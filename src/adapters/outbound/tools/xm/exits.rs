@@ -25,7 +25,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::exec_common::{
-    check_private_agent, finish, live_books, run_exec, ExecIo, ExecOrder, ExecSize, MarketRows,
+    check_private_agent, finish, live_books, run_exec, ExecGate, ExecIo, ExecOrder, ExecSize,
+    MarketRows,
 };
 use super::paper::{object, opt_num};
 use super::{defs, XmShared};
@@ -182,6 +183,7 @@ fn exit_order(
 ) -> ExecOrder {
     ExecOrder {
         tool: names::XM_EXITS,
+        gate: ExecGate::Risk,
         limits: risk.limits(),
         instrument,
         // Ignored for a close: the position decides.
@@ -229,8 +231,9 @@ fn record(check: &mut ExitCheck, obs: &Observation) {
 /// The first attempt `n` (1-based) that `stored(n)` says is unstored.
 /// Attempts are placed in order and a denied one stores nothing, so the
 /// stored ones are 1..k: a galloping then binary search reads O(log k) of
-/// them, and the attempt returned was read unstored.
-async fn first_unstored<F, Fut>(stored: F) -> Result<u32>
+/// them, and the attempt returned was read unstored. Also the weekend
+/// fade's shadow exits (`weekend_fade.rs`).
+pub(crate) async fn first_unstored<F, Fut>(stored: F) -> Result<u32>
 where
     F: Fn(u32) -> Fut,
     Fut: Future<Output = Result<bool>>,

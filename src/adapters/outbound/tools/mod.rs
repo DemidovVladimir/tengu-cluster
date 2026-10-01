@@ -293,6 +293,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             plugin: |_| Box::new(xm::XmPlugin),
         },
         ToolEntry {
+            opt_in: Some(names::XM_WEEKEND_FADE),
+            needs_memory: false,
+            defs: || xm::defs_named(names::XM_WEEKEND_FADE),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
             opt_in: Some(names::PAPER_POSITIONS),
             needs_memory: false,
             defs: || xm::defs_named(names::PAPER_POSITIONS),

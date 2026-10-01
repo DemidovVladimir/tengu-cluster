@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
+use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
 
@@ -37,4 +38,7 @@ pub struct SandboxSections {
     /// `<xm_state_dir>/history` when `[recorder] enabled`: the day files
     /// `open_observation_store` records into; `None` = no recording.
     pub history_dir: Option<PathBuf>,
+    /// `[xmarket.weekend_fade]` (`xm_weekend_fade`); its `calendar` is one
+    /// of `calendars`.
+    pub weekend_fade: Option<WeekendFadeConfig>,
 }

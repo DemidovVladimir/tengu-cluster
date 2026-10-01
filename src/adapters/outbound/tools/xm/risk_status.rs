@@ -255,6 +255,8 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             ledger: Ok(ledger as Arc<dyn PaperLedger>),
             risk: Some(risk(&dir.join("KILL"))),
             paper: Some(paper()),
+            history: None,
+            fade: None,
         }
     }
 

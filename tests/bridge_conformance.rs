@@ -458,6 +458,51 @@ fn paper(c: Case) -> Case {
         .row(opportunity_row())
 }
 
+/// `[xmarket.weekend_fade]` (rule W on `xyz:TSLA`, the $100 `[risk]` of
+/// [`XM_RISK_TOML`]) + the recorder, on a calendar whose current Saturday +
+/// Sunday break spans three weeks (every weekday from yesterday a
+/// holiday): whenever the case runs, the window is before its entry, so
+/// `xm_weekend_fade` reports `waiting` on both sides.
+fn weekend_fade_toml() -> String {
+    use chrono::Datelike;
+    let today = chrono::Utc::now().date_naive();
+    let holidays: Vec<String> = (-1..=20)
+        .map(|d| today + chrono::Duration::days(d))
+        .filter(|d| d.weekday().number_from_monday() <= 5)
+        .map(|d| format!("\"{}\"", d.format("%Y-%m-%d")))
+        .collect();
+    format!(
+        r#"
+[xmarket.calendars.fade]
+kind = "exchange"
+tz = "America/New_York"
+core = ["09:30", "16:00"]
+holidays = [{}]
+
+[xmarket.weekend_fade]
+calendar = "fade"
+universe = ["hyperliquid:xyz:TSLA"]
+exclude = []
+capped_top_n = 1
+min_abs_signal_bps = 50
+capped_notional_usd = 25
+shadow_account = "conf-shadow"
+shadow_initial_cash_usd = 1000
+shadow_notional_usd = 25
+expected_edge_bps = 23
+anchor_max_age_secs = 600
+entry_max_age_secs = 120
+entry_lateness_max_secs = 600
+max_slippage_bps = 100
+
+[recorder]
+enabled = true
+schemas = ["mkt_ctx/1"]
+"#,
+        holidays.join(", ")
+    )
+}
+
 /// A skill in the project tier (`<cwd>/skills/demo`).
 const DEMO_SKILL: &str = "---\nname: demo\ndescription: Conformance demo skill.\neditable_by_learner: true\n---\n\n# demo\n\nBody.\n";
 
@@ -778,6 +823,14 @@ fn cases() -> Vec<Case> {
         paper(case("xm_exits", json!({})))
             .named("idle")
             .ok("xm_exits account=conf open=0 due=0 closed=0 failed=0"),
+        // x-weekend-fade-strategy: `[xmarket.weekend_fade]`, the calendar
+        // and the recorder reach the bridge; before the entry the step
+        // opens both ledger accounts and reports waiting.
+        case("xm_weekend_fade", json!({}))
+            .toml(XM_RISK_TOML)
+            .toml(&weekend_fade_toml())
+            .scoped("HL_API_URL")
+            .ok(" waiting next_entry_s=<COUNTDOWN> universe=1 excluded=0 | ok <AGE>s live"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))

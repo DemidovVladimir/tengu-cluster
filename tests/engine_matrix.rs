@@ -11,7 +11,7 @@
 //! |---|---|---|
 //! | `workspace` | `list_directory` `.` → `read_file` the `token-*` file → `write_file` `answer.txt` = the token → `read_file` `second.txt` | the answer holds the token (its file name is only in the listing, its value only in the file); `answer.txt` = the token; `second.txt` holds a registered secret (`TENGU_SECRETS_LOADED`): the answer quotes `REDACTED`; Claude Code: the bridge's result for it, logged by the engine, is `[REDACTED]` |
 //! | `hyperliquid` | `hl_ctx` `{"coins": ["xyz:TSLA"]}` → `hl_book` `{"coin": "xyz:TSLA"}` — live, read-only | the answer holds a number of the stored `mkt_ctx/1:hyperliquid:xyz:TSLA` headline and one of `hl_book/1:hyperliquid:xyz:TSLA` |
-//! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status`, on a new paper account (`[xmarket]` + `[risk]` + `[paper]`, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id, and no open position; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
+//! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id, no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //!
 //! Every leg: exit 0, `status = ok`, every tool of the set in the `tools`
 //! activity and no run of it failed (Claude Code: the bridged calls the
@@ -160,6 +160,7 @@ impl Set {
                 "paper_close",
                 "xm_exits",
                 "risk_status",
+                "xm_weekend_fade",
             ],
         }
     }
@@ -193,6 +194,7 @@ impl Set {
                     "Call paper_order with {\"instrument\": \"hyperliquid:xyz:TSLA\", \"side\": \"buy\", \"notional_usd\": 15, \"kind\": \"market\", \"max_slippage_bps\": 30, \"opportunity\": \"xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA\", \"exit_at_ms\": 1000000000000}.",
                     "Call xm_exits with no arguments.",
                     "Call risk_status with no arguments.",
+                    "Call xm_weekend_fade with no arguments.",
                 ],
                 "the avg_px= value the first paper_order returned and the equity= value risk_status returned, exactly as printed",
             ),
@@ -642,6 +644,19 @@ fn ledger_orders(ws: &Workspace) -> Vec<LedgerOrder> {
     .unwrap_or_default()
 }
 
+/// The leg's ledger accounts, by name.
+fn ledger_accounts(ws: &Workspace) -> Vec<String> {
+    let Ok(conn) = rusqlite::Connection::open(ledger_path(ws)) else {
+        return Vec::new();
+    };
+    let Ok(mut stmt) = conn.prepare("SELECT account FROM accounts ORDER BY account") else {
+        return Vec::new();
+    };
+    stmt.query_map([], |r| r.get(0))
+        .map(|rows| rows.flatten().collect())
+        .unwrap_or_default()
+}
+
 /// The quantity the leg's account holds in `xyz:TSLA` (`None`: no row).
 fn open_qty(ws: &Workspace) -> Option<f64> {
     let conn = rusqlite::Connection::open(ledger_path(ws)).ok()?;
@@ -784,6 +799,13 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace) {
                 .filter(|l| l["tool"] == "xm_exits" && l["verdict"] == "allow")
                 .count();
             assert!(exits >= 1, "{label}: no xm_exits verdict in risk.jsonl");
+            // xm_weekend_fade ran a step of its window: both ledger
+            // accounts exist whatever the phase.
+            assert!(
+                ledger_accounts(ws).contains(&"matrix-shadow".to_string()),
+                "{label}: xm_weekend_fade did not open its shadow account: {:?}",
+                ledger_accounts(ws)
+            );
             let px = orders
                 .iter()
                 .find(|o| o.side == "buy" && o.status == "filled")
@@ -1048,7 +1070,8 @@ fn offline_local_xm() {
             "paper_order",
             "paper_positions",
             "risk_status",
-            "xm_exits"
+            "xm_exits",
+            "xm_weekend_fade"
         ],
         "the xm agent's tools, no compress_and_store on the chat path"
     );

@@ -682,7 +682,13 @@ mod tests {
             .map(|l| l.strip_prefix("# ").unwrap_or(l.trim_start_matches('#')))
             .collect();
         assert!(block.len() > 20, "{block:?}");
-        let cfg = load(&block.join("\n"));
+        // The exec agent holds the weekend fade too (as in the example).
+        let base = BASE.replace(
+            "tools = [\"xm_exits\"]",
+            "tools = [\"xm_exits\", \"xm_weekend_fade\"]",
+        );
+        let cfg: Config = toml::from_str(&format!("{base}\n{}", block.join("\n")))
+            .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(validation_errors(&cfg), Vec::<String>::new());
         let names: Vec<&str> = cfg.feeds.keys().map(String::as_str).collect();
         assert_eq!(
@@ -692,7 +698,8 @@ mod tests {
                 "hl_ctx",
                 "risk_day",
                 "weekend_review",
-                "xm_exits"
+                "xm_exits",
+                "xm_weekend_fade"
             ]
         );
         assert_eq!(
@@ -720,5 +727,17 @@ mod tests {
             (Ok(FeedKind::Tool), Some(15_000), true)
         );
         assert_eq!(exits.calls(), vec![json!({})]);
+        // The weekend fade every 60 s on the same agent, no arguments.
+        let fade = &cfg.feeds["xm_weekend_fade"];
+        assert_eq!(
+            (
+                fade.kind(),
+                fade.schedule().unwrap().every_ms,
+                fade.required,
+                fade.agent.as_deref()
+            ),
+            (Ok(FeedKind::Tool), Some(60_000), true, Some("xm_exec"))
+        );
+        assert_eq!(fade.calls(), vec![json!({})]);
     }
 }

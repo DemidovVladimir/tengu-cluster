@@ -10,12 +10,12 @@
 //! | 1 | `[risk]` + `[paper]` and the ledger (`[xmarket]`) | `risk_config_missing` · `state_dir_missing` · `ledger_unavailable` |
 //! | 2 | the calling agent is private — no `description`, not `default` (the load rule again: a planner step's `compose.tools` can hand any tool to a routable agent) | `exec_agent_not_private` |
 //! | 3 | `client_order_id` = the arg, else `ToolCtx.call_id` (bridge: `mcp:<process nonce>:<JSON-RPC id>`) — never random | `no_client_order_id` · `invalid_client_order_id` |
-//! | 4 | the account (`limits.account`) opened on first use with `[paper] initial_cash_usd`; an order stored under the id ⇒ its row, `replayed` — no latency, no book read, nothing written | — |
+//! | 4 | the account (`limits.account`) opened on first use with `[paper] initial_cash_usd` (a shadow account, `ExecGate::Shadow`: its own cash); an order stored under the id ⇒ its row, `replayed` — no latency, no book read, nothing written | — |
 //! | 5 | store reads, never fetched: `mkt_ctx/1` of the open positions + the order's (and hedge) instrument, `mkt_instrument/1` of the instrument (`domain::xm::exec::venue_facts`), the `opportunity` row | `missing:mkt_instrument` |
 //! | 6 | funding the open positions owe booked first: every due hour at a fresh `mkt_ctx/1` rate + oracle (`ledger::due_funding_hours`) | — |
 //! | 7 | the order checked before the latency (`[paper] order_types`, `check_order`); a close sized from the position | `order_type` · `invalid_order` · `no_position` |
 //! | 8 | `fill_with_latency` on the `Clock` + `BookSource` (live: `SystemClock`, `hyperliquid::book::HlBookSource`, the `hl_book/1` read recorded + stored); a hedge leg's book right after | — a failed read is the gate's `missing:book` |
-//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate, fill, write — a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`) | — |
+//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate (`[risk]`, or the shadow gate for `ExecGate::Shadow`), fill, write — a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`) | — |
 //! | 10 | row `paper_fill/1:<account>:<client_order_id>` (ttl 0: recorded, never cached) — `domain/xm/exec.rs` | — |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,7 +40,9 @@ use crate::domain::xm::ledger::{due_funding_hours, Mark, PaperAccount, PaperPosi
 use crate::domain::xm::paper::{
     jittered_latency_ms, FillEnv, OrderKind, OrderSize, PaperOrder, Tif,
 };
-use crate::domain::xm::risk::{BookInput, CtxInput, EdgeInput, LegMarket, OrderIntent, RiskLimits};
+use crate::domain::xm::risk::{
+    BookInput, CtxInput, EdgeInput, GateKind, LegMarket, OrderIntent, RiskLimits,
+};
 use crate::ports::book::{BookRead, BookSource};
 use crate::ports::clock::Clock;
 use crate::ports::observation::ObservationStore;
@@ -61,11 +63,33 @@ pub(crate) enum ExecSize {
     Close,
 }
 
+/// Which gate an exec order passes and how its account opens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ExecGate {
+    /// The `[risk]` gate, every rule; a new account opens with `[paper]
+    /// initial_cash_usd`.
+    Risk,
+    /// A measurement account (the weekend fade's shadow ledger):
+    /// `domain::xm::risk::evaluate_shadow`; a new account opens with this
+    /// cash.
+    Shadow { initial_cash_usd: f64 },
+}
+
+impl ExecGate {
+    fn kind(self) -> GateKind {
+        match self {
+            ExecGate::Risk => GateKind::Risk,
+            ExecGate::Shadow { .. } => GateKind::Shadow,
+        }
+    }
+}
+
 /// One order for [`run_exec`].
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ExecOrder {
     /// The calling tool (the row's `tool`).
     pub tool: &'static str,
+    pub gate: ExecGate,
     /// The gate's limits and the ledger account: `[risk]` (`limits()`), or a
     /// shadow account's own.
     pub limits: RiskLimits,
@@ -116,9 +140,11 @@ pub(crate) async fn run_exec(
     let store = shared.store.as_deref();
 
     let now = io.clock.now_ms();
-    ledger
-        .open_account(&account, paper.initial_cash_usd, now)
-        .await?;
+    let initial_cash_usd = match order.gate {
+        ExecGate::Risk => paper.initial_cash_usd,
+        ExecGate::Shadow { initial_cash_usd } => initial_cash_usd,
+    };
+    ledger.open_account(&account, initial_cash_usd, now).await?;
     if let Some(p) = ledger.stored(&account, &coid).await? {
         let ids = open_ids(&p.account);
         let rows = MarketRows::read(store, &ids, None, None).await;
@@ -234,6 +260,7 @@ pub(crate) async fn run_exec(
     };
     let marks = rows.marks(&ids);
     let plan = ExecPlan {
+        gate: order.gate.kind(),
         limits: order.limits.clone(),
         order: paper_order,
         close,
@@ -712,6 +739,8 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 ledger: Ok(ledger.clone() as Arc<dyn PaperLedger>),
                 risk: Some(risk(&dir.path().join("KILL"), max_order)),
                 paper: Some(paper()),
+                history: None,
+                fade: None,
             };
             let clock = Arc::new(ManualClock::at(NOW));
             let books = ScriptedBooks::new(
@@ -759,6 +788,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         pub(crate) fn buy(&self, usd: f64) -> ExecOrder {
             ExecOrder {
                 tool: names::PAPER_ORDER,
+                gate: ExecGate::Risk,
                 limits: self.shared.risk.as_ref().unwrap().limits(),
                 instrument: InstrumentId::parse(TSLA).unwrap(),
                 side: Side::Buy,

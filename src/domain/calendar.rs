@@ -17,10 +17,13 @@
 //! | entry | 18:00 on the last non-trading day (normally Sun; Mon for a Monday holiday) | Sun 18:00 EDT = 22:00 UTC |
 //! | exit | 09:00 on the next trading day | Mon 09:00 EDT = 13:00 UTC |
 //!
-//! A single mid-week holiday is a break too (`closed_days = 1`).
+//! A single mid-week holiday is a break too (`closed_days = 1`); the weekend
+//! fade trades only breaks that hold a Saturday and a Sunday
+//! (`domain/xm/weekend_fade.rs::fade_window`).
 
-// Consumers land in the next wave (`x-weekend-fade-strategy`); config builds
-// the calendars and `domain/schedule.rs` parses clock times here today.
+// Config builds the calendars, `domain/schedule.rs` parses clock times here
+// and the weekend fade reads the weekend clock; session reads land with the
+// market-hours gates (M1+).
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;

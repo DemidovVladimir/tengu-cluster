@@ -37,6 +37,7 @@
 //! | Verdict `rule` | the first failing check in table order; else `allow_reduce_degraded` when a check was waived; else `ok` |
 //! | `trips` | halts the state should record (`risk_state.rs` keeps them): `file`, `total_loss`, `daily_loss` |
 //! | Ids | full, in every detail (`hyperliquid:xyz:TSLA`) — never shortened |
+//! | Shadow ledger ([`evaluate_shadow`], [`GateKind::Shadow`]) | a measurement account (the weekend fade's): `intent`, `account`, `kill_switch`, `halted`, `reduce_only`, `venue`, `book_age` as above; every other rule skipped (`shadow: measurement only`); no trips |
 
 // Consumers land in wave W1 (`risk-paper-ledger-store`, `risk-kill-switch`,
 // `risk-gate-enforcement`).
@@ -888,6 +889,20 @@ impl Gate<'_> {
             self.pass(rules::INSTRUMENT, "exit of an open position");
             return;
         }
+        self.check_venue();
+        if let Some(why) = permission_error(self.limits, &i.instrument) {
+            self.fail(rules::INSTRUMENT, why);
+        } else {
+            self.pass(
+                rules::INSTRUMENT,
+                format!("{} is allow-listed", i.instrument),
+            );
+        }
+    }
+
+    /// `venue`: the order's venue is in `[risk] venues`.
+    fn check_venue(&mut self) {
+        let i = self.intent;
         match i.venue() {
             Some(v) if self.limits.venues.iter().any(|x| x == v) => {
                 self.pass(rules::VENUE, format!("venue {v} permitted"))
@@ -897,14 +912,6 @@ impl Gate<'_> {
                 format!("venue {v} is not in [risk] venues {:?}", self.limits.venues),
             ),
             None => self.fail(rules::VENUE, format!("no venue in `{}`", i.instrument)),
-        }
-        if let Some(why) = permission_error(self.limits, &i.instrument) {
-            self.fail(rules::INSTRUMENT, why);
-        } else {
-            self.pass(
-                rules::INSTRUMENT,
-                format!("{} is allow-listed", i.instrument),
-            );
         }
     }
 
@@ -1032,11 +1039,17 @@ impl Gate<'_> {
 
     /// `book_age`, `ctx_age` of the order leg.
     fn check_ages(&mut self) {
+        self.check_book_age();
+        self.check_ctx_age();
+    }
+
+    /// `book_age` of the order leg (`missing:book` without one).
+    fn check_book_age(&mut self) {
         let id = self.intent.instrument.clone();
-        let (book, ctx) = match self.leg(&id) {
-            Some(leg) => (leg.book.clone(), leg.ctx.clone()),
-            None => (Field::Absent, Field::Absent),
-        };
+        let book = self
+            .leg(&id)
+            .map(|l| l.book.clone())
+            .unwrap_or(Field::Absent);
         let ages = self.limits.max_data_age_ms;
         match &book {
             Field::Ok { value: b } => {
@@ -1053,6 +1066,16 @@ impl Gate<'_> {
                 self.degradable(missing("book"), format!("{id}: {}", describe(&e)));
             }
         }
+    }
+
+    /// `ctx_age` of the order leg (`missing:ctx` without a row).
+    fn check_ctx_age(&mut self) {
+        let id = self.intent.instrument.clone();
+        let ctx = self
+            .leg(&id)
+            .map(|l| l.ctx.clone())
+            .unwrap_or(Field::Absent);
+        let ages = self.limits.max_data_age_ms;
         match &ctx {
             Field::Ok { value: c } => {
                 let age = c.age_ms(self.now_ms);
@@ -1583,6 +1606,105 @@ fn group(groups: &[GroupExposure], key: &str) -> Field<Exposure> {
         })
 }
 
+/// Detail of every rule [`evaluate_shadow`] skips.
+pub const SHADOW_SKIPPED: &str = "shadow: measurement only";
+
+/// Which gate an order passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GateKind {
+    /// Every rule — [`evaluate`] (the `[risk]` account).
+    Risk,
+    /// A measurement account — [`evaluate_shadow`] (the weekend fade's
+    /// shadow ledger).
+    Shadow,
+}
+
+/// [`evaluate`] or [`evaluate_shadow`].
+pub fn evaluate_with(
+    kind: GateKind,
+    intent: &OrderIntent,
+    ctx: &RiskContext,
+    limits: &RiskLimits,
+    now_ms: i64,
+) -> RiskVerdict {
+    match kind {
+        GateKind::Risk => evaluate(intent, ctx, limits, now_ms),
+        GateKind::Shadow => evaluate_shadow(intent, ctx, limits, now_ms),
+    }
+}
+
+impl<'a> Gate<'a> {
+    /// A gate for `intent`, classed entry / exit (module table).
+    fn start(
+        intent: &'a OrderIntent,
+        ctx: &'a RiskContext,
+        limits: &'a RiskLimits,
+        now_ms: i64,
+    ) -> (Self, bool) {
+        let pos_qty = ctx
+            .account
+            .positions
+            .iter()
+            .find(|r| r.instrument == intent.instrument)
+            .map_or(0.0, |r| r.qty);
+        let reduces = pos_qty != 0.0
+            && pos_qty.signum() == -intent.side.sign()
+            && intent.qty.is_finite()
+            && intent.qty > 0.0
+            && intent.qty <= pos_qty.abs() * (1.0 + LIMIT_TOL);
+        let class = if intent.reduce_only && reduces {
+            OrderClass::Exit
+        } else {
+            OrderClass::Entry
+        };
+        let gate = Gate {
+            intent,
+            ctx,
+            limits,
+            now_ms,
+            class,
+            order_usd: intent.notional_usd,
+            checks: Vec::new(),
+            headroom: Headroom::default(),
+            trips: Vec::new(),
+        };
+        (gate, reduces)
+    }
+
+    /// The verdict: the first failing check's rule, else
+    /// `allow_reduce_degraded` when a check was waived, else `ok`; trips once
+    /// each.
+    fn verdict(self) -> RiskVerdict {
+        let mut trips = Vec::new();
+        for t in self.trips {
+            if !trips.contains(&t) {
+                trips.push(t);
+            }
+        }
+        let first_fail = self
+            .checks
+            .iter()
+            .find(|c| c.status == CheckStatus::Fail)
+            .map(|c| c.rule.clone());
+        let degraded = self.checks.iter().any(|c| c.status == CheckStatus::Waived);
+        let (allow, rule) = match first_fail {
+            Some(rule) => (false, rule),
+            None if degraded => (true, rules::ALLOW_REDUCE_DEGRADED.to_string()),
+            None => (true, rules::OK.to_string()),
+        };
+        RiskVerdict {
+            allow,
+            rule,
+            class: self.class,
+            degraded: allow && degraded,
+            checks: self.checks,
+            headroom: self.headroom,
+            trips,
+        }
+    }
+}
+
 /// Gate one order (module tables). Pure; never panics on bad input — a bad
 /// intent is a `deny` on `intent`.
 pub fn evaluate(
@@ -1591,33 +1713,7 @@ pub fn evaluate(
     limits: &RiskLimits,
     now_ms: i64,
 ) -> RiskVerdict {
-    let pos_qty = ctx
-        .account
-        .positions
-        .iter()
-        .find(|r| r.instrument == intent.instrument)
-        .map_or(0.0, |r| r.qty);
-    let reduces = pos_qty != 0.0
-        && pos_qty.signum() == -intent.side.sign()
-        && intent.qty.is_finite()
-        && intent.qty > 0.0
-        && intent.qty <= pos_qty.abs() * (1.0 + LIMIT_TOL);
-    let class = if intent.reduce_only && reduces {
-        OrderClass::Exit
-    } else {
-        OrderClass::Entry
-    };
-    let mut g = Gate {
-        intent,
-        ctx,
-        limits,
-        now_ms,
-        class,
-        order_usd: intent.notional_usd,
-        checks: Vec::new(),
-        headroom: Headroom::default(),
-        trips: Vec::new(),
-    };
+    let (mut g, reduces) = Gate::start(intent, ctx, limits, now_ms);
     g.check_intent();
     g.check_account();
     let wrong_account = g.checks.iter().any(|c| c.status == CheckStatus::Fail);
@@ -1646,32 +1742,67 @@ pub fn evaluate(
     if wrong_account {
         g.trips.clear();
     }
-    let mut trips = Vec::new();
-    for t in g.trips {
-        if !trips.contains(&t) {
-            trips.push(t);
-        }
+    g.verdict()
+}
+
+/// The shadow ledger's gate (`x-weekend-fade-strategy`): a paper account
+/// that measures a strategy at executable prices, outside the budget.
+///
+/// | Rule | Shadow |
+/// |---|---|
+/// | `intent`, `account`, `reduce_only` | as [`evaluate`] |
+/// | `kill_switch`, `halted`, `book_age` / `missing:book` | as [`evaluate`] — an exit waives them under `allow_reduce_degraded` |
+/// | `venue` | entries: as [`evaluate`]; exits pass |
+/// | every other rule | skipped, detail [`SHADOW_SKIPPED`] (market status, depth and slippage: the fill decides) |
+/// | trips | none: the kill-switch file denies entries while it exists but leaves no sticky halt on a measurement account |
+pub fn evaluate_shadow(
+    intent: &OrderIntent,
+    ctx: &RiskContext,
+    limits: &RiskLimits,
+    now_ms: i64,
+) -> RiskVerdict {
+    let (mut g, reduces) = Gate::start(intent, ctx, limits, now_ms);
+    g.check_intent();
+    g.check_account();
+    g.check_kill_switch();
+    g.check_halted();
+    g.check_reduce_only(reduces);
+    if g.is_exit() {
+        g.check_permission();
+    } else {
+        g.check_venue();
+        g.skip(rules::INSTRUMENT, SHADOW_SKIPPED);
     }
-    let first_fail = g
-        .checks
-        .iter()
-        .find(|c| c.status == CheckStatus::Fail)
-        .map(|c| c.rule.clone());
-    let degraded = g.checks.iter().any(|c| c.status == CheckStatus::Waived);
-    let (allow, rule) = match first_fail {
-        Some(rule) => (false, rule),
-        None if degraded => (true, rules::ALLOW_REDUCE_DEGRADED.to_string()),
-        None => (true, rules::OK.to_string()),
-    };
-    RiskVerdict {
-        allow,
-        rule,
-        class,
-        degraded: allow && degraded,
-        checks: g.checks,
-        headroom: g.headroom,
-        trips,
+    for rule in [
+        rules::LIFECYCLE,
+        rules::DAILY_LOSS,
+        rules::TOTAL_LOSS,
+        rules::ORDER_RATE,
+        rules::OPEN_ORDERS,
+    ] {
+        g.skip(rule, SHADOW_SKIPPED);
     }
+    g.check_book_age();
+    for rule in [
+        rules::CTX_AGE,
+        rules::MARKET_STATUS,
+        rules::MIN_EDGE,
+        rules::DEPTH,
+        rules::SLIPPAGE,
+        rules::ORDER_NOTIONAL,
+        rules::POSITION_NOTIONAL,
+        rules::ASSET_EXPOSURE,
+        rules::VENUE_EXPOSURE,
+        rules::GROSS_EXPOSURE,
+        rules::NET_EXPOSURE,
+        rules::LEVERAGE,
+        rules::HEDGE,
+        rules::SKEW,
+    ] {
+        g.skip(rule, SHADOW_SKIPPED);
+    }
+    g.trips.clear();
+    g.verdict()
 }
 
 #[cfg(test)]
@@ -2684,5 +2815,143 @@ mod tests {
         assert!(!d.contains("\"bids\""), "no books in the digest");
         assert_eq!(HaltReason::parse("file"), Some(HaltReason::File));
         assert!(HaltReason::Operator.is_sticky() && !HaltReason::DailyLoss.is_sticky());
+    }
+
+    fn shadow(c: &Case) -> RiskVerdict {
+        evaluate_with(GateKind::Shadow, &c.intent, &c.ctx, &c.limits, NOW)
+    }
+
+    /// The shadow gate: every budget rule skipped (`shadow: measurement
+    /// only`), the kill switch, halts, the account and the book judged as the
+    /// `[risk]` gate does — and no trips.
+    #[test]
+    fn the_shadow_gate_skips_the_budget_only() {
+        // Over every cap, not allow-listed, no edge row, a stale ctx, over
+        // the order rate, a loss past the limits: the shadow gate allows.
+        let mut c = Case::entry();
+        c.limits.max_order_notional_usd = 1.0;
+        c.limits.max_gross_exposure_usd = 1.0;
+        c.limits.max_leverage = 0.01;
+        c.limits.instruments_allow.clear();
+        c.limits.max_orders_per_min = 1;
+        c.ctx.orders_last_min = 5;
+        c.ctx.opportunity = Field::Absent;
+        c.ctx.account = account(&[(NVDA, 50.0, NOW - 1_000)], Some(200.0));
+        if let Field::Ok { value: ctx } = &mut tsla_leg(&mut c).unwrap().ctx {
+            ctx.observed_at_ms = NOW - 600_000;
+        }
+        let risk = c.run();
+        assert_deny(&risk, rules::INSTRUMENT);
+        assert_eq!(risk.trips, vec![HaltReason::DailyLoss]);
+        let v = shadow(&c);
+        assert_allow(&v);
+        assert_eq!((v.rule.as_str(), v.class), (rules::OK, OrderClass::Entry));
+        assert!(v.trips.is_empty(), "{:?}", v.trips);
+        for rule in [
+            rules::INTENT,
+            rules::ACCOUNT,
+            rules::KILL_SWITCH,
+            rules::HALTED,
+            rules::VENUE,
+            rules::BOOK_AGE,
+        ] {
+            assert_eq!(v.check(rule).unwrap().status, CheckStatus::Pass, "{rule}");
+        }
+        for rule in [
+            rules::INSTRUMENT,
+            rules::LIFECYCLE,
+            rules::DAILY_LOSS,
+            rules::TOTAL_LOSS,
+            rules::ORDER_RATE,
+            rules::OPEN_ORDERS,
+            rules::CTX_AGE,
+            rules::MARKET_STATUS,
+            rules::MIN_EDGE,
+            rules::DEPTH,
+            rules::SLIPPAGE,
+            rules::ORDER_NOTIONAL,
+            rules::POSITION_NOTIONAL,
+            rules::ASSET_EXPOSURE,
+            rules::VENUE_EXPOSURE,
+            rules::GROSS_EXPOSURE,
+            rules::NET_EXPOSURE,
+            rules::LEVERAGE,
+            rules::HEDGE,
+            rules::SKEW,
+        ] {
+            let check = v.check(rule).unwrap_or_else(|| panic!("no {rule} check"));
+            assert_eq!(
+                (check.status, check.detail.as_str()),
+                (CheckStatus::Skipped, SHADOW_SKIPPED),
+                "{rule}"
+            );
+        }
+        assert_eq!(v.headroom, Headroom::default(), "no cap judged");
+        // `evaluate_with` dispatches.
+        assert_eq!(
+            evaluate_with(GateKind::Risk, &c.intent, &c.ctx, &c.limits, NOW),
+            c.run()
+        );
+    }
+
+    #[test]
+    fn the_shadow_gate_honours_the_kill_switch_halts_and_the_book() {
+        // The kill-switch file denies an entry but trips no sticky halt.
+        let mut c = Case::entry();
+        c.ctx.kill_switch = Field::ok(true);
+        let v = shadow(&c);
+        assert_deny(&v, rules::KILL_SWITCH);
+        assert!(v.trips.is_empty());
+        assert_eq!(
+            c.run().trips,
+            vec![HaltReason::File],
+            "the [risk] gate trips"
+        );
+        c.ctx.kill_switch = Field::err(err("kill_switch"));
+        assert_deny(&shadow(&c), "missing:kill_switch");
+        // An operator halt of the shadow account.
+        let mut c = Case::entry();
+        c.ctx.halt = Some(Halt {
+            reason: HaltReason::Operator,
+            since_ms: NOW - 1,
+        });
+        assert_deny(&shadow(&c), rules::HALTED);
+        // The book: stale, missing.
+        let mut c = Case::entry();
+        tsla_leg(&mut c).unwrap().book = Field::err(err("book"));
+        assert_deny(&shadow(&c), "missing:book");
+        let mut c = Case::entry();
+        if let Field::Ok { value: b } = &mut tsla_leg(&mut c).unwrap().book {
+            b.observed_at_ms = NOW - 60_000;
+        }
+        assert_deny(&shadow(&c), rules::BOOK_AGE);
+        // Another account's limits, an unknown venue, a malformed intent.
+        let mut c = Case::entry();
+        c.limits.account = "xmarket-shadow".into();
+        assert_deny(&shadow(&c), rules::ACCOUNT);
+        let mut c = Case::entry();
+        c.limits.venues = vec!["robinhood".into()];
+        assert_deny(&shadow(&c), rules::VENUE);
+        let mut c = Case::entry();
+        c.intent.qty = f64::NAN;
+        assert_deny(&shadow(&c), rules::INTENT);
+        // An exit on a stale book with the file present: waived (degraded).
+        let mut c = Case::exit();
+        c.ctx.kill_switch = Field::ok(true);
+        c.ctx.legs.get_mut(NVDA).unwrap().book = Field::err(err("book"));
+        let v = shadow(&c);
+        assert_allow(&v);
+        assert_eq!(
+            (v.rule.as_str(), v.class, v.degraded),
+            (rules::ALLOW_REDUCE_DEGRADED, OrderClass::Exit, true)
+        );
+        assert!(v.trips.is_empty());
+        assert_eq!(v.check(rules::VENUE).unwrap().status, CheckStatus::Pass);
+        c.limits.allow_reduce_degraded = false;
+        assert_deny(&shadow(&c), rules::KILL_SWITCH);
+        // A reduce-only order that would open is still refused.
+        let mut c = Case::entry();
+        c.intent.reduce_only = true;
+        assert_deny(&shadow(&c), rules::REDUCE_ONLY);
     }
 }

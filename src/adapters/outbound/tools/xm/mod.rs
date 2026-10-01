@@ -9,8 +9,10 @@
 //! | `exec_common.rs` | `run_exec` — the `[risk]` gate inside every exec tool: gate + fill + ledger write in one transaction, `paper_fill/1:<account>:<client_order_id>` |
 //! | `paper.rs` | `paper_order`, `paper_close` (exec tools, through `run_exec`), `paper_positions` — `paper_positions/1:<account>` |
 //! | `exits.rs` | `xm_exits` (exec tool) — the exit rules: closes every due open position (deadline, max hold, stop-loss, take-profit) through `run_exec` under a deterministic id; `xm_exits/1:<account>` |
+//! | `weekend_fade.rs` | `xm_weekend_fade` (exec tool) — rule W: one step of the window's state machine per call; capped fades through the `[risk]` gate, shadow fades through the shadow gate, shadow exits; `xm_weekend/1:<anchor date>` |
 //!
-//! The plugin opens the observation store (`open_observation_store`) and —
+//! The plugin opens the observation store (`open_observation_store`), a
+//! history reader (`[recorder]` day files: the weekend fade's anchor) and —
 //! only with `[risk]` — the ledger (`open_paper_ledger`) once. No store ⇒
 //! rows are not cached (fail-soft). No `[risk]` ⇒ every tool refuses
 //! `risk_config_missing` (tracker convention 9); no ledger ⇒
@@ -26,6 +28,7 @@ pub(crate) mod exec_common;
 pub(crate) mod exits;
 pub(crate) mod paper;
 pub(crate) mod risk_status;
+pub(crate) mod weekend_fade;
 
 use std::sync::Arc;
 
@@ -33,12 +36,15 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tracing::warn;
 
+use crate::adapters::outbound::history_sqlite::SqliteHistoryStore;
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::paper_store::open_paper_ledger;
 use crate::config::risk::{PaperConfig, RiskConfig};
+use crate::ports::history::HistoryStore;
 use crate::ports::observation::ObservationStore;
 use crate::ports::paper::PaperLedger;
 use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
+use weekend_fade::FadeSetup;
 
 pub(crate) use defs::defs_named;
 
@@ -59,6 +65,10 @@ pub(crate) struct XmShared {
     /// `[risk]`, `kill_switch_file` expanded.
     pub risk: Option<RiskConfig>,
     pub paper: Option<PaperConfig>,
+    /// The recorder's day files, read-only; `None` = `[recorder]` off.
+    pub history: Option<Arc<dyn HistoryStore>>,
+    /// `[xmarket.weekend_fade]` + its calendar; `None` = not configured.
+    pub fade: Option<Arc<FadeSetup>>,
 }
 
 impl XmShared {
@@ -103,15 +113,39 @@ impl ToolPlugin for XmPlugin {
             (Some(_), Some(_)) => open_paper_ledger(sections)
                 .map_err(|e| format!("{LEDGER_UNAVAILABLE}: paper ledger unavailable: {e:#}")),
         };
+        let history = sections
+            .history_dir
+            .as_deref()
+            .map(|dir| Arc::new(SqliteHistoryStore::reader(dir)) as Arc<dyn HistoryStore>);
+        let fade = sections.weekend_fade.as_ref().map(|config| {
+            let calendar = sections
+                .calendars
+                .get(&config.calendar)
+                .and_then(|c| c.exchange())
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "calendar `{}` is not an exchange [xmarket.calendars.<id>] row",
+                        config.calendar
+                    )
+                });
+            Arc::new(FadeSetup {
+                config: config.clone(),
+                calendar,
+            })
+        });
         let shared = XmShared {
             store,
             ledger,
             risk: sections.risk.clone(),
             paper: sections.paper.clone(),
+            history,
+            fade,
         };
         let mut tools = risk_status::tools(&shared);
         tools.extend(paper::tools(&shared));
         tools.extend(exits::tools(&shared));
+        tools.extend(weekend_fade::tools(&shared));
         Ok(tools)
     }
 }

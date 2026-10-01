@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use serde_json::{Map, Value};
 
 use super::exec_common::{
-    accrue_due_funding, check_private_agent, client_order_id, finish, live_books, run_exec, ExecIo,
-    ExecOrder, ExecSize, MarketRows,
+    accrue_due_funding, check_private_agent, client_order_id, finish, live_books, run_exec,
+    ExecGate, ExecIo, ExecOrder, ExecSize, MarketRows,
 };
 use super::{defs, XmShared};
 use crate::adapters::outbound::clock::SystemClock;
@@ -202,6 +202,7 @@ pub(crate) fn parse_order(args: &Value, limits: RiskLimits) -> Result<ExecOrder>
     };
     Ok(ExecOrder {
         tool,
+        gate: ExecGate::Risk,
         limits,
         instrument: id,
         side,
@@ -319,6 +320,7 @@ impl PaperCloseTool {
         let (target, max_slippage_bps, coid) = parse_close(args)?;
         let order = |id: InstrumentId, coid: Option<String>| ExecOrder {
             tool: names::PAPER_CLOSE,
+            gate: ExecGate::Risk,
             limits: risk.limits(),
             instrument: id,
             side: Side::Sell,

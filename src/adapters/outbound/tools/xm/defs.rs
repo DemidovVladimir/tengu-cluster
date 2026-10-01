@@ -16,6 +16,7 @@ pub(crate) fn tool_defs() -> Vec<ToolDef> {
         paper_order(),
         paper_close(),
         xm_exits(),
+        xm_weekend_fade(),
         paper_positions(),
     ]
 }
@@ -173,6 +174,28 @@ fn xm_exits() -> ToolDef {
                     "description": "IOC bound of each close vs the book mid in bps (> 0, < 10000); default [risk] max_slippage_bps.",
                 },
             },
+            "required": [],
+            "additionalProperties": false,
+        }),
+    )
+}
+
+fn xm_weekend_fade() -> ToolDef {
+    ToolDef::new(
+        names::XM_WEEKEND_FADE,
+        "Weekend-fade rule W, one step per call (idempotent; normally a feed calls it every \
+         60 s). Before the weekend entry (18:00 New York on the last non-trading day of a \
+         Saturday + Sunday break) it reports waiting and next_entry_s. At the entry it fixes \
+         the signals once — s = ln(price at the entry / price at 20:00 on the last trading day) \
+         per universe name, from mkt_ctx/1 rows (read hl_ctx; the anchor from the recorder's \
+         history) — then fades every eligible name in the shadow ledger and the names with the \
+         largest |s| in the capped [risk] ledger, each exiting at 09:00 on the next trading \
+         day. Later calls close the shadow positions after the exit and report the P&L. Typed \
+         observation xm_weekend/1:<anchor date>: phase (waiting, entered, missed_entry, \
+         closing, closed), counts, per name the signal and the fills. No arguments.",
+        json!({
+            "type": "object",
+            "properties": {},
             "required": [],
             "additionalProperties": false,
         }),

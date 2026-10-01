@@ -1,6 +1,6 @@
 # xmarket risk + paper — operator reference (2026-09-30)
 
-The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Verdict audit: § Audit (`risk-audit-verdicts`); exit rules: § Exits (`x-exit-rules`, `src/domain/xm/exits.rs` + `src/adapters/outbound/tools/xm/exits.rs`).
+The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Verdict audit: § Audit (`risk-audit-verdicts`); exit rules: § Exits (`x-exit-rules`, `src/domain/xm/exits.rs` + `src/adapters/outbound/tools/xm/exits.rs`); weekend fade: § Weekend fade (`x-weekend-fade-strategy`, `src/domain/xm/weekend_fade.rs` + `src/adapters/outbound/tools/xm/weekend_fade.rs`).
 
 ## Load rules (`Config::load`, any violation fails it)
 
@@ -9,7 +9,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | A `[risk]` sandbox is hardened like a Solana signer (`config/hardening.rs`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"`; no `[[mcp_servers]]`; no scope grants `shell_bins` (tools without a scope run no shell, in-process and in the bridge) | nothing outside tengu scopes runs (convention 12) |
 | `<TENGU_HOME>/state` (no overlap either way), `kill_switch_file` and the config file itself outside every `fs_roots` and agent `workspace` (symlinks resolved) | `read_file` / `write_file` cannot edit `ledger.db`, delete the kill-switch file or lift a limit for the next load |
 | `[xmarket]` present; every agent sets `workspace` (absolute or `~/…`); feed, loop and xmarket-tool agents share one (`config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout) | the ledger lives in the state dir; an agent without a workspace works in the process cwd, which may hold `<TENGU_HOME>/state` |
-| Exec tools (`paper_order`, `paper_close`, `xm_exits` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
+| Exec tools (`paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
 | `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing stays off (a tool without a scope gets the permissive fallback's `default` wallet) |
 
 ## Gate enforcement — `run_exec` (every exec tool, in-process and through the bridge)
@@ -41,12 +41,13 @@ Underlying: the position's; none yet ⇒ the instrument id itself (asset exposur
 | `paper_order` | `instrument`* (full id), `side`* buy / sell, `notional_usd`*, `kind`* market / limit, `limit_px` (limit only), `tif` ioc, `reduce_only`, `max_slippage_bps`*, `strategy` (§21 type), `hedge_instrument`, `opportunity` (row key), `client_order_id`, `exit_at_ms` (position deadline for the exit rules) | `paper_fill/1:<account>:<client_order_id>` |
 | `paper_close` | `instrument` or `all = true`; `max_slippage_bps`*; `client_order_id` — reduce-only market IOC of the whole position, same gate | `paper_fill/1` · all: `paper_close/1:<account>:<client_order_id>` (legs `<client_order_id>:<instrument>`, each replayed by its own id) |
 | `xm_exits` (§ Exits) | `max_slippage_bps` (default `[risk] max_slippage_bps`) — closes every due position of the `[risk]` account, same gate | `xm_exits/1:<account>`; each close its own `paper_fill/1` |
+| `xm_weekend_fade` (§ Weekend fade) | none — one step of rule W's window per call: capped fades through the gate, shadow fades through the shadow gate, shadow exits | `xm_weekend/1:<anchor date>`; each order its own `paper_fill/1` |
 | `paper_positions` (not an exec tool) | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): funding owed booked first (every due hour at the fresh `mkt_ctx/1` rate + oracle — past hours at the current rate); marks fresh or omitted, never 0; `exit_at_ms` per position |
 
 | Setup | Value |
 |---|---|
-| Agent | a private block: no `description`, not `default`, no webhook `agent`; `tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status", "xm_exits"]` |
-| Scopes | `fs_roots` = the workspace (store); `paper_order` / `paper_close` / `xm_exits` also `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` |
+| Agent | a private block: no `description`, not `default`, no webhook `agent`; `tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status", "xm_exits", "xm_weekend_fade"]` |
+| Scopes | `fs_roots` = the workspace (store); `paper_order` / `paper_close` / `xm_exits` / `xm_weekend_fade` also `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` |
 | Reached by | decision loops and feeds (their agent), `@<agent>` chat, `tengu tool call` / `tool turn` — never the planner, a `run-agent` step or a webhook |
 | Engines | all three (convention 20): conformance cases for each tool; live legs `openrouter_*_xm`, `claude_code_xm` run the set through `tengu tool turn` on the fixtures' private `xm_*` agents |
 
@@ -127,6 +128,42 @@ Join a loop step to its verdict: `jq -c 'select(.call_id == "<call id>")' <TENGU
 | Needs | the `hl_ctx` feed in the same workspace (one store): a close needs the instrument's `mkt_instrument/1` row (else it errors `missing:mkt_instrument`, `n_failed`), and TP / SL need `mkt_ctx/1` marks younger than `max_data_age_ms.ctx` — run `hl_ctx` at least that often (15 s, convention 14) |
 | Gate on an exit | skips caps, `min_edge`, depth / slippage, `market_status`; waives `kill_switch` / `halted` / `book_age` / `ctx_age` under `allow_reduce_degraded` (recorded); still checks `intent`, `account`, `reduce_only`, `order_rate`, `open_orders`. Exits count toward `max_orders_per_min`: leave room for every position that can fall due at once (the weekend fade closes its 4 capped positions at one deadline); a rate denial is judged again next run under the same id |
 | Feed | `[feeds.xm_exits] kind = "tool"`, `agent` = the private exec agent (its `tools` list `xm_exits`), `tool = "xm_exits"`, `every_secs = 15`, `required = true` — no LLM, no Jev (`config.example.toml`); an `error` row reports the feed `down` until a run closes them |
+
+## Weekend fade — `xm_weekend_fade` (`x-weekend-fade-strategy`)
+
+Rule W, fixed before the data ([`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md)). Knobs `[xmarket.weekend_fade]` (`src/config/xmarket.rs`: every key required, load rules there).
+
+| Piece | Rule |
+|---|---|
+| Window | a break of the `calendar` (an `exchange` row: NYSE) that holds a Saturday and a Sunday — a single mid-week holiday is not one: anchor 20:00 on the last trading day before it, entry 18:00 on its last non-trading day (Sun; Mon for a Monday holiday), exit 09:00 on the next trading day; New York wall clock, DST-safe |
+| Prices | `mkt_ctx/1` mid, else mark — the anchor from the recorder's history as of the anchor (≤ `anchor_max_age_secs` old), the entry from the store (≤ `entry_max_age_secs` old at the call) |
+| Signal | s = ln(P_entry / P_anchor); fade = −sign(s); eligible = not in `exclude`, both prices, s ≠ 0 |
+| Shadow ledger | every eligible name, `shadow_notional_usd`, account `shadow_account` (opens with `shadow_initial_cash_usd`) |
+| Capped ledger | the `capped_top_n` largest \|s\| ≥ `min_abs_signal_bps` (ties by full id), `capped_notional_usd` each, the `[risk]` account |
+| Offline replay | `weekend_fade::replay` over 5 m candles reproduces the feasibility golden of 2026-09-26 → 09-28 bit for bit: 74 names (`xyz:KIOXIA` excluded, split halt), mean net +95.4585 bps at 3.8 bps round trip, 53 positive, capped `xyz:CRCL`, `xyz:SMSN`, `xyz:MINIMAX`, `xyz:MSTR` (`tests/fixtures/xmarket/`) |
+
+| Ledger | Gate | Entry id | Exit |
+|---|---|---|---|
+| capped | the `[risk]` gate, every rule; opportunity = the name's `xm_weekend_signal/1` row (`edge_after_costs_bps` = `expected_edge_bps`, example 23 = half the in-sample +46), strategy `overreaction` | `fade:<account>:<full id>:<anchor date>` | `xm_exits`, reason `deadline` (the position's `exit_at_ms`) — never this tool |
+| shadow | `risk::evaluate_shadow`: intent, account, kill switch, halt, reduce-only, venue, book age as the gate; every budget rule `Skipped` "shadow: measurement only"; no trips (the kill-switch file denies entries while present, leaves no sticky halt) | `fade-shadow:<shadow account>:<full id>:<anchor date>` | this tool after the exit: reduce-only IOC, `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` after a stored rejected / partial attempt) |
+
+Both: market IOC bound `max_slippage_bps`, `exit_at_ms` = the exit, the fill on the post-latency live book, one `place()` per order (verdict row + `risk.jsonl` line, tool `xm_weekend_fade`, the feed's call id). Anchor date = the window's last trading day (`YYYY-MM-DD`, New York).
+
+| Phase (`xm_weekend/1:<anchor date>`) | When | The call |
+|---|---|---|
+| `waiting` | before the entry | reports `next_entry_s` |
+| `entered` | entry ≤ now < exit, snapshot kept | first call: the snapshot (prices, signals, the capped set, each name's ledger bases) kept in the store by compare-and-swap before any order (one per window across processes; never recomputed), then the capped fades (largest \|s\| first), then the shadow fades (4 at a time); later calls within `entry_lateness_max_secs` place again what the ledger does not hold (a denial stores nothing); a name the account already holds is not faded (`position_open`); no eligible name ⇒ an `error` row, nothing kept, the next call tries again |
+| `missed_entry` | no snapshot by entry + `entry_lateness_max_secs` | nothing: no late entry |
+| `closing` | after the exit, a filled name still open | closes the due shadow positions; the capped ones wait for `xm_exits` |
+| `closed` | every filled name flat | P&L per name and ledger = (realized − fees − funding) now − the base before the entry, USD and bps of the entry notional; `shadow_pnl_usd`, `shadow_mean_net_bps`, `capped_pnl_usd`, `capped_mean_net_bps` |
+
+Every call also books both accounts' hourly funding. It returns the previous window's row while that one closes and the next waits, else the current window's; both are stored (TTL 120 s).
+
+| Setup | Value |
+|---|---|
+| Feeds (`config.example.toml`) | `[feeds.xm_weekend_fade]` `kind = "tool"`, the private exec agent, `every_secs = 60`, `required = true`; `[feeds.hl_ctx]` `args = { dex = "xyz" }` every 60 s (prices + the `mkt_instrument/1` rows every fill needs); `[feeds.xm_exits]` every 15 s |
+| `[recorder]` | records `mkt_ctx/1` from before Friday 20:00 New York; `anchor_max_age_secs` ≥ its `heartbeat_secs` (load rule) |
+| `[risk]` | `instruments_allow` ⊇ the universe not excluded (load rule); `capped_top_n` × `capped_notional_usd` ≤ `max_gross_exposure_usd` (load rule) — leave headroom: marks move between fills, and the gate checks `max_leverage` against equity after fees (4 × $25 on $100 cash needs `max_leverage` > 1); `max_net_exposure_usd` ≥ the capped total (fades often share a side); `max_orders_per_min` ≥ 8 (4 entries, then 4 exits at once); `max_data_age_ms.ctx` ≥ the `hl_ctx` interval + jitter; `require_hedge_for` without `overreaction` (load rule); `[risk.exits]` `max_hold_secs` above the 15 h hold (entry 18:00 → exit 09:00 on the next trading day, holidays and DST included) with wide TP / SL, so the deadline closes |
 
 ## Halts (§ 7 #8)
 

@@ -23,7 +23,7 @@
 //! |---|---|
 //! | Value | `RiskState::value` at the plan's marks with the UTC day rolled |
 //! | Intent | the order's size at the post-latency book's mid (else the mark, else the position's entry); a close = the whole snapshot position, opposite side; underlying = the position's, else the instrument id |
-//! | Gate | `evaluate` against the plan's legs (the book read after the latency, the `mkt_ctx/1` row), opportunity row and kill-switch probe |
+//! | Gate | `evaluate` against the plan's legs (the book read after the latency, the `mkt_ctx/1` row), opportunity row and kill-switch probe — `evaluate_shadow` for a shadow account (`ExecPlan.gate`) |
 //! | Fill | allowed ⇒ `simulate_fill` on that book against the snapshot position; no book ⇒ refused `stale_book` (a degraded exit may be allowed without one) |
 //! | Trips | the verdict's halts recorded (`RiskState::trip`) |
 
@@ -39,7 +39,7 @@ use crate::domain::xm::paper::{
     OrderKind, OrderSize, PaperOrder, Tif, VenueRules,
 };
 use crate::domain::xm::risk::{
-    evaluate, venue_of, EdgeInput, LegMarket, OrderIntent, RiskContext, RiskLimits,
+    evaluate_with, venue_of, EdgeInput, GateKind, LegMarket, OrderIntent, RiskContext, RiskLimits,
 };
 use crate::ports::book::{BookRead, BookSource};
 use crate::ports::clock::Clock;
@@ -119,6 +119,9 @@ pub(crate) async fn fill_with_latency(
 /// Everything an exec order read before `PaperLedger::place`: the closure
 /// only computes (`ports/paper.rs`).
 pub(crate) struct ExecPlan {
+    /// `Risk` = every rule; `Shadow` = a measurement account's gate
+    /// (`domain::xm::risk::evaluate_shadow`).
+    pub gate: GateKind,
     /// The gate's limits: `[risk]`, or a shadow account's own.
     pub limits: RiskLimits,
     /// The order as sent — sized from the position read before the latency.
@@ -203,7 +206,7 @@ pub(crate) fn decide(plan: ExecPlan) -> Decide {
             legs: plan.legs.clone(),
             opportunity: plan.opportunity.clone(),
         };
-        let verdict = evaluate(&intent, &ctx, limits, now);
+        let verdict = evaluate_with(plan.gate, &intent, &ctx, limits, now);
         let outcome = if verdict.allow {
             let env = FillEnv {
                 rules: &plan.rules,

@@ -1,0 +1,21 @@
+{
+  "about": "xmarket fixtures. calendars.toml = the [xmarket.calendars.*] rows of config.example.toml (src/config/xmarket.rs). weekend_2026-09-26_*.json = the weekend-fade replay golden (x-weekend-fade-strategy, src/domain/xm/weekend_fade.rs::replay), produced outside the repo (Rust-only repo: no script is committed).",
+  "files": {
+    "weekend_2026-09-26_candles.json": {
+      "source": "live Hyperliquid candleSnapshot replies, interval 5m, dex xyz, captured 2026-09-30 by the feasibility collector (research archive c5m_all_xyz_2026-09-25_to_28.tgz, outside the repo)",
+      "request": "POST https://api.hyperliquid.xyz/info {\"type\":\"candleSnapshot\",\"req\":{\"coin\":\"xyz:<COIN>\",\"interval\":\"5m\",\"startTime\":…,\"endTime\":…}}",
+      "cut": "with jq: per coin of the 75-name universe (HL perpCategories \"stocks\" minus 17 ETFs, STRC, OURA and the delisted IBIDEN — replay-2026-09-26/universe.txt), only the 3 candles ending at the weekend instants, verbatim (t, T, s, i, o, c, h, l, v, n)",
+      "instants": {
+        "anchor": "Fri 2026-09-25 20:00 America/New_York = 2026-09-26T00:00:00Z → candle t 1790380500000",
+        "entry": "Sun 2026-09-27 18:00 America/New_York = 2026-09-27T22:00:00Z → candle t 1790546100000",
+        "exit": "Mon 2026-09-28 09:00 America/New_York = 2026-09-28T13:00:00Z → candle t 1790600100000"
+      }
+    },
+    "weekend_2026-09-26_golden.json": {
+      "source": "computed with jq from weekend_2026-09-26_candles.json (rule W of docs/xmarket-feasibility-2026-09-30.md, fixed before the data)",
+      "rule": "price at an instant = close of the 5m candle ending there; s_bps = ln(entry / anchor) × 10000; dir = −sign(s); gross_bps = dir × ln(exit / entry) × 10000; net_bps = gross_bps − 3.8 (round-trip cost); mean_net_bps = the mean of net_bps over the rows in coin order; capped = the 4 largest |s| with |s| ≥ 50 bps",
+      "excluded": "xyz:KIOXIA — trade.xyz halted and settled the market for a 3-for-1 split on this weekend",
+      "result": "74 rows, mean_net_bps 95.45850028087516, 53 positive, capped xyz:CRCL, xyz:SMSN, xyz:MINIMAX, xyz:MSTR"
+    }
+  }
+}

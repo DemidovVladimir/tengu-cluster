@@ -1,9 +1,10 @@
 //! `[xmarket]` — sandbox-wide settings of the xmarket runtime: the
-//! install-wide state directory (tracker convention 3) and the session
+//! install-wide state directory (tracker convention 3), the session
 //! calendars `[xmarket.calendars.<id>]` (convention 18, evaluated by
-//! `domain/calendar.rs`). Later milestones add venues and lifecycle knobs.
-//! `deny_unknown_fields`. Operator doc: `docs/runtime-2026-09-30.md` § State
-//! layout.
+//! `domain/calendar.rs`) and the weekend fade `[xmarket.weekend_fade]`
+//! ([`WeekendFadeConfig`], its own load rules). Later milestones add venues
+//! and lifecycle knobs. `deny_unknown_fields`. Operator doc:
+//! `docs/runtime-2026-09-30.md` § State layout.
 //!
 //! State layout — one state dir per sandbox, `<TENGU_HOME>/state/<state>`,
 //! shared by every process of the install; `tengu prune` never deletes it.
@@ -43,12 +44,20 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::hardening;
 use super::paths::{expand_tilde, resolve_tengu_home};
+use super::risk::HL_MIN_ORDER_USD;
 use super::Config;
 use crate::domain::calendar::{
     parse_date, parse_hm, parse_week_hm, Calendar, ExchangeCalendar, WeeklyWindow,
 };
-use crate::domain::tools::XM_TOOLS;
+use crate::domain::market::MarketCtx;
+use crate::domain::observation::Observed;
+use crate::domain::tools::{XM_TOOLS, XM_WEEKEND_FADE};
 use crate::domain::tz::Zone;
+use crate::domain::xm::risk::permission_error;
+use crate::domain::xm::weekend_fade::{FadeRule, FADE_STRATEGY};
+
+/// The rows the weekend fade's anchor price comes from.
+const MKT_CTX_SCHEMA: &str = <MarketCtx as Observed>::SCHEMA;
 
 /// The paper ledger (`outbound/paper_store.rs`).
 pub(crate) const LEDGER_DB: &str = "ledger.db";
@@ -98,6 +107,10 @@ pub struct XmarketConfig {
     /// `[xmarket.calendars.<id>]` — session calendars by id (module doc).
     #[serde(default)]
     pub calendars: BTreeMap<String, CalendarConfig>,
+    /// `[xmarket.weekend_fade]` — rule W for the exec tool
+    /// `xm_weekend_fade` ([`WeekendFadeConfig`]).
+    #[serde(default)]
+    pub weekend_fade: Option<WeekendFadeConfig>,
 }
 
 impl Default for XmarketConfig {
@@ -105,6 +118,7 @@ impl Default for XmarketConfig {
         Self {
             state: default_state(),
             calendars: BTreeMap::new(),
+            weekend_fade: None,
         }
     }
 }
@@ -155,7 +169,296 @@ impl XmarketConfig {
                 );
             }
         }
+        if let Some(fade) = &self.weekend_fade {
+            errors.extend(fade.validation_errors(self));
+        }
         errors
+    }
+}
+
+/// `[xmarket.weekend_fade]` — the weekend-fade rule W, run by the exec tool
+/// `xm_weekend_fade` (`domain/xm/weekend_fade.rs`,
+/// `docs/xmarket-risk-paper-2026-09-30.md` § Weekend fade). Every key is
+/// required, unknown keys are refused.
+///
+/// | Load rule | Why |
+/// |---|---|
+/// | `calendar` names an `exchange` `[xmarket.calendars.<id>]` | the weekend clock needs trading days |
+/// | `universe` non-empty, unique `hyperliquid:<coin>` ids in full; `exclude` ⊆ `universe` | the paper engine fills Hyperliquid perps only; a short id never matches a row |
+/// | `capped_top_n` ≤ the names not excluded; `min_abs_signal_bps` ≥ 0 | the capped selection |
+/// | `capped_notional_usd` ≥ $10 (HL minimum), ≤ `[risk] max_order_notional_usd`; `capped_top_n` × it ≤ `[risk] max_gross_exposure_usd` | a fade the gate always denies is a typo |
+/// | `shadow_account` a `[A-Za-z0-9._-]` name, not the `[risk] account`; `shadow_initial_cash_usd` > 0; `shadow_notional_usd` ≥ $10 | the shadow ledger is its own account |
+/// | `expected_edge_bps` ≥ `[risk] min_edge_bps` | else every capped fade is denied `min_edge` |
+/// | `anchor_max_age_secs`, `entry_max_age_secs` > 0; 0 < `entry_lateness_max_secs` < 54 000 (15 h: before any exit); 0 < `max_slippage_bps` < 10 000 | — |
+/// | `[risk]` + `[paper]` present | an exec tool; the capped ledger is the `[risk]` account |
+/// | `[recorder]` records `mkt_ctx/1`; `anchor_max_age_secs` ≥ its `heartbeat_secs` (with `change_only`) and ≥ its `min_interval_secs` for `mkt_ctx/1` | the anchor price comes from the history |
+/// | every universe name not excluded permitted by `[risk]` (`instruments_allow`, not `instruments_deny`) | the capped ledger is rule W exactly; leave a name out with `exclude` |
+/// | `[risk] require_hedge_for` does not list `overreaction` | the fades carry that strategy and have no hedge leg |
+/// | an agent holding `xm_weekend_fade` ⇒ the section exists | the tool would refuse every call |
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeekendFadeConfig {
+    /// Id of an `exchange` `[xmarket.calendars.<id>]` — the weekend clock
+    /// (NYSE: `us_equity`).
+    pub calendar: String,
+    /// Names faded, full ids `hyperliquid:<coin>` (`hyperliquid:xyz:TSLA`).
+    pub universe: Vec<String>,
+    /// Universe ids neither ledger trades (a split, a halt).
+    pub exclude: Vec<String>,
+    /// Capped ledger: this many names with the largest |s| …
+    pub capped_top_n: usize,
+    /// … and |s| at least this, bps.
+    pub min_abs_signal_bps: f64,
+    /// USD per capped fade, through the `[risk]` gate.
+    pub capped_notional_usd: f64,
+    /// The shadow ledger's account (every eligible name, no caps).
+    pub shadow_account: String,
+    /// Its cash when it opens.
+    pub shadow_initial_cash_usd: f64,
+    /// USD per shadow fade.
+    pub shadow_notional_usd: f64,
+    /// `edge_after_costs_bps` of the per-name opportunity row a capped fade
+    /// names (the gate's `min_edge_bps`). Example 23: half the in-sample
+    /// +46 bps net per trade (the feasibility study cut every edge in half).
+    pub expected_edge_bps: f64,
+    /// Oldest recorded `mkt_ctx/1` row the anchor price may come from.
+    pub anchor_max_age_secs: u64,
+    /// Oldest stored `mkt_ctx/1` row the entry price may come from.
+    pub entry_max_age_secs: u64,
+    /// A first call later than this after the entry instant enters nothing
+    /// (`missed_entry`); failed fades are placed again until then.
+    pub entry_lateness_max_secs: u64,
+    /// IOC bound of every fade order (entries and shadow exits) vs the book
+    /// mid, bps.
+    pub max_slippage_bps: f64,
+}
+
+/// Longest `entry_lateness_max_secs`: every window's exit is at least 15 h
+/// after its entry (Sun 18:00 → Mon 09:00).
+const MAX_LATENESS_SECS: u64 = 15 * 3600;
+
+impl WeekendFadeConfig {
+    /// The selection knobs.
+    pub fn rule(&self) -> FadeRule {
+        FadeRule {
+            capped_top_n: self.capped_top_n,
+            min_abs_signal_bps: self.min_abs_signal_bps,
+        }
+    }
+
+    /// The section's own rules (the module-table rows that need only
+    /// `[xmarket]`).
+    fn validation_errors(&self, x: &XmarketConfig) -> Vec<String> {
+        let mut errors = Vec::new();
+        let mut err = |e: String| errors.push(format!("xmarket.weekend_fade: {e}"));
+        match x.calendars.get(&self.calendar) {
+            None => err(format!(
+                "calendar `{}` is not an [xmarket.calendars.<id>] row",
+                self.calendar
+            )),
+            Some(c) if c.kind != CalendarKind::Exchange => err(format!(
+                "calendar `{}` must be kind = \"exchange\" (the weekend clock needs trading days)",
+                self.calendar
+            )),
+            Some(_) => {}
+        }
+        if self.universe.is_empty() {
+            err("universe is empty".into());
+        }
+        let mut seen = BTreeSet::new();
+        for id in &self.universe {
+            let full = id
+                .strip_prefix("hyperliquid:")
+                .is_some_and(|coin| !coin.is_empty() && !coin.contains(char::is_whitespace));
+            if !full {
+                err(format!(
+                    "universe id `{id}` is not a full `hyperliquid:<coin>` id (e.g. hyperliquid:xyz:TSLA)"
+                ));
+            }
+            if !seen.insert(id.as_str()) {
+                err(format!("universe lists `{id}` twice"));
+            }
+        }
+        let mut excluded = BTreeSet::new();
+        for id in &self.exclude {
+            if !seen.contains(id.as_str()) {
+                err(format!("exclude id `{id}` is not in universe"));
+            }
+            if !excluded.insert(id.as_str()) {
+                err(format!("exclude lists `{id}` twice"));
+            }
+        }
+        let tradable = seen.iter().filter(|id| !excluded.contains(*id)).count();
+        if self.capped_top_n > tradable {
+            err(format!(
+                "capped_top_n {} exceeds the {tradable} universe names not excluded",
+                self.capped_top_n
+            ));
+        }
+        let finite = |v: f64| v.is_finite();
+        if !(finite(self.min_abs_signal_bps) && self.min_abs_signal_bps >= 0.0) {
+            err(format!(
+                "min_abs_signal_bps must be ≥ 0, got {}",
+                self.min_abs_signal_bps
+            ));
+        }
+        for (key, v) in [
+            ("capped_notional_usd", self.capped_notional_usd),
+            ("shadow_notional_usd", self.shadow_notional_usd),
+        ] {
+            if !(finite(v) && v >= HL_MIN_ORDER_USD) {
+                err(format!(
+                    "{key} must be ≥ {HL_MIN_ORDER_USD} (Hyperliquid's minimum order), got {v}"
+                ));
+            }
+        }
+        let a = self.shadow_account.as_str();
+        if a.is_empty()
+            || !a
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            err(format!(
+                "shadow_account `{a}` must be a [A-Za-z0-9._-] ledger account"
+            ));
+        }
+        if !(finite(self.shadow_initial_cash_usd) && self.shadow_initial_cash_usd > 0.0) {
+            err(format!(
+                "shadow_initial_cash_usd must be > 0, got {}",
+                self.shadow_initial_cash_usd
+            ));
+        }
+        if !finite(self.expected_edge_bps) {
+            err(format!(
+                "expected_edge_bps must be a number, got {}",
+                self.expected_edge_bps
+            ));
+        }
+        for (key, v) in [
+            ("anchor_max_age_secs", self.anchor_max_age_secs),
+            ("entry_max_age_secs", self.entry_max_age_secs),
+        ] {
+            if v == 0 {
+                err(format!("{key} must be > 0"));
+            }
+        }
+        if !(1..MAX_LATENESS_SECS).contains(&self.entry_lateness_max_secs) {
+            err(format!(
+                "entry_lateness_max_secs must be > 0 and < {MAX_LATENESS_SECS} (15 h: before any \
+                 exit), got {}",
+                self.entry_lateness_max_secs
+            ));
+        }
+        if !(finite(self.max_slippage_bps)
+            && self.max_slippage_bps > 0.0
+            && self.max_slippage_bps < 10_000.0)
+        {
+            err(format!(
+                "max_slippage_bps must be > 0 and < 10000, got {}",
+                self.max_slippage_bps
+            ));
+        }
+        errors
+    }
+}
+
+/// `[xmarket.weekend_fade]` against the other sections (the struct's
+/// module-table rows that need `[risk]`, `[recorder]` or the agents).
+fn weekend_fade_errors(cfg: &Config, errors: &mut Vec<String>) {
+    let fade = cfg.xmarket.as_ref().and_then(|x| x.weekend_fade.as_ref());
+    let Some(fade) = fade else {
+        let holders: Vec<&str> = cfg
+            .agents
+            .iter()
+            .filter(|(_, a)| {
+                [&a.tools, &a.workspace_tools]
+                    .iter()
+                    .any(|list| list.iter().any(|t| t == XM_WEEKEND_FADE))
+            })
+            .map(|(id, _)| id.as_str())
+            .collect();
+        for id in holders {
+            errors.push(format!(
+                "agents.{id} holds {XM_WEEKEND_FADE}, but the sandbox has no \
+                 [xmarket.weekend_fade] — the tool would refuse every call"
+            ));
+        }
+        return;
+    };
+    let mut err = |e: String| errors.push(format!("xmarket.weekend_fade: {e}"));
+    let (Some(risk), Some(_)) = (&cfg.risk, &cfg.paper) else {
+        err(
+            "needs [risk] + [paper]: xm_weekend_fade is an exec tool and the capped ledger is \
+             the [risk] account"
+                .into(),
+        );
+        return;
+    };
+    let limits = risk.limits();
+    if fade.shadow_account == risk.account {
+        err(format!(
+            "shadow_account `{}` is the [risk] account — the shadow ledger needs its own",
+            fade.shadow_account
+        ));
+    }
+    if fade.capped_notional_usd > risk.max_order_notional_usd {
+        err(format!(
+            "capped_notional_usd {} exceeds [risk] max_order_notional_usd {}",
+            fade.capped_notional_usd, risk.max_order_notional_usd
+        ));
+    }
+    let capped_total = fade.capped_top_n as f64 * fade.capped_notional_usd;
+    if capped_total > risk.max_gross_exposure_usd {
+        err(format!(
+            "capped_top_n × capped_notional_usd = {capped_total} exceeds [risk] \
+             max_gross_exposure_usd {}",
+            risk.max_gross_exposure_usd
+        ));
+    }
+    if fade.expected_edge_bps < risk.min_edge_bps {
+        err(format!(
+            "expected_edge_bps {} is below [risk] min_edge_bps {}: every capped fade would be \
+             denied min_edge",
+            fade.expected_edge_bps, risk.min_edge_bps
+        ));
+    }
+    if risk.require_hedge_for.iter().any(|s| s == FADE_STRATEGY) {
+        err(format!(
+            "[risk] require_hedge_for lists `{FADE_STRATEGY}`, the fades' strategy — they have \
+             no hedge leg"
+        ));
+    }
+    let blocked: Vec<String> = fade
+        .universe
+        .iter()
+        .filter(|id| !fade.exclude.contains(id))
+        .filter_map(|id| permission_error(&limits, id))
+        .collect();
+    if !blocked.is_empty() {
+        err(format!(
+            "every universe name not excluded must be tradable under [risk] (the capped ledger \
+             is rule W exactly; leave a name out with `exclude`): {}",
+            blocked.join("; ")
+        ));
+    }
+    let rec = &cfg.recorder;
+    if !rec.records(MKT_CTX_SCHEMA) {
+        err(format!(
+            "the anchor price comes from the history: [recorder] enabled = true with \
+             `{MKT_CTX_SCHEMA}` in schemas"
+        ));
+    } else {
+        let mut floor = rec.min_interval_ms(MKT_CTX_SCHEMA) / 1000;
+        if rec.change_only {
+            floor = floor.max(rec.heartbeat_secs);
+        }
+        if fade.anchor_max_age_secs < floor {
+            err(format!(
+                "anchor_max_age_secs {} is below {floor} s, the longest the recorder may go \
+                 without a {MKT_CTX_SCHEMA} row ([recorder] heartbeat_secs / min_interval_secs)",
+                fade.anchor_max_age_secs
+            ));
+        }
     }
 }
 
@@ -183,6 +486,7 @@ fn rules_at(cfg: &Config, tengu_home: &Path) -> Vec<String> {
         );
     }
     workspace_errors(cfg, &mut errors);
+    weekend_fade_errors(cfg, &mut errors);
     // A hardened sandbox keeps all of `<TENGU_HOME>/state` out of reach
     // (`config/hardening.rs`); an invalid `state` name is reported above.
     match &cfg.xmarket {
@@ -804,6 +1108,274 @@ every_secs = 60
             );
         let got = rules(&format!("{XM}{RISK_100}{all_home}"));
         assert!(got.is_empty(), "{got:#?}");
+    }
+
+    /// A weekend-fade sandbox: an exchange calendar, `[xmarket.weekend_fade]`,
+    /// the recorder, the $100 `[risk]`, a private exec agent holding the tool.
+    fn fade_sandbox() -> String {
+        use crate::config::risk::tests::RISK_100;
+        format!(
+            r#"{XM}
+[xmarket.calendars.us]
+kind = "exchange"
+tz = "America/New_York"
+core = ["09:30", "16:00"]
+
+[xmarket.calendars.crypto]
+kind = "24x7"
+
+[xmarket.weekend_fade]
+calendar = "us"
+universe = ["hyperliquid:xyz:TSLA"]
+exclude = []
+capped_top_n = 1
+min_abs_signal_bps = 50
+capped_notional_usd = 25
+shadow_account = "xmarket-shadow"
+shadow_initial_cash_usd = 10000
+shadow_notional_usd = 100
+expected_edge_bps = 23
+anchor_max_age_secs = 600
+entry_max_age_secs = 120
+entry_lateness_max_secs = 600
+max_slippage_bps = 50
+
+[recorder]
+enabled = true
+schemas = ["mkt_ctx/1"]
+{RISK_100}
+[agents.main]
+default = true
+engine = "openrouter"
+model = "m"
+workspace = "/srv/xm-ws"
+
+[agents.xm_exec]
+engine = "openrouter"
+model = "m"
+workspace = "/srv/xm-ws"
+tools = ["xm_weekend_fade"]
+"#
+        )
+    }
+
+    /// Every `[xmarket.weekend_fade]` rule, table-driven (each error matches
+    /// a `want`, each `want` an error).
+    #[test]
+    fn weekend_fade_rules() {
+        let base = fade_sandbox();
+        let with = |from: &str, to: &str| {
+            assert!(base.contains(from), "{from}");
+            base.replacen(from, to, 1)
+        };
+        let cases: Vec<(&str, String, Vec<&str>)> = vec![
+            ("valid", base.clone(), vec![]),
+            (
+                "a 24x7 calendar",
+                with("calendar = \"us\"", "calendar = \"crypto\""),
+                vec!["xmarket.weekend_fade: calendar `crypto` must be kind = \"exchange\""],
+            ),
+            (
+                "an unknown calendar",
+                with("calendar = \"us\"", "calendar = \"nyse\""),
+                vec!["calendar `nyse` is not an [xmarket.calendars.<id>] row"],
+            ),
+            (
+                "a short id",
+                with(
+                    "universe = [\"hyperliquid:xyz:TSLA\"]",
+                    "universe = [\"xyz:TSLA\"]",
+                ),
+                vec![
+                    "universe id `xyz:TSLA` is not a full `hyperliquid:<coin>` id",
+                    "every universe name not excluded must be tradable under [risk]",
+                ],
+            ),
+            (
+                "a twice-listed id, an exclusion outside the universe",
+                with(
+                    "universe = [\"hyperliquid:xyz:TSLA\"]\nexclude = []",
+                    "universe = [\"hyperliquid:xyz:TSLA\", \"hyperliquid:xyz:TSLA\"]\n\
+                     exclude = [\"hyperliquid:xyz:NVDA\"]",
+                ),
+                vec![
+                    "universe lists `hyperliquid:xyz:TSLA` twice",
+                    "exclude id `hyperliquid:xyz:NVDA` is not in universe",
+                ],
+            ),
+            (
+                "more capped names than tradable ones",
+                with("capped_top_n = 1", "capped_top_n = 2"),
+                vec!["capped_top_n 2 exceeds the 1 universe names not excluded"],
+            ),
+            (
+                "under the HL minimum",
+                with("capped_notional_usd = 25", "capped_notional_usd = 5"),
+                vec!["capped_notional_usd must be ≥ 10"],
+            ),
+            (
+                "over the [risk] order cap",
+                with("capped_notional_usd = 25", "capped_notional_usd = 30"),
+                vec!["capped_notional_usd 30 exceeds [risk] max_order_notional_usd 25"],
+            ),
+            (
+                "over the gross budget",
+                with(
+                    "max_gross_exposure_usd = 100",
+                    "max_gross_exposure_usd = 20",
+                ),
+                vec!["capped_top_n × capped_notional_usd = 25 exceeds [risk] max_gross_exposure_usd 20"],
+            ),
+            (
+                "the [risk] account as the shadow",
+                with(
+                    "shadow_account = \"xmarket-shadow\"",
+                    "shadow_account = \"xmarket\"",
+                ),
+                vec!["shadow_account `xmarket` is the [risk] account"],
+            ),
+            (
+                "a shadow account with a space",
+                with(
+                    "shadow_account = \"xmarket-shadow\"",
+                    "shadow_account = \"x shadow\"",
+                ),
+                vec!["shadow_account `x shadow` must be a [A-Za-z0-9._-] ledger account"],
+            ),
+            (
+                "an edge under min_edge_bps",
+                with("expected_edge_bps = 23", "expected_edge_bps = 5"),
+                vec!["expected_edge_bps 5 is below [risk] min_edge_bps 10"],
+            ),
+            (
+                "no lateness",
+                with(
+                    "entry_lateness_max_secs = 600",
+                    "entry_lateness_max_secs = 0",
+                ),
+                vec!["entry_lateness_max_secs must be > 0 and < 54000"],
+            ),
+            (
+                "an anchor age under the recorder heartbeat",
+                with("anchor_max_age_secs = 600", "anchor_max_age_secs = 100"),
+                vec!["anchor_max_age_secs 100 is below 300 s"],
+            ),
+            (
+                "mkt_ctx/1 not recorded",
+                with(
+                    "schemas = [\"mkt_ctx/1\"]",
+                    "schemas = [\"hl_book/1\"]",
+                ),
+                vec!["the anchor price comes from the history: [recorder] enabled = true with `mkt_ctx/1`"],
+            ),
+            (
+                "the fades' strategy needs a hedge",
+                with(
+                    "require_hedge_for = [\"convergence\"]",
+                    "require_hedge_for = [\"overreaction\"]",
+                ),
+                vec!["[risk] require_hedge_for lists `overreaction`"],
+            ),
+            (
+                "a denied universe name",
+                with("instruments_deny = []", "instruments_deny = [\"hyperliquid:xyz:TSLA\"]"),
+                vec!["hyperliquid:xyz:TSLA is in instruments_deny"],
+            ),
+            (
+                "excluded, it need not be tradable",
+                with(
+                    "universe = [\"hyperliquid:xyz:TSLA\"]\nexclude = []\ncapped_top_n = 1",
+                    "universe = [\"hyperliquid:xyz:TSLA\", \"hyperliquid:xyz:KIOXIA\"]\n\
+                     exclude = [\"hyperliquid:xyz:KIOXIA\"]\ncapped_top_n = 1",
+                ),
+                vec![],
+            ),
+            (
+                "an agent holds the tool, no section",
+                format!(
+                    "{XM}{}\n[agents.x]\nengine = \"openrouter\"\nmodel = \"m\"\nworkspace = \"/srv/xm-ws\"\ntools = [\"xm_weekend_fade\"]\n",
+                    crate::config::risk::tests::RISK_100
+                ),
+                vec!["agents.x holds xm_weekend_fade, but the sandbox has no [xmarket.weekend_fade]"],
+            ),
+        ];
+        for (label, toml, want) in cases {
+            let got = rules(&toml);
+            for e in &got {
+                assert!(
+                    want.iter().any(|w| e.contains(w)),
+                    "{label}: unexpected {e}"
+                );
+            }
+            for w in want {
+                assert!(
+                    got.iter().any(|e| e.contains(w)),
+                    "{label}: want {w}\ngot {got:#?}"
+                );
+            }
+        }
+        // Without [risk] + [paper].
+        let no_risk = base.replacen(crate::config::risk::tests::RISK_100, "", 1);
+        let got = rules(&no_risk);
+        assert!(
+            got.iter().any(|e| e.contains("needs [risk] + [paper]")),
+            "{got:#?}"
+        );
+        // Every key required, unknown keys refused.
+        let missing = with("max_slippage_bps = 50\n", "");
+        assert!(toml::from_str::<Config>(&missing).is_err());
+        let typo = with(
+            "max_slippage_bps = 50",
+            "max_slippage_bps = 50\nmax_slippage = 50",
+        );
+        assert!(toml::from_str::<Config>(&typo).is_err());
+        // The rules run in `Config::validate`; the section reaches every
+        // agent's tools.
+        let mut cfg: Config = toml::from_str(&base).unwrap();
+        cfg.validate().expect("valid");
+        cfg.fold_default_scopes();
+        let fade = cfg.agents["xm_exec"].sandbox.weekend_fade.clone().unwrap();
+        assert_eq!(fade.universe, ["hyperliquid:xyz:TSLA"]);
+        assert_eq!(fade.rule().capped_top_n, 1);
+        let bad: Config =
+            toml::from_str(&with("expected_edge_bps = 23", "expected_edge_bps = 5")).unwrap();
+        assert!(bad.validate().is_err());
+    }
+
+    /// The commented `[xmarket.weekend_fade]` block of `config.example.toml`,
+    /// uncommented under the calendar fixture, passes the section's rules:
+    /// the 75-name universe in full ids, NYSE as the clock.
+    #[test]
+    fn example_weekend_fade_block_is_valid() {
+        let text = include_str!("../../config.example.toml");
+        let block: Vec<&str> = text
+            .lines()
+            .skip_while(|l| *l != "# [xmarket.weekend_fade]")
+            .take_while(|l| l.starts_with('#'))
+            .map(|l| l.strip_prefix("# ").unwrap_or(l.trim_start_matches('#')))
+            .collect();
+        assert!(block.len() > 20, "{block:?}");
+        let x = toml::from_str::<Fixture>(&format!("{FIXTURE}\n{}", block.join("\n")))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .xmarket;
+        assert_eq!(x.validation_errors(), Vec::<String>::new());
+        let fade = x.weekend_fade.unwrap();
+        assert_eq!(fade.universe.len(), 75);
+        assert!(fade
+            .universe
+            .iter()
+            .all(|id| id.starts_with("hyperliquid:xyz:")));
+        assert!(fade.universe.contains(&"hyperliquid:xyz:TSLA".to_string()));
+        assert_eq!(
+            (
+                fade.capped_top_n,
+                fade.min_abs_signal_bps,
+                fade.capped_notional_usd
+            ),
+            (4, 50.0, 25.0)
+        );
+        assert_eq!(fade.calendar, "us_equity");
+        assert_eq!(fade.expected_edge_bps, 23.0);
     }
 
     /// The rules run inside `Config::validate` (and so `Config::load`).

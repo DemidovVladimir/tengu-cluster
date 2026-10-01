@@ -1128,6 +1128,7 @@ impl Config {
                 .as_ref()
                 .filter(|_| self.recorder.enabled)
                 .map(|x| x.history_dir(&home)),
+            weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
         }
     }
 
