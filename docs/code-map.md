@@ -233,14 +233,23 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (49 files)
+### domain — data + pure policy (58 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
-| `src/domain/backtest/mod.rs` | 10 | Backtests (xlab) — pure: specs, simulator, costs, features, stats, report; module table. |
-| `src/domain/backtest/costs.rs` | 195 | Backtest cost model `CostSpec`: taker fee, half-spread (`fixed` / `abdi_ranaldo` / `ctx`), slippage, funding on / off; `cost_for` = longest `[backtest.costs]` prefix. |
+| `src/domain/backtest/mod.rs` | 31 | Backtests (xlab) — pure: spec → `candidates` → arms → report; module table. |
+| `src/domain/backtest/checks.rs` | 328 | Backtest cross-kind checks (tests only): time integrity — candidates at or before t unchanged when the next bar or the whole future moves, `data_asof_ms ≤ decided_at_ms` for every kind and arm — and the rule W golden (= `weekend_fade::replay`). |
+| `src/domain/backtest/costs.rs` | 192 | Backtest cost model `CostSpec`: taker fee, half-spread (`fixed` / `abdi_ranaldo` / `ctx`), slippage, funding on / off; `cost_for` = longest `[backtest.costs]` prefix. |
+| `src/domain/backtest/engine.rs` | 956 | Backtest engine: `candidates` (checks, then `kinds.rs`) → `simulate` per arm (research; `[risk]`-capped: order clamp, gross / net exposure, daily / total loss halts, refusals by rule) — `MarketData`, `RunParams`, `Candidate`, `Trade` (the audit row), `ArmResult`. |
+| `src/domain/backtest/features.rs` | 327 | Features as-of t for the Jev gate: returns 1 / 24 / 168 h, 24 h vol, volume ratio, trades, funding APR, half-spread, hour of week — only rows observable at t, missing ⇒ absent. |
+| `src/domain/backtest/fills.rs` | 607 | Backtest fills: cost per side (fee + half-spread fixed / Abdi–Ranaldo / ctx + slippage), funding over a hold (settlement hours, complete flag), exits (TP / SL / hold, funding under the exit APR, pair \|z\|), the pair spread series. |
+| `src/domain/backtest/kinds.rs` | 1150 | Decisions of the six strategy kinds as-of t: rule W windows (`fade_window`, `signal_of`, `select_capped`), daily windows, move triggers, funding carry, pair spread, event windows; skips and data notes. |
+| `src/domain/backtest/report.rs` | 847 | `BacktestReport` = `report.json` + row `backtest/1:<run id>` (≤ 32 features, line 1 ids whole), `report.md` (summary, split, per instrument, limits), compact text ≤ 3 KB. |
+| `src/domain/backtest/spec.rs` | 1292 | Strategy specs: six kinds, `deny_unknown_fields`, bounds naming the field, `to_value`, `data_range`; `SplitSpec` (`time:` / `instruments:`). |
+| `src/domain/backtest/stats.rs` | 629 | Backtest statistics: `Summary` (mean / median / t / hit, USD, drawdown, Sharpe, seeded splitmix64 cluster-bootstrap CI, robustness, per instrument), `paired_diff_ci`, `calibration` + Brier. |
+| `src/domain/backtest/testkit.rs` | 293 | Backtest test fixtures (tests only): clocks, bars, the NYSE `us_equity` calendar, run params, hand-made trades, a seeded random market. |
 | `src/domain/book.rs` | 853 | Venue-neutral L2 book (`L2Level`, `L2Book`, validated), depth walk by qty / notional (VWAP, slippage vs mid / touch, unfilled), `depth_within`, imbalance. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
 | `src/domain/decision.rs` | 282 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape, round-trips through JSON), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate), `Verdict` (a terminal-only loop's decision: action, confidence, p per action, below `act_at`). |

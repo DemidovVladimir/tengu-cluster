@@ -10,9 +10,6 @@
 //! | `slippage_bps` | extra per side |
 //! | `funding` | book funding over the hold (default true) |
 
-// Consumers land with the xlab wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use serde::{Deserialize, Serialize};
 
 /// What one side of a fill costs (module table).
