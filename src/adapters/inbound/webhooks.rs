@@ -749,7 +749,11 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
             .map(|p| crate::config::paths::expand_tilde(p))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-        let secret_registry = Arc::new(SecretRegistry::new());
+        // The process's vault values (never prompts): tool output reaches the
+        // model redacted, as in chat, `run-agent` and the bridge.
+        let secret_registry = Arc::new(
+            crate::adapters::outbound::secrets::process_secret_registry(None),
+        );
         let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
         // Orchestrator agent gets NO tools — its job is to emit JSON only.
@@ -766,17 +770,17 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
         let base_tools = if is_orchestrator_agent {
             Vec::new()
         } else {
-            crate::bootstrap::tools::compute_base_tools(
-                true,
-                false, // memory tools off for webhook one-shots
-                &agent.workspace_tools,
+            // The agent's `tools` list, as on every surface.
+            crate::bootstrap::tools::agent_base_tools(
+                agent, true, false, // memory tools off for webhook one-shots
             )
         };
 
         let skill_source = FileSystemSkillSource::new(workspace_path.clone());
         let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry =
-            SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
+        let mut skill_registry = SkillRegistry::new(base_reserved)
+            .with_allowlist(Some(agent.skill_packages.clone()))
+            .with_shell_skills(!agent.no_shell_fallback);
         skill_registry.reload(&skill_source);
 
         let current_tools = if is_orchestrator_agent {
@@ -810,7 +814,12 @@ impl ChatServiceFactory for WebhookChatServiceFactory {
                     if !extra.is_empty() {
                         tool_defs.extend(extra);
                     }
-                    Arc::new(executor) as Arc<dyn ToolExecutor>
+                    Arc::new(
+                        crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
+                            Arc::new(executor),
+                            Arc::clone(&secret_registry),
+                        ),
+                    ) as Arc<dyn ToolExecutor>
                 }
                 None => Arc::new(NoopRuntimeToolExecutor) as Arc<dyn ToolExecutor>,
             };

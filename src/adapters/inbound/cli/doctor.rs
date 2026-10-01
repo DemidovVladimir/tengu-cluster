@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::adapters::outbound::engines::build_engine;
+use crate::adapters::outbound::engines::{build_engine, build_step_engine, StepOpts};
 use crate::adapters::outbound::observations::SqliteObservationStore;
 use crate::adapters::outbound::runtime_store::read_heartbeat;
 use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
@@ -263,7 +263,7 @@ const LOCAL_SKIPPED: &str = "skipped (local models run on the operator's PC)";
 /// |---|---|
 /// | workspace | a fresh temp dir holding a random token file + a decoy |
 /// | tools | `list_directory` + `read_file` only, in-process executor (secrets redacted); Claude Code: the same two through `tengu mcp-bridge`, built-ins off |
-/// | scopes | the agent's own; the temp workspace granted on each, like a `run-agent` step |
+/// | scopes | the agent's own; the temp workspace granted on each, like a `run-agent` step — Claude Code's bridge through the explicit engine option (`build_step_engine`, `TENGU_BRIDGE_GRANT_WORKSPACE`), never a process-wide env var |
 /// | bound | `min(limits.max_tool_rounds, SMOKE_MAX_ROUNDS)` rounds, `limits.step_timeout_secs` |
 /// | `local` with a loopback `base_url`, on macOS | [`LOCAL_SKIPPED`], never contacted |
 async fn doctor_engines(config: &Config, failures: &mut Vec<String>) {
@@ -293,15 +293,7 @@ async fn doctor_engines(config: &Config, failures: &mut Vec<String>) {
             );
             continue;
         }
-        let secrets = secrets.get_or_insert_with(|| {
-            // The turn runs like a `run-agent` step, so the Claude Code
-            // bridge (it inherits this env through the CLI) also grants the
-            // temp workspace on every configured scope
-            // (`mcp_bridge::BridgeSetup::subagent`). This process only exits
-            // after the doctor.
-            std::env::set_var("TENGU_AGENT_IPC", "1");
-            Arc::new(process_secret_registry(None))
-        });
+        let secrets = secrets.get_or_insert_with(|| Arc::new(process_secret_registry(None)));
         let started = std::time::Instant::now();
         let (ok, called, problem) = match smoke_agent(config, id, agent, secrets).await {
             Ok((runs, text, token)) => {
@@ -375,7 +367,19 @@ async fn smoke_agent(
         builtin_tools_profile: "none".to_string(),
     });
     grant_workspace_root(&mut cfg.scopes, &ws);
-    let engine = build_engine(id, &cfg, config.claude_code.as_ref()).context("build engine")?;
+    // Run like a `run-agent` step: a Claude Code bridge grants the temp
+    // workspace on every configured scope too — an explicit engine option,
+    // never this process's env.
+    let engine = build_step_engine(
+        id,
+        &cfg,
+        config.claude_code.as_ref(),
+        StepOpts {
+            grant_workspace: true,
+            summary_file: None,
+        },
+    )
+    .context("build engine")?;
 
     let tools: Vec<ToolDef> = compute_base_tools(true, false, &[])
         .into_iter()

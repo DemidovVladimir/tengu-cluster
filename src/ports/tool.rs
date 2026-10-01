@@ -128,7 +128,8 @@ pub(crate) struct ToolCtx<'a> {
     /// | decision loop | `{loop}:{session_id}:{t}` | across events and restarts (one session id per event) |
     /// | `[feeds.<n>]` tool feed | `feed:<name>:<slot ms>:<i>` | across slots; a retry of a slot reuses it |
     /// | `tengu mcp-bridge`, `tengu tool call` | `mcp:<process nonce>:<JSON-RPC id>` | across processes (`mcp_bridge::call_nonce`) |
-    /// | in-process chat | the model's tool-call id | engine-dependent |
+    /// | in-process chat (`chat/tool_loop.rs`: TUI, Telegram, webhooks, eval, `tengu tool turn`, doctor) | `chat:<turn nonce>:<round>:<i>:<provider id>` | across processes, turns, rounds and calls (a provider may reuse its own ids) |
+    /// | `run-agent` step | the model's tool-call id | engine-dependent; exec tools never run there (routable agents only) |
     ///
     /// Exec-tool contract (`tools/xm/exec_common.rs`): `client_order_id` =
     /// the tool's `client_order_id` arg if given, else `call_id`; refuse

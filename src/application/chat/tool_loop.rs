@@ -10,6 +10,10 @@
 //! Activity: `EngineResponse.tool_runs` lists every call with its outcome —
 //! the ones run here and the ones the engine ran itself
 //! (`StreamEvent::ToolRan`, Claude Code through `tengu mcp-bridge`).
+//!
+//! Call ids: the executor sees `chat:<turn nonce>:<round>:<i>:<provider id>`
+//! (`chat_call_id` → `ToolCtx.call_id`, an exec tool's default
+//! `client_order_id`); the messages keep the provider's id.
 
 use anyhow::Result;
 use futures::StreamExt;
@@ -78,6 +82,7 @@ pub async fn collect_engine_response(
     let mut total_output_delta: u32 = 0;
     let mut tool_outcomes: Vec<(String, String)> = Vec::new();
     let mut tool_runs: Vec<ToolRun> = Vec::new();
+    let turn_nonce = uuid::Uuid::new_v4().simple().to_string();
 
     let is_cancelled = || cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::Relaxed));
 
@@ -169,7 +174,7 @@ pub async fn collect_engine_response(
             tool_calls: Some(tool_calls.clone()),
         });
 
-        for tc in &tool_calls {
+        for (i, tc) in tool_calls.iter().enumerate() {
             if is_cancelled() {
                 debug!("Turn cancelled before executing tool {}", tc.name);
                 return Ok(EngineResponse {
@@ -181,7 +186,12 @@ pub async fn collect_engine_response(
                 });
             }
 
-            let (result, observation, ok) = match executor.execute_typed(tc, &messages).await {
+            let call = ToolCall {
+                id: chat_call_id(&turn_nonce, round, i, &tc.id),
+                name: tc.name.clone(),
+                arguments: tc.arguments.clone(),
+            };
+            let (result, observation, ok) = match executor.execute_typed(&call, &messages).await {
                 Ok(output) => (output.text, output.observation, true),
                 Err(e) => (format!("ERROR: {}", e), None, false),
             };
@@ -346,6 +356,23 @@ pub(crate) async fn run_single_engine_turn(
     })
 }
 
+/// `ToolCtx.call_id` of the model's `index`-th call in `round` of one loop:
+/// `chat:<turn nonce>:<round>:<index>`, then `:<provider id>` when it has
+/// one. The provider's id is unique only as far as its provider makes it (a
+/// local server may number every response's calls `call_0`, `call_1`, …), so
+/// an exec tool keying its order on it could replay an older order's fill.
+/// This id never repeats across processes (`turn_nonce`, a uuid per loop),
+/// rounds or calls — an exec call from chat places its own order unless the
+/// model passes a `client_order_id`. Loops, feeds and the bridge mint their
+/// own (`ports::tool::ToolCtx::call_id`).
+fn chat_call_id(turn_nonce: &str, round: usize, index: usize, provider_id: &str) -> String {
+    if provider_id.is_empty() {
+        format!("chat:{turn_nonce}:{round}:{index}")
+    } else {
+        format!("chat:{turn_nonce}:{round}:{index}:{provider_id}")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tool result compaction
 // ---------------------------------------------------------------------------
@@ -439,8 +466,16 @@ fn flush_pending_tool_call(
     pending_args: &mut String,
 ) {
     if let (Some(id), Some(name)) = (pending_id.take(), pending_name.take()) {
-        let arguments =
-            serde_json::from_str(pending_args.as_str()).unwrap_or_else(|_| serde_json::json!({}));
+        let arguments = serde_json::from_str(pending_args.as_str()).unwrap_or_else(|e| {
+            // Empty = no arguments; anything else is a model error the tool
+            // will report as missing fields — say what really happened.
+            if !pending_args.trim().is_empty() {
+                let shown = truncate_at_boundary(pending_args, 300)
+                    .map_or(pending_args.as_str(), |(prefix, _)| prefix);
+                tracing::warn!(tool = %name, error = %e, arguments = %shown, "tool call arguments are not valid JSON — sent as {{}}");
+            }
+            serde_json::json!({})
+        });
         tool_calls.push(ToolCall {
             id,
             name,
@@ -756,6 +791,124 @@ mod tests {
         );
         assert_eq!(resp.tool_outcomes.len(), 2, "dispatched calls only");
         assert_eq!(resp.text, "done");
+    }
+
+    /// A provider reusing `call_0` in every round (a local server's
+    /// numbering) never hands two calls one `ToolCtx.call_id`: the executor
+    /// sees `chat:<nonce>:<round>:<i>:call_0`, the messages keep `call_0`; a
+    /// second loop (another turn) gets another nonce.
+    #[tokio::test]
+    async fn chat_call_ids_never_repeat_and_messages_keep_the_provider_id() {
+        struct SameId(Mutex<Vec<Vec<Message>>>);
+        #[async_trait::async_trait]
+        impl Engine for SameId {
+            fn id(&self) -> &str {
+                "same-id"
+            }
+            fn context_window(&self) -> usize {
+                16_384
+            }
+            fn supports_tool_use(&self) -> bool {
+                true
+            }
+            fn manages_own_workspace(&self) -> bool {
+                false
+            }
+            fn available_models(&self) -> Vec<ModelInfo> {
+                Vec::new()
+            }
+            async fn run(
+                &self,
+                messages: &[Message],
+                _tools: &[ToolDef],
+                _context: &EngineContext,
+            ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+                let mut seen = self.0.lock().unwrap();
+                seen.push(messages.to_vec());
+                let mut events = if seen.len() < 3 {
+                    vec![
+                        StreamEvent::ToolCallStart {
+                            id: "call_0".into(),
+                            name: "order".into(),
+                        },
+                        StreamEvent::ToolCallEnd {
+                            id: "call_0".into(),
+                        },
+                    ]
+                } else {
+                    vec![StreamEvent::TextDelta {
+                        text: "done".into(),
+                    }]
+                };
+                events.push(StreamEvent::Done);
+                Ok(Box::pin(futures::stream::iter(events)))
+            }
+        }
+        struct Ids(Mutex<Vec<String>>);
+        #[async_trait::async_trait]
+        impl ToolExecutor for Ids {
+            async fn execute(&self, call: &ToolCall, _m: &[Message]) -> Result<String> {
+                self.0.lock().unwrap().push(call.id.clone());
+                Ok("placed".into())
+            }
+        }
+        let tools = [ToolDef::new(
+            "order",
+            "d",
+            serde_json::json!({"type": "object"}),
+        )];
+        let context = EngineContext {
+            workspace: None,
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: None,
+            max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
+        };
+        let prompt = [Message {
+            role: Role::User,
+            content: "go".into(),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let ids = Ids(Mutex::new(Vec::new()));
+        for _turn in 0..2 {
+            let engine = SameId(Mutex::new(Vec::new()));
+            let resp = collect_engine_response(
+                &engine,
+                &prompt,
+                &tools,
+                &context,
+                Some(&ids),
+                None,
+                None,
+                None,
+                5,
+                300_000,
+                30,
+                200,
+            )
+            .await
+            .unwrap();
+            assert_eq!(resp.text, "done");
+            let seen = engine.0.lock().unwrap();
+            let paired: Vec<&str> = seen[2]
+                .iter()
+                .filter_map(|m| m.tool_call_id.as_deref())
+                .collect();
+            assert_eq!(
+                paired,
+                ["call_0", "call_0"],
+                "results pair with the model's id"
+            );
+        }
+        let ids = ids.0.lock().unwrap();
+        let shape = regex::Regex::new(r"^chat:[0-9a-f]{32}:[01]:0:call_0$").unwrap();
+        assert_eq!(ids.len(), 4);
+        assert!(ids.iter().all(|i| shape.is_match(i)), "{ids:?}");
+        let unique: std::collections::HashSet<&String> = ids.iter().collect();
+        assert_eq!(unique.len(), 4, "{ids:?}");
+        assert_eq!(chat_call_id("n", 2, 1, ""), "chat:n:2:1", "no provider id");
     }
 
     #[tokio::test]

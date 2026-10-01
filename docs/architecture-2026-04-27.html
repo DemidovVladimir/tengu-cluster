@@ -485,7 +485,7 @@ const STEPS = [
     what: "Inside the child: load the parent's config FIRST (sandbox_config → sandboxes/&lt;name&gt;/config.toml, else the default chain) → egress::install (TENGU_EGRESS wins) → take [agents.*] for the step's agent from it (compose.base_agent when composed; skill_packages/tools overridden in memory only) → assemble system prompt (base + skills + plan_state + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns (= limits.max_tool_rounds).",
     files: [
       { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "the orchestrating function" },
-      { path: "src/adapters/bootstrap::tools::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store}; subagent_config merges workspace-tool opt-ins from tools" },
+      { path: "src/adapters/bootstrap::tools::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools (∩ tools); subagent_config merges workspace-tool opt-ins from tools; a Claude Code step's bridge serves compress_and_store into the step summary file" },
       { path: "src/adapters/outbound/egress.rs", desc: "tool_client (proxy, redirects off) / llm_api_client / shell_command — the network policy every tool call goes through" },
       { path: "src/adapters/outbound/tools/{http,workspace,memory,crypto,mcp,...}", desc: "the actual tools" },
       { path: "src/adapters/application::chat::tool_loop::run_single_engine_turn", desc: "one LLM turn" },

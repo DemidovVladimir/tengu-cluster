@@ -66,6 +66,16 @@ pub(crate) fn build_planner_engine(
     }
 }
 
+/// What a `run-agent` step asks of a Claude Code engine's bridge
+/// (`claude_code::StepBridge`): the workspace grant and the
+/// `compress_and_store` summary file. Ignored by the other engines.
+#[derive(Debug, Clone, Default)]
+#[cfg_attr(not(feature = "claude_code"), allow(dead_code))]
+pub(crate) struct StepOpts {
+    pub grant_workspace: bool,
+    pub summary_file: Option<std::path::PathBuf>,
+}
+
 /// Build configured engine instance for one agent. `agent_id` names the
 /// `[agents.<id>]` block of the config in `TENGU_CONFIG` for the Claude Code
 /// bridge (the base agent for a composed plan step).
@@ -73,6 +83,23 @@ pub(crate) fn build_engine(
     agent_id: &str,
     agent_config: &crate::config::AgentConfig,
     claude_code_config: Option<&crate::config::ClaudeCodeConfig>,
+) -> Result<Box<dyn Engine>> {
+    build_step_engine(
+        agent_id,
+        agent_config,
+        claude_code_config,
+        StepOpts::default(),
+    )
+}
+
+/// [`build_engine`] for a `run-agent` step or a turn run like one (the
+/// doctor's smoke turn): a Claude Code bridge gets `step` explicitly, never
+/// through an inherited process env.
+pub(crate) fn build_step_engine(
+    agent_id: &str,
+    agent_config: &crate::config::AgentConfig,
+    claude_code_config: Option<&crate::config::ClaudeCodeConfig>,
+    step: StepOpts,
 ) -> Result<Box<dyn Engine>> {
     match agent_config.engine.as_str() {
         "claude_code" => {
@@ -82,13 +109,19 @@ pub(crate) fn build_engine(
                 let profile = agent_config
                     .claude_code
                     .as_ref()
-                    .map(|c| c.builtin_tools_profile.as_str())
+                    .map(|c| c.builtin_tools_profile.trim())
                     .unwrap_or("editor_shell");
                 // `[egress]`: builtin Bash has no egress control — dropped
                 // while a proxy is set. The CLI's own API traffic follows
                 // `claude_cli_env` (HTTPS_PROXY) inside the engine.
                 let profile =
                     crate::adapters::outbound::egress::policy().claude_code_profile(profile);
+                let profile = crate::adapters::outbound::engines::claude_code::BuiltinToolsProfile::parse(profile)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "agents.{agent_id}.claude_code.builtin_tools_profile: unknown profile '{profile}' (none | read_only | editor | editor_shell)"
+                        )
+                    })?;
                 let model_opt = if agent_config.model.is_empty() {
                     None
                 } else {
@@ -102,17 +135,23 @@ pub(crate) fn build_engine(
                 Ok(Box::new(
                     crate::adapters::outbound::engines::claude_code::ClaudeCodeEngine::new(
                         std::path::PathBuf::from(&cc.cli_path),
-                        crate::adapters::outbound::engines::claude_code::BuiltinToolsProfile::from_str(profile),
+                        profile,
                         model_opt,
                         timeout,
                     )
                     .with_scopes(agent_config.scopes.clone())
-                    .with_bridge_agent(agent_id, &crate::config::paths::default_config_path()),
+                    .with_bridge_agent(agent_id, &crate::config::paths::default_config_path())
+                    .with_step_bridge(
+                        crate::adapters::outbound::engines::claude_code::StepBridge {
+                            grant_workspace: step.grant_workspace,
+                            summary_file: step.summary_file,
+                        },
+                    ),
                 ))
             }
             #[cfg(not(feature = "claude_code"))]
             {
-                let _ = (agent_id, claude_code_config);
+                let _ = (agent_id, claude_code_config, step);
                 anyhow::bail!("claude_code engine requires --features claude_code")
             }
         }

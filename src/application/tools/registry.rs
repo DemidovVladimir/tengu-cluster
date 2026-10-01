@@ -149,7 +149,15 @@ impl ToolExecutor for PluginToolExecutor {
         self.activity.publish_tool_activity(call);
 
         if self.registry.get(&call.name).is_none() {
-            anyhow::bail!("Tool '{}' is not available to this agent.", call.name);
+            // Name the tools it has: a model that invented a name (Gemini's
+            // `UNEXPECTED_TOOL_CALL`) can retry with a real one.
+            let mut names = self.registry.tool_names();
+            names.sort();
+            anyhow::bail!(
+                "Tool '{}' is not available to this agent. Its tools: {}.",
+                call.name,
+                names.join(", ")
+            );
         }
 
         let scope = self.scopes.get(&call.name).cloned().unwrap_or_default();

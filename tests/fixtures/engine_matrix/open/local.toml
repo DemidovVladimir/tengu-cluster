@@ -1,0 +1,145 @@
+# Engine-matrix open fixture sandbox (x-engine-parity-audit): local engine,
+# Ollama gemma4:latest (docs/engine-backends.md § Local). The server is named
+# by TENGU_MATRIX_LOCAL_BASE_URL — the operator's PC over the LAN, never a
+# model on this Mac (unset: the live legs are skipped); offline, a scripted
+# mock server (`offline_local_shell`). The test sets TENGU_MATRIX_WORKSPACE,
+# TENGU_MATRIX_FIXTURES (../), TENGU_MATRIX_MCP_TOKEN and TENGU_HOME.
+#
+# The sets that need a sandbox without [risk] (a shell, [[mcp_servers]],
+# memory on) and every catalog tool the hardened fixtures (../*.toml) do not
+# hold. Never signs or sends: no [solana] signer, the Solana write tools run
+# in their keyless `simulate` mode only, both Privy signing tools have a scope
+# without wallets (refused before any request).
+#
+# Everything above [agents.*] is identical in the three open fixtures
+# (`fixtures_load_and_agree` checks it).
+
+[egress]
+network = "open"
+
+# memory_ingest / memory_search / persistent_store: the disk store under
+# <workspace>/memory, embeddings through OpenRouter (OPENROUTER_API_KEY).
+[memory]
+enabled = true
+
+# The shell set's [[mcp_servers]] proxy `matrix__token`. `$VAR` stays literal
+# here and is resolved by whoever spawns the server — the run-agent child, or a
+# Claude Code step's bridge from its inherited env (no value in the CLI's
+# temp --mcp-config).
+[[mcp_servers]]
+name = "matrix"
+transport = "stdio"
+command = ["sh", "${TENGU_MATRIX_FIXTURES}/token_mcp_server.sh"]
+env = { MATRIX_TOKEN = "$TENGU_MATRIX_MCP_TOKEN" }
+
+# Configured scopes that do NOT cover the workspace: they work only through
+# the workspace grant of a run-agent step (the bridge's too, for Claude Code).
+[default_scopes.run_command]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+shell_bins = ["cat"]
+
+# The util set's loopback endpoint.
+[default_scopes.http_request]
+net_hosts = ["127.0.0.1"]
+
+# Privy signing off: a scope without wallets refuses before any env read or
+# request (the privy_off set).
+[default_scopes.sign_message]
+
+[default_scopes.sign_and_send_transaction]
+
+# Privy read (the privy set, only with PRIVY_* set): env and host scoped.
+[default_scopes.get_wallet_address]
+wallets = ["default"]
+net_hosts = ["api.privy.io"]
+env_reads = ["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]
+
+# Solana (sandboxes/lping/config.toml's scopes): public mainnet RPC (the leg
+# clears SOLANA_RPC_URL), Jupiter lite, Meteora datapi.
+[default_scopes.sol_price]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["lite-api.jup.ag", "hermes.pyth.network", "api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.dlmm_pools]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["dlmm.datapi.meteora.ag"]
+
+[default_scopes.dlmm_pool]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.dlmm_positions]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.jup_perps]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.solana_wallet]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.solana_tx]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.lp_snapshot]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.hedge_decide]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.lp_decide]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+# Write tools: simulate only (no signer; `wallets` never granted here).
+[default_scopes.solana_close_token_accounts]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.jupiter_swap]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.dlmm_open_position]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.dlmm_close_position]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[default_scopes.jup_perps_order]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
+env_reads = ["SOLANA_RPC_URL"]
+
+[agents.gemma]
+engine = "local"
+model = "gemma4:latest"
+description = "Engine-matrix open fixture: local Ollama gemma4:latest."
+tools = ["run_command", "matrix__token", "memory_ingest", "memory_search", "persistent_store", "view_skill", "skill_resource", "manage_skill", "skill_distill", "apply_improver_proposal", "shared_cache", "http_request", "abi_encode", "hex_to_uint256", "sign_message", "sign_and_send_transaction", "get_wallet_address", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order", "agentic_memory"]
+skill_packages = ["matrix_cat"]
+workspace = "${TENGU_MATRIX_WORKSPACE}"
+
+[agents.gemma.limits]
+context_window = 16384
+max_tool_rounds = 14
+request_timeout_secs = 900
+
+[agents.gemma.local]
+base_url = "${TENGU_MATRIX_LOCAL_BASE_URL}"
+api_key_env = ""

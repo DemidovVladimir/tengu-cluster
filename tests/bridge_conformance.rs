@@ -15,7 +15,7 @@
 //! | Side | Process (cwd = its workspace) | Env (after `env_clear`) |
 //! |---|---|---|
 //! | in-process | one `tengu tool call -c <root>/config.toml --agent conf --batch`: a `{"tool", "args", "call_id": <n>}` line per step, one executor | `PATH`, `TMPDIR`, `HOME` + `TENGU_HOME` under the side root, `TENGU_SECRETS_LOADED` naming `XM_CONFORMANCE_SECRET`, the case env |
-//! | bridge | one `tengu mcp-bridge`: `initialize`, then a `tools/call` per step with JSON-RPC id `<n>` | the same + `TENGU_CONFIG`, `TENGU_BRIDGE_AGENT=conf`, `TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS` (the agent's tools), `TENGU_AGENT_IPC=1` (a `run-agent` child's bridge: workspace root granted like in-process), `TENGU_BRIDGE_MCP_SERVERS` in `[[mcp_servers]]` cases |
+//! | bridge | one `tengu mcp-bridge`: `initialize`, then a `tools/call` per step with JSON-RPC id `<n>` | the same + `TENGU_CONFIG`, `TENGU_BRIDGE_AGENT=conf`, `TENGU_BRIDGE_WORKSPACE`, `TENGU_BRIDGE_TOOLS` (the agent's tools), `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's bridge: workspace root granted like in-process), `TENGU_BRIDGE_MCP_SERVERS` in `[[mcp_servers]]` cases |
 //!
 //! Fixture sandbox (`BASE_TOML` + the case's TOML): `[egress] network =
 //! "open"`, `allow_hosts = ["127.0.0.1"]` (a hard-coded upstream host is
@@ -106,6 +106,7 @@ engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
 workspace = "{ws}"
 tools = [{tools}]
+skill_packages = [{skills}]
 "#;
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,9 @@ struct Case {
     toml: String,
     /// `[agents.conf] tools`; default = every step's tool.
     agent_tools: Vec<String>,
+    /// `[agents.conf] skill_packages` (`.skill(..)`: copied from
+    /// `tests/fixtures/skills/<name>` into `<ws>/skills/<name>`).
+    skills: Vec<String>,
     /// `.scoped(env)`: `[default_scopes.<t>]` for every agent tool (workspace
     /// store, mock host, `env` readable) and `env` = the mock.
     scope_env: Option<String>,
@@ -173,6 +177,7 @@ fn case(tool: &str, args: Value) -> Case {
         steps: vec![step(tool, args)],
         toml: String::new(),
         agent_tools: Vec::new(),
+        skills: Vec::new(),
         scope_env: None,
         env: Vec::new(),
         files: Vec::new(),
@@ -232,6 +237,13 @@ impl Case {
     fn tools(mut self, tools: &[&str]) -> Self {
         self.agent_tools = tools.iter().map(|t| t.to_string()).collect();
         self
+    }
+    /// The fixture skill `tests/fixtures/skills/<name>` in the workspace's
+    /// project tier and in `[agents.conf] skill_packages`.
+    fn skill(mut self, name: &str) -> Self {
+        self.skills.push(name.to_string());
+        let text = fixture(&format!("skills/{name}/SKILL.md"));
+        self.file(&format!("skills/{name}/SKILL.md"), &text)
     }
     fn scoped(mut self, env: &str) -> Self {
         self.scope_env = Some(env.to_string());
@@ -621,6 +633,19 @@ fn cases() -> Vec<Case> {
             .err("PRIVY_APP_ID"),
         case("sign_message", json!({"message": "hello"})).err("PRIVY_APP_ID"),
         case("get_wallet_address", json!({})).err("PRIVY_APP_ID"),
+        // Privy requests pass `[egress]` like `http_request`: api.privy.io
+        // is outside `allow_hosts`, nothing is sent.
+        case("get_wallet_address", json!({}))
+            .named("egress_denied")
+            .env("PRIVY_APP_ID", "conformance-app")
+            .env("PRIVY_APP_SECRET", "conformance-app-secret")
+            .env("PRIVY_WALLET_ID", "conformance-wallet")
+            .err("not in allow_hosts"),
+        // A configured scope gates the Privy env like any networked tool's.
+        case("get_wallet_address", json!({}))
+            .named("scope")
+            .toml("[default_scopes.get_wallet_address]\nwallets = [\"default\"]\nnet_hosts = [\"api.privy.io\"]\n")
+            .err("env var 'PRIVY_APP_ID' not in allowed env_reads"),
         case(
             "abi_encode",
             json!({"function_signature": "transfer(address,uint256)",
@@ -840,9 +865,39 @@ fn cases() -> Vec<Case> {
         .ok("pong");
     proxy.extra = true;
     proxy.mcp_servers = Some(json!([{
-        "name": "fake", "transport": "stdio", "command": ["sh", fake_server]
+        "name": "fake", "transport": "stdio", "command": ["sh", &fake_server]
     }]));
     cases.push(proxy);
+    // A server tool outside the agent's `tools` runs on neither side.
+    let mut unlisted = case("fake__echo", json!({}))
+        .named("not_listed")
+        .tools(&["read_file"])
+        .toml(&format!(
+            "[[mcp_servers]]\nname = \"fake\"\ntransport = \"stdio\"\ncommand = [\"sh\", \"{fake_server}\"]\n"
+        ))
+        .err("not available to this agent");
+    unlisted.extra = true;
+    unlisted.mcp_servers = Some(json!([{
+        "name": "fake", "transport": "stdio", "command": ["sh", &fake_server]
+    }]));
+    cases.push(unlisted);
+    // ── shell skill (not a catalog row): `skill_packages` loads it on both
+    //    sides (`tests/fixtures/skills/matrix_cat`); output redacted alike
+    let mut skill = case("matrix_cat", json!({"path": "note.txt"}))
+        .skill("matrix_cat")
+        .file("note.txt", "skill {secret}\n")
+        .ok("skill [REDACTED]");
+    skill.extra = true;
+    cases.push(skill);
+    // A `[risk]` sandbox runs no shell: the skill loads on neither side.
+    let mut no_shell = case("matrix_cat", json!({"path": "note.txt"}))
+        .named("risk")
+        .skill("matrix_cat")
+        .toml(XM_RISK_TOML)
+        .file("note.txt", "x")
+        .err("not available to this agent");
+    no_shell.extra = true;
+    cases.push(no_shell);
     cases
 }
 
@@ -1137,7 +1192,10 @@ impl Side {
             .iter()
             .map(|t| format!("\"{t}\""))
             .collect();
-        let toml = format!("{BASE_TOML}{}", case.full_toml()).replace("{tools}", &tools.join(", "));
+        let skills: Vec<String> = case.skills.iter().map(|s| format!("\"{s}\"")).collect();
+        let toml = format!("{BASE_TOML}{}", case.full_toml())
+            .replace("{tools}", &tools.join(", "))
+            .replace("{skills}", &skills.join(", "));
         let config = root.join("config.toml");
         std::fs::write(&config, expand(&toml, &root, &ws, mock)).unwrap();
         let mut roots = vec![root.display().to_string()];
@@ -1289,7 +1347,7 @@ fn run_bridge(side: &Side, case: &Case, mock: &str) -> Result<Vec<Answer>, Strin
         .env("TENGU_BRIDGE_AGENT", AGENT)
         .env("TENGU_BRIDGE_WORKSPACE", &side.ws)
         .env("TENGU_BRIDGE_TOOLS", Value::from(defs).to_string())
-        .env("TENGU_AGENT_IPC", "1");
+        .env("TENGU_BRIDGE_GRANT_WORKSPACE", "1");
     if let Some(servers) = &case.mcp_servers {
         cmd.env("TENGU_BRIDGE_MCP_SERVERS", servers.to_string());
     }

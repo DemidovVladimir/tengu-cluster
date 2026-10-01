@@ -440,25 +440,23 @@ pub fn run_tui(
             engine.supports_tool_use() && !engine.manages_own_workspace() && workspace.is_some();
         let has_memory = memory_manager_handle.is_some();
         let manages_workspace = engine.manages_own_workspace();
-        let mut base_tools = crate::bootstrap::tools::compute_base_tools(
-            uses_tools,
-            has_memory,
-            &engine_agent_config.workspace_tools,
-        );
+        // The agent's `tools` list applies here as on every surface
+        // (`agent_base_tools`; empty = every base tool).
+        let mut base_tools =
+            crate::bootstrap::tools::agent_base_tools(&engine_agent_config, uses_tools, has_memory);
         // For engines that manage their own workspace (claude_code), build bridge
         // tools so Tengu-native tools are still accessible via MCP bridge.
-        let bridge_base_tools: Vec<crate::domain::message::ToolDef> =
-            if manages_workspace && workspace.is_some() {
-                rt.block_on(crate::bootstrap::tools::with_mcp_bridge_tools(
-                    crate::adapters::outbound::tools::advertised_defs(
-                        has_memory,
-                        &engine_agent_config.workspace_tools,
-                    ),
-                    &mcp_servers,
-                ))
-            } else {
-                vec![]
-            };
+        let bridge_base_tools: Vec<crate::domain::message::ToolDef> = if manages_workspace
+            && workspace.is_some()
+        {
+            rt.block_on(crate::bootstrap::tools::with_mcp_bridge_tools(
+                crate::bootstrap::tools::agent_base_tools(&engine_agent_config, true, has_memory),
+                &engine_agent_config.tools,
+                &mcp_servers,
+            ))
+        } else {
+            vec![]
+        };
 
         // Skill registry — initialized and loaded once, hot-reloaded each turn.
         let skill_source: Option<FileSystemSkillSource> = workspace
@@ -467,7 +465,8 @@ pub fn run_tui(
 
         let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
         let mut skill_registry = SkillRegistry::new(base_reserved)
-            .with_allowlist(Some(engine_agent_config.skill_packages.clone()));
+            .with_allowlist(Some(engine_agent_config.skill_packages.clone()))
+            .with_shell_skills(!engine_agent_config.no_shell_fallback);
 
         if let Some(ref src) = skill_source {
             skill_registry.reload(src);
@@ -551,10 +550,10 @@ pub fn run_tui(
                         let mut lines = Vec::new();
 
                         // Re-read env vars and rebuild base tool set.
-                        let new_base = crate::bootstrap::tools::compute_base_tools(
+                        let new_base = crate::bootstrap::tools::agent_base_tools(
+                            &engine_agent_config,
                             uses_tools,
                             has_memory,
-                            &engine_agent_config.workspace_tools,
                         );
                         let env_changed = new_base.len() != base_tools.len();
                         base_tools = new_base;

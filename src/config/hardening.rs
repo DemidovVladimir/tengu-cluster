@@ -79,9 +79,9 @@ fn claude_code_errors(cfg: &Config) -> Vec<String> {
     agents
         .into_iter()
         .filter_map(|(id, agent)| {
-            // Exact match, like `BuiltinToolsProfile::from_str`.
+            // Trimmed, like `BuiltinToolsProfile::parse`.
             let got = match agent.claude_code.as_ref() {
-                Some(cc) if cc.builtin_tools_profile == "none" => return None,
+                Some(cc) if cc.builtin_tools_profile.trim() == "none" => return None,
                 Some(cc) => format!("builtin_tools_profile = \"{}\"", cc.builtin_tools_profile),
                 None => format!("no [agents.{id}.claude_code] block (= \"editor_shell\")"),
             };
@@ -286,21 +286,24 @@ mod tests {
 
     #[test]
     fn signing_sandbox_accepts_claude_code_with_builtins_off() {
-        let cfg = load(
-            true,
-            "[agents.exec.claude_code]\nbuiltin_tools_profile = \"none\"\n",
-        )
-        .expect("hardened claude_code agent loads");
-        assert!(requires_hardened_claude_code(&cfg));
-        assert!(
-            cfg.agents.values().all(|a| a.no_shell_fallback),
-            "every agent's fallback runs no shell"
-        );
+        // Trimmed like `BuiltinToolsProfile::parse`: " none" is none.
+        for profile in ["none", " none", "none\t"] {
+            let cfg = load(
+                true,
+                &format!("[agents.exec.claude_code]\nbuiltin_tools_profile = \"{profile}\"\n"),
+            )
+            .expect("hardened claude_code agent loads");
+            assert!(requires_hardened_claude_code(&cfg));
+            assert!(
+                cfg.agents.values().all(|a| a.no_shell_fallback),
+                "every agent's fallback runs no shell"
+            );
+        }
     }
 
     #[test]
     fn signing_sandbox_refuses_claude_code_with_builtins_on_or_no_block() {
-        for profile in ["read_only", "editor", "editor_shell", " none"] {
+        for profile in ["read_only", "editor", "editor_shell", " editor_shell"] {
             let err = load(
                 true,
                 &format!("[agents.exec.claude_code]\nbuiltin_tools_profile = \"{profile}\"\n"),

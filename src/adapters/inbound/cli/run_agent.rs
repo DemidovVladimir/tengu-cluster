@@ -53,14 +53,18 @@ async fn try_persist_agentic_step_summary(
 ///    takes `[agents.<name>]` from it — model, engine, tools, skills, limits.
 /// 4. Composes the system prompt: base template + skill bodies (three-tier
 ///    loader) + mandatory `compress_and_store` suffix.
-/// 5. Builds the engine (`engine` = `openrouter` | `claude_code`) for the agent's model.
-/// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪ {compress_and_store}`
-///    plus a `PluginToolExecutor` over those tools.
+/// 5. Builds the engine (`engine` = `openrouter` | `local` | `claude_code`) for
+///    the agent's model as a step (`build_step_engine`: a Claude Code bridge
+///    grants the workspace and writes `compress_and_store` into a summary file).
+/// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪
+///    {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools` plus a
+///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`).
 /// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
 ///    dispatch each → append assistant + tool messages → repeat. Results
 ///    enter as returned, except on engines with a per-result cap (local:
 ///    `tool_loop::fit_tool_result`, older rounds compacted to line 1). Stop on:
-///    - empty tool_calls (model done)
+///    - empty tool_calls (model done; a Claude Code turn ends here — its
+///      bridged `compress_and_store` summary is read from the summary file)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
 ///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
@@ -241,11 +245,24 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
     crate::bootstrap::tools::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
-    // The base block's name: a Claude Code bridge loads `[agents.<it>]`.
-    let engine = crate::adapters::outbound::engines::build_engine(
+    // A Claude Code step's bridge serves `compress_and_store` into this file
+    // (the loop below intercepts it for the other engines); read back after
+    // the turn. Removed when this process ends.
+    let summary_file = if spec.engine == "claude_code" {
+        Some(tempfile::NamedTempFile::new().context("run-agent: step summary file")?)
+    } else {
+        None
+    };
+    // The base block's name: a Claude Code bridge loads `[agents.<it>]` and
+    // grants this step's workspace, as the executor below does.
+    let engine = crate::adapters::outbound::engines::build_step_engine(
         &spec_load_name,
         &agent_cfg_for_engine,
         parent_config.claude_code.as_ref(),
+        crate::adapters::outbound::engines::StepOpts {
+            grant_workspace: true,
+            summary_file: summary_file.as_ref().map(|f| f.path().to_path_buf()),
+        },
     )
     .with_context(|| {
         format!(
@@ -473,7 +490,17 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 use crate::ports::engine::ToolExecutor;
                 match exec.execute_typed(call, &messages).await {
                     Ok(out) => (out.text, out.observation, true),
-                    Err(e) => (format!("tool error: {}", e), None, false),
+                    Err(e) => {
+                        // The error is redacted by `SanitizedToolExecutor`;
+                        // in the step's log with the model's arguments so a
+                        // failed call is diagnosable (the parent forwards
+                        // stderr).
+                        let args = call.arguments.to_string();
+                        let args = crate::domain::token::truncate_at_boundary(&args, 300)
+                            .map_or(args.as_str(), |(prefix, _)| prefix);
+                        tracing::warn!(tool = %call.name, error = %e, arguments = %args, "subagent tool call failed");
+                        (format!("tool error: {}", e), None, false)
+                    }
                 }
             } else {
                 (
@@ -526,6 +553,30 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         }
     }
 
+    // A Claude Code step called `compress_and_store` through its bridge.
+    if summary.is_none() {
+        if let Some(text) = summary_file
+            .as_ref()
+            .and_then(|f| bridged_summary(f.path()))
+        {
+            tracing::info!(
+                chars = text.chars().count(),
+                "compress_and_store called through the bridge; its summary is the step summary"
+            );
+            compress_called = true;
+            #[cfg(feature = "postgres_memory")]
+            {
+                let _ = try_persist_agentic_step_summary(
+                    &parent_config,
+                    &input.session_id,
+                    &input.step_id,
+                    &text,
+                )
+                .await;
+            }
+            summary = Some(text);
+        }
+    }
     // If the model never called compress_and_store, treat the final
     // assistant text as the summary (graceful degradation, same as Phase 5a).
     let summary = summary.unwrap_or_else(|| final_text.clone());
@@ -610,6 +661,15 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
     println!("{}", json);
     Ok(())
+}
+
+/// The summary a Claude Code step's bridge wrote for `compress_and_store`
+/// (`mcp_bridge::StepSummary`); `None` when the model never called it (the
+/// file is empty) or it holds only whitespace.
+fn bridged_summary(file: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(file)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 /// Subprocess `ToolActivityPort` impl — silent. The parent runner sees
@@ -707,4 +767,25 @@ fn load_skill_body_three_tier(name: &str) -> Option<String> {
         return Some(content);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The step summary a Claude Code bridge leaves: none until
+    /// `compress_and_store` wrote one; whitespace is none.
+    #[test]
+    fn bridged_summary_is_the_written_text() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        assert_eq!(bridged_summary(file.path()), None);
+        std::fs::write(file.path(), " \n").unwrap();
+        assert_eq!(bridged_summary(file.path()), None);
+        std::fs::write(file.path(), "done: 42").unwrap();
+        assert_eq!(bridged_summary(file.path()).as_deref(), Some("done: 42"));
+        assert_eq!(
+            bridged_summary(std::path::Path::new("/nonexistent/x")),
+            None
+        );
+    }
 }

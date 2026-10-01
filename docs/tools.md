@@ -16,7 +16,7 @@
 | `memory/` | `memory_ingest`, `memory_search` | `[memory] enabled` |
 | `memory/` | `persistent_store` | opt-in |
 | `http/` | `http_request` | always |
-| `crypto/` | `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` | always |
+| `crypto/` | `sign_and_send_transaction`, `sign_message`, `get_wallet_address` (Privy: `wallets`, then `PRIVY_*` through `env_reads`, every request through `[egress]` + `net_hosts`, audited), `abi_encode`, `hex_to_uint256` | always |
 | `skill_resource/`, `view_skill/` | `skill_resource`, `view_skill` | always |
 | `cache/` | `shared_cache` | opt-in |
 | `agentic_memory/` | `agentic_memory` | opt-in, feature `postgres_memory` |
@@ -36,7 +36,7 @@ The list is `catalog()` in `tools/mod.rs` — one `ToolEntry` row per group. Tha
 4. `cargo test --bin tengu -- catalog schema_lint && cargo test --test scope_lint && cargo test --test bridge_conformance`.
 5. Every engine — no exceptions (operator rule 2026-09-30): the tool must work the same under `engine = "openrouter"` and `"local"` (in-process) and `"claude_code"` (through `tengu mcp-bridge`). Keep the input schema in the subset all three accept (§ Tool schema subset — the lint covers every catalog row automatically), keep results within a local model's context window, and add:
    - a bridge conformance case — one `case("<tool>", json!({..}))` row in `tests/bridge_conformance.rs::cases()` with its scope TOML, mock replies (fixtures under `tests/fixtures/<area>/`) and expected outcome; `bridge_conformance` fails for a catalog tool without one (`docs/mcp-bridge.md` § Testing);
-   - its engine-matrix smoke: the tool in a tool set of `tests/engine_matrix.rs` (`Set::tools`, the scripted `goal`, what the answer must hold) and in the fixture agents' `tools` + scopes (`tests/fixtures/engine_matrix/*.toml`), then the live legs on every engine (`docs/engine-backends.md` § Engine matrix). An exec tool (private agents only) goes in the xm set: its legs run `tengu tool turn` on the fixtures' private `xm_*` agents instead of `run-agent`.
+   - its engine-matrix smoke: the tool in a tool set of `tests/engine_matrix.rs` (`Set::tools`, the scripted `goal`, what the answer must hold; `every_catalog_tool_has_a_live_leg` fails CI for a catalog tool in no set) and in the fixture agents' `tools` + scopes — `tests/fixtures/engine_matrix/*.toml` for a `[risk]` sandbox, `tests/fixtures/engine_matrix/open/*.toml` otherwise (memory, shell, `[[mcp_servers]]`) — then the live legs on every engine (`docs/engine-backends.md` § Engine matrix). An exec tool (private agents only) goes in the xm set: its legs run `tengu tool turn` on the fixtures' private `xm_*` agents instead of `run-agent`.
 
    Open parity gaps: `docs/mcp-bridge.md` § Parity rule.
 
@@ -87,11 +87,13 @@ net_hosts = ["*"]
 
 | Field | Effect |
 |---|---|
-| `tools` | Allow-list for plan-step runs (`tengu run-agent`). Empty = every always-on tool plus configured opt-ins. Opt-in names listed here are switched on. |
+| `tools` | Allow-list on every surface: chat (TUI, Telegram, webhooks, eval, `tengu tool turn`), plan steps (`tengu run-agent`), `tengu tool call`, feeds, decision loops, the Claude Code bridge — `[[mcp_servers]]` tools included (`bootstrap::tools::agent_base_tools`). Empty = every always-on tool plus configured opt-ins. Opt-in names listed here are switched on. |
 | `workspace_tools` | Older way to switch on opt-in tools; merged with `tools`. |
+| `skill_packages` | Skills the agent loads (doc skills into the prompt; shell skills as tools on every surface, the bridge included). An agent that runs no shell (`[risk]` / signer sandbox) loads no shell skill |
 | `scopes.<tool>` | `fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`. Per-agent entry replaces `default_scopes` wholesale. |
 | Solana tools | need `fs_roots` = the workspace (observation store), `net_hosts` per tool, `env_reads = ["SOLANA_RPC_URL"]` (else the public RPC is used silently). Working example: `sandboxes/lping/config.toml` |
 | Hyperliquid tools | need `fs_roots` = the workspace (observation store), `net_hosts = ["api.hyperliquid.xyz"]`, `env_reads = ["HL_API_URL"]` (testnet override; unset = mainnet). Request weight budgets against `[rate_limits.hyperliquid]`. Example: `config.example.toml` |
+| Privy crypto tools | a configured scope needs `wallets = ["default"]` (to sign; empty = Privy signing off), `net_hosts = ["api.privy.io"]` (+ the `EVM_RPC_URL` host for receipts), `env_reads = ["PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID"]` (+ `CHAIN_ID`, `EVM_RPC_URL`); `[egress] allow_hosts` applies. No scope = the permissive fallback. Example: `tests/fixtures/engine_matrix/open/openrouter.toml` |
 | Solana write tools, `mode = "send"` | `[solana] signer_key_file` + `wallets = ["<full pubkey>"]` in that ONE agent's own scope for the tool (never `[default_scopes]`; the agent has no `description`); signing-sandbox rules in `src/config/solana.rs` + `src/config/hardening.rs`. Without both they only simulate |
 | `[risk]` sandbox (xmarket) | hardened like a signer (`src/config/hardening.rs`: no shell scope, no `[[mcp_servers]]`, `claude_code` only with built-ins off, `<TENGU_HOME>/state` / kill-switch file / config file outside every fs root); `[default_scopes.sign_and_send_transaction]` + `[default_scopes.sign_message]` required without `wallets` (Privy signing off); exec tools (`domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent — rules `src/config/risk.rs`, doc `docs/xmarket-risk-paper-2026-09-30.md` |
 | `compress_and_store` | Added to every subagent automatically — never list it. |
@@ -106,7 +108,7 @@ command = ["npx", "-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }
 ```
 
-List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one.
+List them in an agent's `tools` like any other tool (`tools = ["github__create_issue"]`); an empty `tools` gets every one. A server tool outside a non-empty `tools` runs on no surface (in-process or bridged).
 
 | Agent kind | Sees `[[mcp_servers]]` tools? | How |
 |---|---|---|

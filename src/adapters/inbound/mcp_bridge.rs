@@ -9,10 +9,13 @@
 //! Parity with in-process tools (tracker convention 20): the bridge loads the
 //! config in `TENGU_CONFIG` once (`Config::load`: validated + folded) and runs
 //! tools as `[agents.<TENGU_BRIDGE_AGENT>]` — its scopes, sandbox sections,
-//! `no_shell_fallback`, `[memory]` — redacts the process secrets, and hands
-//! each tool the JSON-RPC request id as `ToolCtx.call_id`. Without that file
-//! or agent (a standalone bridge in someone's own Claude Code) it falls back
-//! to `Config::default()`'s `main` agent + `TENGU_BRIDGE_SCOPES`, with a warn.
+//! `no_shell_fallback`, `[memory]`, its shell skills (`skill_packages`) —
+//! redacts the process secrets, and hands each tool the JSON-RPC request id
+//! as `ToolCtx.call_id`. Without that file or agent (a standalone bridge in
+//! someone's own Claude Code) it falls back to `Config::default()`'s `main`
+//! agent + `TENGU_BRIDGE_SCOPES`, with a warn. A `run-agent` step's bridge
+//! (`TENGU_BRIDGE_SUMMARY_FILE`) serves `compress_and_store` into the step's
+//! summary file; any other bridge refuses it with the reason.
 //! Env contract: `adapters/outbound/bridge_env.rs`; doc: `docs/mcp-bridge.md`.
 //!
 //! Protocol: JSON-RPC 2.0 over stdin/stdout (newline-delimited).
@@ -28,7 +31,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::{info, warn};
 
 use crate::adapters::outbound::bridge_env::{
-    TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_MCP_SERVERS_ENV, TENGU_BRIDGE_SCOPES_ENV,
+    TENGU_BRIDGE_AGENT_ENV, TENGU_BRIDGE_GRANT_WORKSPACE_ENV, TENGU_BRIDGE_MCP_SERVERS_ENV,
+    TENGU_BRIDGE_SCOPES_ENV, TENGU_BRIDGE_SUMMARY_FILE_ENV,
 };
 use crate::adapters::outbound::memory::disk_vector::DiskVectorStore;
 use crate::adapters::outbound::memory::embedder::Embedder;
@@ -145,10 +149,14 @@ struct BridgeSetup {
     config: Option<Config>,
     /// `TENGU_BRIDGE_AGENT`.
     agent: Option<String>,
-    /// `TENGU_AGENT_IPC=1`, inherited from a `run-agent` child: like that
-    /// child's executor, every configured scope also gets the workspace as
-    /// an fs root (`bootstrap::tools::grant_workspace_root`).
-    subagent: bool,
+    /// `TENGU_BRIDGE_GRANT_WORKSPACE=1`, set by a `run-agent` step's engine
+    /// (and the doctor's smoke turn): like the step's own executor, every
+    /// configured scope also gets the workspace as an fs root
+    /// (`bootstrap::tools::grant_workspace_root`).
+    grant_workspace: bool,
+    /// `TENGU_BRIDGE_SUMMARY_FILE`: where `compress_and_store` writes the
+    /// step's summary (`StepSummary`); `None` = refused with the reason.
+    summary_file: Option<PathBuf>,
     /// `TENGU_BRIDGE_SCOPES` — used only by the default-`main` fallback.
     env_scopes: HashMap<String, ToolScope>,
     /// `TENGU_BRIDGE_MCP_SERVERS`.
@@ -166,7 +174,11 @@ impl BridgeSetup {
             agent: std::env::var(TENGU_BRIDGE_AGENT_ENV)
                 .ok()
                 .filter(|a| !a.is_empty()),
-            subagent: std::env::var("TENGU_AGENT_IPC").is_ok_and(|v| v == "1"),
+            grant_workspace: std::env::var(TENGU_BRIDGE_GRANT_WORKSPACE_ENV)
+                .is_ok_and(|v| v == "1"),
+            summary_file: std::env::var_os(TENGU_BRIDGE_SUMMARY_FILE_ENV)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
             env_scopes: bridge_scopes_from_env(),
             mcp_servers: bridge_mcp_servers_from_env(),
         }
@@ -255,7 +267,10 @@ async fn serve_mcp_stdio(
 ) -> Result<()> {
     // Inherited vault values + master password; the bridge never prompts.
     let secrets = Arc::new(process_secret_registry(None));
-    let executor = sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets);
+    let executor: Arc<dyn ToolExecutor> = Arc::new(StepSummary {
+        inner: sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets),
+        file: setup.summary_file.clone(),
+    });
     let mcp_tools: Vec<McpToolDef> = setup.tools.iter().map(McpToolDef::from).collect();
 
     info!(
@@ -331,6 +346,70 @@ fn sanitized(executor: PluginToolExecutor, secrets: &Arc<SecretRegistry>) -> Arc
         Arc::new(executor),
         Arc::clone(secrets),
     ))
+}
+
+/// The `run-agent` step protocol tool (`skill_lifecycle::compress_and_store`).
+const COMPRESS_AND_STORE: &str = "compress_and_store";
+
+/// `compress_and_store` through the bridge — what the `run-agent` loop does
+/// for in-process engines (`cli/run_agent.rs`), for a Claude Code step:
+///
+/// | `file` (`TENGU_BRIDGE_SUMMARY_FILE`) | Call |
+/// |---|---|
+/// | set (a `run-agent` step) | `summary` written to it (replacing an earlier one) → `stored`; the step reads it back as its IPC summary |
+/// | unset | error naming why: no step takes a summary here — answer in plain text |
+///
+/// Every other tool goes to `inner`.
+struct StepSummary {
+    inner: Arc<dyn ToolExecutor>,
+    file: Option<PathBuf>,
+}
+
+impl StepSummary {
+    fn store(&self, call: &ToolCall) -> Result<String> {
+        let Some(file) = &self.file else {
+            anyhow::bail!(
+                "compress_and_store ends a `tengu run-agent` plan step, and this bridge serves \
+                 none (no {TENGU_BRIDGE_SUMMARY_FILE_ENV}) — give your summary as plain text instead"
+            );
+        };
+        let summary = call
+            .arguments
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                anyhow::anyhow!("compress_and_store: `summary` (a string) is required")
+            })?;
+        std::fs::write(file, summary)
+            .with_context(|| format!("compress_and_store: write {}", file.display()))?;
+        info!(
+            chars = summary.chars().count(),
+            "compress_and_store: step summary stored"
+        );
+        Ok("stored".to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for StepSummary {
+    async fn execute(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::domain::message::Message],
+    ) -> Result<String> {
+        Ok(self.execute_typed(call, messages).await?.text)
+    }
+
+    async fn execute_typed(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::domain::message::Message],
+    ) -> Result<crate::ports::tool::ToolOutput> {
+        if call.name == COMPRESS_AND_STORE {
+            return self.store(call).map(crate::ports::tool::ToolOutput::from);
+        }
+        self.inner.execute_typed(call, messages).await
+    }
 }
 
 fn write_response(stdout: &io::Stdout, resp: &JsonRpcResponse) {
@@ -485,8 +564,8 @@ fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
 
 // ---------------------------------------------------------------------------
 // Tool executor construction — mirrors `crate::bootstrap::tools::build_tool_executor`
-// but is tailored for the bridge (no skill registry, no cancel flag, no
-// channel-specific activity port).
+// but is tailored for the bridge (skills from `agent_skill_registry`, no
+// cancel flag, no channel-specific activity port).
 // ---------------------------------------------------------------------------
 
 /// Parse `TENGU_BRIDGE_SCOPES`. Unset → empty map (every tool permissive).
@@ -522,7 +601,7 @@ fn bridge_mcp_servers_from_env() -> Vec<McpServerConfig> {
 ///
 /// | Config file + `[agents.<TENGU_BRIDGE_AGENT>]` | Agent |
 /// |---|---|
-/// | both present | that block as `Config::load` folded it (scopes with `[default_scopes]`, `sandbox` sections, `no_shell_fallback`, signer); under a `run-agent` child each configured scope also gets the workspace root, like the child's own executor |
+/// | both present | that block as `Config::load` folded it (scopes with `[default_scopes]`, `sandbox` sections, `no_shell_fallback`, signer); with `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step) each configured scope also gets the workspace root, like the step's own executor |
 /// | either absent (warn) | `Config::default()`'s `main` with `TENGU_BRIDGE_SCOPES`; shell-free when a loaded config's agents are |
 ///
 /// Then every `WORKSPACE_TOOLS` name in the `TENGU_BRIDGE_TOOLS` allow-list
@@ -541,7 +620,7 @@ fn bridge_agent_config(setup: &BridgeSetup, allowed: &HashSet<String>) -> Result
                 .workspace
                 .as_ref()
                 .map(|p| crate::config::paths::expand_tilde(p));
-            if setup.subagent {
+            if setup.grant_workspace {
                 crate::bootstrap::tools::grant_workspace_root(&mut agent.scopes, &setup.workspace);
             }
             info!(agent = %setup.agent.as_deref().unwrap_or_default(), "mcp-bridge: tools run as the configured agent");
@@ -654,12 +733,6 @@ async fn build_bridge_executor(
 
     let mut registry = ToolRegistry::new();
 
-    // `SkillPlugin` is never registered here — it needs a `SkillRegistry` the
-    // bridge's subprocess context can't construct. `McpPlugin` only for the
-    // `[[mcp_servers]]` the Claude Code engine passed in (see below); a
-    // standalone bridge registered in someone's own Claude Code gets none, so
-    // their MCP manifest isn't re-advertised.
-
     // Same catalog as the in-process executor (`build_tool_executor`).
     crate::adapters::outbound::tools::register_catalog(
         &mut registry,
@@ -672,6 +745,33 @@ async fn build_bridge_executor(
         },
     )
     .await;
+
+    // Shell skills: loaded as `run-agent` loads them (`agent_skill_registry`
+    // — none when the agent runs no shell), kept to the requested names like
+    // every other tool. A requested name counts as listed in
+    // `skill_packages`: a composed plan step's skills (IPC `compose`) reach
+    // the bridge only through the tool list its `run-agent` parent
+    // advertised — as workspace-tool opt-ins do (`bridge_agent_config`).
+    let mut skill_agent = agent_config.clone();
+    skill_agent
+        .skill_packages
+        .extend(allowed_list.iter().cloned());
+    let skills = crate::bootstrap::tools::agent_skill_registry(
+        workspace,
+        &skill_agent,
+        memory_config.enabled,
+    );
+    let skill_plugin = crate::adapters::outbound::tools::skill::SkillPlugin::from_registry(&skills);
+    if let Err(e) = registry
+        .register_plugin(&skill_plugin, &plugin_ctx, &allowed_list)
+        .await
+    {
+        warn!(error = %e, "bridge: skill plugin failed — shell skills unavailable");
+    }
+
+    // `McpPlugin` only for the `[[mcp_servers]]` the Claude Code engine
+    // passed in; a standalone bridge registered in someone's own Claude Code
+    // gets none, so their MCP manifest isn't re-advertised.
 
     // External MCP servers whose `{server}__{tool}` names were requested —
     // proxied here so the calls go through this process's egress policy.
@@ -753,7 +853,8 @@ net_hosts = ["api.hyperliquid.xyz"]
                 .collect(),
             config,
             agent: agent.map(str::to_string),
-            subagent: false,
+            grant_workspace: false,
+            summary_file: None,
             env_scopes: HashMap::new(),
             mcp_servers: Vec::new(),
         }
@@ -842,7 +943,7 @@ net_hosts = ["api.hyperliquid.xyz"]
         let state = seen["xm_state_dir"].as_str().unwrap();
         assert!(state.ends_with("state/bridge-test"), "{state}");
 
-        s.subagent = true;
+        s.grant_workspace = true;
         let exec = build_bridge_executor(&s, &no_secrets()).await.unwrap();
         assert_eq!(exec.scopes["http_request"].fs_roots, [ws.path()]);
     }
@@ -961,5 +1062,136 @@ net_hosts = ["api.hyperliquid.xyz"]
         let none = seen(call(exec.as_ref(), Value::Null, "probe", json!({})).await);
         assert!(none["call_id"].is_null());
         assert_eq!(call_id(&json!("")), "", "an empty id is no id");
+    }
+
+    /// The fixture shell skill (`tests/fixtures/skills/matrix_cat`).
+    const MATRIX_CAT: &str = include_str!("../../../tests/fixtures/skills/matrix_cat/SKILL.md");
+
+    /// A shell skill in the agent's `skill_packages` runs through the bridge
+    /// like in-process; an agent that runs no shell (signer / `[risk]`)
+    /// loads none.
+    #[tokio::test]
+    async fn shell_skills_run_through_the_bridge_unless_the_agent_runs_no_shell() {
+        let ws = TempDir::new().unwrap();
+        let skill = ws.path().join("skills/matrix_cat");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), MATRIX_CAT).unwrap();
+        std::fs::write(ws.path().join("note.txt"), "skill note\n").unwrap();
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("config.toml");
+        std::fs::write(
+            &file,
+            "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\nskill_packages = [\"matrix_cat\"]\n",
+        )
+        .unwrap();
+        let config = Config::load(&file).unwrap();
+
+        let s = setup(
+            ws.path(),
+            &["matrix_cat"],
+            Some(config.clone()),
+            Some("main"),
+        );
+        let exec = sanitized(
+            build_bridge_executor(&s, &no_secrets()).await.unwrap(),
+            &no_secrets(),
+        );
+        let r = call(
+            exec.as_ref(),
+            json!(1),
+            "matrix_cat",
+            json!({"path": "note.txt"}),
+        )
+        .await;
+        assert_eq!(r["isError"], false, "{r}");
+        assert!(text(&r).contains("skill note"), "{r}");
+
+        // A composed plan step's skill reaches the bridge only through the
+        // requested tool list: it loads without `skill_packages` too; an
+        // unrequested one does not.
+        let mut composed = config.clone();
+        composed
+            .agents
+            .get_mut("main")
+            .unwrap()
+            .skill_packages
+            .clear();
+        let s = setup(
+            ws.path(),
+            &["matrix_cat"],
+            Some(composed.clone()),
+            Some("main"),
+        );
+        let exec = build_bridge_executor(&s, &no_secrets()).await.unwrap();
+        assert!(exec.registry.get("matrix_cat").is_some());
+        let s = setup(ws.path(), &["read_file"], Some(composed), Some("main"));
+        let exec = build_bridge_executor(&s, &no_secrets()).await.unwrap();
+        assert!(exec.registry.get("matrix_cat").is_none());
+
+        let mut signing = config;
+        signing.solana.signer_key_file = Some("/keys/signer.json".into());
+        signing.fold_default_scopes();
+        let s = setup(ws.path(), &["matrix_cat"], Some(signing), Some("main"));
+        let exec = sanitized(
+            build_bridge_executor(&s, &no_secrets()).await.unwrap(),
+            &no_secrets(),
+        );
+        let r = call(
+            exec.as_ref(),
+            json!(2),
+            "matrix_cat",
+            json!({"path": "note.txt"}),
+        )
+        .await;
+        assert_eq!(r["isError"], true, "{r}");
+        assert!(text(&r).contains("not available to this agent"), "{r}");
+    }
+
+    /// `compress_and_store`: a `run-agent` step's bridge writes the summary
+    /// to the step's file (the last call wins); any other bridge refuses it
+    /// with the reason; other tools pass through.
+    #[tokio::test]
+    async fn compress_and_store_writes_the_step_summary_or_says_why_not() {
+        let ws = TempDir::new().unwrap();
+        std::fs::write(ws.path().join("a.txt"), "alpha").unwrap();
+        let summary = ws.path().join("summary.txt");
+        let s = setup(ws.path(), &["read_file", "compress_and_store"], None, None);
+        let inner = sanitized(
+            build_bridge_executor(&s, &no_secrets()).await.unwrap(),
+            &no_secrets(),
+        );
+        let step = StepSummary {
+            inner: Arc::clone(&inner),
+            file: Some(summary.clone()),
+        };
+        for (id, words) in [(1, "first"), (2, "done: 42")] {
+            let r = call(
+                &step,
+                json!(id),
+                "compress_and_store",
+                json!({"summary": words}),
+            )
+            .await;
+            assert_eq!((r["isError"].clone(), text(&r)), (json!(false), "stored"));
+        }
+        assert_eq!(std::fs::read_to_string(&summary).unwrap(), "done: 42");
+        let r = call(&step, json!(3), "compress_and_store", json!({})).await;
+        assert!(
+            r["isError"] == true && text(&r).contains("`summary`"),
+            "{r}"
+        );
+        let r = call(&step, json!(4), "read_file", json!({"path": "a.txt"})).await;
+        assert!(r["isError"] == false && text(&r).contains("alpha"), "{r}");
+
+        let plain = StepSummary { inner, file: None };
+        let r = call(
+            &plain,
+            json!(5),
+            "compress_and_store",
+            json!({"summary": "x"}),
+        )
+        .await;
+        assert_eq!(r["isError"], true);
+        assert!(text(&r).contains("plain text"), "{r}");
     }
 }

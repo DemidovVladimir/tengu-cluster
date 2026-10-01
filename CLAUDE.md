@@ -207,7 +207,7 @@ global metrics sink so the TUI sees a unified stream.
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (`ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. One `ToolEntry` row in `catalog()` (`src/adapters/outbound/tools/mod.rs`) — drives in-process registration, the MCP bridge, and the advertised tool list.
 3. Opt-in only: also add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (config validation; `catalog_tests` fail if you forget).
-4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint (`tools/schema_lint.rs`, runs over every catalog row), bridge conformance case and live engine-matrix smoke pass (milestone E0 in `docs/xmarket-tracker-2026-09-29.md`; see the gotcha below for what is still open).
+4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint (`tools/schema_lint.rs`, runs over every catalog row), bridge conformance case and live engine-matrix smoke pass (a tool set in `tests/engine_matrix.rs` — `every_catalog_tool_has_a_live_leg` fails CI without one; milestone E0 in `docs/xmarket-tracker-2026-09-29.md`, open items in the gotcha below).
 
 No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (`[[mcp_servers]]`). Full recipe + agent config: `docs/tools.md`, `docs/code-map.md`. `SkillPlugin` / `McpPlugin` stay outside the catalog (registered in `bootstrap/tools.rs::build_tool_executor`).
 
@@ -445,14 +445,15 @@ These are not preferences. They're load-bearing.
   outbound imports inbound/bootstrap. Need something from an adapter in a use
   case? Add a port in `src/ports/`, implement it in `adapters/outbound/`, wire
   it in `src/bootstrap/`.
-- **`compress_and_store` reliability with Claude Code subagents** — Claude
-  Code subagents don't reliably call `compress_and_store` as their final
-  action; they just stop. The Phase 5c middle-ground protocol forgives this —
-  the final assistant text becomes the IPC summary. With `postgres_memory`,
-  that final text is also captured into Postgres `agentic_memory` by the
-  `run-agent` backstop (`try_persist_agentic_step_summary`) so the durable
-  row exists for within-session recall on the next user turn. The original
-  `model finished without calling compress_and_store` warn is still emitted.
+- **`compress_and_store` with Claude Code subagents** — served through the
+  bridge since 2026-10-01: a `run-agent` step's bridge writes the `summary`
+  to the step's `TENGU_BRIDGE_SUMMARY_FILE`, read back as the IPC summary
+  (+ the `agentic_memory` write with `postgres_memory`). A subagent that just
+  stops still passes: the Phase 5c middle-ground protocol makes the final
+  assistant text the IPC summary, the `run-agent` backstop
+  (`try_persist_agentic_step_summary`) captures it into Postgres
+  `agentic_memory` for within-session recall, and the
+  `model finished without calling compress_and_store` warn is emitted.
 - **Memory backend** — `agentic_memory` (Postgres + pgvector, behind the
   `postgres_memory` feature) is the only durable runtime memory: planner
   user-message recall, within-session step-output recall, replan cross-plan
@@ -491,27 +492,37 @@ These are not preferences. They're load-bearing.
   forms or just attempt the call and read the error.
 - **Every tool must work under every engine — `openrouter`, `local`,
   `claude_code` (operator rule 2026-09-30, no exceptions)** — step 4 of "How
-  to add a new tool". Bridge parity (`x-bridge-parity`, 2026-09-30):
-  `ClaudeCodeEngine` forwards `TENGU_CONFIG` (absolute) + `TENGU_BRIDGE_AGENT`;
-  `tengu mcp-bridge` loads that config once and runs tools as
-  `[agents.<name>]` — folded scopes (+ the workspace root under a `run-agent`
-  child), `AgentConfig::sandbox` sections, `no_shell_fallback`, `[memory]` —
-  behind `SanitizedToolExecutor` (`secrets::process_secret_registry`; text,
-  observations and errors redacted), with the JSON-RPC request id as
-  `ToolCtx.call_id`; no config / unknown agent → default `main` +
-  `TENGU_BRIDGE_SCOPES` with a warn. The Claude CLI merges the `--mcp-config`
-  `env` over its inherited env (verified CLI 2.1.285, `docs/mcp-bridge.md`
-  § Env). The engine passes `--strict-mcp-config` on every run (the bridge is
-  its only MCP server). Schemas: `x-tool-schema-lint`. Still open in E0
-  (`docs/xmarket-tracker-2026-09-29.md`): `x-bridge-conformance-test`,
-  `x-engine-matrix-smoke`, `x-engine-parity-audit` (shell-skill tools are not
-  bridged; `compress_and_store` is advertised through the bridge but refused).
+  to add a new tool". E0 is closed (`x-engine-parity-audit`, 2026-10-01):
+  every catalog tool, shell skills and `[[mcp_servers]]` proxies pass the
+  schema lint, a bridge conformance case and a live engine-matrix leg
+  (`every_catalog_tool_has_a_live_leg` fails CI for a tool in no set; gap
+  list in the tracker's W1 notes). `tengu mcp-bridge` loads `TENGU_CONFIG`
+  (absolute) and runs tools as `[agents.<TENGU_BRIDGE_AGENT>]` — folded
+  scopes, `AgentConfig::sandbox` sections, `no_shell_fallback`, `[memory]`,
+  shell skills (`skill_packages` + the requested names) — behind
+  `SanitizedToolExecutor` (text, observations and errors redacted, on every
+  surface), call id `mcp:<nonce>:<id>`; no config / unknown agent → default
+  `main` + `TENGU_BRIDGE_SCOPES` with a warn. A `run-agent` step's engine
+  (`engines::build_step_engine`) writes `TENGU_BRIDGE_GRANT_WORKSPACE=1` +
+  `TENGU_BRIDGE_SUMMARY_FILE` into the bridge env: the workspace grant, and
+  `compress_and_store` served into that file (the step's IPC summary);
+  elsewhere the bridge refuses it with the reason. The temp `--mcp-config`
+  holds no secret value — the CLI merges its `env` over the inherited env
+  (`docs/mcp-bridge.md` § Env); the engine strips a parent Claude Code
+  session's env (`CLAUDECODE`, `CLAUDE_CODE_*` but auth / provider,
+  `CLAUDE_PID`, `CLAUDE_EFFORT`) and passes `--strict-mcp-config`. Every
+  surface honours `tools` (`bootstrap::tools::agent_base_tools`; empty = every
+  base tool; `[[mcp_servers]]` tools too); in-process chat call ids are
+  `chat:<turn nonce>:<round>:<i>:<provider id>`. Still open: the live `local`
+  legs (the operator's PC), `agentic_memory` live (Postgres), Privy signing /
+  Solana `send` legs (never run).
 - **Hardened sandboxes (2026-09-30, `config/hardening.rs`)** — a `[solana]`
   signer or a `[risk]` section: every `claude_code` agent must set
   `[agents.<a>.claude_code] builtin_tools_profile = "none"` (no block =
-  `editor_shell` = load error), and `fold_default_scopes` sets
-  `no_shell_fallback` on every agent (in-process and bridge fallbacks run no
-  shell).
+  `editor_shell` = load error; the value is read trimmed, an unknown one is a
+  load error), and `fold_default_scopes` sets `no_shell_fallback` on every
+  agent (in-process and bridge fallbacks run no shell; no shell skill loads —
+  `SkillRegistry::with_shell_skills`).
 - **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
   `config/sections.rs::SandboxSections` (one `Arc` per config, set by
   `fold_default_scopes`): `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
@@ -631,7 +642,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-30 (xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-01 (`x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

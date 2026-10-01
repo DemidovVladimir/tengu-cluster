@@ -705,6 +705,12 @@ pub(crate) struct SkillRegistry {
     entries: HashMap<String, SkillEntry>,
     reserved_names: Vec<String>,
     skill_allowlist: Option<Vec<String>>,
+    /// `false` (an agent that runs no shell: a `[risk]` / signer sandbox)
+    /// drops shell skills at load — they never become tools; doc and API
+    /// skills stay.
+    shell_skills: bool,
+    /// The shell skills the last `reload` dropped (warned once per change).
+    dropped_shell: Vec<String>,
 }
 
 impl SkillRegistry {
@@ -713,11 +719,20 @@ impl SkillRegistry {
             entries: HashMap::new(),
             reserved_names: reserved,
             skill_allowlist: None,
+            shell_skills: true,
+            dropped_shell: Vec::new(),
         }
     }
 
     pub(crate) fn with_allowlist(mut self, allowlist: Option<Vec<String>>) -> Self {
         self.skill_allowlist = allowlist;
+        self
+    }
+
+    /// `allowed = false`: shell skills are not loaded (see `shell_skills`).
+    /// Callers pass `!agent.no_shell_fallback`.
+    pub(crate) fn with_shell_skills(mut self, allowed: bool) -> Self {
+        self.shell_skills = allowed;
         self
     }
 
@@ -785,6 +800,22 @@ impl SkillRegistry {
                     .iter()
                     .any(|a| a.replace('-', "_").to_lowercase() == e.name)
             });
+        }
+        if !self.shell_skills {
+            let mut dropped: Vec<String> = fresh
+                .iter()
+                .filter(|e| matches!(e.definition.execution, SkillExecution::Shell { .. }))
+                .map(|e| e.name.clone())
+                .collect();
+            dropped.sort();
+            if !dropped.is_empty() && dropped != self.dropped_shell {
+                tracing::warn!(
+                    skills = ?dropped,
+                    "shell skills not loaded: this agent runs no shell ([risk] / signer sandbox)"
+                );
+            }
+            fresh.retain(|e| !dropped.contains(&e.name));
+            self.dropped_shell = dropped;
         }
 
         let diff = diff_skill_sets(&self.entries, &fresh);
@@ -1309,5 +1340,39 @@ mod tests {
             },
             _ => panic!("expected ParsedSkill::Api"),
         }
+    }
+
+    /// An agent that runs no shell (`[risk]` / signer sandbox) loads no
+    /// shell skill — it never becomes a tool; doc skills still load.
+    #[test]
+    fn no_shell_registry_drops_shell_skills_keeps_doc_skills() {
+        struct Two;
+        impl SkillSourcePort for Two {
+            fn discover_skill_files(&self) -> Vec<(String, String)> {
+                vec![
+                    (
+                        "echo_word".into(),
+                        "# echo_word\n\nEcho.\n\n## Parameters\n\n- `word` (string, required): The word\n\n## Execution\n\n```sh\necho {{word}}\n```\n".into(),
+                    ),
+                    (
+                        "guide".into(),
+                        "---\nname: guide\ndescription: A guide.\n---\n\nRead me.\n".into(),
+                    ),
+                ]
+            }
+        }
+        let allow = Some(vec!["echo_word".to_string(), "guide".to_string()]);
+        let mut open = SkillRegistry::new(Vec::new()).with_allowlist(allow.clone());
+        open.reload(&Two);
+        assert_eq!(open.active_tools().len(), 1);
+
+        let mut closed = SkillRegistry::new(Vec::new())
+            .with_allowlist(allow)
+            .with_shell_skills(false);
+        closed.reload(&Two);
+        assert!(closed.active_tools().is_empty());
+        let names: Vec<String> = closed.list_all().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["guide"]);
+        assert!(!closed.reload(&Two), "a second reload changes nothing");
     }
 }

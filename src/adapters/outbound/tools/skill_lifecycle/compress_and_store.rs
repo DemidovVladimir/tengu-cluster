@@ -1,10 +1,13 @@
 //! `compress_and_store` — the harness-enforced "step is done" signal.
 //!
 //! The model's "I'm done" tool. `inbound/cli/run_agent.rs::run_agent_subprocess` intercepts
-//! `tool_calls` named `compress_and_store` out-of-band (OpenRouter path),
-//! sets `compress_called = true`, and captures the summary; Claude Code
-//! subagents often just stop instead, in which case the runner's graceful-
-//! degradation path treats the final assistant text as the summary.
+//! `tool_calls` named `compress_and_store` out-of-band (OpenRouter / local),
+//! sets `compress_called = true`, and captures the summary. A Claude Code
+//! step calls it through its bridge (`inbound/mcp_bridge.rs::StepSummary`),
+//! which writes the summary to the step's `TENGU_BRIDGE_SUMMARY_FILE`; the
+//! runner reads it back the same way. A subagent that just stops falls to
+//! the runner's graceful-degradation path: the final assistant text is the
+//! summary.
 //!
 //! Durable capture (when the `postgres_memory` feature is enabled) happens in
 //! `run-agent` via `try_persist_agentic_step_summary` → Open Brain Postgres.

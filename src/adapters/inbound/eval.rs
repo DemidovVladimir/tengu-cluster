@@ -614,6 +614,24 @@ impl<'a> StubbedExecutor<'a> {
             queues: Mutex::new(queues),
         }
     }
+
+    /// The next stubbed response for `call`'s tool, serialised; `None` when
+    /// the tool has no stub (the real executor runs it).
+    fn stubbed(&self, call: &ToolCall) -> anyhow::Result<Option<String>> {
+        let mut guard = self.queues.lock().unwrap();
+        let Some(q) = guard.get_mut(&call.name) else {
+            return Ok(None);
+        };
+        let response = if q.len() > 1 {
+            q.pop_front().unwrap()
+        } else {
+            // Last entry repeats forever once we stop popping.
+            q.front()
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!(null))
+        };
+        Ok(Some(serde_json::to_string(&response)?))
+    }
 }
 
 #[async_trait]
@@ -623,21 +641,23 @@ impl<'a> ToolExecutor for StubbedExecutor<'a> {
         call: &ToolCall,
         messages: &[crate::domain::message::Message],
     ) -> anyhow::Result<String> {
-        {
-            let mut guard = self.queues.lock().unwrap();
-            if let Some(q) = guard.get_mut(&call.name) {
-                let response = if q.len() > 1 {
-                    q.pop_front().unwrap()
-                } else {
-                    // Last entry repeats forever once we stop popping.
-                    q.front()
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!(null))
-                };
-                return Ok(serde_json::to_string(&response)?);
-            }
+        match self.stubbed(call)? {
+            Some(text) => Ok(text),
+            None => self.inner.execute(call, messages).await,
         }
-        self.inner.execute(call, messages).await
+    }
+
+    /// Unstubbed tools keep their typed observation, so a local engine's
+    /// compact rendering (`tool_loop::fit_tool_result`) works in eval too.
+    async fn execute_typed(
+        &self,
+        call: &ToolCall,
+        messages: &[crate::domain::message::Message],
+    ) -> anyhow::Result<crate::ports::tool::ToolOutput> {
+        match self.stubbed(call)? {
+            Some(text) => Ok(crate::ports::tool::ToolOutput::from(text)),
+            None => self.inner.execute_typed(call, messages).await,
+        }
     }
 }
 
@@ -1345,16 +1365,16 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let secret_registry = Arc::new(SecretRegistry::new());
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
 
-    let base_tools = crate::bootstrap::tools::compute_base_tools(
-        true,
-        false, // no memory in v1 eval runs
-        &agent.workspace_tools,
+    // The agent's `tools` list, as on every surface.
+    let base_tools = crate::bootstrap::tools::agent_base_tools(
+        agent, true, false, // no memory in v1 eval runs
     );
 
     let skill_source = FileSystemSkillSource::new(workspace_path.clone());
     let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-    let mut skill_registry =
-        SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
+    let mut skill_registry = SkillRegistry::new(base_reserved)
+        .with_allowlist(Some(agent.skill_packages.clone()))
+        .with_shell_skills(!agent.no_shell_fallback);
     skill_registry.reload(&skill_source);
 
     let current_tools = crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry);
@@ -1694,17 +1714,16 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
         let base_tools = if is_orchestrator_agent {
             Vec::new()
         } else {
-            crate::bootstrap::tools::compute_base_tools(
-                true,
-                false, // memory off in v1 eval runs
-                &agent.workspace_tools,
+            crate::bootstrap::tools::agent_base_tools(
+                agent, true, false, // memory off in v1 eval runs
             )
         };
 
         let skill_source = FileSystemSkillSource::new(workspace_path.clone());
         let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry =
-            SkillRegistry::new(base_reserved).with_allowlist(Some(agent.skill_packages.clone()));
+        let mut skill_registry = SkillRegistry::new(base_reserved)
+            .with_allowlist(Some(agent.skill_packages.clone()))
+            .with_shell_skills(!agent.no_shell_fallback);
         skill_registry.reload(&skill_source);
 
         let current_tools = if is_orchestrator_agent {
@@ -2473,6 +2492,63 @@ workspace = "{TMP_WORKSPACE}"
             .unwrap();
         assert_eq!(r, "live-result-for-memory_ingest");
         assert_eq!(inner.counter.lock().unwrap().as_slice(), &["memory_ingest"]);
+    }
+
+    /// The typed path: an unstubbed tool's observation survives (local
+    /// engines render it compactly); a stub is text only.
+    #[tokio::test]
+    async fn stubbed_executor_keeps_typed_results_of_unstubbed_tools() {
+        struct Typed;
+        #[async_trait]
+        impl ToolExecutor for Typed {
+            async fn execute(
+                &self,
+                call: &ToolCall,
+                m: &[crate::domain::message::Message],
+            ) -> anyhow::Result<String> {
+                Ok(self.execute_typed(call, m).await?.text)
+            }
+            async fn execute_typed(
+                &self,
+                _call: &ToolCall,
+                _m: &[crate::domain::message::Message],
+            ) -> anyhow::Result<crate::ports::tool::ToolOutput> {
+                let obs = crate::domain::observation::Observation {
+                    key: "mkt_ctx/1:hyperliquid:xyz:TSLA".into(),
+                    schema: "mkt_ctx/1".into(),
+                    tool: "hl_ctx".into(),
+                    observed_at_ms: 0,
+                    slot: None,
+                    ttl_ms: 15_000,
+                    source: crate::domain::observation::ObsSource::Live,
+                    status: crate::domain::observation::ObsStatus::Ok,
+                    errors: vec![],
+                    headline: "mkt hyperliquid:xyz:TSLA mark=347.19".into(),
+                    features: Default::default(),
+                    data: serde_json::json!({"levels": [1, 2, 3]}),
+                };
+                Ok(crate::ports::tool::ToolOutput::observed(obs, 0))
+            }
+        }
+        let stubs = vec![StubSpec {
+            tool: "http_request".into(),
+            responses: vec![serde_json::json!({"status": 200})],
+        }];
+        let stubbed = StubbedExecutor::new(&Typed, &stubs);
+        let live = stubbed
+            .execute_typed(&make_call("hl_ctx"), &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            live.observation.map(|o| o.key).as_deref(),
+            Some("mkt_ctx/1:hyperliquid:xyz:TSLA")
+        );
+        let stub = stubbed
+            .execute_typed(&make_call("http_request"), &[])
+            .await
+            .unwrap();
+        assert!(stub.observation.is_none());
+        assert!(stub.text.contains("200"));
     }
 
     #[test]

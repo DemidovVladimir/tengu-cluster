@@ -107,6 +107,10 @@ pub(crate) fn build_tool_executor(
     if tools.is_empty() {
         return None;
     }
+    // The workspace-tool opt-ins the agent lists in `tools` are on for its
+    // plugins too (`persistent_store` reads `workspace_tools`), on every
+    // surface — chat passes the config block as loaded.
+    let agent_config = &subagent_config(agent_config);
 
     let shell: Arc<dyn ShellExecutionPort> = Arc::new(match cancel {
         Some(ref flag) => LocalShellExecutor::new().with_cancel(Arc::clone(flag)),
@@ -166,15 +170,17 @@ pub(crate) fn build_tool_executor(
     );
 
     // MCP plugin — connects to each configured external server and registers
-    // its tools as `{server_name}__{tool_name}`. The Claude Code bridge does
-    // the same for the servers its engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
+    // its tools as `{server_name}__{tool_name}`: all of them when the agent's
+    // `tools` is empty, else only the listed ones — the allow-list the Claude
+    // Code bridge applies to the servers its engine passes
+    // (`TENGU_BRIDGE_MCP_SERVERS`), so an unlisted server tool runs nowhere.
     if !mcp_servers.is_empty() {
         let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
         register_plugin_safe(
             &mut registry,
             &mcp_plugin,
             &plugin_ctx,
-            &[],
+            &agent_config.tools,
             "Failed to register mcp plugin — external MCP tools unavailable",
         );
     }
@@ -276,16 +282,23 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
 // ---------------------------------------------------------------------------
 
 /// Bridge tool list for an in-process Claude Code agent: `base` (the catalog
-/// defs) plus every `[[mcp_servers]]` tool as `{server}__{tool}`, which the
-/// bridge then proxies (the engine passes the servers along via
+/// defs) plus the `[[mcp_servers]]` tools as `{server}__{tool}` — every one
+/// when `allow` (the agent's `tools`) is empty, else only the listed ones —
+/// which the bridge then proxies (the engine passes the servers along via
 /// `EngineContext.mcp_servers`). Listed once at agent setup — live
 /// `tools/list`, fail-soft per server.
 pub(crate) async fn with_mcp_bridge_tools(
     mut base: Vec<ToolDef>,
+    allow: &[String],
     mcp_servers: &[McpServerConfig],
 ) -> Vec<ToolDef> {
     if !base.is_empty() {
-        base.extend(crate::adapters::outbound::mcp_client::enumerate_tools(mcp_servers).await);
+        base.extend(
+            crate::adapters::outbound::mcp_client::enumerate_tools(mcp_servers)
+                .await
+                .into_iter()
+                .filter(|d| allow.is_empty() || allow.contains(&d.name)),
+        );
     }
     base
 }
@@ -324,18 +337,67 @@ pub(crate) fn subagent_config(agent: &AgentConfig) -> AgentConfig {
     cfg
 }
 
-/// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`.
+/// The catalog tools an agent gets on every surface — in-process chat (TUI,
+/// Telegram, webhooks, eval, `tengu tool turn`), `run-agent`, `tengu tool
+/// call`, decision loops, and so the Claude Code bridge list: the base tools
+/// (`compute_base_tools`) with the workspace-tool opt-ins the agent lists in
+/// `tools` switched on (`subagent_config`); a non-empty `tools` then keeps
+/// only the listed tools and the opted-in ones. Empty `tools` = every base
+/// tool. `[[mcp_servers]]` tools follow the same list
+/// (`build_tool_executor`); shell skills come from `skill_packages`.
+pub(crate) fn agent_base_tools(
+    agent: &AgentConfig,
+    uses_tools: bool,
+    has_memory: bool,
+) -> Vec<ToolDef> {
+    let cfg = subagent_config(agent);
+    let base = compute_base_tools(uses_tools, has_memory, &cfg.workspace_tools);
+    if agent.tools.is_empty() {
+        return base;
+    }
+    base.into_iter()
+        .filter(|t| agent.tools.contains(&t.name) || cfg.workspace_tools.contains(&t.name))
+        .collect()
+}
+
+/// The skills an agent loads where no channel keeps a hot-reloaded registry
+/// (`run-agent`, `tengu tool`, decision loops, the MCP bridge) — the rule
+/// in-process chat applies: the three-tier scan from `workspace`
+/// (`FileSystemSkillSource`), only names in `skill_packages`, none named like
+/// one of its catalog tools, and shell skills only when the agent runs a
+/// shell (`no_shell_fallback` — a `[risk]` / signer sandbox — loads none).
+pub(crate) fn agent_skill_registry(
+    workspace: &Path,
+    agent: &AgentConfig,
+    has_memory: bool,
+) -> SkillRegistry {
+    let reserved = compute_base_tools(true, has_memory, &subagent_config(agent).workspace_tools)
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    let mut registry = SkillRegistry::new(reserved)
+        .with_allowlist(Some(agent.skill_packages.clone()))
+        .with_shell_skills(!agent.no_shell_fallback);
+    registry.reload(
+        &crate::application::skills::registry::FileSystemSkillSource::new(workspace.to_path_buf()),
+    );
+    registry
+}
+
+/// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`
+/// (also `tengu tool call` and decision loops).
 ///
-/// Resolves `effective_tools = (compute_base_tools ∩ agent.tools) ∪ {compress_and_store}`,
-/// then constructs a `PluginToolExecutor` over those tools. Returns the
-/// resolved ToolDef list (so `run-agent` can pass it to `engine.run`) plus
-/// the executor.
+/// Resolves `effective_tools = agent_base_tools ∪ {compress_and_store} ∪
+/// shell skills (skill_packages) ∪ [[mcp_servers]] tools (tools list)`, then
+/// constructs a `PluginToolExecutor` over those tools. Returns the resolved
+/// ToolDef list (so `run-agent` can pass it to `engine.run`, or a Claude
+/// Code bridge as `bridge_tools`) plus the executor.
 ///
 /// `compress_and_store` is dispatched out-of-band by the run-agent loop
 /// (the summary is captured there and persisted to Postgres
-/// `agentic_memory` with `postgres_memory`) so its `ToolDef` is appended
-/// to the advertised list but its execution path bypasses the
-/// `PluginToolExecutor`.
+/// `agentic_memory` with `postgres_memory`; a Claude Code step's bridge
+/// writes it to the step's summary file) so its `ToolDef` is appended to the
+/// advertised list but its execution path bypasses the `PluginToolExecutor`.
 pub(crate) fn build_subprocess_tool_executor(
     agent: &AgentConfig,
     config: &Config,
@@ -353,45 +415,20 @@ pub(crate) fn build_subprocess_tool_executor(
     let mut agent_cfg = subagent_config(agent);
     grant_workspace_root(&mut agent_cfg.scopes, workspace);
 
-    // Full base tool list (workspace + http + crypto + memory if enabled).
-    let base_tools = compute_base_tools(
-        true,                  // uses_tools
-        config.memory.enabled, // has_memory
-        &agent_cfg.workspace_tools,
-    );
-
-    // Filter to `tools` when the agent declares an allow-list. Empty
-    // `tools` means "no allow-list" — keep all base tools available.
-    // compress_and_store is appended unconditionally regardless of `tools`.
-    //
-    // Workspace-tools opt-ins are always-on for this agent regardless of
-    // whether they appear in `tools` — they're separately gated by the
-    // workspace_tools allowlist + per-agent declaration. Pre-fix bug: an
-    // agent with `tools = ["read_file", ...]` and `workspace_tools = ["foo"]`
-    // would NOT get `foo` because `tools` filtered it out.
-    let mut effective: Vec<ToolDef> = if agent.tools.is_empty() {
-        base_tools
-    } else {
-        let mut allow: std::collections::HashSet<&str> =
-            agent.tools.iter().map(|s| s.as_str()).collect();
-        for wt in &agent_cfg.workspace_tools {
-            allow.insert(wt.as_str());
-        }
-        base_tools
-            .into_iter()
-            .filter(|t| allow.contains(t.name.as_str()))
-            .collect()
-    };
+    // The agent's catalog tools: `tools` when listed (its workspace-tool
+    // opt-ins included), else every base tool.
+    let mut effective = agent_base_tools(agent, true, config.memory.enabled);
 
     // Always-on protocol tool. Phase 5b dispatches it out-of-band, so we
     // only need its description here for the LLM to see + call.
     effective
         .push(crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::definition());
 
-    // Skill registry is empty for the subprocess (skill bodies are loaded
-    // separately and merged into the system prompt; no shell-skills exposed
-    // as tools yet).
-    let skill_registry = crate::application::skills::registry::SkillRegistry::new(Vec::new());
+    // Shell skills named in `skill_packages` are tools here too, as in
+    // in-process chat (skill bodies also reach the system prompt, loaded by
+    // `run-agent`); none in a sandbox that runs no shell.
+    let skill_registry = agent_skill_registry(workspace, &agent_cfg, config.memory.enabled);
+    effective.extend(skill_registry.active_tools());
 
     let executor = build_tool_executor(
         workspace,
@@ -685,11 +722,16 @@ mod golden_tests {
             "fake",
         )];
         let base = vec![ToolDef::new("read_file", "d", serde_json::json!({}))];
-        let bridge = with_mcp_bridge_tools(base, &servers).await;
+        let bridge = with_mcp_bridge_tools(base.clone(), &[], &servers).await;
         let names: Vec<&str> = bridge.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["read_file", "fake__echo"]);
+        // A `tools` list keeps only the listed server tools.
+        let listed = with_mcp_bridge_tools(base, &["read_file".to_string()], &servers).await;
+        assert_eq!(listed.len(), 1, "fake__echo is not in the agent's tools");
         // No bridge (non-Claude-Code agent) stays empty — servers not dialled.
-        assert!(with_mcp_bridge_tools(Vec::new(), &servers).await.is_empty());
+        assert!(with_mcp_bridge_tools(Vec::new(), &[], &servers)
+            .await
+            .is_empty());
 
         #[derive(Default)]
         struct Recording(Mutex<Option<(Vec<String>, Vec<String>)>>);

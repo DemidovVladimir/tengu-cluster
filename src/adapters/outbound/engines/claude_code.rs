@@ -39,13 +39,17 @@ pub(crate) enum BuiltinToolsProfile {
 }
 
 impl BuiltinToolsProfile {
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "none" => Self::None,
-            "read_only" => Self::ReadOnly,
-            "editor" => Self::Editor,
-            "editor_shell" => Self::EditorShell,
-            _ => Self::EditorShell,
+    /// `[agents.<a>.claude_code] builtin_tools_profile`, surrounding
+    /// whitespace ignored (`" none"` is `none`, as `Config::validate` and the
+    /// hardening rule read it). `None` for any other value — never a silent
+    /// `editor_shell`; config validation refuses it at load.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "none" => Some(Self::None),
+            "read_only" => Some(Self::ReadOnly),
+            "editor" => Some(Self::Editor),
+            "editor_shell" => Some(Self::EditorShell),
+            _ => None,
         }
     }
 
@@ -87,6 +91,24 @@ pub(crate) struct ClaudeCodeEngine {
     /// bridged tools see the same config as in-process ones. `None` (planner
     /// engine) = the bridge's standalone fallback.
     bridge_agent: Option<(String, PathBuf)>,
+    /// What a `run-agent` step (or the doctor's smoke turn, run like one)
+    /// asks of its bridge (`with_step_bridge`); default = nothing.
+    step: StepBridge,
+}
+
+/// A `run-agent` step's bridge options, written into the `--mcp-config` env
+/// (`adapters/outbound/bridge_env.rs`). Explicit, never inherited from the
+/// process env.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StepBridge {
+    /// `TENGU_BRIDGE_GRANT_WORKSPACE=1`: every configured scope also gets
+    /// the workspace as an fs root — what the step's own executor does
+    /// (`bootstrap::tools::grant_workspace_root`).
+    pub grant_workspace: bool,
+    /// `TENGU_BRIDGE_SUMMARY_FILE`: the bridge serves `compress_and_store`
+    /// by writing the summary here; the step reads it back as its IPC
+    /// summary. `None` = the bridge refuses the call with the reason.
+    pub summary_file: Option<PathBuf>,
 }
 
 impl ClaudeCodeEngine {
@@ -103,7 +125,15 @@ impl ClaudeCodeEngine {
             timeout_secs,
             scopes: std::collections::HashMap::new(),
             bridge_agent: None,
+            step: StepBridge::default(),
         }
+    }
+
+    /// Run as a `run-agent` step (see [`StepBridge`]);
+    /// `engines::build_step_engine` calls it.
+    pub fn with_step_bridge(mut self, step: StepBridge) -> Self {
+        self.step = step;
+        self
     }
 
     /// Attach the agent's per-tool scope map (see `scopes` field). Call from
@@ -182,15 +212,25 @@ impl ClaudeCodeEngine {
             env[crate::config::paths::TENGU_CONFIG_ENV] =
                 serde_json::Value::String(config.to_string_lossy().into_owned());
         }
+        if self.step.grant_workspace {
+            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_GRANT_WORKSPACE_ENV] =
+                serde_json::Value::String("1".into());
+        }
+        if let Some(file) = &self.step.summary_file {
+            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_SUMMARY_FILE_ENV] =
+                serde_json::Value::String(file.to_string_lossy().into_owned());
+        }
         // The CLI merges this `env` over its own inherited env (verified with
-        // CLI 2.1.285, `docs/mcp-bridge.md` § Env), so the bridge also gets
-        // this process's env — vault secrets included. The keys below are
-        // forwarded explicitly anyway, as part of the documented contract.
+        // CLI 2.1.285, `docs/mcp-bridge.md` § Env), so the bridge inherits
+        // this process's env — vault secrets, `OPENROUTER_API_KEY` and the
+        // vars `[[mcp_servers]]` `$VAR` references name. No secret value is
+        // written into this file (it sits on disk for the whole run).
         //
         // External `[[mcp_servers]]` with a `{server}__{tool}` entry in
         // `bridge_tools`: the bridge reconnects to them and proxies the calls
-        // under its egress policy, resolving their `$VAR` references.
-        use crate::adapters::outbound::mcp_client::{is_server_tool, referenced_env_vars};
+        // under its egress policy, resolving their `$VAR` references from
+        // that inherited env.
+        use crate::adapters::outbound::mcp_client::is_server_tool;
         let servers: Vec<&crate::config::McpServerConfig> = mcp_servers
             .iter()
             .filter(|s| {
@@ -204,11 +244,6 @@ impl ClaudeCodeEngine {
                 serde_json::Value::String(
                     serde_json::to_string(&servers).unwrap_or_else(|_| "[]".into()),
                 );
-            for var in servers.iter().flat_map(|s| referenced_env_vars(s)) {
-                if let Ok(v) = std::env::var(&var) {
-                    env[var] = serde_json::Value::String(v);
-                }
-            }
         }
         // The bridge runs the tools — it must apply the parent's egress policy.
         env[crate::adapters::outbound::egress::EGRESS_ENV] =
@@ -225,17 +260,13 @@ impl ClaudeCodeEngine {
         if let Ok(v) = std::env::var("TENGU_SESSION_ID") {
             env["TENGU_SESSION_ID"] = serde_json::Value::String(v);
         }
-        // The names of the vault vars: the bridge registers their values for
-        // redaction, and a `tengu` run by a bridge tool (`run_command`) does
-        // not re-prompt for the vault password on the terminal the TUI owns.
+        // The names of the vault vars (names only): the bridge registers
+        // their values for redaction, and a `tengu` run by a bridge tool
+        // (`run_command`) does not re-prompt for the vault password on the
+        // terminal the TUI owns.
         let loaded = crate::adapters::outbound::secrets::SECRETS_LOADED_ENV;
         if let Ok(v) = std::env::var(loaded) {
             env[loaded] = serde_json::Value::String(v);
-        }
-        // OPENROUTER_API_KEY — the bridge's memory backend (DiskVectorStore
-        // + Embedder) needs it.
-        if let Ok(v) = std::env::var("OPENROUTER_API_KEY") {
-            env["OPENROUTER_API_KEY"] = serde_json::Value::String(v);
         }
         serde_json::json!({
             "mcpServers": {
@@ -247,6 +278,38 @@ impl ClaudeCodeEngine {
             }
         })
     }
+}
+
+/// Operator configuration under the `CLAUDE_CODE_` prefix that a nested
+/// `claude` keeps: auth (`claude setup-token`), the provider switch and
+/// client certificates. Every other `CLAUDE_CODE_*` var is a parent session's.
+const KEPT_CLAUDE_CODE_ENV: &[&str] = &[
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+    "CLAUDE_CODE_CLIENT_CERT",
+    "CLAUDE_CODE_CLIENT_KEY",
+    "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+];
+
+/// Env a parent Claude Code session sets (tengu run from inside one): a
+/// nested `claude` must start like one from the operator's terminal, not as
+/// that session's child (its messaging socket + token, session id, effort).
+///
+/// | Removed | Kept |
+/// |---|---|
+/// | `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, every `CLAUDE_CODE_*` | [`KEPT_CLAUDE_CODE_ENV`], `CLAUDE_CODE_USE_*` / `CLAUDE_CODE_SKIP_*_AUTH` (provider), `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, the egress proxy env; `ANTHROPIC_API_KEY` is removed separately (subscription) |
+fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    names
+        .into_iter()
+        .filter(|n| {
+            matches!(*n, "CLAUDECODE" | "CLAUDE_PID" | "CLAUDE_EFFORT")
+                || n.strip_prefix("CLAUDE_CODE_").is_some_and(|rest| {
+                    !KEPT_CLAUDE_CODE_ENV.contains(n)
+                        && !rest.starts_with("USE_")
+                        && !(rest.starts_with("SKIP_") && rest.ends_with("_AUTH"))
+                })
+        })
+        .collect()
 }
 
 /// `claude` arguments for one run — all but the prompt (stdin), the working
@@ -641,6 +704,12 @@ impl Engine for ClaudeCodeEngine {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .env_remove("ANTHROPIC_API_KEY");
+        let inherited: Vec<String> = std::env::vars_os()
+            .filter_map(|(k, _)| k.into_string().ok())
+            .collect();
+        for name in parent_session_env(inherited.iter().map(String::as_str)) {
+            cmd.env_remove(name);
+        }
         // `[egress]`: with `route_llm_api` the CLI's own Anthropic traffic
         // goes through the proxy's HTTP CONNECT port (Arti serves it on 9050).
         for (k, v) in crate::adapters::outbound::egress::policy().claude_cli_env() {
@@ -971,16 +1040,41 @@ mod tests {
         assert!(config.ends_with("sandboxes/xmarket/config.toml"));
     }
 
+    /// Every key the engine may write into the temp `--mcp-config` env
+    /// (`bridge_env.rs`): names and non-secret settings only.
+    const BRIDGE_ENV_KEYS: &[&str] = &[
+        "TENGU_BRIDGE_WORKSPACE",
+        "TENGU_BRIDGE_TOOLS",
+        "TENGU_BRIDGE_MAX_RESULT_CHARS",
+        "TENGU_BRIDGE_SCOPES",
+        "TENGU_BRIDGE_AGENT",
+        "TENGU_CONFIG",
+        "TENGU_BRIDGE_GRANT_WORKSPACE",
+        "TENGU_BRIDGE_SUMMARY_FILE",
+        "TENGU_BRIDGE_MCP_SERVERS",
+        "TENGU_EGRESS",
+        "TENGU_PERSISTENT_STORE_CHUNK_SIZE",
+        "TENGU_PERSISTENT_STORE_CHUNK_OVERLAP",
+        "TENGU_SESSION_ID",
+        "TENGU_SECRETS_LOADED",
+    ];
+
+    /// The temp file holds the requested servers' config but no secret
+    /// value: no `$VAR` value of a server, no `OPENROUTER_API_KEY` — the
+    /// bridge inherits them (the CLI merges its env, `docs/mcp-bridge.md`).
     #[test]
-    fn bridge_config_carries_only_requested_mcp_servers_and_their_vars() {
+    fn bridge_config_carries_requested_mcp_servers_and_no_secret_values() {
         let engine = ClaudeCodeEngine::new(
             PathBuf::from("claude"),
             BuiltinToolsProfile::ReadOnly,
             None,
             60,
         );
-        let tools = vec![ToolDef::new("fake__echo", "d", serde_json::json!({}))];
-        // `$HOME` is always set, so the forwarded value is observable.
+        let tools = vec![
+            ToolDef::new("fake__echo", "d", serde_json::json!({})),
+            ToolDef::new("compress_and_store", "d", serde_json::json!({})),
+        ];
+        // `$HOME` is always set: its value would be observable if forwarded.
         let servers = vec![
             server("fake", &[("TOKEN", "$HOME")]),
             server("unused", &[("OTHER", "$PATH")]),
@@ -1001,10 +1095,26 @@ mod tests {
         .unwrap();
         assert_eq!(passed.len(), 1);
         assert_eq!(passed[0].name, "fake");
-        assert_eq!(env["HOME"], std::env::var("HOME").unwrap());
+        assert_eq!(
+            passed[0].env["TOKEN"], "$HOME",
+            "the reference, not its value"
+        );
+        let env = env.as_object().unwrap();
+        let unknown: Vec<&String> = env
+            .keys()
+            .filter(|k| !BRIDGE_ENV_KEYS.contains(&k.as_str()))
+            .collect();
+        assert!(unknown.is_empty(), "keys outside the contract: {unknown:?}");
+        let home = std::env::var("HOME").unwrap();
         assert!(
-            env.get("PATH").is_none(),
-            "unused server's vars must not leak"
+            env.values().all(|v| v.as_str() != Some(home.as_str())),
+            "a `$VAR` value was written into the file"
+        );
+        assert!(!env.contains_key("OPENROUTER_API_KEY"));
+        assert!(
+            !env.contains_key("TENGU_BRIDGE_GRANT_WORKSPACE")
+                && !env.contains_key("TENGU_BRIDGE_SUMMARY_FILE"),
+            "a plain engine is no run-agent step"
         );
 
         let none = engine.build_mcp_config_json(
@@ -1017,5 +1127,78 @@ mod tests {
         assert!(none["mcpServers"]["tengu-tools"]["env"]
             .get(crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV)
             .is_none());
+    }
+
+    /// A `run-agent` step names its workspace grant and summary file
+    /// explicitly in the bridge env.
+    #[test]
+    fn step_bridge_options_reach_the_bridge_env() {
+        let engine =
+            ClaudeCodeEngine::new(PathBuf::from("claude"), BuiltinToolsProfile::None, None, 60)
+                .with_step_bridge(StepBridge {
+                    grant_workspace: true,
+                    summary_file: Some(PathBuf::from("/tmp/tengu-summary-x")),
+                });
+        let tools = [ToolDef::new("read_file", "d", serde_json::json!({}))];
+        let cfg =
+            engine.build_mcp_config_json("tengu", std::path::Path::new("/tmp"), &tools, 1000, &[]);
+        let env = &cfg["mcpServers"]["tengu-tools"]["env"];
+        assert_eq!(env["TENGU_BRIDGE_GRANT_WORKSPACE"], "1");
+        assert_eq!(env["TENGU_BRIDGE_SUMMARY_FILE"], "/tmp/tengu-summary-x");
+    }
+
+    /// A parent Claude Code session's env is dropped; the operator's auth,
+    /// provider and other env stay.
+    #[test]
+    fn parent_session_env_strips_the_session_keeps_operator_config() {
+        let names = [
+            "CLAUDECODE",
+            "CLAUDE_PID",
+            "CLAUDE_EFFORT",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_SSE_PORT",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_SESSION_ATTENDED",
+            "CLAUDE_CODE_EXECPATH",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+            "CLAUDE_CODE_SOME_FUTURE_SESSION_VAR",
+            // kept
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+            "CLAUDE_CODE_CLIENT_CERT",
+            "CLAUDE_CONFIG_DIR",
+            "PATH",
+            "HOME",
+            "HTTPS_PROXY",
+            "TENGU_SECRETS_LOADED",
+        ];
+        let removed = parent_session_env(names);
+        assert_eq!(removed, &names[..13]);
+    }
+
+    /// Whitespace around a profile is ignored; anything else is no profile
+    /// (never a silent `editor_shell`).
+    #[test]
+    fn builtin_tools_profile_parses_trimmed_and_refuses_unknown() {
+        assert_eq!(
+            BuiltinToolsProfile::parse(" none"),
+            Some(BuiltinToolsProfile::None)
+        );
+        assert_eq!(
+            BuiltinToolsProfile::parse("read_only\n"),
+            Some(BuiltinToolsProfile::ReadOnly)
+        );
+        assert_eq!(
+            BuiltinToolsProfile::parse("editor_shell"),
+            Some(BuiltinToolsProfile::EditorShell)
+        );
+        for bad in ["", "None", "shell", "editor-shell"] {
+            assert_eq!(BuiltinToolsProfile::parse(bad), None, "{bad:?}");
+        }
     }
 }

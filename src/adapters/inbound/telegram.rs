@@ -604,17 +604,14 @@ impl TelegramSession {
                 engine.supports_tool_use() && !engine.manages_own_workspace();
             let manages_workspace = engine.manages_own_workspace();
             let uses_tools = advertise_workspace_tools && workspace.is_some();
-            let base_tools = crate::bootstrap::tools::compute_base_tools(
-                uses_tools,
-                has_memory,
-                &agent_config.workspace_tools,
-            );
+            // The agent's `tools` list applies here as on every surface
+            // (`agent_base_tools`; empty = every base tool).
+            let base_tools =
+                crate::bootstrap::tools::agent_base_tools(agent_config, uses_tools, has_memory);
             let bridge_base_tools: Vec<ToolDef> = if manages_workspace && workspace.is_some() {
                 rt.block_on(crate::bootstrap::tools::with_mcp_bridge_tools(
-                    crate::adapters::outbound::tools::advertised_defs(
-                        has_memory,
-                        &agent_config.workspace_tools,
-                    ),
+                    crate::bootstrap::tools::agent_base_tools(agent_config, true, has_memory),
+                    &agent_config.tools,
                     &config.mcp_servers,
                 ))
             } else {
@@ -627,7 +624,8 @@ impl TelegramSession {
 
             let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
             let mut skill_registry = SkillRegistry::new(base_reserved)
-                .with_allowlist(Some(agent_config.skill_packages.clone()));
+                .with_allowlist(Some(agent_config.skill_packages.clone()))
+                .with_shell_skills(!agent_config.no_shell_fallback);
             if let Some(ref src) = skill_source {
                 skill_registry.reload(src);
             }

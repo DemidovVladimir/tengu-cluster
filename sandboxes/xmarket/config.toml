@@ -190,8 +190,9 @@ staking_discount_pct = 0
 order_types = ["market", "ioc"]
 
 # --- Agents: one shared workspace (config/xmarket.rs) ------------------------
-# `tools` is the allow-list of run-agent steps, `tengu tool` and feeds. A chat
-# turn in-process gets every base tool, so [default_scopes] below denies the
+# `tools` is the allow-list on every surface: chat, run-agent steps, `tengu
+# tool`, feeds, the bridge. A plan step's `compose.tools` can still hand a
+# routable agent any catalog tool, so [default_scopes] below also denies the
 # writers (write_file, run_command, http_request) to every agent.
 
 # Planner + operator chat. OpenRouter only: a claude_code planner calls tools
@@ -272,7 +273,8 @@ tools = ["hl_ctx", "hl_book", "risk_status", "paper_order", "paper_close", "pape
 
 [default_scopes.sign_message]
 
-# Base tools no agent lists: denied (empty scope) — in-process chat offers them.
+# Base tools no agent lists: denied (empty scope) — a plan step's compose.tools
+# could still name them.
 [default_scopes.write_file]
 
 [default_scopes.run_command]

@@ -449,6 +449,16 @@ impl SanitizedToolExecutor {
     }
 }
 
+impl SanitizedToolExecutor {
+    /// A failed call's error, redacted: its message reaches the model on
+    /// every surface (`ERROR: …` in chat, `tool error: …` in `run-agent`, the
+    /// bridge's `isError` text) — a request URL a `$VAR` expanded into, an
+    /// upstream body echoing a key. Keeps the displayed (outermost) message.
+    fn redact_error(&self, e: anyhow::Error) -> anyhow::Error {
+        anyhow::anyhow!(self.registry.redact(&e.to_string()))
+    }
+}
+
 #[async_trait]
 impl ToolExecutor for SanitizedToolExecutor {
     async fn execute(
@@ -456,18 +466,26 @@ impl ToolExecutor for SanitizedToolExecutor {
         call: &ToolCall,
         messages: &[crate::domain::message::Message],
     ) -> Result<String> {
-        let result = self.inner.execute(call, messages).await?;
+        let result = self
+            .inner
+            .execute(call, messages)
+            .await
+            .map_err(|e| self.redact_error(e))?;
         Ok(self.registry.redact(&result))
     }
 
     /// Redacts the text and the observation (headline, error messages,
-    /// string features, `data`).
+    /// string features, `data`), and a failed call's error.
     async fn execute_typed(
         &self,
         call: &ToolCall,
         messages: &[crate::domain::message::Message],
     ) -> Result<crate::ports::tool::ToolOutput> {
-        let mut out = self.inner.execute_typed(call, messages).await?;
+        let mut out = self
+            .inner
+            .execute_typed(call, messages)
+            .await
+            .map_err(|e| self.redact_error(e))?;
         out.text = self.registry.redact(&out.text);
         if let Some(obs) = out.observation.as_mut() {
             self.registry.redact_observation(obs);
@@ -546,5 +564,36 @@ mod tests {
             json!({"rpc_url": "https://rpc.example/?api-key=[REDACTED]", "n": 1})
         );
         assert_eq!(obs.headline, "rpc [REDACTED]");
+    }
+
+    /// A failed call's error reaches the model redacted on every path
+    /// (typed and text), like the bridge's error text.
+    #[tokio::test]
+    async fn sanitized_executor_redacts_errors() {
+        struct Failing;
+        #[async_trait]
+        impl ToolExecutor for Failing {
+            async fn execute(&self, _call: &ToolCall, _m: &[Message]) -> Result<String> {
+                anyhow::bail!("error sending request for url (https://api.example/?key={KEY})")
+            }
+        }
+        let mut reg = SecretRegistry::new();
+        reg.register(KEY.to_string());
+        let exec = SanitizedToolExecutor::new(Arc::new(Failing), Arc::new(reg));
+        let call = ToolCall {
+            id: "c".into(),
+            name: "http_request".into(),
+            arguments: json!({}),
+        };
+        let typed = exec
+            .execute_typed(&call, &[])
+            .await
+            .unwrap_err()
+            .to_string();
+        let text = exec.execute(&call, &[]).await.unwrap_err().to_string();
+        for e in [typed, text] {
+            assert!(!e.contains(KEY), "{e}");
+            assert!(e.contains("?key=[REDACTED]"), "{e}");
+        }
     }
 }

@@ -1278,14 +1278,14 @@ impl Config {
             &["openrouter", "claude_code", "local"],
         );
         errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
-        if agent.engine == "claude_code" {
-            if let Some(ref cc) = agent.claude_code {
-                errors.require_one_of(
-                    &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
-                    &cc.builtin_tools_profile,
-                    &["none", "read_only", "editor", "editor_shell"],
-                );
-            }
+        // Read trimmed everywhere (`BuiltinToolsProfile::parse`, the
+        // hardening rule); an unknown value is a load error on any block.
+        if let Some(ref cc) = agent.claude_code {
+            errors.require_one_of(
+                &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
+                &cc.builtin_tools_profile,
+                &["none", "read_only", "editor", "editor_shell"],
+            );
         }
         errors.require_one_of(
             &format!("agents.{agent_id}.default_lens"),
@@ -1738,6 +1738,30 @@ ttl_days = 7
         assert!(err
             .to_string()
             .contains("builtin_tools_profile must be one of"));
+    }
+
+    /// Profiles are read trimmed (`BuiltinToolsProfile::parse`); an unknown
+    /// value fails the load on any agent's `[agents.<a>.claude_code]` block.
+    #[test]
+    fn claude_profile_is_trimmed_and_unknown_fails_on_any_block() {
+        let with = |engine: &str, profile: &str| {
+            let mut config = Config::default();
+            let main = config.agents.get_mut("main").expect("main agent");
+            main.engine = engine.to_string();
+            main.claude_code = Some(AgentClaudeCodeConfig {
+                builtin_tools_profile: profile.to_string(),
+            });
+            config.validate()
+        };
+        assert!(with("claude_code", " none").is_ok());
+        assert!(with("claude_code", "editor\n").is_ok());
+        for engine in ["claude_code", "openrouter"] {
+            let err = with(engine, "nnone").expect_err(engine).to_string();
+            assert!(
+                err.contains("builtin_tools_profile must be one of"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
