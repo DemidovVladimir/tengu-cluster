@@ -1481,6 +1481,116 @@ tools = ["xm_weekend_fade"]
         assert_eq!(first.entry_ms, utc("2026-10-04 22:00"));
     }
 
+    /// `sandboxes/xmarket/config.toml` (`ops-sandbox-config`), stage M0:
+    /// its own state dir, workspace and kill switch (not the weekend run's —
+    /// both may run at once), one shared workspace, exec tools only on the
+    /// private `xm_executor`, an explicit scope for every tool an agent holds,
+    /// the egress ceiling = the scopes' hosts, feeds whose agent holds their
+    /// tool, the market rows recorded, ctx fresh enough for `xm_exits`.
+    #[test]
+    fn xmarket_sandbox_m0_stage() {
+        use crate::config::AgentConfig;
+        use crate::domain::scope::host_matches;
+        use crate::domain::tools::XM_EXEC_TOOLS;
+
+        let load = |name: &str| {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("sandboxes")
+                .join(name)
+                .join("config.toml");
+            Config::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
+        };
+        let held = |a: &AgentConfig| -> BTreeSet<String> {
+            a.tools.iter().chain(&a.workspace_tools).cloned().collect()
+        };
+        let cfg = load("xmarket");
+        let weekend = load("xmarket-weekend");
+
+        let x = cfg.xmarket.as_ref().unwrap();
+        assert_eq!(x.state, "xmarket");
+        assert!(x.weekend_fade.is_none(), "rule W is xmarket-weekend's");
+        let home = Path::new(HOME);
+        let weekend_x = weekend.xmarket.as_ref().unwrap();
+        assert_ne!(x.state_dir(home), weekend_x.state_dir(home));
+        let workspaces = |c: &Config| -> BTreeSet<PathBuf> {
+            c.agents
+                .values()
+                .map(|a| expand_tilde(a.workspace.as_ref().expect("every agent sets one")))
+                .collect()
+        };
+        let ws = workspaces(&cfg);
+        assert_eq!(ws.len(), 1, "one shared workspace: {ws:?}");
+        assert!(ws.is_disjoint(&workspaces(&weekend)));
+        let kill = |c: &Config| expand_tilde(&c.risk.as_ref().unwrap().kill_switch_file);
+        assert_ne!(kill(&cfg), kill(&weekend));
+
+        // Exec tools only on the private executor; the planner (default)
+        // and the routable architect read only.
+        let exec_holders: Vec<&str> = cfg
+            .agents
+            .iter()
+            .filter(|(_, a)| held(a).iter().any(|t| XM_EXEC_TOOLS.contains(&t.as_str())))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(exec_holders, ["xm_executor"]);
+        let exec = &cfg.agents["xm_executor"];
+        assert!(exec.description.is_none() && !exec.default);
+        let routable: Vec<&str> = cfg
+            .agents
+            .iter()
+            .filter(|(_, a)| a.description.is_some())
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(routable, ["xm_architect"]);
+        let planner = &cfg.agents["xm"];
+        assert!(planner.default);
+        assert_eq!(cfg.orchestrator.as_ref().unwrap().agent, "xm");
+        for (id, a) in &cfg.agents {
+            assert_ne!(a.engine, "claude_code", "{id}: the default build has none");
+        }
+
+        // An explicit scope (folded into `scopes` by `Config::load`) for every
+        // tool an agent holds; every scope host inside the egress ceiling,
+        // every ceiling host used by a scope.
+        for (id, a) in &cfg.agents {
+            for t in held(a) {
+                assert!(a.scopes.contains_key(&t), "agents.{id}: {t} has no scope");
+            }
+        }
+        let allow = &cfg.egress.allow_hosts;
+        let scopes = cfg
+            .default_scopes
+            .values()
+            .chain(cfg.agents.values().flat_map(|a| a.scopes.values()));
+        let hosts: BTreeSet<&String> = scopes.flat_map(|s| &s.net_hosts).collect();
+        for h in &hosts {
+            assert!(
+                allow.iter().any(|p| host_matches(p, h)),
+                "{h} outside {allow:?}"
+            );
+        }
+        for p in allow {
+            assert!(hosts.iter().any(|h| host_matches(p, h)), "{p} unused");
+        }
+        assert_eq!(cfg.egress.network, "open");
+
+        // Feeds run tools their agent holds; the market rows are recorded;
+        // the 15 s ctx feed keeps marks fresh for the gate and xm_exits.
+        for (name, f) in cfg.feeds.iter().filter(|(_, f)| f.kind == "tool") {
+            let (agent, tool) = (f.agent.as_deref().unwrap(), f.tool.as_deref().unwrap());
+            assert!(held(&cfg.agents[agent]).contains(tool), "feeds.{name}");
+        }
+        for schema in ["mkt_ctx/1", "hl_book/1"] {
+            assert!(cfg.recorder.records(schema), "{schema}");
+        }
+        let ctx = &cfg.feeds["hl_ctx"];
+        assert_eq!(ctx.args["dex"], "xyz");
+        let ctx_late_ms = ctx.every_secs.unwrap() * 1000 * (100 + u64::from(ctx.jitter_pct)) / 100;
+        let risk = cfg.risk.as_ref().unwrap();
+        assert!(risk.max_data_age_ms.ctx >= ctx_late_ms);
+        assert_eq!(cfg.feeds["xm_exits"].every_secs, Some(15));
+    }
+
     /// The rules run inside `Config::validate` (and so `Config::load`).
     #[test]
     fn validate_runs_the_rules() {

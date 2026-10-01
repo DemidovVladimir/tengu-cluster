@@ -415,9 +415,10 @@ These are not preferences. They're load-bearing.
   `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
 - **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
   exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
-  `network = "open"`; the planned `xmarket` runs `open` and must stay switchable
-  to Tor (every transport through `egress.rs`). `tor-check`, `storage-test` and
-  the base config run over Tor.
+  `network = "open"`; `xmarket` (M0 stage) and `xmarket-weekend` run `open`
+  with `allow_hosts = ["api.hyperliquid.xyz"]` and must stay switchable to Tor
+  (every transport through `egress.rs`). `tor-check`, `storage-test` and the
+  base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI
   has tool access via MCP at engine-construction time, so the planner-side
   tool stripping (intended for OpenRouter's per-turn `tools = []`) doesn't
