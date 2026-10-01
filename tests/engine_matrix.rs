@@ -1173,7 +1173,8 @@ fn drive(mut cmd: Command, input: Option<String>, timeout: Duration, label: &str
 }
 
 /// The opportunity row the xm set's `paper_order` names (`min_edge`): 25
-/// bps after costs, stamped now, 10 min TTL, in the leg's workspace store.
+/// bps after costs, backing a buy (`overreaction`), stamped now, 10 min TTL,
+/// in the leg's workspace store.
 fn seed_opportunity(ws: &Workspace) {
     let dir = ws.path.join(".tengu");
     std::fs::create_dir_all(&dir).unwrap();
@@ -1193,7 +1194,8 @@ fn seed_opportunity(ws: &Workspace) {
         "key": OPPORTUNITY, "schema": "xm_compare/1", "tool": "xm_compare",
         "observed_at_ms": now, "ttl_ms": 600_000, "source": "live", "status": "ok",
         "headline": "compare hyperliquid:xyz:TSLA edge_after_costs_bps=25",
-        "features": {"edge_after_costs_bps": 25.0}, "data": null
+        "features": {"edge_after_costs_bps": 25.0, "side": "buy", "strategy": "overreaction"},
+        "data": null
     });
     conn.execute(
         "INSERT OR REPLACE INTO observations(key, schema, observed_at_ms, slot, ttl_ms, status, body)

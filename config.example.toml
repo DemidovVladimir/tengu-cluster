@@ -314,10 +314,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_leverage = 1                           # no leverage
 # daily_loss_limit_usd = 10                  # halt; clears 00:00 UTC
 # total_loss_limit_usd = 25                  # halt; clears only via `tengu risk resume` (TTY)
-# min_edge_bps = 10                          # edge after costs an entry needs (xm_compare/1 row)
+# min_edge_bps = 10                          # edge after costs an entry needs (its opportunity row: same side, strategy, size)
 # max_slippage_bps = 30
 # min_depth_usd = 250                        # book depth within max_slippage_bps
-# require_hedge_for = ["convergence"]
+# require_hedge_for = ["convergence"]        # entries refused (hedge_not_supported) until hedge legs are placed
 # max_data_age_ms = { book = 5000, ctx = 20000, reference = 60000, quote = 20000 }
 # max_skew_ms = 5000
 # max_orders_per_min = 6

@@ -24,7 +24,7 @@
 //! | Row | Holds |
 //! |---|---|
 //! | `xm_weekend/1:<anchor date>` ([`WeekendFade`]) | the window's phase `waiting` → `entered` (or `missed_entry`) → `closing` → `closed`; from the entry on, the snapshot: per name both prices, s, the fade side, capped or not, ledger bases, the orders, open quantities, P&L — the tool writes it before any order and never recomputes it |
-//! | `xm_weekend_signal/1:<anchor date>:<full id>` ([`FadeSignal`]) | one eligible name's signal — the opportunity row a capped fade names: `edge_after_costs_bps` = `expected_edge_bps` |
+//! | `xm_weekend_signal/1:<anchor date>:<full id>` ([`FadeSignal`]) | one eligible name's signal — the opportunity row a capped fade names, backing that fade only (review #8): `side` = the fade's, `strategy` = `overreaction`, `edge_after_costs_bps` = `expected_edge_bps`, `max_notional_usd` = `capped_notional_usd` |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -39,7 +39,7 @@ use crate::domain::observation::{
     ReadError, MAX_LINE1_CHARS,
 };
 use crate::domain::xm::ledger::{future_stamp, stamp_age_ms, PaperAccount, Position};
-use crate::domain::xm::risk::EDGE_FEATURE;
+use crate::domain::xm::risk::{EDGE_FEATURE, MAX_NOTIONAL_FEATURE, SIDE_FEATURE, STRATEGY_FEATURE};
 
 /// One replay candle: the price at an instant is the close of the 5 m
 /// candle ending there.
@@ -461,8 +461,11 @@ pub fn replay(
 
 /// `xm_weekend_signal/1:<anchor date>:<full id>` — one eligible name's
 /// signal, written at the entry before any order: the opportunity row its
-/// fades name (`edge_after_costs_bps` = `[xmarket.weekend_fade]
-/// expected_edge_bps`, for the `[risk]` gate's `min_edge`).
+/// fades name, for the `[risk]` gate's `min_edge` — it backs the fade and
+/// nothing else (review #8): features `side` (the fade's), `strategy`
+/// ([`FADE_STRATEGY`]), `edge_after_costs_bps` (`[xmarket.weekend_fade]
+/// expected_edge_bps`), `max_notional_usd` (`capped_notional_usd`; the
+/// shadow gate skips `min_edge`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FadeSignal {
     pub anchor_date: String,
@@ -474,6 +477,9 @@ pub struct FadeSignal {
     /// In the capped ledger.
     pub capped: bool,
     pub edge_after_costs_bps: f64,
+    /// The largest order the row backs, USD (the capped fade's size).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_notional_usd: Option<f64>,
 }
 
 impl Observed for FadeSignal {
@@ -499,11 +505,13 @@ impl Observed for FadeSignal {
         let mut f = Features::new();
         set_num(&mut f, "s_bps", Some(self.s_bps));
         set_num(&mut f, "abs_s_bps", Some(self.s_bps.abs()));
-        set_str(&mut f, "side", Some(self.side.as_str()));
+        set_str(&mut f, SIDE_FEATURE, Some(self.side.as_str()));
+        set_str(&mut f, STRATEGY_FEATURE, Some(FADE_STRATEGY));
         set_num(&mut f, "anchor_px", Some(self.anchor_px));
         set_num(&mut f, "entry_px", Some(self.entry_px));
         set_bool(&mut f, "capped", Some(self.capped));
         set_num(&mut f, EDGE_FEATURE, Some(self.edge_after_costs_bps));
+        set_num(&mut f, MAX_NOTIONAL_FEATURE, self.max_notional_usd);
         f
     }
 }
@@ -1657,18 +1665,32 @@ mod tests {
             side: Side::Sell,
             capped: true,
             edge_after_costs_bps: 23.0,
+            max_notional_usd: Some(25.0),
         };
         let o = Observation::of("xm_weekend_fade", &sig, 1, 600_000, ObsSource::Live);
         assert_eq!(o.key, "xm_weekend_signal/1:2026-10-02:hyperliquid:xyz:TSLA");
         assert!(key_names(&o.key, TSLA), "the gate's min_edge finds it");
         assert!(!key_names(&o.key, "hyperliquid:xyz:TSL"));
         assert_eq!(o.features[EDGE_FEATURE], 23.0);
+        // Review #8: what it backs — the fade's side, strategy and size.
+        assert_eq!(o.features[SIDE_FEATURE], "sell");
+        assert_eq!(o.features[STRATEGY_FEATURE], FADE_STRATEGY);
+        assert_eq!(o.features[MAX_NOTIONAL_FEATURE], 25.0);
         assert_features_ok(&o.features);
+        let back: FadeSignal = o.typed().unwrap();
+        assert_eq!(back, sig);
         assert_eq!(
             o.headline,
             "xm_weekend_signal 2026-10-02 hyperliquid:xyz:TSLA s_bps=+99.50 fade=sell capped \
              edge_after_costs_bps=23"
         );
+        // Without a bound the feature is left out (never 0).
+        let unbounded = FadeSignal {
+            max_notional_usd: None,
+            ..sig
+        };
+        let u = Observation::of("xm_weekend_fade", &unbounded, 1, 600_000, ObsSource::Live);
+        assert!(!u.features.contains_key(MAX_NOTIONAL_FEATURE));
     }
 
     fn window() -> WeekendWindow {

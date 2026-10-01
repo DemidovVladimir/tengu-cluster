@@ -143,13 +143,17 @@ pub struct RiskConfig {
     pub daily_loss_limit_usd: f64,
     /// Loss since inception that halts entries until `tengu risk resume`.
     pub total_loss_limit_usd: f64,
-    /// Edge after costs an entry needs (fresh `xm_compare/1` row); exits skip it.
+    /// Edge after costs an entry needs: its fresh opportunity row
+    /// (`xm_compare/1`, `xm_weekend_signal/1`), which must back the order's
+    /// side, its strategy and its size (review #8); exits skip it.
     pub min_edge_bps: f64,
     /// Worst fill vs mid the book walk may reach.
     pub max_slippage_bps: f64,
     /// Book depth on the order's side within `max_slippage_bps`.
     pub min_depth_usd: f64,
-    /// Strategies ([`STRATEGIES`]) that need an available hedge leg.
+    /// Strategies ([`STRATEGIES`]) that need an available hedge leg. Until
+    /// an exec path places hedge legs, an entry of one is refused
+    /// (`hedge_not_supported`, `tools/xm/exec_common.rs`; review #8).
     pub require_hedge_for: Vec<String>,
     /// Max age of each input row an order is checked against.
     pub max_data_age_ms: DataAgeLimits,

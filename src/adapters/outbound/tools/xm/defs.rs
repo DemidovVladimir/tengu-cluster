@@ -75,7 +75,8 @@ fn paper_order() -> ToolDef {
          caps after the fill, leverage. Allowed orders fill after the paper latency against a \
          live Hyperliquid book (market or limit IOC, depth walk, HL rejection codes). Needs \
          fresh mkt_ctx/1 + mkt_instrument/1 rows (read hl_ctx first) and, for an entry, an \
-         opportunity row with edge_after_costs_bps. Typed observation \
+         opportunity row with edge_after_costs_bps that backs the order (same side, same \
+         strategy, size within its max_notional_usd). Typed observation \
          paper_fill/1:<account>:<client_order_id>: status (filled, partial, rejected, denied), \
          risk (allow / deny), risk_rule, fill price, fee, slippage, position and equity after.",
         json!({
@@ -104,7 +105,7 @@ fn paper_order() -> ToolDef {
                 "strategy": {
                     "type": "string",
                     "enum": STRATEGIES,
-                    "description": "Opportunity type; [risk] require_hedge_for names the ones that need a hedge leg.",
+                    "description": "Opportunity type; must be the opportunity row's. Entries of a [risk] require_hedge_for type are refused (hedge_not_supported) until hedge legs are placed.",
                 },
                 "hedge_instrument": {
                     "type": "string",
@@ -112,7 +113,7 @@ fn paper_order() -> ToolDef {
                 },
                 "opportunity": {
                     "type": "string",
-                    "description": "Observation key of the row with edge_after_costs_bps that justifies the entry, e.g. xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA.",
+                    "description": "Observation key of the row that justifies the entry (edge_after_costs_bps, side = this order's, strategy, optional max_notional_usd), e.g. xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA.",
                 },
                 "client_order_id": client_order_id(),
                 "exit_at_ms": {

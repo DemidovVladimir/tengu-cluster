@@ -23,15 +23,15 @@
 //! | `order_rate` · `open_orders` | entries stored in the last 60 s (`orders_last_min`: orders that are not reduce-only — exits never count) + 1 ≤ max · resting orders + 1 ≤ max | `order_rate` skipped · `open_orders` same |
 //! | `book_age` · `ctx_age` | row age ≤ `max_data_age_ms.book` / `.ctx`; a book is as old as the older of its row and venue time; a row stamped more than 1 s after now (`ledger::stamp_age_ms`) is stale, never age 0 | waived |
 //! | `market_status` | `mkt_ctx` listed with a book, not halted; at the OI cap only if the position does not grow; the growth ≤ `oi_cap_usd − oi_usd` when the row has both; a Hyperliquid row without `at_oi_cap` (the `perpsAtOpenInterestCap` read failed) only if the position does not grow, else `missing:at_oi_cap` — the fill would refuse it and store the refusal | skipped |
-//! | `min_edge` | `edge_after_costs_bps` of the `opportunity_key` row — its key names the order's instrument as whole `:` segments, any schema with that feature, within the row TTL (stamped ≤ 1 s ahead of now) — ≥ `min_edge_bps` | skipped |
+//! | `min_edge` | the `opportunity_key` row — its key names the order's instrument as whole `:` segments, any schema with the features below, within the row TTL (stamped ≤ 1 s ahead of now) — backs this order (review #8): its `side` is the order's (none ⇒ `missing:opportunity_side`); its `strategy` is the order's when the order names one (none ⇒ `missing:opportunity_strategy`); `edge_after_costs_bps` ≥ `min_edge_bps`; the order's size (the cap rules' `order_usd`) ≤ its `max_notional_usd` when it carries one | skipped |
 //! | `depth` · `slippage` | taker-side depth within `max_slippage_bps` of mid ≥ `min_depth_usd` · the walk of `notional_usd` fills fully, VWAP ≤ `max_slippage_bps` from mid | skipped |
 //! | `order_notional` · `position_notional` · `asset_exposure` · `venue_exposure` · `gross_exposure` · `net_exposure` | after the fill ≤ cap: the order · \|position\| · \|net per underlying\| · gross per venue · gross · \|net\| | skipped |
 //! | `leverage` | gross after / equity ≤ `max_leverage`; equity ≤ 0 fails | skipped |
-//! | `hedge` · `skew` | `require_hedge_for` strategies: the hedge leg is permitted, fresh, open, deep enough, and the leg books are ≤ `max_skew_ms` apart | skipped |
+//! | `hedge` · `skew` | `require_hedge_for` strategies (the order's, else its opportunity row's): the hedge leg is permitted, fresh, open, deep enough, and the leg books are ≤ `max_skew_ms` apart — no exec path places that leg yet, so `run_exec` refuses such an entry first (`hedge_not_supported`) | skipped |
 //!
 //! | Detail | Rule |
 //! |---|---|
-//! | Missing input (`Absent` / `Error`) | the check fails `missing:<field>`: `kill_switch`, `mark`, `equity`, `day_start_equity`, `book`, `ctx`, `at_oi_cap`, `edge_after_costs_bps`, `lifecycle`, `hedge_book`, `hedge_ctx` |
+//! | Missing input (`Absent` / `Error`) | the check fails `missing:<field>`: `kill_switch`, `mark`, `equity`, `day_start_equity`, `book`, `ctx`, `at_oi_cap`, `edge_after_costs_bps`, `opportunity_side`, `opportunity_strategy`, `opportunity_max_notional_usd` (present but not a number > 0), `lifecycle`, `hedge_book`, `hedge_ctx` |
 //! | After-fill values | existing positions and the order's delta at mark; a new position at the order leg's book mid (no book: `notional_usd / qty`); `order_notional` takes the larger of `notional_usd` and qty × that price — an intent never understates its size |
 //! | Comparison | 1e-12 relative tolerance: at the limit passes, limit + 1e-6 fails |
 //! | Verdict `rule` | the first failing check in table order; else `allow_reduce_degraded` when a check was waived; else `ok` |
@@ -96,6 +96,17 @@ pub mod rules {
 
 /// Feature an opportunity row carries (`xm_compare/1`, a strategy row).
 pub const EDGE_FEATURE: &str = "edge_after_costs_bps";
+/// The side an opportunity row backs (`buy` · `sell`), required.
+pub const SIDE_FEATURE: &str = "side";
+/// The §21 type of an opportunity row (`overreaction`, `convergence`, …).
+pub const STRATEGY_FEATURE: &str = "strategy";
+/// The largest order an opportunity row backs, USD; optional.
+pub const MAX_NOTIONAL_FEATURE: &str = "max_notional_usd";
+
+/// `missing:<field>` names of an opportunity row's other features.
+const OPPORTUNITY_SIDE: &str = "opportunity_side";
+const OPPORTUNITY_STRATEGY: &str = "opportunity_strategy";
+const OPPORTUNITY_MAX_NOTIONAL: &str = "opportunity_max_notional_usd";
 
 /// §29 lifecycle states, in order (`kg-lifecycle` owns the transitions;
 /// `config::risk` re-exports this as the `min_lifecycle` type).
@@ -386,7 +397,12 @@ pub struct LegMarket {
     pub ctx: Field<CtxInput>,
 }
 
-/// The opportunity row an entry names.
+fn absent<T>() -> Field<T> {
+    Field::Absent
+}
+
+/// The opportunity row an entry names: what it backs (review #8 — a row is
+/// one side, one strategy and, when it says so, one size).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EdgeInput {
     pub key: String,
@@ -394,12 +410,23 @@ pub struct EdgeInput {
     /// The row's TTL: older rows are stale (missing).
     pub ttl_ms: u64,
     pub edge_after_costs_bps: Field<f64>,
+    /// The side it backs (`side`): an entry on the other side has no edge.
+    #[serde(default = "absent")]
+    pub side: Field<Side>,
+    /// Its §21 type (`strategy`): an order that names one needs this one.
+    #[serde(default = "absent")]
+    pub strategy: Field<String>,
+    /// The largest order it backs, USD (`max_notional_usd`); `Absent` = no
+    /// bound beyond the caps.
+    #[serde(default = "absent")]
+    pub max_notional_usd: Field<f64>,
 }
 
 impl EdgeInput {
     /// From the stored row at `key` (`None` = no row ⇒ `Absent`). An error
-    /// row ⇒ `Error`; no finite `edge_after_costs_bps` feature ⇒ the edge
-    /// is `Absent` / `Error`.
+    /// row ⇒ `Error`; per feature: missing / null ⇒ `Absent`, malformed
+    /// (`edge_after_costs_bps` not finite, `side` not buy / sell, `strategy`
+    /// not a non-empty string, `max_notional_usd` not finite > 0) ⇒ `Error`.
     pub fn from_row(key: &str, row: Option<&Observation>) -> Field<EdgeInput> {
         let Some(row) = row else {
             return Field::Absent;
@@ -414,23 +441,46 @@ impl EdgeInput {
         if row.status == ObsStatus::Error {
             return Field::err(first_error(row, EDGE_FEATURE));
         }
-        let edge = match row.features.get(EDGE_FEATURE) {
-            None | Some(Value::Null) => Field::Absent,
-            Some(v) => match v.as_f64().filter(|x| x.is_finite()) {
-                Some(x) => Field::ok(x),
-                None => Field::err(ReadError::new(
-                    EDGE_FEATURE,
-                    ErrorClass::Decode,
-                    format!("{EDGE_FEATURE} is {v}, not a number"),
-                )),
-            },
-        };
         Field::ok(EdgeInput {
             key: key.to_string(),
             observed_at_ms: row.observed_at_ms,
             ttl_ms: row.ttl_ms,
-            edge_after_costs_bps: edge,
+            edge_after_costs_bps: row_feature(row, EDGE_FEATURE, "a number", |v| {
+                v.as_f64().filter(|x| x.is_finite())
+            }),
+            side: row_feature(row, SIDE_FEATURE, "buy or sell", |v| {
+                v.as_str().and_then(Side::parse)
+            }),
+            strategy: row_feature(row, STRATEGY_FEATURE, "a strategy name", |v| {
+                v.as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .map(str::to_string)
+            }),
+            max_notional_usd: row_feature(row, MAX_NOTIONAL_FEATURE, "a number > 0", |v| {
+                v.as_f64().filter(|x| x.is_finite() && *x > 0.0)
+            }),
         })
+    }
+}
+
+/// Feature `name` of `row`: missing or null ⇒ `Absent`; `parse` ⇒ `Ok`;
+/// anything else ⇒ an `Error` saying what it should be.
+fn row_feature<T>(
+    row: &Observation,
+    name: &str,
+    what: &str,
+    parse: impl Fn(&Value) -> Option<T>,
+) -> Field<T> {
+    match row.features.get(name) {
+        None | Some(Value::Null) => Field::Absent,
+        Some(v) => match parse(v) {
+            Some(x) => Field::ok(x),
+            None => Field::err(ReadError::new(
+                name,
+                ErrorClass::Decode,
+                format!("{name} is {v}, not {what}"),
+            )),
+        },
     }
 }
 
@@ -508,6 +558,9 @@ impl RiskContext {
                 "age_ms": stamp_age_ms(now_ms, o.observed_at_ms),
                 "ttl_ms": o.ttl_ms,
                 "edge_after_costs_bps": o.edge_after_costs_bps,
+                "side": o.side,
+                "strategy": o.strategy,
+                "max_notional_usd": o.max_notional_usd,
             }),
             other => json!(other),
         };
@@ -1234,48 +1287,138 @@ impl Gate<'_> {
             return;
         }
         let ctx = self.ctx;
-        match &ctx.opportunity {
-            Field::Ok { value: o } if o.key != key => self.fail(
-                missing(EDGE_FEATURE),
-                format!("context row {} is not the order's {key}", o.key),
-            ),
+        let o = match &ctx.opportunity {
+            Field::Ok { value: o } if o.key == key => o,
             Field::Ok { value: o } => {
-                let Some(age) = stamp_age_ms(self.now_ms, o.observed_at_ms) else {
-                    self.fail(
-                        missing(EDGE_FEATURE),
-                        future_stamp(&key, o.observed_at_ms, self.now_ms),
-                    );
-                    return;
-                };
-                if o.ttl_ms == 0 || age > o.ttl_ms {
-                    self.fail(
-                        missing(EDGE_FEATURE),
-                        format!("stale: {key} age {age} ms > ttl {} ms", o.ttl_ms),
-                    );
-                    return;
-                }
-                match &o.edge_after_costs_bps {
-                    Field::Ok { value } => {
-                        let detail = format!(
-                            "{key} {EDGE_FEATURE} {value} bps, min {} bps",
-                            self.limits.min_edge_bps
-                        );
-                        if at_least(*value, self.limits.min_edge_bps) {
-                            self.pass(rules::MIN_EDGE, detail);
-                        } else {
-                            self.fail(rules::MIN_EDGE, detail);
-                        }
-                    }
-                    other => {
-                        let e = read_error(other, EDGE_FEATURE);
-                        self.fail(missing(EDGE_FEATURE), format!("{key}: {}", describe(&e)));
-                    }
-                }
+                self.fail(
+                    missing(EDGE_FEATURE),
+                    format!("context row {} is not the order's {key}", o.key),
+                );
+                return;
             }
             other => {
                 let e = read_error(other, EDGE_FEATURE);
                 self.fail(missing(EDGE_FEATURE), format!("{key}: {}", describe(&e)));
+                return;
             }
+        };
+        let Some(age) = stamp_age_ms(self.now_ms, o.observed_at_ms) else {
+            self.fail(
+                missing(EDGE_FEATURE),
+                future_stamp(&key, o.observed_at_ms, self.now_ms),
+            );
+            return;
+        };
+        if o.ttl_ms == 0 || age > o.ttl_ms {
+            self.fail(
+                missing(EDGE_FEATURE),
+                format!("stale: {key} age {age} ms > ttl {} ms", o.ttl_ms),
+            );
+            return;
+        }
+        match self.backs(&key, o) {
+            Ok(detail) => self.pass(rules::MIN_EDGE, detail),
+            Err((code, detail)) => self.fail(code, detail),
+        }
+    }
+
+    /// `min_edge` on a fresh row `o` about the order's instrument (review
+    /// #8): the row backs this order's side, its strategy when the order
+    /// names one, an edge ≥ `min_edge_bps` and, when it carries
+    /// `max_notional_usd`, the order's size. `Err((code, detail))` = the
+    /// first that does not.
+    fn backs(&self, key: &str, o: &EdgeInput) -> Result<String, (String, String)> {
+        let i = self.intent;
+        match &o.side {
+            Field::Ok { value } if *value == i.side => {}
+            Field::Ok { value } => {
+                return Err((
+                    rules::MIN_EDGE.into(),
+                    format!(
+                        "{key} backs a {}; the order is a {} of {}",
+                        value.as_str(),
+                        i.side.as_str(),
+                        i.instrument
+                    ),
+                ))
+            }
+            other => {
+                let e = read_error(other, SIDE_FEATURE);
+                return Err((
+                    missing(OPPORTUNITY_SIDE),
+                    format!("{key} names no side: {}", describe(&e)),
+                ));
+            }
+        }
+        if let Some(want) = &i.strategy {
+            match &o.strategy {
+                Field::Ok { value } if value == want => {}
+                Field::Ok { value } => {
+                    return Err((
+                        rules::MIN_EDGE.into(),
+                        format!("{key} is a {value} opportunity; the order's strategy is {want}"),
+                    ))
+                }
+                other => {
+                    let e = read_error(other, STRATEGY_FEATURE);
+                    return Err((
+                        missing(OPPORTUNITY_STRATEGY),
+                        format!(
+                            "{key} names no strategy to match the order's {want}: {}",
+                            describe(&e)
+                        ),
+                    ));
+                }
+            }
+        }
+        let edge = match &o.edge_after_costs_bps {
+            Field::Ok { value } => *value,
+            other => {
+                let e = read_error(other, EDGE_FEATURE);
+                return Err((missing(EDGE_FEATURE), format!("{key}: {}", describe(&e))));
+            }
+        };
+        let strategy = o.strategy.value().map_or("-", String::as_str);
+        let mut detail = format!(
+            "{key} {} {strategy} {EDGE_FEATURE} {edge} bps, min {} bps",
+            i.side.as_str(),
+            self.limits.min_edge_bps
+        );
+        if !at_least(edge, self.limits.min_edge_bps) {
+            return Err((rules::MIN_EDGE.into(), detail));
+        }
+        match &o.max_notional_usd {
+            Field::Absent => {}
+            Field::Ok { value: max } => {
+                detail = format!(
+                    "{detail}; order {} USD, {MAX_NOTIONAL_FEATURE} {max} USD",
+                    self.order_usd
+                );
+                if !within_max(self.order_usd, *max) {
+                    return Err((rules::MIN_EDGE.into(), detail));
+                }
+            }
+            Field::Error { error } => {
+                return Err((
+                    missing(OPPORTUNITY_MAX_NOTIONAL),
+                    format!("{key}: {}", describe(error)),
+                ))
+            }
+        }
+        Ok(detail)
+    }
+
+    /// The entry's §21 strategy: the order's, else its opportunity row's
+    /// (an order naming none trades the row's opportunity).
+    fn strategy(&self) -> Option<&str> {
+        if let Some(s) = &self.intent.strategy {
+            return Some(s);
+        }
+        match &self.ctx.opportunity {
+            Field::Ok { value: o } if self.intent.opportunity_key.as_ref() == Some(&o.key) => {
+                o.strategy.value().map(String::as_str)
+            }
+            _ => None,
         }
     }
 
@@ -1535,24 +1678,26 @@ impl Gate<'_> {
         }
     }
 
-    /// `hedge` + `skew` (entries of `require_hedge_for` strategies).
+    /// `hedge` + `skew` (entries of `require_hedge_for` strategies — the
+    /// order's, else its opportunity row's).
     fn check_hedge(&mut self) {
-        let needs = self
-            .intent
-            .strategy
-            .as_ref()
-            .is_some_and(|s| self.limits.require_hedge_for.contains(s));
-        if self.is_exit() || !needs {
-            let why = if self.is_exit() {
-                "exit"
-            } else {
-                "strategy needs no hedge"
-            };
-            self.skip(rules::HEDGE, why);
-            self.skip(rules::SKEW, why);
-            return;
-        }
-        let strategy = self.intent.strategy.clone().unwrap_or_default();
+        let strategy = self
+            .strategy()
+            .filter(|s| self.limits.require_hedge_for.iter().any(|h| h == s))
+            .map(str::to_string);
+        let strategy = match strategy {
+            Some(s) if !self.is_exit() => s,
+            _ => {
+                let why = if self.is_exit() {
+                    "exit"
+                } else {
+                    "strategy needs no hedge"
+                };
+                self.skip(rules::HEDGE, why);
+                self.skip(rules::SKEW, why);
+                return;
+            }
+        };
         let Some(h) = self.intent.hedge_instrument.clone() else {
             let detail = format!("strategy {strategy} requires a hedge_instrument");
             self.fail(rules::HEDGE, detail.clone());
@@ -1902,6 +2047,7 @@ mod tests {
     use crate::domain::market::InstrumentId;
     use crate::domain::observation::{ObsSource, Observed};
     use crate::domain::xm::ledger::{Fill, Mark, PaperAccount};
+    use crate::domain::xm::weekend_fade::FadeSignal;
 
     const ACCOUNT: &str = "xmarket";
     const TSLA: &str = "hyperliquid:xyz:TSLA";
@@ -2047,6 +2193,9 @@ mod tests {
                         observed_at_ms: NOW - 1_000,
                         ttl_ms: 5_000,
                         edge_after_costs_bps: Field::ok(12.0),
+                        side: Field::ok(Side::Buy),
+                        strategy: Field::ok("overreaction".into()),
+                        max_notional_usd: Field::Absent,
                     }),
                 },
                 limits: limits(),
@@ -2644,6 +2793,124 @@ mod tests {
         }
     }
 
+    /// Review #8: an opportunity row backs one side, its strategy and —
+    /// when it says so — one size; the weekend fade's SHORT signal row never
+    /// lets a BUY through; a row without a side never passes.
+    #[test]
+    fn min_edge_needs_the_rows_side_strategy_and_size() {
+        // A matching row passes (the baseline: a buy, overreaction).
+        let v = Case::entry().run();
+        assert_allow(&v);
+        let d = &v.check(rules::MIN_EDGE).unwrap().detail;
+        assert!(d.starts_with(&format!("{OPP} buy overreaction")), "{d}");
+
+        // A buy against a sell row has no edge; a sell takes it.
+        let mut c = Case::entry();
+        opp(&mut c).side = Field::ok(Side::Sell);
+        let v = c.run();
+        assert_deny(&v, rules::MIN_EDGE);
+        assert_eq!(
+            v.failed().unwrap().detail,
+            format!("{OPP} backs a sell; the order is a buy of {TSLA}")
+        );
+        c.intent.side = Side::Sell;
+        assert_allow(&c.run());
+
+        // No side, or an unreadable one: never an allow.
+        for side in [Field::Absent, Field::err(err(SIDE_FEATURE))] {
+            let mut c = Case::entry();
+            opp(&mut c).side = side;
+            let v = c.run();
+            assert_deny(&v, "missing:opportunity_side");
+            assert!(v.failed().unwrap().detail.contains(OPP), "{:?}", v.failed());
+        }
+
+        // The strategy: the order's must be the row's; a row without one
+        // backs no order that names one; an order naming none takes the row
+        // as it is (the hedge rule then judges the row's strategy).
+        let mut c = Case::entry();
+        opp(&mut c).strategy = Field::ok("underreaction".into());
+        let v = c.run();
+        assert_deny(&v, rules::MIN_EDGE);
+        assert_eq!(
+            v.failed().unwrap().detail,
+            format!("{OPP} is a underreaction opportunity; the order's strategy is overreaction")
+        );
+        c.intent.strategy = None;
+        assert_allow(&c.run());
+        for strategy in [Field::Absent, Field::err(err(STRATEGY_FEATURE))] {
+            let mut c = Case::entry();
+            opp(&mut c).strategy = strategy;
+            assert_deny(&c.run(), "missing:opportunity_strategy");
+            c.intent.strategy = None;
+            assert_allow(&c.run());
+        }
+
+        // The size: the caps' order_usd (the $25 baseline) at the row's
+        // max_notional_usd passes, 1e-6 over it does not; qty at mid counts,
+        // not a smaller notional; an unreadable bound never passes.
+        let mut c = Case::entry();
+        opp(&mut c).max_notional_usd = Field::ok(25.0);
+        let v = c.run();
+        assert_allow(&v);
+        let d = &v.check(rules::MIN_EDGE).unwrap().detail;
+        assert!(
+            d.ends_with("; order 25 USD, max_notional_usd 25 USD"),
+            "{d}"
+        );
+        opp(&mut c).max_notional_usd = Field::ok(25.0 - 1e-6);
+        assert_deny(&c.run(), rules::MIN_EDGE);
+        let mut c = Case::entry();
+        opp(&mut c).max_notional_usd = Field::ok(25.0);
+        c.intent.qty = 0.07; // 0.07 × mid 400 = $28
+        let v = c.run();
+        assert_deny(&v, rules::MIN_EDGE);
+        assert!(v.failed().unwrap().detail.contains("order 28"), "{v:?}");
+        opp(&mut c).max_notional_usd = Field::err(err(MAX_NOTIONAL_FEATURE));
+        assert_deny(&c.run(), "missing:opportunity_max_notional_usd");
+
+        // The finding: during the lateness after the weekend entry, the
+        // SHORT fade's xm_weekend_signal/1 row on TSLA (as the fade writes
+        // it) backs a sell up to the capped size — never a buy.
+        let signal = FadeSignal {
+            anchor_date: "2026-10-02".into(),
+            instrument: TSLA.into(),
+            anchor_px: 396.0,
+            entry_px: 400.0,
+            s_bps: (400.0f64 / 396.0).ln() * 10_000.0,
+            side: Side::Sell,
+            capped: true,
+            edge_after_costs_bps: 23.0,
+            max_notional_usd: Some(25.0),
+        };
+        let row = Observation::of(
+            "xm_weekend_fade",
+            &signal,
+            NOW - 1_000,
+            600_000,
+            ObsSource::Live,
+        );
+        let mut c = Case::entry();
+        c.intent.opportunity_key = Some(row.key.clone());
+        c.ctx.opportunity = EdgeInput::from_row(&row.key, Some(&row));
+        let v = c.run();
+        assert_deny(&v, rules::MIN_EDGE);
+        assert_eq!(
+            v.failed().unwrap().detail,
+            format!("{} backs a sell; the order is a buy of {TSLA}", row.key)
+        );
+        c.intent.side = Side::Sell;
+        assert_allow(&c.run());
+        c.intent.qty = 0.125;
+        c.intent.notional_usd = 50.0;
+        let v = c.run();
+        assert_deny(&v, rules::MIN_EDGE);
+        assert!(
+            v.failed().unwrap().detail.contains("max_notional_usd 25"),
+            "{v:?}"
+        );
+    }
+
     /// Every input an entry reads, knocked out (`Absent` and `Error`),
     /// denies with `missing:<field>` — never an allow.
     #[test]
@@ -2726,6 +2993,26 @@ mod tests {
                     value.observed_at_ms = NOW - 5_001;
                 }
             }),
+            k("missing:opportunity_side", |c| {
+                if let Field::Ok { value } = &mut c.ctx.opportunity {
+                    value.side = Field::Absent;
+                }
+            }),
+            k("missing:opportunity_side", |c| {
+                if let Field::Ok { value } = &mut c.ctx.opportunity {
+                    value.side = Field::err(err(SIDE_FEATURE));
+                }
+            }),
+            k("missing:opportunity_strategy", |c| {
+                if let Field::Ok { value } = &mut c.ctx.opportunity {
+                    value.strategy = Field::Absent;
+                }
+            }),
+            k("missing:opportunity_max_notional_usd", |c| {
+                if let Field::Ok { value } = &mut c.ctx.opportunity {
+                    value.max_notional_usd = Field::err(err(MAX_NOTIONAL_FEATURE));
+                }
+            }),
             k("missing:lifecycle", |c| {
                 c.limits.min_lifecycle = Some(Lifecycle::Mapped);
                 c.ctx.lifecycle = Field::err(err("catalog"));
@@ -2763,12 +3050,22 @@ mod tests {
         }
     }
 
-    /// A `convergence` entry hedged on the RH TSLA token.
+    /// The case's opportunity row (it has one).
+    fn opp(c: &mut Case) -> &mut EdgeInput {
+        match &mut c.ctx.opportunity {
+            Field::Ok { value } => value,
+            other => panic!("no opportunity row: {other:?}"),
+        }
+    }
+
+    /// A `convergence` entry hedged on the RH TSLA token, naming a
+    /// convergence row.
     fn hedged() -> Case {
         let mut c = Case::entry();
         c.limits.venues.push("robinhood".into());
         c.limits.instruments_allow.push(TSLA_RH.into());
         c.intent.strategy = Some("convergence".into());
+        opp(&mut c).strategy = Field::ok("convergence".into());
         c.intent.hedge_instrument = Some(TSLA_RH.into());
         let rh = L2Book::new(
             vec![L2Level {
@@ -2821,6 +3118,19 @@ mod tests {
         let v = Case::entry().run();
         assert_eq!(v.check(rules::HEDGE).unwrap().status, CheckStatus::Skipped);
         assert_eq!(v.check(rules::SKEW).unwrap().status, CheckStatus::Skipped);
+        // Review #8: an order naming no strategy trades its row's — a
+        // convergence row needs the hedge leg all the same.
+        let mut c = hedged();
+        c.intent.strategy = None;
+        assert_allow(&c.run());
+        c.intent.hedge_instrument = None;
+        let v = c.run();
+        assert_deny(&v, rules::HEDGE);
+        assert!(
+            v.failed().unwrap().detail.contains("strategy convergence"),
+            "{:?}",
+            v.failed()
+        );
     }
 
     #[test]
@@ -2994,7 +3304,50 @@ mod tests {
             (Field::ok(14.5), 5_000)
         );
         let partial = EdgeInput::from_row(OPP, Some(&row(json!({}), ObsStatus::Partial)));
-        assert_eq!(partial.value().unwrap().edge_after_costs_bps, Field::Absent);
+        let p = partial.value().unwrap();
+        assert_eq!(p.edge_after_costs_bps, Field::Absent);
+        assert_eq!(
+            (&p.side, &p.strategy, &p.max_notional_usd),
+            (&Field::Absent, &Field::Absent, &Field::Absent)
+        );
+        // Review #8: what the row backs — side, strategy, size.
+        let full = EdgeInput::from_row(
+            OPP,
+            Some(&row(
+                json!({"edge_after_costs_bps": 14.5, "side": "sell", "strategy": "convergence",
+                       "max_notional_usd": 20}),
+                ObsStatus::Ok,
+            )),
+        );
+        let f = full.value().unwrap();
+        assert_eq!(
+            (&f.side, &f.strategy, &f.max_notional_usd),
+            (
+                &Field::ok(Side::Sell),
+                &Field::ok("convergence".to_string()),
+                &Field::ok(20.0)
+            )
+        );
+        let bad = EdgeInput::from_row(
+            OPP,
+            Some(&row(
+                json!({"edge_after_costs_bps": 14.5, "side": "long", "strategy": " ",
+                       "max_notional_usd": 0}),
+                ObsStatus::Ok,
+            )),
+        );
+        let b = bad.value().unwrap();
+        assert_eq!(b.edge_after_costs_bps, Field::ok(14.5));
+        let msg = |f: Option<&ReadError>| f.map(|e| e.message.clone()).unwrap_or_default();
+        assert_eq!(msg(b.side.error()), "side is \"long\", not buy or sell");
+        assert_eq!(
+            msg(b.strategy.error()),
+            "strategy is \" \", not a strategy name"
+        );
+        assert_eq!(
+            msg(b.max_notional_usd.error()),
+            "max_notional_usd is 0, not a number > 0"
+        );
         assert!(EdgeInput::from_row(
             OPP,
             Some(&row(json!({"edge_after_costs_bps": 1}), ObsStatus::Error))

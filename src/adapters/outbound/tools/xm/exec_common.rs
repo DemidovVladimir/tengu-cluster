@@ -11,7 +11,7 @@
 //! | 2 | the calling agent is private — no `description`, not `default` (the load rule again: a planner step's `compose.tools` can hand any tool to a routable agent); the gate fits the account (review #5): `ExecGate::Shadow` only with the paper engine's [`PaperFills`] (`[risk] mode = "paper"`) and never on the `[risk]` account, `ExecGate::Risk` only on it | `exec_agent_not_private` · `shadow_not_paper` · `gate_account_mismatch` |
 //! | 3 | `client_order_id` = the arg, else `ToolCtx.call_id` (bridge: `mcp:<process nonce>:<JSON-RPC id>`) — never random; the request's fingerprint (`exec::order_fingerprint`: tool, account, full id, `close` or side + notional) is stored with the order | `no_client_order_id` · `invalid_client_order_id` |
 //! | 4 | the account (`limits.account`) opened on first use with `[paper] initial_cash_usd` (a shadow account, `ExecGate::Shadow`: its own cash); an order stored under the id ⇒ its row, `replayed` — no latency, no book read, nothing written — unless it was placed with another fingerprint (review #11) | `client_order_id_conflict` |
-//! | 5 | store reads, never fetched: `mkt_ctx/1` of the open positions, of the instruments that owe funding and of the order's (and hedge) instrument, `mkt_instrument/1` of the instrument (`domain::xm::exec::order_venue_facts`: a reduce-only order falls back to the facts kept with its position when the row is missing, older or partial — review #6), the `opportunity` row | `missing:mkt_instrument` |
+//! | 5 | store reads, never fetched: `mkt_ctx/1` of the open positions, of the instruments that owe funding and of the order's (and hedge) instrument, `mkt_instrument/1` of the instrument (`domain::xm::exec::order_venue_facts`: a reduce-only order falls back to the facts kept with its position when the row is missing, older or partial — review #6), the `opportunity` row; an entry (not reduce-only) whose strategy — the order's, else its opportunity row's `strategy` — is in `[risk] require_hedge_for` is refused (review #8): no exec path places the hedge leg yet, and the gate's `hedge` rule only checks that one could trade | `missing:mkt_instrument` · `hedge_not_supported` | `missing:mkt_instrument` |
 //! | 6 | funding owed booked first: every owed and due hour of the account at a fresh `mkt_ctx/1` rate + oracle (`ledger::Position::settle_funding`; a row stamped > 1 s ahead is not fresh); without one nothing is written here — `place` settles the order's instrument at the size held, owed when no rate is known (review #10) | — |
 //! | 7 | the order checked before the latency (`[paper] order_types`, `check_order`); a close sized from the position; a reduce-only order's IOC bound cut to `exec::MAX_EXIT_SLIPPAGE_BPS` (500 bps, review #9) | `order_type` · `invalid_order` · `no_position` |
 //! | 8 | `fill_with_latency` on the `Clock` + `BookSource` (live: `SystemClock`, `hyperliquid::book::HlBookSource`, the `hl_book/1` read recorded + stored); a hedge leg's book right after | — a failed read is the gate's `missing:book` |
@@ -50,7 +50,7 @@ use crate::domain::xm::paper::{
     jittered_latency_ms, FillEnv, OrderKind, OrderSize, PaperOrder, Tif,
 };
 use crate::domain::xm::risk::{
-    BookInput, CtxInput, EdgeInput, GateKind, LegMarket, OrderIntent, RiskLimits,
+    BookInput, CtxInput, EdgeInput, GateKind, LegMarket, OrderIntent, RiskLimits, STRATEGY_FEATURE,
 };
 use crate::ports::book::{BookRead, BookSource};
 use crate::ports::clock::Clock;
@@ -117,6 +117,38 @@ pub(crate) const SHADOW_NOT_PAPER: &str = "shadow_not_paper";
 /// Refusal: a gate on the wrong account (a shadow order on the `[risk]`
 /// account, a `[risk]` order on another).
 pub(crate) const GATE_ACCOUNT_MISMATCH: &str = "gate_account_mismatch";
+
+/// Refusal: an entry of a `[risk] require_hedge_for` strategy — no exec
+/// path places the hedge leg yet (review #8).
+pub(crate) const HEDGE_NOT_SUPPORTED: &str = "hedge_not_supported";
+
+/// Review #8: until hedge legs are placed, an entry whose strategy — the
+/// order's, else its opportunity row's (`opportunity`, the row the order's
+/// key names; the gate's `hedge` rule judges the same one) — is in
+/// `require_hedge_for` is refused rather than sent naked. Exits and closes
+/// need no hedge.
+fn check_hedge_supported(order: &ExecOrder, opportunity: Option<&Observation>) -> Result<()> {
+    if order.reduce_only || order.size == ExecSize::Close {
+        return Ok(());
+    }
+    let (strategy, whose) = match (order.strategy.as_deref(), opportunity) {
+        (Some(s), _) => (s, "the order".to_string()),
+        (None, Some(o)) => match o.features.get(STRATEGY_FEATURE).and_then(|v| v.as_str()) {
+            Some(s) => (s, format!("its opportunity row {}", o.key)),
+            None => return Ok(()),
+        },
+        (None, None) => return Ok(()),
+    };
+    if order.limits.require_hedge_for.iter().any(|h| h == strategy) {
+        bail!(
+            "{HEDGE_NOT_SUPPORTED}: {whose} names strategy `{strategy}`, listed in [risk] \
+             require_hedge_for, and no exec path places its hedge leg yet — the entry on {} is \
+             refused rather than sent naked",
+            order.instrument
+        );
+    }
+    Ok(())
+}
 
 /// Review #5: the shadow gate runs only on the paper engine and never on
 /// the `[risk]` account; the `[risk]` gate only on it.
@@ -320,6 +352,7 @@ pub(crate) async fn exec(
     let mut row_ids = ids.clone();
     row_ids.extend(snapshot.account.funding_ids());
     let rows = MarketRows::read(store, &row_ids, Some(&id), order.opportunity_key.as_deref()).await;
+    check_hedge_supported(&order, rows.opportunity.as_ref())?;
     let reduce_only = order.reduce_only || order.size == ExecSize::Close;
     // Review #6: a reduce-only order falls back to the facts kept with its
     // position when the instrument row is missing, older or partial.
@@ -905,10 +938,13 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         ]
     }
 
-    /// An opportunity row naming TSLA with `edge` bps after costs.
+    /// An opportunity row naming TSLA with `edge` bps after costs, backing
+    /// a buy (`overreaction`).
     pub(crate) fn opportunity(edge: f64, at_ms: i64) -> Observation {
         let mut features = Features::new();
         features.insert("edge_after_costs_bps".into(), serde_json::json!(edge));
+        features.insert("side".into(), serde_json::json!("buy"));
+        features.insert("strategy".into(), serde_json::json!("overreaction"));
         Observation {
             key: OPP.into(),
             schema: "xm_compare/1".into(),
@@ -1154,6 +1190,113 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         let o = rig.run(blind, "loop:s:2").await.unwrap();
         assert_eq!(row(&o).gate.rule, "missing:edge_after_costs_bps");
         assert_eq!(rig.rows()["risk_decisions"], 2);
+    }
+
+    /// Review #8: the opportunity row backs its own side only — a sell
+    /// naming the buy row is denied `min_edge` (one verdict row, no order);
+    /// a row without a side backs nothing.
+    #[tokio::test]
+    async fn an_opportunity_row_backs_its_side_only() {
+        let rig = Rig::new(25).await;
+        let mut sell = rig.buy(20.0);
+        sell.side = Side::Sell;
+        let o = rig.run(sell, "o:1").await.unwrap();
+        let r = row(&o);
+        assert_eq!(r.gate.rule, rules::MIN_EDGE, "{:?}", r.gate);
+        assert!(r.fill.is_none());
+        assert!(
+            o.errors[0]
+                .message
+                .contains(&format!("{OPP} backs a buy; the order is a sell of {TSLA}")),
+            "{:?}",
+            o.errors
+        );
+        let n = rig.rows();
+        assert_eq!((n["orders"], n["risk_decisions"]), (0, 1));
+        // Without a side: `missing:opportunity_side`.
+        let mut sideless = opportunity(12.0, NOW - 1_000);
+        sideless.features.remove("side");
+        rig.store.put(&sideless).await.unwrap();
+        let o = rig.run(rig.buy(20.0), "o:2").await.unwrap();
+        assert_eq!(row(&o).gate.rule, "missing:opportunity_side");
+        // The row's own side passes.
+        rig.store
+            .put(&opportunity(12.0, NOW - 1_000))
+            .await
+            .unwrap();
+        let o = rig.run(rig.buy(20.0), "o:3").await.unwrap();
+        assert!(row(&o).gate.allow, "{:?}", row(&o).gate);
+    }
+
+    /// Review #8 (b): until hedge legs are placed, an entry of a
+    /// `require_hedge_for` strategy — the order's, else its opportunity
+    /// row's — is refused `hedge_not_supported`: nothing judged, nothing
+    /// written. Closes and other strategies go on.
+    #[tokio::test]
+    async fn a_hedge_required_entry_is_refused() {
+        let mut rig = Rig::new(25).await;
+        rig.shared.risk.as_mut().unwrap().require_hedge_for = vec!["convergence".into()];
+        let err = |r: Result<Observation>| r.unwrap_err().to_string();
+        // The order names it.
+        let mut conv = rig.buy(20.0);
+        conv.strategy = Some("convergence".into());
+        let e = err(rig.run(conv, "h:1").await);
+        assert_eq!(
+            e,
+            format!(
+                "hedge_not_supported: the order names strategy `convergence`, listed in [risk] \
+                 require_hedge_for, and no exec path places its hedge leg yet — the entry on \
+                 {TSLA} is refused rather than sent naked"
+            )
+        );
+        // Its row names it (the order names none).
+        let mut row_conv = opportunity(12.0, NOW - 1_000);
+        row_conv
+            .features
+            .insert("strategy".into(), serde_json::json!("convergence"));
+        rig.store.put(&row_conv).await.unwrap();
+        let mut plain = rig.buy(20.0);
+        plain.strategy = None;
+        let e = err(rig.run(plain, "h:2").await);
+        assert!(
+            e.starts_with(&format!(
+                "hedge_not_supported: its opportunity row {OPP} names strategy `convergence`"
+            )),
+            "{e}"
+        );
+        let n = rig.rows();
+        assert_eq!(
+            (n["orders"], n["risk_decisions"]),
+            (0, 0),
+            "refused before the gate"
+        );
+        assert!(rig.risk_lines().is_empty());
+        // An order naming another strategy is judged on its own: the gate
+        // denies the mismatch (`min_edge`) — one verdict row, no order.
+        let o = rig.run(rig.buy(20.0), "h:3").await.unwrap();
+        let r = row(&o);
+        assert_eq!(r.gate.rule, rules::MIN_EDGE, "{:?}", r.gate);
+        assert!(
+            o.errors[0].message.contains(&format!(
+                "{OPP} is a convergence opportunity; the order's strategy is overreaction"
+            )),
+            "{:?}",
+            o.errors
+        );
+        assert_eq!(rig.rows()["orders"], 0);
+        // Another strategy on a row of its own: placed.
+        rig.store
+            .put(&opportunity(12.0, NOW - 1_000))
+            .await
+            .unwrap();
+        let o = rig.run(rig.buy(20.0), "h:4").await.unwrap();
+        assert!(row(&o).gate.allow, "{:?}", row(&o).gate);
+        // A close needs no hedge, whatever the rows say.
+        rig.store.put(&row_conv).await.unwrap();
+        let o = rig.run(rig.close(), "h:5").await.unwrap();
+        let r = row(&o);
+        assert!(r.gate.allow, "{:?}", r.gate);
+        assert_eq!(r.position_qty_after, 0.0);
     }
 
     /// The kill-switch file denies the next entry `kill_switch` and records

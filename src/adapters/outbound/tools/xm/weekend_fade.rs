@@ -13,7 +13,7 @@
 //! | Previous window | its `xm_weekend/1` row, still `entered` / `closing`: each fade not filled in the row read from the ledger (below); open quantities from both ledgers; once every filled name is flat, `closed` with the P&L |
 //! | Current window, before the entry | `waiting` (`next_entry_s`) |
 //! | … entry ≤ now < entry + `entry_lateness_max_secs`, no snapshot | the snapshot: anchor prices from the history as of the anchor (`mkt_ctx/1` mid, else mark, ≤ `anchor_max_age_secs` old), entry prices from the store (≤ `entry_max_age_secs` old), signals, the capped set, each name's ledger bases — kept in the store first (compare-and-swap: one snapshot per window, across processes). Kept only complete (`WeekendFade::complete`): while a name (not excluded, with an anchor) has no entry row fresher than `entry_max_age_secs` (`stale`) and now < entry + 120 s (≤ half the lateness, `weekend_fade::snapshot_deadline_ms`), or no name is eligible, nothing is kept (an `error` row) and the next call reads again; from that deadline the `stale` names are left out. A fresh row without a usable price (`missing_entry`) holds nothing back |
-//! | … then, and on later calls within the lateness | per fade not filled in the row, its attempts in the ledger (`fade_attempt_id`: the id, then `<id>:2`, `<id>:3` …): the latest stored one is its outcome — a fill or a partial fill is never placed again, a final rejection stays; with none, or a transient rejection (`FillReason::is_transient`), the next attempt is placed — unless the account holds the name with no fill under those ids (`position_open`, not faded). Placing writes the name's `xm_weekend_signal/1` row (the opportunity row, stamped at the snapshot, TTL = the lateness), then the capped fades, largest \|s\| first (`run_exec`, the `[risk]` gate, `capped_notional_usd`, id `fade:<account>:<full id>:<anchor date>`, `exit_at_ms` = the exit, strategy `overreaction`), then the shadow fades of every eligible name, 4 at a time (the shadow gate, `shadow_notional_usd`, id `fade-shadow:<shadow account>:<full id>:<anchor date>`). A denial or a refusal stores nothing: the same attempt is judged again next call. Two callers place the same attempt id: the ledger keeps one (`UNIQUE (account, client_order_id)` in one `BEGIN IMMEDIATE`), the other replays it |
+//! | … then, and on later calls within the lateness | per fade not filled in the row, its attempts in the ledger (`fade_attempt_id`: the id, then `<id>:2`, `<id>:3` …): the latest stored one is its outcome — a fill or a partial fill is never placed again, a final rejection stays; with none, or a transient rejection (`FillReason::is_transient`), the next attempt is placed — unless the account holds the name with no fill under those ids (`position_open`, not faded). Placing writes the name's `xm_weekend_signal/1` row (the opportunity row, stamped at the snapshot, TTL = the lateness; it backs the fade only — its side, `overreaction`, ≤ `capped_notional_usd`, review #8), then the capped fades, largest \|s\| first (`run_exec`, the `[risk]` gate, `capped_notional_usd`, id `fade:<account>:<full id>:<anchor date>`, `exit_at_ms` = the exit, strategy `overreaction`), then the shadow fades of every eligible name, 4 at a time (the shadow gate, `shadow_notional_usd`, id `fade-shadow:<shadow account>:<full id>:<anchor date>`). A denial or a refusal stores nothing: the same attempt is judged again next call. Two callers place the same attempt id: the ledger keeps one (`UNIQUE (account, client_order_id)` in one `BEGIN IMMEDIATE`), the other replays it |
 //! | … after the lateness, with a snapshot | no placement; each fade not filled in the row is read from the ledger (a row save lost to a crash or a concurrent call still counts its fills, P&L and closes) |
 //! | … entry + lateness ≤ now, no snapshot | `missed_entry`: no late entry |
 //! | Row | `xm_weekend/1:<anchor date>` (TTL 120 s): the previous window's while it closes and the current one waits, else the current one; both are stored |
@@ -581,7 +581,9 @@ impl FadeEntry {
 }
 
 /// Write the `xm_weekend_signal/1` row of `signal`, stamped at the snapshot
-/// (valid for the whole lateness window); its key.
+/// (valid for the whole lateness window); its key. The row backs the
+/// capped fade only (review #8): its side, `overreaction`, at most
+/// `capped_notional_usd`.
 async fn write_signal(
     env: &Env<'_>,
     anchor_date: &str,
@@ -598,6 +600,7 @@ async fn write_signal(
         side: signal.side,
         capped,
         edge_after_costs_bps: env.cfg.expected_edge_bps,
+        max_notional_usd: Some(env.cfg.capped_notional_usd),
     };
     let obs = Observation::of(
         names::XM_WEEKEND_FADE,
@@ -1420,6 +1423,11 @@ max_slippage_bps = 50
         assert_eq!(capped_line["intent"]["opportunity_key"], signal_key);
         let signal = f.rig.store.get(&signal_key).await.unwrap().unwrap();
         assert_eq!(signal.features["edge_after_costs_bps"], 23.0);
+        // Review #8: the row backs the capped fade only — its side, its
+        // strategy, its size.
+        assert_eq!(signal.features["side"], "sell");
+        assert_eq!(signal.features["strategy"], "overreaction");
+        assert_eq!(signal.features["max_notional_usd"], 20.0);
         assert_eq!(
             signal.observed_at_ms,
             ENTRY + 30_000,
@@ -1515,6 +1523,71 @@ max_slippage_bps = 50
             .unwrap()
             .unwrap();
         assert_eq!(fade_row(&closed).phase, FadePhase::Closed);
+    }
+
+    /// Review #8 (the finding): for the lateness after the entry, the capped
+    /// TSLA short's `xm_weekend_signal/1` row backs that fade only — a
+    /// `paper_order` buy of TSLA naming it is denied `min_edge`, so is a
+    /// sell larger than the fade; the fades themselves filled through it.
+    #[tokio::test]
+    async fn a_fade_signal_backs_its_own_fade_only() {
+        let f = Fade::new(ENTRY + 30_000).await;
+        f.market(&PRICES, ENTRY + 20_000).await;
+        let row = fade_row(&f.step("feed:xm_weekend_fade:1:0").await.unwrap());
+        for id in [TSLA, NVDA] {
+            let o = name(&row, id).capped_order.clone().unwrap();
+            assert_eq!(
+                (o.status.as_str(), o.rule.as_deref()),
+                ("filled", Some("ok")),
+                "{id}"
+            );
+        }
+        let key = format!("xm_weekend_signal/1:{DATE}:{TSLA}");
+        let limits = f.rig.shared.risk.as_ref().unwrap().limits();
+        let io = ExecIo {
+            clock: f.rig.clock.as_ref(),
+            books: &f.books,
+            rand01: 0.5,
+        };
+        let order = |side: &str, usd: f64| {
+            let args = json!({"instrument": TSLA, "side": side, "notional_usd": usd,
+                              "kind": "market", "max_slippage_bps": 30,
+                              "strategy": "overreaction", "opportunity": key});
+            super::super::paper::parse_order(&args, limits.clone()).unwrap()
+        };
+        let denied = |o: &Observation| {
+            let r: PaperFillRow = o.typed().unwrap();
+            assert!(r.fill.is_none(), "{r:?}");
+            (r.gate.rule, o.errors[0].message.clone())
+        };
+        let o = run_exec(
+            &f.rig.shared,
+            &f.rig.ctx(Some("op:1")),
+            &io,
+            order("buy", 20.0),
+        )
+        .await
+        .unwrap();
+        let (rule, why) = denied(&o);
+        assert_eq!(rule, "min_edge");
+        assert!(
+            why.contains(&format!("{key} backs a sell; the order is a buy of {TSLA}")),
+            "{why}"
+        );
+        let o = run_exec(
+            &f.rig.shared,
+            &f.rig.ctx(Some("op:2")),
+            &io,
+            order("sell", 25.0),
+        )
+        .await
+        .unwrap();
+        let (rule, why) = denied(&o);
+        assert_eq!(rule, "min_edge");
+        assert!(why.ends_with("max_notional_usd 20 USD"), "{why}");
+        // Nothing traded: the capped ledger holds the two fades only.
+        let capped: Vec<_> = f.orders().into_iter().filter(|o| o.0 == ACCOUNT).collect();
+        assert_eq!(capped.len(), 2, "{capped:?}");
     }
 
     /// No call within the lateness: no late entry. A missing entry price on

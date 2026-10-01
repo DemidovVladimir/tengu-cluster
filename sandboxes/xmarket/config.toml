@@ -165,10 +165,10 @@ max_net_exposure_usd = 100
 max_leverage = 1                 # no leverage
 daily_loss_limit_usd = 10        # halt; clears 00:00 UTC
 total_loss_limit_usd = 25        # halt; only `tengu risk resume` (TTY) clears it
-min_edge_bps = 10                # edge after costs an entry needs (xm_compare/1 row)
+min_edge_bps = 10                # edge after costs an entry needs (xm_compare/1 row: same side, strategy, size)
 max_slippage_bps = 30            # entries, and xm_exits' closes (its feed passes no bound)
 min_depth_usd = 250
-require_hedge_for = ["convergence"]
+require_hedge_for = ["convergence"]   # entries refused (hedge_not_supported) until hedge legs are placed
 max_data_age_ms = { book = 5000, ctx = 20000, reference = 60000, quote = 20000 }   # ctx ≥ hl_ctx 15 s + jitter
 max_skew_ms = 5000
 max_orders_per_min = 6           # entries per minute (exits never count)

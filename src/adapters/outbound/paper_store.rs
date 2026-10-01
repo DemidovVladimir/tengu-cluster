@@ -1488,6 +1488,9 @@ pub(crate) mod tests {
                     observed_at_ms: now - 1_000,
                     ttl_ms: 5_000,
                     edge_after_costs_bps: Field::ok(12.0),
+                    side: Field::ok(intent.side),
+                    strategy: Field::ok("overreaction".into()),
+                    max_notional_usd: Field::Absent,
                 }),
             };
             let verdict = evaluate(&intent, &ctx, &limits, now);

@@ -454,7 +454,8 @@ order_types = ["market", "ioc"]
 [default_scopes.sign_message]
 "#;
 
-/// The opportunity row a paper entry names (`min_edge`): 25 bps after costs.
+/// The opportunity row a paper entry names (`min_edge`): 25 bps after costs,
+/// backing a buy (`overreaction`).
 const OPP_KEY: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
 
 fn opportunity_row() -> Value {
@@ -462,7 +463,8 @@ fn opportunity_row() -> Value {
         "key": OPP_KEY, "schema": "xm_compare/1", "tool": "xm_compare",
         "observed_at_ms": 0, "ttl_ms": 600_000, "source": "live", "status": "ok",
         "headline": "compare hyperliquid:xyz:TSLA edge_after_costs_bps=25",
-        "features": {"edge_after_costs_bps": 25.0}, "data": null
+        "features": {"edge_after_costs_bps": 25.0, "side": "buy", "strategy": "overreaction"},
+        "data": null
     })
 }
 
@@ -865,6 +867,22 @@ fn cases() -> Vec<Case> {
         }))
         .named("denied")
         .ok("paper_fill denied buy hyperliquid:xyz:TSLA notional=25.00 risk=deny rule=missing:edge_after_costs_bps"),
+        // Review #8: the row backs a buy — a sell naming it has no edge.
+        paper(case("paper_order", {
+            let mut a = paper_buy();
+            a["side"] = json!("sell");
+            a
+        }))
+        .named("wrong_side")
+        .ok("paper_fill denied sell hyperliquid:xyz:TSLA notional=25.00 risk=deny rule=min_edge"),
+        // A `require_hedge_for` entry is refused until hedge legs are placed.
+        paper(case("paper_order", {
+            let mut a = paper_buy();
+            a["strategy"] = json!("convergence");
+            a
+        }))
+        .named("hedge")
+        .err("hedge_not_supported: the order names strategy `convergence`"),
         paper(case("paper_order", paper_buy()))
             .then(
                 "paper_close",
