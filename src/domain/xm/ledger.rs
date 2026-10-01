@@ -14,7 +14,7 @@
 //! | Equity | cash + Σ unrealized (funding settles into cash each hour, as on HL) |
 //! | Exposure | at mark, total / per underlying / per venue: net = Σ qty × mark, gross = Σ \|qty × mark\|; a group with a failed mark is `Error` |
 //! | Leverage | gross / equity; equity ≤ 0 ⇒ `Error` |
-//! | Funding | HL: at each hour boundary, payment = qty × oracle × rate_1h, positive rate ⇒ longs pay; `funding_paid` positive = paid. Book every hour in time order before any later fill; an hour already booked, or before `opened_ms`, is skipped |
+//! | Funding | HL: at each hour boundary, payment = qty × oracle × rate_1h, positive rate ⇒ longs pay; `funding_paid` positive = paid. Settled hour by hour at the size held then ([`Position::settle_funding`], review #10) — before any fill changes it (the ledger's `place` settles the order's instrument first): booked at the rate known now (a fresh `mkt_ctx/1` row; HL's per-hour history is not read), or, without one, recorded owed ([`OwedHour`]: the hour + the size held) and booked by the next settlement that has a rate — also after the position closed or flipped. `last_funding_hour_ms` = the last hour settled (booked or owed); an hour already settled, or before `opened_ms`, is skipped |
 //! | `paper_positions/1:<account>` | status `partial` when an open position's mark failed (its numbers omitted, never 0); per-position rows with full ids in `data` |
 //! | Exit deadline ([`exit_deadline`]) | open / flip ⇒ the order's; increase ⇒ the earlier; reduce ⇒ kept; flat ⇒ none |
 //!
@@ -24,7 +24,7 @@
 // `risk-paper-tools`, `x-exit-rules`).
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -106,8 +106,72 @@ pub struct Position {
     /// When the open quantity was opened (set on open and on a flip);
     /// `None` when flat.
     pub opened_ms: Option<i64>,
-    /// Last hour boundary whose funding was booked.
+    /// Last hour boundary whose funding was settled: booked, or owed.
     pub last_funding_hour_ms: Option<i64>,
+    /// Settled hours whose rate is not known yet, oldest first (module
+    /// table: Funding); booked by the next settlement with a rate.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub funding_owed: Vec<OwedHour>,
+}
+
+/// One hour boundary's funding, owed at the size held then (signed), its
+/// rate not known when it was settled (no fresh `mkt_ctx/1` row).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct OwedHour {
+    pub hour_ms: i64,
+    pub qty: f64,
+}
+
+/// A funding rate known now — HL `funding` per hour and the oracle, from a
+/// fresh `mkt_ctx/1` row.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FundingRate {
+    pub rate_1h: f64,
+    pub oracle_px: f64,
+}
+
+impl FundingRate {
+    /// `None` for a non-finite rate or an oracle that is not > 0.
+    pub fn new(rate_1h: f64, oracle_px: f64) -> Option<Self> {
+        let r = Self { rate_1h, oracle_px };
+        r.is_valid().then_some(r)
+    }
+
+    fn is_valid(&self) -> bool {
+        self.rate_1h.is_finite() && self.oracle_px.is_finite() && self.oracle_px > 0.0
+    }
+}
+
+/// One hour [`Position::settle_funding`] booked.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BookedHour {
+    pub hour_ms: i64,
+    /// The size held at the hour (signed).
+    pub qty: f64,
+    pub rate: FundingRate,
+    /// qty × oracle × rate_1h; positive = paid.
+    pub payment_usd: f64,
+    /// It was owed (booked late, at the rate known now).
+    pub was_owed: bool,
+}
+
+/// What one settlement did: hours booked (owed ones first, in hour order)
+/// and hours newly owed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FundingSettlement {
+    pub booked: Vec<BookedHour>,
+    pub owed: Vec<OwedHour>,
+}
+
+impl FundingSettlement {
+    pub fn is_empty(&self) -> bool {
+        self.booked.is_empty() && self.owed.is_empty()
+    }
+
+    /// Σ payments booked (positive = paid).
+    pub fn paid_usd(&self) -> f64 {
+        total(self.booked.iter().map(|h| h.payment_usd))
+    }
 }
 
 impl Position {
@@ -123,11 +187,17 @@ impl Position {
             funding_paid: 0.0,
             opened_ms: None,
             last_funding_hour_ms: None,
+            funding_owed: Vec::new(),
         }
     }
 
     pub fn is_flat(&self) -> bool {
         self.qty == 0.0
+    }
+
+    /// Flat with no funding owed: its (realized − fees − funding) is final.
+    pub fn is_settled(&self) -> bool {
+        self.is_flat() && self.funding_owed.is_empty()
     }
 
     /// `Buy` = long, `Sell` = short, `None` = flat.
@@ -262,6 +332,84 @@ impl Position {
         self.funding_paid += payment;
         self.last_funding_hour_ms = Some(hour_ms);
         Ok(Some(payment))
+    }
+
+    /// Settles the funding this position owes at `now_ms` (module table):
+    /// the owed hours first, booked at `rate`; then every due hour
+    /// ([`due_funding_hours`]) at the size held now — booked at `rate`, or
+    /// recorded owed without one. `rate` = the instrument's rate known now
+    /// (a fresh `mkt_ctx/1` row). Call it before a fill changes the size.
+    /// The position is unchanged on error.
+    pub fn settle_funding(
+        &mut self,
+        rate: Option<FundingRate>,
+        now_ms: i64,
+    ) -> Result<FundingSettlement, LedgerError> {
+        let saved = self.clone();
+        let settled = self.settle(rate, now_ms);
+        if settled.is_err() {
+            *self = saved;
+        }
+        settled
+    }
+
+    fn settle(
+        &mut self,
+        rate: Option<FundingRate>,
+        now_ms: i64,
+    ) -> Result<FundingSettlement, LedgerError> {
+        let mut s = FundingSettlement::default();
+        if let Some(r) = rate {
+            if !r.is_valid() {
+                return Err(LedgerError::Funding {
+                    instrument: self.instrument.clone(),
+                    what: format!(
+                        "rate_1h {} / oracle_px {} is not a rate",
+                        r.rate_1h, r.oracle_px
+                    ),
+                });
+            }
+            for o in std::mem::take(&mut self.funding_owed) {
+                let payment = o.qty * r.oracle_px * r.rate_1h;
+                self.funding_paid += payment;
+                s.booked.push(BookedHour {
+                    hour_ms: o.hour_ms,
+                    qty: o.qty,
+                    rate: r,
+                    payment_usd: payment,
+                    was_owed: true,
+                });
+            }
+        }
+        for hour_ms in due_funding_hours(self, now_ms) {
+            let qty = self.qty;
+            match rate {
+                Some(r) => {
+                    if let Some(payment) = self.accrue_funding(r.rate_1h, r.oracle_px, hour_ms)? {
+                        s.booked.push(BookedHour {
+                            hour_ms,
+                            qty,
+                            rate: r,
+                            payment_usd: payment,
+                            was_owed: false,
+                        });
+                    }
+                }
+                None => {
+                    if hour_ms.rem_euclid(HOUR_MS) != 0 {
+                        return Err(LedgerError::Funding {
+                            instrument: self.instrument.clone(),
+                            what: format!("hour_ms {hour_ms} is not on the hour"),
+                        });
+                    }
+                    let owed = OwedHour { hour_ms, qty };
+                    self.last_funding_hour_ms = Some(hour_ms);
+                    self.funding_owed.push(owed);
+                    s.owed.push(owed);
+                }
+            }
+        }
+        Ok(s)
     }
 }
 
@@ -471,8 +619,37 @@ impl PaperAccount {
         Ok(paid)
     }
 
+    /// [`Position::settle_funding`] for `instrument`; cash moves by each
+    /// payment, in the settlement's order. Nothing for an instrument never
+    /// traded. Unchanged on error.
+    pub fn settle_funding(
+        &mut self,
+        instrument: &str,
+        rate: Option<FundingRate>,
+        now_ms: i64,
+    ) -> Result<FundingSettlement, LedgerError> {
+        let Some(position) = self.positions.get_mut(instrument) else {
+            return Ok(FundingSettlement::default());
+        };
+        let s = position.settle_funding(rate, now_ms)?;
+        for h in &s.booked {
+            self.cash_usd -= h.payment_usd;
+        }
+        Ok(s)
+    }
+
     pub fn open_positions(&self) -> impl Iterator<Item = &Position> {
         self.positions.values().filter(|p| !p.is_flat())
+    }
+
+    /// Instruments whose funding may need settling: open, or owing hours
+    /// (a closed position too) — the `mkt_ctx/1` rows a caller reads.
+    pub fn funding_ids(&self) -> BTreeSet<String> {
+        self.positions
+            .values()
+            .filter(|p| !p.is_settled())
+            .map(|p| p.instrument.clone())
+            .collect()
     }
 
     pub fn realized_pnl(&self) -> f64 {
@@ -1325,5 +1502,163 @@ mod tests {
         assert_eq!(due_funding_hours(&q, T0), [T0]);
         let paid = q.accrue_funding(0.0001, 100.0, T0).unwrap().unwrap();
         close(paid, -0.01, "a short receives");
+    }
+
+    fn rate(rate_1h: f64, oracle_px: f64) -> Option<FundingRate> {
+        Some(FundingRate::new(rate_1h, oracle_px).unwrap())
+    }
+
+    /// Cash = initial + realized − fees − funding, whatever was settled.
+    fn reconciles(a: &PaperAccount) {
+        close(
+            a.cash_usd,
+            a.initial_cash_usd + a.realized_pnl() - a.fees_paid() - a.funding_paid(),
+            "cash invariant",
+        );
+    }
+
+    /// Review #10: an hour without a rate is owed at the size held then —
+    /// the reduce after it never changes what it costs; the next rate books
+    /// it at that size, then the later hours at the new one.
+    #[test]
+    fn funding_across_a_reduce_is_charged_at_the_size_held() {
+        let mut a = PaperAccount::new(ACCOUNT, 1_000.0).unwrap();
+        a.apply_fill(&fill(TSLA_HL, Side::Buy, 2.0, 100.0, 0.0, T0 + 10 * MIN))
+            .unwrap();
+        // The reduce at H1 + 30 min settles H1 first; no fresh rate: owed.
+        let s = a.settle_funding(TSLA_HL, None, T0 + 90 * MIN).unwrap();
+        assert!(s.booked.is_empty());
+        assert_eq!(
+            s.owed,
+            [OwedHour {
+                hour_ms: T0 + HOUR_MS,
+                qty: 2.0
+            }]
+        );
+        let cash = a.cash_usd;
+        a.apply_fill(&fill(TSLA_HL, Side::Sell, 1.0, 100.0, 0.0, T0 + 90 * MIN))
+            .unwrap();
+        assert_eq!(a.cash_usd, cash, "owed is not paid");
+        // Settling again without a rate owes nothing new and drops nothing.
+        assert!(a
+            .settle_funding(TSLA_HL, None, T0 + 100 * MIN)
+            .unwrap()
+            .is_empty());
+        // A rate at H2 + 5 min: H1 at 2 (the size then), H2 at 1.
+        let s = a
+            .settle_funding(TSLA_HL, rate(0.0001, 110.0), T0 + 125 * MIN)
+            .unwrap();
+        let booked: Vec<(i64, f64, bool)> = s
+            .booked
+            .iter()
+            .map(|h| (h.hour_ms, h.qty, h.was_owed))
+            .collect();
+        assert_eq!(
+            booked,
+            [(T0 + HOUR_MS, 2.0, true), (T0 + 2 * HOUR_MS, 1.0, false)]
+        );
+        close(s.paid_usd(), 3.0 * 110.0 * 0.0001, "2 + 1 units at 110");
+        let p = &a.positions[TSLA_HL];
+        assert!(p.funding_owed.is_empty());
+        assert_eq!(p.last_funding_hour_ms, Some(T0 + 2 * HOUR_MS));
+        close(p.funding_paid, 0.033, "funding on the position");
+        close(a.cash_usd, cash - 0.033, "cash paid both hours");
+        reconciles(&a);
+    }
+
+    /// Review #10: a full close at a stale rate keeps the hours it owes
+    /// (the position goes flat, `opened_ms` clears) until a rate books them;
+    /// until then it is not settled and its funding id stays.
+    #[test]
+    fn funding_owed_across_a_full_close_is_booked_later() {
+        let mut a = PaperAccount::new(ACCOUNT, 1_000.0).unwrap();
+        a.apply_fill(&fill(TSLA_HL, Side::Sell, 1.5, 100.0, 0.0, T0 + 10 * MIN))
+            .unwrap();
+        let s = a.settle_funding(TSLA_HL, None, T0 + 130 * MIN).unwrap();
+        assert_eq!(
+            s.owed.iter().map(|o| o.hour_ms).collect::<Vec<_>>(),
+            [T0 + HOUR_MS, T0 + 2 * HOUR_MS]
+        );
+        a.apply_fill(&fill(TSLA_HL, Side::Buy, 1.5, 100.0, 0.0, T0 + 130 * MIN))
+            .unwrap();
+        let p = &a.positions[TSLA_HL];
+        assert!(p.is_flat() && !p.is_settled());
+        assert_eq!(p.opened_ms, None);
+        assert_eq!(a.open_positions().count(), 0);
+        assert_eq!(a.funding_ids(), BTreeSet::from([TSLA_HL.to_string()]));
+        // Hours later, flat: only the owed ones, at the short's size.
+        let s = a
+            .settle_funding(TSLA_HL, rate(-0.0002, 90.0), T0 + 300 * MIN)
+            .unwrap();
+        assert_eq!(s.booked.len(), 2);
+        assert!(s.booked.iter().all(|h| h.qty == -1.5 && h.was_owed));
+        close(s.paid_usd(), 2.0 * -1.5 * 90.0 * -0.0002, "a short pays");
+        assert!(a.positions[TSLA_HL].is_settled());
+        assert!(a.funding_ids().is_empty());
+        // Nothing more is ever due on the closed position.
+        assert!(a
+            .settle_funding(TSLA_HL, rate(0.0001, 90.0), T0 + 600 * MIN)
+            .unwrap()
+            .is_empty());
+        reconciles(&a);
+    }
+
+    /// Review #10: hours owed while the rate is stale are booked, oldest
+    /// first, with the due ones once a fresh rate is back; a bad rate is
+    /// refused with the position unchanged.
+    #[test]
+    fn a_stale_rate_that_recovers_books_every_hour_owed() {
+        let mut a = PaperAccount::new(ACCOUNT, 1_000.0).unwrap();
+        a.apply_fill(&fill(TSLA_HL, Side::Buy, 1.0, 100.0, 0.0, T0 + 10 * MIN))
+            .unwrap();
+        for now in [T0 + 61 * MIN, T0 + 121 * MIN] {
+            assert_eq!(a.settle_funding(TSLA_HL, None, now).unwrap().owed.len(), 1);
+        }
+        let before = a.clone();
+        for bad in [
+            FundingRate {
+                rate_1h: f64::NAN,
+                oracle_px: 100.0,
+            },
+            FundingRate {
+                rate_1h: 0.0001,
+                oracle_px: 0.0,
+            },
+        ] {
+            assert!(a
+                .settle_funding(TSLA_HL, Some(bad), T0 + 200 * MIN)
+                .is_err());
+            assert_eq!(a, before, "unchanged on error");
+        }
+        assert_eq!(FundingRate::new(0.0001, -1.0), None);
+        let s = a
+            .settle_funding(TSLA_HL, rate(0.0001, 100.0), T0 + 181 * MIN)
+            .unwrap();
+        assert_eq!(
+            s.booked
+                .iter()
+                .map(|h| (h.hour_ms, h.was_owed))
+                .collect::<Vec<_>>(),
+            [
+                (T0 + HOUR_MS, true),
+                (T0 + 2 * HOUR_MS, true),
+                (T0 + 3 * HOUR_MS, false)
+            ]
+        );
+        close(
+            a.positions[TSLA_HL].funding_paid,
+            0.03,
+            "three hours of 1 unit",
+        );
+        assert!(a
+            .settle_funding(TSLA_HL, None, T0 + 181 * MIN)
+            .unwrap()
+            .is_empty());
+        reconciles(&a);
+        // Never traded: nothing.
+        assert!(a
+            .settle_funding(TSLA_RH, rate(0.0001, 100.0), T0)
+            .unwrap()
+            .is_empty());
     }
 }

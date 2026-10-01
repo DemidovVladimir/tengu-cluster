@@ -158,14 +158,16 @@ fn xm_exits() -> ToolDef {
     ToolDef::new(
         names::XM_EXITS,
         "Exit rules for the [risk] paper account: close every open position that is due — its \
-         exit_at_ms deadline passed, it is older than [risk.exits] max_hold_secs, or its P&L at a \
-         fresh mark reached stop_loss_bps / take_profit_bps (mkt_ctx/1 rows from the store; a \
-         missing or stale mark never triggers those two; read hl_ctx first — a close also needs \
-         the mkt_instrument/1 row). Each close is a reduce-only market IOC \
-         of the whole position through the same [risk] gate, keyed \
-         exit:<account>:<instrument>:<reason>:<opened_ms>, so a retry never closes twice. Typed \
-         observation xm_exits/1:<account>: n_open, n_due, n_closed, n_failed, n_stale_marks; per \
-         position the reason, the close and its gate rule.",
+         exit_at_ms deadline passed, it is older than [risk.exits] max_hold_secs, or its P&L \
+         reached stop_loss_bps / take_profit_bps: at a fresh mark (mkt_ctx/1 rows from the \
+         store; read hl_ctx first), else at the mid of the live book read after the order \
+         latency. A stop-loss / take-profit that fired stays due until the position is flat. \
+         Each close is a reduce-only market IOC of the whole position through the same [risk] \
+         gate, keyed exit:<account>:<instrument>:<reason>:<opened_ms>, so a retry never closes \
+         twice; without the mkt_instrument/1 row it fills on the venue facts kept at the entry. \
+         Books the funding the account owes first. Typed observation xm_exits/1:<account>: \
+         n_open, n_due, n_closed, n_failed, n_stale_marks, n_book_marks; per position the \
+         reason, the close and its gate rule.",
         json!({
             "type": "object",
             "properties": {
@@ -209,8 +211,9 @@ fn paper_positions() -> ToolDef {
          realized P&L, fees, funding, gross / net exposure, leverage, daily P&L; per position \
          the full id, qty, entry, mark, notional, P&L and exit deadline. Marks come from fresh \
          mkt_ctx/1 rows (read hl_ctx first); a missing or stale mark leaves its numbers out \
-         (partial), never 0. Books the hourly funding the positions owe first. Typed \
-         observation paper_positions/1:<account>, stored 2 s.",
+         (partial), never 0. Books the hourly funding the account owes first (hours settled \
+         without a fresh rate are booked at the next one). Typed observation \
+         paper_positions/1:<account>, stored 2 s.",
         json!({
             "type": "object",
             "properties": {

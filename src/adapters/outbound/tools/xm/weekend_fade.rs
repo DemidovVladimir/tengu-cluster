@@ -8,7 +8,7 @@
 //! | Step (every call) | Rule |
 //! |---|---|
 //! | Refuse | no `[risk]` / `[paper]` / ledger (`risk_config_missing` · `state_dir_missing` · `ledger_unavailable`); no `[xmarket.weekend_fade]` or its calendar not an `exchange` row (`weekend_fade_config_missing`); a caller that is not a private agent (`exec_agent_not_private`); any argument |
-//! | Funding | both accounts (`[risk] account`, `shadow_account`) book the hourly funding their open positions owe, at a fresh `mkt_ctx/1` rate + oracle |
+//! | Funding | both accounts (`[risk] account`, `shadow_account`) book the hourly funding they owe — open positions, and closed ones with hours owed (settled at a stale rate, review #10) — at a fresh `mkt_ctx/1` rate + oracle |
 //! | Shadow exits | every open shadow position whose `exit_at_ms` passed, 4 at a time: a reduce-only market IOC of the whole position through the shadow gate (`risk::evaluate_shadow`; paper only — `shadow_not_paper` otherwise), IOC bound `max_slippage_bps` (≤ 500 bps, `exec::MAX_EXIT_SLIPPAGE_BPS`), id `exit:<shadow account>:<full id>:deadline:<opened_ms>` (`…:<n>` once a rejected / partial attempt is stored), the exits' retry rule (`exits::plan_exit`: `backoff` 15 s … 15 min after a rejection, `stuck` after a final one). The capped positions close through `xm_exits` (reason `deadline`) — never here |
 //! | Previous window | its `xm_weekend/1` row, still `entered` / `closing`: each fade not filled in the row read from the ledger (below); open quantities from both ledgers; once every filled name is flat, `closed` with the P&L |
 //! | Current window, before the entry | `waiting` (`next_entry_s`) |
@@ -274,6 +274,7 @@ impl XmWeekendFadeTool {
                 opportunity_key: None,
                 client_order_id: Some(coid.clone()),
                 exit_at_ms: None,
+                tp_sl_on_book: None,
             };
             let result = run_exec(&self.shared, ctx, io, order).await;
             if let Ok(obs) = &result {
@@ -574,6 +575,7 @@ impl FadeEntry {
             opportunity_key: Some(self.opportunity_key),
             client_order_id: Some(coid.to_string()),
             exit_at_ms: Some(self.exit_at_ms),
+            tp_sl_on_book: None,
         })
     }
 }
@@ -698,14 +700,11 @@ fn outcome(
     }
 }
 
-/// Book the funding `account`'s open positions owe (fresh `mkt_ctx/1` rows).
+/// Book the funding `account` owes — its open positions, and closed ones
+/// with hours owed — at fresh `mkt_ctx/1` rates.
 async fn book_funding(env: &Env<'_>, account: &str, now: i64) -> Result<()> {
     let snap = env.ledger.snapshot(account, now).await?;
-    let ids: BTreeSet<String> = snap
-        .account
-        .open_positions()
-        .map(|p| p.instrument.clone())
-        .collect();
+    let ids: BTreeSet<String> = snap.account.funding_ids();
     if ids.is_empty() {
         return Ok(());
     }
@@ -1244,6 +1243,7 @@ max_slippage_bps = 50
                         1,
                     )),
                     exit_at_ms: None,
+                    tp_sl_on_book: None,
                 };
                 let io = ExecIo {
                     clock: self.rig.clock.as_ref(),
@@ -1889,6 +1889,7 @@ max_slippage_bps = 50
             opportunity_key: None,
             client_order_id: Some("manual:nvda:1".into()),
             exit_at_ms: None,
+            tp_sl_on_book: None,
         };
         let io = ExecIo {
             clock: h.rig.clock.as_ref(),

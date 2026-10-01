@@ -324,7 +324,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_open_orders = 4
 # kill_switch_file = "~/.tengu/state/xmarket/KILL"   # present = halted; absolute or ~/
 # allow_reduce_degraded = true               # stale data / halted: reduce-only + close still pass
-# exits = { take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }   # [risk.exits]: xm_exits closes at TP / SL (bps vs the entry, fresh mark) or after max hold; all required
+# exits = { take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }   # [risk.exits]: xm_exits closes at TP / SL (bps vs the entry: a fresh mark, else the live book; a fired one stays due) or after max hold; all required
 # [paper]
 # initial_cash_usd = 100
 # latency_ms = 250                           # sleep, re-read the book, fill against it
@@ -459,7 +459,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # kind = "tool"
 # agent = "xm_exec"                         # the private exec agent; its `tools` list xm_exits
 # tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps, ≤ 500 bps); needs the hl_ctx feed
-#                                           # (mkt_instrument/1 rows for closes, mkt_ctx/1 marks for TP / SL);
+#                                           # (mkt_ctx/1 marks for TP / SL — stale: the live book decides;
+#                                           # mkt_instrument/1 rows — missing: the facts kept at the entry);
 #                                           # exits never count toward max_orders_per_min; a rejected close
 #                                           # waits 15 s … 15 min, a final rejection (delisted) is never retried
 # every_secs = 15

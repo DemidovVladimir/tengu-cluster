@@ -12,10 +12,11 @@
 //! |---|---|---|
 //! | `accounts` | account | initial cash, created |
 //! | `cash` | id | journal: `deposit` / `fill` / `funding` movement + the running balance (the latest row is the cash) |
-//! | `positions` | (account, instrument) | `domain::xm::ledger::Position` + `exit_at_ms`; flat rows keep their P&L history |
+//! | `positions` | (account, instrument) | `domain::xm::ledger::Position` + `exit_at_ms`; the venue facts kept for closes (`sz_decimals`, `taker_fee_bps`, `maker_fee_bps`, `facts_at_ms` — written by every sent order priced from a `mkt_instrument/1` row, never by an older one; review #6); a fired stop-loss / take-profit (`exit_trigger` + the `exit_trigger_opened_ms` it fired for + `exit_trigger_ms`); flat rows keep their P&L history |
 //! | `orders` | id · UNIQUE (account, client_order_id) | one per allowed order: status, reason, fill summary, the engine's `FillResult` (JSON), the id of the verdict that allowed it, the request's `fingerprint` (a replay asking for something else is refused `client_order_id_conflict`; NULL on older rows: not checked). The gate's order rate counts the rows that are not `reduce_only` (exits never count) |
 //! | `fills` | id | the ledger fill (VWAP) of a filled / partial order: qty, px, fee, realized P&L, qty before / after |
-//! | `funding` | (account, instrument, hour_ms) | one HL funding payment |
+//! | `funding` | (account, instrument, hour_ms) | one HL funding payment: rate, oracle, the size held at the hour |
+//! | `funding_owed` | (account, instrument, hour_ms) | an hour settled without a fresh rate: the size held then; deleted when a rate books it into `funding` (review #10) |
 //! | `risk_decisions` | id | every verdict: allow, rule, class, the verdict + intent + context digest (JSON), the call id, the exec tool, the session id |
 //! | `risk_state` | account | `domain::xm::risk_state::RiskState`: halt reason + since, the UTC day + its starting equity (no row = the default) |
 //!
@@ -24,6 +25,11 @@
 //! per line, so concurrent writers never tear one). The row is canonical:
 //! `tengu prune` deletes `logs/`, never the ledger; a failed mirror write
 //! only warns. A replay writes no verdict row, so no line.
+//!
+//! Schema changes are additive and idempotent: new tables `CREATE … IF NOT
+//! EXISTS`, new columns [`ADDED_COLUMNS`] (nullable) — a binary from before
+//! them keeps reading and writing the ledger (it leaves the new columns and
+//! `funding_owed` alone).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,7 +45,13 @@ use crate::application::decision_loop::append_line;
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::{ledger_db, LEDGER_DB};
 use crate::domain::observation::{ErrorClass, Field, ReadError};
-use crate::domain::xm::ledger::{exit_deadline, Fill, FillEffect, PaperAccount, Position};
+use crate::domain::xm::cost::FeeSchedule;
+use crate::domain::xm::exec::HeldFacts;
+use crate::domain::xm::exits::{ExitReason, ExitTrigger};
+use crate::domain::xm::ledger::{
+    exit_deadline, Fill, FillEffect, FundingRate, FundingSettlement, OwedHour, PaperAccount,
+    Position,
+};
 use crate::domain::xm::paper::FillResult;
 use crate::domain::xm::risk::{Halt, HaltReason};
 use crate::domain::xm::risk_state::RiskState;
@@ -65,7 +77,9 @@ CREATE TABLE IF NOT EXISTS positions (
   account TEXT NOT NULL, instrument TEXT NOT NULL, underlying TEXT NOT NULL, venue TEXT NOT NULL,
   qty REAL NOT NULL, avg_px REAL, realized_pnl_usd REAL NOT NULL, fees_usd REAL NOT NULL,
   funding_usd REAL NOT NULL, opened_ms INTEGER, last_funding_hour_ms INTEGER,
-  exit_at_ms INTEGER, updated_ms INTEGER NOT NULL, PRIMARY KEY (account, instrument));
+  exit_at_ms INTEGER, updated_ms INTEGER NOT NULL, sz_decimals INTEGER, taker_fee_bps REAL,
+  maker_fee_bps REAL, facts_at_ms INTEGER, exit_trigger TEXT, exit_trigger_opened_ms INTEGER,
+  exit_trigger_ms INTEGER, PRIMARY KEY (account, instrument));
 CREATE TABLE IF NOT EXISTS orders (
   id INTEGER PRIMARY KEY, account TEXT NOT NULL, client_order_id TEXT NOT NULL, call_id TEXT,
   decision_id INTEGER NOT NULL, ts_ms INTEGER NOT NULL, instrument TEXT NOT NULL,
@@ -84,6 +98,9 @@ CREATE TABLE IF NOT EXISTS funding (
   account TEXT NOT NULL, instrument TEXT NOT NULL, hour_ms INTEGER NOT NULL,
   rate_1h REAL NOT NULL, oracle_px REAL NOT NULL, qty REAL NOT NULL,
   payment_usd REAL NOT NULL, ts_ms INTEGER NOT NULL, PRIMARY KEY (account, instrument, hour_ms));
+CREATE TABLE IF NOT EXISTS funding_owed (
+  account TEXT NOT NULL, instrument TEXT NOT NULL, hour_ms INTEGER NOT NULL, qty REAL NOT NULL,
+  ts_ms INTEGER NOT NULL, PRIMARY KEY (account, instrument, hour_ms));
 CREATE TABLE IF NOT EXISTS risk_decisions (
   id INTEGER PRIMARY KEY, ts_ms INTEGER NOT NULL, account TEXT NOT NULL,
   client_order_id TEXT NOT NULL, call_id TEXT, instrument TEXT NOT NULL, class TEXT NOT NULL,
@@ -120,6 +137,13 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("risk_decisions", "tool", "TEXT"),
     ("risk_decisions", "session_id", "TEXT"),
     ("orders", "fingerprint", "TEXT"),
+    ("positions", "sz_decimals", "INTEGER"),
+    ("positions", "taker_fee_bps", "REAL"),
+    ("positions", "maker_fee_bps", "REAL"),
+    ("positions", "facts_at_ms", "INTEGER"),
+    ("positions", "exit_trigger", "TEXT"),
+    ("positions", "exit_trigger_opened_ms", "INTEGER"),
+    ("positions", "exit_trigger_ms", "INTEGER"),
 ];
 
 /// `<TENGU_HOME>/logs/risk.jsonl`.
@@ -224,8 +248,58 @@ fn add_missing_columns(conn: &mut Connection) -> Result<()> {
 
 // ── reads ─────────────────────────────────────────────────────────
 
-/// The account and the exit deadline of each open position.
-fn load_account(c: &Connection, account: &str) -> Result<(PaperAccount, BTreeMap<String, i64>)> {
+/// One account as stored: the domain account (hours owed included) and
+/// what the ledger keeps beside each position.
+struct Loaded {
+    account: PaperAccount,
+    /// The exit deadline of each open position.
+    exit_at_ms: BTreeMap<String, i64>,
+    /// The fired TP / SL of each open position's current opening.
+    exit_triggers: BTreeMap<String, ExitTrigger>,
+    /// The venue facts kept with each position.
+    facts: BTreeMap<String, HeldFacts>,
+}
+
+/// The kept venue facts of a `positions` row (columns 11–14); `None` when
+/// any is missing or the fees do not validate.
+fn held_facts(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<HeldFacts>> {
+    Ok(facts_of(r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?))
+}
+
+fn facts_of(
+    sz_decimals: Option<i64>,
+    taker_bps: Option<f64>,
+    maker_bps: Option<f64>,
+    at_ms: Option<i64>,
+) -> Option<HeldFacts> {
+    Some(HeldFacts {
+        sz_decimals: u32::try_from(sz_decimals?).ok()?,
+        fees: FeeSchedule::new(taker_bps?, maker_bps?).ok()?,
+        at_ms: at_ms?,
+    })
+}
+
+/// The fired TP / SL of a `positions` row (columns 15–17) when it fired for
+/// the position's current opening; an unknown reason counts as none.
+fn exit_trigger(r: &rusqlite::Row<'_>, p: &Position) -> rusqlite::Result<Option<ExitTrigger>> {
+    Ok(trigger_of(r.get(15)?, r.get(16)?, r.get(17)?, p))
+}
+
+fn trigger_of(
+    reason: Option<String>,
+    opened_ms: Option<i64>,
+    at_ms: Option<i64>,
+    p: &Position,
+) -> Option<ExitTrigger> {
+    let reason = ExitReason::parse(reason.as_deref()?).filter(|r| r.on_price())?;
+    let current = !p.is_flat() && opened_ms.is_some() && opened_ms == p.opened_ms;
+    current.then_some(ExitTrigger {
+        reason,
+        at_ms: at_ms?,
+    })
+}
+
+fn load_account(c: &Connection, account: &str) -> Result<Loaded> {
     let initial: f64 = c
         .query_row(
             "SELECT initial_cash_usd FROM accounts WHERE account = ?1",
@@ -244,42 +318,78 @@ fn load_account(c: &Connection, account: &str) -> Result<(PaperAccount, BTreeMap
         .ok_or_else(|| anyhow!("paper account `{account}` has no cash row"))?;
     let mut stmt = c.prepare(
         "SELECT instrument, underlying, venue, qty, avg_px, realized_pnl_usd, fees_usd,
-                funding_usd, opened_ms, last_funding_hour_ms, exit_at_ms
+                funding_usd, opened_ms, last_funding_hour_ms, exit_at_ms, sz_decimals,
+                taker_fee_bps, maker_fee_bps, facts_at_ms, exit_trigger, exit_trigger_opened_ms,
+                exit_trigger_ms
          FROM positions WHERE account = ?1",
     )?;
     let rows = stmt.query_map(params![account], |r| {
+        let p = Position {
+            instrument: r.get(0)?,
+            underlying: r.get(1)?,
+            venue: r.get(2)?,
+            qty: r.get(3)?,
+            avg_px: r.get(4)?,
+            realized_pnl: r.get(5)?,
+            fees_paid: r.get(6)?,
+            funding_paid: r.get(7)?,
+            opened_ms: r.get(8)?,
+            last_funding_hour_ms: r.get(9)?,
+            funding_owed: Vec::new(),
+        };
+        let exit: Option<i64> = r.get(10)?;
+        let facts = held_facts(r)?;
+        let trigger = exit_trigger(r, &p)?;
+        Ok((p, exit, facts, trigger))
+    })?;
+    let mut loaded = Loaded {
+        account: PaperAccount {
+            account: account.to_string(),
+            initial_cash_usd: initial,
+            cash_usd: cash,
+            positions: BTreeMap::new(),
+        },
+        exit_at_ms: BTreeMap::new(),
+        exit_triggers: BTreeMap::new(),
+        facts: BTreeMap::new(),
+    };
+    for row in rows {
+        let (p, exit, facts, trigger) = row?;
+        let id = p.instrument.clone();
+        if let Some(t) = exit.filter(|_| !p.is_flat()) {
+            loaded.exit_at_ms.insert(id.clone(), t);
+        }
+        if let Some(t) = trigger {
+            loaded.exit_triggers.insert(id.clone(), t);
+        }
+        if let Some(f) = facts {
+            loaded.facts.insert(id.clone(), f);
+        }
+        loaded.account.positions.insert(id, p);
+    }
+    let mut owed = c.prepare(
+        "SELECT instrument, hour_ms, qty FROM funding_owed WHERE account = ?1
+         ORDER BY instrument, hour_ms",
+    )?;
+    let rows = owed.query_map(params![account], |r| {
         Ok((
-            Position {
-                instrument: r.get(0)?,
-                underlying: r.get(1)?,
-                venue: r.get(2)?,
-                qty: r.get(3)?,
-                avg_px: r.get(4)?,
-                realized_pnl: r.get(5)?,
-                fees_paid: r.get(6)?,
-                funding_paid: r.get(7)?,
-                opened_ms: r.get(8)?,
-                last_funding_hour_ms: r.get(9)?,
+            r.get::<_, String>(0)?,
+            OwedHour {
+                hour_ms: r.get(1)?,
+                qty: r.get(2)?,
             },
-            r.get::<_, Option<i64>>(10)?,
         ))
     })?;
-    let mut positions = BTreeMap::new();
-    let mut exits = BTreeMap::new();
     for row in rows {
-        let (p, exit) = row?;
-        if let Some(t) = exit.filter(|_| !p.is_flat()) {
-            exits.insert(p.instrument.clone(), t);
-        }
-        positions.insert(p.instrument.clone(), p);
+        let (instrument, hour) = row?;
+        let p = loaded
+            .account
+            .positions
+            .get_mut(&instrument)
+            .ok_or_else(|| anyhow!("{account}: funding owed on {instrument} without a position"))?;
+        p.funding_owed.push(hour);
     }
-    let a = PaperAccount {
-        account: account.to_string(),
-        initial_cash_usd: initial,
-        cash_usd: cash,
-        positions,
-    };
-    Ok((a, exits))
+    Ok(loaded)
 }
 
 fn count<P: rusqlite::Params>(c: &Connection, sql: &str, p: P) -> Result<u32> {
@@ -288,7 +398,12 @@ fn count<P: rusqlite::Params>(c: &Connection, sql: &str, p: P) -> Result<u32> {
 }
 
 fn load_snapshot(c: &Connection, account: &str, now_ms: i64) -> Result<LedgerSnapshot> {
-    let (account_now, exit_at_ms) = load_account(c, account)?;
+    let Loaded {
+        account: account_now,
+        exit_at_ms,
+        exit_triggers,
+        facts,
+    } = load_account(c, account)?;
     // Entries only: a stored reduce-only order was an exit (the gate denies
     // one that would open or flip), and exits never count (review #3).
     let orders_last_min = count(
@@ -306,6 +421,8 @@ fn load_snapshot(c: &Connection, account: &str, now_ms: i64) -> Result<LedgerSna
         risk: load_risk_state(c, account)?,
         account: account_now,
         exit_at_ms,
+        exit_triggers,
+        facts,
         orders_last_min,
         open_orders,
         now_ms,
@@ -660,6 +777,91 @@ fn insert_fill(
     Ok(())
 }
 
+/// Write `s`, the funding settlement of `instrument` that left `account`
+/// as it is now (`cash_before` = its cash before the payments): the
+/// position, a cash row and a `funding` row per hour booked (an owed one
+/// leaves `funding_owed`), a `funding_owed` row per hour newly owed.
+fn write_settlement(
+    c: &Connection,
+    account: &PaperAccount,
+    instrument: &str,
+    exit_at_ms: Option<i64>,
+    cash_before: f64,
+    s: &FundingSettlement,
+    now_ms: i64,
+) -> Result<()> {
+    if s.is_empty() {
+        return Ok(());
+    }
+    let name = account.account.as_str();
+    let p = account
+        .positions
+        .get(instrument)
+        .ok_or_else(|| anyhow!("{name}: funding settled on {instrument} without a position"))?;
+    write_position(c, name, p, exit_at_ms, now_ms)?;
+    // The same subtractions, in the same order, as the domain's cash.
+    let mut balance = cash_before;
+    for h in &s.booked {
+        balance -= h.payment_usd;
+        append_cash(
+            c,
+            name,
+            now_ms,
+            "funding",
+            &format!("{instrument}@{}", h.hour_ms),
+            -h.payment_usd,
+            balance,
+        )?;
+        c.execute(
+            "INSERT INTO funding(account, instrument, hour_ms, rate_1h, oracle_px, qty,
+               payment_usd, ts_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                name,
+                instrument,
+                h.hour_ms,
+                h.rate.rate_1h,
+                h.rate.oracle_px,
+                h.qty,
+                h.payment_usd,
+                now_ms
+            ],
+        )?;
+        if h.was_owed {
+            c.execute(
+                "DELETE FROM funding_owed WHERE account = ?1 AND instrument = ?2 AND hour_ms = ?3",
+                params![name, instrument, h.hour_ms],
+            )?;
+        }
+    }
+    for o in &s.owed {
+        c.execute(
+            "INSERT INTO funding_owed(account, instrument, hour_ms, qty, ts_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![name, instrument, o.hour_ms, o.qty, now_ms],
+        )?;
+    }
+    Ok(())
+}
+
+/// Keep `f` with the position (module table: `positions`) unless the
+/// stored facts are newer.
+fn write_facts(c: &Connection, account: &str, instrument: &str, f: &HeldFacts) -> Result<()> {
+    c.execute(
+        "UPDATE positions SET sz_decimals = ?3, taker_fee_bps = ?4, maker_fee_bps = ?5,
+           facts_at_ms = ?6
+         WHERE account = ?1 AND instrument = ?2 AND (facts_at_ms IS NULL OR facts_at_ms <= ?6)",
+        params![
+            account,
+            instrument,
+            i64::from(f.sz_decimals),
+            f.fees.taker_bps,
+            f.fees.maker_bps,
+            f.at_ms
+        ],
+    )?;
+    Ok(())
+}
+
 /// A `Decision` the store refuses to write (nothing is written).
 fn check_decision(req: &PlaceRequest, d: &Decision) -> Result<()> {
     if d.intent.account != req.account {
@@ -667,6 +869,13 @@ fn check_decision(req: &PlaceRequest, d: &Decision) -> Result<()> {
             "decision is for account `{}`, the order for `{}`",
             d.intent.account,
             req.account
+        );
+    }
+    if d.intent.instrument != req.instrument {
+        bail!(
+            "decision is for {}, the order for {}",
+            d.intent.instrument,
+            req.instrument
         );
     }
     match (&d.outcome, d.verdict.allow) {
@@ -724,7 +933,7 @@ fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<
             bail!("{why}");
         }
         let decision = read_decision(&tx, order.decision_id)?;
-        let (account, _) = load_account(&tx, &req.account)?;
+        let account = load_account(&tx, &req.account)?.account;
         tx.commit()?;
         return Ok(Placement {
             replayed: true,
@@ -733,7 +942,23 @@ fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<
             account,
         });
     }
-    let snapshot = load_snapshot(&tx, &req.account, req.now_ms)?;
+    let mut snapshot = load_snapshot(&tx, &req.account, req.now_ms)?;
+    // Review #10: the hours the order's instrument owes are settled at the
+    // size held, before the gate values the account and the fill changes it.
+    let cash_before = snapshot.account.cash_usd;
+    let settled = snapshot
+        .account
+        .settle_funding(&req.instrument, req.funding, req.now_ms)
+        .with_context(|| format!("order {}: funding", req.client_order_id))?;
+    write_settlement(
+        &tx,
+        &snapshot.account,
+        &req.instrument,
+        snapshot.exit_at_ms.get(&req.instrument).copied(),
+        cash_before,
+        &settled,
+        req.now_ms,
+    )?;
     let decision = decide(&snapshot);
     check_decision(&req, &decision)?;
     let decision_id = insert_decision(&tx, &req, &decision)?;
@@ -772,6 +997,9 @@ fn place_tx(conn: &mut Connection, req: PlaceRequest, decide: Decide) -> Result<
                     account.cash_usd,
                 )?;
                 insert_fill(&tx, &req, order_id, &fill, &effect)?;
+            }
+            if let Some(f) = &req.facts {
+                write_facts(&tx, &req.account, &req.instrument, f)?;
             }
             Some(order_id)
         }
@@ -864,7 +1092,7 @@ impl PaperLedger for SqlitePaperLedger {
                     initial_cash_usd,
                 )?;
             }
-            let (a, _) = load_account(&tx, &account)?;
+            let a = load_account(&tx, &account)?.account;
             tx.commit()?;
             Ok(a)
         })
@@ -942,7 +1170,7 @@ impl PaperLedger for SqlitePaperLedger {
                 return Ok(None);
             };
             let decision = read_decision(&tx, order.decision_id)?;
-            let (a, _) = load_account(&tx, &account)?;
+            let a = load_account(&tx, &account)?.account;
             tx.commit()?;
             Ok(Some(Placement {
                 replayed: true,
@@ -970,40 +1198,77 @@ impl PaperLedger for SqlitePaperLedger {
         .await
     }
 
-    async fn accrue_funding(
+    async fn settle_funding(
         &self,
         account: &str,
         instrument: &str,
-        rate_1h: f64,
-        oracle_px: f64,
-        hour_ms: i64,
+        rate: Option<FundingRate>,
         now_ms: i64,
-    ) -> Result<Option<f64>> {
+    ) -> Result<FundingSettlement> {
         let (account, instrument) = (account.to_string(), instrument.to_string());
         self.with_conn(move |conn| {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let (mut a, exits) = load_account(&tx, &account)?;
-            let Some(paid) = a.accrue_funding(&instrument, rate_1h, oracle_px, hour_ms)? else {
-                return Ok(None);
-            };
-            let p = &a.positions[&instrument];
-            write_position(&tx, &account, p, exits.get(&instrument).copied(), now_ms)?;
-            append_cash(
+            let mut loaded = load_account(&tx, &account)?;
+            let cash_before = loaded.account.cash_usd;
+            let s = loaded.account.settle_funding(&instrument, rate, now_ms)?;
+            if s.is_empty() {
+                return Ok(s);
+            }
+            write_settlement(
                 &tx,
-                &account,
+                &loaded.account,
+                &instrument,
+                loaded.exit_at_ms.get(&instrument).copied(),
+                cash_before,
+                &s,
                 now_ms,
-                "funding",
-                &format!("{instrument}@{hour_ms}"),
-                -paid,
-                a.cash_usd,
-            )?;
-            tx.execute(
-                "INSERT INTO funding(account, instrument, hour_ms, rate_1h, oracle_px, qty,
-                   payment_usd, ts_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![account, instrument, hour_ms, rate_1h, oracle_px, p.qty, paid, now_ms],
             )?;
             tx.commit()?;
-            Ok(Some(paid))
+            Ok(s)
+        })
+        .await
+    }
+
+    async fn trigger_exit(
+        &self,
+        account: &str,
+        instrument: &str,
+        opened_ms: i64,
+        reason: ExitReason,
+        now_ms: i64,
+    ) -> Result<Option<ExitTrigger>> {
+        if !reason.on_price() {
+            bail!(
+                "trigger_exit: `{}` is no stop-loss / take-profit",
+                reason.as_str()
+            );
+        }
+        let (account, instrument) = (account.to_string(), instrument.to_string());
+        self.with_conn(move |conn| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let loaded = load_account(&tx, &account)?;
+            let Some(p) = loaded
+                .account
+                .positions
+                .get(&instrument)
+                .filter(|p| !p.is_flat() && p.opened_ms == Some(opened_ms))
+            else {
+                return Ok(None);
+            };
+            if let Some(stored) = loaded.exit_triggers.get(&p.instrument) {
+                return Ok(Some(*stored));
+            }
+            tx.execute(
+                "UPDATE positions SET exit_trigger = ?3, exit_trigger_opened_ms = ?4,
+                   exit_trigger_ms = ?5
+                 WHERE account = ?1 AND instrument = ?2",
+                params![account, instrument, reason.as_str(), opened_ms, now_ms],
+            )?;
+            tx.commit()?;
+            Ok(Some(ExitTrigger {
+                reason,
+                at_ms: now_ms,
+            }))
         })
         .await
     }
@@ -1122,6 +1387,9 @@ pub(crate) mod tests {
             tool: "paper_order".into(),
             session_id: None,
             fingerprint: Some(fingerprint(o)),
+            instrument: o.instrument.clone(),
+            funding: None,
+            facts: None,
             now_ms,
         }
     }
@@ -1191,7 +1459,9 @@ pub(crate) mod tests {
                 })
                 .collect();
             let (valued, rolled) = snap.risk.value(&snap.account, &marks, now, 20_000);
-            let book = tsla_book();
+            // Stamped 400 ms before the order — the fixture's age at `NOW`.
+            let mut book = tsla_book();
+            book.venue_ts_ms = now - 400;
             let leg = LegMarket {
                 book: Field::ok(BookInput {
                     key: format!("hl_book/1:{TSLA}"),
@@ -1705,39 +1975,311 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let hour = NOW - NOW.rem_euclid(HOUR_MS) + HOUR_MS;
+        let rate = FundingRate::new(0.0001, 350.0);
         // Long 0.072, oracle 350, +0.0001 / h ⇒ the long pays 0.00252.
-        let paid = l
-            .accrue_funding(ACCOUNT, TSLA, 0.0001, 350.0, hour, hour + 5)
+        let s = l
+            .settle_funding(ACCOUNT, TSLA, rate, hour + 5)
             .await
             .unwrap();
-        close_to(paid.unwrap(), 0.072 * 350.0 * 0.0001, "payment");
-        for h in [hour, hour - HOUR_MS] {
-            let again = l
-                .accrue_funding(ACCOUNT, TSLA, 0.0001, 350.0, h, h + 9)
-                .await;
-            assert_eq!(again.unwrap(), None, "{h}");
+        assert_eq!(s.booked.len(), 1);
+        let paid = s.paid_usd();
+        close_to(paid, 0.072 * 350.0 * 0.0001, "payment");
+        for at in [hour + 9, hour + HOUR_MS - 1] {
+            let again = l.settle_funding(ACCOUNT, TSLA, rate, at).await.unwrap();
+            assert!(again.is_empty(), "{at}");
         }
-        assert_eq!(
-            l.accrue_funding(ACCOUNT, NVDA, 0.0001, 1.0, hour, hour)
-                .await
-                .unwrap(),
-            None
-        );
         assert!(l
-            .accrue_funding(ACCOUNT, TSLA, 0.0001, 350.0, hour + 1, hour)
+            .settle_funding(ACCOUNT, NVDA, rate, hour)
             .await
-            .is_err());
+            .unwrap()
+            .is_empty());
         let s = l.snapshot(ACCOUNT, hour + 10).await.unwrap();
         let pos = &s.account.positions[TSLA];
         assert_eq!(pos.last_funding_hour_ms, Some(hour));
-        close_to(pos.funding_paid, paid.unwrap(), "funding on the position");
-        close_to(
-            s.account.cash_usd,
-            p.account.cash_usd - paid.unwrap(),
-            "cash",
-        );
+        close_to(pos.funding_paid, paid, "funding on the position");
+        close_to(s.account.cash_usd, p.account.cash_usd - paid, "cash");
         let r = rows(dir.path());
         assert_eq!((r["funding"], r["cash"]), (1, 3));
+    }
+
+    /// `(hour_ms, qty)` rows, in hour order.
+    type HourRows = Vec<(i64, f64)>;
+
+    /// Every `funding` row, then every `funding_owed` row.
+    fn funding_rows(dir: &Path) -> (HourRows, HourRows) {
+        let c = Connection::open(ledger_db(dir)).unwrap();
+        let read = |sql: &str| {
+            let mut s = c.prepare(sql).unwrap();
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<HourRows>()
+        };
+        (
+            read("SELECT hour_ms, qty FROM funding ORDER BY hour_ms"),
+            read("SELECT hour_ms, qty FROM funding_owed ORDER BY hour_ms"),
+        )
+    }
+
+    fn reconciles(a: &PaperAccount) {
+        close_to(
+            a.cash_usd,
+            a.initial_cash_usd + a.realized_pnl() - a.fees_paid() - a.funding_paid(),
+            "cash = initial + realized − fees − funding",
+        );
+    }
+
+    /// Review #10: a reduce after an hour boundary, with no fresh rate,
+    /// first records that hour owed at the size held (inside `place`, before
+    /// the fill); the next rate books it at that size and the later hour at
+    /// the reduced one.
+    #[tokio::test]
+    async fn funding_across_a_reduce_is_settled_before_the_fill() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let o = buy("o-1", ACCOUNT, TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        let h1 = NOW - NOW.rem_euclid(HOUR_MS) + HOUR_MS;
+        let c = close("c-1", 0.036);
+        let p = l
+            .place(req(&c, h1 + 600_000), gate(&c, limits(), None))
+            .await
+            .unwrap();
+        assert!(
+            p.decision.verdict.allow,
+            "{:?}",
+            p.decision.verdict.failed()
+        );
+        let pos = &p.account.positions[TSLA];
+        assert_eq!(pos.qty, 0.036);
+        assert_eq!(
+            pos.funding_owed,
+            [OwedHour {
+                hour_ms: h1,
+                qty: 0.072
+            }]
+        );
+        assert_eq!(funding_rows(dir.path()), (vec![], vec![(h1, 0.072)]));
+        // An hour later a rate: H1 at 0.072, H2 at 0.036.
+        let rate = FundingRate::new(0.0001, 350.0);
+        let s = l
+            .settle_funding(ACCOUNT, TSLA, rate, h1 + HOUR_MS + 5)
+            .await
+            .unwrap();
+        assert_eq!(
+            s.booked
+                .iter()
+                .map(|h| (h.hour_ms, h.qty, h.was_owed))
+                .collect::<Vec<_>>(),
+            [(h1, 0.072, true), (h1 + HOUR_MS, 0.036, false)]
+        );
+        assert_eq!(
+            funding_rows(dir.path()),
+            (vec![(h1, 0.072), (h1 + HOUR_MS, 0.036)], vec![])
+        );
+        let a = l
+            .snapshot(ACCOUNT, h1 + HOUR_MS + 10)
+            .await
+            .unwrap()
+            .account;
+        close_to(
+            a.positions[TSLA].funding_paid,
+            0.108 * 350.0 * 0.0001,
+            "0.072 + 0.036 for one hour each",
+        );
+        reconciles(&a);
+    }
+
+    /// Review #10: a full close at a stale rate keeps the hours it owes —
+    /// the position is flat, `opened_ms` cleared — and a later rate books
+    /// them; a close given a fresh rate books its hours itself.
+    #[tokio::test]
+    async fn funding_owed_across_a_full_close_is_booked_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let o = buy("o-1", ACCOUNT, TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        let h1 = NOW - NOW.rem_euclid(HOUR_MS) + HOUR_MS;
+        let c = close("c-1", 0.072);
+        let p = l
+            .place(req(&c, h1 + HOUR_MS + 600_000), gate(&c, limits(), None))
+            .await
+            .unwrap();
+        let pos = &p.account.positions[TSLA];
+        assert!(pos.is_flat() && pos.opened_ms.is_none());
+        assert_eq!(pos.funding_owed.len(), 2, "{pos:?}");
+        let snap = l.snapshot(ACCOUNT, h1 + 2 * HOUR_MS).await.unwrap();
+        assert_eq!(snap.account.open_positions().count(), 0);
+        assert_eq!(
+            snap.account.funding_ids(),
+            std::collections::BTreeSet::from([TSLA.to_string()])
+        );
+        let rate = FundingRate::new(-0.0002, 340.0);
+        let s = l
+            .settle_funding(ACCOUNT, TSLA, rate, h1 + 5 * HOUR_MS)
+            .await
+            .unwrap();
+        assert_eq!(s.booked.len(), 2, "only the owed ones: flat since");
+        assert!(s.booked.iter().all(|h| h.qty == 0.072 && h.was_owed));
+        let a = l.snapshot(ACCOUNT, h1 + 5 * HOUR_MS).await.unwrap().account;
+        assert!(a.positions[TSLA].is_settled());
+        assert!(a.funding_ids().is_empty());
+        reconciles(&a);
+
+        // The same close with a fresh rate: booked inside place, none owed.
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        let mut r = req(&c, h1 + HOUR_MS + 600_000);
+        r.funding = FundingRate::new(0.0001, 350.0);
+        let p = l.place(r, gate(&c, limits(), None)).await.unwrap();
+        assert!(p.account.positions[TSLA].is_settled());
+        assert_eq!(
+            funding_rows(dir.path()),
+            (vec![(h1, 0.072), (h1 + HOUR_MS, 0.072)], vec![])
+        );
+        reconciles(&p.account);
+    }
+
+    /// Review #6: a fired stop-loss / take-profit is kept for the opening it
+    /// fired for — the first one wins — and ends with that opening.
+    #[tokio::test]
+    async fn a_fired_exit_trigger_is_kept_for_its_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let o = buy("o-1", ACCOUNT, TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        let sl = ExitTrigger {
+            reason: ExitReason::StopLoss,
+            at_ms: NOW + 1,
+        };
+        let t = l
+            .trigger_exit(ACCOUNT, TSLA, NOW, ExitReason::StopLoss, NOW + 1)
+            .await
+            .unwrap();
+        assert_eq!(t, Some(sl));
+        let again = l
+            .trigger_exit(ACCOUNT, TSLA, NOW, ExitReason::TakeProfit, NOW + 2)
+            .await
+            .unwrap();
+        assert_eq!(again, Some(sl), "the first one is kept");
+        let snap = l.snapshot(ACCOUNT, NOW + 3).await.unwrap();
+        assert_eq!(snap.exit_triggers, BTreeMap::from([(TSLA.to_string(), sl)]));
+        // Another opening, no position, a time reason.
+        for (instrument, opened) in [(TSLA, NOW - 1), (NVDA, NOW)] {
+            let t = l
+                .trigger_exit(ACCOUNT, instrument, opened, ExitReason::StopLoss, NOW)
+                .await
+                .unwrap();
+            assert_eq!(t, None, "{instrument} {opened}");
+        }
+        assert!(l
+            .trigger_exit(ACCOUNT, TSLA, NOW, ExitReason::Deadline, NOW)
+            .await
+            .is_err());
+        // Closed: the trigger ends with the opening; the next one has none.
+        let c = close("c-1", 0.072);
+        l.place(req(&c, NOW + 1_000), gate(&c, limits(), None))
+            .await
+            .unwrap();
+        assert!(l
+            .snapshot(ACCOUNT, NOW + 1_001)
+            .await
+            .unwrap()
+            .exit_triggers
+            .is_empty());
+        let o2 = buy("o-2", ACCOUNT, TSLA);
+        l.place(req(&o2, NOW + 2_000), gate(&o2, limits(), None))
+            .await
+            .unwrap();
+        let snap = l.snapshot(ACCOUNT, NOW + 2_001).await.unwrap();
+        assert_eq!(snap.account.positions[TSLA].opened_ms, Some(NOW + 2_000));
+        assert!(snap.exit_triggers.is_empty(), "a new opening");
+    }
+
+    /// Review #6: a sent order keeps the venue facts it was priced with on
+    /// the position — never older ones over newer, never from a denial.
+    #[tokio::test]
+    async fn sent_orders_keep_their_venue_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let l = ledger(dir.path()).await;
+        let facts = |sz: u32, at_ms: i64| HeldFacts {
+            sz_decimals: sz,
+            fees: FeeSchedule::new(0.9, 0.3).unwrap(),
+            at_ms,
+        };
+        let o = buy("o-1", ACCOUNT, TSLA);
+        let mut r = req(&o, NOW);
+        r.facts = Some(facts(3, NOW - 1_000));
+        l.place(r, gate(&o, limits(), None)).await.unwrap();
+        let snap = l.snapshot(ACCOUNT, NOW).await.unwrap();
+        assert_eq!(snap.facts[TSLA], facts(3, NOW - 1_000));
+        // An older row's facts never replace newer ones; a newer row's do.
+        for (sz, at, want) in [
+            (2, NOW - 5_000, facts(3, NOW - 1_000)),
+            (4, NOW + 500, facts(4, NOW + 500)),
+        ] {
+            let c = close(&format!("c-{sz}"), 0.001);
+            let mut r = req(&c, NOW + 1_000);
+            r.facts = Some(facts(sz, at));
+            l.place(r, gate(&c, limits(), None)).await.unwrap();
+            let snap = l.snapshot(ACCOUNT, NOW + 1_000).await.unwrap();
+            assert_eq!(snap.facts[TSLA], want, "{sz}");
+        }
+        // A denied entry (the $40 gross cap) writes no facts.
+        let o2 = buy("o-2", ACCOUNT, TSLA);
+        let mut r = req(&o2, NOW + 2_000);
+        r.facts = Some(facts(5, NOW + 1_500));
+        let p = l.place(r, gate(&o2, limits(), None)).await.unwrap();
+        assert!(!p.decision.verdict.allow);
+        let snap = l.snapshot(ACCOUNT, NOW + 2_000).await.unwrap();
+        assert_eq!(snap.facts[TSLA], facts(4, NOW + 500));
+    }
+
+    /// A `positions` table from before reviews #6 / #10 gains the kept
+    /// facts and trigger columns on open (twice is a no-op), and the ledger
+    /// gains `funding_owed`; its rows read without facts or a trigger.
+    #[tokio::test]
+    async fn an_older_ledger_gains_the_position_columns_and_funding_owed() {
+        let dir = tempfile::tempdir().unwrap();
+        let o = buy("old-1", ACCOUNT, TSLA);
+        {
+            let l = ledger(dir.path()).await;
+            l.place(req(&o, NOW), gate(&o, limits(), None))
+                .await
+                .unwrap();
+        }
+        {
+            let c = Connection::open(ledger_db(dir.path())).unwrap();
+            for (table, column, _) in ADDED_COLUMNS.iter().filter(|c| c.0 == "positions") {
+                c.execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                    .unwrap();
+            }
+            c.execute_batch("DROP TABLE funding_owed").unwrap();
+        }
+        let l = SqlitePaperLedger::open(dir.path()).unwrap();
+        SqlitePaperLedger::open(dir.path()).expect("a second open adds nothing");
+        let snap = l.snapshot(ACCOUNT, NOW + 1).await.unwrap();
+        assert_eq!(snap.account.positions[TSLA].qty, 0.072);
+        assert!(snap.facts.is_empty() && snap.exit_triggers.is_empty());
+        let t = l
+            .trigger_exit(ACCOUNT, TSLA, NOW, ExitReason::TakeProfit, NOW + 2)
+            .await
+            .unwrap();
+        assert_eq!(t.map(|t| t.reason), Some(ExitReason::TakeProfit));
+        let s = l
+            .settle_funding(ACCOUNT, TSLA, None, NOW + HOUR_MS)
+            .await
+            .unwrap();
+        assert_eq!(s.owed.len(), 1, "funding_owed is back");
     }
 
     /// A `Decision` that contradicts itself or the request writes nothing.

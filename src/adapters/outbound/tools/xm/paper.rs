@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | `paper_order` | `instrument`* (full id), `side`* buy / sell, `notional_usd`*, `kind`* market / limit, `limit_px` (limit only), `tif` ioc, `reduce_only`, `max_slippage_bps`*, `strategy` (§21 type), `hedge_instrument`, `opportunity` (row key), `client_order_id`, `exit_at_ms` | `paper_fill/1:<account>:<client_order_id>` |
 //! | `paper_close` | `instrument` or `all = true`; `max_slippage_bps`*; `client_order_id` — reduce-only market IOC of the whole position | one: `paper_fill/1` · all: `paper_close/1:<account>:<client_order_id>`, legs `<client_order_id>:<instrument>` (each its own `paper_fill/1`, replayed by its id) |
-//! | `paper_positions` | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): books the funding owed first; marks from fresh `mkt_ctx/1` rows (missing ⇒ partial, never 0); exit deadlines per position |
+//! | `paper_positions` | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): books the funding owed first (open positions and closed ones owing hours, at fresh `mkt_ctx/1` rates); marks from fresh `mkt_ctx/1` rows (missing ⇒ partial, never 0); exit deadlines per position |
 //!
 //! Arguments parse strictly — an unknown key, a wrong type, a short id or
 //! `null` for a required key is a tool error naming it; nothing is placed.
@@ -262,6 +262,7 @@ pub(crate) fn parse_order(args: &Value, limits: RiskLimits) -> Result<ExecOrder>
         opportunity_key: opt_str(tool, o, "opportunity")?.map(str::to_string),
         client_order_id: coid_arg(tool, o)?,
         exit_at_ms,
+        tp_sl_on_book: None,
     })
 }
 
@@ -378,6 +379,7 @@ impl PaperCloseTool {
             opportunity_key: None,
             client_order_id: coid,
             exit_at_ms: None,
+            tp_sl_on_book: None,
         };
         if let CloseTarget::One(id) = target {
             return run_exec(&self.shared, ctx, io, order(id, coid)).await;
@@ -487,7 +489,8 @@ impl PaperPositionsTool {
             .open_positions()
             .map(|p| p.instrument.clone())
             .collect();
-        let rows = MarketRows::read(store, &ids, None, None).await;
+        // The open positions' rows, and those of closed ones owing funding.
+        let rows = MarketRows::read(store, &before.account.funding_ids(), None, None).await;
         accrue_due_funding(ledger.as_ref(), &before.account, &rows, now_ms, max_ctx_ms).await?;
         let snap = ledger.snapshot(account, now_ms).await?;
         let (mut valued, _) = snap

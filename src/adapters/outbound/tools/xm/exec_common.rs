@@ -11,11 +11,12 @@
 //! | 2 | the calling agent is private — no `description`, not `default` (the load rule again: a planner step's `compose.tools` can hand any tool to a routable agent); the gate fits the account (review #5): `ExecGate::Shadow` only with the paper engine's [`PaperFills`] (`[risk] mode = "paper"`) and never on the `[risk]` account, `ExecGate::Risk` only on it | `exec_agent_not_private` · `shadow_not_paper` · `gate_account_mismatch` |
 //! | 3 | `client_order_id` = the arg, else `ToolCtx.call_id` (bridge: `mcp:<process nonce>:<JSON-RPC id>`) — never random; the request's fingerprint (`exec::order_fingerprint`: tool, account, full id, `close` or side + notional) is stored with the order | `no_client_order_id` · `invalid_client_order_id` |
 //! | 4 | the account (`limits.account`) opened on first use with `[paper] initial_cash_usd` (a shadow account, `ExecGate::Shadow`: its own cash); an order stored under the id ⇒ its row, `replayed` — no latency, no book read, nothing written — unless it was placed with another fingerprint (review #11) | `client_order_id_conflict` |
-//! | 5 | store reads, never fetched: `mkt_ctx/1` of the open positions + the order's (and hedge) instrument, `mkt_instrument/1` of the instrument (`domain::xm::exec::venue_facts`), the `opportunity` row | `missing:mkt_instrument` |
-//! | 6 | funding the open positions owe booked first: every due hour at a fresh `mkt_ctx/1` rate + oracle (`ledger::due_funding_hours`; a row stamped > 1 s ahead is not fresh) | — |
+//! | 5 | store reads, never fetched: `mkt_ctx/1` of the open positions, of the instruments that owe funding and of the order's (and hedge) instrument, `mkt_instrument/1` of the instrument (`domain::xm::exec::order_venue_facts`: a reduce-only order falls back to the facts kept with its position when the row is missing, older or partial — review #6), the `opportunity` row | `missing:mkt_instrument` |
+//! | 6 | funding owed booked first: every owed and due hour of the account at a fresh `mkt_ctx/1` rate + oracle (`ledger::Position::settle_funding`; a row stamped > 1 s ahead is not fresh); without one nothing is written here — `place` settles the order's instrument at the size held, owed when no rate is known (review #10) | — |
 //! | 7 | the order checked before the latency (`[paper] order_types`, `check_order`); a close sized from the position; a reduce-only order's IOC bound cut to `exec::MAX_EXIT_SLIPPAGE_BPS` (500 bps, review #9) | `order_type` · `invalid_order` · `no_position` |
 //! | 8 | `fill_with_latency` on the `Clock` + `BookSource` (live: `SystemClock`, `hyperliquid::book::HlBookSource`, the `hl_book/1` read recorded + stored); a hedge leg's book right after | — a failed read is the gate's `missing:book` |
-//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): value, gate (`[risk]`, or the shadow gate for `ExecGate::Shadow`), fill, write — an entry probes the kill-switch file again inside the transaction (review #7); a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`) | — |
+//! | 8b | [`ExecOrder::tp_sl_on_book`] (`xm_exits` without a fresh mark, review #6): take-profit / stop-loss judged on that book's mid (`exits::tp_sl_due`; the book within `max_data_age_ms.book`) — nothing fires, or no fresh two-sided book ⇒ [`Executed::NotCalled`], nothing placed or written; one fires ⇒ recorded (`PaperLedger::trigger_exit`), the id `exit:<account>:<instrument>:<reason>:<opened_ms>` | — |
+//! | 9 | kill-switch probe, then `place(decide(plan))` (`application/paper.rs`): funding the instrument owes settled first, value, gate (`[risk]`, or the shadow gate for `ExecGate::Shadow`), fill, write — an entry probes the kill-switch file again inside the transaction (review #7); a deny writes one verdict row (with the call id, the tool and `TENGU_SESSION_ID`; mirrored to `<TENGU_HOME>/logs/risk.jsonl`); a sent order keeps the row's venue facts with the position | — |
 //! | 10 | row `paper_fill/1:<account>:<client_order_id>` (ttl 0: recorded, never cached) — `domain/xm/exec.rs` | — |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,11 +37,14 @@ use crate::domain::observation::{
     ErrorClass, Field, ObsSource, ObsStatus, Observation, Observed, ReadError,
 };
 use crate::domain::xm::exec::{
-    client_order_id_error, order_fingerprint, venue_facts, GateSummary, PaperFillRow,
+    client_order_id_error, order_fingerprint, order_venue_facts, GateSummary, PaperFillRow,
     MAX_EXIT_SLIPPAGE_BPS,
 };
+use crate::domain::xm::exits::{
+    exit_client_order_id, tp_sl_due, ExitReason, ExitRules, ExitTrigger,
+};
 use crate::domain::xm::ledger::{
-    due_funding_hours, stamp_age_ms, Mark, PaperAccount, PaperPositions, Position,
+    due_funding_hours, stamp_age_ms, FundingRate, Mark, PaperAccount, PaperPositions, Position,
 };
 use crate::domain::xm::paper::{
     jittered_latency_ms, FillEnv, OrderKind, OrderSize, PaperOrder, Tif,
@@ -159,10 +163,34 @@ pub(crate) struct ExecOrder {
     pub hedge_instrument: Option<InstrumentId>,
     /// Key of the row carrying `edge_after_costs_bps` (`min_edge`).
     pub opportunity_key: Option<String>,
-    /// The tool's arg; `None` ⇒ `ToolCtx.call_id`.
+    /// The tool's arg; `None` ⇒ `ToolCtx.call_id`. Ignored with
+    /// `tp_sl_on_book` (the reason that fires picks the id).
     pub client_order_id: Option<String>,
     /// Deadline of the position this order opens (exit rules).
     pub exit_at_ms: Option<i64>,
+    /// A close that fires only when these take-profit / stop-loss rules
+    /// hold at the mid of the book read after the latency (module table:
+    /// 8b) — `xm_exits` on a stale or missing mark. `None` = always placed.
+    pub tp_sl_on_book: Option<ExitRules>,
+}
+
+/// What [`exec`] did with one order.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Executed {
+    /// The order's `paper_fill/1` row: placed (allowed or denied), or
+    /// replayed.
+    Row(Observation),
+    /// [`ExecOrder::tp_sl_on_book`]: the book's `mid` fired `trigger`
+    /// (recorded in the ledger — the stored one when another caller fired
+    /// first); the close's row.
+    Called {
+        trigger: ExitTrigger,
+        mid: f64,
+        row: Observation,
+    },
+    /// [`ExecOrder::tp_sl_on_book`]: the book's mid — or why there is none
+    /// — fired nothing; nothing placed or written.
+    NotCalled { mid: Field<f64> },
 }
 
 /// Where time and books come from: live = `SystemClock` + `HlBookSource` +
@@ -176,17 +204,63 @@ pub(crate) struct ExecIo<'a> {
 
 /// The module table: one order through the gate. `Ok` = the typed row
 /// (`denied` / `rejected` are rows with status `error`); `Err` = refused
-/// before the gate, nothing written.
+/// before the gate, nothing written. An order judged on the book
+/// (`tp_sl_on_book`) goes through [`exec`].
 pub(crate) async fn run_exec(
     shared: &XmShared,
     ctx: &ToolCtx<'_>,
     io: &ExecIo<'_>,
     order: ExecOrder,
 ) -> Result<Observation> {
+    match exec(shared, ctx, io, order).await? {
+        Executed::Row(row) | Executed::Called { row, .. } => Ok(row),
+        Executed::NotCalled { .. } => {
+            bail!("not_called: the book fired no take-profit / stop-loss — nothing was placed")
+        }
+    }
+}
+
+/// The mid of the book read after the latency — at most `max_age_ms` old
+/// at `now_ms` — or why there is none (a stale book judges nothing, like a
+/// stale mark).
+fn book_mid(
+    book: &std::result::Result<BookRead, ReadError>,
+    now_ms: i64,
+    max_age_ms: u64,
+) -> Field<f64> {
+    let missing = |why: String| Field::err(ReadError::new("book", ErrorClass::Transient, why));
+    match book {
+        Ok(read) if read.age_ms(now_ms) > max_age_ms => missing(format!(
+            "stale: book age {} ms > {max_age_ms} ms",
+            read.age_ms(now_ms)
+        )),
+        Ok(read) => read
+            .book
+            .mid()
+            .map_or_else(|| missing("one-sided book: no mid".into()), Field::ok),
+        Err(e) => Field::err(e.clone()),
+    }
+}
+
+/// [`run_exec`], with what an order judged on the book did (module table:
+/// 8b).
+pub(crate) async fn exec(
+    shared: &XmShared,
+    ctx: &ToolCtx<'_>,
+    io: &ExecIo<'_>,
+    order: ExecOrder,
+) -> Result<Executed> {
     let (risk, paper, ledger) = shared.parts()?;
     check_private_agent(ctx)?;
     check_gate(&order, risk)?;
-    let coid = client_order_id(order.client_order_id.as_deref(), ctx.call_id)?;
+    // Judged on the book: the reason that fires picks the id (step 8b).
+    let fixed_coid = match order.tp_sl_on_book {
+        None => Some(client_order_id(
+            order.client_order_id.as_deref(),
+            ctx.call_id,
+        )?),
+        Some(_) => None,
+    };
     let call_id = ctx.call_id.map(str::to_string);
     let account = order.limits.account.clone();
     let id = order.instrument.to_string();
@@ -210,28 +284,30 @@ pub(crate) async fn run_exec(
         } => initial_cash_usd,
     };
     ledger.open_account(&account, initial_cash_usd, now).await?;
-    if let Some(p) = ledger.stored(&account, &coid).await? {
-        // Review #11: another request's order under this id is refused.
-        if let Some(why) = p
-            .order
-            .as_ref()
-            .and_then(|o| o.conflict(Some(&fingerprint)))
-        {
-            bail!("{why}");
+    if let Some(coid) = &fixed_coid {
+        if let Some(p) = ledger.stored(&account, coid).await? {
+            // Review #11: another request's order under this id is refused.
+            if let Some(why) = p
+                .order
+                .as_ref()
+                .and_then(|o| o.conflict(Some(&fingerprint)))
+            {
+                bail!("{why}");
+            }
+            let ids = open_ids(&p.account);
+            let rows = MarketRows::read(store, &ids, None, None).await;
+            let row = row_of(
+                &p,
+                coid,
+                call_id,
+                None,
+                None,
+                &rows.marks(&ids),
+                now,
+                max_ctx_ms,
+            );
+            return Ok(Executed::Row(finish(store, order.tool, &row, now).await));
         }
-        let ids = open_ids(&p.account);
-        let rows = MarketRows::read(store, &ids, None, None).await;
-        let row = row_of(
-            &p,
-            &coid,
-            call_id,
-            None,
-            None,
-            &rows.marks(&ids),
-            now,
-            max_ctx_ms,
-        );
-        return Ok(finish(store, order.tool, &row, now).await);
     }
 
     let snapshot = ledger.snapshot(&account, now).await?;
@@ -240,14 +316,24 @@ pub(crate) async fn run_exec(
     if let Some(h) = &order.hedge_instrument {
         ids.insert(h.to_string());
     }
-    let rows = MarketRows::read(store, &ids, Some(&id), order.opportunity_key.as_deref()).await;
-    let facts = venue_facts(
-        rows.instrument.as_ref(),
+    // Funding is settled on every instrument that owes it, a closed one too.
+    let mut row_ids = ids.clone();
+    row_ids.extend(snapshot.account.funding_ids());
+    let rows = MarketRows::read(store, &row_ids, Some(&id), order.opportunity_key.as_deref()).await;
+    let reduce_only = order.reduce_only || order.size == ExecSize::Close;
+    // Review #6: a reduce-only order falls back to the facts kept with its
+    // position when the instrument row is missing, older or partial.
+    let (facts, keep_facts) = order_venue_facts(
+        rows.instrument.as_ref().map(|(i, at)| (i, *at)),
         rows.ctx_of(&id).as_ref(),
         fee_basis(paper),
+        snapshot.facts.get(&id),
+        reduce_only,
     )
     .map_err(|why| anyhow!("missing:mkt_instrument: {why}"))?;
     accrue_due_funding(ledger.as_ref(), &snapshot.account, &rows, now, max_ctx_ms).await?;
+    // The order instrument's rate, for the hours `place` settles (step 9).
+    let funding = rows.funding_rate(&id, now, max_ctx_ms);
 
     let held = snapshot.account.positions.get(&id);
     let (side, size, close) = match order.size {
@@ -261,7 +347,6 @@ pub(crate) async fn run_exec(
         },
         ExecSize::NotionalUsd(n) => (order.side, OrderSize::NotionalUsd(n), false),
     };
-    let reduce_only = order.reduce_only || close;
     // Review #9: an exit's IOC bound never passes the hard ceiling (the
     // gate skips slippage for exits; the arg parsers refuse a larger one).
     let max_slippage_bps = if reduce_only {
@@ -269,8 +354,18 @@ pub(crate) async fn run_exec(
     } else {
         order.max_slippage_bps
     };
-    let paper_order = PaperOrder {
-        client_order_id: coid.clone(),
+    let opened_ms = held.and_then(|p| p.opened_ms);
+    let mut paper_order = PaperOrder {
+        // Judged on the book: the stop-loss id until the book decides.
+        client_order_id: fixed_coid.clone().unwrap_or_else(|| {
+            exit_client_order_id(
+                &account,
+                &id,
+                ExitReason::StopLoss,
+                opened_ms.unwrap_or_default(),
+                1,
+            )
+        }),
         instrument: order.instrument.clone(),
         side,
         size,
@@ -314,6 +409,32 @@ pub(crate) async fn run_exec(
         Some(h) => Some((h.to_string(), io.books.fresh_book(h).await)),
         None => None,
     };
+
+    // Step 8b: take-profit / stop-loss on this book's mid.
+    let mut called = None;
+    let coid = match (fixed_coid, order.tp_sl_on_book) {
+        (Some(coid), _) => coid,
+        (None, rules) => {
+            let rules = rules.ok_or_else(|| anyhow!("an order needs an id or exit rules"))?;
+            let mid = book_mid(&book, io.clock.now_ms(), order.limits.max_data_age_ms.book);
+            let fired = mid
+                .value()
+                .and_then(|px| Some((*px, tp_sl_due(&position, *px, &rules)?)));
+            let Some((px, reason)) = fired else {
+                return Ok(Executed::NotCalled { mid });
+            };
+            let opened = opened_ms.ok_or_else(|| anyhow!("open position {id} has no opened_ms"))?;
+            let trigger = ledger
+                .trigger_exit(&account, &id, opened, reason, io.clock.now_ms())
+                .await?
+                .ok_or_else(|| {
+                    anyhow!("no_position: account {account} holds no {id} opened at {opened}")
+                })?;
+            called = Some((trigger, px));
+            exit_client_order_id(&account, &id, trigger.reason, opened, 1)
+        }
+    };
+    paper_order.client_order_id = coid.clone();
 
     let now = io.clock.now_ms();
     let mut legs = BTreeMap::from([(
@@ -370,6 +491,9 @@ pub(crate) async fn run_exec(
         tool: order.tool.to_string(),
         session_id: std::env::var("TENGU_SESSION_ID").ok(),
         fingerprint: Some(fingerprint),
+        instrument: id,
+        funding,
+        facts: keep_facts,
         now_ms: now,
     };
     let placement = ledger.place(req, decide(plan)).await?;
@@ -384,7 +508,11 @@ pub(crate) async fn run_exec(
         now,
         max_ctx_ms,
     );
-    Ok(finish(store, order.tool, &row, now).await)
+    let row = finish(store, order.tool, &row, now).await;
+    Ok(match called {
+        Some((trigger, mid)) => Executed::Called { trigger, mid, row },
+        None => Executed::Row(row),
+    })
 }
 
 /// Step 2 of the module table.
@@ -449,8 +577,9 @@ pub(crate) struct MarketRows {
     /// `mkt_ctx/1` rows by full id, as stored (the gate and the marks judge
     /// their age).
     ctx: BTreeMap<String, Observation>,
-    /// The order instrument's `mkt_instrument/1`, decoded.
-    instrument: Option<MarketInstrument>,
+    /// The order instrument's `mkt_instrument/1`, decoded, and when it was
+    /// observed.
+    instrument: Option<(MarketInstrument, i64)>,
     opportunity: Option<Observation>,
     /// No store, or the read failed: every row is this error.
     failed: Option<ReadError>,
@@ -512,7 +641,10 @@ impl MarketRows {
                 .next()
                 .flatten()
                 .filter(|r| r.status != ObsStatus::Error)
-                .and_then(|r| r.typed::<MarketInstrument>().ok());
+                .and_then(|r| {
+                    let at = r.observed_at_ms;
+                    r.typed::<MarketInstrument>().ok().map(|i| (i, at))
+                });
         }
         out.opportunity = rows.next().flatten();
         out
@@ -532,6 +664,18 @@ impl MarketRows {
         let row = self.ctx.get(id)?;
         let age = stamp_age_ms(now_ms, row.observed_at_ms)?;
         (age <= max_age_ms).then(|| self.ctx_of(id)).flatten()
+    }
+
+    /// The instrument's funding rate + oracle from a fresh row; `None` when
+    /// the row is stale, missing or has no valid pair.
+    pub(crate) fn funding_rate(
+        &self,
+        id: &str,
+        now_ms: i64,
+        max_age_ms: u64,
+    ) -> Option<FundingRate> {
+        let c = self.fresh_ctx(id, now_ms, max_age_ms)?;
+        FundingRate::new(*c.funding_1h.value()?, *c.oracle.value()?)
     }
 
     fn missing(&self, what: &str) -> ReadError {
@@ -564,44 +708,33 @@ impl MarketRows {
     }
 }
 
-/// Step 6: every hour the open positions of `account` owe, at a fresh
-/// `mkt_ctx/1` funding rate + oracle; a stale or missing row books nothing
-/// (the next read with a fresh one does). HL's per-hour history is not
-/// read: past hours are booked at the current rate.
+/// Step 6: the funding `account` owes (`PaperAccount::funding_ids`: open
+/// positions, and closed ones with hours owed), settled per instrument at a
+/// fresh `mkt_ctx/1` rate + oracle — owed hours and due hours booked. A
+/// stale or missing row writes nothing: the hours stay due (a fill settles
+/// them owed first, inside `place`; the next fresh rate books them). HL's
+/// per-hour history is not read: past hours are booked at the current
+/// rate. The hours booked.
 pub(crate) async fn accrue_due_funding(
     ledger: &dyn PaperLedger,
     account: &PaperAccount,
     rows: &MarketRows,
     now_ms: i64,
     max_age_ms: u64,
-) -> Result<u32> {
+) -> Result<usize> {
     let mut booked = 0;
-    for p in account.open_positions() {
-        let Some(c) = rows.fresh_ctx(&p.instrument, now_ms, max_age_ms) else {
+    for p in account.positions.values().filter(|p| !p.is_settled()) {
+        let Some(rate) = rows.funding_rate(&p.instrument, now_ms, max_age_ms) else {
             continue;
         };
-        let (Some(rate), Some(oracle)) = (c.funding_1h.value(), c.oracle.value()) else {
-            continue;
-        };
-        if !(rate.is_finite() && oracle.is_finite() && *oracle > 0.0) {
+        if p.funding_owed.is_empty() && due_funding_hours(p, now_ms).is_empty() {
             continue;
         }
-        for hour in due_funding_hours(p, now_ms) {
-            if ledger
-                .accrue_funding(
-                    &account.account,
-                    &p.instrument,
-                    *rate,
-                    *oracle,
-                    hour,
-                    now_ms,
-                )
-                .await?
-                .is_some()
-            {
-                booked += 1;
-            }
-        }
+        booked += ledger
+            .settle_funding(&account.account, &p.instrument, Some(rate), now_ms)
+            .await?
+            .booked
+            .len();
     }
     Ok(booked)
 }
@@ -890,6 +1023,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
                 opportunity_key: Some(OPP.into()),
                 client_order_id: None,
                 exit_at_ms: None,
+                tp_sl_on_book: None,
             }
         }
 
@@ -1177,6 +1311,67 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         );
     }
 
+    /// Review #10: a close two hours after the entry on a stale ctx row (a
+    /// degraded exit) records both hours owed at the size it held — not
+    /// dropped with the position — and a fresh rate later books them.
+    #[tokio::test]
+    async fn a_degraded_close_keeps_the_funding_it_owes() {
+        let rig = Rig::new(25).await;
+        rig.run(rig.buy(20.0), "f:1").await.unwrap();
+        let later = NOW + 2 * 3_600_000;
+        rig.clock.set(later);
+        let mut book = tsla_book();
+        book.venue_ts_ms = later;
+        let books = ScriptedBooks::new(
+            rig.clock.clone(),
+            InstrumentId::parse(TSLA).unwrap(),
+            vec![(0, book)],
+        );
+        let fresh = ExecIo {
+            clock: rig.clock.as_ref(),
+            books: &books,
+            rand01: 0.5,
+        };
+        let o = run_exec(&rig.shared, &rig.ctx(Some("f:2")), &fresh, rig.close())
+            .await
+            .unwrap();
+        let r = row(&o);
+        assert!(r.gate.allow && r.gate.degraded, "ctx 2 h old: {:?}", r.gate);
+        assert_eq!(r.position_qty_after, 0.0);
+        assert_eq!(rig.rows()["funding"], 0, "no rate: nothing booked");
+        let snap = rig.ledger.snapshot("xmarket", later + 1_000).await.unwrap();
+        let owed = &snap.account.positions[TSLA].funding_owed;
+        assert_eq!(owed.len(), 2, "{owed:?}");
+        assert!(owed.iter().all(|h| h.qty == 0.057), "{owed:?}");
+        // A fresh rate: both hours booked at the size held then.
+        for r in market_rows(347.2, later + 2_000) {
+            rig.store.put(&r).await.unwrap();
+        }
+        let store = rig.store.as_ref() as &dyn ObservationStore;
+        let rows = MarketRows::read(Some(store), &snap.account.funding_ids(), None, None).await;
+        let booked = accrue_due_funding(
+            rig.ledger.as_ref(),
+            &snap.account,
+            &rows,
+            later + 2_500,
+            20_000,
+        )
+        .await
+        .unwrap();
+        assert_eq!(booked, 2);
+        let a = rig
+            .ledger
+            .snapshot("xmarket", later + 3_000)
+            .await
+            .unwrap()
+            .account;
+        let p = &a.positions[TSLA];
+        assert!(p.is_settled());
+        let want = 2.0 * 0.057 * 347.2 * 0.0001;
+        assert!((p.funding_paid - want).abs() < 1e-12, "{}", p.funding_paid);
+        assert_eq!(rig.rows()["funding"], 2);
+    }
+
     fn io(rig: &Rig) -> ExecIo<'_> {
         ExecIo {
             clock: rig.clock.as_ref(),
@@ -1290,18 +1485,24 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         ) -> Result<Vec<crate::ports::paper::StoredDecision>> {
             self.inner.decisions(a, limit).await
         }
-        async fn accrue_funding(
+        async fn settle_funding(
             &self,
             a: &str,
             i: &str,
-            rate: f64,
-            oracle: f64,
-            hour: i64,
+            rate: Option<FundingRate>,
             now: i64,
-        ) -> Result<Option<f64>> {
-            self.inner
-                .accrue_funding(a, i, rate, oracle, hour, now)
-                .await
+        ) -> Result<crate::domain::xm::ledger::FundingSettlement> {
+            self.inner.settle_funding(a, i, rate, now).await
+        }
+        async fn trigger_exit(
+            &self,
+            a: &str,
+            i: &str,
+            opened_ms: i64,
+            reason: ExitReason,
+            now: i64,
+        ) -> Result<Option<ExitTrigger>> {
+            self.inner.trigger_exit(a, i, opened_ms, reason, now).await
         }
     }
 

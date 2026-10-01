@@ -18,7 +18,7 @@
 //! | Capped ledger ([`select_capped`]) | the `capped_top_n` largest \|s\| with \|s\| ≥ `min_abs_signal_bps`, ties by full id; `capped_notional_usd` each through the `[risk]` gate |
 //! | Ids | anchor date = the last trading day (local `YYYY-MM-DD`); capped `fade:<account>:<full id>:<anchor date>`, shadow `fade-shadow:<shadow account>:<full id>:<anchor date>` ([`capped_order_id`], [`shadow_order_id`]); attempt n ≥ 2 of either `<id>:<n>` ([`fade_attempt_id`], the exits' numbering) |
 //! | Attempts | the first keeps the id; a stored rejection the next attempt may not meet (`FillReason::is_transient`: missing data, book age, liquidity, a price bound, a venue state) is placed again as the next attempt within `entry_lateness_max_secs`; a fill or a partial fill is never placed again; a final rejection (size, lot and tick rules, delisting, a bad order) is the outcome; a gate denial stores nothing and is judged again under the same id |
-//! | P&L ([`WeekendFade::refresh`]) | per name and ledger, once flat after the exit: (realized − fees − funding) now minus the same before the entry, USD, and bps of the filled entry notional |
+//! | P&L ([`WeekendFade::refresh`]) | per name and ledger, once flat after the exit with its funding booked (an hour owed at a stale rate keeps the name, and the window, `closing` until a rate books it — `Position::is_settled`): (realized − fees − funding) now minus the same before the entry, USD, and bps of the filled entry notional |
 //! | Replay ([`replay`]) | per eligible name with an exit price: gross = dir × ln(P_exit / P_entry) bps, net = gross − the round-trip cost; the mean over names in id order, positives, the capped set |
 //!
 //! | Row | Holds |
@@ -851,7 +851,10 @@ impl WeekendFade {
                 let position = ledger.positions.get(&n.instrument);
                 let qty = position.map_or(0.0, |p| p.qty);
                 let flat = position.is_none_or(Position::is_flat);
-                let pnl = (after_exit && flat).then(|| {
+                // Review #10: funding owed at a stale rate is not booked yet —
+                // the P&L waits for it (the window stays `closing`).
+                let settled = position.is_none_or(Position::is_settled);
+                let pnl = (after_exit && settled).then(|| {
                     let usd = position_net_usd(position) - base;
                     let bps = order
                         .notional_usd
@@ -859,7 +862,7 @@ impl WeekendFade {
                         .map(|notional| usd / notional * 10_000.0);
                     (usd, bps)
                 });
-                open |= !flat;
+                open |= !settled;
                 let (q, usd, bps) = if is_capped {
                     (
                         &mut n.capped_qty,
@@ -1889,6 +1892,50 @@ mod tests {
         // The row round-trips (the tool reloads its snapshot).
         let back: WeekendFade = o.typed().unwrap();
         assert_eq!(back, row);
+    }
+
+    /// Review #10: a name flat after the exit but owing funding (hours
+    /// settled at a stale rate) keeps the window `closing` without a P&L
+    /// until a rate books them; the P&L then counts that funding.
+    #[test]
+    fn funding_owed_keeps_the_window_closing() {
+        use crate::domain::xm::ledger::{FundingRate, OwedHour, HOUR_MS};
+        let w = window();
+        let mut row = WeekendFade::new(FadePhase::Entered, w, "c", "s", 1, 0, 600, w.entry_ms);
+        row.entered_at_ms = Some(w.entry_ms);
+        let mut tsla = FadeName::at_entry(TSLA, false, point(100.0), point(101.0));
+        tsla.shadow = Some(order(TSLA, "filled", 1.0, 101.0));
+        row.names = vec![tsla];
+        let mut shadow = PaperAccount::new("s", 10_000.0).unwrap();
+        let capped = PaperAccount::new("c", 100.0).unwrap();
+        fill(&mut shadow, TSLA, Side::Sell, 101.0, 0.0);
+        fill(&mut shadow, TSLA, Side::Buy, 100.0, 0.0);
+        let hour = w.exit_ms - w.exit_ms.rem_euclid(HOUR_MS);
+        shadow
+            .positions
+            .get_mut(TSLA)
+            .unwrap()
+            .funding_owed
+            .push(OwedHour {
+                hour_ms: hour,
+                qty: -1.0,
+            });
+        row.refresh(&shadow, &capped, w.exit_ms + 1);
+        assert_eq!(row.phase, FadePhase::Closing);
+        assert_eq!(
+            (row.names[0].shadow_qty, row.names[0].shadow_pnl_usd),
+            (Some(0.0), None),
+            "flat, P&L not final"
+        );
+        // A rate: the short receives 1 × 100 × 0.0001.
+        let s = shadow
+            .settle_funding(TSLA, FundingRate::new(0.0001, 100.0), w.exit_ms + 2)
+            .unwrap();
+        assert_eq!(s.booked.len(), 1);
+        row.refresh(&shadow, &capped, w.exit_ms + 3);
+        assert_eq!(row.phase, FadePhase::Closed);
+        let pnl = row.names[0].shadow_pnl_usd.unwrap();
+        assert!((pnl - 1.01).abs() < 1e-12, "{pnl}");
     }
 
     /// Line 1 never cuts an id: with long ids the capped names move to `data`.

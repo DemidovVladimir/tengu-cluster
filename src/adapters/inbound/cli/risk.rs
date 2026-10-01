@@ -5,7 +5,7 @@
 //!
 //! | Command | Rule |
 //! |---|---|
-//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines), entries in the last 60 s (exits never count toward the order rate), the latest verdicts (rule, full ids, exec tool, call id), and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
+//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines, a fired stop-loss / take-profit), funding owed (hours settled without a fresh rate, booked at the next one), entries in the last 60 s (exits never count toward the order rate), the latest verdicts (rule, full ids, exec tool, call id), and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
 //! | `halt` | operator only: an `operator` halt (a sticky halt stays as is) — entries deny `halted`, reduce-only exits still pass (`allow_reduce_degraded`). The `[risk]` account is opened first if new |
 //! | `resume` | operator only; refused while the kill-switch file exists (checked again inside the ledger transaction); the operator types the account name to confirm; clears any halt. A loss still over its limit halts again at the next valuation |
 //! | operator only | refused when stdin or stdout is not a terminal (a piped `y` is never accepted) or `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME` is set (an agent process) |
@@ -232,12 +232,26 @@ async fn status(
                 .exit_at_ms
                 .get(&p.instrument)
                 .map_or(String::new(), |t| format!(", exit by {}", iso(*t)));
+            let fired = s
+                .exit_triggers
+                .get(&p.instrument)
+                .map_or(String::new(), |t| {
+                    format!(", {} fired {}", t.reason.as_str(), iso(t.at_ms))
+                });
             console.say(&format!(
-                "  position {} qty {} avg {} opened {}{exit}",
+                "  position {} qty {} avg {} opened {}{exit}{fired}",
                 p.instrument,
                 p.qty,
                 p.avg_px.map_or("-".to_string(), |x| x.to_string()),
                 p.opened_ms.map_or("-".to_string(), iso),
+            ));
+        }
+        for p in a.positions.values().filter(|p| !p.funding_owed.is_empty()) {
+            console.say(&format!(
+                "  funding owed {}: {} h since {} (no fresh rate when settled; booked at the next one)",
+                p.instrument,
+                p.funding_owed.len(),
+                iso(p.funding_owed[0].hour_ms),
             ));
         }
         for d in ledger.decisions(&name, 5).await? {
@@ -582,5 +596,47 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             e.to_string().contains("unknown paper account `nobody`"),
             "{e}"
         );
+    }
+
+    /// `status` names a fired stop-loss / take-profit (review #6) and the
+    /// funding hours owed without a rate (#10), ids in full.
+    #[tokio::test]
+    async fn status_shows_fired_exits_and_funding_owed() {
+        use crate::adapters::outbound::paper_store::tests::{buy, gate, ledger, limits, req, TSLA};
+        use crate::domain::xm::exits::ExitReason;
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        let l = ledger(&t.state_dir).await;
+        let o = buy("o-1", "xmarket", TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        l.trigger_exit("xmarket", TSLA, NOW, ExitReason::StopLoss, NOW + 1_000)
+            .await
+            .unwrap();
+        // Opened on the hour: that hour and the next, owed.
+        let s = l
+            .settle_funding("xmarket", TSLA, None, NOW + 3_600_000)
+            .await
+            .unwrap();
+        assert_eq!(s.owed.len(), 2);
+        let mut c = console(false, &[]);
+        run(
+            &t,
+            RiskAction::Status { account: None },
+            &mut c,
+            None,
+            NOW + 3_700_000,
+        )
+        .await
+        .unwrap();
+        let text = c.out.join("\n");
+        for want in [
+            format!("position {TSLA} qty 0.072"),
+            "stop_loss fired 2026-10-03T12:00:01Z".to_string(),
+            format!("funding owed {TSLA}: 2 h since 2026-10-03T12:00:00Z"),
+        ] {
+            assert!(text.contains(&want), "{want}: {text}");
+        }
     }
 }

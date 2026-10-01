@@ -4,22 +4,24 @@
 //! [`exit_due`] names through the `[risk]` gate and returns [`XmExits`]
 //! (`xm_exits/1:<account>`). Knobs: `[risk.exits]` (`config/risk.rs`).
 //!
-//! | Reason (first due wins) | Due when | Needs a fresh mark |
+//! | Reason (first due wins) | Due when | Price |
 //! |---|---|---|
-//! | `deadline` | the position's `exit_at_ms` (set by the order that opened it: `paper_order exit_at_ms`, a strategy) ≤ now | no |
-//! | `max_hold` | `opened_ms` + `max_hold_secs` ≤ now | no |
-//! | `stop_loss` | P&L at mark ≤ −`stop_loss_bps` | yes |
-//! | `take_profit` | P&L at mark ≥ `take_profit_bps` | yes |
+//! | `deadline` | the position's `exit_at_ms` (set by the order that opened it: `paper_order exit_at_ms`, a strategy) ≤ now | none |
+//! | `max_hold` | `opened_ms` + `max_hold_secs` ≤ now | none |
+//! | a fired `stop_loss` / `take_profit` ([`ExitTrigger`]) | it fired for this opening (`opened_ms`) and the position is still open — kept in the ledger, so a later stale mark or a price back inside the band never cancels it | none |
+//! | `stop_loss` | P&L ≤ −`stop_loss_bps` | a fresh mark, else the live book's mid |
+//! | `take_profit` | P&L ≥ `take_profit_bps` | same |
 //!
 //! | Detail | Rule |
 //! |---|---|
-//! | P&L at mark | side-signed `(mark − avg_px) / avg_px × 10 000` bps; fees and funding not counted |
-//! | Mark | `ledger::fresh_mark` of the `mkt_ctx/1` mark: a missing, stale or invalid mark never triggers take-profit / stop-loss; deadline and max hold still fire (the close fills against a fresh book inside the gate) |
+//! | P&L | side-signed `(px − avg_px) / avg_px × 10 000` bps ([`tp_sl_due`]); fees and funding not counted |
+//! | Price (review #6) | the `mkt_ctx/1` mark when fresh (`ledger::fresh_mark`); a missing, stale or invalid one ⇒ the mid of the live book the close reads after its latency (`xm_exits` decides it there: not due ⇒ nothing placed; a failed, one-sided or stale read — older than `max_data_age_ms.book` — ⇒ not judged this run). Deadline and max hold need no price |
+//! | Fired | a TP / SL found due is recorded first (`PaperLedger::trigger_exit`, the first one of an opening wins), then closed: due until the position is flat (`ExitCheck::triggered_ms`) |
 //! | Boundaries | at the deadline / the threshold is due; P&L compared with a 1e-9 bps tolerance (f64 residue) |
-//! | Order | time reasons first: once due they stay due, so a retried exit keeps its reason and its id |
+//! | Order | time reasons first, then a fired TP / SL: once due they stay due, so a retried exit keeps its reason and its id (a time reason that comes due later takes over with its own ids) |
 //! | Idempotency key ([`exit_client_order_id`]) | `exit:<account>:<instrument>:<reason>:<opened_ms>`; attempt n ≥ 2 — the earlier id's order is stored but left the position open (rejected, partial) — appends `:<n>` |
 //! | Retry ([`exit_retry`], review #3) | the latest stored attempt decides: none, filled or partial ⇒ the next attempt now; rejected for a reason that may pass later (`FillReason::is_transient`) ⇒ the next one [`exit_retry_wait_ms`] after it (15 s, 30 s, 1 min … 15 min for 1, 2, 3 … rejections in a row) — derived from the stored attempts, so a restart keeps it; rejected for a final reason (`delisted`, `invalid_order`, a lot / tick rule) ⇒ never placed again (`stuck`: the stored rejection is the marker, the operator decides) |
-//! | Row `xm_exits/1:<account>` (ttl 0) | `ok` nothing failed · `partial` some closes failed or a mark was stale · `error` every due close failed |
+//! | Row `xm_exits/1:<account>` (ttl 0) | `ok` nothing failed · `partial` some closes failed or a mark was stale (`n_book_marks` of them judged on the live book) · `error` every due close failed |
 
 use serde::{Deserialize, Serialize};
 
@@ -117,6 +119,13 @@ pub enum ExitReason {
 }
 
 impl ExitReason {
+    pub const ALL: [ExitReason; 4] = [
+        ExitReason::Deadline,
+        ExitReason::MaxHold,
+        ExitReason::StopLoss,
+        ExitReason::TakeProfit,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             ExitReason::Deadline => "deadline",
@@ -125,6 +134,25 @@ impl ExitReason {
             ExitReason::TakeProfit => "take_profit",
         }
     }
+
+    /// The `as_str` name back; `None` for anything else.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.as_str() == s)
+    }
+
+    /// Stop-loss or take-profit: due on a price, kept once fired.
+    pub fn on_price(self) -> bool {
+        matches!(self, ExitReason::StopLoss | ExitReason::TakeProfit)
+    }
+}
+
+/// A stop-loss / take-profit that fired for an opening of a position (the
+/// ledger's `positions.exit_trigger`): due until that opening is closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExitTrigger {
+    pub reason: ExitReason,
+    /// When it fired.
+    pub at_ms: i64,
 }
 
 /// Side-signed P&L of `position` at `mark_px`, bps of its entry; `None`
@@ -137,12 +165,27 @@ pub fn pnl_bps(position: &Position, mark_px: f64) -> Option<f64> {
     Some(position.qty.signum() * (mark_px - avg) / avg * 10_000.0)
 }
 
+/// Stop-loss / take-profit of `position` at `px` — a fresh mark, or the
+/// live book's mid when the mark is stale or missing (module table).
+pub fn tp_sl_due(position: &Position, px: f64, rules: &ExitRules) -> Option<ExitReason> {
+    let pnl = pnl_bps(position, px)?;
+    if pnl <= -rules.stop_loss_bps + PNL_TOL_BPS {
+        Some(ExitReason::StopLoss)
+    } else if pnl >= rules.take_profit_bps - PNL_TOL_BPS {
+        Some(ExitReason::TakeProfit)
+    } else {
+        None
+    }
+}
+
 /// The module table for one position at `now_ms`. `mark` = the position's
-/// fresh mark (`ledger::fresh_mark`); `exit_at_ms` = its deadline, if any.
+/// fresh mark (`ledger::fresh_mark`); `exit_at_ms` = its deadline, if any;
+/// `fired` = the TP / SL recorded for this opening (`ExitTrigger`), if any.
 pub fn exit_due(
     position: &Position,
     mark: &Field<f64>,
     exit_at_ms: Option<i64>,
+    fired: Option<ExitReason>,
     now_ms: i64,
     rules: &ExitRules,
 ) -> Option<ExitReason> {
@@ -158,14 +201,10 @@ pub fn exit_due(
     {
         return Some(ExitReason::MaxHold);
     }
-    let pnl = mark.value().and_then(|px| pnl_bps(position, *px))?;
-    if pnl <= -rules.stop_loss_bps + PNL_TOL_BPS {
-        Some(ExitReason::StopLoss)
-    } else if pnl >= rules.take_profit_bps - PNL_TOL_BPS {
-        Some(ExitReason::TakeProfit)
-    } else {
-        None
+    if let Some(r) = fired.filter(|r| r.on_price()) {
+        return Some(r);
     }
+    tp_sl_due(position, *mark.value()?, rules)
 }
 
 /// Idempotency key of exit attempt `attempt` (1-based) for the position of
@@ -256,8 +295,16 @@ pub struct ExitCheck {
     pub exit_at_ms: Option<i64>,
     /// The fresh mark, or why there is none (never 0).
     pub mark_px: Field<f64>,
-    /// At the mark; `None` without one.
+    /// At the mark — else at `book_mid`; `None` without either.
     pub pnl_bps: Option<f64>,
+    /// No fresh mark: the mid of the live book read after the latency, that
+    /// take-profit / stop-loss were judged on (module table: Price).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_mid: Option<f64>,
+    /// When the TP / SL `reason` fired (recorded in the ledger: due until
+    /// the position is flat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triggered_ms: Option<i64>,
     /// `None` = not due.
     pub reason: Option<ExitReason>,
     pub status: ExitStatus,
@@ -309,6 +356,12 @@ impl XmExits {
 
     pub fn n_stale_marks(&self) -> usize {
         self.count(|c| c.mark_px.value().is_none())
+    }
+
+    /// Stale or missing marks whose take-profit / stop-loss were judged on
+    /// the live book instead.
+    pub fn n_book_marks(&self) -> usize {
+        self.count(|c| c.book_mid.is_some())
     }
 
     /// Due positions whose latest attempt was rejected for a final reason.
@@ -366,6 +419,7 @@ impl Observed for XmExits {
         set_int(&mut f, "n_closed", Some(self.n_closed() as i64));
         set_int(&mut f, "n_failed", Some(self.n_failed() as i64));
         set_int(&mut f, "n_stale_marks", Some(self.n_stale_marks() as i64));
+        set_int(&mut f, "n_book_marks", Some(self.n_book_marks() as i64));
         set_int(&mut f, "n_stuck", Some(self.n_stuck() as i64));
         f
     }
@@ -569,16 +623,116 @@ mod tests {
             ),
         ];
         for (name, qty, mark, deadline, now, want) in cases {
-            let got = exit_due(&position(*qty), mark, *deadline, *now, &rules());
+            let got = exit_due(&position(*qty), mark, *deadline, None, *now, &rules());
             assert_eq!(got, *want, "{name}");
         }
+    }
+
+    /// Review #6: a fired stop-loss / take-profit stays due whatever the
+    /// mark says now (stale, missing, back inside the band); a time reason
+    /// that comes due later takes over; a fired time reason means nothing.
+    #[test]
+    fn a_fired_tp_sl_stays_due_until_the_position_closes() {
+        use ExitReason::*;
+        let hold = T0 + 24 * HOUR_MS;
+        for (name, mark, deadline, fired, now, want) in [
+            (
+                "SL fired, mark stale",
+                stale(TSLA),
+                None,
+                Some(StopLoss),
+                T0 + 1,
+                Some(StopLoss),
+            ),
+            (
+                "SL fired, no mark",
+                Field::Absent,
+                None,
+                Some(StopLoss),
+                T0 + 1,
+                Some(StopLoss),
+            ),
+            (
+                "SL fired, price back",
+                fresh(100.5),
+                None,
+                Some(StopLoss),
+                T0 + 1,
+                Some(StopLoss),
+            ),
+            (
+                "TP fired, mark at SL",
+                fresh(98.0),
+                None,
+                Some(TakeProfit),
+                T0 + 1,
+                Some(TakeProfit),
+            ),
+            (
+                "deadline after SL fired",
+                stale(TSLA),
+                Some(T0 + 2),
+                Some(StopLoss),
+                T0 + 2,
+                Some(Deadline),
+            ),
+            (
+                "max hold after TP fired",
+                fresh(100.0),
+                None,
+                Some(TakeProfit),
+                hold,
+                Some(MaxHold),
+            ),
+            (
+                "a time reason is no trigger",
+                fresh(100.0),
+                None,
+                Some(Deadline),
+                T0 + 1,
+                None,
+            ),
+        ] {
+            let got = exit_due(&position(1.0), &mark, deadline, fired, now, &rules());
+            assert_eq!(got, want, "{name}");
+        }
+        let flat = Position::flat(TSLA, TSLA, "hyperliquid");
+        assert_eq!(
+            exit_due(&flat, &stale(TSLA), None, Some(StopLoss), T0 + 1, &rules()),
+            None,
+            "closed: nothing stays due"
+        );
+        for r in ExitReason::ALL {
+            assert_eq!(ExitReason::parse(r.as_str()), Some(r));
+        }
+        assert_eq!(ExitReason::parse("stop"), None);
+        assert!(StopLoss.on_price() && TakeProfit.on_price());
+        assert!(!Deadline.on_price() && !MaxHold.on_price());
+    }
+
+    /// Review #6: TP / SL on any price — the live book's mid when the mark
+    /// is stale — with the mark's boundaries.
+    #[test]
+    fn tp_sl_judge_any_price() {
+        let long = position(1.0);
+        assert_eq!(tp_sl_due(&long, 99.0, &rules()), Some(ExitReason::StopLoss));
+        assert_eq!(
+            tp_sl_due(&long, 102.0, &rules()),
+            Some(ExitReason::TakeProfit)
+        );
+        assert_eq!(tp_sl_due(&long, 101.0, &rules()), None);
+        assert_eq!(
+            tp_sl_due(&position(-1.0), 101.0, &rules()),
+            Some(ExitReason::StopLoss)
+        );
+        assert_eq!(tp_sl_due(&long, f64::NAN, &rules()), None);
     }
 
     #[test]
     fn a_flat_or_unpriced_position_is_never_due_on_price() {
         let flat = Position::flat(TSLA, TSLA, "hyperliquid");
         assert_eq!(
-            exit_due(&flat, &fresh(1.0), Some(T0), T0 + 1, &rules()),
+            exit_due(&flat, &fresh(1.0), Some(T0), None, T0 + 1, &rules()),
             None
         );
         let no_entry = Position {
@@ -586,7 +740,7 @@ mod tests {
             ..position(1.0)
         };
         assert_eq!(
-            exit_due(&no_entry, &fresh(1.0), None, T0 + 1, &rules()),
+            exit_due(&no_entry, &fresh(1.0), None, None, T0 + 1, &rules()),
             None
         );
         assert_eq!(pnl_bps(&position(1.0), 0.0), None, "a 0 mark is invalid");
@@ -615,6 +769,8 @@ mod tests {
             exit_at_ms: None,
             mark_px: fresh(347.2),
             pnl_bps: Some(-0.86),
+            book_mid: None,
+            triggered_ms: None,
             reason,
             status,
             client_order_id: reason.map(|r| exit_client_order_id("xmarket", instrument, r, T0, 1)),
@@ -739,12 +895,14 @@ mod tests {
             ("n_closed", 1),
             ("n_failed", 0),
             ("n_stale_marks", 0),
+            ("n_book_marks", 0),
         ] {
             assert_eq!(o.features[k], v, "{k}");
         }
         // A rejected close and a stale mark: partial, both in errors.
         row.positions[1] = ExitCheck {
             mark_px: stale(NVDA),
+            book_mid: Some(347.1),
             ..check(NVDA, Some(ExitReason::MaxHold), ExitStatus::Rejected)
         };
         row.positions[1].error = Some("stale_book: no book after the latency".into());
@@ -755,6 +913,14 @@ mod tests {
             "rejected max_hold exit:xmarket:{NVDA}:max_hold:{T0}: stale_book"
         )));
         assert_eq!(o.errors[1].field, format!("mark:{NVDA}"));
+        assert_eq!(
+            (
+                o.features["n_stale_marks"].clone(),
+                o.features["n_book_marks"].clone()
+            ),
+            (1.into(), 1.into()),
+            "the stale mark was judged on the book"
+        );
         // Every due close failed: error.
         row.positions[0].status = ExitStatus::Denied;
         assert_eq!(row.status(), ObsStatus::Error);

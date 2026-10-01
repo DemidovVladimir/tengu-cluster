@@ -13,7 +13,8 @@
 //! | Exit bound | an exit's IOC bound ≤ [`MAX_EXIT_SLIPPAGE_BPS`] (500 bps from mid) |
 //! | Underlying | the instrument's ledger position's (a close always matches it); none yet ⇒ the instrument id itself until the catalog maps underlyings (M1) — asset exposure then nets per instrument |
 //! | Venue facts | `mkt_instrument/1:<id>` (any age: static facts): a Hyperliquid perp, `sz_decimals`, the fee = the `[paper]` fee basis × HIP-3 deployer scale × growth mode on a USDC-quoted market (`hl_ctx`'s `taker_fee_bps` rule, `domain::hl::paper_fees`); `at_oi_cap` from the `mkt_ctx/1` row when there is one, else the instrument row's (unknown ⇒ opening refused) |
-//! | Market state of the fill | the `mkt_ctx/1` row: not listed ⇒ `delisted`; else `open` (no book ⇒ the book decides); no row ⇒ the instrument row's listing |
+//! | Kept facts ([`HeldFacts`], review #6) | every order priced from the row keeps `sz_decimals`, the fee schedule and the row's time with its position (ledger `positions`); a reduce-only order uses them when the row is missing (store unreadable or purged), older than them, or lacks a fact ([`order_venue_facts`]) — an entry always needs the row |
+//! | Market state of the fill | the `mkt_ctx/1` row: not listed ⇒ `delisted`; else `open` (no book ⇒ the book decides); no row ⇒ the instrument row's listing — with kept facts, `open` |
 //! | `paper_fill/1` status | `ok` filled · `partial` partial fill · `error` denied by the gate or rejected by the venue (its reason in `errors`) |
 //! | `paper_close/1` (`paper_close` with `all = true`) | one leg per open position, each also its own `paper_fill/1`; `ok` every leg filled (or nothing open) · `partial` some · `error` none |
 //!
@@ -150,6 +151,73 @@ pub(crate) fn venue_facts(
         fees,
         status,
     })
+}
+
+/// The venue facts a close needs, kept with the position (module table:
+/// Kept facts) from the `mkt_instrument/1` row an order on it was priced
+/// with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct HeldFacts {
+    pub sz_decimals: u32,
+    pub fees: FeeSchedule,
+    /// The row's `observed_at_ms`.
+    pub at_ms: i64,
+}
+
+impl HeldFacts {
+    fn of(f: &VenueFacts, at_ms: i64) -> Self {
+        Self {
+            sz_decimals: f.rules.sz_decimals,
+            fees: f.fees,
+            at_ms,
+        }
+    }
+
+    /// The fill engine's view: these facts, the OI-cap state and the
+    /// listing of the `mkt_ctx/1` row when there is one (else `open`: the
+    /// book decides).
+    fn venue_facts(&self, ctx: Option<&MarketCtx>) -> VenueFacts {
+        let listed = ctx.map_or(true, |c| c.listing == Listing::Listed);
+        VenueFacts {
+            rules: VenueRules::hyperliquid(
+                HlKind::Perp,
+                self.sz_decimals,
+                ctx.and_then(|c| c.at_oi_cap),
+            ),
+            fees: self.fees,
+            status: if listed {
+                MarketStatus::Open
+            } else {
+                MarketStatus::Delisted
+            },
+        }
+    }
+}
+
+/// The venue facts an order fills with (module table): the
+/// `mkt_instrument/1` row's (`row` = the row decoded + its
+/// `observed_at_ms`); a reduce-only order falls back to the facts kept with
+/// its position when the row is missing, older than them or lacks a fact.
+/// `Ok` also says what to keep with the position: `Some` = the row's facts.
+pub(crate) fn order_venue_facts(
+    row: Option<(&MarketInstrument, i64)>,
+    ctx: Option<&MarketCtx>,
+    basis: FeeBasis,
+    held: Option<&HeldFacts>,
+    reduce_only: bool,
+) -> Result<(VenueFacts, Option<HeldFacts>), String> {
+    let held = held.filter(|_| reduce_only);
+    if let Some((inst, at_ms)) = row.filter(|(_, at)| held.map_or(true, |h| *at >= h.at_ms)) {
+        match venue_facts(Some(inst), ctx, basis) {
+            Ok(f) => return Ok((f, Some(HeldFacts::of(&f, at_ms)))),
+            Err(why) if held.is_none() => return Err(why),
+            Err(_) => {}
+        }
+    }
+    match held {
+        Some(h) => Ok((h.venue_facts(ctx), None)),
+        None => venue_facts(None, ctx, basis).map(|f| (f, None)),
+    }
 }
 
 /// The gate's answer as a `paper_fill/1` row carries it (the verdict row in
@@ -587,6 +655,59 @@ mod tests {
         let mut spot = tsla();
         spot.kind = InstrumentKind::Spot;
         assert!(err(Some(&spot)).contains("Hyperliquid perps only"));
+    }
+
+    /// Review #6: a close falls back to the facts kept with its position
+    /// when the `mkt_instrument/1` row is missing, older than them or lacks
+    /// a fact; an entry never does; a newer whole row wins and is kept.
+    #[test]
+    fn a_close_uses_the_kept_facts_without_a_row() {
+        let basis = FeeBasis::default();
+        let row = tsla();
+        let (f, keep) = order_venue_facts(Some((&row, 100)), None, basis, None, false).unwrap();
+        let held = keep.expect("an entry keeps the row's facts");
+        assert_eq!((held.sz_decimals, held.at_ms), (3, 100));
+        assert!((held.fees.taker_bps - 0.9).abs() < 1e-12, "{held:?}");
+        assert_eq!(f.rules.sz_decimals, 3);
+        // No row: an entry is refused, a close fills on the kept facts.
+        let e = order_venue_facts(None, None, basis, Some(&held), false).unwrap_err();
+        assert!(e.contains("no mkt_instrument/1 row"), "{e}");
+        let (f, keep) = order_venue_facts(None, None, basis, Some(&held), true).unwrap();
+        assert_eq!(keep, None, "nothing new to keep");
+        assert_eq!(
+            (f.rules.sz_decimals, f.fees, f.status, f.rules.at_oi_cap),
+            (3, held.fees, MarketStatus::Open, None)
+        );
+        // The ctx row's listing and cap state still count.
+        let mut ctx = MarketCtx::new(InstrumentId::parse(TSLA).unwrap(), 1);
+        ctx.listing = Listing::Delisted;
+        ctx.at_oi_cap = Some(true);
+        let (f, _) = order_venue_facts(None, Some(&ctx), basis, Some(&held), true).unwrap();
+        assert_eq!(
+            (f.status, f.rules.at_oi_cap),
+            (MarketStatus::Delisted, Some(true))
+        );
+        // A row older than the kept facts, or one without the fee: kept.
+        let newer = HeldFacts {
+            sz_decimals: 2,
+            at_ms: 200,
+            ..held
+        };
+        let (f, keep) =
+            order_venue_facts(Some((&row, 100)), None, basis, Some(&newer), true).unwrap();
+        assert_eq!((f.rules.sz_decimals, keep), (2, None));
+        let mut no_fee = tsla();
+        no_fee.growth_mode = None;
+        let (f, keep) =
+            order_venue_facts(Some((&no_fee, 300)), None, basis, Some(&held), true).unwrap();
+        assert_eq!((f.rules.sz_decimals, keep), (3, None));
+        let e =
+            order_venue_facts(Some((&no_fee, 300)), None, basis, Some(&held), false).unwrap_err();
+        assert!(e.contains("taker fee unknown"), "{e}");
+        // A newer whole row wins and is kept.
+        let (f, keep) =
+            order_venue_facts(Some((&row, 300)), None, basis, Some(&newer), true).unwrap();
+        assert_eq!((f.rules.sz_decimals, keep.map(|k| k.at_ms)), (3, Some(300)));
     }
 
     fn verdict(allow: bool, rule: &str) -> RiskVerdict {

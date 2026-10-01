@@ -8,9 +8,10 @@
 //!
 //! | Call | Transaction |
 //! |---|---|
-//! | [`PaperLedger::place`] | one `BEGIN IMMEDIATE`: an order already stored under the `client_order_id` is returned as is (`replayed`, `decide` not called) — unless its fingerprint differs from the request's (`client_order_id_conflict`, nothing written); else the account and its risk state are re-read and `decide(&snapshot)` — synchronous: the gate, then the fill simulation; its one read is the kill-switch file, re-probed for entries (`application/paper.rs`) — returns a [`Decision`]. The verdict row and a changed risk state (the gate's trips, the day roll) are written always; order, fill, position and cash rows only when the order was `Sent` |
+//! | [`PaperLedger::place`] | one `BEGIN IMMEDIATE`: an order already stored under the `client_order_id` is returned as is (`replayed`, `decide` not called) — unless its fingerprint differs from the request's (`client_order_id_conflict`, nothing written); else the account and its risk state are re-read, the funding the order's instrument owes is settled at the size held (`PlaceRequest::funding`; review #10 — before the gate and the fill), and `decide(&snapshot)` — synchronous: the gate, then the fill simulation; its one read is the kill-switch file, re-probed for entries (`application/paper.rs`) — returns a [`Decision`]. The verdict row, the funding settled and a changed risk state (the gate's trips, the day roll) are written always; order, fill, position, cash and kept venue facts (`PlaceRequest::facts`) only when the order was `Sent` |
 //! | [`PaperLedger::update_risk_state`] | one `BEGIN IMMEDIATE`: `update(&snapshot)` returns the next risk state (the `risk_status` roll + trips, `tengu risk halt / resume`); `Err` writes nothing |
-//! | [`PaperLedger::accrue_funding`] | one `BEGIN IMMEDIATE`: the HL funding of one hour boundary, once per (account, instrument, hour) |
+//! | [`PaperLedger::settle_funding`] | one `BEGIN IMMEDIATE`: the HL funding one instrument owes (`domain::xm::ledger::Position::settle_funding`: owed hours booked at the rate, due hours booked or owed), each hour once per (account, instrument) |
+//! | [`PaperLedger::trigger_exit`] | one `BEGIN IMMEDIATE`: records a fired stop-loss / take-profit on the open position (`positions.exit_trigger`, review #6); the first one of an opening is kept |
 //! | [`PaperLedger::open_account`] | creates the account and its `deposit` cash row once |
 //! | reads | [`PaperLedger::snapshot`], [`PaperLedger::order`], [`PaperLedger::stored`] (a replay without the write lock), [`PaperLedger::decisions`], [`PaperLedger::accounts`] |
 //!
@@ -30,7 +31,9 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::domain::xm::ledger::{Fill, PaperAccount};
+use crate::domain::xm::exec::HeldFacts;
+use crate::domain::xm::exits::{ExitReason, ExitTrigger};
+use crate::domain::xm::ledger::{Fill, FundingRate, FundingSettlement, PaperAccount};
 use crate::domain::xm::paper::FillResult;
 use crate::domain::xm::risk::{OrderIntent, RiskVerdict};
 use crate::domain::xm::risk_state::RiskState;
@@ -42,6 +45,12 @@ pub(crate) struct LedgerSnapshot {
     pub account: PaperAccount,
     /// Exit deadline per open position (full instrument id → ms).
     pub exit_at_ms: BTreeMap<String, i64>,
+    /// The fired stop-loss / take-profit of each open position that has one
+    /// for its current opening (`trigger_exit`).
+    pub exit_triggers: BTreeMap<String, ExitTrigger>,
+    /// Venue facts kept with each position (full instrument id; a closed
+    /// one keeps its last) — a close falls back to them (review #6).
+    pub facts: BTreeMap<String, HeldFacts>,
     /// Entries — orders that are not reduce-only — stored in the 60 s before
     /// `now_ms` (the gate's `orders_last_min`; a denied order stores none,
     /// an exit never counts).
@@ -111,6 +120,15 @@ pub(crate) struct PlaceRequest {
     /// fingerprint differs is refused (`client_order_id_conflict`), never
     /// replayed. `None` = not checked.
     pub fingerprint: Option<String>,
+    /// Full id of the order's instrument (the decision must judge it):
+    /// `place` settles the funding its position owes first.
+    pub instrument: String,
+    /// Its rate from a fresh `mkt_ctx/1` row; `None` ⇒ the hours it owes
+    /// are recorded owed, at the size held (review #10).
+    pub funding: Option<FundingRate>,
+    /// The venue facts the order was priced with from a `mkt_instrument/1`
+    /// row: kept with the position when the order is sent (review #6).
+    pub facts: Option<HeldFacts>,
     pub now_ms: i64,
 }
 
@@ -232,17 +250,28 @@ pub(crate) trait PaperLedger: Send + Sync {
     ) -> anyhow::Result<Option<Placement>>;
     /// Verdict rows of `account`, newest first, at most `limit`.
     async fn decisions(&self, account: &str, limit: usize) -> anyhow::Result<Vec<StoredDecision>>;
-    /// Book the HL funding of hour boundary `hour_ms` for `instrument`
-    /// (`PaperAccount::accrue_funding` rules), once per (account,
-    /// instrument, hour): the payment, or `Ok(None)` when nothing is due.
-    /// Book every due hour, in order, before a later fill.
-    async fn accrue_funding(
+    /// Settle the HL funding `instrument` owes at `now_ms`
+    /// (`PaperAccount::settle_funding`): owed hours booked at `rate`, due
+    /// hours booked at it — or owed without one —, each hour once per
+    /// (account, instrument). What it did; empty = nothing written.
+    async fn settle_funding(
         &self,
         account: &str,
         instrument: &str,
-        rate_1h: f64,
-        oracle_px: f64,
-        hour_ms: i64,
+        rate: Option<FundingRate>,
         now_ms: i64,
-    ) -> anyhow::Result<Option<f64>>;
+    ) -> anyhow::Result<FundingSettlement>;
+    /// Record that `reason` (a stop-loss / take-profit) fired for the open
+    /// position of `instrument` opened at `opened_ms`: due until that
+    /// opening is closed (`LedgerSnapshot::exit_triggers`). The first
+    /// trigger of an opening is kept: the stored one is returned — `None`
+    /// when that opening is not open any more.
+    async fn trigger_exit(
+        &self,
+        account: &str,
+        instrument: &str,
+        opened_ms: i64,
+        reason: ExitReason,
+        now_ms: i64,
+    ) -> anyhow::Result<Option<ExitTrigger>>;
 }

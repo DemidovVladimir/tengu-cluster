@@ -8,11 +8,14 @@
 //! | Step | Rule |
 //! |---|---|
 //! | Refuse | no `[risk]` / ledger (`risk_config_missing` · `state_dir_missing` · `ledger_unavailable`); a caller that is not a private agent (`exec_agent_not_private`); an unknown argument |
-//! | Positions | the `[risk]` account's ledger snapshot (opened on first use) and each position's exit deadline |
-//! | Marks | the positions' `mkt_ctx/1` rows in the store, never fetched; missing, older than `[risk] max_data_age_ms.ctx` or stamped > 1 s ahead ⇒ no stop-loss / take-profit for that position (`n_stale_marks`); deadline and max hold still apply |
-//! | Close | per due position, in id order: `run_exec` with `ExecSize::Close` (sized from the position inside the ledger transaction: a closed position is never closed again), IOC bound `max_slippage_bps` (the arg, ≤ 500 bps — `exec::MAX_EXIT_SLIPPAGE_BPS`; default `[risk] max_slippage_bps` cut to 500), id `exit:<account>:<instrument>:<reason>:<opened_ms>` — when that id's order is already stored and the position is still open (rejected, partial), the first unstored attempt `…:<n>`; a denied attempt stores nothing and is judged again next run; each close needs the instrument's `mkt_instrument/1` row (keep `hl_ctx` running, else `missing:mkt_instrument`); exits never count toward, nor are denied by, `[risk] max_orders_per_min` |
+//! | Positions | the `[risk]` account's ledger snapshot (opened on first use): each position's exit deadline and fired TP / SL (`exit_triggers`) |
+//! | Funding | the account's owed and due funding booked first at fresh `mkt_ctx/1` rates (`exec_common::accrue_due_funding`; closed positions owing hours too — review #10) |
+//! | Marks | the positions' `mkt_ctx/1` rows in the store, never fetched; missing, older than `[risk] max_data_age_ms.ctx` or stamped > 1 s ahead ⇒ stale (`n_stale_marks`) |
+//! | Due | `domain::xm::exits::exit_due`: deadline, max hold, a fired TP / SL (kept in the ledger until the position closes — a later stale mark never cancels it), TP / SL at the fresh mark — a TP / SL found due is recorded first (`PaperLedger::trigger_exit`) |
+//! | Stale mark (review #6) | not due by time or a fired trigger: a close judged on the live book (`ExecOrder::tp_sl_on_book`) — after the latency the post-latency book's mid decides TP / SL (`book_mid`, `n_book_marks`); nothing fires ⇒ nothing placed, `held` |
+//! | Close | per due position, in id order: `run_exec` with `ExecSize::Close` (sized from the position inside the ledger transaction: a closed position is never closed again), IOC bound `max_slippage_bps` (the arg, ≤ 500 bps — `exec::MAX_EXIT_SLIPPAGE_BPS`; default `[risk] max_slippage_bps` cut to 500), id `exit:<account>:<instrument>:<reason>:<opened_ms>` — when that id's order is already stored and the position is still open (rejected, partial), the first unstored attempt `…:<n>`; a denied attempt stores nothing and is judged again next run; the venue facts from the instrument's `mkt_instrument/1` row, else the ones kept with the position at its entry (`exec::order_venue_facts`: a purged or unreadable store still closes — review #6); exits never count toward, nor are denied by, `[risk] max_orders_per_min` |
 //! | Retry (review #3) | the latest stored attempt decides (`domain::xm::exits::exit_retry`, read from the ledger — a restart keeps it): rejected for a reason that may pass ⇒ the next attempt 15 s, 30 s, 1 min … 15 min after it (`backoff`, `next_attempt_ms`); rejected for a final one (`delisted`, `invalid_order`, a lot / tick rule) ⇒ never placed again (`stuck`): one WARN line when it happens, the stored rejection + its verdict stay the marker, the operator decides |
-//! | Row | `xm_exits/1:<account>` (ttl 0, `domain/xm/exits.rs::XmExits`): `n_open`, `n_due`, `n_closed`, `n_failed` (`backoff` and `stuck` too), `n_stale_marks`, `n_stuck`; per position the full id, entry, deadline, mark, P&L, reason, status, id, gate rule, fill and the next attempt time |
+//! | Row | `xm_exits/1:<account>` (ttl 0, `domain/xm/exits.rs::XmExits`): `n_open`, `n_due`, `n_closed`, `n_failed` (`backoff` and `stuck` too), `n_stale_marks`, `n_book_marks`, `n_stuck`; per position the full id, entry, deadline, mark (or book mid), P&L, reason, when a TP / SL fired, status, id, gate rule, fill and the next attempt time |
 //!
 //! Each close is its own `paper_fill/1` row and verdict (`ledger.db` +
 //! `logs/risk.jsonl`, tool `xm_exits`, the feed's call id).
@@ -27,8 +30,8 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::exec_common::{
-    check_private_agent, finish, live_books, run_exec, ExecGate, ExecIo, ExecOrder, ExecSize,
-    MarketRows,
+    accrue_due_funding, check_private_agent, exec, finish, live_books, run_exec, ExecGate, ExecIo,
+    ExecOrder, ExecSize, Executed, MarketRows,
 };
 use super::paper::{exit_bound_arg, object};
 use super::{defs, XmShared};
@@ -43,7 +46,7 @@ use crate::domain::tools as names;
 use crate::domain::xm::exec::{rejected_message, PaperFillRow, MAX_EXIT_SLIPPAGE_BPS};
 use crate::domain::xm::exits::{
     exit_client_order_id, exit_due, exit_retry, pnl_bps, ExitAttempt, ExitCheck, ExitReason,
-    ExitRetry, ExitStatus, XmExits, EXIT_RETRY_STEPS,
+    ExitRetry, ExitRules, ExitStatus, ExitTrigger, XmExits, EXIT_RETRY_STEPS,
 };
 use crate::domain::xm::ledger::{fresh_mark, Position};
 use crate::domain::xm::paper::{FillStatus, OrderKind};
@@ -93,14 +96,19 @@ impl XmExitsTool {
             .map(|p| p.instrument.clone())
             .collect();
         let store = self.shared.store.as_deref();
-        let marks = MarketRows::read(store, &ids, None, None).await.marks(&ids);
+        // The open positions' rows, and those of closed ones owing funding.
+        let rows = MarketRows::read(store, &snap.account.funding_ids(), None, None).await;
+        let max_ctx_ms = risk.max_data_age_ms.ctx;
+        accrue_due_funding(ledger.as_ref(), &snap.account, &rows, now, max_ctx_ms).await?;
+        let marks = rows.marks(&ids);
         let rules = risk.exits.rules();
         let mut positions = Vec::new();
         for p in snap.account.open_positions() {
             let raw = marks.get(&p.instrument).cloned().unwrap_or(Field::Absent);
-            let mark = fresh_mark(&p.instrument, &raw, now, risk.max_data_age_ms.ctx);
+            let mark = fresh_mark(&p.instrument, &raw, now, max_ctx_ms);
             let exit_at_ms = snap.exit_at_ms.get(&p.instrument).copied();
-            let reason = exit_due(p, &mark, exit_at_ms, now, &rules);
+            let fired = snap.exit_triggers.get(&p.instrument).copied();
+            let reason = exit_due(p, &mark, exit_at_ms, fired.map(|t| t.reason), now, &rules);
             let mut check = ExitCheck {
                 instrument: p.instrument.clone(),
                 qty: p.qty,
@@ -108,7 +116,8 @@ impl XmExitsTool {
                 opened_ms: p.opened_ms,
                 exit_at_ms,
                 pnl_bps: mark.value().and_then(|px| pnl_bps(p, *px)),
-                mark_px: mark,
+                book_mid: None,
+                triggered_ms: None,
                 reason,
                 status: ExitStatus::Held,
                 client_order_id: None,
@@ -118,10 +127,19 @@ impl XmExitsTool {
                 fill_px: None,
                 error: None,
                 next_attempt_ms: None,
+                mark_px: mark,
             };
-            if let Some(reason) = reason {
-                self.close(ctx, io, p, reason, max_slippage_bps, &mut check)
-                    .await;
+            match reason {
+                Some(reason) => {
+                    self.close(ctx, io, p, reason, fired, max_slippage_bps, &mut check)
+                        .await
+                }
+                // Review #6: no fresh mark — TP / SL on the live book.
+                None if check.mark_px.value().is_none() => {
+                    self.close_on_book(ctx, io, p, &rules, max_slippage_bps, &mut check)
+                        .await
+                }
+                None => {}
             }
             positions.push(check);
         }
@@ -135,13 +153,15 @@ impl XmExitsTool {
 
     /// Close `p` for `reason` under its next exit id — unless the retry
     /// rule holds it back (`backoff`, `stuck`); the outcome lands in
-    /// `check`.
+    /// `check`. A TP / SL not yet `fired` is recorded first (it stays due).
+    #[allow(clippy::too_many_arguments)]
     async fn close(
         &self,
         ctx: &ToolCtx<'_>,
         io: &ExecIo<'_>,
         p: &Position,
         reason: ExitReason,
+        fired: Option<ExitTrigger>,
         max_slippage_bps: f64,
         check: &mut ExitCheck,
     ) {
@@ -151,6 +171,27 @@ impl XmExitsTool {
                 .opened_ms
                 .ok_or_else(|| anyhow!("open position {} has no opened_ms", p.instrument))?;
             let instrument = InstrumentId::parse(&p.instrument).map_err(|e| anyhow!("{e}"))?;
+            // Review #6: a TP / SL that fires is kept in the ledger — due
+            // until the position closes, whatever later marks say.
+            let reason = match fired {
+                Some(t) if t.reason == reason => {
+                    check.triggered_ms = Some(t.at_ms);
+                    reason
+                }
+                _ if reason.on_price() => {
+                    let now = io.clock.now_ms();
+                    let t = ledger
+                        .trigger_exit(&risk.account, &p.instrument, opened_ms, reason, now)
+                        .await?
+                        .ok_or_else(|| {
+                            anyhow!("no_position: {} closed since the snapshot", p.instrument)
+                        })?;
+                    check.triggered_ms = Some(t.at_ms);
+                    check.reason = Some(t.reason);
+                    t.reason
+                }
+                _ => reason,
+            };
             let id = |n| exit_client_order_id(&risk.account, &p.instrument, reason, opened_ms, n);
             let plan = plan_exit(ledger.as_ref(), &risk.account, &id, io.clock.now_ms()).await?;
             if plan.retry != ExitRetry::Now {
@@ -175,6 +216,66 @@ impl XmExitsTool {
             Err(e) => {
                 check.status = ExitStatus::Error;
                 check.error = Some(format!("{e:#}"));
+            }
+        }
+    }
+
+    /// Review #6: `p` has no fresh mark and is not due by time — its
+    /// take-profit / stop-loss are judged on the mid of the book the close
+    /// reads after its latency (`ExecOrder::tp_sl_on_book`). Nothing fires
+    /// ⇒ nothing placed, `held`; one fires ⇒ recorded and closed under
+    /// `exit:<account>:<instrument>:<reason>:<opened_ms>`. A failure before
+    /// the book (no venue facts, the ledger) leaves it `held` with the
+    /// error: the position is not known to be due.
+    async fn close_on_book(
+        &self,
+        ctx: &ToolCtx<'_>,
+        io: &ExecIo<'_>,
+        p: &Position,
+        rules: &ExitRules,
+        max_slippage_bps: f64,
+        check: &mut ExitCheck,
+    ) {
+        let done = async {
+            let (risk, _, _) = self.shared.parts()?;
+            let instrument = InstrumentId::parse(&p.instrument).map_err(|e| anyhow!("{e}"))?;
+            let mut order = exit_order(risk, instrument, String::new(), max_slippage_bps);
+            order.client_order_id = None;
+            order.tp_sl_on_book = Some(*rules);
+            exec(&self.shared, ctx, io, order).await
+        }
+        .await;
+        match done {
+            Ok(Executed::NotCalled { mid }) => {
+                check.book_mid = mid.value().copied();
+                check.pnl_bps = check.book_mid.and_then(|px| pnl_bps(p, px));
+                if let Some(e) = mid.error() {
+                    check.error = Some(format!(
+                        "take-profit / stop-loss not judged: no book mid ({} {})",
+                        e.class.as_str(),
+                        e.message
+                    ));
+                }
+            }
+            Ok(Executed::Called { trigger, mid, row }) => {
+                check.book_mid = Some(mid);
+                check.pnl_bps = pnl_bps(p, mid);
+                check.reason = Some(trigger.reason);
+                check.triggered_ms = Some(trigger.at_ms);
+                check.attempt = Some(1);
+                check.client_order_id = row.typed::<PaperFillRow>().ok().map(|r| r.client_order_id);
+                if let Some(account) = self.shared.risk.as_ref().map(|r| r.account.as_str()) {
+                    warn_final_exit(account, &p.instrument, &row);
+                }
+                record(check, &row);
+            }
+            // A judged order always has an id from the book.
+            Ok(Executed::Row(row)) => record(check, &row),
+            Err(e) if format!("{e:#}").starts_with("no_position") => {
+                check.status = ExitStatus::Flat;
+            }
+            Err(e) => {
+                check.error = Some(format!("take-profit / stop-loss not judged: {e:#}"));
             }
         }
     }
@@ -326,6 +427,7 @@ fn exit_order(
         opportunity_key: None,
         client_order_id: Some(client_order_id),
         exit_at_ms: None,
+        tp_sl_on_book: None,
     }
 }
 
@@ -414,7 +516,9 @@ mod tests {
 
     use super::*;
     use crate::adapters::outbound::tools::xm::exec_common::tests::{market_rows, Rig, NOW, TSLA};
+    use crate::application::observe::tests::MemStore;
     use crate::domain::book::fixture::tsla_book;
+    use crate::domain::book::{L2Book, L2Level};
     use crate::domain::market::{InstrumentId, MarketCtx};
     use crate::domain::observation::{ErrorClass, ObsSource, ObsStatus, ReadError};
     use crate::domain::xm::risk::CheckStatus;
@@ -536,10 +640,12 @@ mod tests {
         assert_eq!(rig.risk_lines().len(), 2);
     }
 
-    /// Take-profit fires on a fresh mark; the same price on a stale mark
-    /// closes nothing (partial row, the mark named in `errors`).
+    /// Take-profit fires on a fresh mark. The same price on a stale mark
+    /// fires nothing by itself: TP / SL are judged on the live book instead
+    /// (here at the entry: held, nothing placed, no verdict; the stale mark
+    /// still named in `errors`).
     #[tokio::test]
-    async fn take_profit_needs_a_fresh_mark() {
+    async fn take_profit_needs_a_fresh_mark_or_the_book() {
         let rig = Rig::new(25).await;
         open(&rig, None).await;
         // +201 bps over the 347.23 entry, 30 s old: stale (ctx limit 20 s).
@@ -549,10 +655,23 @@ mod tests {
         let o = run(&rig, "x:1").await;
         let e = exits(&o);
         assert_eq!(o.status, ObsStatus::Partial);
-        assert_eq!((e.n_due(), e.n_stale_marks()), (0, 1));
-        assert!(e.positions[0].mark_px.is_error() && e.positions[0].pnl_bps.is_none());
+        assert_eq!((e.n_due(), e.n_stale_marks(), e.n_book_marks()), (0, 1, 1));
+        let c = &e.positions[0];
+        assert!(c.mark_px.is_error());
+        assert_eq!(c.status, ExitStatus::Held);
+        let mid = c.book_mid.unwrap();
+        assert!(
+            (mid - 347.195).abs() < 1e-9,
+            "the fixture book's mid: {mid}"
+        );
+        assert!(c.pnl_bps.unwrap() < 0.0, "at the book mid: {c:?}");
         assert_eq!(o.errors[0].field, format!("mark:{TSLA}"));
         assert_eq!(orders(&rig).len(), 1, "nothing closed");
+        assert_eq!(
+            rig.rows()["risk_decisions"],
+            1,
+            "nothing judged by the gate"
+        );
         // The same price, fresh: take-profit. The close fills at the book.
         for r in market_rows(354.2, rig.clock.now_ms()) {
             rig.store.put(&r).await.unwrap();
@@ -564,11 +683,230 @@ mod tests {
             (Some(ExitReason::TakeProfit), ExitStatus::Filled)
         );
         assert!(c.pnl_bps.unwrap() > 200.0, "{:?}", c.pnl_bps);
+        assert!(c.triggered_ms.is_some(), "recorded before the close");
         assert!(c
             .client_order_id
             .as_deref()
             .unwrap()
             .starts_with(&format!("exit:xmarket:{TSLA}:take_profit:")));
+    }
+
+    /// A two-level TSLA book around `mid`, 10 deep, stamped at the rig
+    /// clock's now.
+    fn book_at(rig: &Rig, mid: f64) -> ScriptedBooks {
+        let level = |px: f64| L2Level { px, sz: 10.0, n: 1 };
+        let book = L2Book::new(
+            vec![level(mid - 0.05)],
+            vec![level(mid + 0.05)],
+            rig.clock.now_ms(),
+        )
+        .unwrap();
+        ScriptedBooks::new(
+            rig.clock.clone(),
+            InstrumentId::parse(TSLA).unwrap(),
+            vec![(0, book)],
+        )
+    }
+
+    /// Review #6: with a stale mark the stop-loss is judged on the mid of
+    /// the live book the close reads after its latency — a failed read
+    /// judges nothing (held, nothing placed); 122 bps under the entry it
+    /// fires, is recorded, and closes under the stop-loss id.
+    #[tokio::test]
+    async fn a_stop_loss_on_a_stale_mark_fires_on_the_live_book() {
+        let rig = Rig::new(25).await;
+        let opened = open(&rig, None).await;
+        // The rig's rows are from NOW − 1 s: 61 s old, stale (limit 20 s).
+        rig.clock.set(NOW + 60_000);
+        let o = tool(&rig.shared)
+            .check(&json!({}), &rig.ctx(Some("b:1")), &io(&rig, &no_book(&rig)))
+            .await
+            .unwrap();
+        let c = &exits(&o).positions[0];
+        assert_eq!(
+            (c.status, c.reason, c.book_mid),
+            (ExitStatus::Held, None, None)
+        );
+        assert!(c.error.as_deref().unwrap().contains("not judged"), "{c:?}");
+        assert_eq!(orders(&rig).len(), 1, "nothing placed");
+        let books = book_at(&rig, 343.0);
+        let o = tool(&rig.shared)
+            .check(&json!({}), &rig.ctx(Some("b:2")), &io(&rig, &books))
+            .await
+            .unwrap();
+        let c = &exits(&o).positions[0];
+        assert_eq!(
+            (c.reason, c.status, c.book_mid),
+            (Some(ExitReason::StopLoss), ExitStatus::Filled, Some(343.0)),
+            "{c:?}"
+        );
+        assert!(c.mark_px.is_error() && c.triggered_ms.is_some(), "{c:?}");
+        assert!(c.pnl_bps.unwrap() < -100.0, "{c:?}");
+        let id = format!("exit:xmarket:{TSLA}:stop_loss:{opened}");
+        assert_eq!(c.client_order_id.as_deref(), Some(id.as_str()));
+        for (k, v) in [("n_book_marks", 1), ("n_closed", 1), ("n_stale_marks", 1)] {
+            assert_eq!(o.features[k], v, "{k}");
+        }
+        let line = rig.risk_lines().pop().unwrap();
+        assert_eq!(
+            (&line["client_order_id"], &line["tool"]),
+            (&json!(id), &json!("xm_exits"))
+        );
+        let snap = rig
+            .ledger
+            .snapshot("xmarket", rig.clock.now_ms())
+            .await
+            .unwrap();
+        assert!(snap.account.positions[TSLA].is_flat());
+    }
+
+    /// Review #6: a stop-loss that fired and was rejected stays due — on a
+    /// stale mark (the backoff holds it, never `held`) and with the price
+    /// back inside the band (attempt 2 closes it).
+    #[tokio::test]
+    async fn a_fired_stop_loss_stays_due_until_the_position_closes() {
+        let rig = Rig::new(25).await;
+        let opened = open(&rig, None).await;
+        rig.clock.set(NOW + 1_000);
+        for r in market_rows(343.0, NOW + 900) {
+            rig.store.put(&r).await.unwrap();
+        }
+        let o = tool(&rig.shared)
+            .check(&json!({}), &rig.ctx(Some("t:1")), &io(&rig, &no_book(&rig)))
+            .await
+            .unwrap();
+        let c = &exits(&o).positions[0];
+        assert_eq!(
+            (c.reason, c.status, c.attempt),
+            (Some(ExitReason::StopLoss), ExitStatus::Rejected, Some(1))
+        );
+        let fired = rig
+            .ledger
+            .snapshot("xmarket", NOW + 2_000)
+            .await
+            .unwrap()
+            .exit_triggers[TSLA];
+        assert_eq!(fired.reason, ExitReason::StopLoss);
+        assert_eq!(c.triggered_ms, Some(fired.at_ms));
+        // The mark goes stale: still due, held back by the backoff.
+        rig.clock.set(NOW + 5_000);
+        for r in market_rows(343.0, NOW - 60_000) {
+            rig.store.put(&r).await.unwrap();
+        }
+        let o = run(&rig, "t:2").await;
+        let c = &exits(&o).positions[0];
+        assert_eq!(
+            (c.reason, c.status, c.book_mid),
+            (Some(ExitReason::StopLoss), ExitStatus::Backoff, None)
+        );
+        assert!(c.mark_px.is_error());
+        // The price back inside the band, fresh: still due — attempt 2.
+        rig.clock.set(NOW + 20_000);
+        for r in market_rows(350.0, NOW + 19_900) {
+            rig.store.put(&r).await.unwrap();
+        }
+        let books = fresh_books(&rig);
+        let o = tool(&rig.shared)
+            .check(&json!({}), &rig.ctx(Some("t:3")), &io(&rig, &books))
+            .await
+            .unwrap();
+        let c = &exits(&o).positions[0];
+        let base = format!("exit:xmarket:{TSLA}:stop_loss:{opened}");
+        assert_eq!(
+            (c.reason, c.status, c.client_order_id.clone()),
+            (
+                Some(ExitReason::StopLoss),
+                ExitStatus::Filled,
+                Some(format!("{base}:2"))
+            )
+        );
+        assert!(c.pnl_bps.unwrap() > 0.0, "the mark says no stop: {c:?}");
+        assert_eq!(c.triggered_ms, Some(fired.at_ms), "fired once");
+    }
+
+    /// Review #6: the instrument row purged (the store keeps 7 days) or no
+    /// store at all, a close still fills on the venue facts kept with the
+    /// position at its entry; an entry still needs the row, and so does a
+    /// position from before the kept facts.
+    #[tokio::test]
+    async fn a_close_without_the_instrument_row_uses_the_kept_facts() {
+        let rig = Rig::new(25).await;
+        open(&rig, Some(NOW + 500)).await;
+        let kept = rig
+            .ledger
+            .snapshot("xmarket", NOW + 600)
+            .await
+            .unwrap()
+            .facts[TSLA];
+        assert_eq!((kept.sz_decimals, kept.at_ms), (3, NOW - 1_000));
+        assert!((kept.fees.taker_bps - 0.9).abs() < 1e-12, "{kept:?}");
+        // Purged: the store holds the ctx row only.
+        let purged = Arc::new(MemStore::default());
+        purged.put(&market_rows(347.2, NOW + 500)[0]).await.unwrap();
+        let mut gone = rig.shared.clone();
+        gone.store = Some(purged as Arc<dyn ObservationStore>);
+        rig.clock.set(NOW + 1_000);
+        let books = fresh_books(&rig);
+        let o = tool(&gone)
+            .check(&json!({}), &rig.ctx(Some("p:1")), &io(&rig, &books))
+            .await
+            .unwrap();
+        let c = &exits(&o).positions[0];
+        assert_eq!(
+            (c.reason, c.status),
+            (Some(ExitReason::Deadline), ExitStatus::Filled),
+            "{c:?}"
+        );
+        let id = c.client_order_id.clone().unwrap();
+        let r = rig
+            .ledger
+            .order("xmarket", &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .result;
+        let fee = r.filled_notional_usd * 0.9e-4;
+        assert!((r.fee_usd - fee).abs() < 1e-12, "the kept fee: {r:?}");
+        // An entry on that store is refused: it needs the row.
+        let e = run_exec(
+            &gone,
+            &rig.ctx(Some("p:2")),
+            &io(&rig, &books),
+            rig.buy(20.0),
+        )
+        .await
+        .unwrap_err();
+        assert!(e.to_string().starts_with("missing:mkt_instrument"), "{e}");
+        // No store at all: a close still fills.
+        rig.clock.set(NOW + 2_000);
+        rig.run(rig.buy(20.0), "entry:s:2").await.unwrap();
+        let mut blind = rig.shared.clone();
+        blind.store = None;
+        let books = fresh_books(&rig);
+        let o = run_exec(
+            &blind,
+            &rig.ctx(Some("n:1")),
+            &io(&rig, &books),
+            rig.close(),
+        )
+        .await
+        .unwrap();
+        let r: PaperFillRow = o.typed().unwrap();
+        assert_eq!(
+            (r.fill.unwrap().status, r.position_qty_after),
+            (FillStatus::Filled, 0.0)
+        );
+        // A position without kept facts (an older ledger) needs the row.
+        rig.clock.set(NOW + 3_000);
+        rig.run(rig.buy(20.0), "entry:s:3").await.unwrap();
+        rusqlite::Connection::open(rig.dir.path().join("state/ledger.db"))
+            .unwrap()
+            .execute_batch("UPDATE positions SET sz_decimals = NULL")
+            .unwrap();
+        let e = run_exec(&gone, &rig.ctx(Some("p:3")), &io(&rig, &books), rig.close())
+            .await
+            .unwrap_err();
+        assert!(e.to_string().starts_with("missing:mkt_instrument"), "{e}");
     }
 
     /// The fixture book stamped at the rig clock's now (a fresh read).

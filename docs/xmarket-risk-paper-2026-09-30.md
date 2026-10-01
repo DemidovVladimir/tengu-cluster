@@ -1,6 +1,6 @@
 # xmarket risk + paper — operator reference (2026-09-30)
 
-The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Verdict audit: § Audit (`risk-audit-verdicts`); exit rules: § Exits (`x-exit-rules`, `src/domain/xm/exits.rs` + `src/adapters/outbound/tools/xm/exits.rs`); weekend fade: § Weekend fade (`x-weekend-fade-strategy`, `src/domain/xm/weekend_fade.rs` + `src/adapters/outbound/tools/xm/weekend_fade.rs`).
+The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. Schema: `src/config/risk.rs` (every field required, § 7 #3 budget) + `src/config/hardening.rs` (load rules). Code: gate `src/domain/xm/risk.rs`, halts `src/domain/xm/risk_state.rs`, exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`), ledger closure `src/application/paper.rs::decide`, ledger `src/ports/paper.rs` + `src/adapters/outbound/paper_store.rs`, tools `src/adapters/outbound/tools/xm/`, CLI `src/adapters/inbound/cli/risk.rs`. Verdict audit: § Audit (`risk-audit-verdicts`); funding and the venue facts closes keep: § Funding and kept facts (`domain/xm/ledger.rs::Position::settle_funding`, `domain/xm/exec.rs::order_venue_facts`); exit rules: § Exits (`x-exit-rules`, `src/domain/xm/exits.rs` + `src/adapters/outbound/tools/xm/exits.rs`); weekend fade: § Weekend fade (`x-weekend-fade-strategy`, `src/domain/xm/weekend_fade.rs` + `src/adapters/outbound/tools/xm/weekend_fade.rs`).
 
 ## Load rules (`Config::load`, any violation fails it)
 
@@ -21,11 +21,11 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | Gate ↔ account (review #5) | the `[risk]` gate only on the `[risk]` account; the shadow gate (no budget) only with the paper engine's `PaperFills` proof (`[risk] mode = "paper"`: a live engine gets none) and never on the `[risk]` account | `gate_account_mismatch` · `shadow_not_paper` |
 | Key | `client_order_id` = the arg, else `ToolCtx.call_id` (loop `{loop}:{session}:{t}`, feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>`); 1–256 chars, no whitespace; never random. An arg never starts with a reserved prefix — `exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:` (ids the exit rules, the weekend fade and the call paths make; review #11) | `no_client_order_id` · `invalid_client_order_id` |
 | Replay | an order stored under the key ⇒ its `paper_fill/1` row (`replayed`): no latency, no book read, nothing written — only when the request asks for the same order: its fingerprint (`tool account instrument close` · `… side notional USD`, stored with the order) must match; orders stored before the column are not checked | `client_order_id_conflict` |
-| Rows (never fetched) | `mkt_ctx/1` of the open positions + the order (and hedge) instrument; `mkt_instrument/1` of the instrument (HL perp, `sz_decimals`, the paper fee = `hl_ctx`'s `taker_fee_bps` rule); the `opportunity` row | `missing:mkt_instrument` (read `hl_ctx` first) |
-| Funding | every hour the open positions owe, at a fresh `mkt_ctx/1` rate + oracle, before the order | — |
+| Rows (never fetched) | `mkt_ctx/1` of the open positions, of closed ones owing funding, and of the order (and hedge) instrument; `mkt_instrument/1` of the instrument (HL perp, `sz_decimals`, the paper fee = `hl_ctx`'s `taker_fee_bps` rule) — a reduce-only order falls back to the facts kept with its position when that row is missing, older than them or partial (§ Funding and kept facts); the `opportunity` row | `missing:mkt_instrument` (read `hl_ctx` first; a close only without kept facts) |
+| Funding | every hour owed or due, at a fresh `mkt_ctx/1` rate + oracle, before the order; inside `place` the order's instrument settles first at the size held (§ Funding and kept facts) | — |
 | Order | `[paper] order_types`, well-formed; a close = the whole position, reduce-only; a reduce-only order's IOC bound ≤ 500 bps (`exec::MAX_EXIT_SLIPPAGE_BPS`, review #9: an arg above it is refused, a configured or default bound cut to it) | `order_type` · `invalid_order` · `no_position` |
 | Latency + book | sleep `latency_ms ± jitter`, then a live `l2Book` (`hl_book/1` recorded + stored); a failed read = the gate's `missing:book` | — |
-| Gate + fill + write | kill-switch probe, then one `BEGIN IMMEDIATE`: value at marks (day roll), the file probed again for an entry (review #7: a `touch` while the order waited for the lock still denies it; present at either probe = present; a reduce-only order keeps the first probe), `evaluate`, allowed ⇒ fill that book against the position read inside the transaction; a deny writes one verdict row only (each verdict row also a `risk.jsonl` line — § Audit) | — |
+| Gate + fill + write | kill-switch probe, then one `BEGIN IMMEDIATE`: the funding the order's instrument owes settled at the size held (§ Funding and kept facts), value at marks (day roll), the file probed again for an entry (review #7: a `touch` while the order waited for the lock still denies it; present at either probe = present; a reduce-only order keeps the first probe), `evaluate`, allowed ⇒ fill that book against the position read inside the transaction; a deny writes one verdict row only, besides that funding (each verdict row also a `risk.jsonl` line — § Audit) | — |
 
 Underlying: the position's; none yet ⇒ the instrument id itself (asset exposure nets per instrument until the catalog, M1). A reduce-only close with no book after the latency is allowed degraded but rejected `stale_book` by the fill.
 
@@ -43,7 +43,7 @@ Underlying: the position's; none yet ⇒ the instrument id itself (asset exposur
 | `paper_close` | `instrument` or `all = true`; `max_slippage_bps`* (≤ 500); `client_order_id` (no reserved prefix) — reduce-only market IOC of the whole position, same gate | `paper_fill/1` · all: `paper_close/1:<account>:<client_order_id>` (legs `<client_order_id>:<instrument>`, each replayed by its own id) |
 | `xm_exits` (§ Exits) | `max_slippage_bps` (≤ 500; default `[risk] max_slippage_bps`, cut to 500) — closes every due position of the `[risk]` account, same gate | `xm_exits/1:<account>`; each close its own `paper_fill/1` |
 | `xm_weekend_fade` (§ Weekend fade) | none — one step of rule W's window per call: capped fades through the gate, shadow fades through the shadow gate, shadow exits | `xm_weekend/1:<anchor date>`; each order its own `paper_fill/1` |
-| `paper_positions` (not an exec tool) | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): funding owed booked first (every due hour at the fresh `mkt_ctx/1` rate + oracle — past hours at the current rate); marks fresh or omitted, never 0; `exit_at_ms` per position |
+| `paper_positions` (not an exec tool) | `account` (default `[risk] account`) | `paper_positions/1:<account>` (2 s): funding booked first (every owed and due hour — closed positions owing hours too — at the fresh `mkt_ctx/1` rate + oracle; past hours at the current rate); marks fresh or omitted, never 0; `exit_at_ms` per position |
 
 | Setup | Value |
 |---|---|
@@ -85,11 +85,23 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 | Table | Holds |
 |---|---|
 | `accounts` · `cash` | several accounts (weekend: capped + shadow), created with `[paper] initial_cash_usd` · journal deposit / fill / funding + running balance |
-| `positions` · `fills` · `funding` | per (account, instrument) incl. `exit_at_ms` · VWAP fill per filled / partial order · one HL payment per (account, instrument, hour) |
+| `positions` · `fills` | per (account, instrument) incl. `exit_at_ms`, the kept venue facts (`sz_decimals`, `taker_fee_bps`, `maker_fee_bps`, `facts_at_ms`) and a fired TP / SL (`exit_trigger`, `exit_trigger_opened_ms`, `exit_trigger_ms`) · VWAP fill per filled / partial order |
+| `funding` · `funding_owed` | one HL payment per (account, instrument, hour): rate, oracle, the size held at the hour · an hour settled without a fresh rate: the size held then, until a rate books it |
 | `orders` | allowed orders, `UNIQUE (account, client_order_id)`: a retry returns the stored result, writes nothing; `fingerprint` (added on open, NULL on older rows) = what the order asked for — a retry asking for another order is refused |
 | `risk_decisions` · `risk_state` | every verdict (checks, headroom, trips, intent, context digest, call id, exec tool, session id — § Audit) · halt + UTC day + day-start equity |
 
-`place` = gate + fill + write in one `BEGIN IMMEDIATE`; a deny writes the verdict (and a changed risk state) only. Columns added later reach an older `ledger.db` on open (`ALTER TABLE … ADD COLUMN`, one transaction).
+`place` = funding settled + gate + fill + write in one `BEGIN IMMEDIATE`; a deny writes the verdict, the funding settled (and a changed risk state) only. Columns and tables added later reach an older `ledger.db` on open (`ALTER TABLE … ADD COLUMN`, `CREATE TABLE IF NOT EXISTS`, one transaction; a binary from before them leaves them alone).
+
+## Funding and kept facts (reviews #6, #10)
+
+| Rule | Detail |
+|---|---|
+| Size | an hour's funding = the size held at that hour × oracle × the HL 1 h rate (positive ⇒ longs pay); hours are settled before any fill changes the size: `place` settles the order's instrument first, inside its transaction |
+| Rate | a fresh `mkt_ctx/1` row (`max_data_age_ms.ctx`; a row stamped > 1 s ahead is stale): the hour is booked. None: the hour is recorded owed (`funding_owed`: hour + size), never dropped — also through a full close or a flip |
+| Booking owed | the next settlement with a fresh rate books every owed hour at that rate (HL's per-hour history is not read), then the due ones; every exec call, `paper_positions`, `xm_exits` (every 15 s) and `xm_weekend_fade` settle the account's open positions and closed ones owing hours. Without a rate nothing is written outside `place`: the hours stay due |
+| Until booked | equity omits owed funding (cents on the budget); a weekend-fade name owing hours stays `closing` without a P&L; `tengu risk status` lists them |
+| Kept facts | every sent order priced from a `mkt_instrument/1` row keeps its `sz_decimals`, fee schedule and the row's time with the position (never an older row's over newer ones) |
+| Using them | a reduce-only order (`xm_exits`, `paper_close`, a shadow exit) fills on them when the row is missing (store unreadable, purged after 7 days), older than them, or partial; the `mkt_ctx/1` row still gives the listing and OI cap (none ⇒ `open`, the book decides). Entries always need the row. A position from before the columns has none: its close needs the row |
 
 ## Audit — every verdict (`risk-audit-verdicts`)
 
@@ -113,21 +125,22 @@ Join a loop step to its verdict: `jq -c 'select(.call_id == "<call id>")' <TENGU
 
 ## Exits — `xm_exits` (`x-exit-rules`)
 
-`[risk.exits]` (every key required, unknown keys refused): `take_profit_bps`, `stop_loss_bps` (finite > 0), `max_hold_secs` (> 0). The exec tool `xm_exits` checks every open position of the `[risk]` account (`domain/xm/exits.rs::exit_due`) and closes the due ones through `run_exec` — reduce-only market IOC of the whole position, sized inside the ledger transaction, the gate inside (an exit passes halted / on stale data under `allow_reduce_degraded`).
+`[risk.exits]` (every key required, unknown keys refused): `take_profit_bps`, `stop_loss_bps` (finite > 0), `max_hold_secs` (> 0). The exec tool `xm_exits` books the account's funding, then checks every open position of the `[risk]` account (`domain/xm/exits.rs::exit_due`) and closes the due ones through `run_exec` — reduce-only market IOC of the whole position, sized inside the ledger transaction, the gate inside (an exit passes halted / on stale data under `allow_reduce_degraded`).
 
-| Reason (first due wins) | Due when | Needs a fresh mark |
+| Reason (first due wins) | Due when | Price |
 |---|---|---|
-| `deadline` | the position's `exit_at_ms` ≤ now — set by the order that opened it (`paper_order exit_at_ms`, a strategy such as the weekend fade) | no |
-| `max_hold` | `opened_ms` + `max_hold_secs` ≤ now | no |
-| `stop_loss` · `take_profit` | P&L at mark (side-signed `(mark − entry) / entry`, bps; fees and funding not counted) ≤ −`stop_loss_bps` · ≥ `take_profit_bps` | yes: a `mkt_ctx/1` row within `max_data_age_ms.ctx` (never fetched); a stale or missing mark never triggers them (`n_stale_marks`) |
+| `deadline` | the position's `exit_at_ms` ≤ now — set by the order that opened it (`paper_order exit_at_ms`, a strategy such as the weekend fade) | none |
+| `max_hold` | `opened_ms` + `max_hold_secs` ≤ now | none |
+| a fired `stop_loss` / `take_profit` | it fired for this opening (`positions.exit_trigger`, review #6): due until the position is flat — a later stale mark, or a price back inside the band, never cancels it | none |
+| `stop_loss` · `take_profit` | P&L (side-signed `(px − entry) / entry`, bps; fees and funding not counted) ≤ −`stop_loss_bps` · ≥ `take_profit_bps`; recorded as fired before the close | a `mkt_ctx/1` mark within `max_data_age_ms.ctx` (never fetched); stale or missing (`n_stale_marks`) ⇒ the mid of the live book the close reads after its latency (`n_book_marks`, `book_mid`): fires ⇒ closed, else nothing placed; a failed, one-sided or stale (> `max_data_age_ms.book`) book judges nothing this run |
 
 | Detail | Rule |
 |---|---|
 | Id | `exit:<account>:<instrument>:<reason>:<opened_ms>` (full ids); when that id's order is stored but left the position open (rejected, e.g. `stale_book`; partial) the next attempt uses the first unstored `…:<n>`; a denial stores nothing, so the same id is judged again. A retry after a crash never closes twice: the close is sized from the position inside the transaction (flat ⇒ nothing to close) |
 | Retry (review #3) | the latest stored attempt decides (`domain/xm/exits.rs::exit_retry`, read from the ledger — a restart keeps it): none, filled or partial ⇒ the next attempt now; rejected for a reason that may pass (`FillReason::is_transient`: `stale_book`, liquidity, missing data, OI cap, halts) ⇒ `backoff` — the next attempt 15 s, 30 s, 1 min, 2 min, 4 min, 8 min, then every 15 min after the latest (rejections in a row); rejected for a final reason (`delisted`, `invalid_order`, `order_type`, `MinTradeNtl`, `Tick`, `ReduceOnly`) ⇒ `stuck`: never placed again — one WARN log line when it happens, the stored rejection + its verdict stay the marker, the operator decides |
-| Row `xm_exits/1:<account>` (ttl 0) | features `n_open`, `n_due`, `n_closed`, `n_failed` (`backoff` and `stuck` included), `n_stale_marks`, `n_stuck`; `data` per open position: full id, qty, entry, `opened_ms`, `exit_at_ms`, mark, P&L bps, reason, status (`held` · `filled` · `partial` · `rejected` · `denied` · `flat` · `error` · `backoff` · `stuck`), id + attempt, gate rule, fill, `next_attempt_ms`; `ok` nothing failed · `partial` a close failed or a mark was stale · `error` every due close failed |
-| Audit | each close is its own `paper_fill/1` row and verdict (`tool = xm_exits`, the feed's call id) |
-| Needs | the `hl_ctx` feed in the same workspace (one store): a close needs the instrument's `mkt_instrument/1` row (else it errors `missing:mkt_instrument`, `n_failed`), and TP / SL need `mkt_ctx/1` marks younger than `max_data_age_ms.ctx` — run `hl_ctx` at least that often (15 s, convention 14) |
+| Row `xm_exits/1:<account>` (ttl 0) | features `n_open`, `n_due`, `n_closed`, `n_failed` (`backoff` and `stuck` included), `n_stale_marks`, `n_book_marks`, `n_stuck`; `data` per open position: full id, qty, entry, `opened_ms`, `exit_at_ms`, mark (or `book_mid`), P&L bps, reason, `triggered_ms` (a TP / SL fired), status (`held` · `filled` · `partial` · `rejected` · `denied` · `flat` · `error` · `backoff` · `stuck`), id + attempt, gate rule, fill, `next_attempt_ms`; `ok` nothing failed · `partial` a close failed or a mark was stale · `error` every due close failed |
+| Audit | each close is its own `paper_fill/1` row and verdict (`tool = xm_exits`, the feed's call id); a book that fired nothing writes nothing |
+| Needs | the `hl_ctx` feed in the same workspace (one store) for `mkt_ctx/1` marks younger than `max_data_age_ms.ctx` — run it at least that often (15 s, convention 14) — and `mkt_instrument/1` rows; with them gone (store unreadable or purged, `hl_ctx` down) a close fills on the facts kept at the entry and TP / SL are judged on the live book (`l2Book`, scope `net_hosts`) |
 | Gate on an exit | skips caps, `min_edge`, depth / slippage, `market_status`, `order_rate` (exits never count toward `max_orders_per_min` and are never denied by it); waives `kill_switch` / `halted` / `book_age` / `ctx_age` under `allow_reduce_degraded` (recorded); still checks `intent`, `account`, `reduce_only`, `open_orders`. IOC bound ≤ 500 bps (`exec::MAX_EXIT_SLIPPAGE_BPS`; a `[risk.exits]` key may replace the constant after the weekend run) |
 | Feed | `[feeds.xm_exits] kind = "tool"`, `agent` = the private exec agent (its `tools` list `xm_exits`), `tool = "xm_exits"`, `every_secs = 15`, `required = true` — no LLM, no Jev (`config.example.toml`); an `error` row reports the feed `down` until a run closes them |
 
@@ -167,10 +180,10 @@ Both: market IOC bound `max_slippage_bps`, `exit_at_ms` = the exit, the fill on 
 | `waiting` | before the entry | reports `next_entry_s` |
 | `entered` | entry ≤ now < exit, snapshot kept | first call: the snapshot (prices, signals, the capped set, each name's ledger bases) kept in the store by compare-and-swap before any order (one per window across processes; never recomputed), then the capped fades (largest \|s\| first), then the shadow fades (4 at a time); later calls within `entry_lateness_max_secs` place the next attempt where the table above says so; no eligible name ⇒ an `error` row, nothing kept, the next call tries again. Kept only complete: while a name (not excluded, with an anchor) has no entry row fresher than `entry_max_age_secs` (none, or older: a restart), until entry + 120 s (at most half the lateness), the call keeps nothing (an `error` row) and the next one reads again; from then on those names are left out `stale` (`n_stale`). A fresh row without a usable price is `missing_entry` and holds nothing back |
 | `missed_entry` | no snapshot by entry + `entry_lateness_max_secs` | nothing: no late entry |
-| `closing` | after the exit, a filled name still open | closes the due shadow positions; the capped ones wait for `xm_exits` |
-| `closed` | every filled name flat | P&L per name and ledger = (realized − fees − funding) now − the base before the entry, USD and bps of the entry notional; `shadow_pnl_usd`, `shadow_mean_net_bps`, `capped_pnl_usd`, `capped_mean_net_bps` |
+| `closing` | after the exit, a filled name still open — or flat but owing funding hours (settled at a stale rate, § Funding and kept facts) | closes the due shadow positions; the capped ones wait for `xm_exits` |
+| `closed` | every filled name flat with its funding booked | P&L per name and ledger = (realized − fees − funding) now − the base before the entry, USD and bps of the entry notional; `shadow_pnl_usd`, `shadow_mean_net_bps`, `capped_pnl_usd`, `capped_mean_net_bps` |
 
-Every call also books both accounts' hourly funding. It returns the previous window's row while that one closes and the next waits, else the current window's; both are stored (TTL 120 s).
+Every call also books both accounts' hourly funding (closed positions owing hours too). It returns the previous window's row while that one closes and the next waits, else the current window's; both are stored (TTL 120 s).
 
 | Setup | Value |
 |---|---|
@@ -192,7 +205,7 @@ Halted ⇒ entries deny, reduce-only exits pass. Day-start equity = the first va
 
 | Command / tool | Does | Guard |
 |---|---|---|
-| `tengu risk status [--sandbox s] [--account a]` | per account: halt, day start, cash, positions (full ids, exit deadlines), entries last 60 s (exits never count), last 5 verdicts, kill-switch file | read-only; never creates the ledger |
+| `tengu risk status [--sandbox s] [--account a]` | per account: halt, day start, cash, positions (full ids, exit deadlines, a fired TP / SL), funding owed (hours, since when), entries last 60 s (exits never count), last 5 verdicts, kill-switch file | read-only; never creates the ledger |
 | `tengu risk halt [--account a]` | `operator` halt (default account `[risk] account`) | stdin + stdout a TTY; refused under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME` |
 | `tengu risk resume [--account a]` | the operator types the account name; clears any halt | same + refused while the kill-switch file exists |
 | tool `risk_status` (opt-in) | row `risk_state/1:<[risk] account>` (TTL 2 s); marks from fresh `mkt_ctx/1` rows (never fetched: missing ⇒ `partial`, numbers omitted); each read rolls the UTC day + records trips | no `[risk]` ⇒ `risk_config_missing`; scope `fs_roots` = the workspace |
