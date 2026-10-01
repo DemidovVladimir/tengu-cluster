@@ -12,12 +12,16 @@
 # command asks for the vault password at a terminal: Enter skips it (nothing
 # here needs a secret). Never start `tengu run` with `&`: the prompt stops a
 # background job — run it in the foreground of a tmux pane.
-#   build  CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release
-#          T=$HOME/.cache/tengu-xm.noindex/main/release/tengu        (default features suffice)
+#   binary the W1-gate build, soaked 30 min 2026-10-01 06:34-07:04 UTC (commit 6fcb455, sha256
+#          e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72), frozen for this weekend:
+#          T=$HOME/.cache/tengu-xm.noindex/weekend/tengu-6fcb455      (a later build replaces only
+#          main/release/tengu: CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2
+#          nice -n 10 cargo build --release, default features)
 #   start  tmux new -s xmw      (survives a closed terminal; detach Ctrl-b d, back: tmux attach -t xmw)
-#          T=$HOME/.cache/tengu-xm.noindex/main/release/tengu; cd ~/development/tengu-cluster
+#          T=$HOME/.cache/tengu-xm.noindex/weekend/tengu-6fcb455; cd ~/development/tengu-cluster
 #          caffeinate -i -s nice -n 10 "$T" run --sandbox xmarket-weekend
-#          caffeinate holds the Mac awake (on power, lid open, online) exactly while the run lives,
+#          caffeinate holds the Mac awake exactly while the run lives — ON AC POWER (`-s` holds only
+#          on AC; the battery lasts ~7 h), lid open, online;
 #          a restart in the pane included — no separate `caffeinate -w <pid>`
 #          logs: the pane + ~/.tengu/logs/tengu.log; a second start exits 1 (lease runtime:xmarket-weekend)
 #   check  "$T" doctor --sandbox xmarket-weekend --live      exit 0 = heartbeat fresh, every required feed live —
