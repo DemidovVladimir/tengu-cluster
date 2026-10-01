@@ -35,7 +35,7 @@ impl Tool for SkillShellTool {
 
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         let command = render_command(&self.template, args)?;
-        let bin = extract_binary(&command);
+        let bin = crate::domain::scope::shell_command_binary(&command);
         if bin.is_empty() {
             anyhow::bail!("skill_shell: empty command");
         }
@@ -95,11 +95,6 @@ pub(crate) fn render_command(template: &str, arguments: &Value) -> Result<String
 fn shell_escape(s: &str) -> String {
     let escaped = s.replace('\'', "'\\''");
     format!("'{}'", escaped)
-}
-
-/// Extract the first whitespace-delimited token (the binary name) from a shell command.
-fn extract_binary(command: &str) -> &str {
-    command.trim().split_whitespace().next().unwrap_or("")
 }
 
 #[cfg(test)]

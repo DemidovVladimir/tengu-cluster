@@ -443,7 +443,7 @@ mod tests {
     async fn heartbeat_task_beats_at_once_and_returns_on_stop() {
         let stopper = super::super::Supervisor::new().stopper();
         let beats = Arc::new(Beats::default());
-        let loops = Arc::new(LoopDispatch::new(BTreeMap::new(), 1));
+        let loops = Arc::new(LoopDispatch::new(BTreeMap::new(), 1, 1));
         let task = tokio::spawn(heartbeat_task(
             board(None),
             loops,

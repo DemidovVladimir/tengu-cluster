@@ -380,9 +380,11 @@ pub struct AgentConfig {
     /// planner can match short casual messages. Only used with `description`.
     #[serde(default)]
     pub example_queries: Vec<String>,
-    /// Tool allow-list for subagent runs. Empty = every base tool. Names
-    /// from the workspace-tools allow-list (`shared_cache`, …) listed here
-    /// are opted in exactly like `workspace_tools`.
+    /// Tool allow-list on every surface: in-process chat (TUI, Telegram,
+    /// webhooks, eval, `tengu tool`), `run-agent` steps, decision loops and
+    /// the Claude Code bridge (`bootstrap::tools::agent_base_tools`). Empty =
+    /// every base tool. Opt-in names (`domain::tools::WORKSPACE_TOOLS`)
+    /// listed here are opted in exactly like `workspace_tools`.
     #[serde(default)]
     pub tools: Vec<String>,
     #[serde(default)]
@@ -406,7 +408,8 @@ pub struct AgentConfig {
     pub skill_packages: Vec<String>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
-    /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
+    /// Opt-in tools this agent can use — only names in
+    /// `domain::tools::WORKSPACE_TOOLS` (anything else fails validation).
     #[serde(default)]
     pub workspace_tools: Vec<String>,
     /// Per-tool scope restrictions (default-deny). Key = tool name.
@@ -420,11 +423,13 @@ pub struct AgentConfig {
     /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
-    /// Runtime (never in TOML): set by `Config::fold_default_scopes` in a
-    /// hardened sandbox (`config/hardening.rs`: a `[solana]` signer or
-    /// `[risk]`) — tools without a configured scope then get a fallback that
-    /// runs no shell (`bootstrap::tools::resolve_tool_scopes`). Read as
-    /// [`AgentConfig::hardened`].
+    /// Runtime (never in TOML): set by `Config::fold_default_scopes` on every
+    /// agent of a hardened sandbox (`config/hardening.rs`: a `[solana]`
+    /// signer or a `[risk]` section) — tools without a configured scope then
+    /// get a fallback that runs no shell (`bootstrap::tools::resolve_tool_scopes`,
+    /// in-process and in the bridge), and no shell skill loads
+    /// (`bootstrap::tools::agent_skill_registry`).
+    /// Read as [`AgentConfig::hardened`].
     #[serde(skip)]
     pub no_shell_fallback: bool,
     /// Runtime (never in TOML): `[solana] signer_key_file`, expanded — set
@@ -670,10 +675,38 @@ pub struct TelegramConfig {
     /// `tengu telegram` refuses to start; an unlisted sender is refused.
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// NOT implemented: parsed and ignored — nothing is approval-gated on
+    /// any engine or surface (the approval adapter is gone). Kept so old
+    /// sandboxes load; `Config::load` warns while it is `true`
+    /// ([`Self::approvals_warning`]).
     #[serde(default)]
     pub tool_approvals: bool,
+    /// NOT implemented, like `tool_approvals`: the listed tools run without
+    /// an approval. `Config::load` warns while it is non-empty.
     #[serde(default)]
     pub approve_only: Vec<String>,
+}
+
+impl TelegramConfig {
+    /// One warning naming the approval keys that are set, `None` when
+    /// neither is: they gate nothing, so an operator must not read them as
+    /// a guard.
+    pub fn approvals_warning(&self) -> Option<String> {
+        let mut keys = Vec::new();
+        if self.tool_approvals {
+            keys.push("tool_approvals = true".to_string());
+        }
+        if !self.approve_only.is_empty() {
+            keys.push(format!("approve_only = {:?}", self.approve_only));
+        }
+        (!keys.is_empty()).then(|| {
+            format!(
+                "[telegram] {}: not implemented — tools are not approval-gated (no tool call \
+                 waits for an approval, on any engine or surface; docs/configuration.md § Telegram)",
+                keys.join(", ")
+            )
+        })
+    }
 }
 
 // =====================================================================
@@ -1238,6 +1271,7 @@ impl Config {
                 }
             }
         }
+        out.extend(self.telegram.approvals_warning());
         out.sort();
         out
     }
@@ -2162,5 +2196,47 @@ ttl_days = 7
             "{}",
             warnings[1]
         );
+    }
+
+    /// `[telegram] tool_approvals` / `approve_only` gate nothing: the load
+    /// still succeeds (aura sets them) and one warning names the keys that
+    /// are set; `false` / empty / absent warn nothing.
+    #[test]
+    fn telegram_approval_keys_load_with_one_warning() {
+        let aura = Config::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/aura/config.toml"),
+        )
+        .expect("aura loads");
+        let warnings: Vec<String> = aura
+            .validation_warnings()
+            .into_iter()
+            .filter(|w| w.starts_with("[telegram]"))
+            .collect();
+        assert_eq!(
+            warnings,
+            [
+                "[telegram] tool_approvals = true, approve_only = [\"sign_and_send_transaction\"]: \
+                 not implemented — tools are not approval-gated (no tool call waits for an \
+                 approval, on any engine or surface; docs/configuration.md § Telegram)"
+            ]
+        );
+
+        let agent = "[agents.m]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+        let warns = |telegram: &str| {
+            let cfg: Config = toml::from_str(&format!("{telegram}\n{agent}")).unwrap();
+            cfg.validate().expect("valid");
+            cfg.telegram.approvals_warning()
+        };
+        assert_eq!(warns("[telegram]\ntool_approvals = false"), None);
+        assert_eq!(warns(""), None);
+        let only = warns("[telegram]\napprove_only = [\"run_command\"]").unwrap();
+        assert!(
+            only.starts_with("[telegram] approve_only = [\"run_command\"]: not implemented"),
+            "{only}"
+        );
+        let flag = warns("[telegram]\ntool_approvals = true").unwrap();
+        let head =
+            "[telegram] tool_approvals = true: not implemented — tools are not approval-gated";
+        assert!(flag.starts_with(head), "{flag}");
     }
 }

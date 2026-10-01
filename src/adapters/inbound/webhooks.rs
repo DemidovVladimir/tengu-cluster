@@ -164,6 +164,7 @@ async fn serve_webhooks(
     let loops = Arc::new(LoopDispatch::new(
         handlers,
         config.runtime.max_decisions_in_flight,
+        config.runtime.max_queued_per_loop,
     ));
 
     let state = app_state(config, memory_manager, Arc::clone(&loops), secret_registry)?;
@@ -376,6 +377,14 @@ async fn dispatch_webhook(
                 warn!(name = %name, decision_loop = %loop_name, session_id = %session_id, "loop event refused: shutting down");
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"error": refused.to_string()})),
+                )
+                    .into_response();
+            }
+            // The dispatch warned (loop, session id, counts).
+            Err(refused @ Refused::QueueFull { .. }) => {
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
                     Json(json!({"error": refused.to_string()})),
                 )
                     .into_response();
@@ -1110,12 +1119,64 @@ mod tests {
         Arc<LoopDispatch>,
         Arc<crate::application::runtime::loops::tests::SlowLoop>,
     ) {
-        let slow = crate::application::runtime::loops::tests::SlowLoop::new(1);
+        slow_dispatch_with(loops, 1, 64)
+    }
+
+    fn slow_dispatch_with(
+        loops: &[&str],
+        ms: u64,
+        max_queued: usize,
+    ) -> (
+        Arc<LoopDispatch>,
+        Arc<crate::application::runtime::loops::tests::SlowLoop>,
+    ) {
+        let slow = crate::application::runtime::loops::tests::SlowLoop::new(ms);
         let handlers = loops
             .iter()
             .map(|n| (n.to_string(), Arc::clone(&slow) as Arc<dyn LoopHandler>))
             .collect();
-        (Arc::new(LoopDispatch::new(handlers, 4)), slow)
+        (Arc::new(LoopDispatch::new(handlers, 4, max_queued)), slow)
+    }
+
+    /// W1-gate review: a burst past `[runtime] max_queued_per_loop` gets 429
+    /// (the dispatch warns); what was accepted still runs.
+    #[tokio::test]
+    async fn loop_endpoint_429s_past_the_queue_bound() {
+        let (loops, slow) = slow_dispatch_with(&["watch"], 100, 1);
+        let state = app_state(
+            loop_config(),
+            Arc::new(MemoryManager::new()),
+            Arc::clone(&loops),
+            Arc::new(SecretRegistry::new()),
+        )
+        .unwrap();
+        assert_eq!(
+            post_signed(&state, b"{\"n\":1}").await,
+            StatusCode::ACCEPTED
+        );
+        for _ in 0..200 {
+            if loops.stats()["watch"].in_flight == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        assert_eq!(
+            post_signed(&state, b"{\"n\":2}").await,
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            post_signed(&state, b"{\"n\":3}").await,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        let st = loops.stats()["watch"].clone();
+        assert_eq!((st.accepted, st.queued, st.dropped), (2, 1, 1));
+        for _ in 0..200 {
+            if loops.stats()["watch"].completed == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(slow.seen.lock().unwrap().len(), 2);
     }
 
     async fn post_signed(state: &Arc<WebhookAppState>, body: &'static [u8]) -> StatusCode {

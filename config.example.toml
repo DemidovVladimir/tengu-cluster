@@ -52,7 +52,7 @@ model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
-# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill,
+# workspace_tools = ["shared_cache", "skill_distill"]  # opt-in tools: only names in src/domain/tools.rs::WORKSPACE_TOOLS (memory, skill lifecycle — and the families below)
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
 #   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
@@ -412,6 +412,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [runtime]
 # shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events get this long, then abort
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
+# max_queued_per_loop = 64                  # events one loop holds waiting; one more is refused (warn, webhook 429)
 # heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
 # heartbeat_stale_secs = 30                 # `tengu doctor --sandbox <name> --live` fails past this
 #
@@ -510,8 +511,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # A subagent the planner can route to. `description` + `example_queries` are
 # what the planner LLM reads — say what it is good at AND what it is NOT for.
-# `tools` is the allow-list for its subprocess runs (empty = every base tool;
-# workspace-tool names listed here are opted in like `workspace_tools`).
+# `tools` is its allow-list on every surface — plan steps, chat, the bridge
+# (empty = every base tool; opt-in names listed here switch on like `workspace_tools`).
 # `limits.max_tool_rounds` caps its LLM turns per step (tool calls on
 # `claude_code`), `limits.step_timeout_secs` the wall clock (default 600).
 # No `workspace` = a temp dir per step (and per webhook turn), removed after
@@ -630,10 +631,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.skill-improver]
 # engine = "openrouter"
 # model = "anthropic/claude-opus-4-7"
-# # `workspace_tools` allow-list: agentic_memory / shared_cache / persistent_store /
-# # skill_distill / apply_improver_proposal / manage_skill (+ the Solana LP tools,
-# # docs/tools.md). Regular tools like
-# # read_file / list_directory go in `tools`.
+# # Opt-in names (src/domain/tools.rs::WORKSPACE_TOOLS) listed in `tools` are
+# # switched on like `workspace_tools`; regular tools like read_file /
+# # list_directory go in `tools` too.
 # tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 #
 # [agents.skill-improver.identity]

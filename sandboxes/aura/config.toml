@@ -26,6 +26,10 @@ port = 7071
 enabled = true
 
 [telegram]
+# NOT implemented: `tool_approvals` / `approve_only` gate nothing — no tool
+# call waits for an approval, on any engine or surface (the approval adapter
+# is gone). `Config::load` warns while they are set. What an agent can call
+# is its `tools` list and scopes.
 tool_approvals = true
 approve_only = ["sign_and_send_transaction"]
 allowed_users = ['848344935']  # your sender id from the log
@@ -105,7 +109,10 @@ default = true
 workspace = "~/aura-workspace"
 skill_packages = ["aura-orchestrator", "molecule-x402", "beach-science", "privy-agentic-wallets"]
 workspace_tools = ["shared_cache"]
-tools = ["shared_cache", "http_request", "read_file", "list_directory"]
+# The allow-list on every surface (chat, plan steps, the `test` webhook).
+# run_command: the x402 flow and the Phase 4 node encrypt step of
+# aura-orchestrator / molecule-x402 (scope below).
+tools = ["shared_cache", "http_request", "read_file", "list_directory", "run_command"]
 description = """
 Runs the full Decentralised Science pipeline end-to-end: document analysis, \
 Proof-of-Invention registration, IP-NFT minting, Molecule project creation, \
@@ -131,6 +138,16 @@ example_queries = [
 # `tools` above (via the MCP bridge), no builtin Bash/Write.
 [agents.aura.claude_code]
 builtin_tools_profile = "read_only"
+
+# run_command: only the binaries the skills' commands start with — the first
+# command word, leading `NAME=value` skipped (`DEK='…' node -e …` → node,
+# `NOW=$(date +%s) && echo …` → echo); mkdir for E1's `mint/encrypted/`.
+# A guard rail, not a sandbox: what follows `;` / `|` / `&&`, a `$( )` or
+# `node -e` runs unchecked. It keeps python / pip / pdftotext (the skill
+# forbids them) out. Before 2026-10-01 aura's chat ran run_command under the
+# permissive fallback (any binary); its plan steps had no run_command.
+[agents.aura.scopes.run_command]
+shell_bins = ["curl", "date", "echo", "mkdir", "node", "printf", "sleep", "wc"]
 
 [agents.aura.limits]
 # Each tool round resends full history — cumulative tokens exceed 100K default by ~round 10.

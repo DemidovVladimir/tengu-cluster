@@ -518,6 +518,7 @@ impl Runtime {
         let loops = Arc::new(LoopDispatch::new(
             BTreeMap::new(),
             cfg.max_decisions_in_flight,
+            cfg.max_queued_per_loop,
         ));
         let health = Arc::new(HealthBoard::new(
             &sandbox,
@@ -550,6 +551,7 @@ impl Runtime {
         self.loops = Arc::new(LoopDispatch::new(
             handlers,
             self.cfg.max_decisions_in_flight,
+            self.cfg.max_queued_per_loop,
         ));
         self.health = Arc::new(HealthBoard::new(
             &self.sandbox,

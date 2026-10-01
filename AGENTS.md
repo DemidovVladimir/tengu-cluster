@@ -226,8 +226,9 @@ No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (
 2. Restart `tengu chat` — `TENGU_PLANNER_REGISTRY.md` is regenerated on planner turns.
 
 Fields (same `AgentConfig` as every in-process agent, `src/config/mod.rs`):
-`engine`, `model`, `description`, `example_queries`, `tools` (subprocess
-allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias),
+`engine`, `model`, `description`, `example_queries`, `tools` (allow-list on
+every surface — chat, plan steps, bridge; workspace-tool names opt in),
+`skill_packages` (`skills` alias),
 `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap
 per step), `limits.step_timeout_secs` (wall clock per step, default 600),
 `identity`, `claude_code`. There is no separate subagent schema and no
@@ -273,13 +274,13 @@ These are not preferences. They're load-bearing.
 
 ## Key gotchas (compiled from SESSION_HANDOFF + scars)
 
-- **`workspace_tools` is a narrow allow-list** —
-  `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`,
-  `apply_improver_proposal`, `manage_skill`. Anything else fails config
-  validation (`domain/tools.rs::WORKSPACE_TOOLS`). `manage_skill` is the
-  canonical unified skill write API (see `outbound/tools/manage_skill/`);
-  `agentic_memory` is the Postgres-backed Open Brain memory tool
-  (`postgres_memory` feature).
+- **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
+  in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
+  the Solana, Hyperliquid and xmarket families — read the list there, don't
+  copy it); anything else fails config validation, and listing one in
+  `tools` opts it in too. `manage_skill` is the canonical unified skill
+  write API (see `outbound/tools/manage_skill/`); `agentic_memory` is the
+  Postgres-backed Open Brain memory tool (`postgres_memory` feature).
 - **One agent schema (2026-09-18)** — `agents/*.toml` and `AgentSpec` are
   gone. A subagent is an `[agents.<name>]` block with a `description`;
   `bootstrap::tools::subagent_config` merges workspace-tool names found in
@@ -305,7 +306,10 @@ These are not preferences. They're load-bearing.
   field empty, e.g. xmarket's `[default_scopes.write_file]`), which stays a
   deny (`tengu doctor --engines` skips an agent whose own scopes deny the
   smoke tools — jev-exec's architect). `ToolScope::check_env_read` honours
-  the `"*"` wildcard like `net_hosts` / `shell_bins`.
+  the `"*"` wildcard like `net_hosts` / `shell_bins`. `shell_bins` gates a
+  command's first command word only (`domain::scope::shell_command_binary`:
+  leading `NAME=value` skipped, so `DEK=… node` checks `node`) — a guard
+  rail, not a sandbox: `;`, pipes, `$( )` and `node -e` run unchecked.
 - **Config resolution** — `--sandbox <name>` replaces the base config
   wholesale; otherwise `--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml`.
   The `run-agent` child gets the same file: `--sandbox` travels over IPC and
@@ -574,7 +578,10 @@ These are not preferences. They're load-bearing.
   an unlisted sender gets "Unauthorized.". A private agent (no `description`,
   not `default` — the exec-tool / signing owners) is never `@<id>:` /
   `@<role>:`-routable, never the default and not listed in `/agents` or the
-  team block (`telegram.rs::telegram_reachable`).
+  team block (`telegram.rs::telegram_reachable`). `[telegram] tool_approvals`
+  / `approve_only` are NOT implemented — no tool call waits for an approval,
+  on any engine or surface; they still load (aura sets `approve_only`) and
+  `Config::load` warns naming them (`TelegramConfig::approvals_warning`).
 - **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
   `config/sections.rs::SandboxSections` (one `Arc` per config, set by
   `fold_default_scopes`): the sandbox name (`<name>` of the file
@@ -592,7 +599,8 @@ These are not preferences. They're load-bearing.
   account records the sandbox that first wrote it, another sandbox's tools are
   refused `account_owner_mismatch`); every `[decision_loops.*]` built once
   behind `LoopDispatch` (one event per loop at a time, `[runtime]
-  max_decisions_in_flight`); `/webhooks/:name` with `--features webhooks`;
+  max_decisions_in_flight`; past `max_queued_per_loop` waiting events, 64 by
+  default, one more is refused with a warn — webhook 429); `/webhooks/:name` with `--features webhooks`;
   SIGINT/SIGTERM drain ≤ `shutdown_grace_secs`; heartbeat
   `<state dir>/run-<s>.json` + `loop/1` / `feed/1` rows; `tengu doctor
   --sandbox <s> --live` is the Docker healthcheck. `tengu risk resume` may

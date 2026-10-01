@@ -25,7 +25,7 @@ Deviations from the sketch below: history is in-process (not `shared_cache`); a 
 | Executor | `[decision_loops.executor]`: `crypto_price` (Coinbase), `fx_rate` (Frankfurter), `list_workspace`, `done`; `escalate = false`, `act_at = 0.7` |
 | Result back | `tengu decide` now prints `history` (args + reduced result per step) next to `outcomes` |
 | Verified | "1 BTC in EUR?" → architect sent 2 tasks in parallel → Jev `crypto_price(BTC-USD)` / `fx_rate(EUR)` at confidence 1.0, then `done`; ~0.3–0.6 s per decision. Architect's own `http_request` → `host 'api.coinbase.com' not in allowed net_hosts []` |
-| Limits | Jev only chooses — args must be enumerated slots (no free text from the task); `run_command` scope checks the first token only; the Claude CLI also loads the user's global Claude Code plugin MCP servers (not tengu-scoped); stdout carries tracing lines before the JSON |
+| Limits | Jev only chooses — args must be enumerated slots (no free text from the task); `run_command` scope checks the first command word only (leading `NAME=value` skipped, 2026-10-01); the Claude CLI also loads the user's global Claude Code plugin MCP servers (not tengu-scoped); stdout carries tracing lines before the JSON |
 
 ## Shape
 

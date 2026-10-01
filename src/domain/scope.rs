@@ -28,7 +28,8 @@ pub(crate) struct ToolScope {
     #[serde(default)]
     pub env_reads: Vec<String>,
 
-    /// For run_command: allowed binary names (basename match).
+    /// For `run_command` and shell skills: allowed binary names (basename
+    /// match on the command's first command word, `shell_command_binary`).
     /// Empty = no shell execution.
     #[serde(default)]
     pub shell_bins: Vec<String>,
@@ -162,6 +163,86 @@ pub(crate) fn protected_write_in(rel: &Path, hardened: bool) -> Option<&'static 
              (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — \
              tengu loads them into the system prompt",
         )
+    })
+}
+
+/// The word [`ToolScope::check_shell_bin`] gates for a shell command line
+/// (`run_command`, shell skills): its first command word.
+///
+/// | Command | Word |
+/// |---|---|
+/// | `curl -sS …` | `curl` |
+/// | `DEK='…' node -e …` (leading `NAME=value` skipped) | `node` |
+/// | `NOW=$(date +%s) && echo …` (assignments only, then the next command) | `echo` |
+/// | `FOO=1` (no command word) | `FOO=1` — refused by any list but `"*"` |
+///
+/// Words split as `sh` splits them: quotes, `\` escapes, `$( )` / `$(( ))`
+/// and backticks keep their spaces; unquoted whitespace, `;`, `&` and `|`
+/// separate. Only this word is gated: what runs after `;` / `|` / `&&`,
+/// inside a substitution or in the binary itself (`node -e`) is not —
+/// `shell_bins` is a guard rail, not a sandbox.
+pub(crate) fn shell_command_binary(command: &str) -> &str {
+    let words = shell_words(command);
+    words
+        .iter()
+        .find(|w| !is_assignment(w))
+        .or(words.first())
+        .copied()
+        .unwrap_or("")
+}
+
+/// `command` split into words like `sh` splits it; the operators `;` `&`
+/// `|` only separate. Each word is a slice of `command`, quotes kept.
+fn shell_words(command: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quote: Option<char> = None;
+    let mut depth = 0usize; // `$(` nesting
+    let mut chars = command.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if let Some(q) = quote {
+            if c == '\\' && q != '\'' {
+                chars.next();
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if depth == 0 && (c.is_whitespace() || matches!(c, ';' | '&' | '|')) {
+            if let Some(s) = start.take() {
+                words.push(&command[s..i]);
+            }
+            continue;
+        }
+        start.get_or_insert(i);
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '\'' | '"' | '`' => quote = Some(c),
+            '$' if chars.peek().is_some_and(|&(_, n)| n == '(') => {
+                chars.next();
+                depth += 1;
+            }
+            '(' if depth > 0 => depth += 1,
+            ')' if depth > 0 => depth -= 1,
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        words.push(&command[s..]);
+    }
+    words
+}
+
+/// `NAME=value` with an `sh` variable name (`[A-Za-z_][A-Za-z0-9_]*`).
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        let mut chars = name.chars();
+        chars
+            .next()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+            && chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
     })
 }
 
@@ -456,6 +537,52 @@ mod tests {
             ..Default::default()
         };
         assert!(scope.check_shell_bin("rm").is_err());
+    }
+
+    /// The first command word: leading assignments skipped (also a whole
+    /// assignment-only command before `&&` / `;` / `|`), quotes, escapes and
+    /// `$( )` kept inside their word; no command word → the first word.
+    #[test]
+    fn shell_command_binary_is_the_first_command_word() {
+        for (command, bin) in [
+            (
+                "curl -sS -i -X POST \"$X402_GATEWAY_URL/x\" -d '{}'",
+                "curl",
+            ),
+            ("  /usr/bin/git status", "/usr/bin/git"),
+            (
+                "DEK='aGVsbG8+/w==' node -e 'console.log(1)' a.pdf b.enc",
+                "node",
+            ),
+            ("A=1 B=\"x y\" C=$(date +%s) git log", "git"),
+            (
+                "NOW=$(date +%s) && echo \"0x$(openssl rand -hex 32)\" && echo $(( NOW - 600 ))",
+                "echo",
+            ),
+            ("printf '%s' '{\"a\": 1}' | base64 | tr -d '\\n'", "printf"),
+            ("wc -c < research/paper.pdf", "wc"),
+            ("X=`date +%s`;sleep 1", "sleep"),
+            ("echo|nc example.org 80", "echo"),
+            ("; rm -rf x", "rm"),
+            ("X=a\\ b node x", "node"),
+            ("'node' -e 1", "'node'"),
+            ("\"FOO=1\" node", "\"FOO=1\""),
+            ("FOO=1", "FOO=1"),
+            ("FOO=1 && BAR=$(id)", "FOO=1"),
+            ("   ", ""),
+            ("", ""),
+        ] {
+            assert_eq!(shell_command_binary(command), bin, "{command}");
+        }
+        let scope = ToolScope {
+            shell_bins: vec!["node".into(), "echo".into()],
+            ..Default::default()
+        };
+        let gate = |c: &str| scope.check_shell_bin(shell_command_binary(c));
+        assert!(gate("DEK='k' node -e 1").is_ok());
+        assert!(gate("NOW=$(date +%s) && echo $NOW").is_ok());
+        assert!(gate("PY=1 python3 -c 1").is_err());
+        assert!(gate("FOO=1").is_err());
     }
 
     #[test]

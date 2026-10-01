@@ -381,6 +381,12 @@ impl FeedRunner {
             Err(Refused::ShuttingDown) => {
                 debug!(feed = %self.spec.name, slot_ms, "tick not sent: shutting down");
             }
+            // Other senders (webhooks) filled the loop's queue; the dispatch
+            // warned. This tick is dropped, the next one tries again.
+            Err(e @ Refused::QueueFull { .. }) => {
+                debug!(feed = %self.spec.name, decision_loop = %target, slot_ms, "tick not sent: {e}");
+                self.env.health.dropped(1, now_ms).await;
+            }
             Err(e @ Refused::UnknownLoop) => {
                 let message = format!("decision loop `{target}`: {e}");
                 warn!(feed = %self.spec.name, %message, "tick not sent");
@@ -1302,6 +1308,7 @@ mod tests {
                 Arc::clone(&handler) as Arc<dyn LoopHandler>,
             )]),
             4,
+            crate::config::runtime::DEFAULT_MAX_QUEUED_PER_LOOP,
         ));
         let spec = tick_spec("exit_tick", every(MIN), &loops, "xm_main");
         let mut feed = FeedRunner::new(spec, rig.env("exit_tick", 0.5));
@@ -1360,6 +1367,7 @@ mod tests {
                 Arc::clone(&handler) as Arc<dyn LoopHandler>,
             )]),
             4,
+            crate::config::runtime::DEFAULT_MAX_QUEUED_PER_LOOP,
         ));
         let schedule = Schedule {
             zone: Zone::NewYork,

@@ -6,6 +6,7 @@
 //! |---|---|
 //! | one event at a time per loop, in arrival order | per-loop `turn` mutex (tokio's is FIFO) |
 //! | ≤ `[runtime] max_decisions_in_flight` running across loops | one FIFO `Semaphore` |
+//! | ≤ `[runtime] max_queued_per_loop` waiting per loop | one more is refused ([`Refused::QueueFull`]) with a warn, counted dropped, `last_error` set |
 //! | shutdown ([`LoopDispatch::drain`]) | new events refused ([`Refused::ShuttingDown`]), queued ones dropped, running ones get until the deadline, then are aborted |
 //! | stats ([`LoopStats`]) | queued · in flight · accepted · completed · failed · dropped · last event / finish times · last error |
 
@@ -41,14 +42,23 @@ impl LoopHandler for DecisionLoop {
 pub(crate) enum Refused {
     UnknownLoop,
     ShuttingDown,
+    /// `max` events (`[runtime] max_queued_per_loop`) already wait for the loop.
+    QueueFull {
+        max: usize,
+    },
 }
 
 impl std::fmt::Display for Refused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Refused::UnknownLoop => "no such decision loop in this process",
-            Refused::ShuttingDown => "shutting down — not accepting loop events",
-        })
+        match self {
+            Refused::UnknownLoop => f.write_str("no such decision loop in this process"),
+            Refused::ShuttingDown => f.write_str("shutting down — not accepting loop events"),
+            Refused::QueueFull { max } => write!(
+                f,
+                "decision loop queue full: {max} events already waiting ([runtime] \
+                 max_queued_per_loop) — event refused, retry later"
+            ),
+        }
     }
 }
 
@@ -100,15 +110,19 @@ impl Slot {
 pub(crate) struct LoopDispatch {
     slots: BTreeMap<String, Arc<Slot>>,
     permits: Arc<Semaphore>,
+    /// Waiting events one loop may hold (`[runtime] max_queued_per_loop`).
+    max_queued: usize,
     closing: watch::Sender<bool>,
     tasks: Mutex<JoinSet<()>>,
 }
 
 impl LoopDispatch {
-    /// `max_in_flight` < 1 is treated as 1 (config validation refuses 0).
+    /// `max_in_flight` / `max_queued` < 1 are treated as 1 (config
+    /// validation refuses 0).
     pub(crate) fn new(
         handlers: BTreeMap<String, Arc<dyn LoopHandler>>,
         max_in_flight: usize,
+        max_queued: usize,
     ) -> Self {
         let slots = handlers
             .into_iter()
@@ -125,6 +139,7 @@ impl LoopDispatch {
         Self {
             slots,
             permits: Arc::new(Semaphore::new(max_in_flight.max(1))),
+            max_queued: max_queued.max(1),
             closing: watch::channel(false).0,
             tasks: Mutex::new(JoinSet::new()),
         }
@@ -148,7 +163,8 @@ impl LoopDispatch {
 
     /// Queue `event` for `loop_name` and return at once; it runs when the
     /// loop and an in-flight slot are free. Refused after [`Self::drain`]
-    /// began. Callers: webhook loop endpoints.
+    /// began, and while `max_queued` events already wait for the loop.
+    /// Callers: webhook loop endpoints.
     #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
     pub(crate) fn submit(
         &self,
@@ -185,6 +201,21 @@ impl LoopDispatch {
         if *self.closing.borrow() {
             slot.stats().dropped += 1;
             return Err(Refused::ShuttingDown);
+        }
+        // Enqueues serialise on `tasks`, so the count cannot grow between
+        // this check and `Ticket::queue`.
+        let queued = slot.stats().queued;
+        if queued as usize >= self.max_queued {
+            let refused = Refused::QueueFull {
+                max: self.max_queued,
+            };
+            {
+                let mut st = slot.stats();
+                st.dropped += 1;
+                st.last_error = Some(refused.to_string());
+            }
+            warn!(decision_loop = %slot.name, session_id = %session_id, queued, max_queued = self.max_queued, "loop event refused: queue full");
+            return Err(refused);
         }
         while tasks.try_join_next().is_some() {}
         let ticket = Ticket::queue(Arc::clone(&slot));
@@ -369,13 +400,70 @@ pub(crate) mod tests {
     }
 
     fn dispatch(loops: &[(&str, Arc<SlowLoop>)], max: usize) -> LoopDispatch {
+        dispatch_queued(
+            loops,
+            max,
+            crate::config::runtime::DEFAULT_MAX_QUEUED_PER_LOOP,
+        )
+    }
+
+    fn dispatch_queued(
+        loops: &[(&str, Arc<SlowLoop>)],
+        max: usize,
+        max_queued: usize,
+    ) -> LoopDispatch {
         LoopDispatch::new(
             loops
                 .iter()
                 .map(|(n, l)| (n.to_string(), Arc::clone(l) as Arc<dyn LoopHandler>))
                 .collect(),
             max,
+            max_queued,
         )
+    }
+
+    /// W1-gate review: an event burst cannot park unbounded tasks — past
+    /// `max_queued` waiting events a loop refuses (`QueueFull`, counted
+    /// dropped, `last_error` set, tracked receivers too) and accepts again
+    /// once its queue drains. Other loops are unaffected.
+    #[tokio::test]
+    async fn a_full_loop_queue_refuses_until_it_drains() {
+        let (a, b) = (SlowLoop::new(80), SlowLoop::new(1));
+        let d = dispatch_queued(&[("a", a.clone()), ("b", b)], 4, 2);
+        d.submit("a", Value::Null, "running".into()).unwrap();
+        for _ in 0..200 {
+            if d.stats()["a"].in_flight == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        d.submit("a", Value::Null, "q1".into()).unwrap();
+        d.submit_tracked("a", Value::Null, "q2".into()).unwrap();
+        let full = Refused::QueueFull { max: 2 };
+        assert_eq!(d.submit("a", Value::Null, "burst".into()), Err(full));
+        assert_eq!(
+            d.submit_tracked("a", Value::Null, "burst2".into()).err(),
+            Some(full)
+        );
+        let st = &d.stats()["a"];
+        assert_eq!(
+            (st.accepted, st.queued, st.in_flight, st.dropped),
+            (3, 2, 1, 2)
+        );
+        let error = st.last_error.clone().unwrap();
+        assert!(
+            error.contains("queue full: 2 events already waiting")
+                && error.contains("max_queued_per_loop"),
+            "{error}"
+        );
+        // Another loop still accepts.
+        d.submit("b", Value::Null, "other".into()).unwrap();
+        settle(&d, "b", 1).await;
+
+        settle(&d, "a", 3).await;
+        assert_eq!(*a.seen.lock().unwrap(), ["running", "q1", "q2"]);
+        d.submit("a", Value::Null, "after".into()).unwrap();
+        settle(&d, "a", 4).await;
     }
 
     async fn settle(d: &LoopDispatch, loop_name: &str, done: u64) {
