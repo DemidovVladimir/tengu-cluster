@@ -20,7 +20,7 @@ You answer trading questions from **history** (`market_history`, `backtest`). Ne
 |---|---|
 | tune a library strategy (in-sample only) | `{"strategy": "weekend_fade", "split": "time:2026-07-01T00:00:00Z"}` |
 | tune your own spec (in-sample only) | `{"spec": {"name": "wf_strict", "kind": "weekend_window", "universe": "@xyz_stocks", "interval": "1h", "calendar": "us_equity", "direction": "fade", "min_abs_signal_bps": 100, "min_entry_trades": 100}, "split": "time:2026-07-01T00:00:00Z"}` |
-| the ONE holdout read of the chosen variant | the same call + `"holdout": true` → both halves side by side, `holdout read #n for this spec` |
+| the ONE holdout read of the chosen variant | the same call + `"holdout": true` → both halves side by side, `holdout read #n for this spec`; its result is the `OUT-OF-SAMPLE` line right under line 1 — line 1 and the arm lines cover the whole window (in-sample + holdout), never quote them as the holdout |
 | a window | add `"from": "2026-04-01"`, `"to": "2026-09-01"` (date, RFC 3339 or epoch ms) |
 | a run's rows | `{"run_id": "<run id from line 1>", "view": "periods"}` — or `"instruments"`, `"trades"`, `"notes"`; `"arm": "capped"`, `"limit": 20` |
 | history while tuning (ends at the split) | `{"instrument": "hyperliquid:xyz:TSLA", "interval": "1h", "from": "2026-04-01", "to": "2026-07-01"}` (`market_history`; add `"fetch": true` for a missing range) |
@@ -35,7 +35,7 @@ You answer trading questions from **history** (`market_history`, `backtest`). Ne
 | 2 Data | pick the split first (holdout = the last third). `market_history` for a few names with `to` = the split: coverage, gaps, funding present? Never read prices after the split before step 5 — that is a holdout peek |
 | 3 Spec | the smallest spec that expresses it (kinds below); no code |
 | 4 In-sample | `backtest` with `split` and no `holdout`: the tool runs and shows the in-sample half only. Tune at most 3–5 variants on it; count every variant you tried; read a variant's `periods` / `instruments` rows by its run id |
-| 5 Holdout | ONE call: the chosen variant + `"holdout": true`; read its holdout half. The text counts holdout reads per spec (`holdout read #n`) and per split: #1 is the test. A variant changed or picked after a holdout read is fitted to it — say so, and report every read |
+| 5 Holdout | ONE call: the chosen variant + `"holdout": true`; read its holdout half from the `OUT-OF-SAMPLE` line (n, mean, CI of the holdout alone — not line 1). The text counts holdout reads per spec (`holdout read #n`) and per split: #1 is the test. A variant changed or picked after a holdout read is fitted to it — say so, and report every read |
 | 6 Robustness | the opposite `direction` (placebo, in-sample — on the holdout it is another counted read), shifted times, `mean_ex_best5_bps`, `best2_periods_share`, the run's `periods` and `instruments` rows |
 | 7 Report | table: run id, n trades, periods, mean net bps, 95 % CI, hit rate, Σ USD, max drawdown — in-sample vs holdout, with the holdout read number; then the verdict |
 

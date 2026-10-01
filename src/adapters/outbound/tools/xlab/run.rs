@@ -43,7 +43,7 @@ use crate::config::backtest::BacktestConfig;
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::backtests_dir;
 use crate::domain::backtest::costs::cost_for;
-use crate::domain::backtest::report::PRIMARY_ARM;
+use crate::domain::backtest::report::{BacktestReport, PRIMARY_ARM};
 use crate::domain::backtest::spec::SplitSpec;
 use crate::domain::calendar::Calendar;
 use crate::domain::marketdata::fmt_time;
@@ -515,6 +515,29 @@ fn period_lines(ran: &Ran) -> Vec<String> {
 }
 
 /// The tool's text (module table); `read` = a recorded holdout read.
+/// `OUT-OF-SAMPLE (holdout of <split>) research: n=… mean_net_bps=… ci95=[…]
+/// · in-sample n=… mean_net_bps=… ci95=[…]` — the result a holdout read is
+/// judged on; `None` when the research arm has no split halves.
+fn out_of_sample_line(report: &BacktestReport, split: &SplitSpec) -> Option<String> {
+    let halves = report.arms.get(PRIMARY_ARM)?.split.as_ref()?;
+    let half = |s: &crate::domain::backtest::stats::Summary| {
+        let mean = s
+            .mean_net_bps
+            .map_or_else(|| "—".to_string(), |m| format!("{m:+.2}"));
+        let ci = match (s.ci95_lo_bps, s.ci95_hi_bps) {
+            (Some(lo), Some(hi)) => format!("[{lo:+.1}, {hi:+.1}]"),
+            _ => "—".to_string(),
+        };
+        format!("n={} mean_net_bps={mean} ci95={ci}", s.n)
+    };
+    Some(format!(
+        "OUT-OF-SAMPLE (holdout of {split}) research: {} · in-sample {} — judge the holdout on \
+         this line; line 1 and the arm lines cover the whole window (in-sample + holdout)",
+        half(&halves.holdout),
+        half(&halves.in_sample)
+    ))
+}
+
 pub(crate) fn render(
     obs: &Observation,
     ran: &Ran,
@@ -524,8 +547,19 @@ pub(crate) fn render(
 ) -> String {
     let mut head = obs.clone();
     head.data = Value::Null;
-    let mut lines = vec![head.render_text(now_ms)];
     let report = &ran.run.report;
+    let head_text = head.render_text(now_ms);
+    let mut head_lines = head_text.lines();
+    let mut lines: Vec<String> = head_lines.next().map(str::to_string).into_iter().collect();
+    // A holdout read: line 1 and the arm lines cover the whole window; the
+    // out-of-sample result goes right under line 1, labelled (a live
+    // Architect quoted the whole-window CI as the holdout's).
+    if let Halves::Both(split) = &ran.halves {
+        if let Some(line) = out_of_sample_line(report, split) {
+            lines.push(line);
+        }
+    }
+    lines.extend(head_lines.map(str::to_string));
     // Its line 1 is the row's headline, already in line 1 above; its data
     // notes are read with the notes view, not in report.md.
     let compact = report.render_compact();
@@ -1066,6 +1100,24 @@ mod tests {
         }
         assert_eq!(obs.features["holdout_reads"], 1);
         assert!(obs.features.contains_key("holdout_mean_net_bps"));
+        // The out-of-sample result sits right under line 1, labelled, with
+        // the holdout half's own n / mean (line 1 covers the whole window).
+        let oos = out.text.lines().nth(1).unwrap();
+        let holdout = &full.arms["research"].split.as_ref().unwrap().holdout;
+        assert!(
+            oos.starts_with(&format!(
+                "OUT-OF-SAMPLE (holdout of time:2026-09-15T00:00:00Z) research: n={} \
+                 mean_net_bps={:+.2} ci95=",
+                holdout.n,
+                holdout.mean_net_bps.unwrap()
+            )),
+            "{oos}"
+        );
+        assert!(oos.contains("judge the holdout on this line"), "{oos}");
+        assert!(
+            !text.contains("OUT-OF-SAMPLE"),
+            "a hidden run has no out-of-sample line: {text}"
+        );
         assert!(
             out.text
                 .contains("\nsplit time:2026-09-15T00:00:00Z research: in-sample n="),
