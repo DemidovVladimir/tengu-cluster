@@ -15,9 +15,6 @@
 //! | Counters | `CacheStats` (`DecisionEngine::cache_stats`): hits · misses (= live calls when online) · errors (offline misses, failed live calls, store errors) |
 //! | Store | `decisions(key PK, model, request, decision, created_at_ms)` — `request` = the hashed canonical text; WAL (`synchronous = NORMAL`) + busy_timeout 5 s, one connection, every call on `spawn_blocking` (pattern of `history_sqlite.rs`) |
 
-// The gate arm (`application/backtest/gate.rs`) lands with the xlab wave.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

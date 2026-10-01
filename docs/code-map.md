@@ -62,7 +62,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Skills registry / lifecycle | `src/application/skills/registry.rs` / `src/application/skills/lifecycle/` |
 | Secrets vault / redaction | `src/adapters/outbound/secrets.rs` / `src/domain/secrets.rs` |
 | Metrics records / bus | `src/domain/metrics.rs` / `src/application/metrics.rs` |
-| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` · replay (`SimClock`, terminal-only loop, `Verdict`) + decision cache `src/adapters/outbound/decision_cache.rs` |
+| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` · replay (`SimClock`, terminal-only loop, `Verdict`) + decision cache `src/adapters/outbound/decision_cache.rs` · backtest gate arm `src/application/backtest/gate.rs` + `src/domain/backtest/gate.rs` (`build_gate`; `docs/xlab-2026-10-01.md` § 7) |
 | Typed tool observations + TTL cache | `src/domain/observation.rs` (`Observation`, `Observed`, `Field`, `CachePolicy`) · port `src/ports/observation.rs` · `src/application/observe.rs` (`observe`) · store `src/adapters/outbound/observations.rs` (`<workspace>/.tengu/observations.db`) · loop `world` `src/application/decision_loop/world.rs` |
 | Solana LP tools (`sol_price` … `lp_decide`; writes `solana_close_token_accounts` …) | interfaces `src/adapters/outbound/tools/solana/defs.rs` · plugin + families `src/adapters/outbound/tools/solana/` · RPC / accounts `src/adapters/outbound/solana/` · pure types + policy `src/domain/solana.rs`, `src/domain/lp/` · tx wire format `src/domain/solana_tx.rs` |
 | `tengu run` (loops, feeds, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health,feeds}.rs` · `src/domain/runtime.rs` · fire times `src/domain/schedule.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · `[feeds.<n>]` `src/config/feeds.rs` · doc `docs/runtime-2026-09-30.md` |
@@ -233,18 +233,19 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (59 files)
+### domain — data + pure policy (60 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
-| `src/domain/backtest/mod.rs` | 31 | Backtests (xlab) — pure: spec → `candidates` → arms → report; module table. |
+| `src/domain/backtest/mod.rs` | 33 | Backtests (xlab) — pure: spec → `candidates` → arms → report; module table. |
 | `src/domain/backtest/checks.rs` | 328 | Backtest cross-kind checks (tests only): time integrity — candidates at or before t unchanged when the next bar or the whole future moves, `data_asof_ms ≤ decided_at_ms` for every kind and arm — and the rule W golden (= `weekend_fade::replay`). |
 | `src/domain/backtest/costs.rs` | 192 | Backtest cost model `CostSpec`: taker fee, half-spread (`fixed` / `abdi_ranaldo` / `ctx`), slippage, funding on / off; `cost_for` = longest `[backtest.costs]` prefix. |
 | `src/domain/backtest/engine.rs` | 956 | Backtest engine: `candidates` (checks, then `kinds.rs`) → `simulate` per arm (research; `[risk]`-capped: order clamp, gross / net exposure, daily / total loss halts, refusals by rule) — `MarketData`, `RunParams`, `Candidate`, `Trade` (the audit row), `ArmResult`. |
 | `src/domain/backtest/features.rs` | 327 | Features as-of t for the Jev gate: returns 1 / 24 / 168 h, 24 h vol, volume ratio, trades, funding APR, half-spread, hour of week — only rows observable at t, missing ⇒ absent. |
 | `src/domain/backtest/fills.rs` | 607 | Backtest fills: cost per side (fee + half-spread fixed / Abdi–Ranaldo / ctx + slippage), funding over a hold (settlement hours, complete flag), exits (TP / SL / hold, funding under the exit APR, pair \|z\|), the pair spread series. |
+| `src/domain/backtest/gate.rs` | 846 | The Jev gate arm's pure half: `gate_event` (strategy, instrument, side, signal, decided_at, features — rounded, nothing after the decision), `GateClass` of a `Verdict` (take / skip / ask_architect / unsure / rejected / error), `p_take`, `GateSummary` (counts, take rate, cache, est. cost, calibration, jev − rules) + its `report.md` section, CLI lines and `jev_*` row features. |
 | `src/domain/backtest/kinds.rs` | 1150 | Decisions of the six strategy kinds as-of t: rule W windows (`fade_window`, `signal_of`, `select_capped`), daily windows, move triggers, funding carry, pair spread, event windows; skips and data notes. |
 | `src/domain/backtest/report.rs` | 847 | `BacktestReport` = `report.json` + row `backtest/1:<run id>` (≤ 32 features, line 1 ids whole), `report.md` (summary, split, per instrument, limits), compact text ≤ 3 KB. |
 | `src/domain/backtest/spec.rs` | 1292 | Strategy specs: six kinds, `deny_unknown_fields`, bounds naming the field, `to_value`, `data_range`; `SplitSpec` (`time:` / `instruments:`). |
@@ -305,8 +306,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
 | `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
 | `src/ports/market_data.rs` | 81 | `MarketDataStore` — the market-data warehouse (bars, funding, contexts per full instrument id; `coverage`); impl `outbound/market_data.rs` (`<state dir>/market.db`). |
-| `src/ports/decision.rs` | 53 | Decision-loop ports — `DecisionEngine` (Jev; `cache_stats` → `CacheStats` for a caching engine), `Escalator` (low confidence → orchestrator). |
-| `src/ports/clock.rs` | 94 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `SimClock` settable time (the decision loop's replay clock; `ManualClock` in tests). |
+| `src/ports/decision.rs` | 52 | Decision-loop ports — `DecisionEngine` (Jev; `cache_stats` → `CacheStats` for a caching engine), `Escalator` (low confidence → orchestrator). |
+| `src/ports/clock.rs` | 93 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `SimClock` settable time (the decision loop's replay clock; `ManualClock` in tests). |
 | `src/ports/book.rs` | 188 | `BookSource` — a fresh L2 book per instrument (`BookRead`), live or replayed; `ScriptedBooks` test fake. |
 | `src/ports/memory.rs` | 153 | Memory ports — `MemoryProvider` (harness-level memory backends driven by |
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
@@ -341,10 +342,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/sections.rs` | 44 | `SandboxSections` — sandbox-level sections tools read at call time, shared by every agent via `AgentConfig::sandbox`; `owner()` = the sandbox of the config file (else `default`). |
 | `src/config/xmarket.rs` | 1566 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` and its layout (`ledger_db`, `runtime_db`, `history_dir`, reserved store names) + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`) + `[xmarket.weekend_fade]` (`WeekendFadeConfig`, its load rules against `[risk]`, `[recorder]` and the agents); xmarket load rules: `[risk]` needs `[xmarket]`, one shared workspace for feed / loop / xmarket-tool agents (`XM_TOOLS`), with `[risk]` a workspace on every agent, the state dir outside every fs root and workspace. |
 
-### application — use cases (51 files)
+### application — use cases (53 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/application/backtest/gate.rs` | 974 | The Jev gate arm on history: `run_gate` (the first `--max-decisions` candidates by seq, the rest counted as cut; K workers, each a replay loop + `SimClock`, on one queue; results by seq, identical for any K; failed calls = class error), `gate_arms` (rules vs jev arms, research + capped, calibration, paired diff → `GateSummary`), `GateArms::add_to_report`. |
+| `src/application/backtest/mod.rs` | 4 | Backtests (xlab) — the gate arm. |
 | `src/application/chat/flow.rs` | 271 | Flow management: key resolution, history turn limits, compaction policy, and compaction. |
 | `src/application/chat/mod.rs` | 7 | Chat use cases — one user turn (`service`), flow/session budgeting |
 | `src/application/chat/prompt_budget.rs` | 91 | Prompt budgeting helpers for runtime turns. |
@@ -356,11 +359,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/decision_loop/mod.rs` | 2000 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`; `trigger` when set); time from an optional `Clock` (`with_clock`); `decide_terminal` → `Verdict` (replay). |
+| `src/application/decision_loop/mod.rs` | 1999 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`; `trigger` when set); time from an optional `Clock` (`with_clock`); `decide_terminal` → `Verdict` (replay). |
 | `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
 | `src/application/decision_loop/slots.rs` | 314 | Argument slots — static / history- / observation-sourced candidates, caps, `{slot}` arg rendering. |
 | `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
-| `src/application/mod.rs` | 12 | Application — use cases (chat turn, orchestration, memory, skills, tool |
+| `src/application/mod.rs` | 15 | Application — use cases (chat turn, orchestration, memory, skills, tool |
 | `src/application/observe.rs` | 182 | `observe()` — cache-or-fetch for typed tools (fresh rows only, `Error` never cached, store failure → live). |
 | `src/application/paper.rs` | 519 | `fill_with_latency` — sleep the `[paper]` latency on the `Clock`, then read the book, then fill against it (convention 16); `decide` — the exec tools' gate (or the shadow gate) + fill closure run inside the ledger transaction (an entry re-probes the kill-switch file there). |
 | `src/application/orchestrator/events.rs` | 87 | `OrchestratorEvent` + broadcast channel. |
@@ -402,7 +405,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/bootstrap/memory.rs` | 123 | Memory wiring — builds the `MemoryManager` (builtin provider + disk vector |
-| `src/bootstrap/decision.rs` | 369 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. Replay: `build_replay_loop` (terminal-only, caller's clock, run-dir audit, no tools / store / escalator), `cached_decision_engine` (`<state dir>/backtests/decision-cache.db` over `JevClient`, or offline). |
+| `src/bootstrap/decision.rs` | 497 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. Replay: `build_replay_loop` (terminal-only, no history, caller's clock, run-dir audit, no tools / store / escalator), `cached_decision_engine` (`<state dir>/backtests/decision-cache.db` over `JevClient`, or offline), `build_gate` (the gate arm: cached engine + K replay loops, each on its own `SimClock`). |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
 | `src/bootstrap/runtime.rs` | 833 | `tengu run` composition — the leases (`LeasePlan` / `OwnerLeases`: `runtime:<sandbox>` + `state:<dir>` for an `[xmarket]` state dir; `tengu webhooks` takes the same), every `[decision_loops.*]` built once, every `[feeds.*]` started (`start_feeds`, `SystemClock`, executors under `egress::AttributedExecutor`), webhook routes via `Runtime::spawn`. |
@@ -425,7 +428,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/history_sqlite.rs` | 531 | `SqliteHistoryStore` — `<state dir>/history/<YYYYMMDD>.db` UTC day files (WAL), range / asof across days, retention sweeper. |
 | `src/adapters/outbound/hyperliquid/mod.rs` | 6 | Hyperliquid outbound — the `POST /info` client (`info.rs`). |
 | `src/adapters/outbound/hyperliquid/info.rs` | 833 | `HlInfo` — Hyperliquid `POST /info` over the scoped egress client, request weights from `[rate_limits.hyperliquid]`, HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF); a keyed `HL_API_URL` path never renders (`redacted_path`, `Scrubber::for_keyed_path`). |
-| `src/adapters/outbound/decision_cache.rs` | 474 | `CachedDecisionEngine` — replay-deterministic `DecisionEngine` over SQLite (`<state dir>/backtests/decision-cache.db`, WAL): key = sha256 hex of the canonical `{model, state, questions}` (keys sorted at every depth), hit = the stored `Decision`, miss = inner call + store, offline miss = error naming the key; `CacheStats` hits / misses / errors. |
+| `src/adapters/outbound/decision_cache.rs` | 471 | `CachedDecisionEngine` — replay-deterministic `DecisionEngine` over SQLite (`<state dir>/backtests/decision-cache.db`, WAL): key = sha256 hex of the canonical `{model, state, questions}` (keys sorted at every depth), hit = the stored `Decision`, miss = inner call + store, offline miss = error naming the key; `CacheStats` hits / misses / errors. |
 | `src/adapters/outbound/decisions.rs` | 363 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
 | `src/adapters/outbound/engines/claude_code.rs` | 800 | Claude Code engine — runs agents through the local Claude CLI subprocess. |
 | `src/adapters/outbound/engines/mod.rs` | 163 | Engine adapters — implementations of `ports::engine::Engine` and the |

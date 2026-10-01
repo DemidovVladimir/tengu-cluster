@@ -28,7 +28,6 @@ pub(crate) trait Clock: Send + Sync {
 /// sets it to each decision instant; a feed schedule or a fill latency runs
 /// instantly and deterministically. Never moves on its own.
 #[derive(Debug, Default)]
-#[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm drives it (xlab)
 pub(crate) struct SimClock {
     now: std::sync::atomic::AtomicI64,
 }
@@ -37,7 +36,6 @@ pub(crate) struct SimClock {
 #[cfg(test)]
 pub(crate) type ManualClock = SimClock;
 
-#[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm drives it (xlab)
 impl SimClock {
     pub(crate) fn at(now_ms: i64) -> Self {
         Self {
@@ -47,6 +45,7 @@ impl SimClock {
     pub(crate) fn set(&self, now_ms: i64) {
         self.now.store(now_ms, std::sync::atomic::Ordering::SeqCst);
     }
+    #[cfg_attr(not(test), allow(dead_code))] // replay sets instants; tests advance
     pub(crate) fn advance(&self, ms: i64) {
         self.now.fetch_add(ms, std::sync::atomic::Ordering::SeqCst);
     }

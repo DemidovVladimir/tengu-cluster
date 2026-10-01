@@ -27,7 +27,6 @@ pub(crate) trait DecisionEngine: Send + Sync {
         questions: &BTreeMap<String, Question>,
     ) -> anyhow::Result<Decision>;
     /// Counters of a caching engine; `None` (default) = every call is live.
-    #[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm reads it (xlab)
     fn cache_stats(&self) -> Option<CacheStats> {
         None
     }

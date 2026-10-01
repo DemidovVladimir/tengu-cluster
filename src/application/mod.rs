@@ -2,6 +2,7 @@
 //! dispatch). Depends on `domain`, `ports`, `config`; never on `adapters` or
 //! `bootstrap` (see `tests/layering_lint.rs`).
 
+pub(crate) mod backtest;
 pub(crate) mod chat;
 pub(crate) mod decision_loop;
 pub(crate) mod memory;

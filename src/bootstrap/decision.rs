@@ -13,8 +13,9 @@
 //!
 //! | Helper | Builds |
 //! |---|---|
-//! | [`build_replay_loop`] | the real loop on the caller's clock (a `SimClock`), audit to the run's `decisions.jsonl` (trigger `backtest`); no observation store, no escalator (`escalate = false`), an executor that refuses every call — a loop whose actions name a tool or that reads `world` is refused |
+//! | [`build_replay_loop`] | the real loop on the caller's clock (a `SimClock`), audit to the run's `decisions.jsonl` (trigger `backtest`); no history (`history = 0`: a decision sees its event alone, so its request — the cache key — never depends on the events before it), no observation store, no escalator (`escalate = false`), an executor that refuses every call — a loop whose actions name a tool or that reads `world` is refused |
 //! | [`cached_decision_engine`] | `CachedDecisionEngine` on `<state dir>/backtests/decision-cache.db` over `JevClient::from_env(model, timeout)`; offline = no client (a miss fails) |
+//! | [`build_gate`] | `tengu backtest --gate <loop>`'s `Gate` (`application/backtest/gate.rs`): [`cached_decision_engine`] for the loop's model + timeout, and K replay loops over it, each on its own `SimClock` |
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -30,10 +31,11 @@ use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
+use crate::application::backtest::gate::{Gate, GateWorker};
 use crate::application::decision_loop::{AuditLog, DecisionLoop};
 use crate::config::{AgentConfig, Config};
 use crate::domain::secrets::SecretRegistry;
-use crate::ports::clock::Clock;
+use crate::ports::clock::{Clock, SimClock};
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
 
@@ -146,11 +148,14 @@ pub(crate) fn build_decision_loop(
 /// [`cached_decision_engine`]) answers, `clock` (a `SimClock` the caller
 /// sets to each decision instant) is the loop's time, audit lines (trigger
 /// `backtest`) go to `audit_path` — the backtest run's `decisions.jsonl`,
-/// never `<TENGU_HOME>/logs/decisions.jsonl`. No observation store, no
-/// escalator (`escalate = false`), an executor that refuses every call.
-/// Refused: a loop whose actions name a tool (replay never runs tools) or
-/// that reads `world` (no store to read; the event carries the features).
-#[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm calls it (xlab)
+/// never `<TENGU_HOME>/logs/decisions.jsonl`. No history (`history = 0`:
+/// every decision's state is `{goal, event, history: [], step: 0}`, so a
+/// verdict and its cache key never depend on which candidates the loop
+/// decided before — any worker count, any `--max-decisions`), no
+/// observation store, no escalator (`escalate = false`), an executor that
+/// refuses every call. Refused: a loop whose actions name a tool (replay
+/// never runs tools) or that reads `world` (no store to read; the event
+/// carries the features).
 pub(crate) fn build_replay_loop(
     config: &Config,
     name: &str,
@@ -182,6 +187,7 @@ pub(crate) fn build_replay_loop(
     }
     let mut cfg = dl.clone();
     cfg.escalate = false;
+    cfg.history = 0;
     let audit = AuditLog {
         path: audit_path.to_path_buf(),
         sandbox: config.sandbox_name.clone(),
@@ -198,7 +204,6 @@ pub(crate) fn build_replay_loop(
 /// `JevClient::from_env(model, timeout)` (needs `OPENROUTER_API_KEY`), or
 /// fail when `offline` (no client, no key needed). Counters:
 /// `DecisionEngine::cache_stats`.
-#[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm calls it (xlab)
 pub(crate) fn cached_decision_engine(
     state_dir: &Path,
     model: &str,
@@ -214,11 +219,60 @@ pub(crate) fn cached_decision_engine(
     Ok(Arc::new(CachedDecisionEngine::open(&path, model, inner)?))
 }
 
+/// The gate arm of `tengu backtest --gate <loop>`
+/// (`application/backtest/gate.rs`): [`cached_decision_engine`] on
+/// `state_dir` (the `[xmarket]` state dir) for `[decision_loops.<loop>]`'s
+/// model and timeout — `offline` = no client, a miss fails — and
+/// `concurrency` replay loops over it ([`build_replay_loop`]), each on its
+/// own `SimClock`, every audit line to `audit_path` (the run's
+/// `decisions.jsonl`). Refused: concurrency 0, an unknown loop, a loop that
+/// is not terminal-only.
+#[cfg_attr(not(test), allow(dead_code))] // `tengu backtest --gate` calls it (xlab CLI)
+pub(crate) fn build_gate(
+    config: &Config,
+    loop_name: &str,
+    state_dir: &Path,
+    audit_path: &Path,
+    concurrency: usize,
+    offline: bool,
+) -> Result<Gate> {
+    if concurrency == 0 {
+        bail!("jev gate: concurrency must be at least 1");
+    }
+    let dl = config
+        .decision_loops
+        .get(loop_name)
+        .ok_or_else(|| anyhow!("no [decision_loops.{loop_name}] block in this config"))?;
+    let engine = cached_decision_engine(
+        state_dir,
+        &dl.model,
+        Duration::from_secs(dl.timeout_secs),
+        offline,
+    )?;
+    let workers = (0..concurrency)
+        .map(|_| {
+            let clock = Arc::new(SimClock::at(0));
+            let replay = build_replay_loop(
+                config,
+                loop_name,
+                Arc::clone(&engine),
+                clock.clone(),
+                audit_path,
+            )?;
+            Ok((clock, replay))
+        })
+        .collect::<Result<Vec<GateWorker>>>()?;
+    Ok(Gate {
+        loop_name: loop_name.to_string(),
+        engine,
+        workers,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::decision::{Answer, Decision, Question, StepOutcome};
-    use crate::ports::clock::SimClock;
     use async_trait::async_trait;
     use serde_json::{json, Value};
     use std::collections::BTreeMap;
@@ -365,5 +419,79 @@ mod tests {
             .unwrap_err();
         assert!(format!("{err:#}").contains("offline"), "{err:#}");
         assert_eq!(engine.cache_stats().map(|s| s.errors), Some(1));
+    }
+
+    /// Answers like [`Take`]; records every state it is asked.
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<Value>>);
+
+    #[async_trait]
+    impl DecisionEngine for Recording {
+        fn model(&self) -> &str {
+            "~typesafe/jev-latest"
+        }
+        async fn decide(&self, s: &Value, q: &BTreeMap<String, Question>) -> Result<Decision> {
+            self.0.lock().unwrap().push(s.clone());
+            Take.decide(s, q).await
+        }
+    }
+
+    /// A replayed decision never sees an earlier one: its state (and so its
+    /// cache key) is the event alone, whatever the config's `history`.
+    #[tokio::test]
+    async fn replay_loops_carry_no_history_between_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Arc::new(Recording::default());
+        let l = build_replay_loop(
+            &config(),
+            "xl_gate",
+            engine.clone(),
+            Arc::new(SimClock::at(T0)),
+            &dir.path().join("decisions.jsonl"),
+        )
+        .unwrap();
+        for (seq, id) in ["hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]
+            .iter()
+            .enumerate()
+        {
+            let v = l
+                .decide_terminal(&json!({"instrument": id}), &format!("backtest:r1:{seq}"))
+                .await
+                .unwrap();
+            assert_eq!(v.action, "take");
+        }
+        assert!(l.history().await.is_empty());
+        let states = engine.0.lock().unwrap();
+        assert_eq!(states.len(), 2);
+        for s in states.iter() {
+            assert_eq!((&s["history"], &s["step"]), (&json!([]), &json!(0)), "{s}");
+        }
+        assert_eq!(
+            states[1]["event"],
+            json!({"instrument": "hyperliquid:xyz:NVDA"})
+        );
+    }
+
+    #[test]
+    fn build_gate_makes_k_workers_on_their_own_clocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (c, audit) = (config(), dir.path().join("run/decisions.jsonl"));
+        let gate = build_gate(&c, "xl_gate", dir.path(), &audit, 3, true).unwrap();
+        assert_eq!(gate.loop_name, "xl_gate");
+        assert_eq!(gate.engine.model(), "~typesafe/jev-latest");
+        assert_eq!(gate.workers.len(), 3);
+        assert!(!Arc::ptr_eq(&gate.workers[0].0, &gate.workers[1].0));
+        gate.workers[0].0.set(T0);
+        assert_eq!(gate.workers[1].0.now_ms(), 0, "clocks are per worker");
+        assert!(dir.path().join("backtests/decision-cache.db").exists());
+        let err = |name: &str, k: usize| {
+            build_gate(&c, name, dir.path(), &audit, k, true)
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        assert!(err("xl_gate", 0).contains("concurrency must be at least 1"));
+        assert!(err("nope", 2).contains("no [decision_loops.nope]"));
+        assert!(err("xl_watch", 2).contains("terminal-only"));
     }
 }

@@ -165,7 +165,6 @@ impl DecisionLoop {
     /// (`Stopped` / `Escalated` / `Rejected`). A failed decisions call
     /// (offline cache miss, Jev error) is audited, then returned as the
     /// error. A loop with a tool action is refused before any call.
-    #[cfg_attr(not(test), allow(dead_code))] // the backtest gate arm calls it (xlab)
     pub(crate) async fn decide_terminal(&self, event: &Value, session_id: &str) -> Result<Verdict> {
         if let Some((an, _)) = self.cfg.actions.iter().find(|(_, a)| a.tool.is_some()) {
             bail!(
