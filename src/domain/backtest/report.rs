@@ -470,9 +470,10 @@ impl BacktestReport {
             for (name, a) in &self.arms {
                 if let Some(h) = &a.split {
                     lines.push(format!(
-                        "split {split} {name}: in-sample n={} mean_net_bps={} · holdout n={} mean_net_bps={} ci95={}",
+                        "split {split} {name}: in-sample n={} mean_net_bps={} ci95={} · holdout n={} mean_net_bps={} ci95={}",
                         h.in_sample.n,
                         signed(h.in_sample.mean_net_bps, 2),
+                        ci(&h.in_sample),
                         h.holdout.n,
                         signed(h.holdout.mean_net_bps, 2),
                         ci(&h.holdout)
