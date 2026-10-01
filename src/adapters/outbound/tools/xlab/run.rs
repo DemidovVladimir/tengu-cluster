@@ -43,7 +43,7 @@ use crate::config::backtest::BacktestConfig;
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::backtests_dir;
 use crate::domain::backtest::costs::cost_for;
-use crate::domain::backtest::report::{BacktestReport, PRIMARY_ARM};
+use crate::domain::backtest::report::PRIMARY_ARM;
 use crate::domain::backtest::spec::SplitSpec;
 use crate::domain::calendar::Calendar;
 use crate::domain::marketdata::fmt_time;
