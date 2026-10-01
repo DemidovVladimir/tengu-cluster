@@ -248,10 +248,13 @@ pub(crate) fn resolve_tool_scopes(
 /// cwd when unset), so grant that root on every inherited scope — otherwise
 /// `read_file` / multipart `http_request` under the child's own workspace is
 /// scope-denied. Tools without a configured scope already get the workspace
-/// via `permissive_scope`, so this only equalises the configured ones.
+/// via `permissive_scope`, so this only equalises the configured ones. An
+/// explicit deny (every field empty, `ToolScope::is_deny_all` — e.g.
+/// `[default_scopes.write_file]` with no keys) stays a deny: a plan step's
+/// `compose.tools` must not turn it into a workspace grant.
 pub(crate) fn grant_workspace_root(scopes: &mut HashMap<String, ToolScope>, workspace: &Path) {
     for scope in scopes.values_mut() {
-        if !scope.fs_roots.iter().any(|r| r == workspace) {
+        if !scope.is_deny_all() && !scope.fs_roots.iter().any(|r| r == workspace) {
             scope.fs_roots.push(workspace.to_path_buf());
         }
     }
@@ -358,6 +361,57 @@ pub(crate) fn agent_base_tools(
     base.into_iter()
         .filter(|t| agent.tools.contains(&t.name) || cfg.workspace_tools.contains(&t.name))
         .collect()
+}
+
+/// A plan step's `compose` applied to its base `[agents.<compose.base_agent>]`
+/// block: `skills` and `tools` replace the base's wholesale (doctrine #3).
+/// In a hardened sandbox (`hardened`: a `[solana]` signer or `[risk]`,
+/// `config::hardening`) a compose may only narrow: a catalog tool the
+/// composed agent would get that the base does not (an empty `tools` = every
+/// catalog tool), or a skill the base does not list, refuses the step — a
+/// planner fed hostile text must not hand a routable agent `write_file` or
+/// an exec tool. (A hardened sandbox has no `[[mcp_servers]]` and loads no
+/// shell skill, so the catalog is every tool there is.)
+pub(crate) fn compose_agent(
+    base_name: &str,
+    base: &AgentConfig,
+    compose: &crate::domain::plan::AgentCompose,
+    hardened: bool,
+    has_memory: bool,
+) -> anyhow::Result<AgentConfig> {
+    let mut agent = base.clone();
+    agent.skill_packages = compose.skills.clone();
+    agent.tools = compose.tools.clone();
+    if !hardened {
+        return Ok(agent);
+    }
+    let names = |a: &AgentConfig| -> HashSet<String> {
+        agent_base_tools(a, true, has_memory)
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
+    };
+    let held = names(base);
+    let mut tools: Vec<String> = names(&agent)
+        .into_iter()
+        .filter(|t| !held.contains(t))
+        .collect();
+    tools.sort();
+    let mut skills: Vec<&str> = compose
+        .skills
+        .iter()
+        .filter(|s| !base.skill_packages.contains(s))
+        .map(String::as_str)
+        .collect();
+    skills.sort();
+    if tools.is_empty() && skills.is_empty() {
+        return Ok(agent);
+    }
+    anyhow::bail!(
+        "compose would widen agent `{base_name}` in a hardened sandbox (Solana signer or \
+         [risk]): a composed plan step may only narrow its base agent's tools and skills — \
+         adds tools {tools:?}, skills {skills:?}"
+    )
 }
 
 /// The skills an agent loads where no channel keeps a hot-reloaded registry
@@ -673,6 +727,161 @@ mod golden_tests {
             "tool surface drift: registry has {:?}, expected {:?}",
             names, expected
         );
+    }
+
+    /// W1-gate review regression (was `run_agent_grant_turns_an_empty_
+    /// writer_scope_into_the_workspace`): a routable agent handed
+    /// `write_file` (a plan step's `compose.tools`) in a sandbox that denies
+    /// it with an empty `[default_scopes.write_file]` (sandboxes/xmarket) is
+    /// denied in-process AND in the run-agent child — the workspace grant
+    /// leaves a deny-all scope alone, while a scope that configures
+    /// something (the matrix fixtures' `fs_roots` elsewhere) still gets it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_agent_grant_keeps_an_empty_writer_scope_a_deny() {
+        use crate::ports::engine::ToolExecutor;
+        let ws = tempfile::TempDir::new().unwrap();
+        let toml = format!(
+            "[agents.arch]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"routable\"\n\
+             workspace = \"{}\"\ntools = [\"write_file\", \"read_file\"]\n\n\
+             [default_scopes.write_file]\n\n\
+             [default_scopes.read_file]\nfs_roots = [\"/nonexistent/elsewhere\"]\n",
+            ws.path().display()
+        );
+        let mut cfg: Config = toml::from_str(&toml).unwrap();
+        cfg.fold_default_scopes();
+        let agent = cfg.agents["arch"].clone();
+        let secrets = Arc::new(SecretRegistry::new());
+        std::fs::write(ws.path().join("notes.txt"), "hello").unwrap();
+        let write = ToolCall {
+            id: "probe:1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({"path": "answer.txt", "content": "not allowed"}),
+        };
+        let read = ToolCall {
+            id: "probe:2".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "notes.txt"}),
+        };
+
+        // In-process executor (chat): the empty scope denies.
+        let tools = agent_base_tools(&agent, true, false);
+        let skills = agent_skill_registry(ws.path(), &agent, false);
+        let inproc = build_tool_executor(
+            ws.path(),
+            &tools,
+            &skills,
+            &None,
+            &secrets,
+            Arc::new(crate::adapters::outbound::noop::NoopActivity),
+            None,
+            None,
+            &agent,
+            &[],
+        )
+        .unwrap();
+        assert!(inproc.execute(&write, &[]).await.is_err());
+
+        // run-agent child executor (plan step): still denied; the configured
+        // read_file scope gets the workspace grant.
+        let (_, exec) = build_subprocess_tool_executor(
+            &agent,
+            &cfg,
+            ws.path(),
+            &secrets,
+            Arc::new(crate::adapters::outbound::noop::NoopActivity),
+            None,
+        );
+        let exec = exec.unwrap();
+        let denied = exec.execute(&write, &[]).await;
+        assert!(denied.is_err(), "run-agent child wrote: {denied:?}");
+        assert!(!ws.path().join("answer.txt").exists());
+        assert_eq!(exec.execute(&read, &[]).await.unwrap(), "hello");
+        assert!(exec.scopes["write_file"].is_deny_all());
+    }
+
+    /// `grant_workspace_root`: a deny-all scope stays one; every other
+    /// configured scope gains the workspace once.
+    #[test]
+    fn grant_workspace_root_skips_deny_all_scopes() {
+        let ws = Path::new("/srv/step-ws");
+        let mut scopes = HashMap::from([
+            ("write_file".to_string(), ToolScope::default()),
+            (
+                "http_request".to_string(),
+                ToolScope {
+                    net_hosts: vec!["api.example.com".into()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "read_file".to_string(),
+                ToolScope {
+                    fs_roots: vec![ws.to_path_buf()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        grant_workspace_root(&mut scopes, ws);
+        assert!(scopes["write_file"].is_deny_all());
+        assert_eq!(scopes["http_request"].fs_roots, [ws]);
+        assert_eq!(scopes["read_file"].fs_roots, [ws]);
+    }
+
+    /// Hardened sandbox: a compose may only narrow its base agent — a tool
+    /// or skill the base lacks, or an empty `tools` (= every catalog tool)
+    /// over a listed base, refuses the step. Elsewhere it replaces wholesale.
+    #[test]
+    fn compose_only_narrows_in_a_hardened_sandbox() {
+        use crate::domain::plan::AgentCompose;
+        let mut base = Config::default().agents.remove("main").unwrap();
+        base.tools = vec!["read_file".into(), "list_directory".into(), "hl_ctx".into()];
+        base.skill_packages = vec!["research".into()];
+        let compose = |tools: &[&str], skills: &[&str]| AgentCompose {
+            base_agent: "arch".into(),
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            skills: skills.iter().map(|s| s.to_string()).collect(),
+        };
+        let run = |base: &AgentConfig, c: &AgentCompose, hardened: bool| {
+            compose_agent("arch", base, c, hardened, false)
+        };
+
+        let narrowed = run(&base, &compose(&["read_file"], &[]), true).unwrap();
+        assert_eq!(narrowed.tools, ["read_file"]);
+        assert!(narrowed.skill_packages.is_empty());
+        run(
+            &base,
+            &compose(&["hl_ctx", "list_directory"], &["research"]),
+            true,
+        )
+        .unwrap();
+
+        for (c, want) in [
+            (
+                compose(&["read_file", "write_file"], &[]),
+                "[\"write_file\"]",
+            ),
+            (compose(&["paper_order"], &[]), "[\"paper_order\"]"),
+            (compose(&[], &[]), "\"run_command\""),
+            (compose(&["read_file"], &["evil"]), "skills [\"evil\"]"),
+        ] {
+            let err = run(&base, &c, true).unwrap_err().to_string();
+            assert!(
+                err.contains("compose would widen agent `arch` in a hardened sandbox")
+                    && err.contains(want),
+                "{c:?}: {err}"
+            );
+            let open = run(&base, &c, false).unwrap();
+            assert_eq!(open.tools, c.tools, "not hardened: wholesale");
+        }
+
+        // A base with every catalog tool (`tools = []`): an opt-in tool it
+        // never enabled (an exec tool) is still a widening.
+        base.tools.clear();
+        run(&base, &compose(&["write_file"], &[]), true).unwrap();
+        let err = run(&base, &compose(&["paper_order"], &[]), true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("paper_order"), "{err}");
     }
 
     // A plan-step subagent must see `[[mcp_servers]]` tools, filtered by its

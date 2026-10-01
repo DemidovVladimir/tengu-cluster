@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 use crate::application::skills::lifecycle::audit;
 use crate::application::skills::lifecycle::evolve::{
     apply_proposal_to_skill_md, is_editable_by_learner, unique_suffix, validate_resource_path,
-    ProposalBody,
+    validate_resource_write_path, ProposalBody,
 };
 use crate::application::skills::lifecycle::metrics::MetricSpec;
 use crate::domain::message::ToolDef;
@@ -739,7 +739,7 @@ fn do_add_resource(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     if path.len() > 256 {
         bail!("manage_skill.add_resource: 'path' too long (>256 chars)");
     }
-    validate_resource_path(path)?;
+    validate_resource_write_path(path)?;
 
     let skill_dir = locate_skill_dir(&args.name, workspace).ok_or_else(|| {
         anyhow!(

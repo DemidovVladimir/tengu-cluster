@@ -147,7 +147,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // which may be a synthetic label for events/logs), then override the
     // base's `skills` and `tools` with the values the planner picked from
     // the planner registry roster. The override is in-memory only — the config
-    // on disk is unchanged.
+    // on disk is unchanged. In a hardened sandbox it may only narrow the
+    // base (`bootstrap::tools::compose_agent`); a widening compose fails the
+    // step here, before the engine is built.
     let (spec_load_name, compose_override) = match &input.compose {
         Some(c) => {
             tracing::info!(
@@ -190,8 +192,13 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         .as_ref()
         .map(|p| crate::config::paths::expand_tilde(p));
     if let Some(c) = compose_override {
-        spec.skill_packages = c.skills;
-        spec.tools = c.tools;
+        spec = crate::bootstrap::tools::compose_agent(
+            &spec_load_name,
+            &spec,
+            &c,
+            crate::config::hardening::requires_hardened_claude_code(&parent_config),
+            parent_config.memory.enabled,
+        )?;
     }
     // Resolved agent name (the base for composed agents) — exposed like
     // TENGU_SESSION_ID so plugins can attribute writes without ToolCtx plumbing.

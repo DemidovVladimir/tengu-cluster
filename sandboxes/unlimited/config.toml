@@ -14,7 +14,7 @@ enabled = true          # disk vector store; add --features postgres_memory for 
 
 [telegram]
 tool_approvals = false
-allowed_users = ['848344935']  # empty = every message rejected
+allowed_users = ['848344935']  # required: empty = `tengu telegram` refuses to start
 
 [scaffold]
 root = "~/unlimited-workspace"

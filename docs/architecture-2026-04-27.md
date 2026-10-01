@@ -275,7 +275,7 @@ Both inject **before** the current turn. Different time scales — lite is "what
 
 When no listed agent fits the request:
 - **Turn 1 (C)**: planner emits `Direct { response: "I don't have a perfect match. Closest is researcher (0.18)..." }` asking the user.
-- **Turn 2 (B)**: on user confirmation, planner emits `Plan` with `Step.compose` set. Child loads `[agents.<compose.base_agent>]`, OVERRIDES `skill_packages` + `tools` with the values the planner picked from the registry file. **This run only — config on disk unchanged.**
+- **Turn 2 (B)**: on user confirmation, planner emits `Plan` with `Step.compose` set. Child loads `[agents.<compose.base_agent>]`, OVERRIDES `skill_packages` + `tools` with the values the planner picked from the registry file. **This run only — config on disk unchanged.** In a hardened sandbox (`[risk]` / Solana signer) the override may only narrow the base (`bootstrap::tools::compose_agent`); a widening one fails the step before the engine is built.
 
 Implementation: `orchestrator/plan.rs::AgentCompose`, threaded through `AgentIpcInput.compose`, applied in `run_agent_subprocess`.
 

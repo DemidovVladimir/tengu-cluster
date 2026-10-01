@@ -23,6 +23,7 @@ persistent_store_chunk_overlap = 200
 
 [telegram]
 tool_approvals = false
+# allowed_users = ["<your Telegram user id>"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 [scaffold]
 root = "~/storage-test-workspace"

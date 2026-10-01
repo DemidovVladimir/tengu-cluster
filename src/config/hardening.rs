@@ -4,10 +4,12 @@
 //! both (`risk-gate-enforcement`). Doc: `docs/engine-backends.md` § Claude
 //! Code, `docs/xmarket-risk-paper-2026-09-30.md` § Load rules.
 //!
-//! | Rule (hardened sandbox — any violation fails `Config::load`) | Enforced by | Why |
+//! | Rule (hardened sandbox; a `validation_errors` violation fails `Config::load`) | Enforced by | Why |
 //! |---|---|---|
 //! | Every `engine = "claude_code"` agent sets `[agents.<a>.claude_code] builtin_tools_profile = "none"` — no block = `editor_shell` = refused | `validation_errors` | built-in Read / Write / Bash ignore tengu scopes: they could read the key or edit a store |
 //! | The CLI sees only the tengu bridge | `--strict-mcp-config` on every run (`engines/claude_code.rs::cli_args`) | the operator's own MCP servers run outside tengu scopes and egress |
+//! | Profile `none` runs the CLI without user / project / local settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md discovery and auto-memory | `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (`cli_args`; CLI 2.1.286: OAuth + the bridge work; `--safe-mode` drops the bridge, `--bare` OAuth) | hooks and plugins run shell commands outside tengu scopes; a planted `CLAUDE.md` / `.claude/` steers the model |
+//! | A plan step's `compose` only narrows its base agent's tools and skills | `run-agent` (`bootstrap::tools::compose_agent`) | a planner fed hostile text must not hand a routable agent `write_file` or an exec tool |
 //! | No `[[mcp_servers]]` | `validation_errors` | foreign processes with this filesystem |
 //! | No configured scope grants `shell_bins`; tools without a scope run no shell (`AgentConfig::no_shell_fallback`, set by `Config::fold_default_scopes`; the bridge too) | `validation_errors` + runtime | a shell reads and writes any file |
 //! | Outside every `fs_roots` and agent `workspace` (symlinks resolved): the signer key; `<TENGU_HOME>/state` (no overlap either way); `[risk] kill_switch_file`; the config file itself | `validation_errors`, the config file in `config_file_errors` (`Config::load`) | `read_file` / `write_file` must not read the key, edit `ledger.db` or a lease, delete the kill-switch file or raise the limits |

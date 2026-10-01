@@ -34,6 +34,9 @@ pub(crate) fn require_bool(args: &Value, tool_name: &str, key: &str) -> Result<b
 }
 
 /// Resolve `requested` against `workspace` and refuse anything that escapes it.
+/// The result is the path the OS will open (`domain::scope::resolve_path`):
+/// symlinks of the existing part followed, `..` applied — so
+/// `new/../../x` is caught before a writer creates `new`.
 pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
     let workspace_canonical = workspace
         .canonicalize()
@@ -45,38 +48,36 @@ pub fn validate_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
         workspace.join(requested)
     };
 
-    if target.exists() {
-        let canonical = target
-            .canonicalize()
-            .map_err(|e| anyhow::anyhow!("Cannot resolve path: {}", e))?;
-        if !canonical.starts_with(&workspace_canonical) {
-            bail!("Path escapes workspace: {}", requested);
-        }
-        return Ok(canonical);
+    let resolved = crate::domain::scope::resolve_path(&target)
+        .map_err(|e| anyhow!("Cannot resolve path '{}': {:#}", requested, e))?;
+    if !resolved.starts_with(&workspace_canonical) {
+        bail!("Path escapes workspace: {}", requested);
     }
+    Ok(resolved)
+}
 
-    let parent = target
+/// [`validate_path`] for a tool that writes where the model says: also
+/// refuses what `domain::scope::protected_write` names (`.tengu/`,
+/// `.claude/`, `.git/`, `CLAUDE.md`, `AGENTS.md`, … at any depth) and skill
+/// directories (`skills/` at any depth — an LLM-written skill would load on
+/// the next scan). Checked on the resolved path relative to the workspace,
+/// so `x/../.tengu/…`, a symlinked directory or `Skills/` on a case-folding
+/// filesystem cannot slip past. Every sandbox.
+pub fn validate_write_path(workspace: &Path, requested: &str) -> Result<PathBuf> {
+    let target = validate_path(workspace, requested)?;
+    let root = workspace
+        .canonicalize()
+        .map_err(|e| anyhow!("Workspace directory not found: {}", e))?;
+    let rel = target.strip_prefix(&root).unwrap_or(&target);
+    if let Some(why) = crate::domain::scope::protected_write(rel) {
+        bail!("Writing '{}' is not allowed: {}", requested, why);
+    }
+    if rel
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("Invalid path: no parent directory"))?;
-    if !parent.exists() {
-        let mut ancestor = parent.to_path_buf();
-        while !ancestor.exists() {
-            ancestor = match ancestor.parent() {
-                Some(p) => p.to_path_buf(),
-                None => bail!("No valid ancestor directory for path: {}", requested),
-            };
-        }
-        let ancestor_canonical = ancestor.canonicalize()?;
-        if !ancestor_canonical.starts_with(&workspace_canonical) {
-            bail!("Path escapes workspace: {}", requested);
-        }
-    } else {
-        let parent_canonical = parent.canonicalize()?;
-        if !parent_canonical.starts_with(&workspace_canonical) {
-            bail!("Path escapes workspace: {}", requested);
-        }
+        .is_some_and(|dirs| dirs.iter().any(|d| d.eq_ignore_ascii_case("skills")))
+    {
+        bail!("Writing to skill directories is not allowed");
     }
-
     Ok(target)
 }
 
@@ -114,5 +115,67 @@ mod tests {
     fn require_bool_ok() {
         let v = json!({ "b": true });
         assert!(require_bool(&v, "t", "b").unwrap());
+    }
+
+    /// `..` after a directory that does not exist yet: the OS would land
+    /// outside the workspace once a writer creates it.
+    #[test]
+    fn validate_path_refuses_dotdot_through_a_missing_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        for escape in ["new/../../outside.txt", "a/b/../../../x/y.txt"] {
+            let err = validate_path(&ws, escape).unwrap_err().to_string();
+            assert!(err.contains("Path escapes workspace"), "{escape}: {err}");
+        }
+        let ok = validate_path(&ws, "new/../inside.txt").unwrap();
+        assert_eq!(ok, ws.canonicalize().unwrap().join("inside.txt"));
+    }
+
+    /// Writers refuse tengu's state, the nested CLI's config and
+    /// instruction files and skill directories — after resolution, in any
+    /// case; ordinary files pass.
+    #[test]
+    fn validate_write_path_refuses_protected_targets() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join(".tengu")).unwrap();
+        for bad in [
+            ".tengu/observations.db",
+            "notes/../.tengu/cache.db",
+            ".claude/settings.json",
+            "sub/.claude/settings.local.json",
+            "CLAUDE.md",
+            "docs/claude.md",
+            "AGENTS.md",
+            "x/CLAUDE.local.md",
+            ".mcp.json",
+            ".git/hooks/pre-commit",
+            "skills/evil/SKILL.md",
+            "Skills/evil/SKILL.md",
+            "a/skills/b.md",
+        ] {
+            assert!(validate_write_path(ws, bad).is_err(), "{bad} allowed");
+        }
+        let abs = ws.join(".tengu/x").display().to_string();
+        assert!(validate_write_path(ws, &abs).is_err());
+        for good in ["answer.txt", "out/new.txt", "skills.md", "notes/agents.txt"] {
+            validate_write_path(ws, good).unwrap_or_else(|e| panic!("{good}: {e:#}"));
+        }
+    }
+
+    /// A symlinked directory resolves first: `link/…` into `.tengu` is
+    /// `.tengu/…`.
+    #[cfg(unix)]
+    #[test]
+    fn validate_write_path_follows_symlinked_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join(".tengu")).unwrap();
+        std::os::unix::fs::symlink(ws.join(".tengu"), ws.join("state")).unwrap();
+        let err = validate_write_path(ws, "state/observations.db")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`.tengu/`"), "{err}");
     }
 }

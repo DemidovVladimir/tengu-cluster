@@ -65,7 +65,7 @@ Environment set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_j
 | `TENGU_BRIDGE_MAX_RESULT_CHARS` | Result cap per call (`[limits] max_mcp_result_chars`, default 50 000) |
 | `TENGU_BRIDGE_SCOPES` | JSON `HashMap<String, ToolScope>` — the agent's scope map; used only by the fallback below (missing/unparsable → all permissive with a warn) |
 | `TENGU_BRIDGE_MCP_SERVERS` | The `[[mcp_servers]]` behind requested `{server}__{tool}` names — their `$VAR` references as written, resolved by the bridge from its inherited env |
-| `TENGU_BRIDGE_GRANT_WORKSPACE` | `1` = a `run-agent` step's bridge (and the doctor's smoke turn): every configured scope also gets the workspace as an fs root, like the step's executor. Set by the engine (`engines::build_step_engine` → `StepBridge`), never read from an inherited `TENGU_AGENT_IPC` |
+| `TENGU_BRIDGE_GRANT_WORKSPACE` | `1` = a `run-agent` step's bridge (and the doctor's smoke turn): every configured scope also gets the workspace as an fs root, like the step's executor — but a deny-all scope (every field empty) stays a deny. Set by the engine (`engines::build_step_engine` → `StepBridge`), never read from an inherited `TENGU_AGENT_IPC` |
 | `TENGU_BRIDGE_SUMMARY_FILE` | A `run-agent` step's summary file: `compress_and_store` writes there (§ Dispatch) |
 | `TENGU_EGRESS` | The parent's **resolved** `[egress]` policy (proxy, allow/deny hosts, audit path); wins over the loaded config's `[egress]` |
 | `TENGU_SECRETS_LOADED` | Names of the vault vars the parent loaded (names only); the bridge registers their inherited values for redaction |
@@ -95,7 +95,7 @@ Shape of the temp `--mcp-config` file:
 
 | `TENGU_CONFIG` file | `[agents.<TENGU_BRIDGE_AGENT>]` | Tools run as |
 |---|---|---|
-| present | present | that block as `Config::load` folded it: scopes (with `[default_scopes]`), `sandbox` sections (`xm_state_dir`, …), `no_shell_fallback`, signer; `[memory]` as in-process. With `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's engine) every configured scope also gets the workspace as an fs root — the step's own executor does the same (`grant_workspace_root`) |
+| present | present | that block as `Config::load` folded it: scopes (with `[default_scopes]`), `sandbox` sections (`xm_state_dir`, …), `no_shell_fallback`, signer; `[memory]` as in-process. With `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's engine) every configured scope but a deny-all one also gets the workspace as an fs root — the step's own executor does the same (`grant_workspace_root`) |
 | present | absent / unset | `Config::default()`'s `main` + `TENGU_BRIDGE_SCOPES`, warn; shell-free when the loaded config's agents are |
 | absent | — | standalone bridge: default `main` + `TENGU_BRIDGE_SCOPES`, warn; disk memory under `<workspace>/memory` |
 | present but invalid | — | the bridge exits with the load error |
@@ -228,6 +228,7 @@ Every tool must work under every engine — `openrouter`, `local` and, through t
 - `agentic_memory` needs `TENGU_MEMORY_DATABASE_URL` per call; the bridge inherits it from the parent env
 - `tengu eval` builds engines from the eval config while `TENGU_CONFIG` names the base config: a `claude_code` eval agent's bridge resolves the agent there or falls back (warn)
 - The engine passes `--strict-mcp-config` on every run (`x-claude-code-hardening`): the bridge is the Claude CLI's only MCP server — the user's own / plugin MCP servers are not loaded
+- Profile `none` (the hardened one) also passes `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}`: no settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md or auto-memory, and the `--mcp-config` bridge still loads (CLI 2.1.286, subscription OAuth — [[engine-backends#Claude Code]] § Safety Policy). `--safe-mode` would drop the bridge with the rest
 
 ## Related
 - [[engine-backends#Claude Code]] — the engine that spawns the bridge

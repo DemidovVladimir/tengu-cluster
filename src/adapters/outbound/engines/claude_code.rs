@@ -4,7 +4,9 @@
 //! spawns as a subprocess, connects to the `tengu mcp-bridge` for Tengu-native
 //! tools, and uses its own native workspace tools (Read, Write, Bash, etc.) per
 //! `builtin_tools_profile`. `--strict-mcp-config` on every run: the bridge is
-//! its only MCP server (`cli_args`).
+//! its only MCP server; profile `none` (the hardened one) also drops settings
+//! files, hooks, plugins, skills, CLAUDE.md discovery and auto-memory
+//! (`cli_args`).
 //!
 //! The NDJSON stream yields per-turn events: system init (session_id), assistant
 //! messages (text + tool activity), and a final result with cost/usage metrics.
@@ -312,6 +314,11 @@ fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a s
         .collect()
 }
 
+/// The settings a `builtin_tools_profile = "none"` run adds through
+/// `--settings` (which still applies under `--setting-sources ""`):
+/// no auto-memory, no hooks from any source.
+const ISOLATED_SETTINGS: &str = r#"{"autoMemoryEnabled":false,"disableAllHooks":true}"#;
+
 /// `claude` arguments for one run — all but the prompt (stdin), the working
 /// directory and the env. Pure, so tests pin the hardening flags.
 ///
@@ -319,6 +326,7 @@ fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a s
 /// |---|---|
 /// | `--strict-mcp-config` | always: only the `--mcp-config` servers (the tengu bridge), never the operator's user / project / plugin MCP servers — they run outside tengu scopes and egress. No bridge = no MCP server |
 /// | `--tools <profile>` | built-in tools; `""` = none (`builtin_tools_profile = "none"`) |
+/// | profile `none` (the hardened one, `config/hardening.rs`): `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
 /// | `--mcp-config <file>` `--allowedTools mcp__tengu-tools__<name>…` | the bridge; `--tools` covers built-ins only, so each bridged tool is allowed by name |
 fn cli_args(
     profile: BuiltinToolsProfile,
@@ -345,6 +353,18 @@ fn cli_args(
         args.extend(["--system-prompt".into(), sp.into()]);
     }
     args.extend(["--tools".into(), profile.cli_tools_arg().into()]);
+    if profile == BuiltinToolsProfile::None {
+        args.extend(
+            [
+                "--setting-sources",
+                "",
+                "--disable-slash-commands",
+                "--settings",
+                ISOLATED_SETTINGS,
+            ]
+            .map(Into::into),
+        );
+    }
     if let Some((config, tools)) = bridge {
         args.extend(["--mcp-config".into(), config.as_os_str().to_owned()]);
         // Variadic flag: last, and never bare (the CLI rejects a value-less one).
@@ -978,6 +998,59 @@ mod tests {
             !no_tools.iter().any(|a| a == "--allowedTools"),
             "never bare"
         );
+    }
+
+    /// Profile `none` (the hardened one) runs the CLI without settings
+    /// files, CLAUDE.md / AGENTS.md discovery, skills, auto-memory and
+    /// hooks — with the bridge still last; every other profile keeps the
+    /// operator's settings.
+    #[test]
+    fn cli_args_isolate_the_none_profile() {
+        let tools = vec![ToolDef::new("read_file", "d", serde_json::json!({}))];
+        let cfg = std::path::Path::new("/tmp/tengu-mcp.json");
+        let none = strings(cli_args(
+            BuiltinToolsProfile::None,
+            Some("claude-haiku-4-5"),
+            None,
+            Some((cfg, &tools)),
+        ));
+        assert_eq!(value_after(&none, "--setting-sources"), "");
+        assert!(
+            none.iter().any(|a| a == "--disable-slash-commands"),
+            "{none:?}"
+        );
+        let settings: serde_json::Value =
+            serde_json::from_str(value_after(&none, "--settings")).unwrap();
+        assert_eq!(
+            settings,
+            serde_json::json!({"autoMemoryEnabled": false, "disableAllHooks": true})
+        );
+        for flag in ["--bare", "--safe-mode"] {
+            assert!(
+                !none.iter().any(|a| a == flag),
+                "{flag} breaks OAuth or the bridge"
+            );
+        }
+        assert_eq!(
+            none[none.len() - 2..],
+            ["--allowedTools", "mcp__tengu-tools__read_file"],
+            "variadic --allowedTools stays last"
+        );
+        assert!(none.iter().any(|a| a == "--strict-mcp-config"));
+
+        for profile in [
+            BuiltinToolsProfile::ReadOnly,
+            BuiltinToolsProfile::Editor,
+            BuiltinToolsProfile::EditorShell,
+        ] {
+            let args = strings(cli_args(profile, None, None, Some((cfg, &tools))));
+            assert!(
+                !args.iter().any(|a| a == "--setting-sources"
+                    || a == "--settings"
+                    || a == "--disable-slash-commands"),
+                "{profile:?}: {args:?}"
+            );
+        }
     }
 
     /// `tool_use` → `tool_result` pairs become `ToolRan` (bridge prefix

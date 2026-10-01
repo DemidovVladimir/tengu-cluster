@@ -145,8 +145,10 @@ Durable cross-session memory is the Postgres `agentic_memory` plugin: build with
 ```toml
 [telegram]
 enabled = true
-allowed_users = ["123456789"]    # merged with TENGU_TELEGRAM_ALLOWED_USERS
+allowed_users = ["123456789"]    # merged with TENGU_TELEGRAM_ALLOWED_USERS; required
 ```
+
+Fail closed: with no allowed user (config + env) `tengu telegram` refuses to start; an unlisted sender gets "Unauthorized.". Private agents (no `description`, not `default`) are never `@`-routable from Telegram nor its default.
 
 ## Skill lifecycle
 
@@ -195,7 +197,7 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 | `OPENROUTER_REFERER` | `adapters/outbound/engines/mod.rs` | unset | `HTTP-Referer` header |
 | `OPENROUTER_TITLE` | `adapters/outbound/engines/mod.rs` | unset | `X-Title` header |
 | `TELEGRAM_BOT_TOKEN` | `adapters/inbound/telegram.rs` | — (required for `telegram`) | Bot token |
-| `TENGU_TELEGRAM_ALLOWED_USERS` | `adapters/inbound/telegram.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users` |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | `adapters/inbound/telegram.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users`; both empty = `tengu telegram` refuses to start |
 | `TENGU_HOME` | `config/paths.rs::resolve_tengu_home` | `~/.tengu` | State root (config, vault, logs, memory) |
 | `TENGU_CONFIG` | `main.rs` (config resolution) | `~/.tengu/config.toml` | Path to config.toml (`-c/--config` wins) |
 | `TENGU_MASTER_PASSWORD` | `main.rs`, `adapters/outbound/secrets.rs` | unset (prompt) | Vault password |

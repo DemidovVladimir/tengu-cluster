@@ -129,6 +129,7 @@ Be specific about the closest match so the user can make an informed choice. Do 
 Rules:
 - `compose.base_agent` must be the EXACT name of an `[agents.<name>]` block from the roster — the runner loads it as the starting point.
 - `compose.skills` and `compose.tools` REPLACE the base spec's lists for this run only — the file on disk is unchanged. Pick the entries from the registry roster that look applicable.
+- In a sandbox with money or signing (`[risk]`, a Solana signer) a compose may only NARROW the base agent: every tool and skill must already be on its lists, and `tools` must not be empty. A compose that adds anything fails the step.
 - The top-level `agent` field is just a label for events/logs (use something readable like `composed-<base>`); the actual base lives in `compose.base_agent`.
 - Use `compose` ONLY after a prior C-style Direct asked the user to confirm. Do NOT compose silently — that defeats the purpose of asking.
 

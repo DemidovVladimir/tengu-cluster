@@ -15,7 +15,12 @@
 //! - **Secret redaction** — all outbound text passes through `SecretRegistry::redact`.
 //! - **Hot-reload** — skills are re-scanned on each message if files changed.
 //! - **Multi-agent routing** — `@role: message` targeting, automatic classification,
-//!   `/team` orchestration via event-bus.
+//!   `/team` orchestration via event-bus. Only agents with a `description` or
+//!   the `default` one are reachable: a private agent (the exec-tool and
+//!   signing owners) is never routable, the default or listed.
+//! - **Access control, fail closed** — `tengu telegram` refuses to start
+//!   without an allow-list (`[telegram] allowed_users` +
+//!   `TENGU_TELEGRAM_ALLOWED_USERS`); an unlisted sender gets "Unauthorized.".
 
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
@@ -544,15 +549,13 @@ impl TelegramSession {
         secret_registry: Arc<SecretRegistry>,
         rt: &tokio::runtime::Runtime,
     ) -> Result<(Self, tokio::sync::mpsc::Receiver<InboundMessage>)> {
+        // Fail closed: an empty allow-list never means "everyone".
+        let allowed_users = build_allowed_users(&config);
+        require_allowed_users(&allowed_users)?;
+        info!(count = allowed_users.len(), "Telegram allowed users loaded");
+
         let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
             .map_err(|_| anyhow::anyhow!("TELEGRAM_BOT_TOKEN env var is required"))?;
-
-        let allowed_users = build_allowed_users(&config);
-        if allowed_users.is_empty() {
-            warn!("No allowed Telegram users configured — all messages will be rejected");
-        } else {
-            info!(count = allowed_users.len(), "Telegram allowed users loaded");
-        }
 
         let memory_config = config.memory.clone();
 
@@ -575,10 +578,9 @@ impl TelegramSession {
 
         crate::adapters::outbound::scaffold::maybe_apply_scaffold(&config);
 
-        // Build per-agent runtime state.
+        // Build per-agent runtime state. Private agents are built too (the
+        // orchestrator's planner may be one) but never routable or default.
         let mut agent_states: HashMap<String, TelegramAgentState> = HashMap::new();
-        let mut role_to_agent: HashMap<String, String> = HashMap::new();
-        let mut default_agent_id: Option<String> = None;
 
         for (agent_id, agent_config) in &config.agents {
             let engine: Arc<dyn Engine> =
@@ -653,21 +655,6 @@ impl TelegramSession {
             );
 
             let role = agent_config.role.clone();
-            if let Some(ref role_str) = role {
-                let role_key = role_str.trim().to_lowercase().replace('-', "_");
-                if !role_key.is_empty() {
-                    role_to_agent.insert(role_key, agent_id.clone());
-                }
-            }
-            role_to_agent.insert(agent_id.clone(), agent_id.clone());
-
-            if agent_config.default || default_agent_id.is_none() {
-                if agent_config.default {
-                    default_agent_id = Some(agent_id.clone());
-                } else if default_agent_id.is_none() {
-                    default_agent_id = Some(agent_id.clone());
-                }
-            }
 
             info!(
                 agent_id = %agent_id,
@@ -701,22 +688,39 @@ impl TelegramSession {
             );
         }
 
-        let default_agent_id =
-            default_agent_id.ok_or_else(|| anyhow::anyhow!("No agents configured"))?;
+        let built = || {
+            agent_states
+                .iter()
+                .map(|(id, s)| (id.as_str(), &s.agent_config))
+        };
+        let role_to_agent = telegram_routes(built());
+        let default_agent_id = telegram_default_agent(built()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no agent Telegram may reach: set `default = true` on one or give one a \
+                 `description` — a private agent (neither) is never reachable from Telegram"
+            )
+        })?;
+        let reachable = built().filter(|(_, a)| telegram_reachable(a)).count();
 
         let base_workspaces: HashMap<String, std::path::PathBuf> = agent_states
             .iter()
             .filter_map(|(id, a)| a.workspace.as_ref().map(|w| (id.clone(), w.clone())))
             .collect();
 
-        // Inject team awareness into each agent's system prompt.
-        if agent_states.len() > 1 {
+        // Inject team awareness into each agent's system prompt: the agents a
+        // Telegram user can route to.
+        if reachable > 1 {
             let mut team_block = String::from("\n\n## Team Members\n");
             team_block.push_str(
                 "If a request is outside your expertise, suggest the user route to the right agent.\n",
             );
             team_block.push_str("Format: @role: message\n\n");
-            for state in agent_states.values() {
+            let mut members: Vec<&TelegramAgentState> = agent_states
+                .values()
+                .filter(|s| telegram_reachable(&s.agent_config))
+                .collect();
+            members.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+            for state in members {
                 let role_key = state.role.as_deref().unwrap_or(&state.agent_id);
                 let name = state
                     .agent_config
@@ -902,8 +906,8 @@ impl TelegramSession {
 
         self.evict_idle_users();
 
-        // Access control.
-        if !self.allowed_users.is_empty() && !self.allowed_users.contains(&sender_id) {
+        // Access control — fail closed (`build` refuses an empty list too).
+        if !is_authorized(&self.allowed_users, &sender_id) {
             warn!(sender = %sender_id, "Unauthorized Telegram user");
             let _ = self
                 .pipe
@@ -1073,11 +1077,13 @@ impl TelegramSession {
             match self.role_to_agent.get(role_key) {
                 Some(aid) => aid.clone(),
                 None => {
-                    let available: Vec<&str> = self
+                    let mut available: Vec<&str> = self
                         .agent_states
                         .values()
+                        .filter(|a| telegram_reachable(&a.agent_config))
                         .filter_map(|a| a.role.as_deref())
                         .collect();
+                    available.sort_unstable();
                     let _ = self
                         .pipe
                         .send_text(
@@ -1735,7 +1741,13 @@ impl TelegramSession {
 
     async fn handle_agents(&self, sender: &Recipient) -> Result<()> {
         let mut lines = vec!["Available agents:".to_string()];
-        for (aid, astate) in &self.agent_states {
+        let mut reachable: Vec<(&String, &TelegramAgentState)> = self
+            .agent_states
+            .iter()
+            .filter(|(_, a)| telegram_reachable(&a.agent_config))
+            .collect();
+        reachable.sort_by(|a, b| a.0.cmp(b.0));
+        for (aid, astate) in reachable {
             let role_label = astate.role.as_deref().unwrap_or("-");
             let is_default = if *aid == self.default_agent_id {
                 " [default]"
@@ -2032,17 +2044,89 @@ impl TelegramSession {
 // Helpers
 // ===========================================================================
 
+/// The Telegram user ids the bot answers: `[telegram] allowed_users` plus
+/// `TENGU_TELEGRAM_ALLOWED_USERS` (comma-separated).
 fn build_allowed_users(config: &Config) -> HashSet<String> {
-    let mut allowed: HashSet<String> = config.telegram.allowed_users.iter().cloned().collect();
-    if let Ok(env_users) = std::env::var("TENGU_TELEGRAM_ALLOWED_USERS") {
-        for uid in env_users.split(',') {
-            let uid = uid.trim();
-            if !uid.is_empty() {
-                allowed.insert(uid.to_string());
-            }
+    allowed_users(
+        &config.telegram.allowed_users,
+        std::env::var("TENGU_TELEGRAM_ALLOWED_USERS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// [`build_allowed_users`] over explicit inputs; blank entries are dropped.
+fn allowed_users(configured: &[String], env: Option<&str>) -> HashSet<String> {
+    configured
+        .iter()
+        .map(String::as_str)
+        .chain(env.into_iter().flat_map(|v| v.split(',')))
+        .map(str::trim)
+        .filter(|uid| !uid.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// `tengu telegram` refuses to start without an allow-list: an empty one
+/// must never mean "every sender".
+fn require_allowed_users(allowed: &HashSet<String>) -> Result<()> {
+    if allowed.is_empty() {
+        anyhow::bail!(
+            "tengu telegram: no allowed users — refusing to start. Set [telegram] allowed_users \
+             = [\"<your Telegram user id>\"] in the config or TENGU_TELEGRAM_ALLOWED_USERS=<id>[,<id>…] \
+             (@userinfobot shows your id)"
+        );
+    }
+    Ok(())
+}
+
+/// Only a listed sender gets an answer — an empty list answers no one.
+fn is_authorized(allowed: &HashSet<String>, sender: &str) -> bool {
+    allowed.contains(sender)
+}
+
+/// Telegram reaches an agent with a `description` (planner-routable) or the
+/// `default` one — never a private agent (neither: the exec-tool and signing
+/// owners, `config/risk.rs`, `config/solana.rs`). A private agent is not
+/// `@<id>:` / `@<role>:`-routable and never the default.
+fn telegram_reachable(agent: &crate::config::AgentConfig) -> bool {
+    agent.default || agent.description.is_some()
+}
+
+/// `@<key>:` routing keys of the reachable agents → agent id: each role
+/// (lowercased, `-` → `_`, as `parse_agent_routing` reads it), then each
+/// id (an id wins over another agent's role).
+fn telegram_routes<'a>(
+    agents: impl Iterator<Item = (&'a str, &'a crate::config::AgentConfig)>,
+) -> HashMap<String, String> {
+    let mut reachable: Vec<_> = agents.filter(|(_, a)| telegram_reachable(a)).collect();
+    reachable.sort_by_key(|(id, _)| *id);
+    let mut routes = HashMap::new();
+    for (id, agent) in &reachable {
+        let role = agent.role.as_deref().unwrap_or_default();
+        let role = role.trim().to_lowercase().replace('-', "_");
+        if !role.is_empty() {
+            routes.insert(role, id.to_string());
         }
     }
-    allowed
+    for (id, _) in &reachable {
+        routes.insert(id.to_string(), id.to_string());
+    }
+    routes
+}
+
+/// Where plain messages go: the `default = true` agent, else the first
+/// reachable one by id; `None` when no agent is reachable.
+fn telegram_default_agent<'a>(
+    agents: impl Iterator<Item = (&'a str, &'a crate::config::AgentConfig)>,
+) -> Option<String> {
+    let mut reachable: Vec<_> = agents.filter(|(_, a)| telegram_reachable(a)).collect();
+    reachable.sort_by_key(|(id, _)| *id);
+    reachable
+        .iter()
+        .find(|(_, a)| a.default)
+        .or(reachable.first())
+        .map(|(id, _)| id.to_string())
 }
 
 fn sanitize_attachment_filename(name: &str) -> String {
@@ -2074,4 +2158,127 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
 
     let (session, inbound_rx) = TelegramSession::build(config, secret_registry, &rt)?;
     session.run(rt, inbound_rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sorted<'a>(keys: impl Iterator<Item = &'a String>) -> Vec<&'a str> {
+        let mut keys: Vec<&str> = keys.map(String::as_str).collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    #[test]
+    fn allow_list_merges_config_and_env_and_drops_blanks() {
+        let set = allowed_users(&["848344935".into(), " ".into()], Some(" 1, ,2 "));
+        assert_eq!(sorted(set.iter()), ["1", "2", "848344935"]);
+        assert!(allowed_users(&[], None).is_empty());
+        assert!(allowed_users(&["".into()], Some(" , ")).is_empty());
+    }
+
+    /// W1-gate review: an empty allow-list (config + env) refuses to start
+    /// and answers no one; a listed sender is answered, anyone else is not.
+    #[test]
+    fn empty_allow_list_fails_closed() {
+        let none = HashSet::new();
+        let err = require_allowed_users(&none).unwrap_err().to_string();
+        assert!(
+            err.contains("no allowed users — refusing to start")
+                && err.contains("TENGU_TELEGRAM_ALLOWED_USERS"),
+            "{err}"
+        );
+        assert!(!is_authorized(&none, "848344935"));
+        let one = allowed_users(&["848344935".into()], None);
+        require_allowed_users(&one).unwrap();
+        assert!(is_authorized(&one, "848344935"));
+        assert!(!is_authorized(&one, "1"));
+    }
+
+    fn agents(toml: &str) -> HashMap<String, crate::config::AgentConfig> {
+        toml::from_str::<Config>(toml).expect("config").agents
+    }
+
+    fn view(
+        agents: &HashMap<String, crate::config::AgentConfig>,
+    ) -> impl Iterator<Item = (&str, &crate::config::AgentConfig)> {
+        agents.iter().map(|(id, a)| (id.as_str(), a))
+    }
+
+    /// Private agents (no `description`, not `default` — the exec-tool
+    /// owners) are never `@`-routable from Telegram nor its default; the
+    /// default and the described agents are.
+    #[test]
+    fn private_agents_are_never_routable_or_default() {
+        let xm = agents(
+            r#"
+            [agents.xm]
+            default = true
+            engine = "openrouter"
+            model = "m"
+            [agents.xm_architect]
+            engine = "openrouter"
+            model = "m"
+            role = "Architect"
+            description = "research"
+            [agents.xm_executor]
+            engine = "openrouter"
+            model = "m"
+            role = "executor"
+            "#,
+        );
+        let routes = telegram_routes(view(&xm));
+        assert_eq!(sorted(routes.keys()), ["architect", "xm", "xm_architect"]);
+        assert_eq!(routes["architect"], "xm_architect");
+        assert_eq!(telegram_default_agent(view(&xm)).as_deref(), Some("xm"));
+
+        // No `default`: the first described agent, never a private one
+        // (even one that sorts first).
+        let no_default = agents(
+            r#"
+            [agents.a_exec]
+            engine = "openrouter"
+            model = "m"
+            [agents.b_research]
+            engine = "openrouter"
+            model = "m"
+            description = "research"
+            "#,
+        );
+        assert_eq!(
+            telegram_default_agent(view(&no_default)).as_deref(),
+            Some("b_research")
+        );
+        assert_eq!(
+            sorted(telegram_routes(view(&no_default)).keys()),
+            ["b_research"]
+        );
+
+        // Only private agents (sandboxes/xmarket-weekend): nothing to reach.
+        let private = agents("[agents.xm_weekend]\nengine = \"openrouter\"\nmodel = \"m\"\n");
+        assert_eq!(telegram_default_agent(view(&private)), None);
+        assert!(telegram_routes(view(&private)).is_empty());
+    }
+
+    /// sandboxes/aura keeps its allow-list and its three described agents;
+    /// its private tool agents (`skill-improver`, `fixture-runner`) drop out.
+    #[test]
+    fn aura_sandbox_keeps_its_telegram_surface() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/aura/config.toml");
+        let cfg = Config::load(&path).expect("aura config");
+        let allowed = allowed_users(&cfg.telegram.allowed_users, None);
+        require_allowed_users(&allowed).unwrap();
+        assert!(is_authorized(&allowed, "848344935"));
+        let routes = telegram_routes(view(&cfg.agents));
+        assert_eq!(
+            sorted(routes.keys()),
+            ["aura", "learning-agent", "researcher"]
+        );
+        assert_eq!(
+            telegram_default_agent(view(&cfg.agents)).as_deref(),
+            Some("aura")
+        );
+    }
 }

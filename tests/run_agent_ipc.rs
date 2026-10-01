@@ -11,6 +11,7 @@
 //! | guard | no `TENGU_AGENT_IPC` | exit != 0, stderr: "subprocess mode not meant for direct invocation" |
 //! | bad json | `TENGU_AGENT_IPC=1`, stdin = `not json` | exit != 0, stderr: "parse IPC input JSON", stdout empty |
 //! | no agent | valid input, `agent_name = "__no_such_agent__"` | exit != 0, stderr: "no agent `__no_such_agent__` in the active config", stdout empty |
+//! | widening compose | hardened sandbox (a `[solana]` signer), `compose.tools` adds `write_file` to a base listing `read_file` | exit != 0 before the engine is built, stderr: "compose would widen agent `arch` in a hardened sandbox", stdout empty; the same compose without the signer offers `write_file` to a loopback model, exit 0 |
 //! | local fit | local agent, 16 384-token window, `read_file` of 100 000 bytes | the tool message the server gets next is ≤ 8 192 bytes (1/8 of the window), exit 0; a local agent left on the default window is warned about on stderr |
 //!
 //! None of the failure paths emit an `AgentIpcOutput` — every failure before
@@ -216,6 +217,82 @@ fn run_agent_fails_fast_on_unknown_agent() {
         run.stderr
     );
     assert_no_ipc_json(&run);
+}
+
+/// W1-gate review: in a hardened sandbox (here a `[solana]` signer; `[risk]`
+/// takes the same path) a plan step's `compose` may only narrow its base
+/// agent. Adding `write_file` to a base that lists `read_file` fails the
+/// step before the engine is built (no IPC output). Without the signer the
+/// same compose replaces the tools wholesale (doctrine #3): the loopback
+/// model is offered `write_file`.
+#[test]
+fn run_agent_refuses_a_widening_compose_in_a_hardened_sandbox() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let config_dir = tempfile::tempdir().expect("config dir");
+    let (port, server) = fake_local_server(vec![
+        r#"{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}"#,
+    ]);
+    let input = serde_json::json!({
+        "goal": "write the answer",
+        "agent_name": "arch",
+        "model": "",
+        "max_turns": 2,
+        "session_id": "test-session-hardened-compose",
+        "step_id": "step-1",
+        "compose": {"base_agent": "arch", "skills": [], "tools": ["read_file", "write_file"]}
+    })
+    .to_string();
+    let run_with = |signer: &str| {
+        let config = format!(
+            "[egress]\nnetwork = \"open\"\n\n[memory]\nenabled = false\n\n{signer}\
+             [agents.arch]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\
+             description = \"fixture: hardened compose\"\ntools = [\"read_file\"]\n\
+             workspace = \"{}\"\n\n\
+             [agents.arch.limits]\ncontext_window = 16384\n\n\
+             [agents.arch.local]\nbase_url = \"http://127.0.0.1:{port}/v1\"\napi_key_env = \"\"\n",
+            workspace.path().display()
+        );
+        let config_path = config_dir.path().join("config.toml");
+        std::fs::write(&config_path, config).unwrap();
+        run_agent_with(
+            Some("1"),
+            &input,
+            &[("TENGU_CONFIG", config_path.to_str().unwrap())],
+            Duration::from_secs(20),
+        )
+    };
+
+    let run = run_with("[solana]\nsigner_key_file = \"/nonexistent/tengu-ipc/signer.json\"\n\n");
+    assert_ne!(run.code, Some(0), "stderr:\n{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("compose would widen agent `arch` in a hardened sandbox")
+            && run.stderr.contains("[\"write_file\"]"),
+        "stderr should name the widening, got:\n{}",
+        run.stderr
+    );
+    assert!(
+        !run.stderr.contains("subprocess engine built"),
+        "the refusal comes before the engine build, got:\n{}",
+        run.stderr
+    );
+    assert_no_ipc_json(&run);
+
+    let open = run_with("");
+    assert_eq!(open.code, Some(0), "stderr:\n{}", open.stderr);
+    let bodies = server.join().expect("fake server");
+    assert_eq!(bodies.len(), 1, "only the open run calls the model");
+    let request: serde_json::Value = serde_json::from_str(&bodies[0]).expect("request JSON");
+    let offered: Vec<&str> = request["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert!(
+        offered.contains(&"write_file") && offered.contains(&"read_file"),
+        "not hardened: compose replaces the tools wholesale, offered {offered:?}"
+    );
 }
 
 /// Request body of one HTTP/1.1 request (headers, then `Content-Length`).

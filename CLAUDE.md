@@ -258,8 +258,10 @@ These are not preferences. They're load-bearing.
 
 3. **Composition over wholesale.** Per-agent scopes override
    `default_scopes` wholesale (NOT field-merged). Per-step `Step.compose`
-   overrides the base spec's skills/tools wholesale. This keeps the contract
-   simple even if it costs some convenience.
+   overrides the base spec's skills/tools wholesale — in a hardened sandbox
+   (`[risk]` / Solana signer) it may only narrow them
+   (`bootstrap::tools::compose_agent`; a widening compose fails the step).
+   This keeps the contract simple even if it costs some convenience.
 
 4. **Fail-soft on memory operations, hard on plan-shape errors.** Open Brain
    unavailable → log warn, continue with file registry + recent history.
@@ -299,8 +301,11 @@ These are not preferences. They're load-bearing.
   `http_request` scope with empty `fs_roots` denies multipart file uploads —
   `sandboxes/aura/config.toml` sets `fs_roots = ["~/aura-workspace"]` for that
   reason. Subprocess children get their own workspace added to every inherited
-  scope's `fs_roots` (`grant_workspace_root`). `ToolScope::check_env_read`
-  honours the `"*"` wildcard like `net_hosts` / `shell_bins`.
+  scope's `fs_roots` (`grant_workspace_root`) — except a deny-all scope (every
+  field empty, e.g. xmarket's `[default_scopes.write_file]`), which stays a
+  deny (`tengu doctor --engines` skips an agent whose own scopes deny the
+  smoke tools — jev-exec's architect). `ToolScope::check_env_read` honours
+  the `"*"` wildcard like `net_hosts` / `shell_bins`.
 - **Config resolution** — `--sandbox <name>` replaces the base config
   wholesale; otherwise `--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml`.
   The `run-agent` child gets the same file: `--sandbox` travels over IPC and
@@ -522,7 +527,30 @@ These are not preferences. They're load-bearing.
   `editor_shell` = load error; the value is read trimmed, an unknown one is a
   load error), and `fold_default_scopes` sets `no_shell_fallback` on every
   agent (in-process and bridge fallbacks run no shell; no shell skill loads —
-  `SkillRegistry::with_shell_skills`).
+  `SkillRegistry::with_shell_skills`). A `none` agent's CLI runs with
+  `--setting-sources "" --disable-slash-commands --settings
+  {"autoMemoryEnabled":false,"disableAllHooks":true}` (`claude_code.rs::cli_args`):
+  no settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md
+  discovery or auto-memory (CLI 2.1.286: OAuth + bridge verified live;
+  `--safe-mode` drops the bridge, `--bare` OAuth). A plan step's `compose`
+  may only narrow its base agent there (`run-agent` refuses a widening one).
+- **Workspace writers refuse agent / CLI state (2026-10-01)** — `write_file`
+  (`tools/args.rs::validate_write_path`) resolves the path first
+  (`domain::scope::resolve_path`: symlinks followed, `..` applied —
+  `new/../../x` used to land outside the workspace once `new` was created),
+  then refuses `.tengu/`, `.claude/`, `.git/`, `skills/` at any depth and
+  `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `.mcp.json` files
+  (case-insensitive) in every sandbox; `manage_skill` / `apply_improver_proposal`
+  resource paths and `agentic_memory` wiki titles refuse the same names
+  (`domain::scope::protected_write`).
+  Not covered: Claude Code built-ins (profiles other than `none`) and
+  `run_command`.
+- **Telegram fails closed (2026-10-01)** — `tengu telegram` refuses to start
+  without an allow-list (`[telegram] allowed_users` + `TENGU_TELEGRAM_ALLOWED_USERS`);
+  an unlisted sender gets "Unauthorized.". A private agent (no `description`,
+  not `default` — the exec-tool / signing owners) is never `@<id>:` /
+  `@<role>:`-routable, never the default and not listed in `/agents` or the
+  team block (`telegram.rs::telegram_reachable`).
 - **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
   `config/sections.rs::SandboxSections` (one `Arc` per config, set by
   `fold_default_scopes`): `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
@@ -642,7 +670,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-10-01 (`x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-01 (W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

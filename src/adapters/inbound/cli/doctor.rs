@@ -266,6 +266,7 @@ const LOCAL_SKIPPED: &str = "skipped (local models run on the operator's PC)";
 /// | scopes | the agent's own; the temp workspace granted on each, like a `run-agent` step — Claude Code's bridge through the explicit engine option (`build_step_engine`, `TENGU_BRIDGE_GRANT_WORKSPACE`), never a process-wide env var |
 /// | bound | `min(limits.max_tool_rounds, SMOKE_MAX_ROUNDS)` rounds, `limits.step_timeout_secs` |
 /// | `local` with a loopback `base_url`, on macOS | [`LOCAL_SKIPPED`], never contacted |
+/// | its own scopes deny a smoke tool outright (`read_file = {}`) | skipped, naming the tools — a deny-all scope stays one in a `run-agent` step, so the smoke cannot run (`sandboxes/jev-exec`'s architect) |
 async fn doctor_engines(config: &Config, failures: &mut Vec<String>) {
     let mut secrets: Option<Arc<SecretRegistry>> = None;
     let mut agents: Vec<(&String, &AgentConfig)> = config.agents.iter().collect();
@@ -293,6 +294,16 @@ async fn doctor_engines(config: &Config, failures: &mut Vec<String>) {
             );
             continue;
         }
+        let denied = smoke_tools_denied(agent);
+        if !denied.is_empty() {
+            println!(
+                "    {id:<wa$}  {:<we$}  {:<wm$}  skipped ({} denied by its own scopes)",
+                agent.engine,
+                agent.model,
+                denied.join(", ")
+            );
+            continue;
+        }
         let secrets = secrets.get_or_insert_with(|| Arc::new(process_secret_registry(None)));
         let started = std::time::Instant::now();
         let (ok, called, problem) = match smoke_agent(config, id, agent, secrets).await {
@@ -317,6 +328,16 @@ async fn doctor_engines(config: &Config, failures: &mut Vec<String>) {
             ));
         }
     }
+}
+
+/// The smoke tools the agent's own scopes deny outright (every field empty):
+/// the workspace grant leaves those a deny.
+fn smoke_tools_denied(agent: &AgentConfig) -> Vec<&'static str> {
+    SMOKE_TOOLS
+        .iter()
+        .copied()
+        .filter(|t| agent.scopes.get(*t).is_some_and(|s| s.is_deny_all()))
+        .collect()
 }
 
 /// The agent's `[agents.<n>.local] base_url` (default when absent) names this
@@ -535,6 +556,21 @@ mod tests {
         for (url, want) in cases {
             assert_eq!(local_on_loopback(&local_agent(url)), want, "{url:?}");
         }
+    }
+
+    /// sandboxes/jev-exec's architect denies `read_file` / `list_directory`
+    /// outright (its only hand is `run_command` → `tengu`): its smoke row is
+    /// skipped, not failed; the executor's runs.
+    #[test]
+    fn smoke_skips_an_agent_whose_scopes_deny_the_smoke_tools() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/jev-exec/config.toml");
+        let cfg = Config::load(&path).expect("jev-exec config");
+        assert_eq!(
+            smoke_tools_denied(&cfg.agents["architect"]),
+            ["list_directory", "read_file"]
+        );
+        assert!(smoke_tools_denied(&cfg.agents["executor"]).is_empty());
     }
 
     /// On macOS a loopback `local` agent is reported skipped and never

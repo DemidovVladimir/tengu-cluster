@@ -191,9 +191,11 @@ order_types = ["market", "ioc"]
 
 # --- Agents: one shared workspace (config/xmarket.rs) ------------------------
 # `tools` is the allow-list on every surface: chat, run-agent steps, `tengu
-# tool`, feeds, the bridge. A plan step's `compose.tools` can still hand a
-# routable agent any catalog tool, so [default_scopes] below also denies the
-# writers (write_file, run_command, http_request) to every agent.
+# tool`, feeds, the bridge. [risk] hardens this sandbox, so a plan step's
+# `compose` may only narrow an agent's tools (run-agent refuses a widening
+# one); [default_scopes] below also denies the writers (write_file,
+# run_command, http_request) to every agent — a deny-all scope stays a deny in
+# run-agent steps too.
 
 # Planner + operator chat. OpenRouter only: a claude_code planner calls tools
 # instead of emitting plan JSON. No `description`: never a plan step. Read-only.
@@ -273,8 +275,8 @@ tools = ["hl_ctx", "hl_book", "risk_status", "paper_order", "paper_close", "pape
 
 [default_scopes.sign_message]
 
-# Base tools no agent lists: denied (empty scope) — a plan step's compose.tools
-# could still name them.
+# Base tools no agent lists: denied (empty scope, kept a deny in run-agent
+# steps) — defence in depth behind the compose narrowing above.
 [default_scopes.write_file]
 
 [default_scopes.run_command]

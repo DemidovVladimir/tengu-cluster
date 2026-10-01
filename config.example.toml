@@ -120,7 +120,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [telegram]
 # enabled = true
-# allowed_users = ["123456789"]
+# allowed_users = ["123456789"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 # --- Webhooks (inbound HTTP) ---
 # Run with: tengu webhooks --sandbox <name>   (build with --features webhooks)
@@ -585,7 +585,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer)
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer or [risk]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"

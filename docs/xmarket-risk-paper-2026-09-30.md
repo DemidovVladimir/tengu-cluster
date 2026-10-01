@@ -17,7 +17,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | Step | Rule | Refusal (tool error, nothing written) |
 |---|---|---|
 | Config | `[risk]` + `[paper]`, the ledger (`[xmarket]`) | `risk_config_missing` · `state_dir_missing` · `ledger_unavailable` |
-| Agent | the caller is private again at call time (a planner step's `compose.tools` could hand any tool to a routable agent) | `exec_agent_not_private` |
+| Agent | the caller is private again at call time (defence in depth: `run-agent` already refuses a `compose` that widens a routable agent in a `[risk]` sandbox, `bootstrap::tools::compose_agent`) | `exec_agent_not_private` |
 | Key | `client_order_id` = the arg, else `ToolCtx.call_id` (loop `{loop}:{session}:{t}`, feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<process nonce>:<JSON-RPC id>`); 1–256 chars, no whitespace; never random | `no_client_order_id` · `invalid_client_order_id` |
 | Replay | an order stored under the key ⇒ its `paper_fill/1` row (`replayed`): no latency, no book read, nothing written | — |
 | Rows (never fetched) | `mkt_ctx/1` of the open positions + the order (and hedge) instrument; `mkt_instrument/1` of the instrument (HL perp, `sz_decimals`, the paper fee = `hl_ctx`'s `taker_fee_bps` rule); the `opportunity` row | `missing:mkt_instrument` (read `hl_ctx` first) |

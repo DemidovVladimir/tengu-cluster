@@ -629,6 +629,9 @@ fn default_orchestrator_engine() -> String {
 pub struct TelegramConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Telegram user ids the bot answers, merged with
+    /// `TENGU_TELEGRAM_ALLOWED_USERS`. Fail closed: both empty =
+    /// `tengu telegram` refuses to start; an unlisted sender is refused.
     #[serde(default)]
     pub allowed_users: Vec<String>,
     #[serde(default)]
