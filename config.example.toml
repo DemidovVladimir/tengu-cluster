@@ -390,6 +390,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # per_minute = 1200                         # HL: 1200 weight / min / IP (l2Book 2, most info requests 20)
 # burst = 1200                              # bucket size; default = per_minute
 # exec_reserve = 0                          # weight reads leave for order calls
+# [rate_limits.geckoterminal]               # GeckoTerminal pool OHLCV (`tengu history backfill --source gecko`): weight 1 per request
+# per_minute = 25                           # the free API allows ~30 calls / min
 #
 # Hyperliquid tools (opt-in: list them in the agent's `tools`; args, keys,
 # weights: docs/typed-observations-2026-09-24.md § Hyperliquid tools). Each

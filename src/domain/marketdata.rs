@@ -15,9 +15,6 @@
 //! [`BarSeries::observable_at`], so a decision at `t` never sees a bar that
 //! closes after `t`.
 
-// Consumers land with the xlab wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -176,6 +173,7 @@ pub struct CtxPoint {
     pub premium: Option<f64>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest cost model (xlab)
 impl CtxPoint {
     /// Half the impact spread in bps of the mid (else of the mark):
     /// `(impact_ask − impact_bid) / 2 / mid × 10⁴`; `None` without the
@@ -195,6 +193,7 @@ pub struct BarSeries {
     pub bars: Vec<Bar>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest engine (xlab)
 impl BarSeries {
     /// Sorts by `t_open_ms`; a repeated open time keeps the last bar given.
     pub fn new(instrument: impl Into<String>, interval: Interval, mut bars: Vec<Bar>) -> Self {
@@ -242,6 +241,7 @@ pub struct FundingSeries {
     pub points: Vec<FundingPoint>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest engine (xlab)
 impl FundingSeries {
     /// Sorts by `t_ms`; a repeated time keeps the last point given.
     pub fn new(instrument: impl Into<String>, mut points: Vec<FundingPoint>) -> Self {
@@ -276,6 +276,7 @@ pub struct CtxSeries {
     pub points: Vec<CtxPoint>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // readers: the backtest engine (xlab)
 impl CtxSeries {
     /// Sorts by `t_ms`; a repeated time keeps the last point given.
     pub fn new(instrument: impl Into<String>, mut points: Vec<CtxPoint>) -> Self {

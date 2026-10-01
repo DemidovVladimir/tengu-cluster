@@ -50,6 +50,10 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "z
 getrandom = "0.2"
 zeroize = "1"
 tokio-stream = "0.1"
+# HL S3 archive files (`asset_ctxs/<date>.csv.lz4`, LZ4 frame) for
+# `tengu history import-hl-archive` (outbound/backfill/hl_archive.rs). Pure
+# Rust, safe decode only.
+lz4_flex = { version = "0.14", default-features = false, features = ["frame", "safe-decode", "safe-encode"] }
 tempfile = "3"
 glob = "0.3"
 similar = "2"

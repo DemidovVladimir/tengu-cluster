@@ -5,9 +5,6 @@
 //! backfill fetchers (`adapters/outbound/backfill/`), read by the backtest
 //! use case (`application/backtest/`) and the `market_history` tool.
 
-// Consumers land with the xlab wave (docs/xlab-2026-10-01.md); drop this then.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +42,7 @@ pub(crate) trait MarketDataStore: Send + Sync {
         bars: &[Bar],
     ) -> anyhow::Result<usize>;
     /// Bars with `from_ms <= t_open_ms < to_ms`, ascending.
+    #[cfg_attr(not(test), allow(dead_code))] // readers: backtest, `market_history` (xlab)
     async fn bars(
         &self,
         instrument: &str,
@@ -60,6 +58,7 @@ pub(crate) trait MarketDataStore: Send + Sync {
         points: &[FundingPoint],
     ) -> anyhow::Result<usize>;
     /// Funding with `from_ms <= t_ms < to_ms`, ascending.
+    #[cfg_attr(not(test), allow(dead_code))] // readers: backtest, `market_history` (xlab)
     async fn funding(
         &self,
         instrument: &str,
@@ -74,6 +73,7 @@ pub(crate) trait MarketDataStore: Send + Sync {
         points: &[CtxPoint],
     ) -> anyhow::Result<usize>;
     /// Context samples with `from_ms <= t_ms < to_ms`, ascending.
+    #[cfg_attr(not(test), allow(dead_code))] // readers: backtest, `market_history` (xlab)
     async fn ctx(&self, instrument: &str, from_ms: i64, to_ms: i64) -> anyhow::Result<CtxSeries>;
     /// Coverage rows, one per (instrument, kind, interval); `instrument`
     /// filters to one id. Sorted by instrument, kind, interval.
