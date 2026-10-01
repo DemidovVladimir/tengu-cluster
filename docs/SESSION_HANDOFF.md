@@ -6,7 +6,21 @@
 
 ---
 
-## Resume here (Thu 2026-10-01 ~09:00 ET — W1 done: 34 items + the W1 gate passed; weekend run Fri, then operator decisions + W2)
+## Resume here (Thu 2026-10-01 evening — xlab: history first)
+
+Operator 2026-10-01: "why do I have to wait 2 days" — answer from history, never block on live recording (CLAUDE.md gotcha "History first"). Built the same day on `feature/xmarket` (not pushed): sandbox `xlab` for the PRD v0.5 harness, doc `docs/xlab-2026-10-01.md` (§ 14 = first results).
+
+| Topic | State |
+|---|---|
+| Commits | `b19c915` prep · `18221e8` Jev on a clock + decision cache · `d1154b1` sandbox + skill · `e7cd063` market.db + backfill · `9645fc0` engine · `6b7a0e0` `market_history` · `90242ef` gate arm · `d46639b` `tengu backtest` · `b8bb075` CLAUDE / AGENTS / tracker · `02f0c61` `backtest` tool · `2750f78` gate wiring + splits + entry liquidity + capped ranking · `f7baf25` Architect tools · `e6b0075` split CIs + skill call shapes |
+| Data | `~/.tengu/state/xlab/market.db`: 79 instruments (75 xyz + BTC / ETH / SOL / HYPE), 1h bars from 2026-03-07, funding from 2026-03-01, Sept HL-archive ctx (crypto); re-run `tengu history backfill --sandbox xlab --instruments @crypto,@xyz_stocks --interval 1h --from 2026-03-01 --funding` to extend (resumes) |
+| Results | rule W +51.3 bps (n 1,500, CI +15.5 … +82.5); liquid-entry variant holdout +75.4 (CI +7.4 … +136.2); placebo −58.9; every other library strategy no-go; Jev gate on W: +32.8 vs rules, CI spans 0, p(take) uninformative (Brier 0.35) — `docs/xlab-2026-10-01.md` § 14 |
+| Weekend run | optional now: it adds only executable xyz weekend books (no archive has them). The frozen-binary rules below still hold if it runs; the throwaway sampler (pid in `~/.tengu/state/xmarket/research/weekend-2026-10-02/sampler.pid`) is a sleeping shell — `kill <pid>` to drop it |
+| Next | `docs/xlab-2026-10-01.md` § 12: HL-archive L2 import (crypto executable books), info layer on history (EDGAR / news as `event_window` events), `ask_architect` escalation replay, capability lifecycle store, forward paper of a validated spec; local engine legs of `market_history` / `backtest` on the operator's PC |
+
+---
+
+## Previous: Resume here (Thu 2026-10-01 ~09:00 ET — W1 done: 34 items + the W1 gate passed; weekend run Fri, then operator decisions + W2)
 
 | Topic | State |
 |---|---|
