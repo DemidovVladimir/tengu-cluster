@@ -12,15 +12,15 @@
 # terminal each tengu command asks for the vault password on /dev/tty: Enter
 # skips it (stdin /dev/null does not). Never start `tengu run` with `&` at a
 # terminal: the prompt stops a background job — run it in a tmux pane.
-#   build   CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release
-#           T=$HOME/.cache/tengu-xm.noindex/main/release/tengu        (default features suffice)
+#   build   CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release --features claude_code
+#           T=$HOME/.cache/tengu-xm.noindex/main/release/tengu        (claude_code: the agents run on the Claude CLI; `claude` logged in)
 #   start   tmux new -s xm, then: nice -n 10 "$T" run --sandbox xmarket
 #           logs: the pane + ~/.tengu/logs/tengu.log; a second start exits 1 (lease runtime:xmarket)
 #   check   "$T" doctor --sandbox xmarket --live      exit 0 = heartbeat fresh, every required feed live
-#           "$T" doctor --sandbox xmarket --engines   one small OpenRouter turn per agent (costs tokens)
+#           "$T" doctor --sandbox xmarket --engines   one small Claude CLI turn per agent (your Claude plan)
 #           "$T" risk status --sandbox xmarket        cash, positions + exit deadlines, halts, last verdicts
 #           "$T" tool call --sandbox xmarket --agent xm_executor --tool risk_status   equity at mark, loss headroom
-#   chat    "$T" chat --sandbox xmarket               planner xm → xm_architect (read-only research + the book)
+#   chat    "$T" chat --sandbox xmarket               xm_architect, Opus (read-only research + the book)
 #   halt    touch ~/.tengu/state/xmarket/KILL   or   "$T" risk halt --sandbox xmarket (TTY)
 #   resume  remove KILL, then "$T" risk resume --sandbox xmarket (TTY; type the account name)
 #   stop    Ctrl-C in the pane (or kill -TERM <pid>): drains ≤ 20 s, exit 0, lease released,
@@ -56,7 +56,7 @@
 #
 # SECRETS / ENV — names only (vault `tengu secret set <NAME>` or the repo .env):
 #   OPENROUTER_API_KEY     the dedicated xmarket key, $40 / day limit (ops-openrouter-budget-key):
-#                          xm + xm_architect now, Jev and extraction later
+#                          Jev and extraction later (no agent uses it since 2026-10-02)
 #   TENGU_MASTER_PASSWORD  unlocks the vault without a prompt (daemon, Docker)
 #   TENGU_HOME             ~/.tengu (repo .env) · HL_API_URL: optional testnet override, unset = mainnet
 #   later                  SEC_USER_AGENT (M0 EDGAR) · TENGU_XM_WEBHOOK_SECRET, X_BEARER_TOKEN (M4) ·
@@ -69,25 +69,26 @@ runtime_profile = "auto"
 # --- Network -----------------------------------------------------------------
 # Open (convention 17), a one-line switch to "tor" once hl-tor-probe (M1) has
 # checked every host. The ceiling covers tool traffic (http_request, HL info,
-# Solana): exactly the HL host the M0 tools use. The LLM API (OpenRouter: the
-# xm / xm_architect engines, later Jev) is outside it (egress.rs: proxy only).
+# Solana): exactly the HL host the M0 tools use. The LLM APIs (the Claude CLI of
+# xm_architect / xm_executor; OpenRouter for Jev later) are outside it (egress.rs:
+# proxy only).
 [egress]
 network = "open"
 allow_hosts = ["api.hyperliquid.xyz"]
 https_only = true
 
-# --- Memory + planner (default build) ----------------------------------------
-# No vector memory: the planner keeps the session's last messages in-process.
+# --- Memory, no planner ------------------------------------------------------
+# No vector memory: chat keeps the session's last messages in-process.
 # Open Brain needs a `--features postgres_memory` build + TENGU_MEMORY_DATABASE_URL;
-# then: enabled = true, within_session_output_top_k = 3.
+# then: enabled = true.
 [memory]
 enabled = false
 
-[orchestrator]
-agent = "xm"
-engine = "rag"
-max_attempts_per_step = 2
-max_replans = 1
+# No [orchestrator] (operator 2026-10-02, as in xlab): `tengu chat` talks to the
+# default agent xm_architect directly. The former planner `xm` had to stay on
+# OpenRouter (a claude_code planner calls tools instead of emitting plan JSON) and
+# only ever routed to that one agent. M5 escalation (jev-architect-escalator)
+# needs a target again.
 
 # --- xmarket: state dir + session calendars ----------------------------------
 # <TENGU_HOME>/state/xmarket — not the weekend run's. No [xmarket.weekend_fade]:
@@ -191,37 +192,23 @@ order_types = ["market", "ioc"]
 
 # --- Agents: one shared workspace (config/xmarket.rs) ------------------------
 # `tools` is the allow-list on every surface: chat, run-agent steps, `tengu
-# tool`, feeds, the bridge. [risk] hardens this sandbox, so a plan step's
-# `compose` may only narrow an agent's tools (run-agent refuses a widening
-# one); [default_scopes] below also denies the writers (write_file,
-# run_command, http_request) to every agent — a deny-all scope stays a deny in
-# run-agent steps too.
+# tool`, feeds, the bridge. [risk] hardens this sandbox: every claude_code agent
+# runs with builtin_tools_profile = "none" (config/hardening.rs), and a plan
+# step's `compose` may only narrow an agent's tools; [default_scopes] below also
+# denies the writers (write_file, run_command, http_request) to every agent — a
+# deny-all scope stays a deny in run-agent steps too.
+# Models (operator 2026-10-02, as in xlab): Opus and Sonnet on the Claude CLI
+# (the operator's login; build with `--features claude_code`, `claude` logged
+# in); OpenRouter only for Jev (M0 loops, later).
 
-# Planner + operator chat. OpenRouter only: a claude_code planner calls tools
-# instead of emitting plan JSON. No `description`: never a plan step. Read-only.
-[agents.xm]
-default = true
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
-workspace = "~/xmarket-workspace"
-tools = ["read_file", "list_directory", "hl_ctx", "hl_book", "risk_status", "paper_positions"]
-
-[agents.xm.identity]
-name = "xmarket"
-instructions = """You run the operator chat of the xmarket paper desk: a $100 paper
-budget on Hyperliquid perps. Route market research and questions about the paper
-book (positions, P&L, risk state, halts) to xm_architect. Nobody trades from chat:
-orders come only from `tengu run` (feeds, decision loops) through the [risk] gate
-inside the order tools. Show instrument ids, addresses and hashes in full, never
-shortened."""
-
-# The one routable agent (convention 11): research, and the operator's read path
-# into the paper book. OpenRouter in M0: the default build has no claude_code
-# engine, and `tengu doctor` fails on an engine it cannot build.
-# jev-architect-config (M5) sets its final model, skills and xm_submit_research.
+# Operator chat (default: `tengu chat --sandbox xmarket` talks to it) and the
+# one routable agent (convention 11): research, and the operator's read path into
+# the paper book. Read-only. jev-architect-config (M5) sets its skills and
+# xm_submit_research.
 [agents.xm_architect]
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+default = true
+engine = "claude_code"
+model = "claude-opus-5-5"         # bare slug for claude_code
 workspace = "~/xmarket-workspace"
 tools = ["read_file", "list_directory", "hl_ctx", "hl_book", "risk_status", "paper_positions"]
 description = """
@@ -245,19 +232,17 @@ instructions = """You research Hyperliquid markets and report the xmarket paper 
 Use hl_ctx (contexts: one coin, several coins or a whole dex such as "xyz") and
 hl_book (one coin's book and slippage for a notional), risk_status and
 paper_positions (the $100 paper account). Cite the tool row for every number; a
-failed or stale read is unknown, never 0. You never trade and have no order tool.
-Show instrument ids (hyperliquid:xyz:TSLA), addresses and hashes in full."""
+failed or stale read is unknown, never 0. You never trade and have no order tool:
+orders come only from `tengu run` (feeds, decision loops) through the [risk] gate
+inside the order tools. Show instrument ids (hyperliquid:xyz:TSLA), addresses
+and hashes in full, never shortened."""
 
 [agents.xm_architect.limits]
-max_tool_rounds = 30
+max_tool_rounds = 30              # claude_code counts tool calls, not engine turns
 step_timeout_secs = 600
 
-# Hardened claude_code option (jev-architect-config, M5; needs a build with
-# `--features claude_code`), replacing engine + model above:
-#   engine = "claude_code"
-#   model = "claude-sonnet-4-6"                # bare slug for claude_code
-#   [agents.xm_architect.claude_code]
-#   builtin_tools_profile = "none"             # required in a [risk] sandbox (config/hardening.rs)
+[agents.xm_architect.claude_code]
+builtin_tools_profile = "none"    # required in a [risk] sandbox (config/hardening.rs)
 
 # Private tool owner: no `description`, not `default`, no webhook — the only
 # agent holding exec tools (paper_order, paper_close, xm_exits; config/risk.rs,
@@ -265,10 +250,13 @@ step_timeout_secs = 600
 # jev-xmarket-loops-toml makes it the M0 loop's agent. `tengu run` never calls
 # its engine (feeds call tools directly); the model only satisfies the schema.
 [agents.xm_executor]
-engine = "openrouter"
-model = "google/gemini-2.5-flash-lite"
+engine = "claude_code"
+model = "claude-sonnet-5-5"
 workspace = "~/xmarket-workspace"
 tools = ["hl_ctx", "hl_book", "risk_status", "paper_order", "paper_close", "paper_positions", "xm_exits"]
+
+[agents.xm_executor.claude_code]
+builtin_tools_profile = "none"
 
 # --- Tool scopes: explicit for every tool an agent holds (no fallback) -------
 [default_scopes.sign_and_send_transaction]   # required with [risk], no wallets: Privy signing off

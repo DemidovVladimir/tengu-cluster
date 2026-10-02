@@ -1053,7 +1053,7 @@ const SUBSYSTEMS = [
       ["domain/{tz,calendar}.rs", "New York / Paris DST clock · sessions, holidays, weekend window"],
       ["adapters/inbound/cli/risk.rs", "tengu risk status / halt / resume (halt and resume: operator at a terminal; resume refused while the kill-switch file exists)"],
     ],
-    deep: "Sandboxes: xmarket (stage M0: xm planner, xm_architect routable, xm_executor private; feeds hl_ctx, hl_book, xm_exits, risk_day) and xmarket-weekend (rule W on paper, xm_weekend private, tool feeds only). Docs: docs/xmarket-risk-paper-2026-09-30.md, docs/xmarket-tracker-2026-09-29.md.",
+    deep: "Sandboxes: xmarket (stage M0: no planner, xm_architect default + routable, xm_executor private, Claude CLI; feeds hl_ctx, hl_book, xm_exits, risk_day) and xmarket-weekend (rule W on paper, xm_weekend private, tool feeds only). Docs: docs/xmarket-risk-paper-2026-09-30.md, docs/xmarket-tracker-2026-09-29.md.",
   },
   {
     key: "xlab", title: "xlab — market-data warehouse, backtests, Jev on history (2026-10-01)",
@@ -1162,7 +1162,7 @@ const FILE_MAP = [
   ["src/config/solana.rs", "tools", "[solana] signer_key_file + signing-sandbox rules"],
   ["src/config/backtest.rs", "xlab", "[backtest] — notional, bootstrap, seed, costs, universes, strategies, splits, gate, max_candidates, keep_runs; load rules"],
   ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest]"],
-  ["sandboxes/xmarket/config.toml", "xmarket", "paper desk stage M0 — runbook at the top; xm (planner), xm_architect (routable), xm_executor (private); feeds hl_ctx, hl_book, xm_exits, risk_day"],
+  ["sandboxes/xmarket/config.toml", "xmarket", "paper desk stage M0 — runbook at the top; xm_architect (default, routable, Opus), xm_executor (private, Sonnet), no planner; feeds hl_ctx, hl_book, xm_exits, risk_day"],
   ["sandboxes/xmarket-weekend/config.toml", "xmarket", "rule W on paper — runbook + timeline at the top; xm_weekend (private); five required tool feeds; recorder"],
   ["sandboxes/xlab/config.toml", "xlab", "history-first research — [backtest] library, xl_architect (routable), xl_jev + [decision_loops.xl_gate], $100 [risk]"],
   ["skills/xlab-research/SKILL.md", "xlab", "the Architect's protocol: split first, tune in-sample, one counted holdout read, robustness, critic"],

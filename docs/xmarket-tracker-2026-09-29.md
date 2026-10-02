@@ -513,6 +513,7 @@ Budget estimates: ≈ $1.4 / day information layer without X; ≈ $11–75 / day
 | 18 | Pin the Jev build during evaluation | pin per evaluation window; the audit already logs the build | M7 |
 | 19 | Paper or real money | **Decided 2026-09-30: paper first, then real.** M0–M3 run on paper; the live pilot (M3b) starts only after an M3 "go", with a $100-funded Hyperliquid sub-account | M3b |
 | 20 | Response to the feasibility verdict (re-scope) | **Decided 2026-09-30: keep the full plan**; the report stays attached as a warning. Both cheap checks run first: a pre-registered holdout test of the weekend-fade and post-earnings rules on the other xyz stock perps, and order-book recording every 5 min from Fri 2026-10-02 19:30 ET to Mon 2026-10-05 10:00 ET (throwaway sampler in `<TENGU_HOME>/state/xmarket/research/weekend-2026-10-02/`, outside the repo) | before M0 |
+| 21 | Which models run the agents | **Decided 2026-10-02: no expensive OpenRouter models.** xmarket and xlab agents run on the Claude CLI (the operator's login; a `--features claude_code` build): the Architect on Opus (`claude-opus-5-5`), the private tool owner on Sonnet (`claude-sonnet-5-5`, never called), both `builtin_tools_profile = "none"`; Jev is the only OpenRouter model (# 4 now covers Jev only). xmarket has no planner: `xm` (OpenRouter-only by design) only ever routed to `xm_architect`, now the default chat agent — M5 `jev-architect-escalator` needs an escalation target again | — |
 
 ## 8. Risks
 

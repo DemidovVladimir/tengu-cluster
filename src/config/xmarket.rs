@@ -1538,8 +1538,8 @@ tools = ["xm_weekend_fade"]
         let kill = |c: &Config| expand_tilde(&c.risk.as_ref().unwrap().kill_switch_file);
         assert_ne!(kill(&cfg), kill(&weekend));
 
-        // Exec tools only on the private executor; the planner (default)
-        // and the routable architect read only.
+        // Exec tools only on the private executor; the architect (default,
+        // routable) reads only.
         let exec_holders: Vec<&str> = cfg
             .agents
             .iter()
@@ -1556,11 +1556,12 @@ tools = ["xm_weekend_fade"]
             .map(|(id, _)| id.as_str())
             .collect();
         assert_eq!(routable, ["xm_architect"]);
-        let planner = &cfg.agents["xm"];
-        assert!(planner.default);
-        assert_eq!(cfg.orchestrator.as_ref().unwrap().agent, "xm");
+        // No planner (operator 2026-10-02, as in xlab): chat talks to the
+        // architect; every agent on the Claude CLI, OpenRouter only for Jev.
+        assert!(cfg.agents["xm_architect"].default);
+        assert!(cfg.orchestrator.is_none());
         for (id, a) in &cfg.agents {
-            assert_ne!(a.engine, "claude_code", "{id}: the default build has none");
+            assert_eq!(a.engine, "claude_code", "{id}");
         }
 
         // An explicit scope (folded into `scopes` by `Config::load`) for every

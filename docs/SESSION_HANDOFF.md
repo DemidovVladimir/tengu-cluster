@@ -17,6 +17,8 @@ The `feature/xmarket` / "not pushed" mentions below are history. Older local-onl
 
 **xlab models (operator 2026-10-02: no expensive OpenRouter models):** `xl_architect` = `claude_code` `claude-opus-5-5`, `xl_jev` = `claude_code` `claude-sonnet-5-5` (never called), both `builtin_tools_profile = "none"`; Jev is the only OpenRouter model. Needs a build with `--features claude_code` and `claude` logged in. Checked live: `tengu doctor --sandbox xlab --engines` both ok; an Opus `tengu tool turn` called `backtest` (run `20261002T183833Z-weekend_fade`, n 614, in-sample +57.67 bps).
 
+**xmarket the same way (2026-10-02, tracker § 7 # 21):** no planner (`[orchestrator]` and `[agents.xm]` removed; `xm` only ever routed to `xm_architect`), `xm_architect` = default chat agent on `claude-opus-5-5`, `xm_executor` = `claude-sonnet-5-5` (never called), both `"none"`. No OpenRouter model in xmarket until the Jev loops arrive. M5 `jev-architect-escalator` needs an escalation target again.
+
 ---
 
 ## Docs refresh (Fri 2026-10-02) — state below is unchanged

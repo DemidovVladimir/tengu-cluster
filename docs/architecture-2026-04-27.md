@@ -181,7 +181,7 @@ No `agents/` directory, no separate spec type. A subagent is an `[agents.<name>]
 | Fields | `engine` (`openrouter` \| `local` \| `claude_code`), `model`, `description`, `example_queries`, `tools` (allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias), `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap per step), `limits.step_timeout_secs` (default 600), `identity`, `claude_code` |
 | Sandbox sections | `AgentConfig::sandbox` (`config/sections.rs`) — `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`, `[backtest]` reach tools on every surface |
 | Child lookup | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` loads the parent config first, then `config.agents.get(name)` (`compose.base_agent` when composed) |
-| Examples | `sandboxes/aura` (`aura`, `researcher`, `learning-agent`), `sandboxes/xmarket` (`xm` planner · `xm_architect` routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private) |
+| Examples | `sandboxes/aura` (`aura`, `researcher`, `learning-agent`), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private) |
 
 Edit a block + restart chat → the planner registry file is regenerated on the next planner turn. No rebuild required.
 
