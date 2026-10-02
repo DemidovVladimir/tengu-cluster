@@ -6,6 +6,17 @@
 
 ---
 
+## Merged to `main` (Fri 2026-10-02)
+
+| PR | Squash commit on `main` | Original branch (kept on origin) |
+|---|---|---|
+| #20 xmarket W1 + gate (68 commits) | `131af134b57191850c249008a50b2ec05a59ed53` | `feature/xmarket` |
+| #21 xlab (23 commits, rebased onto #20) | `b7dc915149cc025cc9466748905ab18ca46e075a` | `feature/xlab` |
+
+The `feature/xmarket` / "not pushed" mentions below are history. Older local-only work is on origin as `backup/*` branches.
+
+---
+
 ## Docs refresh (Fri 2026-10-02) — state below is unchanged
 
 | Topic | State |
@@ -20,7 +31,7 @@
 
 ## Resume here (Thu 2026-10-01 evening — xlab: history first)
 
-Operator 2026-10-01: "why do I have to wait 2 days" — answer from history, never block on live recording (CLAUDE.md gotcha "History first"). Built the same day on `feature/xmarket` (not pushed): sandbox `xlab` for the PRD v0.5 harness, doc `docs/xlab-2026-10-01.md` (§ 14 = first results).
+Operator 2026-10-01: "why do I have to wait 2 days" — answer from history, never block on live recording (CLAUDE.md gotcha "History first"). Built the same day on `feature/xmarket` (merged to `main` as #21 on 2026-10-02): sandbox `xlab` for the PRD v0.5 harness, doc `docs/xlab-2026-10-01.md` (§ 14 = first results).
 
 | Topic | State |
 |---|---|
@@ -49,11 +60,11 @@ Operator 2026-10-01: "why do I have to wait 2 days" — answer from history, nev
 | Next | Fri ≤ 19:30 ET the weekend run (row above; the FROZEN binary — never run a newer one on `~/.tengu/state/xmarket-weekend/` before Mon 10:00 ET: it would add ledger columns mid-run) → Mon: analyse the weekend (fade rows, both ledgers, the sampler) → operator decisions → W2 (inputs: VPS + SSH alias, dedicated OpenRouter key) · the live `local` legs when the Windows PC is ready |
 | Weekend replay inputs (outside the repo) | `~/.tengu/state/xmarket/research/replay-2026-09-26/`: `universe.txt` (75 xyz single stocks = HL `stocks` minus 17 ETFs, STRC preferred, OURA pre-IPO; delisted IBIDEN out), `weekend_2026-09-26_candles.json` (anchor / entry / exit 5m candles), `weekend_2026-09-26_golden.json` (74 names ex KIOXIA: mean net +95.5 bps, 53 positive, capped CRCL / SMSN / MINIMAX / MSTR). Also there: all 128 xyz markets' 5m candles (`c5m_all_xyz_2026-09-25_to_28.tgz`), `perpCategories.json`, annotations summary; if lost, re-fetch 5m candles for 2026-09-25 18:00 → 09-28 16:00 UTC (HL keeps ~17 days of 5m bars) |
 
-## Current (2026-09-30, W1 in progress): xmarket wave A merged on `feature/xmarket`
+## Earlier (2026-09-30, W1 in progress): xmarket wave A merged on `feature/xmarket`
 
 | State | Detail |
 |---|---|
-| Branch | `feature/xmarket` (local, not pushed); one commit per tracker item; progress + deviations: tracker § 0 "Where to begin" + "W1 notes" |
+| Branch | `feature/xmarket` (local then; merged to `main` as #20 on 2026-10-02); one commit per tracker item; progress + deviations: tracker § 0 "Where to begin" + "W1 notes" |
 | Landed (wave A, 16 items) | E0: `x-bridge-parity`, `x-claude-code-hardening`, `x-tool-schema-lint`, `x-local-model-fit` (+ `risk-exec-idempotency-ids`) · M0: `risk-config-schema`, `ops-audit-atomic-write`, `hl-market-schema`, `rt-backoff-budget`, `hl-info-client`, `risk-calc-costs`, `risk-paper-ledger-domain`, `rt-daemon`, `rt-health` · M1: `kg-calendars`, `ops-history-recorder` |
 | Running (wave B) | `hl-ctx-tool`, `hl-book-tool`, `risk-gate-domain`, `risk-paper-ledger-store`, `risk-kill-switch`, `risk-paper-fill-engine`, `rt-scheduler`, `x-bridge-conformance-test`, `x-engine-matrix-smoke` |
 | Next | wave C: `risk-gate-enforcement`, `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`, `x-engine-parity-audit`, `ops-sandbox-config`, `x-shared-workspace-and-state-layout`; wave D: `x-weekend-fade-strategy`, `x-weekend-sandbox` + 30-min soak by Fri 2026-10-02 18:00 ET |
