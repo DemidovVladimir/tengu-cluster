@@ -253,7 +253,8 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
             let mut resources_written: Vec<PathBuf> = Vec::new();
             if let Some(additions) = best.new_resource_additions.as_deref() {
                 if !additions.is_empty() {
-                    match apply_proposal_resources(&skill_dir, additions) {
+                    // The operator's CLI: not an agent writer.
+                    match apply_proposal_resources(&skill_dir, additions, false) {
                         Ok(paths) => resources_written = paths,
                         Err(e) => {
                             tracing::warn!(

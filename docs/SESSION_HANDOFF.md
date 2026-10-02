@@ -6,6 +6,47 @@
 
 ---
 
+## Resume here (Thu 2026-10-01 ~09:00 ET — W1 done: 34 items + the W1 gate passed; weekend run Fri, then operator decisions + W2)
+
+| Topic | State |
+|---|---|
+| **Weekend run (operator action)** | Start `tengu run --sandbox xmarket-weekend` **≤ Fri 2026-10-02 19:30 New York = Sat 01:30 on this Mac (Europe/Berlin)**: tmux pane, foreground (the vault prompt suspends a `&` job), the frozen W1-gate binary `~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455` started under `caffeinate -i -s` (runbook). Keep the Mac on AC power (`-s` holds only on AC), lid open, online until Mon 2026-10-05 10:00 New York (16:00 Berlin). Runbook + timeline: top of `sandboxes/xmarket-weekend/config.toml`; soak results: `docs/runtime-2026-09-30.md` § Weekend run. The throwaway sampler (pid in `~/.tengu/state/xmarket/research/weekend-2026-10-02/sampler.pid`) records the same weekend independently |
+| Operator rules | 2026-10-01: workflows / parallel agents allowed for speed — keep ≤ 3 at once, each build in its own `~/.cache/tengu-xm.noindex/agents/<label>` (cloned, then `cargo clean -p tengu-cluster`), deleted after; before (2026-09-30): **one agent at a time, low priority** (the claude process runs `renice 15` + `taskpolicy -b`; every build `CARGO_BUILD_JOBS=2`, `CARGO_TARGET_DIR` under `~/.cache/tengu-xm.noindex/` — Spotlight skips `.noindex`); **never start a local model on this Mac** (Ollama server stopped; the live `local` engine check runs later on the operator's Windows gaming PC over the LAN) |
+| Why | 6 parallel agents + gemma4 (10 GB) + Spotlight indexing ~30 GB of build output made the Mac lag badly |
+| Merged since wave A | `x-bridge-conformance-test` 7f02717 (hidden `tengu tool list|call`; 46 cases now), `risk-paper-fill-engine` 7859383, `hl-ctx-tool` ea0b05b, `hl-book-tool` 1e6c372 (`tools/hyperliquid/book.rs::fresh_book` = the paper engine's live book read, wired by `risk-gate-enforcement`), `risk-gate-domain` 81e0065, `risk-paper-ledger-store` b71d1be (`ports/paper.rs`: `place(PlaceRequest, Decide)` = gate + fill + write in one `BEGIN IMMEDIATE`), `risk-kill-switch` ea69033 (`tengu risk status|halt|resume`, `risk_status`; 48 conformance cases), `rt-scheduler` 24a7dd3 (`[feeds.<n>]` tool / tick feeds, windows + DST-safe `at` ticks; `tengu run` refuses a feed whose tool its agent cannot run), `x-engine-matrix-smoke` 0ad160d (live 2026-09-30: gemini-2.5-flash-lite, claude-haiku-4.5 on OpenRouter and claude-haiku-4-5 on the Claude CLI × workspace / hyperliquid / xm tool sets — 9/9 green, ≈ $0.06; `tengu doctor --engines`; the local leg runs only on the operator's Windows PC via `TENGU_MATRIX_LOCAL_BASE_URL`), `risk-gate-enforcement` 5dd0a96 (exec tools refuse unless the caller is a private agent; bridge call ids `mcp:<uuid>:<id>`), `risk-paper-tools` 4209d64 (`paper_order` / `paper_close` / `paper_positions`; hidden `tengu tool turn`; live matrix xm set green), `risk-audit-verdicts` 1cd924d (`logs/risk.jsonl` mirror, `StepOutcome::Refused`), `x-exit-rules` 845cf25 (`[risk.exits]`, exec tool `xm_exits` via a `kind = "tool"` feed) + ebd3d17 (docs), `x-shared-workspace-and-state-layout` 5e03e86 (one xmarket workspace, `[risk]` needs `[xmarket]`, state layout, prune spares `state/`), `x-weekend-fade-strategy` fbb3246 (rule W as exec tool `xm_weekend_fade`: capped + shadow ledgers, 60 s idempotent steps, golden replay of 2026-09-26 bit-exact), `x-weekend-sandbox` bc51087 (`sandboxes/xmarket-weekend`: floor profile, one private agent, 5 required feeds, recorder; golden replay through the sandbox config; 30-min live soak green — 0 WARN / ERROR, HL weight ≤ 190 / min of 1200, SIGTERM drain 0.32 s), `ops-sandbox-config` a27f9b5 (`sandboxes/xmarket` M0 stage: planner `xm`, routable `xm_architect`, private `xm_executor`; HL ctx + books recorded, exits, daily risk roll; 5-min smoke green), `x-engine-parity-audit` 1f52df0 (E0 closed: every catalog tool + a shell skill + an `[[mcp_servers]]` proxy pass lint + conformance (57 cases) + live matrix on gemini-2.5-flash-lite / claude-haiku-4.5 / Claude CLI, 12 / 12 sets each; leads 1–12 fixed — parent-session env stripped, explicit bridge workspace grant, OpenRouter failed-turn retry + `native_finish_reason`, bridge `compress_and_store`, no secrets in `--mcp-config`, shell skills bridged, chat honours `tools`, chat call ids namespaced, Privy under the egress ceiling; open: the live `local` column on the operator's PC) |
+| Wave B worktrees | all merged and removed · local-leg commands for the Windows PC: `~/.tengu/state/xmarket/research/parity_audit_leads.md` |
+| W1 gate (passed 2026-10-01) | Three read-only adversarial reviews — weekend path (→ 6fcb455, frozen weekend binary + 30-min soak 2 green), money safety (→ 0fd620b access, 270f23e ledger, batch 2), engine parity / doctrine (→ batch 2) — then batch 2 in parallel worktrees: 8e35c28, 78f6f6f, b0e3e31, e50483c, 7e8cfb0, b389d06 (tracker W1 notes). Final checks on 11900f7: fmt, lints, conformance, run_agent_ipc, mcp_bridge_external, offline matrix, 1328 unit tests, `cargo check --all-features --all-targets`; live engine matrix on 11900f7: 39 / 39 legs green on gemini / haiku / Claude CLI (one gemini wording flake passed on a rerun; `local` + Postgres legs skipped) |
+| Operator decisions (open) | Tracker W1 note "operator decisions": aura `editor_shell` built-ins with the full env; aura wallet tools vs. signing without approval; aura `learning-agent` without a workspace; weekend capped book limits; Docker owner name |
+| Next | Fri ≤ 19:30 ET the weekend run (row above; the FROZEN binary — never run a newer one on `~/.tengu/state/xmarket-weekend/` before Mon 10:00 ET: it would add ledger columns mid-run) → Mon: analyse the weekend (fade rows, both ledgers, the sampler) → operator decisions → W2 (inputs: VPS + SSH alias, dedicated OpenRouter key) · the live `local` legs when the Windows PC is ready |
+| Weekend replay inputs (outside the repo) | `~/.tengu/state/xmarket/research/replay-2026-09-26/`: `universe.txt` (75 xyz single stocks = HL `stocks` minus 17 ETFs, STRC preferred, OURA pre-IPO; delisted IBIDEN out), `weekend_2026-09-26_candles.json` (anchor / entry / exit 5m candles), `weekend_2026-09-26_golden.json` (74 names ex KIOXIA: mean net +95.5 bps, 53 positive, capped CRCL / SMSN / MINIMAX / MSTR). Also there: all 128 xyz markets' 5m candles (`c5m_all_xyz_2026-09-25_to_28.tgz`), `perpCategories.json`, annotations summary; if lost, re-fetch 5m candles for 2026-09-25 18:00 → 09-28 16:00 UTC (HL keeps ~17 days of 5m bars) |
+
+## Current (2026-09-30, W1 in progress): xmarket wave A merged on `feature/xmarket`
+
+| State | Detail |
+|---|---|
+| Branch | `feature/xmarket` (local, not pushed); one commit per tracker item; progress + deviations: tracker § 0 "Where to begin" + "W1 notes" |
+| Landed (wave A, 16 items) | E0: `x-bridge-parity`, `x-claude-code-hardening`, `x-tool-schema-lint`, `x-local-model-fit` (+ `risk-exec-idempotency-ids`) · M0: `risk-config-schema`, `ops-audit-atomic-write`, `hl-market-schema`, `rt-backoff-budget`, `hl-info-client`, `risk-calc-costs`, `risk-paper-ledger-domain`, `rt-daemon`, `rt-health` · M1: `kg-calendars`, `ops-history-recorder` |
+| Running (wave B) | `hl-ctx-tool`, `hl-book-tool`, `risk-gate-domain`, `risk-paper-ledger-store`, `risk-kill-switch`, `risk-paper-fill-engine`, `rt-scheduler`, `x-bridge-conformance-test`, `x-engine-matrix-smoke` |
+| Next | wave C: `risk-gate-enforcement`, `risk-paper-tools`, `risk-audit-verdicts`, `x-exit-rules`, `x-engine-parity-audit`, `ops-sandbox-config`, `x-shared-workspace-and-state-layout`; wave D: `x-weekend-fade-strategy`, `x-weekend-sandbox` + 30-min soak by Fri 2026-10-02 18:00 ET |
+| New commands | `tengu run [--sandbox <s>]` (lease, heartbeat, drain), `tengu doctor --sandbox <s> --live`, `tengu history range|asof <key>` — `docs/runtime-2026-09-30.md` |
+| Verified live | Claude CLI 2.1.285 merges the `--mcp-config` env (secrets reach the bridge by inheritance); without `--strict-mcp-config` it loaded 28 operator MCP servers (144 tools), with it none; all 38 tool schemas accepted by gemini-2.5-flash-lite, claude-haiku-4.5, gpt-4o-mini (OpenRouter) and parsed by Ollama 0.24; a haiku turn through the bridge returned a vault secret as `[REDACTED]` |
+| How waves run | `Workflow` with `isolation: "worktree"` (worktrees start from `main` — agents `git merge --ff-only <base>` first); each agent builds in its own `CARGO_TARGET_DIR` cloned (APFS `cp -Rc`) from `~/.cache/tengu-xm/seed` — a shared `target/` let a stale test binary from a deleted worktree run (`tests/code_map.rs` "NotFound"); coordinator cherry-picks one item at a time, adds code-map rows + regenerates the html, ticks the tracker, runs the item gate |
+| Weekend data | throwaway sampler pid in `~/.tengu/state/xmarket/research/weekend-2026-10-02/sampler.pid` (records Fri 19:30 ET → Mon 10:00 ET); 5m candles of the 2026-09-26 weekend for all 128 xyz markets saved outside the repo for the replay fixture |
+
+## Next session (set 2026-09-30): build xmarket — start with the build plan
+
+| Read | Why |
+|---|---|
+| `docs/xmarket-build-plan-2026-09-30.md` | **First.** The operator's mandate (build the full PRD scope; every tool works 100 % under `openrouter`, `local` and `claude_code`; a separate `xmarket-weekend` sandbox; validate and fix until it runs smoothly), "Before the first item", waves W1–W9 with gates (W1 = E0 engine parity + the weekend-run slice, deadline **Fri 2026-10-02 18:00 ET**), the engine validation matrix, operator inputs, and the kickoff prompt to paste |
+| `docs/xmarket-tracker-2026-09-29.md` **§ 0 Start here** | Rules for every task (R1–R13), definition of done; § 1 milestones (E0 first); § 5 backlog (185 items) |
+| `docs/xmarket-prd-2026-09-29.md` (addendum at the top) | Operator decisions: build everything, engine parity for every tool, paper first, $100 budget + `[risk]` caps, 24/7 `tengu run` on the operator's VPS, network `open` (switchable), no legal gates |
+| `docs/xmarket-feasibility-2026-09-30.md` | Evidence, attached as a warning: verdict re-scope (cross-venue convergence fails after costs); the operator kept the full plan. Holdout: weekend fade passes on 53 new names, post-earnings rule not confirmed. Weekend order books are being recorded Fri 2026-10-02 → Mon 10-05 in `~/.tengu/state/xmarket/research/weekend-2026-10-02/` (throwaway sampler, pid in `sampler.pid`) — analyse them on Monday |
+| `docs/xmarket-gaps-2026-09-29.md` | Per-item detail — read the entry before starting an item |
+
+The xmarket section further down (2026-09-29 / 2026-09-30 rows) lists what is decided and what the operator still has to provide.
+
+---
+
 ## TL;DR — current state (2026-09-29): Solana write tools (phase 6b)
 
 Branch `feature/decision-loop` (not merged). Doc: **`docs/typed-observations-2026-09-24.md` § Write tools**. Plan: `/Users/vladimirdemidov/.claude/plans/enchanted-waddling-reef.md` (reviewed: 5 high findings folded in).
@@ -72,6 +113,22 @@ Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observ
 | Plugin MCP leak | `claude -p` also loads the user's global Claude Code plugin MCP servers into every `claude_code` agent (outside tengu scopes/egress). Candidate fix: `--strict-mcp-config` in `engines/claude_code.rs` |
 | Hand-off paths | `--sandbox` is cwd-relative and `TENGU_CONFIG` is not forwarded to the bridge → jev-exec hardcodes `~/development/tengu-cluster`. A `decide` tool or `--sandbox` resolution from `$TENGU_HOME` would remove it |
 | Jev args | slots are enumerated only; a `FromEvent` slot source would let the architect pass values |
+
+### 2026-09-29 — `xmarket` PRD + gap tracker (planning only, no code)
+
+| Doc | What |
+|---|---|
+| `docs/xmarket-prd-2026-09-29.md` | Operator PRD, verbatim: event-driven cross-market trading intelligence (news / X / EDGAR + Hyperliquid HIP-3 + Robinhood Chain → Jev → risk gate → paper) |
+| `docs/xmarket-tracker-2026-09-29.md` | The backlog: 179 items in M0–M8 + M3b (live pilot), 20 conventions, accounts + operator setup, decisions, risks, verified facts |
+| `docs/xmarket-gaps-2026-09-29.md` | Per-item research notes (files, API shapes, no-Rust options, evidence) — look up by id |
+
+| Open | Detail |
+|---|---|
+| M0 not started | thin paper slice running 24/7 on the operator's Hetzner / Hostinger VPS (Docker): bridge parity first, then `tengu run` + HL reads + EDGAR 8-K → one Jev loop → risk gate ($100 budget) → paper fill → exit rules → audit (40 items); M3 is a go / no-go edge check; M3b = live pilot on a $100 Hyperliquid sub-account after an M3 go |
+| Operator decisions (2026-09-30) | Operator in Kazakhstan, no legal or regulatory gate in the plan (venue choice is the operator's; only effect: Kazakh connections cannot reach Coinbase, OKX, … → deploy outside); `network = "open"`, switchable later (convention 17); one OpenRouter key for Jev + LLM at $40 / day. `SEC_USER_AGENT` set in `.env` and verified 2026-09-30. Budget $100, paper first then real (M3b), server = operator's Hetzner or Hostinger VPS. Pending operator action: create the xmarket OpenRouter key; pick the server + SSH alias (tracker § 6, operator setup) |
+| Doc contradiction | OpenRouter over Tor: `docs/egress-2026-09-16.md` says reachable, `docs/lping-2026-09-24.md` says blocked — `hl-tor-probe` (M1) settles it |
+| Claude Code rule (2026-09-30) | Every tool must work under `engine = "claude_code"`, no exceptions — CLAUDE.md / AGENTS.md step 4 + gotcha, `docs/tools.md` step 5, tracker convention 20. The bridge is not at parity today (default config + `main` agent, empty `SecretRegistry`, `no_shell = false`, no `TENGU_CONFIG` / `--strict-mcp-config`): M0 items `x-bridge-parity`, `x-claude-code-hardening`, `x-bridge-conformance-test` |
+| ~~Stale gotcha~~ fixed 2026-09-30 | CLAUDE.md / AGENTS.md said only aura runs `open`; now they list aura, lping, jev-exec, unlimited (and the planned xmarket) |
 
 ---
 

@@ -46,3 +46,20 @@ pub(crate) fn distill_tool_defs() -> Vec<ToolDef> {
 pub(crate) fn apply_improver_tool_defs() -> Vec<ToolDef> {
     vec![apply_improver_proposal::tool_def()]
 }
+
+/// Element schema of every `metrics` array (`skill_distill`,
+/// `apply_improver_proposal`, `manage_skill`): one `MetricSpec`
+/// (`application/skills/lifecycle/metrics.rs`). Fields depend on `kind` and
+/// the engine schema subset has no `oneOf` (`tools/schema_lint.rs`), so the
+/// description names them; serde validates at call time.
+pub(crate) fn metric_spec_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "MetricSpec {kind, name, min_pass_rate?} plus the kind's fields: \
+                        shell_check {cmd, expect_exit_code?, expect_stdout_matches?} | \
+                        llm_judge {rubric_file, judge_model?} | \
+                        tool_assertion {tool, action, key?, assert} | script {path} | \
+                        dialog_replay {from_message_index, delegate_metric, expected_outcome?} | \
+                        description_trigger {queries_file, judge_model?, runs_per_query?, holdout?}"
+    })
+}

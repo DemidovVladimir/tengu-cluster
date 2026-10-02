@@ -40,8 +40,9 @@ persists across plan/replan cycles.
 
 | Path | When | Where it runs |
 |---|---|---|
-| **A — Out-of-band** | OpenRouter subagents | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` (L971) intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), breaks loop. |
-| **B — Backstop** | Claude Code subagents | No bridge handler (`CompressAndStoreTool` removed in Phase 6) — the model usually just stops; `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary`. |
+| **A — Out-of-band** | OpenRouter / local subagents | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), breaks the loop after that round. |
+| **B — Bridge** | Claude Code subagents | The step's bridge (`mcp_bridge.rs::StepSummary`) writes `summary` to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the step summary (+ the same `postgres_memory` write). |
+| **C — Backstop** | a subagent that never calls it | `compress_called` stays false; `run-agent` writes the final assistant text via `try_persist_agentic_step_summary`. |
 
 With `postgres_memory`, `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` writes the final
 summary into Open Brain-style Postgres `agentic_memory`, with embeddings when

@@ -35,7 +35,7 @@ tengu chat                                     # or: tengu chat --sandbox aura
 
 ```toml
 [agents.main]
-engine = "openrouter"              # "openrouter" | "claude_code"
+engine = "openrouter"              # "openrouter" | "local" | "claude_code"
 model = "anthropic/claude-sonnet-4-6"   # claude_code wants the bare slug: "claude-sonnet-4-6"
 default = true                     # at most one default agent
 workspace = "~/projects/my-app"
@@ -46,16 +46,17 @@ workspace_tools = ["shared_cache", "skill_distill"]
 # --- subagent view (planner-routable when `description` is set) ---
 description = "What this agent handles and what it is NOT for — read by the planner LLM."
 example_queries = ["what is the BTC price?"]
-tools = ["http_request", "read_file"]   # allow-list for `tengu run-agent` steps; empty = every base tool
+tools = ["http_request", "read_file"]   # allow-list on every surface (chat included); empty = every base tool
 ```
 
 | Field | Notes |
 |---|---|
-| `engine` | `openrouter` needs `OPENROUTER_API_KEY`; `claude_code` needs the `claude` CLI + `--features claude_code`. See [[engine-backends]]. |
-| `workspace_tools` | Allow-list: `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill` (`domain/tools.rs::WORKSPACE_TOOLS`). |
+| `engine` | `openrouter` needs `OPENROUTER_API_KEY`; `local` an OpenAI-compatible server on this host; `claude_code` needs the `claude` CLI + `--features claude_code`. See [[engine-backends]]. |
+| `workspace_tools` | Opt-in tools: only names in `src/domain/tools.rs::WORKSPACE_TOOLS` (read the list there); anything else fails validation. |
 | `description` | Present ⇒ rendered into `TENGU_PLANNER_REGISTRY.md`; the planner may dispatch plan steps to this agent as a `tengu run-agent` subprocess. Absent ⇒ in-process only (planner role, `@role:` chat). |
-| `tools` | Subprocess tool allow-list. Names from the workspace-tools allow-list listed here are opted in like `workspace_tools`. `compress_and_store` is appended implicitly — never list it. |
-| Unknown keys | `AgentConfig` is not strict — a typo is silently ignored. Check `tengu status`. |
+| `tools` | Tool allow-list on **every** surface: in-process chat (TUI, Telegram, webhooks, eval, `tengu tool`), `run-agent` steps, decision loops and the Claude Code bridge (`bootstrap::tools::agent_base_tools`). Empty = every base tool. A skill gets only the tools listed here — list what its `SKILL.md` calls. Opt-in names (`WORKSPACE_TOOLS`) listed here switch on like `workspace_tools`. `compress_and_store` is appended implicitly for plan steps — never list it. |
+| `scopes.<tool>` | Per-tool limits (`fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`), default-deny per field; a tool without one gets the permissive fallback. `shell_bins` gates the first command word only (leading `NAME=value` skipped) — a guard rail, not a sandbox. See `docs/tools.md`. |
+| Unknown keys | `AgentConfig` and `Config` are `deny_unknown_fields`: a typo or an old key fails the load (`skills` is an accepted alias of `skill_packages`). |
 
 ### Identity / Flow / Limits
 
@@ -145,8 +146,14 @@ Durable cross-session memory is the Postgres `agentic_memory` plugin: build with
 ```toml
 [telegram]
 enabled = true
-allowed_users = ["123456789"]    # merged with TENGU_TELEGRAM_ALLOWED_USERS
+allowed_users = ["123456789"]    # merged with TENGU_TELEGRAM_ALLOWED_USERS; required
 ```
+
+Fail closed: with no allowed user (config + env) `tengu telegram` refuses to start; an unlisted sender gets "Unauthorized.". Private agents (no `description`, not `default`) are never `@`-routable from Telegram nor its default.
+
+| Key | Status |
+|---|---|
+| `tool_approvals`, `approve_only` | **Not implemented.** Still parsed (old sandboxes load — aura sets `approve_only`), but no tool call waits for an approval, on any engine or surface. `Config::load` logs one warn naming the keys set: "not implemented — tools are not approval-gated". Gate tools with the agent's `tools` list and scopes. |
 
 ## Skill lifecycle
 
@@ -195,7 +202,7 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 | `OPENROUTER_REFERER` | `adapters/outbound/engines/mod.rs` | unset | `HTTP-Referer` header |
 | `OPENROUTER_TITLE` | `adapters/outbound/engines/mod.rs` | unset | `X-Title` header |
 | `TELEGRAM_BOT_TOKEN` | `adapters/inbound/telegram.rs` | — (required for `telegram`) | Bot token |
-| `TENGU_TELEGRAM_ALLOWED_USERS` | `adapters/inbound/telegram.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users` |
+| `TENGU_TELEGRAM_ALLOWED_USERS` | `adapters/inbound/telegram.rs::build_allowed_users` | unset | Comma-separated user ids merged with `[telegram].allowed_users`; both empty = `tengu telegram` refuses to start |
 | `TENGU_HOME` | `config/paths.rs::resolve_tengu_home` | `~/.tengu` | State root (config, vault, logs, memory) |
 | `TENGU_CONFIG` | `main.rs` (config resolution) | `~/.tengu/config.toml` | Path to config.toml (`-c/--config` wins) |
 | `TENGU_MASTER_PASSWORD` | `main.rs`, `adapters/outbound/secrets.rs` | unset (prompt) | Vault password |
@@ -229,9 +236,10 @@ cargo run --features claude_code -- chat --sandbox aura   # aura's agents use en
 
 ## Validation
 
-- Engine must be `openrouter` or `claude_code`; `builtin_tools_profile` must be `none|read_only|editor|editor_shell`.
+- Engine must be `openrouter`, `local` or `claude_code`; `builtin_tools_profile` must be `none|read_only|editor|editor_shell`.
 - Limits positive; `warn_at_cost <= max_cost_per_flow`; `max_output_tokens_per_turn <= context_window`.
-- `workspace_tools` entries must be in the allow-list above.
+- `workspace_tools` entries must be in `WORKSPACE_TOOLS`; unknown top-level and `[agents.*]` keys fail (`Config`, `AgentConfig` are `deny_unknown_fields`, like `[egress]`, `[runtime]`, `[risk]`).
+- Warnings only (load continues): a `local` agent on the default `context_window`; `[telegram] tool_approvals` / `approve_only` set (not implemented).
 - `[egress]`: unknown keys fail; `network` must be `tor|open`; `proxy` must be `socks5h|http|https` with a port (`socks5://` rejected — DNS leak); `route_llm_api = true` needs a `proxy`; `shell_network = "isolated"` is macOS-only and needs a loopback proxy.
 - `limits.step_timeout_secs > 0`; `description`, when set, must not be empty.
 

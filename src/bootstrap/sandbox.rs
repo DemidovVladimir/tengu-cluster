@@ -1,9 +1,10 @@
 //! Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base
-//! config and installs its `[egress]` policy.
+//! config, pins it as `TENGU_CONFIG` and installs its `[egress]` policy.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+use crate::config::paths::{absolute_path, TENGU_CONFIG_ENV};
 use crate::config::Config;
 
 /// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.
@@ -16,6 +17,10 @@ use crate::config::Config;
 /// subagents fall through to the default user config and lose sandbox-specific
 /// scopes/secrets/MCP servers — concretely, http_request scope-denies in the
 /// child even when the parent's sandbox allows it.
+///
+/// It also pins `TENGU_CONFIG` to the sandbox file's absolute path: the
+/// Claude Code engine forwards it to `tengu mcp-bridge` (whose cwd is the
+/// agent workspace), and a `run-agent` child falls back to it.
 pub(crate) fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Result<Config> {
     let cfg = match sandbox {
         None => default,
@@ -25,6 +30,7 @@ pub(crate) fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Resul
                 format!("Failed to load sandbox '{}' from {}", name, path.display())
             })?;
             cfg.sandbox_name = Some(name);
+            std::env::set_var(TENGU_CONFIG_ENV, absolute_path(&path));
             crate::adapters::outbound::egress::install(&cfg.egress)?;
             cfg
         }

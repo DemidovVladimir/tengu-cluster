@@ -66,6 +66,7 @@ mutates a prompt.
 | `estimate_tokens_approx_min1(text)` | Same, but floors to 1 | Per-message token math |
 | `truncate_at_boundary(s, max_chars)` | UTF-8-safe slice point | Builders of truncation strings |
 | `truncate_with_suffix(s, max, suffix)` | Truncate + append marker only when actually clipped | `truncate_tool_result`, history truncation |
+| `tool_result_char_budget(window)` | `window / 8 × 4` chars — one tool result's share of a local model's window | `LocalEngine::tool_result_char_cap` (Layer 3 #14) |
 
 The `~4 chars/token` heuristic is intentionally crude — it underestimates
 for code-heavy strings and overestimates for prose, but errs on the side
@@ -216,11 +217,21 @@ No dedup or per-skill-count cap — selection happens upstream.
 context-cutting layer. See `context-cutting-flow-2026-04-27.html` for
 the interactive walkthrough.
 
-### 9. `truncate_tool_result` (`adapters/outbound/engines/mod.rs:944`)
+### 9. `truncate_tool_result` (`application/chat/tool_loop.rs`)
 
 Each tool result char-capped at `max_tool_result_chars` (default
 **300 000**) when first inserted into messages. Footer:
 `[truncated — showing X of Y chars]`. UTF-8 boundary safe.
+
+**Local engines** (`Engine::tool_result_char_cap` = `Some`, only
+`LocalEngine`): `fit_tool_result` instead — a result within
+`min(context_window / 8 × 4 chars, max_tool_result_chars)` (16 384 tokens →
+8 192 chars) stays whole; above it a typed row's `data` line becomes
+`data: <n> bytes in observation <key>` (`Observation::compact_text`), then the
+result, footer included, is cut to fit. `run-agent` applies the
+same rules for every engine (`tool_loop::tool_result_content` + `compact_tool_result`
+of older rounds — before 2026-10-01 only for local agents; an OpenRouter step
+resent a 2 MB result on every turn).
 
 ### 10. `compact_tool_result` mid-loop (`adapters/outbound/engines/mod.rs:921`)  — *the closest to /compact*
 
@@ -271,7 +282,7 @@ through `TENGU_BRIDGE_MAX_RESULT_CHARS`.
 This exists because the **Claude Code CLI engine has no in-loop
 compaction at all**. Without this cap, bridge-routed tool results would
 leak unbounded context into Claude. Layer 3's `truncate_tool_result` and
-`compact_tool_result` only run on the OpenRouter path.
+`compact_tool_result` only run on the in-process path (OpenRouter, local).
 
 ---
 
@@ -302,8 +313,9 @@ with embeddings when available and text-only fallback otherwise
 
 | Path | Trigger |
 |---|---|
-| **A — Out-of-band** | OpenRouter subagents — `main.rs:971` intercepts the call before the executor runs |
-| **B — Backstop** | Claude Code subagents — no bridge handler (`CompressAndStoreTool` removed in Phase 6); the model usually just stops, `compress_called` stays false, and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` |
+| **A — Out-of-band** | OpenRouter / local subagents — `run_agent.rs` intercepts the call before the executor runs, then ends the loop after that round |
+| **B — Bridge** | Claude Code subagents — the step's bridge writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary |
+| **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` |
 
 ### 17. Phase 5c middle-ground protocol (`main.rs:1075`)
 
@@ -318,7 +330,9 @@ with embeddings when available and text-only fallback otherwise
 `AgentIpcInput.max_turns`, set by `SubprocessRunner::run_step` from the agent
 block's `limits.max_tool_rounds` (the serde default 20 only applies to payloads
 without the field). Hard cap on the subagent's mini-loop; hits the
-`compress_and_store` warn path on exhaust. Wall clock per step:
+`compress_and_store` warn path on exhaust. It counts engine turns on
+OpenRouter / local, but **tool calls** of the one CLI run on Claude Code
+(`EngineContext.max_tool_rounds`: the CLI is killed past it). Wall clock per step:
 `limits.step_timeout_secs` (default **600**), enforced by `run_with_timeout`.
 
 ### 19. Cross-plan recall (planner replan side)
@@ -462,7 +476,7 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 11 | 2 | grounding nudge / suppress | application/chat/service.rs:248 | trigger words |
 | 12 | 2 | skill body / file caps | application/skills/registry.rs:1129 | 16K / 2K |
 | 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |
-| 14 | 3 | `truncate_tool_result` | adapters/outbound/engines/mod.rs:944 | 300 000 chars |
+| 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | application/chat/tool_loop.rs | 300 000 chars (local: window / 8 × 4) |
 | 15 | 3 | `compact_tool_result` | adapters/outbound/engines/mod.rs:921 | 200 chars |
 | 16 | 3 | `[OUTPUT_TRUNCATED]` continue | adapters/outbound/engines/mod.rs:706 | sentinel |
 | 17 | 3 | `max_tool_rounds` | config.rs:411 | 70 |
@@ -521,7 +535,8 @@ Comparison points for future sessions:
 | Model claims it doesn't know about something the user told it 5 turns ago | Layer 1 #3 (turn limit) or Layer 2 #7 (history budget) |
 | Model loops on the same tool call | Layer 3 #15 (`compact_tool_result` hid the result body) |
 | `Flow token limit reached` notice | Layer 1 #5 (`max_tokens_per_flow`) — bump it or `/reset` |
-| `[truncated — showing X of Y chars]` in tool output | Layer 3 #14 (`max_tool_result_chars`) — bump or paginate |
+| `[truncated — showing X of Y chars]` in tool output | Layer 3 #14 (`max_tool_result_chars`; local engines: 1/8 of `context_window`) — bump or paginate |
+| Local model forgets the goal / answers off-task | Ollama `num_ctx` below the prompt (older messages dropped silently) — raise it and match `limits.context_window` (`docs/engine-backends.md` § Local) |
 | Claude Code subagent stops citing old tool results | Layer 4 #19 (MCP bridge cap) — bump `TENGU_BRIDGE_MAX_RESULT_CHARS` |
 | "model finished without calling compress_and_store" warn | Layer 5 #22 (Phase 5c) — graceful path; final text became the summary |
 | Planner picks the same agent on replan despite obvious progress | Layer 5 #19 (`cross_plan_top_k`) — Postgres recall not surfacing the prior summary |

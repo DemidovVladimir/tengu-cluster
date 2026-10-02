@@ -20,7 +20,7 @@ impl SignMessageTool {
     pub(crate) fn new() -> Self {
         Self {
             def: ToolDef::new(
-                "sign_message",
+                crate::domain::tools::SIGN_MESSAGE,
                 "Sign a message via Privy wallet.",
                 json!({
                     "type": "object",
@@ -48,8 +48,8 @@ impl Tool for SignMessageTool {
 
         let message = require_str(args, "sign_message", "message")?;
 
-        let signature = privy_personal_sign(ctx.http, message).await?;
-        let address = privy_wallet_address(ctx.http).await?;
+        let signature = privy_personal_sign(ctx, message).await?;
+        let address = privy_wallet_address(ctx).await?;
         Ok(ToolOutput::from(format!(
             "signature: {} | signer: {}",
             signature, address

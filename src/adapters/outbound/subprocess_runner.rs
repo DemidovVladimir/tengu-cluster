@@ -86,6 +86,10 @@ fn default_max_turns() -> u32 {
 ///
 /// `metrics` carries per-turn LLM telemetry collected during the subagent's
 /// inner tool loop — empty for the legacy/test paths that don't fill it in.
+/// `tools` is the step's tool activity in call order (`ToolRun`: name + ok):
+/// calls the child ran (`compress_and_store` included) and the ones a Claude
+/// Code engine ran through the bridge (`StreamEvent::ToolRan`) — what
+/// `tests/engine_matrix.rs` asserts on.
 /// `#[serde(default, skip_serializing_if = "Vec::is_empty")]` keeps the IPC
 /// payload byte-compatible with prior versions of the binary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +102,8 @@ pub enum AgentIpcOutput {
         summary: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         metrics: Vec<crate::domain::metrics::MetricsRecord>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools: Vec<crate::domain::message::ToolRun>,
     },
     /// Step failed. `output` contains partial text up to the failure.
     Failed {
@@ -105,6 +111,8 @@ pub enum AgentIpcOutput {
         output: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         metrics: Vec<crate::domain::metrics::MetricsRecord>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tools: Vec<crate::domain::message::ToolRun>,
     },
 }
 
@@ -346,6 +354,7 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
                 error,
                 output,
                 metrics,
+                ..
             } => {
                 for rec in metrics {
                     crate::application::metrics::record(rec);
@@ -473,12 +482,14 @@ mod tests {
             output: "full text".to_string(),
             summary: "summary".to_string(),
             metrics: Vec::new(),
+            tools: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"ok\""));
-        // `metrics` is `skip_serializing_if = "Vec::is_empty"` so the empty
-        // case stays byte-compatible with prior IPC payloads.
+        // `metrics` / `tools` are `skip_serializing_if = "Vec::is_empty"` so
+        // the empty case stays byte-compatible with prior IPC payloads.
         assert!(!json.contains("\"metrics\""));
+        assert!(!json.contains("\"tools\""));
         let back: AgentIpcOutput = serde_json::from_str(&json).unwrap();
         matches!(back, AgentIpcOutput::Ok { .. });
     }
@@ -489,9 +500,40 @@ mod tests {
             error: "timeout".to_string(),
             output: "partial".to_string(),
             metrics: Vec::new(),
+            tools: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"failed\""));
+    }
+
+    /// The step's tool activity crosses the boundary; an old child's
+    /// payload (no `tools`) parses to an empty list.
+    #[test]
+    fn ipc_output_tools_round_trip_and_default() {
+        let run = |name: &str, ok| crate::domain::message::ToolRun {
+            name: name.into(),
+            ok,
+        };
+        let out = AgentIpcOutput::Ok {
+            output: "o".into(),
+            summary: "s".into(),
+            metrics: Vec::new(),
+            tools: vec![run("read_file", true), run("lp_decide", false)],
+        };
+        let json = serde_json::to_string(&out).unwrap();
+        assert!(
+            json.contains(
+                r#""tools":[{"name":"read_file","ok":true},{"name":"lp_decide","ok":false}]"#
+            ),
+            "{json}"
+        );
+        let AgentIpcOutput::Ok { tools, .. } = serde_json::from_str(&json).unwrap() else {
+            panic!("expected Ok");
+        };
+        assert_eq!(tools, [run("read_file", true), run("lp_decide", false)]);
+        let old: AgentIpcOutput =
+            serde_json::from_str(r#"{"status":"failed","error":"e","output":""}"#).unwrap();
+        assert!(matches!(old, AgentIpcOutput::Failed { tools, .. } if tools.is_empty()));
     }
 
     #[test]
@@ -516,6 +558,7 @@ mod tests {
             output: "full text".to_string(),
             summary: "summary".to_string(),
             metrics: vec![m],
+            tools: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"metrics\""));

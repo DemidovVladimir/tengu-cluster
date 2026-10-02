@@ -3,8 +3,11 @@
 
 mod decide;
 mod doctor;
+mod history;
+mod risk;
 mod run_agent;
 mod skill;
+mod tool;
 
 use clap::{Parser, Subcommand};
 
@@ -16,7 +19,6 @@ use crate::adapters::outbound::secrets;
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::paths::{default_config_path, resolve_tengu_home};
 use crate::config::{Config, RuntimeProfile};
-use crate::domain::secrets::SecretRegistry;
 use doctor::{print_status, run_doctor};
 use run_agent::run_agent_subprocess;
 use skill::run_skill_command;
@@ -52,6 +54,19 @@ enum Commands {
         /// check.torproject.org and fail unless it reports a Tor exit.
         #[arg(long)]
         tor: bool,
+        /// Also check the sandbox's running `tengu run`: fail when its
+        /// heartbeat is missing or older than `[runtime]
+        /// heartbeat_stale_secs`, or a required feed is down or stale
+        /// (Docker healthcheck).
+        #[arg(long)]
+        live: bool,
+        /// Also run a tool-using smoke turn (list_directory + read_file in
+        /// a temp workspace) on every agent's own engine + model and print
+        /// agent | engine | model | ok | tools called | secs; fail on any
+        /// failed turn. Calls the models (costs tokens). On macOS a `local`
+        /// agent with a loopback base_url is skipped, never contacted.
+        #[arg(long)]
+        engines: bool,
     },
     /// Run Telegram bot adapter.
     Telegram {
@@ -62,8 +77,18 @@ enum Commands {
     /// Run the inbound webhook listener (`[webhooks.endpoints.<name>]` blocks
     /// in the sandbox config bind URL paths to agents). Returns 202 Accepted
     /// on every authenticated POST and dispatches a one-shot orchestrator
-    /// turn in the background. Build with `--features webhooks`.
+    /// turn in the background. Takes the leases `tengu run` takes (never
+    /// beside it); SIGINT / SIGTERM drain it. Build with `--features webhooks`.
     Webhooks {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+    },
+    /// Run the sandbox's long-running process: every `[decision_loops.*]`
+    /// built once, the webhook routes (with `--features webhooks` and
+    /// `[webhooks] enabled`), one runner per sandbox (lease), graceful
+    /// shutdown on SIGINT / SIGTERM. See docs/runtime-2026-09-30.md.
+    Run {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
         sandbox: Option<String>,
@@ -81,6 +106,26 @@ enum Commands {
         /// Event JSON file (`-` = stdin). Omitted = `{}`.
         #[arg(long)]
         event: Option<PathBuf>,
+    },
+    /// Read recorded observation history (`[recorder]`): `range` / `asof`,
+    /// JSON lines with full keys.
+    History {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: history::HistoryAction,
+    },
+    /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
+    /// `halt` / `resume` (operator at a terminal only; resume asks for the
+    /// account name, and for the content of `TENGU_RISK_RESUME_SECRET_FILE`
+    /// when that names a 0600 file). See docs/xmarket-risk-paper-2026-09-30.md.
+    Risk {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: risk::RiskAction,
     },
     /// Run skill evals against prompts.md/yaml and score pass/fail with an LLM judge.
     Eval {
@@ -160,6 +205,15 @@ enum Commands {
     /// `[agents.<name>]` block of the parent's config.
     #[command(hide = true)]
     RunAgent,
+    /// INTERNAL — run one catalog tool in-process as `[agents.<name>]` and
+    /// print `{text, observation, is_error}` (`tool call`), or list every
+    /// catalog tool (`tool list`). The in-process half of
+    /// `tests/bridge_conformance.rs`; see `cli/tool.rs`.
+    #[command(hide = true)]
+    Tool {
+        #[command(subcommand)]
+        action: tool::ToolAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -314,60 +368,38 @@ pub(crate) async fn run() -> Result<()> {
         return run_agent_subprocess().await;
     }
 
+    if let Some(Commands::Tool { action }) = cli.command {
+        // stdout is one JSON value; logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return tool::run_tool_command(cli.config, action).await;
+    }
+
     let tengu_home = resolve_tengu_home();
-    let secrets_path = tengu_home.join("secrets.vault");
-    let mut secret_registry = SecretRegistry::new();
-    if let Ok(keys) = std::env::var(secrets::SECRETS_LOADED_ENV) {
-        // An ancestor `tengu` already opened the vault; its secrets are in
-        // our env. Register them for redaction — never prompt again.
-        for v in keys.split(',').filter_map(|k| std::env::var(k).ok()) {
-            if !v.is_empty() {
-                secret_registry.register(v);
-            }
-        }
-    } else if secrets_path.exists() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = std::fs::metadata(&secrets_path) {
-                let mode = meta.permissions().mode() & 0o777;
-                if mode & 0o077 != 0 {
-                    eprintln!(
-                        "WARNING: {} has permissions {:o} — should be 600. \
-                         Run: chmod 600 {}",
-                        secrets_path.display(),
-                        mode,
-                        secrets_path.display()
-                    );
-                }
-            }
-        }
-        let loaded = secrets::load_secrets_into_env(&secrets_path).unwrap_or_else(|e| {
-            eprintln!("WARNING: Failed to load secrets vault: {}", e);
-            Vec::new()
-        });
-        let keys: Vec<&str> = loaded.iter().map(|(k, _)| k.as_str()).collect();
-        std::env::set_var(secrets::SECRETS_LOADED_ENV, keys.join(","));
-        for (_, v) in loaded {
-            secret_registry.register(v);
-        }
-    }
-    // Also register the master password itself if set via env.
-    if let Ok(pw) = std::env::var("TENGU_MASTER_PASSWORD") {
-        if !pw.is_empty() {
-            secret_registry.register(pw);
-        }
-    }
-    let secret_registry = std::sync::Arc::new(secret_registry);
+    // Inherited vault names (`TENGU_SECRETS_LOADED`), else the vault itself,
+    // plus the master password — the same registry `tengu mcp-bridge` and
+    // `run-agent` build (without the vault prompt).
+    let secret_registry = std::sync::Arc::new(secrets::process_secret_registry(Some(
+        &secrets::secrets_file_path(&tengu_home),
+    )));
 
     // In TUI mode, persist logs to file only so interactive output stays clean.
     // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
-    // Webhook listener uses the same dual-output (file + stderr) pattern as
-    // telegram so operators can `tail -f tengu.log` while also watching the
-    // console for HMAC-fail / dispatch events.
-    let is_webhooks = matches!(cli.command, Some(Commands::Webhooks { .. }));
+    // Webhook listener and `tengu run` use the same dual-output (file +
+    // stderr) pattern as telegram so operators can `tail -f tengu.log` while
+    // also watching the console for HMAC-fail / dispatch events.
+    let is_webhooks = matches!(
+        cli.command,
+        Some(Commands::Webhooks { .. } | Commands::Run { .. })
+    );
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
         std::fs::create_dir_all(&log_dir).ok();
@@ -409,6 +441,19 @@ pub(crate) async fn run() -> Result<()> {
             .with(stderr_layer);
         tracing::subscriber::set_global_default(subscriber)
             .expect("Failed to set tracing subscriber");
+    } else if matches!(
+        cli.command,
+        Some(Commands::History { .. } | Commands::Risk { .. })
+    ) {
+        // stdout carries JSON lines / the operator's text; logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
     } else {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -458,9 +503,14 @@ pub(crate) async fn run() -> Result<()> {
             print_status(&config, profile);
             Ok(())
         }
-        Commands::Doctor { sandbox, tor } => {
+        Commands::Doctor {
+            sandbox,
+            tor,
+            live,
+            engines,
+        } => {
             let config = load_sandbox_or(sandbox, config)?;
-            run_doctor(&config, tor).await
+            run_doctor(&config, tor, live, engines).await
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
@@ -480,6 +530,10 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Webhooks { .. } => {
             anyhow::bail!("webhook listener requires: cargo build --features webhooks")
         }
+        Commands::Run { sandbox } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            crate::adapters::inbound::run::run_runtime(config, secret_registry).await
+        }
         Commands::Decide {
             sandbox,
             loop_name,
@@ -487,6 +541,14 @@ pub(crate) async fn run() -> Result<()> {
         } => {
             let config = load_sandbox_or(sandbox, config)?;
             decide::run_decide(&config, &loop_name, event.as_deref(), secret_registry).await
+        }
+        Commands::History { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            history::run_history(&config, action).await
+        }
+        Commands::Risk { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            risk::run_risk(&config, action).await
         }
         Commands::Eval {
             skills,
@@ -626,6 +688,9 @@ pub(crate) async fn run() -> Result<()> {
             // Handled by the early-return in main(); this arm is for
             // exhaustiveness only.
             unreachable!("Commands::RunAgent is dispatched earlier in main()")
+        }
+        Commands::Tool { .. } => {
+            unreachable!("Commands::Tool is dispatched earlier in main()")
         }
     }
 }

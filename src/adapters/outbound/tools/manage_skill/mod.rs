@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 use crate::application::skills::lifecycle::audit;
 use crate::application::skills::lifecycle::evolve::{
     apply_proposal_to_skill_md, is_editable_by_learner, unique_suffix, validate_resource_path,
-    ProposalBody,
+    validate_resource_write_path, ProposalBody,
 };
 use crate::application::skills::lifecycle::metrics::MetricSpec;
 use crate::domain::message::ToolDef;
@@ -109,6 +109,7 @@ impl ManageSkillTool {
                         },
                         "metrics": {
                             "type": "array",
+                            "items": crate::adapters::outbound::tools::skill_lifecycle::metric_spec_schema(),
                             "description": "Optional MetricSpec[] for create."
                         },
                         "old_string": {
@@ -198,12 +199,13 @@ impl Tool for ManageSkillTool {
         validate_skill_name(&args.name)?;
 
         let workspace = ctx.workspace.to_path_buf();
+        let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
 
         match args.action.as_str() {
             "create" => do_create(&args, &workspace),
             "edit_body" => do_edit_body(&args, &workspace),
             "patch" => do_patch(&args, &workspace),
-            "add_resource" => do_add_resource(&args, &workspace),
+            "add_resource" => do_add_resource(&args, &workspace, hardened),
             "remove_resource" => do_remove_resource(&args, &workspace),
             "delete" => do_delete(&args, &workspace),
             other => bail!(
@@ -726,7 +728,9 @@ fn validate_post_patch_frontmatter(skill_md: &str) -> Result<()> {
 // add_resource / remove_resource
 // ---------------------------------------------------------------------------
 
-fn do_add_resource(args: &Args, workspace: &Path) -> Result<ToolOutput> {
+/// `hardened`: the caller's `AgentConfig::hardened` (the system-prompt file
+/// names are refused too).
+fn do_add_resource(args: &Args, workspace: &Path, hardened: bool) -> Result<ToolOutput> {
     let path = args
         .path
         .as_deref()
@@ -738,7 +742,7 @@ fn do_add_resource(args: &Args, workspace: &Path) -> Result<ToolOutput> {
     if path.len() > 256 {
         bail!("manage_skill.add_resource: 'path' too long (>256 chars)");
     }
-    validate_resource_path(path)?;
+    validate_resource_write_path(path, hardened)?;
 
     let skill_dir = locate_skill_dir(&args.name, workspace).ok_or_else(|| {
         anyhow!(
@@ -1267,7 +1271,7 @@ mod tests {
         let mut a = make_args("add_resource", "demo");
         a.path = Some("notes/intro.md".into());
         a.content = Some("# Notes\n".into());
-        let out = do_add_resource(&a, ws.path()).unwrap();
+        let out = do_add_resource(&a, ws.path(), false).unwrap();
         let v: Value = serde_json::from_str(&out.text).unwrap();
         assert_eq!(v["overwrote"], false);
 
@@ -1292,12 +1296,12 @@ mod tests {
         let mut a = make_args("add_resource", "demo");
         a.path = Some("x.md".into());
         a.content = Some("NEW".into());
-        let err = do_add_resource(&a, ws.path()).unwrap_err();
+        let err = do_add_resource(&a, ws.path(), false).unwrap_err();
         assert!(format!("{err}").contains("already exists"));
 
         // With overwrite=true → succeeds.
         a.overwrite = Some(true);
-        do_add_resource(&a, ws.path()).unwrap();
+        do_add_resource(&a, ws.path(), false).unwrap();
         assert_eq!(
             std::fs::read_to_string(ws.path().join("skills/demo/resources/x.md")).unwrap(),
             "NEW"
@@ -1312,11 +1316,26 @@ mod tests {
         let mut a = make_args("add_resource", "demo");
         a.path = Some("../escape.md".into());
         a.content = Some("oops".into());
-        let err = do_add_resource(&a, ws.path()).unwrap_err();
+        let err = do_add_resource(&a, ws.path(), false).unwrap_err();
         assert!(
             format!("{err}").contains(".."),
             "expected '..' rejection: {err}"
         );
+    }
+
+    /// A hardened sandbox's writer refuses the system-prompt file names;
+    /// elsewhere they are ordinary resources.
+    #[test]
+    fn add_resource_refuses_prompt_file_names_when_hardened() {
+        let ws = TempDir::new().unwrap();
+        write_skill(ws.path(), "demo", Some(true), "# body");
+        let mut a = make_args("add_resource", "demo");
+        a.path = Some("USER.md".into());
+        a.content = Some("x".into());
+        let err = do_add_resource(&a, ws.path(), true).unwrap_err();
+        assert!(format!("{err}").contains("hardened sandbox"), "{err}");
+        assert!(!ws.path().join("skills/demo/resources/USER.md").exists());
+        do_add_resource(&a, ws.path(), false).unwrap();
     }
 
     #[test]

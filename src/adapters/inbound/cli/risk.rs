@@ -1,0 +1,935 @@
+//! `tengu risk status | halt | resume [--sandbox <s>] [--account <a>]` — the
+//! operator's handle on the paper ledger's risk state
+//! (`domain/xm/risk_state.rs`, `<TENGU_HOME>/state/<xmarket.state>/ledger.db`).
+//! No LLM, no network.
+//!
+//! | Command | Rule |
+//! |---|---|
+//! | `status` | read-only, no TTY needed; never creates the ledger: per account (every ledger account, or `--account`) the halt in force, the UTC day's start equity, cash, open positions (full ids, exit deadlines, a fired stop-loss / take-profit), funding owed (hours settled without a fresh rate, booked at the next one), entries in the last 60 s (exits never count toward the order rate), the latest verdicts (rule, full ids, exec tool, call id), and the kill-switch file. Equity at mark: the `risk_status` tool (marks live in the workspace store) |
+//! | `halt` | operator only: an `operator` halt (a sticky halt stays as is) — entries deny `halted`, reduce-only exits still pass (`allow_reduce_degraded`). The `[risk]` account is opened first if new |
+//! | `resume` | operator only; refused while the kill-switch file exists (checked again inside the ledger transaction); the operator types the account name to confirm; clears any halt. A loss still over its limit halts again at the next valuation |
+//! | operator only | refused when stdin or stdout is not a terminal (a piped `y` is never accepted) or `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME` is set (an agent process) |
+//! | resume guard (optional, review #16) | `TENGU_RISK_RESUME_SECRET_FILE` names a file: resume also asks for its content (typed without echo, compared in constant time). Refused before any prompt when the file is missing, not a regular file, readable by group / other (not 0600), over 4 KiB, not UTF-8 or empty, or inside an agent's `fs_roots` / `workspace`. Unset or empty = off |
+//!
+//! A terminal is not a human (review #16): an agent with a shell could run
+//! `tengu risk resume` under `script` (a pseudo-terminal). Agents inside
+//! tengu have none in a hardened sandbox (no shell scope, no-shell
+//! fallback, `claude_code` built-ins off); an agent outside tengu running as
+//! the operator's user is stopped only by the resume guard, and only while
+//! it cannot read the secret file (keep it out of every agent's reach — the
+//! check above covers tengu's agents, not other tools on the machine).
+
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, bail, Result};
+use clap::Subcommand;
+use zeroize::Zeroizing;
+
+use crate::adapters::outbound::paper_store::{kill_switch_state, SqlitePaperLedger};
+use crate::config::paths::{expand_tilde, resolve_tengu_home};
+use crate::config::risk::{PaperConfig, RiskConfig};
+use crate::config::xmarket::ledger_db;
+use crate::config::Config;
+use crate::domain::observation::{now_ms, Field};
+use crate::ports::paper::PaperLedger;
+
+#[derive(Subcommand)]
+pub(super) enum RiskAction {
+    /// Risk state, cash and positions of every ledger account (read-only).
+    Status {
+        /// One account; default: every account in the ledger.
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Halt new entries (reason `operator`); reduce-only exits still pass.
+    /// Operator at a terminal only.
+    Halt {
+        /// Default: `[risk] account`.
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Clear a halt: type the account name to confirm. Operator at a
+    /// terminal only; refused while the kill-switch file exists.
+    Resume {
+        /// Default: `[risk] account`.
+        #[arg(long)]
+        account: Option<String>,
+    },
+}
+
+/// Env vars that mark an agent process (`run-agent` children, the bridge
+/// under one).
+const AGENT_ENV: [&str; 2] = ["TENGU_AGENT_IPC", "TENGU_AGENT_NAME"];
+
+/// The optional resume guard's file (module table).
+pub(super) const RESUME_SECRET_ENV: &str = "TENGU_RISK_RESUME_SECRET_FILE";
+
+/// Largest resume secret file read.
+const MAX_SECRET_BYTES: u64 = 4096;
+
+/// The resume guard (module table): the secret file, and why an agent of
+/// the sandbox could read it.
+#[derive(Debug, Clone)]
+pub(super) struct ResumeSecret {
+    pub path: PathBuf,
+    /// `hardening::file_reach_errors`; non-empty ⇒ resume refused.
+    pub reach: Vec<String>,
+}
+
+/// What the commands act on.
+pub(super) struct RiskTarget {
+    /// `[risk]`, `kill_switch_file` expanded.
+    pub risk: RiskConfig,
+    pub paper: PaperConfig,
+    /// `<TENGU_HOME>/state/<xmarket.state>` — the ledger's directory.
+    pub state_dir: PathBuf,
+    /// `TENGU_RISK_RESUME_SECRET_FILE`; `None` = no resume guard.
+    pub resume_secret: Option<ResumeSecret>,
+}
+
+impl RiskTarget {
+    fn from_config(config: &Config) -> Result<Self> {
+        let risk = config
+            .risk
+            .as_ref()
+            .ok_or_else(|| anyhow!("no [risk] section: `tengu risk` needs a paper-trading sandbox (--sandbox <name>)"))?
+            .resolved();
+        let paper = config
+            .paper
+            .clone()
+            .ok_or_else(|| anyhow!("no [paper] section next to [risk]"))?;
+        let xmarket = config.xmarket.as_ref().ok_or_else(|| {
+            anyhow!("no [xmarket] section: the ledger lives in <TENGU_HOME>/state/<xmarket.state>/ledger.db")
+        })?;
+        Ok(Self {
+            risk,
+            paper,
+            state_dir: xmarket.state_dir(&resolve_tengu_home()),
+            resume_secret: None,
+        })
+    }
+
+    fn account(&self, account: Option<String>) -> String {
+        account.unwrap_or_else(|| self.risk.account.clone())
+    }
+}
+
+/// The resume guard from `TENGU_RISK_RESUME_SECRET_FILE` (`env`): unset or
+/// empty = off; else the file (`~` expanded) and whether an agent of
+/// `config` reaches it.
+fn resume_secret(config: &Config, env: Option<std::ffi::OsString>) -> Option<ResumeSecret> {
+    let raw = env.filter(|v| !v.is_empty())?;
+    let path = expand_tilde(Path::new(&raw));
+    let reach = crate::config::hardening::file_reach_errors(
+        config,
+        RESUME_SECRET_ENV,
+        &path,
+        "an agent's read_file could read the resume secret",
+    );
+    Some(ResumeSecret { path, reach })
+}
+
+/// The secret the operator must type: the file's content, trimmed (module
+/// table). Refusals are fixed sentences — never the content.
+fn read_secret(s: &ResumeSecret) -> Result<Zeroizing<String>> {
+    if let Some(reach) = s.reach.first() {
+        bail!("tengu risk resume refused: {reach} — nothing changed");
+    }
+    let refuse = |why: &str| {
+        anyhow!(
+            "tengu risk resume refused: {RESUME_SECRET_ENV} {} {why} — nothing changed",
+            s.path.display()
+        )
+    };
+    let meta = match std::fs::metadata(&s.path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(refuse("does not exist")),
+        Err(_) => return Err(refuse("could not be read")),
+    };
+    if !meta.is_file() {
+        return Err(refuse("is not a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(refuse(&format!(
+                "has mode {mode:o}; group / other must have no access (chmod 600)"
+            )));
+        }
+    }
+    if meta.len() > MAX_SECRET_BYTES {
+        return Err(refuse(&format!("is larger than {MAX_SECRET_BYTES} bytes")));
+    }
+    let raw = Zeroizing::new(std::fs::read(&s.path).map_err(|_| refuse("could not be read"))?);
+    let text = std::str::from_utf8(&raw).map_err(|_| refuse("is not UTF-8"))?;
+    let secret = text.trim();
+    if secret.is_empty() {
+        return Err(refuse("is empty"));
+    }
+    Ok(Zeroizing::new(secret.to_string()))
+}
+
+/// Equal, without an early exit at the first differing byte.
+fn same_secret(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The operator's terminal; a scripted one in tests.
+pub(super) trait Console {
+    /// stdin and stdout are both terminals.
+    fn is_tty(&self) -> bool;
+    fn read_line(&mut self) -> std::io::Result<String>;
+    /// A line typed without echo (the resume secret).
+    fn read_secret(&mut self) -> std::io::Result<String>;
+    fn say(&mut self, line: &str);
+}
+
+struct Terminal;
+
+impl Console for Terminal {
+    fn is_tty(&self) -> bool {
+        std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+    }
+    fn read_line(&mut self) -> std::io::Result<String> {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        Ok(line)
+    }
+    fn read_secret(&mut self) -> std::io::Result<String> {
+        rpassword::read_password()
+    }
+    fn say(&mut self, line: &str) {
+        println!("{line}");
+    }
+}
+
+pub(super) async fn run_risk(config: &Config, action: RiskAction) -> Result<()> {
+    let mut target = RiskTarget::from_config(config)?;
+    target.resume_secret = resume_secret(config, std::env::var_os(RESUME_SECRET_ENV));
+    let agent = AGENT_ENV
+        .into_iter()
+        .find(|k| std::env::var_os(k).is_some());
+    run(&target, action, &mut Terminal, agent, now_ms()).await
+}
+
+async fn run(
+    t: &RiskTarget,
+    action: RiskAction,
+    console: &mut dyn Console,
+    agent_env: Option<&str>,
+    now_ms: i64,
+) -> Result<()> {
+    match action {
+        RiskAction::Status { account } => status(t, account, console, now_ms).await,
+        RiskAction::Halt { account } => {
+            operator_only("halt", console, agent_env)?;
+            halt(t, t.account(account), console, now_ms).await
+        }
+        RiskAction::Resume { account } => {
+            operator_only("resume", console, agent_env)?;
+            resume(t, t.account(account), console, now_ms).await
+        }
+    }
+}
+
+/// `halt` / `resume` belong to the operator at a terminal (module table).
+fn operator_only(what: &str, console: &dyn Console, agent_env: Option<&str>) -> Result<()> {
+    if let Some(var) = agent_env {
+        bail!(
+            "tengu risk {what} refused: {var} is set (an agent process) — only the operator \
+             at a terminal may {what}"
+        );
+    }
+    if !console.is_tty() {
+        bail!(
+            "tengu risk {what} refused: stdin / stdout is not a terminal — piped input is never \
+             accepted"
+        );
+    }
+    Ok(())
+}
+
+/// RFC 3339 UTC, seconds (`2026-10-03T00:00:00Z`); the raw ms if out of range.
+fn iso(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms).map_or_else(
+        || ms.to_string(),
+        |t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+}
+
+fn kill_switch_line(t: &RiskTarget) -> String {
+    let path = t.risk.kill_switch_file.display();
+    match kill_switch_state(&t.risk.kill_switch_file) {
+        Field::Ok { value: true } => {
+            format!("kill-switch file {path}: PRESENT — every account is halted")
+        }
+        Field::Ok { value: false } => format!("kill-switch file {path}: absent"),
+        Field::Error { error } => format!(
+            "kill-switch file {path}: UNKNOWN ({}) — entries are refused",
+            error.message
+        ),
+        Field::Absent => format!("kill-switch file {path}: unknown"),
+    }
+}
+
+async fn status(
+    t: &RiskTarget,
+    account: Option<String>,
+    console: &mut dyn Console,
+    now_ms: i64,
+) -> Result<()> {
+    let path = ledger_db(&t.state_dir);
+    console.say(&kill_switch_line(t));
+    if !path.exists() {
+        console.say(&format!("no ledger yet: {}", path.display()));
+        return Ok(());
+    }
+    console.say(&format!("ledger {}", path.display()));
+    let ledger = SqlitePaperLedger::open(&t.state_dir)?;
+    let names = match account {
+        Some(a) => vec![a],
+        None => ledger.accounts().await?,
+    };
+    if names.is_empty() {
+        console.say("no accounts yet");
+    }
+    for name in names {
+        let s = ledger.snapshot(&name, now_ms).await?;
+        let a = &s.account;
+        console.say(&format!(
+            "account {name}: initial {:.2} USD, cash {:.2} USD, entries in the last 60 s {}, resting {}",
+            a.initial_cash_usd, a.cash_usd, s.orders_last_min, s.open_orders
+        ));
+        console.say(&match &s.owner {
+            Some(o) => format!("  owner: sandbox {o} (another sandbox's tools are refused)"),
+            None => "  owner: none yet (the first sandbox whose tools write it)".to_string(),
+        });
+        let halt = match s.risk.effective_halt(now_ms) {
+            Some(h) => format!(
+                "  halt: {} since {} (clear: tengu risk resume --account {name})",
+                h.reason.as_str(),
+                iso(h.since_ms)
+            ),
+            None => "  halt: none".to_string(),
+        };
+        console.say(&halt);
+        match (s.risk.day_utc_ms, s.risk.day_start_equity_usd) {
+            (Some(day), Some(eq)) => console.say(&format!(
+                "  day {} (UTC): start equity {eq:.2} USD",
+                iso(day)
+            )),
+            (Some(day), None) => console.say(&format!(
+                "  day {} (UTC): start equity unknown (no valuation yet)",
+                iso(day)
+            )),
+            _ => console.say("  day: not rolled yet (no gate call or risk_status read)"),
+        }
+        for p in a.open_positions() {
+            let exit = s
+                .exit_at_ms
+                .get(&p.instrument)
+                .map_or(String::new(), |t| format!(", exit by {}", iso(*t)));
+            let fired = s
+                .exit_triggers
+                .get(&p.instrument)
+                .map_or(String::new(), |t| {
+                    format!(", {} fired {}", t.reason.as_str(), iso(t.at_ms))
+                });
+            console.say(&format!(
+                "  position {} qty {} avg {} opened {}{exit}{fired}",
+                p.instrument,
+                p.qty,
+                p.avg_px.map_or("-".to_string(), |x| x.to_string()),
+                p.opened_ms.map_or("-".to_string(), iso),
+            ));
+        }
+        for p in a.positions.values().filter(|p| !p.funding_owed.is_empty()) {
+            console.say(&format!(
+                "  funding owed {}: {} h since {} (no fresh rate when settled; booked at the next one)",
+                p.instrument,
+                p.funding_owed.len(),
+                iso(p.funding_owed[0].hour_ms),
+            ));
+        }
+        for d in ledger.decisions(&name, 5).await? {
+            let verdict = if d.verdict.allow { "allow" } else { "deny" };
+            console.say(&format!(
+                "  verdict {} {verdict} {} {} {} by {} call {}",
+                iso(d.ts_ms),
+                d.verdict.rule,
+                d.instrument,
+                d.client_order_id,
+                d.tool.as_deref().unwrap_or("-"),
+                d.call_id.as_deref().unwrap_or("-"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn halt(t: &RiskTarget, name: String, console: &mut dyn Console, now_ms: i64) -> Result<()> {
+    let ledger = SqlitePaperLedger::open(&t.state_dir)?;
+    if name == t.risk.account {
+        ledger
+            .open_account(&name, t.paper.initial_cash_usd, now_ms)
+            .await?;
+    }
+    let s = ledger
+        .update_risk_state(
+            &name,
+            now_ms,
+            Box::new(move |s| Ok(s.risk.halt_operator(now_ms))),
+        )
+        .await?;
+    let h = s
+        .risk
+        .effective_halt(now_ms)
+        .ok_or_else(|| anyhow!("account {name}: the halt was not recorded"))?;
+    console.say(&format!(
+        "account {name}: halted ({}) since {} — entries deny `halted`, reduce-only exits pass",
+        h.reason.as_str(),
+        iso(h.since_ms)
+    ));
+    Ok(())
+}
+
+async fn resume(
+    t: &RiskTarget,
+    name: String,
+    console: &mut dyn Console,
+    now_ms: i64,
+) -> Result<()> {
+    let kill = t.risk.kill_switch_file.clone();
+    match kill_switch_state(&kill) {
+        Field::Ok { value: false } => {}
+        Field::Ok { value: true } => bail!(
+            "tengu risk resume refused: the kill-switch file {} is present — remove it first",
+            kill.display()
+        ),
+        other => bail!(
+            "tengu risk resume refused: cannot tell whether the kill-switch file {} exists ({:?})",
+            kill.display(),
+            other.error().map(|e| e.message.as_str())
+        ),
+    }
+    let path = ledger_db(&t.state_dir);
+    if !path.exists() {
+        bail!("no ledger yet ({}): nothing to resume", path.display());
+    }
+    let ledger = SqlitePaperLedger::open(&t.state_dir)?;
+    let s = ledger.snapshot(&name, now_ms).await?;
+    let Some(h) = s.risk.effective_halt(now_ms).cloned() else {
+        console.say(&format!("account {name} is not halted: nothing to resume"));
+        return Ok(());
+    };
+    // The guard's file is checked before any prompt.
+    let secret = t.resume_secret.as_ref().map(read_secret).transpose()?;
+    console.say(&format!(
+        "account {name} is halted ({}) since {}. Type the account name to resume:",
+        h.reason.as_str(),
+        iso(h.since_ms)
+    ));
+    let typed = console.read_line()?;
+    if typed.trim() != name {
+        bail!(
+            "tengu risk resume refused: `{}` is not the account name `{name}` — nothing changed",
+            typed.trim()
+        );
+    }
+    if let Some(secret) = &secret {
+        console.say(&format!(
+            "Type the resume secret (the content of {RESUME_SECRET_ENV}):"
+        ));
+        let typed = Zeroizing::new(console.read_secret()?);
+        if !same_secret(typed.trim(), secret) {
+            bail!("tengu risk resume refused: the resume secret does not match — nothing changed");
+        }
+    }
+    ledger
+        .update_risk_state(
+            &name,
+            now_ms,
+            Box::new(move |s| {
+                let present = kill_switch_state(&kill).value() != Some(&false);
+                s.risk.resume(now_ms, present)
+            }),
+        )
+        .await?;
+    console.say(&format!(
+        "account {name} resumed — every entry is gated again; a loss still over its limit halts at the next valuation"
+    ));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::domain::xm::risk::{Halt, HaltReason};
+
+    /// 2026-10-03 12:00 UTC.
+    const NOW: i64 = 1_791_028_800_000;
+
+    struct Scripted {
+        tty: bool,
+        input: Vec<String>,
+        out: Vec<String>,
+    }
+
+    impl Console for Scripted {
+        fn is_tty(&self) -> bool {
+            self.tty
+        }
+        fn read_line(&mut self) -> std::io::Result<String> {
+            Ok(if self.input.is_empty() {
+                String::new()
+            } else {
+                self.input.remove(0)
+            })
+        }
+        fn read_secret(&mut self) -> std::io::Result<String> {
+            self.read_line()
+        }
+        fn say(&mut self, line: &str) {
+            self.out.push(line.to_string());
+        }
+    }
+
+    fn console(tty: bool, input: &[&str]) -> Scripted {
+        Scripted {
+            tty,
+            input: input.iter().map(|s| format!("{s}\n")).collect(),
+            out: Vec::new(),
+        }
+    }
+
+    fn target(dir: &Path) -> RiskTarget {
+        let risk = format!(
+            r#"
+account = "xmarket"
+mode = "paper"
+venues = ["hyperliquid"]
+min_lifecycle = "paper_tradable"
+instruments_allow = ["hyperliquid:xyz:TSLA"]
+instruments_deny = []
+max_order_notional_usd = 25
+max_position_notional_usd = 50
+max_asset_exposure_usd = 50
+max_venue_exposure_usd = 100
+max_gross_exposure_usd = 100
+max_net_exposure_usd = 100
+max_leverage = 1
+daily_loss_limit_usd = 10
+total_loss_limit_usd = 25
+min_edge_bps = 10
+max_slippage_bps = 30
+min_depth_usd = 250
+require_hedge_for = []
+max_skew_ms = 5000
+max_orders_per_min = 6
+max_open_orders = 4
+kill_switch_file = "{}"
+allow_reduce_degraded = true
+exits = {{ take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }}
+max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 }}
+"#,
+            dir.join("KILL").display()
+        );
+        RiskTarget {
+            risk: toml::from_str(&risk).unwrap(),
+            paper: toml::from_str(
+                "initial_cash_usd = 100\nlatency_ms = 250\nlatency_jitter_ms = 100\n\
+                 fee_tier = 0\nstaking_discount_pct = 0\norder_types = [\"market\"]\n",
+            )
+            .unwrap(),
+            state_dir: dir.join("state"),
+            resume_secret: None,
+        }
+    }
+
+    /// `t` with the resume guard on `file` (`content`, `mode`).
+    #[cfg(unix)]
+    fn guarded(mut t: RiskTarget, file: &Path, content: &str, mode: u32) -> RiskTarget {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(file, content).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(mode)).unwrap();
+        t.resume_secret = Some(ResumeSecret {
+            path: file.to_path_buf(),
+            reach: Vec::new(),
+        });
+        t
+    }
+
+    /// Review #16: with the guard on, resume also needs the secret file's
+    /// content — a wrong one changes nothing; the right one resumes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn resume_with_the_guard_needs_the_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("resume.secret");
+        let t = guarded(target(dir.path()), &file, "  open sesame 42\n", 0o600);
+        run(&t, halt_now(), &mut console(true, &[]), None, NOW)
+            .await
+            .unwrap();
+        let mut c = console(true, &["xmarket", "open sesame"]);
+        let e = run(&t, resume_now(), &mut c, None, NOW + 1)
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("the resume secret does not match"),
+            "{e}"
+        );
+        assert!(!e.to_string().contains("sesame"), "never echoed: {e}");
+        assert!(halt_of(&t).await.is_some());
+        let mut c = console(true, &["xmarket", "open sesame 42"]);
+        run(&t, resume_now(), &mut c, None, NOW + 2).await.unwrap();
+        assert_eq!(halt_of(&t).await, None);
+        assert!(c.out.iter().any(
+            |l| l.contains("Type the resume secret (the content of TENGU_RISK_RESUME_SECRET_FILE)")
+        ));
+        assert!(c.out.iter().all(|l| !l.contains("sesame")), "{:?}", c.out);
+    }
+
+    /// A guard file nobody should trust refuses resume before any prompt:
+    /// missing, readable by group / other, empty, a directory, or inside an
+    /// agent's reach. The halt stays.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_guard_refuses_a_bad_secret_file_before_any_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("open.secret");
+        let base = target(dir.path());
+        run(&base, halt_now(), &mut console(true, &[]), None, NOW)
+            .await
+            .unwrap();
+        // Each case its own file: the list is built before the loop runs.
+        let cases: Vec<(RiskTarget, &str)> = vec![
+            (
+                {
+                    let mut t = target(dir.path());
+                    t.resume_secret = Some(ResumeSecret {
+                        path: dir.path().join("missing.secret"),
+                        reach: Vec::new(),
+                    });
+                    t
+                },
+                "does not exist",
+            ),
+            (
+                guarded(target(dir.path()), &file, "s3cret", 0o644),
+                "has mode 644; group / other must have no access",
+            ),
+            (
+                guarded(
+                    target(dir.path()),
+                    &dir.path().join("empty.secret"),
+                    " \n",
+                    0o600,
+                ),
+                "is empty",
+            ),
+            (
+                {
+                    let mut t = target(dir.path());
+                    t.resume_secret = Some(ResumeSecret {
+                        path: dir.path().to_path_buf(),
+                        reach: Vec::new(),
+                    });
+                    t
+                },
+                "is not a regular file",
+            ),
+            (
+                {
+                    let reached = dir.path().join("reached.secret");
+                    let mut t = guarded(target(dir.path()), &reached, "s3cret", 0o600);
+                    t.resume_secret.as_mut().unwrap().reach = vec![
+                        "TENGU_RISK_RESUME_SECRET_FILE `x` is inside agents.a.workspace `y`".into(),
+                    ];
+                    t
+                },
+                "is inside agents.a.workspace",
+            ),
+        ];
+        for (t, want) in cases {
+            let mut c = console(true, &["xmarket", "s3cret"]);
+            let e = run(&t, resume_now(), &mut c, None, NOW + 1)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(want), "{want}: {e}");
+            assert!(e.starts_with("tengu risk resume refused"), "{e}");
+            assert!(!e.contains("s3cret"), "never echoed: {e}");
+            assert_eq!(c.input.len(), 2, "{want}: no prompt read");
+            assert!(halt_of(&t).await.is_some());
+        }
+    }
+
+    /// `TENGU_RISK_RESUME_SECRET_FILE` unset or empty: no guard; set: the
+    /// file, with the agents that could read it named.
+    #[test]
+    fn the_guard_is_off_unless_the_env_names_a_file() {
+        let ws = tempfile::tempdir().unwrap();
+        let config: Config = toml::from_str(&format!(
+            "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\nworkspace = \"{}\"\n",
+            ws.path().display()
+        ))
+        .unwrap();
+        assert!(resume_secret(&config, None).is_none());
+        assert!(resume_secret(&config, Some("".into())).is_none());
+        let outside = tempfile::tempdir().unwrap();
+        let s = resume_secret(&config, Some(outside.path().join("r.secret").into())).unwrap();
+        assert!(s.reach.is_empty(), "{:?}", s.reach);
+        let s = resume_secret(&config, Some(ws.path().join("r.secret").into())).unwrap();
+        assert_eq!(s.reach.len(), 1, "{:?}", s.reach);
+        assert!(
+            s.reach[0].contains("is inside agents.main.workspace"),
+            "{:?}",
+            s.reach
+        );
+    }
+
+    /// Review #13: the operator's commands take no lease — `status` reads,
+    /// `halt` lands while a `tengu run` holds the state dir's leases.
+    #[tokio::test]
+    async fn the_operator_works_while_a_runner_holds_the_state_dir() {
+        use crate::bootstrap::runtime::{LeasePlan, OwnerLeases};
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        let plan = LeasePlan {
+            sandbox: "xmarket".into(),
+            state_dir: t.state_dir.clone(),
+            ledger: true,
+        };
+        let held = OwnerLeases::take(&plan, 60_000).await.unwrap();
+        run(&t, halt_now(), &mut console(true, &[]), None, NOW)
+            .await
+            .unwrap();
+        let mut c = console(false, &[]);
+        run(&t, RiskAction::Status { account: None }, &mut c, None, NOW)
+            .await
+            .unwrap();
+        let text = c.out.join("\n");
+        assert!(text.contains("account xmarket:"), "{text}");
+        assert!(text.contains("halt: operator"), "{text}");
+        assert!(held.release().await);
+    }
+
+    #[test]
+    fn secrets_compare_whole() {
+        assert!(same_secret("open sesame", "open sesame"));
+        for other in ["open sesam", "open sesame!", "", "Open sesame"] {
+            assert!(!same_secret(other, "open sesame"), "{other}");
+        }
+    }
+
+    async fn halt_of(t: &RiskTarget) -> Option<Halt> {
+        let l = SqlitePaperLedger::open(&t.state_dir).unwrap();
+        l.snapshot("xmarket", NOW).await.unwrap().risk.halt
+    }
+
+    fn halt_now() -> RiskAction {
+        RiskAction::Halt { account: None }
+    }
+
+    fn resume_now() -> RiskAction {
+        RiskAction::Resume { account: None }
+    }
+
+    /// No TTY (piped input) or an agent's env: refused before anything is
+    /// opened — a piped `xmarket` never resumes.
+    #[tokio::test]
+    async fn halt_and_resume_refuse_without_a_tty_or_from_an_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        for (tty, agent, want) in [
+            (false, None, "not a terminal"),
+            (true, Some("TENGU_AGENT_IPC"), "TENGU_AGENT_IPC is set"),
+            (true, Some("TENGU_AGENT_NAME"), "TENGU_AGENT_NAME is set"),
+            (false, Some("TENGU_AGENT_IPC"), "TENGU_AGENT_IPC is set"),
+        ] {
+            for (what, action) in [("halt", halt_now()), ("resume", resume_now())] {
+                let mut c = console(tty, &["xmarket"]);
+                let e = run(&t, action, &mut c, agent, NOW).await.unwrap_err();
+                let e = e.to_string();
+                assert!(e.contains(&format!("tengu risk {what} refused")), "{e}");
+                assert!(e.contains(want), "{e}");
+                assert_eq!(c.input.len(), 1, "nothing was read");
+            }
+        }
+        assert!(!ledger_db(&t.state_dir).exists(), "nothing was opened");
+        assert_eq!(AGENT_ENV, ["TENGU_AGENT_IPC", "TENGU_AGENT_NAME"]);
+    }
+
+    #[tokio::test]
+    async fn halt_then_resume_with_the_typed_account_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        let mut c = console(true, &[]);
+        run(&t, halt_now(), &mut c, None, NOW).await.unwrap();
+        let operator = Some(Halt {
+            reason: HaltReason::Operator,
+            since_ms: NOW,
+        });
+        assert_eq!(halt_of(&t).await, operator);
+        assert!(c.out[0].contains("account xmarket: halted (operator) since 2026-10-03T12:00:00Z"));
+        // A wrong name changes nothing.
+        let mut c = console(true, &["xmarkets"]);
+        let e = run(&t, resume_now(), &mut c, None, NOW + 1)
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("`xmarkets` is not the account name"),
+            "{e}"
+        );
+        assert_eq!(halt_of(&t).await, operator);
+        // The right one clears it.
+        let mut c = console(true, &["xmarket"]);
+        run(&t, resume_now(), &mut c, None, NOW + 2).await.unwrap();
+        assert_eq!(halt_of(&t).await, None);
+        assert!(c.out.last().unwrap().contains("account xmarket resumed"));
+        // Nothing left to resume: no prompt.
+        let mut c = console(true, &[]);
+        run(&t, resume_now(), &mut c, None, NOW + 3).await.unwrap();
+        assert_eq!(c.out, ["account xmarket is not halted: nothing to resume"]);
+    }
+
+    #[tokio::test]
+    async fn resume_is_refused_while_the_kill_switch_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        run(&t, halt_now(), &mut console(true, &[]), None, NOW)
+            .await
+            .unwrap();
+        std::fs::write(&t.risk.kill_switch_file, "").unwrap();
+        let mut c = console(true, &["xmarket"]);
+        let e = run(&t, resume_now(), &mut c, None, NOW + 1)
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string().contains("is present — remove it first"),
+            "{e}"
+        );
+        assert!(halt_of(&t).await.is_some());
+        assert_eq!(c.input.len(), 1, "refused before the prompt");
+    }
+
+    /// `status` needs no TTY, never creates the ledger, never writes.
+    #[tokio::test]
+    async fn status_is_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        let mut c = console(false, &[]);
+        run(
+            &t,
+            RiskAction::Status { account: None },
+            &mut c,
+            Some("TENGU_AGENT_IPC"),
+            NOW,
+        )
+        .await
+        .unwrap();
+        assert!(
+            c.out.iter().any(|l| l.starts_with("no ledger yet")),
+            "{:?}",
+            c.out
+        );
+        assert!(c.out[0].ends_with("KILL: absent"), "{:?}", c.out);
+        assert!(!ledger_db(&t.state_dir).exists());
+        run(&t, halt_now(), &mut console(true, &[]), None, NOW)
+            .await
+            .unwrap();
+        let before = SqlitePaperLedger::open(&t.state_dir)
+            .unwrap()
+            .snapshot("xmarket", NOW)
+            .await
+            .unwrap();
+        let mut c = console(false, &[]);
+        run(
+            &t,
+            RiskAction::Status { account: None },
+            &mut c,
+            None,
+            NOW + 5_000,
+        )
+        .await
+        .unwrap();
+        let text = c.out.join("\n");
+        for want in [
+            "account xmarket: initial 100.00 USD, cash 100.00 USD",
+            "owner: none yet",
+            "halt: operator since 2026-10-03T12:00:00Z",
+            "day: not rolled yet",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        let after = SqlitePaperLedger::open(&t.state_dir)
+            .unwrap()
+            .snapshot("xmarket", NOW)
+            .await
+            .unwrap();
+        assert_eq!(after, before, "status wrote nothing");
+        let e = run(
+            &t,
+            RiskAction::Status {
+                account: Some("nobody".into()),
+            },
+            &mut console(false, &[]),
+            None,
+            NOW,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            e.to_string().contains("unknown paper account `nobody`"),
+            "{e}"
+        );
+    }
+
+    /// `status` names a fired stop-loss / take-profit (review #6) and the
+    /// funding hours owed without a rate (#10), ids in full.
+    #[tokio::test]
+    async fn status_shows_fired_exits_and_funding_owed() {
+        use crate::adapters::outbound::paper_store::tests::{buy, gate, ledger, limits, req, TSLA};
+        use crate::domain::xm::exits::ExitReason;
+        let dir = tempfile::tempdir().unwrap();
+        let t = target(dir.path());
+        let l = ledger(&t.state_dir).await;
+        let o = buy("o-1", "xmarket", TSLA);
+        l.place(req(&o, NOW), gate(&o, limits(), None))
+            .await
+            .unwrap();
+        l.trigger_exit("xmarket", TSLA, NOW, ExitReason::StopLoss, NOW + 1_000)
+            .await
+            .unwrap();
+        // Opened on the hour: that hour and the next, owed.
+        let s = l
+            .settle_funding("xmarket", TSLA, None, NOW + 3_600_000)
+            .await
+            .unwrap();
+        assert_eq!(s.owed.len(), 2);
+        let mut c = console(false, &[]);
+        run(
+            &t,
+            RiskAction::Status { account: None },
+            &mut c,
+            None,
+            NOW + 3_700_000,
+        )
+        .await
+        .unwrap();
+        let text = c.out.join("\n");
+        for want in [
+            format!("position {TSLA} qty 0.072"),
+            "stop_loss fired 2026-10-03T12:00:01Z".to_string(),
+            format!("funding owed {TSLA}: 2 h since 2026-10-03T12:00:00Z"),
+        ] {
+            assert!(text.contains(&want), "{want}: {text}");
+        }
+    }
+}

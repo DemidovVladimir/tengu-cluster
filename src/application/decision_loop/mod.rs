@@ -21,9 +21,17 @@
 //!    agent) and append to `history`: a typed result contributes its
 //!    `decision_value` (or the reducer over `decision_root`), `ok = status
 //!    != error` and `obs` meta; a text result goes through
-//!    `reduce::parse_tool_output`. Continue.
+//!    `reduce::parse_tool_output`. A typed result with `features.risk =
+//!    "deny"` (an exec tool's `[risk]` gate refused the order) is outcome
+//!    `Refused { rule }`, else `Executed`. Continue.
 //!
-//! Every call emits a `MetricsKind::Decision` record and one JSONL audit line.
+//! Every decisions call writes one JSONL audit line (`AuditLog`) — a failed
+//! call too (`outcome = "error"`), before its error propagates — and a
+//! successful one also emits a `MetricsKind::Decision` record. A line is one
+//! `write_all` on an append-mode file, so concurrent loops and processes
+//! never interleave inside it. A step that ran a tool carries its `call_id`
+//! (`{loop}:{session_id}:{t}`), which the exec tools' risk verdicts carry
+//! too (`ledger.db` `risk_decisions`, `<TENGU_HOME>/logs/risk.jsonl`).
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
 
@@ -33,7 +41,7 @@ pub(crate) mod world;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -46,7 +54,7 @@ use crate::config::decision_loop::DecisionLoopConfig;
 use crate::domain::decision::{Decision, HistoryEntry, Question, StepOutcome};
 use crate::domain::message::ToolCall;
 use crate::domain::metrics::{now_unix, MetricsKind, MetricsRecord};
-use crate::domain::observation::now_ms;
+use crate::domain::observation::{now_ms, Observation};
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
@@ -63,8 +71,16 @@ pub(crate) struct DecisionLoop {
     /// Source of `state.world`; `None` = every world entry reads as an error.
     observations: Option<Arc<dyn ObservationStore>>,
     escalator: Option<Arc<dyn Escalator>>,
-    audit_path: Option<PathBuf>,
+    audit: Option<AuditLog>,
     state: Mutex<LoopState>,
+}
+
+/// Where the decision audit goes (`<TENGU_HOME>/logs/decisions.jsonl`) and
+/// the sandbox name (`Config::sandbox_name`) every line carries.
+#[derive(Debug, Clone)]
+pub(crate) struct AuditLog {
+    pub path: PathBuf,
+    pub sandbox: Option<String>,
 }
 
 #[derive(Default)]
@@ -86,7 +102,7 @@ impl DecisionLoop {
         tools: Arc<dyn ToolExecutor>,
         observations: Option<Arc<dyn ObservationStore>>,
         escalator: Option<Arc<dyn Escalator>>,
-        audit_path: Option<PathBuf>,
+        audit: Option<AuditLog>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -95,7 +111,7 @@ impl DecisionLoop {
             tools,
             observations,
             escalator,
-            audit_path,
+            audit,
             state: Mutex::new(LoopState::default()),
         }
     }
@@ -112,7 +128,10 @@ impl DecisionLoop {
         let mut outcomes = Vec::new();
         for step in 0..self.cfg.max_steps {
             let outcome = self.step(&mut st, &event, step, session_id).await?;
-            let stop = !matches!(outcome, StepOutcome::Executed { .. });
+            let stop = !matches!(
+                outcome,
+                StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
+            );
             outcomes.push(outcome);
             if stop {
                 break;
@@ -197,21 +216,34 @@ impl DecisionLoop {
             o.insert("world".into(), w);
         }
 
-        // 3. Decide.
+        // 3. Decide. A failed call (timeout, 402, 5xx) is audited, then propagates.
         let started = Instant::now();
-        let decision = self.engine.decide(&state, &questions).await?;
-        self.record_metrics(
-            session_id,
-            &state,
-            &decision,
-            started.elapsed().as_millis() as u64,
-        );
+        let decided = self.engine.decide(&state, &questions).await;
+        let latency_ms = started.elapsed().as_millis() as u64;
+        let decision = match decided {
+            Ok(d) => d,
+            Err(e) => {
+                let outcome = StepOutcome::Error {
+                    reason: format!("{e:#}"),
+                };
+                self.audit(session_id, st.t, None, &outcome, None, latency_ms);
+                return Err(e);
+            }
+        };
+        self.record_metrics(session_id, &state, &decision, latency_ms);
 
         let t_before = st.t;
         let outcome = self.apply(st, &legal, &decision, &state, session_id).await;
         // A step that ran (or dry-ran) appended one history entry with the resolved args.
         let entry = st.history.back().filter(|_| st.t > t_before);
-        self.audit(session_id, st.t, &decision, &outcome, entry);
+        self.audit(
+            session_id,
+            st.t,
+            Some(&decision),
+            &outcome,
+            entry,
+            latency_ms,
+        );
         info!(
             decision_loop = %self.name,
             session_id = %session_id,
@@ -326,16 +358,18 @@ impl DecisionLoop {
         }
 
         let call = ToolCall {
-            id: format!("{}-{t}", self.name),
+            id: self.call_id(session_id, t),
             name: tool.clone(),
             arguments: args.clone(),
         };
         let now = now_ms();
+        let mut refused = None;
         let (ok, result, obs) = match self.tools.execute_typed(&call, &[]).await {
             // Typed: features (or the reducer over `{.., features, data}`);
             // a status-`error` observation is a failure.
             Ok(out) => match out.observation {
                 Some(o) => {
+                    refused = risk_refusal(&o);
                     let result = if action.reduce.is_empty() {
                         o.decision_value(now)
                     } else {
@@ -362,9 +396,22 @@ impl DecisionLoop {
                 obs,
             },
         );
-        StepOutcome::Executed {
-            action: action_name,
+        match refused {
+            Some(rule) => StepOutcome::Refused {
+                action: action_name,
+                rule,
+            },
+            None => StepOutcome::Executed {
+                action: action_name,
+            },
         }
+    }
+
+    /// `{loop}:{session_id}:{t}` — step `t`'s tool call id (`ToolCtx.call_id`
+    /// in the tool); never repeats across events or restarts (session ids
+    /// are per event). The audit line and a risk verdict carry it.
+    fn call_id(&self, session_id: &str, t: u64) -> String {
+        format!("{}:{session_id}:{t}", self.name)
     }
 
     fn push(&self, st: &mut LoopState, entry: HistoryEntry) {
@@ -421,25 +468,41 @@ impl DecisionLoop {
         });
     }
 
-    /// One JSONL line per decision. Fail-soft: audit errors only warn.
+    /// One JSONL line per decisions call; `d = None` = the call failed
+    /// (`outcome = "error"`, no answers). `ts` (unix s) stays for old
+    /// readers; `ts_ms`, `latency_ms` (the decisions call), `sandbox` and
+    /// `act_at` join it; `call_id` when the step ran a tool (`Executed` /
+    /// `Refused`) — the key its risk verdict carries. Fail-soft: audit
+    /// errors only warn.
     fn audit(
         &self,
         session_id: &str,
         t: u64,
-        d: &Decision,
+        d: Option<&Decision>,
         outcome: &StepOutcome,
         entry: Option<&HistoryEntry>,
+        latency_ms: u64,
     ) {
-        let Some(path) = &self.audit_path else { return };
+        let Some(audit) = &self.audit else { return };
+        let ran = matches!(
+            outcome,
+            StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
+        );
         let line = json!({
             "ts": now_unix(),
+            "ts_ms": now_ms(),
             "loop": self.name,
+            "sandbox": audit.sandbox,
             "session_id": session_id,
             "t": t,
-            "decision_id": d.id,
-            "model": d.model,
-            "answers": d.answers,
-            "usage": d.usage,
+            "call_id": ran.then(|| self.call_id(session_id, t)),
+            "decision_id": d.map(|d| &d.id),
+            // The build Jev reported; the configured slug when the call failed.
+            "model": d.map_or(self.engine.model(), |d| d.model.as_str()),
+            "act_at": self.cfg.act_at,
+            "latency_ms": latency_ms,
+            "answers": d.map(|d| &d.answers),
+            "usage": d.map(|d| &d.usage),
             "result": outcome,
             "args": entry.map(|e| &e.args),
             // What the tool returned, as `history` holds it (reduced, redacted).
@@ -448,24 +511,40 @@ impl DecisionLoop {
             // Typed result meta (key / status / source / age / slot).
             "obs": entry.and_then(|e| e.obs.as_ref()),
         });
-        let res = (|| -> std::io::Result<()> {
-            if let Some(dir) = path.parent() {
-                std::fs::create_dir_all(dir)?;
-            }
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
-            writeln!(f, "{line}")
-        })();
-        if let Err(e) = res {
-            warn!(path = %path.display(), error = %e, "decision audit write failed");
+        if let Err(e) = append_line(&audit.path, &format!("{line}\n")) {
+            warn!(path = %audit.path.display(), error = %e, "decision audit write failed");
         }
     }
 }
 
+/// Append one whole line (newline included) with a single `write_all` on an
+/// append-mode file: concurrent writers never interleave inside a line.
+/// `writeln!` over `serde_json::Value`'s `Display` issued one write per
+/// token on the unbuffered `File`. Also the risk verdict mirror's writer
+/// (`outbound/paper_store.rs`).
+pub(crate) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?
+        .write_all(line.as_bytes())
+}
+
 fn slot_key(action: &str, slot: &str) -> String {
     format!("{action}__{slot}")
+}
+
+/// `Some(rule)` when a typed result says the `[risk]` gate refused the
+/// order (`features.risk = "deny"`, rule `features.risk_rule`).
+fn risk_refusal(o: &Observation) -> Option<String> {
+    let deny = o.features.get("risk").and_then(Value::as_str) == Some("deny");
+    deny.then(|| {
+        let rule = o.features.get("risk_rule").and_then(Value::as_str);
+        rule.unwrap_or("?").to_string()
+    })
 }
 
 fn rejected(action: &str, reason: &str) -> StepOutcome {
@@ -476,10 +555,21 @@ fn rejected(action: &str, reason: &str) -> StepOutcome {
 }
 
 /// One audit line (see `DecisionLoop::audit`) as a short readable block:
-/// the chosen action + confidence, its slot answers, the args it ran with
-/// and what came back. The TUI decision feed renders it. `None` when the
-/// line has no `next_action` answer. Values are never shortened.
+/// the chosen action + confidence (a risk refusal names its rule), its slot
+/// answers, the args it ran with, its call id and what came back; a failed
+/// decisions call as one `decide failed` line. The TUI decision feed renders
+/// it. `None` when the line has neither a `next_action` answer nor an
+/// error. Values are never shortened.
 pub(crate) fn render_audit(v: &Value) -> Option<String> {
+    if v.pointer("/result/outcome").and_then(Value::as_str) == Some("error") {
+        let reason = v.pointer("/result/reason").and_then(Value::as_str);
+        return Some(format!(
+            "jev {} #{} · decide failed → error: {}",
+            v["loop"].as_str().unwrap_or("?"),
+            v["t"],
+            reason.unwrap_or("?")
+        ));
+    }
     let next = v.pointer("/answers/next_action")?;
     let action = next.get("choice")?.as_str()?;
     let conf = |a: &Value| match a.get("confidence").and_then(Value::as_f64) {
@@ -491,6 +581,12 @@ pub(crate) fn render_audit(v: &Value) -> Option<String> {
         Some("rejected") => format!(
             "rejected: {}",
             v.pointer("/result/reason")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+        ),
+        Some("refused") => format!(
+            "refused by the risk gate: {}",
+            v.pointer("/result/rule")
                 .and_then(Value::as_str)
                 .unwrap_or("?")
         ),
@@ -514,6 +610,9 @@ pub(crate) fn render_audit(v: &Value) -> Option<String> {
     }
     if let Some(args) = v.get("args").filter(|a| !a.is_null()) {
         out += &format!("\n  args   {args}");
+    }
+    if let Some(id) = v.get("call_id").and_then(Value::as_str) {
+        out += &format!("\n  call   {id}");
     }
     if let Some(o) = v.get("output").filter(|o| !o.is_null()) {
         let label = match v.get("ok").and_then(Value::as_bool) {
@@ -655,6 +754,103 @@ caps = {{ size = 2.0 }}
             None,
         );
         (l, engine, tools, esc)
+    }
+
+    // ── tool-call ids ─────────────────────────────────────────────────
+
+    fn fetch_then_hold() -> Vec<Decision> {
+        vec![
+            pick(&[("next_action", "fetch", 0.95)]),
+            pick(&[("next_action", "hold", 0.99)]),
+        ]
+    }
+
+    /// `{loop}:{session_id}:{t}`: two sessions never share an id, and a
+    /// restarted loop (`t` from 0 again) never repeats an earlier one.
+    #[tokio::test]
+    async fn call_ids_carry_the_session_and_survive_restarts() {
+        let (l, _, tools, _) = build(false, [fetch_then_hold(), fetch_then_hold()].concat());
+        l.handle_event(&json!({}), "webhook-a").await.unwrap();
+        l.handle_event(&json!({}), "webhook-b").await.unwrap();
+        let (restarted, _, after, _) = build(false, fetch_then_hold());
+        restarted
+            .handle_event(&json!({}), "webhook-c")
+            .await
+            .unwrap();
+        let ids: Vec<String> = tools
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .chain(after.0.lock().unwrap().iter())
+            .map(|c| c.id.clone())
+            .collect();
+        assert_eq!(ids, ["t:webhook-a:1", "t:webhook-b:3", "t:webhook-c:1"]);
+    }
+
+    /// Through the real executor the id reaches the tool as `ToolCtx.call_id`.
+    #[tokio::test]
+    async fn loop_call_id_reaches_the_tool_ctx() {
+        use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
+        use crate::domain::message::ToolDef;
+        use crate::ports::tool::{Tool, ToolCtx};
+
+        struct Recorder {
+            def: ToolDef,
+            seen: Arc<StdMutex<Vec<Option<String>>>>,
+        }
+        #[async_trait]
+        impl Tool for Recorder {
+            fn definition(&self) -> &ToolDef {
+                &self.def
+            }
+            async fn execute(&self, _args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+                // scope: pure-compute
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push(ctx.call_id.map(str::to_string));
+                Ok(ToolOutput::from(
+                    "HTTP 200 https://x\n{\"pools\":[]}".to_string(),
+                ))
+            }
+        }
+        struct Quiet;
+        impl crate::ports::tool_activity::ToolActivityPort for Quiet {
+            fn publish_tool_activity(&self, _call: &ToolCall) {}
+        }
+
+        let seen = Arc::new(StdMutex::new(vec![]));
+        let mut registry = ToolRegistry::new();
+        registry.register_tool(Arc::new(Recorder {
+            def: ToolDef::new("http_request", "d", json!({})),
+            seen: Arc::clone(&seen),
+        }));
+        let exec = PluginToolExecutor {
+            registry,
+            workspace: PathBuf::from("."),
+            shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
+            http: reqwest::Client::new(),
+            memory_manager: None,
+            secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
+            activity: Arc::new(Quiet),
+            scopes: Default::default(),
+            agent_config: None,
+        };
+        let l = DecisionLoop::new(
+            "exec",
+            cfg(false),
+            Arc::new(Scripted::new(fetch_then_hold())),
+            Arc::new(exec),
+            None,
+            None,
+            None,
+        );
+        l.handle_event(&json!({}), "decide-exec-7").await.unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [Some("exec:decide-exec-7:1".to_string())]
+        );
     }
 
     // ── typed tools, world, requires, FromObservation ─────────────────
@@ -1016,6 +1212,405 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
         assert!(
             msgs[0].contains("\"A1\""),
             "escalation shows the full resolved value"
+        );
+    }
+
+    // ── audit ──────────────────────────────────────────────────────────
+
+    /// The decisions endpoint failing (402, timeout, 5xx).
+    struct Failing;
+
+    #[async_trait]
+    impl DecisionEngine for Failing {
+        fn model(&self) -> &str {
+            "~typesafe/jev-latest"
+        }
+        async fn decide(&self, _s: &Value, _q: &BTreeMap<String, Question>) -> Result<Decision> {
+            Err(anyhow::anyhow!("decisions HTTP 402: insufficient credits"))
+        }
+    }
+
+    fn audited(name: &str, engine: Arc<dyn DecisionEngine>, path: &Path) -> DecisionLoop {
+        DecisionLoop::new(
+            name,
+            cfg(false),
+            engine,
+            Arc::new(FakeTools(StdMutex::new(vec![]))),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.to_path_buf(),
+                sandbox: Some("xmarket".into()),
+            }),
+        )
+    }
+
+    /// 4 writers × 500 lines into one file (loops of one process; other
+    /// processes append the same way): every line parses whole.
+    #[test]
+    fn concurrent_audit_lines_never_interleave() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("logs").join("decisions.jsonl");
+        let loops: Vec<DecisionLoop> = (0..4)
+            .map(|i| audited(&format!("loop{i}"), Arc::new(Scripted::new(vec![])), &path))
+            .collect();
+        let d = pick(&[
+            ("next_action", "open", 0.91),
+            ("open__pool", "pool_2", 0.88),
+            ("open__size", "2", 0.97),
+        ]);
+        let entry = HistoryEntry {
+            t: 1,
+            action: "open".into(),
+            args: json!({"pool": POOL_B, "size": 2}),
+            ok: Some(true),
+            result: json!({"pools": (0..40).map(|i| json!({"address": POOL_A, "fees": i})).collect::<Vec<_>>()}),
+            obs: None,
+        };
+        let outcome = StepOutcome::Executed {
+            action: "open".into(),
+        };
+        let (d, entry, outcome) = (&d, &entry, &outcome);
+        std::thread::scope(|s| {
+            for l in &loops {
+                s.spawn(move || {
+                    for t in 0..500 {
+                        l.audit("s", t, Some(d), outcome, Some(entry), 7);
+                    }
+                });
+            }
+        });
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 2000);
+        let mut per_loop: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+        for line in text.lines() {
+            let v: Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("torn audit line ({e}): {line}"));
+            assert_eq!(v["output"]["pools"].as_array().unwrap().len(), 40);
+            per_loop
+                .entry(v["loop"].as_str().unwrap().to_string())
+                .or_default()
+                .push(v["t"].as_u64().unwrap());
+        }
+        assert_eq!(per_loop.len(), 4);
+        for (name, mut ts) in per_loop {
+            ts.sort_unstable();
+            assert_eq!(ts, (0..500).collect::<Vec<u64>>(), "{name}");
+        }
+    }
+
+    /// Old keys stay, ms fields join; a failed decisions call leaves one
+    /// `error` line, then its error propagates; the feed renders it.
+    #[tokio::test]
+    async fn audit_lines_for_decided_and_failed_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let hold = Arc::new(Scripted::new(vec![pick(&[("next_action", "hold", 0.99)])]));
+        audited("t", hold, &path)
+            .handle_event(&json!({}), "s1")
+            .await
+            .unwrap();
+        let err = audited("t", Arc::new(Failing), &path)
+            .handle_event(&json!({}), "s2")
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("402"), "{err:#}");
+
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        let (ok, failed) = (&lines[0], &lines[1]);
+        for key in [
+            "ts",
+            "ts_ms",
+            "loop",
+            "sandbox",
+            "session_id",
+            "t",
+            "call_id",
+            "decision_id",
+            "model",
+            "act_at",
+            "latency_ms",
+            "answers",
+            "usage",
+            "result",
+            "args",
+            "ok",
+            "output",
+            "obs",
+        ] {
+            assert!(ok.get(key).is_some(), "{key}: {ok}");
+            assert!(failed.get(key).is_some(), "{key}: {failed}");
+        }
+        assert_eq!(
+            ok["result"],
+            json!({"outcome": "stopped", "action": "hold"})
+        );
+        assert!(ok["call_id"].is_null(), "a terminal step ran no tool");
+        assert_eq!(ok["sandbox"], json!("xmarket"));
+        assert_eq!(ok["act_at"], json!(0.8));
+        assert!(ok["ts_ms"].as_u64().unwrap() >= ok["ts"].as_u64().unwrap() * 1000);
+        assert!(ok["latency_ms"].is_u64());
+
+        assert_eq!(
+            failed["result"],
+            json!({"outcome": "error", "reason": "decisions HTTP 402: insufficient credits"})
+        );
+        assert_eq!(failed["session_id"], json!("s2"));
+        assert!(failed["answers"].is_null() && failed["decision_id"].is_null());
+        assert_eq!(failed["model"], json!("~typesafe/jev-latest"));
+        assert_eq!(
+            render_audit(failed).unwrap(),
+            "jev t #0 · decide failed → error: decisions HTTP 402: insufficient credits"
+        );
+    }
+
+    // ── risk refusals + the verdict join ──────────────────────────────
+
+    const TSLA: &str = "hyperliquid:xyz:TSLA";
+    const OPP: &str = "xm_compare/1:hyperliquid:xyz:TSLA:hyperliquid:xyz:TSLA";
+
+    /// `enter_small` ($20) and `enter_big` ($30) run `paper_order`; `done`
+    /// stops.
+    fn entry_cfg() -> DecisionLoopConfig {
+        let args = |usd: u32| {
+            format!(
+                "{{ instrument = \"{TSLA}\", side = \"buy\", notional_usd = {usd}, kind = \
+                 \"market\", max_slippage_bps = 30, opportunity = \"{OPP}\" }}"
+            )
+        };
+        toml::from_str(&format!(
+            r#"
+goal = "enter TSLA within the budget"
+agent = "exec"
+dry_run = false
+[actions.done]
+description = "stop"
+[actions.enter_small]
+description = "buy $20 of TSLA"
+tool = "paper_order"
+args = {}
+[actions.enter_big]
+description = "buy $30 of TSLA"
+tool = "paper_order"
+args = {}
+"#,
+            args(20),
+            args(30)
+        ))
+        .unwrap()
+    }
+
+    /// Every call returns the `paper_fill/1` row of an order the gate denied
+    /// `min_edge`.
+    struct DenyingTools;
+
+    #[async_trait]
+    impl ToolExecutor for DenyingTools {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            let now = now_ms();
+            let features = [
+                ("risk", "deny"),
+                ("risk_rule", "min_edge"),
+                ("status", "denied"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), json!(v)))
+            .collect();
+            let obs = Observation {
+                key: format!("paper_fill/1:xmarket:{}", call.id),
+                schema: "paper_fill/1".into(),
+                tool: "paper_order".into(),
+                observed_at_ms: now,
+                slot: None,
+                ttl_ms: 0,
+                source: ObsSource::Live,
+                status: ObsStatus::Error,
+                errors: vec![ReadError::new(
+                    "risk",
+                    ErrorClass::NotApplicable,
+                    "denied min_edge: edge 4 bps < 10 bps",
+                )],
+                headline: format!("paper_fill denied buy {TSLA} risk=deny rule=min_edge"),
+                features,
+                data: Value::Null,
+            };
+            Ok(ToolOutput::observed(obs, now))
+        }
+    }
+
+    /// A gate denial is `Refused` (counted apart from `Executed`), the loop
+    /// goes on; the audit line names the rule and the call; the feed shows it.
+    #[tokio::test]
+    async fn a_gate_denial_is_refused_and_the_loop_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let l = DecisionLoop::new(
+            "entry",
+            entry_cfg(),
+            Arc::new(Scripted::new(vec![
+                pick(&[("next_action", "enter_small", 0.95)]),
+                pick(&[("next_action", "done", 0.99)]),
+            ])),
+            Arc::new(DenyingTools),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.clone(),
+                sandbox: None,
+            }),
+        );
+        let out = l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(
+            out,
+            vec![
+                StepOutcome::Refused {
+                    action: "enter_small".into(),
+                    rule: "min_edge".into()
+                },
+                StepOutcome::Stopped {
+                    action: "done".into()
+                },
+            ]
+        );
+        assert_eq!(l.history().await[0].ok, Some(false));
+        let line: Value = serde_json::from_str(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            line["result"],
+            json!({"outcome": "refused", "action": "enter_small", "rule": "min_edge"})
+        );
+        assert_eq!(line["call_id"], json!("entry:s:1"));
+        let text = render_audit(&line).unwrap();
+        assert!(
+            text.starts_with(
+                "jev entry #1 · enter_small (0.95) → refused by the risk gate: min_edge"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("\n  call   entry:s:1"), "{text}");
+    }
+
+    /// Runs `paper_order` through the real `run_exec` on an xm test rig
+    /// (scripted clock + book, ledger mirroring to `risk.jsonl`), keyed by
+    /// the loop's call id.
+    struct RigTools(crate::adapters::outbound::tools::xm::exec_common::tests::Rig);
+
+    #[async_trait]
+    impl ToolExecutor for RigTools {
+        async fn execute(&self, call: &ToolCall, m: &[Message]) -> Result<String> {
+            Ok(self.execute_typed(call, m).await?.text)
+        }
+        async fn execute_typed(&self, call: &ToolCall, _m: &[Message]) -> Result<ToolOutput> {
+            let limits = self.0.shared.risk.as_ref().unwrap().limits();
+            let order =
+                crate::adapters::outbound::tools::xm::paper::parse_order(&call.arguments, limits)?;
+            let obs = self.0.run(order, &call.id).await?;
+            Ok(ToolOutput::observed(obs, now_ms()))
+        }
+    }
+
+    /// Tracker convention 9: the decision audit line of a step that placed
+    /// an order and the order's risk verdict (`risk.jsonl`, the ledger row)
+    /// share the call id `{loop}:{session}:{t}` — allowed and denied alike.
+    #[tokio::test]
+    async fn loop_audit_and_risk_verdicts_join_by_call_id() {
+        use crate::adapters::outbound::tools::xm::exec_common::tests::Rig;
+        use crate::ports::paper::PaperLedger;
+
+        let rig = Rig::new(25).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let tools = Arc::new(RigTools(rig));
+        let l = DecisionLoop::new(
+            "entry",
+            entry_cfg(),
+            Arc::new(Scripted::new(vec![
+                pick(&[("next_action", "enter_small", 0.95)]),
+                pick(&[("next_action", "enter_big", 0.95)]),
+                pick(&[("next_action", "done", 0.99)]),
+            ])),
+            tools.clone(),
+            None,
+            None,
+            Some(AuditLog {
+                path: path.clone(),
+                sandbox: Some("xmarket".into()),
+            }),
+        );
+        let out = l
+            .handle_event(&json!({}), "0001318605-26-000123")
+            .await
+            .unwrap();
+        assert_eq!(
+            out[..2],
+            [
+                StepOutcome::Executed {
+                    action: "enter_small".into()
+                },
+                StepOutcome::Refused {
+                    action: "enter_big".into(),
+                    rule: "order_notional".into()
+                },
+            ]
+        );
+        let audit: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let risk = tools.0.risk_lines();
+        assert_eq!(risk.len(), 2, "one verdict per order");
+        let joined: Vec<(String, String, String)> = audit
+            .iter()
+            .filter_map(|a| {
+                let call = a["call_id"].as_str()?;
+                let r = risk.iter().find(|r| r["call_id"] == call)?;
+                Some((
+                    call.to_string(),
+                    a["result"]["outcome"].as_str()?.to_string(),
+                    r["verdict"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        assert_eq!(
+            joined,
+            [
+                (
+                    "entry:0001318605-26-000123:1".to_string(),
+                    "executed".to_string(),
+                    "allow".to_string()
+                ),
+                (
+                    "entry:0001318605-26-000123:2".to_string(),
+                    "refused".to_string(),
+                    "deny".to_string()
+                ),
+            ]
+        );
+        // The ledger rows carry the same keys.
+        let rows = tools.0.ledger.decisions("xmarket", 10).await.unwrap();
+        let mut calls: Vec<&str> = rows.iter().filter_map(|d| d.call_id.as_deref()).collect();
+        calls.sort_unstable();
+        assert_eq!(
+            calls,
+            [
+                "entry:0001318605-26-000123:1",
+                "entry:0001318605-26-000123:2"
+            ]
         );
     }
 

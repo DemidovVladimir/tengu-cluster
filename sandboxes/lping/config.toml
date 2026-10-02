@@ -417,5 +417,6 @@ rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
 #       wallets = ["<the dedicated wallet, full address>"]
 #  4. the loop action's args: wallet = that address, mode = "send"; the loop
 #     dry_run = false.
-# Config load then refuses claude_code agents, [[mcp_servers]], shell scopes
-# and a key inside any fs root (src/config/solana.rs).
+# Config load then refuses claude_code agents without builtin_tools_profile =
+# "none" (src/config/hardening.rs), [[mcp_servers]], shell scopes and a key
+# inside any fs root (src/config/solana.rs).

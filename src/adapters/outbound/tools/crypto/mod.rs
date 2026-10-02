@@ -2,9 +2,9 @@
 //! Crypto plugin — EVM transaction signing, message signing, and ABI helpers.
 //!
 //! Provides:
-//! - `sign_and_send_transaction` — gated by `ctx.scope.check_wallet()`
-//! - `sign_message`              — gated by `ctx.scope.check_wallet()`
-//! - `get_wallet_address`        — gated by `ctx.scope.check_wallet()`
+//! - `sign_and_send_transaction` — `ctx.scope.check_wallet()`, then the Privy gate
+//! - `sign_message`              — `ctx.scope.check_wallet()`, then the Privy gate
+//! - `get_wallet_address`        — `ctx.scope.check_wallet()`, then the Privy gate
 //! - `abi_encode`                — pure compute (no scope gate)
 //! - `hex_to_uint256`            — pure compute (no scope gate)
 //!
@@ -12,6 +12,10 @@
 //! migration window the `permissive_scope` helper grants a single canonical
 //! wallet label (`DEFAULT_WALLET_LABEL` in `helpers.rs`); per-agent wallet
 //! allow-lists arrive with A9 / Phase B.
+//!
+//! Privy gate (`helpers.rs`): env vars through `env_reads`, every request
+//! through `egress::policy().check_url` (`[egress] allow_hosts`) + the
+//! scope's `net_hosts`, one egress audit record each — like `http_request`.
 
 use anyhow::Result;
 use async_trait::async_trait;

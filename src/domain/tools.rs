@@ -24,6 +24,51 @@ pub(crate) const LP_SNAPSHOT: &str = "lp_snapshot";
 pub(crate) const HEDGE_DECIDE: &str = "hedge_decide";
 pub(crate) const LP_DECIDE: &str = "lp_decide";
 
+// Hyperliquid family (`adapters/outbound/tools/hyperliquid/`) — typed,
+// cached market reads; one `hyperliquid` plugin serves all of them.
+pub(crate) const HL_CTX: &str = "hl_ctx";
+pub(crate) const HL_BOOK: &str = "hl_book";
+
+// xmarket risk / paper family (`adapters/outbound/tools/xm/`) — typed rows
+// over the paper ledger; one `xm` plugin serves all of them.
+pub(crate) const RISK_STATUS: &str = "risk_status";
+pub(crate) const PAPER_ORDER: &str = "paper_order";
+pub(crate) const PAPER_CLOSE: &str = "paper_close";
+pub(crate) const PAPER_POSITIONS: &str = "paper_positions";
+pub(crate) const XM_EXITS: &str = "xm_exits";
+pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
+
+/// Exec tools: each places orders through the `[risk]` gate inside the tool
+/// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
+/// transaction). Only a private agent may hold one — no `description`, not
+/// `default`, no webhook endpoint's `agent` (`config/risk.rs`, and again at
+/// call time).
+pub(crate) const XM_EXEC_TOOLS: &[&str] = &[PAPER_ORDER, PAPER_CLOSE, XM_EXITS, XM_WEEKEND_FADE];
+
+/// Every xmarket tool — the opt-in rows of the `hyperliquid` and `xm`
+/// plugins (`catalog_tests` keep the two equal; a new xmarket plugin joins
+/// both). An agent holding one writes or reads rows in its workspace's
+/// observation store, so it shares the sandbox's one xmarket workspace
+/// (`config/xmarket.rs`).
+pub(crate) const XM_TOOLS: &[&str] = &[
+    HL_CTX,
+    HL_BOOK,
+    RISK_STATUS,
+    PAPER_ORDER,
+    PAPER_CLOSE,
+    PAPER_POSITIONS,
+    XM_EXITS,
+    XM_WEEKEND_FADE,
+];
+
+// Privy wallet tools (`adapters/outbound/tools/crypto/`) that sign; a
+// `[risk]` sandbox turns them off (`config/risk.rs`).
+pub(crate) const SIGN_AND_SEND_TRANSACTION: &str = "sign_and_send_transaction";
+pub(crate) const SIGN_MESSAGE: &str = "sign_message";
+
+/// Every Privy tool that signs with a wallet (`ToolScope::check_wallet`).
+pub(crate) const PRIVY_SIGNING_TOOLS: &[&str] = &[SIGN_AND_SEND_TRANSACTION, SIGN_MESSAGE];
+
 /// Every opt-in workspace tool name.
 pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     AGENTIC_MEMORY,
@@ -47,6 +92,14 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     DLMM_CLOSE_POSITION,
     DLMM_OPEN_POSITION,
     JUP_PERPS_ORDER,
+    HL_CTX,
+    HL_BOOK,
+    RISK_STATUS,
+    PAPER_ORDER,
+    PAPER_CLOSE,
+    PAPER_POSITIONS,
+    XM_EXITS,
+    XM_WEEKEND_FADE,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

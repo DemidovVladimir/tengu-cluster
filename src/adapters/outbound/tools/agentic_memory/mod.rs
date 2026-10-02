@@ -416,6 +416,10 @@ impl AgenticMemoryTool {
         ctx.scope.check_fs_write(ctx.workspace)?;
 
         let title = opt_str(args, "title").unwrap_or("agentic-memory");
+        let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
+        if let Some(why) = wiki_title_refusal(ctx.workspace, title, hardened) {
+            anyhow::bail!("agentic_memory: wiki title '{title}' is not allowed: {why}");
+        }
         let wiki_path = wiki_page_path(ctx.workspace, title);
         if let Some(parent) = wiki_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1135,6 +1139,15 @@ fn wiki_page_path(workspace: &Path, title: &str) -> PathBuf {
     workspace.join(WIKI_ROOT).join(format!("{slug}.md"))
 }
 
+/// Why `title`'s page may not be written: a page named like an instruction
+/// file (`claude.md`, `agents.md`) is one a CLI agent loads on its own; in a
+/// hardened sandbox (`hardened`: the caller's `AgentConfig::hardened`) the
+/// system-prompt file names too (`domain::scope::protected_write_in`).
+fn wiki_title_refusal(workspace: &Path, title: &str, hardened: bool) -> Option<&'static str> {
+    let path = wiki_page_path(workspace, title);
+    crate::domain::scope::protected_write_in(Path::new(path.file_name()?), hardened)
+}
+
 fn render_wiki_page(title: &str, items: &[PromotedItem]) -> String {
     let mut out = format!("# {title}\n\n");
     out.push_str("> LLM Wiki draft compiled from promoted Open Brain memories.\n\n");
@@ -1337,6 +1350,20 @@ mod tests {
     fn chunks_overlap() {
         let chunks = chunk_text("abcdefghij", 4, 1);
         assert_eq!(chunks, vec!["abcd", "defg", "ghij"]);
+    }
+
+    #[test]
+    fn wiki_title_naming_an_instruction_file_is_refused() {
+        let ws = Path::new("/tmp/ws");
+        for hardened in [false, true] {
+            assert!(wiki_title_refusal(ws, "CLAUDE", hardened).is_some());
+            assert!(wiki_title_refusal(ws, "Agents", hardened).is_some());
+            assert_eq!(wiki_title_refusal(ws, "Claude notes", hardened), None);
+            assert_eq!(wiki_title_refusal(ws, "agentic-memory", hardened), None);
+        }
+        // A hardened sandbox: the system-prompt file names too.
+        assert!(wiki_title_refusal(ws, "Memory", true).is_some());
+        assert_eq!(wiki_title_refusal(ws, "Memory", false), None);
     }
 
     #[test]

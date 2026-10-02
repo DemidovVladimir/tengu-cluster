@@ -34,11 +34,6 @@ impl RunCommandTool {
     }
 }
 
-/// Extract the first whitespace-delimited token (the binary name) from a shell command.
-fn extract_binary(command: &str) -> &str {
-    command.trim().split_whitespace().next().unwrap_or("")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +86,37 @@ mod tests {
             .await;
         assert!(result.is_err(), "expected scope denial, got: {:?}", result);
     }
+
+    /// The gate checks the first command word: an env-prefixed command runs
+    /// when its binary is listed, and an unlisted binary behind an
+    /// assignment is still refused.
+    #[tokio::test]
+    async fn run_command_scope_checks_the_binary_after_assignments() {
+        let tmp = TempDir::new().unwrap();
+        let scope = ToolScope {
+            fs_roots: vec![tmp.path().to_path_buf()],
+            shell_bins: vec!["echo".to_string()],
+            ..Default::default()
+        };
+        let harness = TestHarness::with_scope(tmp.path(), scope);
+        let tool = RunCommandTool::new();
+        let out = tool
+            .execute(
+                &json!({"command": "GREETING='hi there' echo prefixed"}),
+                &harness.ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(out.text.contains("prefixed"), "{}", out.text);
+        let err = tool
+            .execute(
+                &json!({"command": "GREETING=hi sh -c 'echo nope'"}),
+                &harness.ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("binary 'sh'"), "{err}");
+    }
 }
 
 #[async_trait]
@@ -102,7 +128,9 @@ impl Tool for RunCommandTool {
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         let command = require_str(args, "run_command", "command")?;
 
-        let bin = extract_binary(command);
+        // The first command word (`DEK='…' node …` → `node`): a guard rail,
+        // not a sandbox (`domain::scope::shell_command_binary`).
+        let bin = crate::domain::scope::shell_command_binary(command);
         if bin.is_empty() {
             anyhow::bail!("run_command: empty command");
         }

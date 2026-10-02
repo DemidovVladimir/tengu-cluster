@@ -4,9 +4,17 @@
 
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
+pub(crate) mod feeds;
+pub(crate) mod hardening;
 pub(crate) mod paths;
+pub(crate) mod rate_limits;
+pub(crate) mod recorder;
+pub(crate) mod risk;
+pub(crate) mod runtime;
+pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
+pub(crate) mod xmarket;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -119,8 +127,11 @@ impl RuntimeProfile {
 // Configuration schema
 // ---------------------------------------------------------------------------
 
-/// Root configuration object loaded from `config.toml`.
+/// Root configuration object loaded from `config.toml`. Unknown top-level
+/// keys are a parse error (tracker convention 6: a misspelled `[risk]` must
+/// not load as "no limits"); tests in `config/risk.rs`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_profile")]
     pub runtime_profile: String,
@@ -184,6 +195,43 @@ pub struct Config {
     #[serde(default)]
     pub solana: solana::SolanaConfig,
 
+    /// `[xmarket]` — xmarket runtime settings (`config/xmarket.rs`): the
+    /// install-wide state directory `<TENGU_HOME>/state/<state>`. Absent =
+    /// not an xmarket sandbox.
+    #[serde(default)]
+    pub xmarket: Option<xmarket::XmarketConfig>,
+
+    /// `[risk]` — every limit the gate inside each exec tool checks
+    /// (`config/risk.rs`; every field required). Absent = exec tools refuse.
+    #[serde(default)]
+    pub risk: Option<risk::RiskConfig>,
+
+    /// `[paper]` — paper fill engine knobs (`config/risk.rs`); required with
+    /// `[risk]`.
+    #[serde(default)]
+    pub paper: Option<risk::PaperConfig>,
+    /// `[rate_limits.<name>]` — request budgets (one token bucket per name,
+    /// per-request weights) shared process-wide by feeds and tools
+    /// (`config/rate_limits.rs`, `outbound/rate_limit.rs`). A name without a
+    /// section is unlimited.
+    #[serde(default)]
+    pub rate_limits: HashMap<String, rate_limits::RateLimitConfig>,
+    /// `[runtime]` — `tengu run` knobs (`config/runtime.rs`): shutdown grace,
+    /// loop events in flight. Defaults apply when absent.
+    #[serde(default)]
+    pub runtime: runtime::RuntimeConfig,
+    /// `[recorder]` — observation history (`config/recorder.rs`): which
+    /// schemas `RecordingObservationStore` appends to
+    /// `<TENGU_HOME>/state/<xmarket.state>/history/`. Default: off.
+    #[serde(default)]
+    pub recorder: recorder::RecorderConfig,
+    /// `[feeds.<name>]` — scheduled work of `tengu run` (`config/feeds.rs`):
+    /// `kind = "tool"` calls a tool of an agent, `kind = "tick"` sends a
+    /// decision-loop event, on `every_secs` / `windows` / `at` clock ticks.
+    /// Absent = no feeds.
+    #[serde(default)]
+    pub feeds: std::collections::BTreeMap<String, feeds::FeedConfig>,
+
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
     #[serde(default)]
@@ -202,6 +250,14 @@ pub struct Config {
     /// config doesn't leak it.
     #[serde(skip)]
     pub sandbox_name: Option<String>,
+
+    /// Runtime (never in TOML): the file `Config::load` read, as given.
+    /// `fold_default_scopes` names the sandbox from it
+    /// (`paths::sandbox_of_config_file` → `SandboxSections::sandbox`, the
+    /// paper ledger's account owner) — the same in every process that loads
+    /// the file, the MCP bridge included. `None` for a config built in code.
+    #[serde(skip)]
+    pub loaded_from: Option<PathBuf>,
 }
 
 /// A single external MCP server that tengu connects to as a client.
@@ -324,9 +380,11 @@ pub struct AgentConfig {
     /// planner can match short casual messages. Only used with `description`.
     #[serde(default)]
     pub example_queries: Vec<String>,
-    /// Tool allow-list for subagent runs. Empty = every base tool. Names
-    /// from the workspace-tools allow-list (`shared_cache`, …) listed here
-    /// are opted in exactly like `workspace_tools`.
+    /// Tool allow-list on every surface: in-process chat (TUI, Telegram,
+    /// webhooks, eval, `tengu tool`), `run-agent` steps, decision loops and
+    /// the Claude Code bridge (`bootstrap::tools::agent_base_tools`). Empty =
+    /// every base tool. Opt-in names (`domain::tools::WORKSPACE_TOOLS`)
+    /// listed here are opted in exactly like `workspace_tools`.
     #[serde(default)]
     pub tools: Vec<String>,
     #[serde(default)]
@@ -350,7 +408,8 @@ pub struct AgentConfig {
     pub skill_packages: Vec<String>,
     #[serde(default)]
     pub prompt_budget: PromptBudgetConfig,
-    /// Optional first-party workspace tools this agent can use (e.g. "shared_cache").
+    /// Opt-in tools this agent can use — only names in
+    /// `domain::tools::WORKSPACE_TOOLS` (anything else fails validation).
     #[serde(default)]
     pub workspace_tools: Vec<String>,
     /// Per-tool scope restrictions (default-deny). Key = tool name.
@@ -364,10 +423,13 @@ pub struct AgentConfig {
     /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
-    /// Runtime (never in TOML): set by `Config::fold_default_scopes` when
-    /// `[solana] signer_key_file` is configured — tools without a configured
-    /// scope then get a fallback that runs no shell
-    /// (`bootstrap::tools::resolve_tool_scopes`).
+    /// Runtime (never in TOML): set by `Config::fold_default_scopes` on every
+    /// agent of a hardened sandbox (`config/hardening.rs`: a `[solana]`
+    /// signer or a `[risk]` section) — tools without a configured scope then
+    /// get a fallback that runs no shell (`bootstrap::tools::resolve_tool_scopes`,
+    /// in-process and in the bridge), and no shell skill loads
+    /// (`bootstrap::tools::agent_skill_registry`).
+    /// Read as [`AgentConfig::hardened`].
     #[serde(skip)]
     pub no_shell_fallback: bool,
     /// Runtime (never in TOML): `[solana] signer_key_file`, expanded — set
@@ -375,10 +437,26 @@ pub struct AgentConfig {
     /// the key at send time (`tools/solana/write_common.rs`).
     #[serde(skip)]
     pub signer_key_file: Option<PathBuf>,
+    /// Runtime (never in TOML): sandbox-level sections tools read at call
+    /// time (`config/sections.rs`) — one `Arc` shared by every agent, set by
+    /// `Config::fold_default_scopes`.
+    #[serde(skip)]
+    pub sandbox: std::sync::Arc<sections::SandboxSections>,
 }
 
 fn default_lens() -> String {
     "eco".to_string()
+}
+
+impl AgentConfig {
+    /// A hardened sandbox (`config/hardening.rs`: `[risk]` or a `[solana]`
+    /// signer) — `fold_default_scopes` marks every agent of one
+    /// (`no_shell_fallback`), the MCP bridge its fallback agent too. Its
+    /// writers also refuse the workspace's prompt files
+    /// (`domain::scope::protected_write_in`).
+    pub fn hardened(&self) -> bool {
+        self.no_shell_fallback
+    }
 }
 
 /// Optional identity metadata used for prompts/UI.
@@ -443,10 +521,19 @@ pub struct LimitsConfig {
     pub max_cost_per_flow: Option<f64>,
     #[serde(default)]
     pub warn_at_cost: Option<f64>,
+    /// Model window in tokens (default 1_000_000). `engine = "local"`: set
+    /// the server's real window (load warns on the default); one tool
+    /// result is capped at 1/8 of it (`domain::token::tool_result_char_budget`).
     #[serde(default = "default_context_window")]
     pub context_window: u32,
     #[serde(default)]
     pub max_output_tokens_per_turn: Option<u32>,
+    /// Tool cap per turn (chat) or plan step (`run-agent`; default 70).
+    ///
+    /// | Engine | Counts |
+    /// |---|---|
+    /// | `openrouter`, `local` | engine turns (rounds; one may call several tools) — chat then forces one answer without tools, a `run-agent` step just ends |
+    /// | `claude_code` | tool calls (`tool_use` blocks) of the CLI run — bridged and built-in; past the cap the run is killed with an error |
     #[serde(default = "default_max_tool_rounds")]
     pub max_tool_rounds: u32,
     #[serde(default = "default_max_tool_result_chars")]
@@ -497,6 +584,16 @@ impl Default for LimitsConfig {
 fn default_context_window() -> u32 {
     1_000_000
 }
+
+/// Tools whose output lives in the agent's workspace (files, skills): a load
+/// warning names them for a routable agent without `workspace`, whose plan
+/// steps run in a temp dir removed after each (`validation_warnings`).
+const STEP_WORKSPACE_WRITERS: &[&str] = &[
+    "write_file",
+    "manage_skill",
+    "skill_distill",
+    "apply_improver_proposal",
+];
 fn default_max_tool_rounds() -> u32 {
     70
 }
@@ -573,12 +670,43 @@ fn default_orchestrator_engine() -> String {
 pub struct TelegramConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Telegram user ids the bot answers, merged with
+    /// `TENGU_TELEGRAM_ALLOWED_USERS`. Fail closed: both empty =
+    /// `tengu telegram` refuses to start; an unlisted sender is refused.
     #[serde(default)]
     pub allowed_users: Vec<String>,
+    /// NOT implemented: parsed and ignored — nothing is approval-gated on
+    /// any engine or surface (the approval adapter is gone). Kept so old
+    /// sandboxes load; `Config::load` warns while it is `true`
+    /// ([`Self::approvals_warning`]).
     #[serde(default)]
     pub tool_approvals: bool,
+    /// NOT implemented, like `tool_approvals`: the listed tools run without
+    /// an approval. `Config::load` warns while it is non-empty.
     #[serde(default)]
     pub approve_only: Vec<String>,
+}
+
+impl TelegramConfig {
+    /// One warning naming the approval keys that are set, `None` when
+    /// neither is: they gate nothing, so an operator must not read them as
+    /// a guard.
+    pub fn approvals_warning(&self) -> Option<String> {
+        let mut keys = Vec::new();
+        if self.tool_approvals {
+            keys.push("tool_approvals = true".to_string());
+        }
+        if !self.approve_only.is_empty() {
+            keys.push(format!("approve_only = {:?}", self.approve_only));
+        }
+        (!keys.is_empty()).then(|| {
+            format!(
+                "[telegram] {}: not implemented — tools are not approval-gated (no tool call \
+                 waits for an approval, on any engine or surface; docs/configuration.md § Telegram)",
+                keys.join(", ")
+            )
+        })
+    }
 }
 
 // =====================================================================
@@ -751,7 +879,8 @@ impl Default for AgentClaudeCodeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentLocalConfig {
-    /// Server root, without `/v1`. Loopback bypasses the Tor proxy.
+    /// Server root; a trailing `/v1` (Ollama's documented form) is dropped.
+    /// Loopback bypasses the Tor proxy.
     #[serde(default = "default_local_base_url")]
     pub base_url: String,
     /// Env var holding the bearer key (Unsloth: `sk-unsloth-…`). Unset or
@@ -1010,7 +1139,13 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let content = Self::substitute_env_vars(&content)?;
         let mut config: Config = toml::from_str(&content)?;
-        config.validate()?;
+        let mut errors = config.validation_errors();
+        errors.extend(hardening::config_file_errors(&config, path));
+        Self::fail_on(errors)?;
+        for warning in config.validation_warnings() {
+            tracing::warn!(path = %path.display(), "{warning}");
+        }
+        config.loaded_from = Some(path.to_path_buf());
         config.fold_default_scopes();
         Ok(config)
     }
@@ -1021,11 +1156,13 @@ impl Config {
     /// `AgentConfig`, so the fallback has to be materialised here; `run-agent`
     /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
-        let signing_sandbox = self.solana.signer_key_file.is_some();
+        let hardened = hardening::requires_hardened_claude_code(self);
         let signer_key_file = self.solana.signer_path();
+        let sections = std::sync::Arc::new(self.sandbox_sections());
         for agent in self.agents.values_mut() {
-            agent.no_shell_fallback = signing_sandbox;
+            agent.no_shell_fallback = hardened;
             agent.signer_key_file = signer_key_file.clone();
+            agent.sandbox = std::sync::Arc::clone(&sections);
             for (tool, scope) in &self.default_scopes {
                 agent
                     .scopes
@@ -1045,9 +1182,41 @@ impl Config {
         }
     }
 
-    /// Validate cross-field configuration invariants.
+    /// The sandbox sections every agent's tools read (`config/sections.rs`).
+    fn sandbox_sections(&self) -> sections::SandboxSections {
+        let home = crate::config::paths::resolve_tengu_home();
+        sections::SandboxSections {
+            sandbox: self
+                .loaded_from
+                .as_deref()
+                .and_then(paths::sandbox_of_config_file),
+            xm_state_dir: self.xmarket.as_ref().map(|x| x.state_dir(&home)),
+            risk: self.risk.as_ref().map(risk::RiskConfig::resolved),
+            paper: self.paper.clone(),
+            calendars: self
+                .xmarket
+                .as_ref()
+                .map(|x| x.calendars())
+                .unwrap_or_default(),
+            rate_limits: self.rate_limits.clone(),
+            recorder: self.recorder.clone(),
+            history_dir: self
+                .xmarket
+                .as_ref()
+                .filter(|_| self.recorder.enabled)
+                .map(|x| x.history_dir(&home)),
+            weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
+        }
+    }
+
+    /// Validate cross-field configuration invariants. `Config::load` adds the
+    /// rules that need the file's path (`hardening::config_file_errors`).
     pub fn validate(&self) -> anyhow::Result<()> {
-        let errors = self.validation_errors();
+        Self::fail_on(self.validation_errors())
+    }
+
+    /// `Ok` for no errors, else one error listing them all.
+    fn fail_on(errors: Vec<String>) -> anyhow::Result<()> {
         if errors.is_empty() {
             return Ok(());
         }
@@ -1063,6 +1232,48 @@ impl Config {
                 .join("\n")
         );
         Err(anyhow::anyhow!(message))
+    }
+
+    /// Non-fatal smells, logged by `Config::load`: a `local` agent on the
+    /// 1_000_000 default `context_window` (its tool-result cap and history
+    /// budget derive from it; the server's real window is far smaller).
+    pub fn validation_warnings(&self) -> Vec<String> {
+        let default = default_context_window();
+        let mut out = Vec::new();
+        for (id, agent) in &self.agents {
+            if agent.engine == "local" && agent.limits.context_window == default {
+                out.push(format!(
+                    "agents.{id}.limits.context_window is the {default} default; set the local \
+                     server's real window (Ollama: num_ctx) — docs/engine-backends.md § Local"
+                ));
+            }
+            // A routable agent without `workspace` runs each plan step in a
+            // temp dir removed after it (`bootstrap::tools::workspace_or_temp`).
+            if agent.description.is_some() && agent.workspace.is_none() {
+                // Listed in `tools` or opted in; `write_file` is a base tool
+                // (an empty `tools` = every base tool).
+                let has = |t: &str| {
+                    agent.tools.iter().any(|x| x == t)
+                        || agent.workspace_tools.iter().any(|x| x == t)
+                        || (agent.tools.is_empty() && t == "write_file")
+                };
+                let writers: Vec<&str> = STEP_WORKSPACE_WRITERS
+                    .iter()
+                    .copied()
+                    .filter(|t| has(t))
+                    .collect();
+                if !writers.is_empty() {
+                    out.push(format!(
+                        "agents.{id} has no `workspace`: each plan step (and webhook turn) runs in a temp \
+                         dir removed after it, and what {writers:?} write there goes with it — set \
+                         `workspace` to keep it"
+                    ));
+                }
+            }
+        }
+        out.extend(self.telegram.approvals_warning());
+        out.sort();
+        out
     }
 
     fn validation_errors(&self) -> Vec<String> {
@@ -1106,6 +1317,27 @@ impl Config {
         for issue in solana::validation_errors(self) {
             errors.push(issue);
         }
+        for issue in hardening::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in xmarket::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in risk::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in rate_limits::validation_errors(&self.rate_limits) {
+            errors.push(issue);
+        }
+        for issue in self.runtime.validation_errors() {
+            errors.push(issue);
+        }
+        for issue in self.recorder.validation_errors(self.xmarket.is_some()) {
+            errors.push(issue);
+        }
+        for issue in feeds::validation_errors(self) {
+            errors.push(issue);
+        }
 
         for (name, dl) in &self.decision_loops {
             for issue in dl.validation_errors(name) {
@@ -1147,14 +1379,14 @@ impl Config {
             &["openrouter", "claude_code", "local"],
         );
         errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
-        if agent.engine == "claude_code" {
-            if let Some(ref cc) = agent.claude_code {
-                errors.require_one_of(
-                    &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
-                    &cc.builtin_tools_profile,
-                    &["none", "read_only", "editor", "editor_shell"],
-                );
-            }
+        // Read trimmed everywhere (`BuiltinToolsProfile::parse`, the
+        // hardening rule); an unknown value is a load error on any block.
+        if let Some(ref cc) = agent.claude_code {
+            errors.require_one_of(
+                &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
+                &cc.builtin_tools_profile,
+                &["none", "read_only", "editor", "editor_shell"],
+            );
         }
         errors.require_one_of(
             &format!("agents.{agent_id}.default_lens"),
@@ -1353,6 +1585,7 @@ impl Default for Config {
                 local: None,
                 no_shell_fallback: false,
                 signer_key_file: None,
+                sandbox: Default::default(),
             },
         );
 
@@ -1371,8 +1604,16 @@ impl Default for Config {
             egress: EgressConfig::default(),
             mcp_servers: Vec::new(),
             solana: solana::SolanaConfig::default(),
+            xmarket: None,
+            risk: None,
+            paper: None,
+            rate_limits: HashMap::new(),
+            runtime: Default::default(),
+            recorder: recorder::RecorderConfig::default(),
+            feeds: Default::default(),
             skill_lifecycle: None,
             sandbox_name: None,
+            loaded_from: None,
         }
     }
 }
@@ -1601,6 +1842,30 @@ ttl_days = 7
             .contains("builtin_tools_profile must be one of"));
     }
 
+    /// Profiles are read trimmed (`BuiltinToolsProfile::parse`); an unknown
+    /// value fails the load on any agent's `[agents.<a>.claude_code]` block.
+    #[test]
+    fn claude_profile_is_trimmed_and_unknown_fails_on_any_block() {
+        let with = |engine: &str, profile: &str| {
+            let mut config = Config::default();
+            let main = config.agents.get_mut("main").expect("main agent");
+            main.engine = engine.to_string();
+            main.claude_code = Some(AgentClaudeCodeConfig {
+                builtin_tools_profile: profile.to_string(),
+            });
+            config.validate()
+        };
+        assert!(with("claude_code", " none").is_ok());
+        assert!(with("claude_code", "editor\n").is_ok());
+        for engine in ["claude_code", "openrouter"] {
+            let err = with(engine, "nnone").expect_err(engine).to_string();
+            assert!(
+                err.contains("builtin_tools_profile must be one of"),
+                "{err}"
+            );
+        }
+    }
+
     #[test]
     fn existing_config_no_scopes_parses() {
         let toml_str = r#"
@@ -1707,6 +1972,31 @@ ttl_days = 7
         assert_eq!(scope.fs_roots.len(), 1);
     }
 
+    /// `Config::load` names the sandbox of the file in every agent's
+    /// sections — the paper ledger's account owner; another file is
+    /// `default`, a config built in code too.
+    #[test]
+    fn load_names_the_sandbox_of_the_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("sandboxes/xm-own");
+        std::fs::create_dir_all(&dir).unwrap();
+        let toml = "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n\
+                    [agents.exec]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+        std::fs::write(dir.join("config.toml"), toml).unwrap();
+        let c = Config::load(&dir.join("config.toml")).unwrap();
+        assert_eq!(c.loaded_from.as_deref(), Some(&*dir.join("config.toml")));
+        for agent in c.agents.values() {
+            assert_eq!(agent.sandbox.sandbox.as_deref(), Some("xm-own"));
+            assert_eq!(agent.sandbox.owner(), "xm-own");
+        }
+        std::fs::write(tmp.path().join("config.toml"), toml).unwrap();
+        let c = Config::load(&tmp.path().join("config.toml")).unwrap();
+        assert_eq!(c.agents["main"].sandbox.owner(), "default");
+        let mut c = Config::default();
+        c.fold_default_scopes();
+        assert_eq!(c.agents["main"].sandbox.owner(), "default");
+    }
+
     #[test]
     fn fold_default_scopes_materialises_fallback_per_agent() {
         let toml_str = r#"
@@ -1739,6 +2029,44 @@ ttl_days = 7
             scopes["write_file"].fs_roots[0].to_str().unwrap(),
             "./agent-specific"
         );
+    }
+
+    /// `[xmarket]` resolves to one state dir that every agent's tools see
+    /// through the shared `AgentConfig::sandbox` handle; absent = none.
+    #[test]
+    fn fold_shares_sandbox_sections_with_every_agent() {
+        let toml_str = r#"
+            [xmarket]
+            state = "xmarket-weekend"
+
+            [agents.main]
+            default = true
+            engine = "openrouter"
+            model = "anthropic/claude-sonnet-4-6"
+
+            [agents.exec]
+            engine = "openrouter"
+            model = "anthropic/claude-haiku-4.5"
+        "#;
+        let mut config: Config = toml::from_str(toml_str).expect("should parse");
+        config.validate().expect("valid");
+        config.fold_default_scopes();
+        let dir = config.agents["main"].sandbox.xm_state_dir.clone().unwrap();
+        assert!(dir.ends_with("state/xmarket-weekend"), "{}", dir.display());
+        assert!(std::sync::Arc::ptr_eq(
+            &config.agents["main"].sandbox,
+            &config.agents["exec"].sandbox
+        ));
+
+        let mut plain = Config::default();
+        plain.fold_default_scopes();
+        assert!(plain.agents["main"].sandbox.xm_state_dir.is_none());
+
+        let bad: Config = toml::from_str(
+            "[xmarket]\nstate = \"../x\"\n[agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\n",
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
     }
 
     #[test]
@@ -1816,5 +2144,99 @@ ttl_days = 7
         .unwrap();
         let err = zero.validate().unwrap_err().to_string();
         assert!(err.contains("step_timeout_secs"), "{err}");
+    }
+
+    #[test]
+    fn local_agent_on_the_default_context_window_warns_only() {
+        let cfg: Config = toml::from_str(
+            "[agents.gemma]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\
+             [agents.sized]\nengine = \"local\"\nmodel = \"gemma4:latest\"\n\
+             [agents.sized.limits]\ncontext_window = 16384\n\
+             [agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\n",
+        )
+        .unwrap();
+        assert!(cfg.validate().is_ok(), "a warning, not an error");
+        let warnings = cfg.validation_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("agents.gemma.limits.context_window is the 1000000 default"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    /// A routable agent without `workspace` whose tools write into it (files,
+    /// skills) is warned about: its plan steps run in a temp dir removed
+    /// after each. Read-only tools, a pinned workspace or no `description`
+    /// (never a plan step): no warning.
+    #[test]
+    fn routable_agent_writing_into_a_step_temp_dir_warns() {
+        let cfg: Config = toml::from_str(
+            "[agents.learner]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             tools = [\"view_skill\", \"manage_skill\", \"read_file\"]\n\
+             [agents.reader]\nengine = \"claude_code\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             tools = [\"http_request\", \"read_file\"]\n\
+             [agents.everything]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             [agents.pinned]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+             tools = [\"manage_skill\"]\nworkspace = \"/srv/ws\"\n\
+             [agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\ntools = [\"write_file\"]\n",
+        )
+        .unwrap();
+        let warnings = cfg.validation_warnings();
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("agents.everything has no `workspace`")
+                && warnings[0].contains("[\"write_file\"]"),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[1].starts_with("agents.learner has no `workspace`")
+                && warnings[1].contains("[\"manage_skill\"]"),
+            "{}",
+            warnings[1]
+        );
+    }
+
+    /// `[telegram] tool_approvals` / `approve_only` gate nothing: the load
+    /// still succeeds (aura sets them) and one warning names the keys that
+    /// are set; `false` / empty / absent warn nothing.
+    #[test]
+    fn telegram_approval_keys_load_with_one_warning() {
+        let aura = Config::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/aura/config.toml"),
+        )
+        .expect("aura loads");
+        let warnings: Vec<String> = aura
+            .validation_warnings()
+            .into_iter()
+            .filter(|w| w.starts_with("[telegram]"))
+            .collect();
+        assert_eq!(
+            warnings,
+            [
+                "[telegram] tool_approvals = true, approve_only = [\"sign_and_send_transaction\"]: \
+                 not implemented — tools are not approval-gated (no tool call waits for an \
+                 approval, on any engine or surface; docs/configuration.md § Telegram)"
+            ]
+        );
+
+        let agent = "[agents.m]\nengine = \"openrouter\"\nmodel = \"m\"\n";
+        let warns = |telegram: &str| {
+            let cfg: Config = toml::from_str(&format!("{telegram}\n{agent}")).unwrap();
+            cfg.validate().expect("valid");
+            cfg.telegram.approvals_warning()
+        };
+        assert_eq!(warns("[telegram]\ntool_approvals = false"), None);
+        assert_eq!(warns(""), None);
+        let only = warns("[telegram]\napprove_only = [\"run_command\"]").unwrap();
+        assert!(
+            only.starts_with("[telegram] approve_only = [\"run_command\"]: not implemented"),
+            "{only}"
+        );
+        let flag = warns("[telegram]\ntool_approvals = true").unwrap();
+        let head =
+            "[telegram] tool_approvals = true: not implemented — tools are not approval-gated";
+        assert!(flag.starts_with(head), "{flag}");
     }
 }

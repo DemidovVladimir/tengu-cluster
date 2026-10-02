@@ -151,6 +151,8 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 | `lping` | `open` (RPC / market APIs block Tor, latency) | Crypto research + dry-run Solana LP / hedge decision loops (`lp_watch`, `hedge_watch`; `tengu decide --sandbox lping --loop <name>`) over 10 typed, cached Solana tools (`docs/typed-observations-2026-09-24.md`); writes + signing later. Agents `lping` (planner) + `crypto_researcher`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
 | `storage-test` | tor | Storage agent smoke config (`persistent_store`) |
 | `unlimited` | tor | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |
+| `xmarket` | `open` (HL host only) | xmarket paper desk, stage M0 ($100 `[risk]` budget, paper only): `tengu run` records Hyperliquid xyz contexts + a starter set of books and runs the exit rules and the daily risk roll; agents `xm` (planner, read-only), `xm_architect` (routable research, never trades), `xm_executor` (private, the only exec tools). Runbook + the per-milestone staged sections at the top of the file; `docs/runtime-2026-09-30.md` § xmarket sandbox |
+| `xmarket-weekend` | `open` (HL host only) | xmarket weekend run: `tengu run` paper-trades rule W (weekend fade) on 75 Hyperliquid xyz stock perps and records their contexts + books; no LLM, no Jev; one private exec agent. Runbook at the top of the file; `docs/runtime-2026-09-30.md` § Weekend run |
 
 ## Telegram
 
@@ -160,7 +162,7 @@ cargo run -- secret set TELEGRAM_BOT_TOKEN "123456:ABC-..."
 cargo run -- telegram --sandbox aura
 ```
 
-`@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`).
+`allowed_users` (or `TENGU_TELEGRAM_ALLOWED_USERS`) is required: without it `tengu telegram` refuses to start. `@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`); private agents (no `description`, not `default`) are never reachable from Telegram.
 
 ## Docker
 

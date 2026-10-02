@@ -49,7 +49,7 @@ workspace = "~/jev-exec-workspace"
 builtin_tools_profile = "none"
 
 [agents.architect.scopes]
-run_command = { shell_bins = ["tengu"] }   # first-token check only — not a sandbox against `;`
+run_command = { shell_bins = ["tengu"] }   # first command word only — not a sandbox against `;`
 read_file = {}
 list_directory = {}
 write_file = {}

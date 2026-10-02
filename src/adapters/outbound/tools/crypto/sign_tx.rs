@@ -2,7 +2,8 @@
 //! `sign_and_send_transaction` tool — submit an EVM transaction via Privy.
 //!
 //! Migrated from `crypto_tool_executor.rs` during Phase A / task A3.
-//! Uses `ctx.http` directly — no `block_in_place` bridge.
+//! Every request through the Privy gate (`helpers.rs`: env_reads, egress,
+//! net_hosts, audit) on `ctx.http`.
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -26,7 +27,7 @@ impl SignAndSendTransactionTool {
     pub(crate) fn new(cancel: Option<Arc<AtomicBool>>) -> Self {
         Self {
             def: ToolDef::new(
-                "sign_and_send_transaction",
+                crate::domain::tools::SIGN_AND_SEND_TRANSACTION,
                 "Sign and send an EVM transaction via Privy wallet.",
                 json!({
                     "type": "object",
@@ -72,7 +73,7 @@ impl Tool for SignAndSendTransactionTool {
         let to = require_str(args, "sign_and_send_transaction", "to")?;
         let data = args.get("data").and_then(|v| v.as_str());
         let value = args.get("value").and_then(|v| v.as_str());
-        let expected_chain_id = resolve_default_chain_id();
+        let expected_chain_id = resolve_default_chain_id(ctx)?;
         let chain_id = match args.get("chain_id").and_then(|v| v.as_u64()) {
             Some(given) if given != expected_chain_id => {
                 return Err(anyhow!(
@@ -89,10 +90,10 @@ impl Tool for SignAndSendTransactionTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let tx_hash = privy_send_transaction(ctx.http, to, data, value, chain_id).await?;
+        let tx_hash = privy_send_transaction(ctx, to, data, value, chain_id).await?;
 
         let text = if wait {
-            let receipt = wait_for_receipt(ctx.http, &tx_hash, self.cancel.as_ref()).await?;
+            let receipt = wait_for_receipt(ctx, &tx_hash, self.cancel.as_ref()).await?;
             let status_hex = receipt["status"].as_str().unwrap_or("0x0");
             let confirmed = status_hex == "0x1";
             let status_str = if confirmed { "confirmed" } else { "reverted" };

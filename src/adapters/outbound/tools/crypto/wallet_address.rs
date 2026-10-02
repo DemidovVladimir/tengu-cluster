@@ -39,7 +39,7 @@ impl Tool for GetWalletAddressTool {
     async fn execute(&self, _args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         ctx.scope.check_wallet(DEFAULT_WALLET_LABEL)?;
 
-        let address = privy_wallet_address(ctx.http).await?;
+        let address = privy_wallet_address(ctx).await?;
         Ok(ToolOutput::from(format!("address: {}", address)))
     }
 }
@@ -63,5 +63,28 @@ mod tests {
         let tool = GetWalletAddressTool::new();
         let result = tool.execute(&json!({}), &harness.ctx()).await;
         assert!(result.is_err(), "expected scope denial, got: {:?}", result);
+    }
+
+    /// The Privy credentials are read through the scope's `env_reads`, like
+    /// any networked tool's env: a configured scope without them refuses
+    /// before anything is read or sent.
+    #[tokio::test]
+    async fn wallet_address_reads_privy_env_only_through_env_reads() {
+        let tmp = TempDir::new().unwrap();
+        let scope = ToolScope {
+            wallets: vec![DEFAULT_WALLET_LABEL.to_string()],
+            net_hosts: vec!["api.privy.io".to_string()],
+            ..Default::default()
+        };
+        let harness = TestHarness::with_scope(tmp.path(), scope);
+        let err = GetWalletAddressTool::new()
+            .execute(&json!({}), &harness.ctx())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("env var 'PRIVY_APP_ID' not in allowed env_reads"),
+            "{err}"
+        );
     }
 }

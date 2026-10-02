@@ -140,14 +140,14 @@
       <text x="16" y="24" font-weight="700" class="accent">compress_and_store hits one of two paths</text>
 
       <rect x="14" y="36" width="402" height="56" rx="6" fill="#1e1e2e" stroke="#45475a"/>
-      <text x="24" y="56" font-weight="700" class="blue">Path A — OUT-OF-BAND  (OpenRouter)</text>
-      <text x="24" y="74" class="small">main.rs:971 intercepts BEFORE executor runs:</text>
+      <text x="24" y="56" font-weight="700" class="blue">Path A — OUT-OF-BAND  (OpenRouter, local)</text>
+      <text x="24" y="74" class="small">run_agent.rs intercepts BEFORE executor runs:</text>
       <text x="24" y="88" class="small mono">summary = call.args["summary"]; compress_called = true;</text>
 
       <rect x="14" y="98" width="402" height="56" rx="6" fill="#1e1e2e" stroke="#45475a"/>
-      <text x="24" y="118" font-weight="700" class="pink">Path B — BACKSTOP  (Claude Code via MCP bridge)</text>
-      <text x="24" y="136" class="small mono">mcp__tengu-tools__compress_and_store → no handler (Phase 6)</text>
-      <text x="24" y="150" class="small">compress_called false → graceful path + backstop write.</text>
+      <text x="24" y="118" font-weight="700" class="pink">Path B — BRIDGE  (Claude Code via MCP bridge)</text>
+      <text x="24" y="136" class="small mono">summary → TENGU_BRIDGE_SUMMARY_FILE; "stored — stop now"</text>
+      <text x="24" y="150" class="small">engine ends the CLI run after the round; run-agent reads the file.</text>
     </g>
 
     <!-- both paths converge on try_persist_agentic_step_summary -->

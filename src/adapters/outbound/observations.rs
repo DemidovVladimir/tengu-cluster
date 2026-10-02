@@ -5,16 +5,26 @@
 //! than 7 days purged on open. `get` errors on a row that does not parse
 //! (`get_many` skips it); `put_if_unchanged` is one conditional statement
 //! (atomic across processes). Every call runs on `spawn_blocking`.
+//!
+//! `open_observation_store` is the one constructor tools and decision loops
+//! use: this cache, wrapped by `RecordingObservationStore` (history,
+//! `ops-history-recorder`) when `[recorder]` is on.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::Value;
 use tracing::warn;
 
+use crate::adapters::outbound::history_sqlite::SqliteHistoryStore;
+use crate::config::recorder::RecorderConfig;
+use crate::config::sections::SandboxSections;
 use crate::domain::observation::{now_ms, ObsStatus, Observation};
+use crate::ports::history::{HistoryRow, HistoryStore};
 use crate::ports::observation::ObservationStore;
 
 /// Rows older than this are deleted when the store is opened.
@@ -212,6 +222,174 @@ impl ObservationStore for SqliteObservationStore {
     }
 }
 
+/// The one constructor of a workspace's observation store (tool plugins,
+/// `bootstrap/decision.rs`): the SQLite cache, wrapped by
+/// `RecordingObservationStore` when `sections.history_dir` is set
+/// (`[recorder] enabled` + `[xmarket]`). A history store that fails to open
+/// only turns recording off (warn).
+pub(crate) fn open_observation_store(
+    workspace: &Path,
+    sections: &SandboxSections,
+) -> Result<Arc<dyn ObservationStore>> {
+    let cache: Arc<dyn ObservationStore> = Arc::new(SqliteObservationStore::open(workspace)?);
+    let Some(dir) = &sections.history_dir else {
+        return Ok(cache);
+    };
+    match SqliteHistoryStore::open(dir, sections.recorder.retention_days) {
+        Ok(history) => Ok(Arc::new(RecordingObservationStore::new(
+            cache,
+            Arc::new(history),
+            sections.recorder.clone(),
+        ))),
+        Err(e) => {
+            let error = format!("{e:#}");
+            warn!(dir = %dir.display(), %error, "history store unavailable; not recording");
+            Ok(cache)
+        }
+    }
+}
+
+/// `ObservationStore` decorator that also feeds a `HistoryStore`
+/// (`ops-history-recorder`, tracker convention 5): the rows `put` /
+/// `put_if_unchanged` wrote and every live result `observe()` passes to
+/// `record` (`Error` and ttl-0 rows too). Only `[recorder] schemas`; per key
+/// (this process's memory): each `(key, observed_at_ms)` once, nothing inside
+/// `min_interval_secs`, and with `change_only` no unchanged row until the
+/// last one is `heartbeat_secs` old; `data` only for `keep_data`. A failed
+/// append never fails the cache call.
+pub(crate) struct RecordingObservationStore {
+    inner: Arc<dyn ObservationStore>,
+    history: Arc<dyn HistoryStore>,
+    policy: RecorderConfig,
+    last: Mutex<HashMap<String, Recorded>>,
+}
+
+/// The last row recorded for a key.
+#[derive(Clone, Copy)]
+struct Recorded {
+    at_ms: i64,
+    fingerprint: u64,
+}
+
+impl RecordingObservationStore {
+    pub(crate) fn new(
+        inner: Arc<dyn ObservationStore>,
+        history: Arc<dyn HistoryStore>,
+        policy: RecorderConfig,
+    ) -> Self {
+        Self {
+            inner,
+            history,
+            policy,
+            last: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn last(&self, key: &str) -> Option<Recorded> {
+        self.last.lock().ok()?.get(key).copied()
+    }
+
+    async fn record_row(&self, obs: &Observation) -> Result<()> {
+        if !self.policy.records(&obs.schema) {
+            return Ok(());
+        }
+        let keep = self.policy.keeps_data(&obs.schema);
+        let fingerprint = fingerprint(obs, keep);
+        let prev = self.last(&obs.key);
+        if let Some(p) = prev {
+            let age = obs.observed_at_ms - p.at_ms;
+            if age == 0 {
+                return Ok(()); // this row is in already (`record`, then `put`)
+            }
+            if age > 0 {
+                let age = age as u64;
+                let heartbeat = self.policy.heartbeat_ms();
+                let unchanged = self.policy.change_only && p.fingerprint == fingerprint;
+                if age < self.policy.min_interval_ms(&obs.schema)
+                    || (unchanged && (heartbeat == 0 || age < heartbeat))
+                {
+                    return Ok(());
+                }
+            }
+        }
+        self.history.append(&[HistoryRow::of(obs, keep)]).await?;
+        if prev.is_none_or(|p| obs.observed_at_ms > p.at_ms) {
+            if let Ok(mut last) = self.last.lock() {
+                last.insert(
+                    obs.key.clone(),
+                    Recorded {
+                        at_ms: obs.observed_at_ms,
+                        fingerprint,
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn record_after_write(&self, obs: &Observation) {
+        if let Err(e) = self.record_row(obs).await {
+            let error = format!("{e:#}");
+            warn!(key = %obs.key, %error, "observation history write failed");
+        }
+    }
+}
+
+/// What `change_only` compares: status, errors, features without
+/// `venue_ts_ms` (a new stamp alone is no change), and kept `data`.
+fn fingerprint(obs: &Observation, keep_data: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut features = obs.features.clone();
+    features.remove("venue_ts_ms");
+    let data = if keep_data { &obs.data } else { &Value::Null };
+    let body = serde_json::json!([obs.status, obs.errors, features, data]);
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    body.to_string().hash(&mut h);
+    h.finish()
+}
+
+#[async_trait]
+impl ObservationStore for RecordingObservationStore {
+    async fn get(&self, key: &str) -> Result<Option<Observation>> {
+        self.inner.get(key).await
+    }
+
+    async fn get_many(&self, keys: &[String]) -> Result<Vec<Option<Observation>>> {
+        self.inner.get_many(keys).await
+    }
+
+    async fn put(&self, obs: &Observation) -> Result<bool> {
+        let written = self.inner.put(obs).await?;
+        if written {
+            self.record_after_write(obs).await;
+        }
+        Ok(written)
+    }
+
+    async fn put_if_unchanged(
+        &self,
+        obs: &Observation,
+        expected_observed_at_ms: Option<i64>,
+    ) -> Result<bool> {
+        let written = self
+            .inner
+            .put_if_unchanged(obs, expected_observed_at_ms)
+            .await?;
+        if written {
+            self.record_after_write(obs).await;
+        }
+        Ok(written)
+    }
+
+    async fn remove(&self, keys: &[String]) -> Result<usize> {
+        self.inner.remove(keys).await
+    }
+
+    async fn record(&self, obs: &Observation) -> Result<()> {
+        self.record_row(obs).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +537,227 @@ mod tests {
         let mut e = obs(None, ObsStatus::Error, 4);
         e.observed_at_ms = 3_000;
         assert!(!store.put_if_unchanged(&e, Some(2_001)).await.unwrap());
+    }
+
+    // ── RecordingObservationStore ───────────────────────────────────
+
+    const TSLA: &str = "hyperliquid:xyz:TSLA";
+
+    /// History that keeps appended rows in memory.
+    #[derive(Default)]
+    struct MemHistory(Mutex<Vec<HistoryRow>>);
+
+    #[async_trait]
+    impl HistoryStore for MemHistory {
+        async fn append(&self, rows: &[HistoryRow]) -> Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(rows);
+            Ok(rows.len())
+        }
+        async fn range(&self, _: &str, _: i64, _: i64) -> Result<Vec<HistoryRow>> {
+            Ok(Vec::new())
+        }
+        async fn asof(&self, keys: &[String], _: i64, _: u64) -> Result<Vec<Option<HistoryRow>>> {
+            Ok(vec![None; keys.len()])
+        }
+    }
+
+    fn ctx_row(at_ms: i64, mark: f64) -> Observation {
+        Observation {
+            key: format!("mkt_ctx/1:{TSLA}"),
+            schema: "mkt_ctx/1".into(),
+            tool: "hl_ctx".into(),
+            observed_at_ms: at_ms,
+            slot: None,
+            ttl_ms: 15_000,
+            source: ObsSource::Live,
+            status: ObsStatus::Ok,
+            errors: vec![],
+            headline: format!("mkt_ctx hyperliquid:xyz:TSLA mark {mark}"),
+            features: [
+                ("mark".to_string(), json!(mark)),
+                ("venue_ts_ms".to_string(), json!(at_ms - 5)),
+            ]
+            .into(),
+            data: json!({"coin": "xyz:TSLA", "mark": mark}),
+        }
+    }
+
+    fn recording(
+        policy: &str,
+    ) -> (
+        tempfile::TempDir,
+        RecordingObservationStore,
+        Arc<MemHistory>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Arc::new(SqliteObservationStore::open(dir.path()).unwrap());
+        let history = Arc::new(MemHistory::default());
+        let policy: RecorderConfig = toml::from_str(policy).unwrap();
+        let store = RecordingObservationStore::new(cache, history.clone(), policy);
+        (dir, store, history)
+    }
+
+    fn recorded(h: &MemHistory) -> Vec<(i64, Option<f64>, bool)> {
+        h.0.lock()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let mark = r.features.get("mark").and_then(Value::as_f64);
+                (r.observed_at_ms, mark, r.data.is_some())
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn change_only_skips_unchanged_rows_until_the_heartbeat() {
+        let (_dir, store, history) =
+            recording("enabled = true\nschemas = [\"mkt_ctx/1\"]\nheartbeat_secs = 300\n");
+        let s = 1_000;
+        for (at, mark) in [
+            (0, 1.0),       // first row
+            (10 * s, 1.0),  // unchanged (a new venue stamp alone is no change)
+            (20 * s, 2.0),  // changed
+            (30 * s, 2.0),  // unchanged
+            (320 * s, 2.0), // unchanged, but the last row is 300 s old
+        ] {
+            store.record(&ctx_row(at, mark)).await.unwrap();
+        }
+        let mut err = ctx_row(330 * s, 2.0);
+        err.status = ObsStatus::Error;
+        store.record(&err).await.unwrap();
+        // `observe()` records, then puts the same row: appended once.
+        let row = ctx_row(340 * s, 3.0);
+        store.record(&row).await.unwrap();
+        assert!(store.put(&row).await.unwrap());
+        assert_eq!(
+            recorded(&history),
+            [
+                (0, Some(1.0), false),
+                (20 * s, Some(2.0), false),
+                (320 * s, Some(2.0), false),
+                (330 * s, Some(2.0), false),
+                (340 * s, Some(3.0), false),
+            ]
+        );
+        // Unlisted schemas are never recorded; the cache is unaffected.
+        let mut other = ctx_row(400 * s, 4.0);
+        other.schema = "dlmm_pool/1".into();
+        other.key = "dlmm_pool/1:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6".into();
+        store.record(&other).await.unwrap();
+        assert!(store.put(&other).await.unwrap());
+        assert_eq!(history.0.lock().unwrap().len(), 5);
+        assert!(store.get(&other.key).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn min_interval_and_keep_data() {
+        let (_dir, store, history) = recording(
+            "enabled = true\nschemas = [\"mkt_ctx/1\"]\nkeep_data = [\"mkt_ctx/1\"]\n\
+             change_only = false\nmin_interval_secs = { \"mkt_ctx/1\" = 60 }\n",
+        );
+        let s = 1_000;
+        for (at, mark) in [
+            (0, 1.0),
+            (30 * s, 2.0),
+            (59 * s, 3.0),
+            (60 * s, 3.0),
+            (61 * s, 3.0),
+        ] {
+            store.record(&ctx_row(at, mark)).await.unwrap();
+        }
+        assert_eq!(
+            recorded(&history),
+            [(0, Some(1.0), true), (60 * s, Some(3.0), true)]
+        );
+        // Direct `put` writes are recorded too (`lp_state`-style rows).
+        assert!(store.put(&ctx_row(200 * s, 5.0)).await.unwrap());
+        assert_eq!(history.0.lock().unwrap().len(), 3);
+        // A rejected write (older slot) is not.
+        let mut newer = ctx_row(300 * s, 6.0);
+        newer.slot = Some(10);
+        let mut older = ctx_row(400 * s, 7.0);
+        older.slot = Some(9);
+        assert!(store.put(&newer).await.unwrap());
+        assert!(!store.put(&older).await.unwrap());
+        assert_eq!(history.0.lock().unwrap().len(), 4);
+    }
+
+    /// Minimal typed value for the end-to-end `observe()` path.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct Mark(Option<f64>);
+
+    impl crate::domain::observation::Observed for Mark {
+        const SCHEMA: &'static str = "mkt_ctx/1";
+        fn subject(&self) -> String {
+            TSLA.into()
+        }
+        fn headline(&self) -> String {
+            format!("mkt_ctx {TSLA}")
+        }
+        fn features(&self) -> crate::domain::observation::Features {
+            let mut f = crate::domain::observation::Features::new();
+            crate::domain::observation::set_num(&mut f, "mark", self.0);
+            f
+        }
+        fn status(&self) -> ObsStatus {
+            if self.0.is_some() {
+                ObsStatus::Ok
+            } else {
+                ObsStatus::Error
+            }
+        }
+    }
+
+    /// `open_observation_store` + `observe()`: Error and ttl-0 rows reach the
+    /// history day file, the cache holds only the usable ttl > 0 row.
+    #[tokio::test]
+    async fn observe_records_error_and_ttl0_rows_into_day_files() {
+        use crate::application::observe::observe;
+        use crate::domain::observation::CachePolicy;
+
+        let ws = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let history_dir = crate::config::xmarket::history_dir(state.path());
+        let sections = SandboxSections {
+            history_dir: Some(history_dir.clone()),
+            recorder: toml::from_str("enabled = true\nschemas = [\"mkt_ctx/1\"]\n").unwrap(),
+            ..SandboxSections::default()
+        };
+        let store = open_observation_store(ws.path(), &sections).unwrap();
+        let policy = CachePolicy::new("mkt_ctx/1", TSLA, 15_000, &json!({}));
+        let t0 = now_ms();
+        for (at, mark, ttl) in [
+            (t0, None, 15_000),
+            (t0 + 1, Some(1.0), 0),
+            (t0 + 2, Some(2.0), 15_000),
+        ] {
+            let obs = observe(Some(store.as_ref()), "hl_ctx", &policy, at, || async move {
+                Ok((Mark(mark), ttl))
+            })
+            .await
+            .unwrap();
+            assert_eq!(obs.source, ObsSource::Live);
+        }
+        let cached = store.get(&policy.key).await.unwrap().unwrap();
+        assert_eq!(cached.observed_at_ms, t0 + 2);
+
+        let reader = SqliteHistoryStore::reader(&history_dir);
+        let rows = reader.range(&policy.key, t0, t0 + 3).await.unwrap();
+        let got: Vec<(i64, ObsStatus)> =
+            rows.iter().map(|r| (r.observed_at_ms, r.status)).collect();
+        assert_eq!(
+            got,
+            [
+                (t0, ObsStatus::Error),
+                (t0 + 1, ObsStatus::Ok),
+                (t0 + 2, ObsStatus::Ok)
+            ]
+        );
+        assert!(rows.iter().all(|r| r.data.is_none() && r.key == policy.key));
+
+        // Recording off (no history dir) ⇒ the plain cache.
+        let plain = open_observation_store(ws.path(), &SandboxSections::default()).unwrap();
+        assert!(plain.record(&cached).await.is_ok());
     }
 
     #[tokio::test]

@@ -26,14 +26,17 @@ pub(crate) mod args;
 pub(crate) mod cache;
 pub(crate) mod crypto;
 pub(crate) mod http;
+pub(crate) mod hyperliquid;
 pub(crate) mod manage_skill;
 pub(crate) mod memory;
+pub(crate) mod schema_lint;
 pub(crate) mod skill;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod skill_resource;
 pub(crate) mod solana;
 pub(crate) mod view_skill;
 pub(crate) mod workspace;
+pub(crate) mod xm;
 
 use std::collections::HashSet;
 use std::sync::atomic::AtomicBool;
@@ -246,6 +249,60 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || solana::defs_named(names::JUP_PERPS_ORDER),
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
+        // Hyperliquid family: one opt-in row per tool, all sharing the
+        // `hyperliquid` plugin (interfaces in `hyperliquid/defs.rs`).
+        ToolEntry {
+            opt_in: Some(names::HL_CTX),
+            needs_memory: false,
+            defs: || hyperliquid::defs_named(names::HL_CTX),
+            plugin: |_| Box::new(hyperliquid::HyperliquidPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::HL_BOOK),
+            needs_memory: false,
+            defs: || hyperliquid::defs_named(names::HL_BOOK),
+            plugin: |_| Box::new(hyperliquid::HyperliquidPlugin),
+        },
+        // xmarket risk / paper family: one opt-in row per tool, all sharing
+        // the `xm` plugin (interfaces in `xm/defs.rs`).
+        ToolEntry {
+            opt_in: Some(names::RISK_STATUS),
+            needs_memory: false,
+            defs: || xm::defs_named(names::RISK_STATUS),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        // Exec tools: the `[risk]` gate inside the tool (`xm/exec_common.rs`);
+        // only a private agent may hold them (`config/risk.rs`).
+        ToolEntry {
+            opt_in: Some(names::PAPER_ORDER),
+            needs_memory: false,
+            defs: || xm::defs_named(names::PAPER_ORDER),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::PAPER_CLOSE),
+            needs_memory: false,
+            defs: || xm::defs_named(names::PAPER_CLOSE),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::XM_EXITS),
+            needs_memory: false,
+            defs: || xm::defs_named(names::XM_EXITS),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::XM_WEEKEND_FADE),
+            needs_memory: false,
+            defs: || xm::defs_named(names::XM_WEEKEND_FADE),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::PAPER_POSITIONS),
+            needs_memory: false,
+            defs: || xm::defs_named(names::PAPER_POSITIONS),
+            plugin: |_| Box::new(xm::XmPlugin),
+        },
     ]);
     rows
 }
@@ -338,6 +395,25 @@ mod catalog_tests {
                 "WORKSPACE_TOOLS '{name}' has no catalog row"
             );
         }
+    }
+
+    /// `XM_TOOLS` (the shared-workspace load rule, `config/xmarket.rs`) is
+    /// exactly the opt-in rows of the `hyperliquid` and `xm` plugins.
+    #[test]
+    fn xm_tools_are_the_hyperliquid_and_xm_rows() {
+        let opts = CatalogOpts {
+            cancel: None,
+            memory_config: None,
+        };
+        let mut rows: Vec<&str> = catalog()
+            .iter()
+            .filter(|r| matches!((r.plugin)(&opts).name(), "hyperliquid" | "xm"))
+            .filter_map(|r| r.opt_in)
+            .collect();
+        rows.sort_unstable();
+        let mut want = names::XM_TOOLS.to_vec();
+        want.sort_unstable();
+        assert_eq!(rows, want);
     }
 
     #[test]

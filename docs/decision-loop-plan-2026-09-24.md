@@ -25,7 +25,7 @@ Deviations from the sketch below: history is in-process (not `shared_cache`); a 
 | Executor | `[decision_loops.executor]`: `crypto_price` (Coinbase), `fx_rate` (Frankfurter), `list_workspace`, `done`; `escalate = false`, `act_at = 0.7` |
 | Result back | `tengu decide` now prints `history` (args + reduced result per step) next to `outcomes` |
 | Verified | "1 BTC in EUR?" → architect sent 2 tasks in parallel → Jev `crypto_price(BTC-USD)` / `fx_rate(EUR)` at confidence 1.0, then `done`; ~0.3–0.6 s per decision. Architect's own `http_request` → `host 'api.coinbase.com' not in allowed net_hosts []` |
-| Limits | Jev only chooses — args must be enumerated slots (no free text from the task); `run_command` scope checks the first token only; the Claude CLI also loads the user's global Claude Code plugin MCP servers (not tengu-scoped); stdout carries tracing lines before the JSON |
+| Limits | Jev only chooses — args must be enumerated slots (no free text from the task); `run_command` scope checks the first command word only (leading `NAME=value` skipped, 2026-10-01); the Claude CLI also loads the user's global Claude Code plugin MCP servers (not tengu-scoped); stdout carries tracing lines before the JSON |
 
 ## Shape
 
@@ -82,9 +82,11 @@ caps  = { size_sol = 2.0 }
 | `requires` | alias → max age secs; the action is offered only while each alias is usable and that fresh |
 | `ok` | typed: `status != error`; text: HTTP status / parse (`reduce::parse_tool_output`) |
 | Executor | loop agent's tools wrapped in `SanitizedToolExecutor` (process `SecretRegistry`) — text and observations redacted before history, audit, Jev |
+| Tool-call id | `{loop}:{session_id}:{t}` → the tool's `ToolCtx.call_id`; never repeats across events or restarts (one session id per event) — the idempotency key of exec tools (`client_order_id` arg, else `call_id`) |
 | Caps | re-checked in code after Jev answers; violation = skip + audit |
 | `dry_run` | non-`read_only` actions are logged, not executed |
 | Escalation | reuse `webhooks::run_one_shot` path: state JSON as the user message, session `decide-<loop>-<uuid>` |
+| Jev call failures (`outbound/decisions.rs`, 2026-09-30) | HTTP 429 / 5xx / connect error ⇒ one retry after 0.5–1 s (`Retry-After` ≤ 5 s honoured, longer ⇒ no retry; `domain/backoff.rs::next_delay`); timeout / other 4xx / unparseable ⇒ no retry; 3 consecutive failed calls open a 30 s circuit (fail fast, no request), then calls pass again |
 
 ## Phases (one branch, `feature/decision-loop`)
 
@@ -105,8 +107,8 @@ Phases 1–3 are the usable core (polling loop, dry-run). 4–6 build on it.
 | Surface | What |
 |---|---|
 | `MetricsKind::Decision` | new variant; tokens + cost + latency per Jev call |
-| `<TENGU_HOME>/logs/decisions.jsonl` | state hash, questions, answers + probabilities, action taken / skipped / escalated, `args`, `ok` + `output` (the history value: reduced, redacted); typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`) |
-| TUI decision feed | `tengu chat` on a config with `[decision_loops]` tails the audit (300 ms) and shows each decision of those loops, from any process, as a System bubble — `decision_loop::render_audit` |
+| `<TENGU_HOME>/logs/decisions.jsonl` | one line per decisions call, written with one `write_all` (concurrent loops / processes never interleave): `ts` (s) + `ts_ms`, `loop`, `sandbox`, `session_id`, `t`, `call_id` (`{loop}:{session_id}:{t}` when the step ran a tool, else null — the key an exec tool's risk verdict carries: `ledger.db` `risk_decisions`, `logs/risk.jsonl`), `decision_id`, `model`, `act_at`, `latency_ms`, answers + probabilities, `usage`, `result` (action taken / skipped / escalated / rejected / `refused` + `rule` when a typed result carries `features.risk = "deny"` — `StepOutcome::Refused`, the loop goes on), `args`, `ok` + `output` (the history value: reduced, redacted); typed results carry `obs` (`key`, `status`, `source` live \| cache, `age_s`, `slot`). A failed call (timeout, 402, 5xx) writes `result = {outcome: "error", reason}` with null answers, then the error propagates |
+| TUI decision feed | `tengu chat` on a config with `[decision_loops]` tails the audit (300 ms) and shows each decision of those loops, from any process, as a System bubble — `decision_loop::render_audit` (+ `call <id>` for a step that ran a tool); a failed call as `jev <loop> #<t> · decide failed → error: <reason>`, a risk refusal as `… → refused by the risk gate: <rule>` |
 | `agentic_memory` | executed actions + escalations (durable, recallable by planner) |
 
 ## Docs to update when landing

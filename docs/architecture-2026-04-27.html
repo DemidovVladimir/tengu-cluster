@@ -482,10 +482,10 @@ const STEPS = [
   },
   {
     num: 6, title: "Subagent tool loop", lane: "tool",
-    what: "Inside the child: load the parent's config FIRST (sandbox_config → sandboxes/&lt;name&gt;/config.toml, else the default chain) → egress::install (TENGU_EGRESS wins) → take [agents.*] for the step's agent from it (compose.base_agent when composed; skill_packages/tools overridden in memory only) → assemble system prompt (base + skills + plan_state + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns (= limits.max_tool_rounds).",
+    what: "Inside the child: load the parent's config FIRST (sandbox_config → sandboxes/&lt;name&gt;/config.toml, else the default chain) → egress::install (TENGU_EGRESS wins) → take [agents.*] for the step's agent from it (compose.base_agent when composed; skill_packages/tools overridden in memory only) → the step's workspace (the agent's, else a temp dir for this step — executor and engine alike) → assemble system prompt (base + skills + plan_state + suffix) → build PluginToolExecutor → run multi-turn LLM-with-tools loop until model calls compress_and_store or hits max_turns (= limits.max_tool_rounds); results capped and older rounds compacted as in chat, every engine.",
     files: [
       { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "the orchestrating function" },
-      { path: "src/adapters/bootstrap::tools::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store}; subagent_config merges workspace-tool opt-ins from tools" },
+      { path: "src/adapters/bootstrap::tools::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools (∩ tools); subagent_config merges workspace-tool opt-ins from tools; a Claude Code step's bridge serves compress_and_store into the step summary file" },
       { path: "src/adapters/outbound/egress.rs", desc: "tool_client (proxy, redirects off) / llm_api_client / shell_command — the network policy every tool call goes through" },
       { path: "src/adapters/outbound/tools/{http,workspace,memory,crypto,mcp,...}", desc: "the actual tools" },
       { path: "src/adapters/application::chat::tool_loop::run_single_engine_turn", desc: "one LLM turn" },
@@ -612,7 +612,7 @@ const FILE_MAP = [
   ["src/domain/", "domain", "plain data + pure policy: message, session, plan, scope (ToolScope), secrets (SecretRegistry), tools (opt-in names), metrics, memory, token, usage"],
   ["src/ports/", "ports", "traits: engine (Engine, ToolExecutor), tool (Tool, ToolPlugin, ToolCtx, ToolDirectory), memory, orchestration, shell, skill_source, tool_activity"],
   ["src/adapters/outbound/tools/mod.rs", "tools", "catalog() — one ToolEntry per tool group; register_catalog, advertised_defs, CatalogDirectory"],
-  ["src/adapters/outbound/bridge_env.rs", "mcp", "TENGU_BRIDGE_SCOPES / TENGU_BRIDGE_MCP_SERVERS env contract (engine writes, bridge reads)"],
+  ["src/adapters/outbound/bridge_env.rs", "mcp", "TENGU_BRIDGE_SCOPES / TENGU_BRIDGE_MCP_SERVERS (names) / TENGU_BRIDGE_TRANSCRIPT_FILE env contract (engine writes, bridge reads)"],
   ["src/adapters/inbound/channel.rs", "channel", "TUI/Telegram helpers: @agent routing, chunking, activity context, skill list"],
   ["tests/layering_lint.rs", "tests", "enforces domain ← ports ← application ← adapters, bootstrap rules"],
   ["src/main.rs", "main", "mod decls + main → adapters::inbound::cli::run"],

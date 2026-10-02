@@ -76,11 +76,30 @@ impl ApplyImproverProposalTool {
                         },
                         "metrics": {
                             "type": "array",
+                            "items": super::metric_spec_schema(),
                             "description": "Optional updated metric specs. Omit to keep existing metrics."
                         },
                         "resource_additions": {
                             "type": "array",
-                            "description": "Optional new files to drop under skills/<name>/resources/. Each: {path (relative, no `..`), content (utf-8), overwrite? (default false)}."
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {
+                                        "type": "string",
+                                        "description": "Relative to skills/<name>/resources/; no `..`, not absolute."
+                                    },
+                                    "content": {
+                                        "type": "string",
+                                        "description": "File content (utf-8)."
+                                    },
+                                    "overwrite": {
+                                        "type": "boolean",
+                                        "description": "Replace an existing file (default false)."
+                                    }
+                                },
+                                "required": ["path", "content"]
+                            },
+                            "description": "Optional new files to drop under skills/<name>/resources/."
                         }
                     },
                     "required": ["skill", "body_markdown", "rationale"]
@@ -139,7 +158,10 @@ impl Tool for ApplyImproverProposalTool {
 
         // Apply resource files (each atomic temp+rename).
         let written: Vec<PathBuf> = match &args.resource_additions {
-            Some(adds) if !adds.is_empty() => apply_proposal_resources(&skill_dir, adds)?,
+            Some(adds) if !adds.is_empty() => {
+                let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
+                apply_proposal_resources(&skill_dir, adds, hardened)?
+            }
             _ => Vec::new(),
         };
 

@@ -1,6 +1,8 @@
 //! `observe()` — cache-or-fetch for typed tools. Serves only fresh rows,
-//! never caches `Error` rows, and a store failure falls back to a live read
-//! (doctrine #4: memory degradation never breaks a call).
+//! never caches `Error` rows, offers every live result to the history
+//! recorder (`ObservationStore::record`, `Error` and ttl-0 rows too), and a
+//! store failure falls back to a live read (doctrine #4: memory degradation
+//! never breaks a call).
 
 use std::future::Future;
 
@@ -10,9 +12,10 @@ use crate::domain::observation::{CachePolicy, ObsSource, ObsStatus, Observation,
 use crate::ports::observation::ObservationStore;
 
 /// Return the fresh cached row for `policy.key` (`source = cache`), else run
-/// `fetch`, wrap its value as a `Live` observation and store it when it is
-/// usable and `ttl_ms > 0`. `fetch` returns the TTL because some tools pick
-/// it after the read (`solana_tx`: longer once finalized).
+/// `fetch`, wrap its value as a `Live` observation, `record` it (history) and
+/// store it when it is usable and `ttl_ms > 0`. `fetch` returns the TTL
+/// because some tools pick it after the read (`solana_tx`: longer once
+/// finalized).
 pub(crate) async fn observe<T, F, Fut>(
     store: Option<&dyn ObservationStore>,
     tool: &str,
@@ -42,6 +45,10 @@ where
         warn!(policy_key = %policy.key, key = %obs.key, tool, "observation key differs from its cache policy key");
     }
     if let Some(s) = store {
+        // History first: every live result, `Error` and ttl-0 rows included.
+        if let Err(e) = s.record(&obs).await {
+            warn!(key = %obs.key, error = %e, "observation history write failed");
+        }
         if obs.status != ObsStatus::Error && ttl_ms > 0 {
             if let Err(e) = s.put(&obs).await {
                 warn!(key = %obs.key, error = %e, "observation store write failed");
@@ -62,8 +69,12 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
+    /// Cache map + every row offered to `record` (the history).
     #[derive(Default)]
-    pub(crate) struct MemStore(Mutex<HashMap<String, Observation>>);
+    pub(crate) struct MemStore(
+        Mutex<HashMap<String, Observation>>,
+        pub(crate) Mutex<Vec<Observation>>,
+    );
 
     #[async_trait]
     impl ObservationStore for MemStore {
@@ -89,6 +100,10 @@ pub(crate) mod tests {
             }
             m.insert(obs.key.clone(), obs.clone());
             Ok(true)
+        }
+        async fn record(&self, obs: &Observation) -> anyhow::Result<()> {
+            self.1.lock().unwrap().push(obs.clone());
+            Ok(())
         }
     }
 
@@ -168,6 +183,48 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(o.status, ObsStatus::Error);
         assert!(store.0.lock().unwrap().is_empty());
+    }
+
+    /// `ops-history-recorder`: every live result reaches `record` — `Error`
+    /// and ttl-0 rows too — while the cache holds neither; a cache hit is not
+    /// recorded again.
+    #[tokio::test]
+    async fn live_results_are_recorded_error_and_ttl0_included() {
+        let store = MemStore::default();
+        let run = |at: i64, usd: Option<f64>, ttl: u64| {
+            let store = &store;
+            async move {
+                observe(Some(store), "p", &policy(json!({})), at, || async move {
+                    Ok((Price { usd }, ttl))
+                })
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(run(1_000, None, 10_000).await.status, ObsStatus::Error);
+        assert_eq!(run(2_000, Some(1.0), 0).await.source, ObsSource::Live);
+        assert!(
+            store.0.lock().unwrap().is_empty(),
+            "no Error / ttl-0 row cached"
+        );
+        assert_eq!(run(3_000, Some(2.0), 10_000).await.source, ObsSource::Live);
+        assert_eq!(run(4_000, Some(3.0), 10_000).await.source, ObsSource::Cache);
+        let recorded: Vec<(ObsStatus, i64, u64)> = store
+            .1
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|o| (o.status, o.observed_at_ms, o.ttl_ms))
+            .collect();
+        assert_eq!(
+            recorded,
+            [
+                (ObsStatus::Error, 1_000, 10_000),
+                (ObsStatus::Ok, 2_000, 0),
+                (ObsStatus::Ok, 3_000, 10_000)
+            ]
+        );
+        assert_eq!(store.0.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

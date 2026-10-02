@@ -133,6 +133,15 @@ config, channels) — it is the index into everything below.
     `application/decision_loop/`, `adapters/outbound/tools/solana/`,
     `adapters/outbound/solana/`, `domain/lp/`, `domain/solana_tx.rs`,
     `domain/solana_write.rs` or `config/solana.rs`.
+11. **`docs/xmarket-tracker-2026-09-29.md`** (+ `docs/xmarket-prd-2026-09-29.md`,
+    `docs/xmarket-gaps-2026-09-29.md`) — the `xmarket` sandbox: the operator's
+    PRD with its 2026-09-30 addendum (decisions and rules), and the backlog
+    (185 items, milestones E0, M0–M8, M3b), plus
+    `docs/xmarket-build-plan-2026-09-30.md` — how to execute it (waves, gates,
+    the weekend sandbox, a kickoff prompt). **§ 0 Start here** of the tracker
+    holds the rules for every task and the definition of done. Read BEFORE any xmarket work: `tengu run`, feeds,
+    `[risk]` / paper trading, Hyperliquid / Robinhood / news tools, or the
+    MCP-bridge parity items.
 
 ---
 
@@ -159,6 +168,7 @@ flow, audit these for staleness **before declaring done**:
 | `sandboxes/*/config.toml` + `config.example.toml` | If you changed `AgentConfig` / `LimitsConfig` / `EgressConfig` (`src/config/mod.rs`, `src/adapters/outbound/egress.rs`), document the field in the struct doc-comment and update every sandbox + the example |
 | `docs/webhooks-2026-05-11.md` | If you changed `src/adapters/inbound/webhooks.rs`, `WebhookConfig`, or the request/response shape. Canonical operator doc for the webhook listener. |
 | `docs/typed-observations-2026-09-24.md` | If you changed the `Observation` envelope, the observation store / `observe()`, decision-loop `world` / `requires` / typed history, a Solana tool's args, key, TTL, hosts or knobs, or a write tool's send rules (signer, `config/solana.rs`, lease / pending / fence). |
+| `docs/xmarket-tracker-2026-09-29.md` (+ PRD addendum) | If you worked on an xmarket item: tick it (✅ + commit), update § 0 "Where to begin" when the next step changes, and keep the conventions, decisions and PRD addendum current when a rule changes. |
 | `docs/egress-2026-09-16.md` + `src/adapters/outbound/egress.rs` doc-comment | If you added a network path (new HTTP client, subprocess, engine, channel) or changed `EgressConfig`, the audit record shape, `docker-compose.tor.yml`, `deploy/tor/` or the Makefile `NETWORK` switch. Canonical operator doc for Tor / host allowlist / audit. |
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
@@ -197,6 +207,7 @@ global metrics sink so the TUI sees a unified stream.
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (`ports::tool`), a `ToolPlugin`, `tool_defs()`. First line of `execute` = `ctx.scope.check_*` or `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. One `ToolEntry` row in `catalog()` (`src/adapters/outbound/tools/mod.rs`) — drives in-process registration, the MCP bridge, and the advertised tool list.
 3. Opt-in only: also add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (config validation; `catalog_tests` fail if you forget).
+4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint (`tools/schema_lint.rs`, runs over every catalog row), bridge conformance case and live engine-matrix smoke pass (a tool set in `tests/engine_matrix.rs` — `every_catalog_tool_has_a_live_leg` fails CI without one; milestone E0 in `docs/xmarket-tracker-2026-09-29.md`, open items in the gotcha below).
 
 No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (`[[mcp_servers]]`). Full recipe + agent config: `docs/tools.md`, `docs/code-map.md`. `SkillPlugin` / `McpPlugin` stay outside the catalog (registered in `bootstrap/tools.rs::build_tool_executor`).
 
@@ -215,8 +226,9 @@ No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (
 2. Restart `tengu chat` — `TENGU_PLANNER_REGISTRY.md` is regenerated on planner turns.
 
 Fields (same `AgentConfig` as every in-process agent, `src/config/mod.rs`):
-`engine`, `model`, `description`, `example_queries`, `tools` (subprocess
-allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias),
+`engine`, `model`, `description`, `example_queries`, `tools` (allow-list on
+every surface — chat, plan steps, bridge; workspace-tool names opt in),
+`skill_packages` (`skills` alias),
 `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap
 per step), `limits.step_timeout_secs` (wall clock per step, default 600),
 `identity`, `claude_code`. There is no separate subagent schema and no
@@ -247,8 +259,10 @@ These are not preferences. They're load-bearing.
 
 3. **Composition over wholesale.** Per-agent scopes override
    `default_scopes` wholesale (NOT field-merged). Per-step `Step.compose`
-   overrides the base spec's skills/tools wholesale. This keeps the contract
-   simple even if it costs some convenience.
+   overrides the base spec's skills/tools wholesale — in a hardened sandbox
+   (`[risk]` / Solana signer) it may only narrow them
+   (`bootstrap::tools::compose_agent`; a widening compose fails the step).
+   This keeps the contract simple even if it costs some convenience.
 
 4. **Fail-soft on memory operations, hard on plan-shape errors.** Open Brain
    unavailable → log warn, continue with file registry + recent history.
@@ -260,13 +274,13 @@ These are not preferences. They're load-bearing.
 
 ## Key gotchas (compiled from SESSION_HANDOFF + scars)
 
-- **`workspace_tools` is a narrow allow-list** —
-  `agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`,
-  `apply_improver_proposal`, `manage_skill`. Anything else fails config
-  validation (`domain/tools.rs::WORKSPACE_TOOLS`). `manage_skill` is the
-  canonical unified skill write API (see `outbound/tools/manage_skill/`);
-  `agentic_memory` is the Postgres-backed Open Brain memory tool
-  (`postgres_memory` feature).
+- **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
+  in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
+  the Solana, Hyperliquid and xmarket families — read the list there, don't
+  copy it); anything else fails config validation, and listing one in
+  `tools` opts it in too. `manage_skill` is the canonical unified skill
+  write API (see `outbound/tools/manage_skill/`); `agentic_memory` is the
+  Postgres-backed Open Brain memory tool (`postgres_memory` feature).
 - **One agent schema (2026-09-18)** — `agents/*.toml` and `AgentSpec` are
   gone. A subagent is an `[agents.<name>]` block with a `description`;
   `bootstrap::tools::subagent_config` merges workspace-tool names found in
@@ -282,19 +296,29 @@ These are not preferences. They're load-bearing.
   `[default_scopes.<tool>]` / `[agents.<id>.scopes.<tool>]` are folded into
   `AgentConfig.scopes` at `Config::load` (`fold_default_scopes`; per-agent wins
   wholesale; `~` in `fs_roots` expanded). `build_tool_executor` and the MCP
-  bridge (`TENGU_BRIDGE_SCOPES`, exported by `ClaudeCodeEngine::with_scopes`)
-  use the configured scope for each tool and `permissive_scope` only for tools
-  with no entry. A configured scope is deny-by-default per field: an
+  bridge (the agent's folded scopes loaded from `TENGU_CONFIG`;
+  `TENGU_BRIDGE_SCOPES` only as its fallback) use the configured scope for
+  each tool and `permissive_scope` only for tools with no entry. A configured scope is deny-by-default per field: an
   `http_request` scope with empty `fs_roots` denies multipart file uploads —
   `sandboxes/aura/config.toml` sets `fs_roots = ["~/aura-workspace"]` for that
   reason. Subprocess children get their own workspace added to every inherited
-  scope's `fs_roots` (`grant_workspace_root`). `ToolScope::check_env_read`
-  honours the `"*"` wildcard like `net_hosts` / `shell_bins`.
+  scope's `fs_roots` (`grant_workspace_root`) — except a deny-all scope (every
+  field empty, e.g. xmarket's `[default_scopes.write_file]`), which stays a
+  deny (`tengu doctor --engines` skips an agent whose own scopes deny the
+  smoke tools — jev-exec's architect). `ToolScope::check_env_read` honours
+  the `"*"` wildcard like `net_hosts` / `shell_bins`. `shell_bins` gates a
+  command's first command word only (`domain::scope::shell_command_binary`:
+  leading `NAME=value` skipped, so `DEK=… node` checks `node`) — a guard
+  rail, not a sandbox: `;`, pipes, `$( )` and `node -e` run unchecked.
 - **Config resolution** — `--sandbox <name>` replaces the base config
   wholesale; otherwise `--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml`.
   The `run-agent` child gets the same file: `--sandbox` travels over IPC and
   `main` pins `TENGU_CONFIG` to the resolved path so `-c/--config` reaches
-  children and the MCP bridge too; it then takes `[agents.<name>]` from it.
+  children and the MCP bridge too, and `load_sandbox_or` re-pins it to the
+  absolute sandbox file; each takes `[agents.<name>]` from it. `Config` is
+  `deny_unknown_fields` (2026-09-30): an unknown or misspelled top-level key
+  (`[rsik]`) fails the load — a new section must be a `Config` field first
+  (`config::risk::tests` loads every `sandboxes/*/config.toml`).
   Docker mounts `./config.toml` (or `sandboxes/<name>/config.toml` via
   `make up SANDBOX=<name>`) as `TENGU_CONFIG`; `make` derives `NETWORK` from
   that file's `[egress] network`.
@@ -392,10 +416,19 @@ These are not preferences. They're load-bearing.
   `[agents.<n>.local] base_url` / `api_key_env`. Own engine
   `engines/local.rs` (`LocalEngine`); direct connection, never via the
   `[egress]` proxy. Set
-  `limits.context_window` — the 1_000_000 default is wrong for local models.
-  Guide: `docs/engine-backends.md` § Local.
-- **`sandboxes/aura` is `network = "open"`** — Molecule / Privy / Beach block
-  Tor exits. Every other sandbox and the base config run over Tor.
+  `limits.context_window` — the 1_000_000 default is wrong for local models
+  (load warns) and must equal the served window (Ollama:
+  `OLLAMA_CONTEXT_LENGTH`). Local agents get each tool result capped at 1/8
+  of the window; a typed row above that cap is compacted (`data` → a pointer
+  to the store key), one that fits arrives whole
+  (`Engine::tool_result_char_cap`, `Observation::compact_text`);
+  `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
+- **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
+  exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
+  `network = "open"`; `xmarket` (M0 stage) and `xmarket-weekend` run `open`
+  with `allow_hosts = ["api.hyperliquid.xyz"]` and must stay switchable to Tor
+  (every transport through `egress.rs`). `tor-check`, `storage-test` and the
+  base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI
   has tool access via MCP at engine-construction time, so the planner-side
   tool stripping (intended for OpenRouter's per-turn `tools = []`) doesn't
@@ -413,23 +446,30 @@ These are not preferences. They're load-bearing.
   `domain/tools.rs::WORKSPACE_TOOLS` (config validation + `subagent_config` +
   bridge filter). `SkillPlugin` / `McpPlugin` are registered outside the
   catalog; the bridge registers `McpPlugin` only for servers the Claude Code
-  engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
+  engine names (`TENGU_BRIDGE_MCP_SERVERS`: names only, each taken from the
+  bridge's loaded config — no `${VAR}`-expanded value in the temp file).
 - **`[[mcp_servers]]` tools are named `{server}__{tool}` (2026-09-23)** — was
   `{server}.{tool}`; model APIs reject `.`. They reach plan-step subagents
-  (both engines), in-process TUI/Telegram agents and webhook agents.
+  (both engines), in-process TUI/Telegram agents, webhook and eval agents. A
+  tool whose schema leaves the engine subset (`tools/schema_lint.rs`) is
+  dropped at discovery with a warn naming server, tool and rule
+  (`mcp_client::linted_tool`, 2026-10-01).
 - **Layering is lint-enforced (2026-09-23)** — `tests/layering_lint.rs` fails
   when `domain` / `ports` / `config` / `application` import an adapter, or
   outbound imports inbound/bootstrap. Need something from an adapter in a use
   case? Add a port in `src/ports/`, implement it in `adapters/outbound/`, wire
   it in `src/bootstrap/`.
-- **`compress_and_store` reliability with Claude Code subagents** — Claude
-  Code subagents don't reliably call `compress_and_store` as their final
-  action; they just stop. The Phase 5c middle-ground protocol forgives this —
-  the final assistant text becomes the IPC summary. With `postgres_memory`,
-  that final text is also captured into Postgres `agentic_memory` by the
-  `run-agent` backstop (`try_persist_agentic_step_summary`) so the durable
-  row exists for within-session recall on the next user turn. The original
-  `model finished without calling compress_and_store` warn is still emitted.
+- **`compress_and_store` with Claude Code subagents** — served through the
+  bridge since 2026-10-01: a `run-agent` step's bridge writes the `summary`
+  to the step's `TENGU_BRIDGE_SUMMARY_FILE`, read back as the IPC summary
+  (+ the `agentic_memory` write with `postgres_memory`), and answers
+  `stored — stop now`; the engine then ends the CLI run once that round's
+  calls are answered (as the in-process loop stops after its round). A subagent that just
+  stops still passes: the Phase 5c middle-ground protocol makes the final
+  assistant text the IPC summary, the `run-agent` backstop
+  (`try_persist_agentic_step_summary`) captures it into Postgres
+  `agentic_memory` for within-session recall, and the
+  `model finished without calling compress_and_store` warn is emitted.
 - **Memory backend** — `agentic_memory` (Postgres + pgvector, behind the
   `postgres_memory` feature) is the only durable runtime memory: planner
   user-message recall, within-session step-output recall, replan cross-plan
@@ -457,7 +497,9 @@ These are not preferences. They're load-bearing.
   (Arti serves CONNECT on the SOCKS port). A bare `reqwest::Client::builder()`
   on a runtime path bypasses Tor. The *resolved* policy crosses to
   `run-agent` / `mcp-bridge` as `TENGU_EGRESS` (wins over the child's
-  config). JSONL audit at `<TENGU_HOME>/logs/egress.jsonl`. `tengu doctor
+  config). JSONL audit at `<TENGU_HOME>/logs/egress.jsonl` (`agent` /
+  `session` / `call_id`: a `tengu run` feed or loop call names its own —
+  `egress::AttributedExecutor` — else the process env). `tengu doctor
   --tor` verifies the exit; `make tor` runs the proxy (`deploy/tor/`: Arti +
   lyrebird-rs from `../lyrebird-rs`). Unit tests must not call
   `egress::install` (process-global).
@@ -466,6 +508,109 @@ These are not preferences. They're load-bearing.
   `mcp__tengu-tools__persistent_store`, not bare `persistent_store`. Skills
   that say "check that tool X is in your tool list" should look for both
   forms or just attempt the call and read the error.
+- **Every tool must work under every engine — `openrouter`, `local`,
+  `claude_code` (operator rule 2026-09-30, no exceptions)** — step 4 of "How
+  to add a new tool". E0 is closed (`x-engine-parity-audit`, 2026-10-01):
+  every catalog tool, shell skills and `[[mcp_servers]]` proxies pass the
+  schema lint, a bridge conformance case and a live engine-matrix leg
+  (`every_catalog_tool_has_a_live_leg` fails CI for a tool in no set; gap
+  list in the tracker's W1 notes). `tengu mcp-bridge` loads `TENGU_CONFIG`
+  (absolute) and runs tools as `[agents.<TENGU_BRIDGE_AGENT>]` — folded
+  scopes, `AgentConfig::sandbox` sections, `no_shell_fallback`, `[memory]`,
+  shell skills (`skill_packages` + the requested names) — behind
+  `SanitizedToolExecutor` (text, observations and errors redacted, on every
+  surface — vault values, `TENGU_MASTER_PASSWORD` and env vars named
+  `*_API_KEY` `*_SECRET` `*_TOKEN` `*_PASSWORD` `*_PRIVATE_KEY`, `.env` too;
+  never a public on-chain id: `domain::secrets::is_env_secret`), call id
+  `mcp:<nonce>:<id>`; no config / unknown agent → default `main` +
+  `TENGU_BRIDGE_SCOPES` with a warn. A `run-agent` step's engine
+  (`engines::build_step_engine`) writes `TENGU_BRIDGE_GRANT_WORKSPACE=1` +
+  `TENGU_BRIDGE_SUMMARY_FILE` into the bridge env: the workspace grant, and
+  `compress_and_store` served into that file (the step's IPC summary);
+  elsewhere the bridge refuses it with the reason. Each bridged call gets the
+  run's conversation (`TENGU_BRIDGE_TRANSCRIPT_FILE`, the engine's 0600
+  transcript; `tengu tool call --transcript`) — `skill_distill` refuses a call
+  with none. A `run-agent` step always has a workspace — the agent's, else a
+  temp dir per step (webhook / `tool turn` one-shots: per turn;
+  `bootstrap::tools::workspace_or_temp`) — for its executor, the CLI's cwd
+  and the bridge; its
+  results are capped and older rounds compacted as in chat, every engine;
+  `limits.max_tool_rounds` counts tool calls on `claude_code`, engine turns
+  elsewhere. The temp `--mcp-config`
+  holds no secret value (`[[mcp_servers]]` by name) — the CLI merges its `env` over the inherited env
+  (`docs/mcp-bridge.md` § Env); the engine strips a parent Claude Code
+  session's env (`CLAUDECODE`, `CLAUDE_CODE_*` but auth / provider,
+  `CLAUDE_PID`, `CLAUDE_EFFORT`) and passes `--strict-mcp-config`. Every
+  surface honours `tools` (`bootstrap::tools::agent_base_tools`; empty = every
+  base tool; `[[mcp_servers]]` tools too); in-process chat call ids are
+  `chat:<turn nonce>:<round>:<i>:<provider id>`. Still open: the live `local`
+  legs (the operator's PC), `agentic_memory` live (Postgres), Privy signing /
+  Solana `send` legs (never run).
+- **Hardened sandboxes (2026-09-30, `config/hardening.rs`)** — a `[solana]`
+  signer or a `[risk]` section: every `claude_code` agent must set
+  `[agents.<a>.claude_code] builtin_tools_profile = "none"` (no block =
+  `editor_shell` = load error; the value is read trimmed, an unknown one is a
+  load error), and `fold_default_scopes` sets `no_shell_fallback` on every
+  agent (in-process and bridge fallbacks run no shell; no shell skill loads —
+  `SkillRegistry::with_shell_skills`). A `none` agent's CLI runs with
+  `--setting-sources "" --disable-slash-commands --settings
+  {"autoMemoryEnabled":false,"disableAllHooks":true}` (`claude_code.rs::cli_args`):
+  no settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md
+  discovery or auto-memory (CLI 2.1.286: OAuth + bridge verified live;
+  `--safe-mode` drops the bridge, `--bare` OAuth). A plan step's `compose`
+  may only narrow its base agent there (`run-agent` refuses a widening one).
+- **Workspace writers refuse agent / CLI state (2026-10-01)** — `write_file`
+  (`tools/args.rs::validate_write_path`) resolves the path first
+  (`domain::scope::resolve_path`: symlinks followed, `..` applied —
+  `new/../../x` used to land outside the workspace once `new` was created),
+  then refuses `.tengu/`, `.claude/`, `.git/`, `skills/` at any depth and
+  `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `.mcp.json` files
+  (case-insensitive) in every sandbox; in a hardened one (`AgentConfig::hardened`)
+  also the system-prompt files `MEMORY.md` / `USER.md` / `IDENTITY.md` /
+  `PROFILE.md` / `CONTEXT.md` (`domain::scope::protected_write_in`; elsewhere
+  agents keep their profile files current); `manage_skill` /
+  `apply_improver_proposal` resource paths and `agentic_memory` wiki titles
+  refuse the same names (`domain::scope::protected_write`).
+  Not covered: Claude Code built-ins (profiles other than `none`) and
+  `run_command`.
+- **Telegram fails closed (2026-10-01)** — `tengu telegram` refuses to start
+  without an allow-list (`[telegram] allowed_users` + `TENGU_TELEGRAM_ALLOWED_USERS`);
+  an unlisted sender gets "Unauthorized.". A private agent (no `description`,
+  not `default` — the exec-tool / signing owners) is never `@<id>:` /
+  `@<role>:`-routable, never the default and not listed in `/agents` or the
+  team block (`telegram.rs::telegram_reachable`). `[telegram] tool_approvals`
+  / `approve_only` are NOT implemented — no tool call waits for an approval,
+  on any engine or surface; they still load (aura sets `approve_only`) and
+  `Config::load` warns naming them (`TelegramConfig::approvals_warning`).
+- **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
+  `config/sections.rs::SandboxSections` (one `Arc` per config, set by
+  `fold_default_scopes`): the sandbox name (`<name>` of the file
+  `sandboxes/<name>/config.toml` however loaded, else `default` — the paper
+  ledger's account owner), `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
+  install-wide stores), `[risk]` / `[paper]` (every field required,
+  `config/risk.rs`), `[xmarket.calendars.*]`, `[rate_limits.<name>]`,
+  `[recorder]`. A new section a tool reads goes there — never a new
+  `#[serde(skip)]` field on `AgentConfig`. Every surface (in-process,
+  `run-agent`, loops, `tengu run`, bridge) sees the same values.
+- **`tengu run --sandbox <s>` (2026-09-30, `docs/runtime-2026-09-30.md`)** —
+  one runner per sandbox and one owner per `[xmarket]` ledger (leases
+  `runtime:<s>` + `state:<dir>` in `<state dir>/runtime.db`, TTL 30 s;
+  `tengu webhooks` takes the same — a second process exits 1; each ledger
+  account records the sandbox that first wrote it, another sandbox's tools are
+  refused `account_owner_mismatch`); every `[decision_loops.*]` built once
+  behind `LoopDispatch` (one event per loop at a time, `[runtime]
+  max_decisions_in_flight`; past `max_queued_per_loop` waiting events, 64 by
+  default, one more is refused with a warn — webhook 429); `/webhooks/:name` with `--features webhooks`;
+  SIGINT/SIGTERM drain ≤ `shutdown_grace_secs`; heartbeat
+  `<state dir>/run-<s>.json` + `loop/1` / `feed/1` rows; `tengu doctor
+  --sandbox <s> --live` is the Docker healthcheck. `tengu risk resume` may
+  also ask for a secret (`TENGU_RISK_RESUME_SECRET_FILE`, 0600; a terminal is
+  not a human). Budgets: `[rate_limits.<name>]`
+  (`outbound/rate_limit.rs`, per process; unconfigured = unlimited); backoff
+  `domain/backoff.rs`; HTTP errors classify through `outbound/http_class.rs`;
+  Hyperliquid `POST /info` via `outbound/hyperliquid/info.rs` (`500 null` ⇒
+  not applicable). Time: `domain/tz.rs` (NY / Paris DST), `domain/calendar.rs`
+  (NYSE holidays, weekend window), `ports/clock.rs`.
 - **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
   (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
   via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
@@ -474,8 +619,15 @@ These are not preferences. They're load-bearing.
   Jev returns typed choices, never text or tool-call JSON — it cannot be an
   `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
-  `auth_header_env`, not HMAC) or `tengu decide`. History is in-process;
-  audit in `<TENGU_HOME>/logs/decisions.jsonl` (incl. `args`, `ok`, `output`);
+  `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
+  in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;
+  exec tools key idempotency on a `client_order_id` arg, else `call_id`; an
+  arg never starts with `exit:` `fade:` `fade-shadow:` `feed:` `mcp:` `chat:`,
+  and a replay asking for another order is refused — `client_order_id_conflict`).
+  Jev retries once on 429 / 5xx and has a 30 s circuit breaker. Audit in
+  `<TENGU_HOME>/logs/decisions.jsonl` — one `write_all` per line, a line for a
+  failed Jev call (`outcome = "error"`), `ts_ms` / `latency_ms` / `sandbox` /
+  `act_at` (incl. `args`, `ok`, `output`);
   `tengu chat` on a config with `[decision_loops]` tails it and shows each
   decision of those loops as a System bubble. Plan:
   `docs/decision-loop-plan-2026-09-24.md`.
@@ -483,9 +635,13 @@ These are not preferences. They're load-bearing.
   `ToolOutput.observation` (`domain/observation.rs`); `execute_typed` carries
   it (the default wraps `execute`; `PluginToolExecutor` and
   `SanitizedToolExecutor` override it). Typed tools cache through
-  `application/observe.rs::observe()` in `<workspace>/.tengu/observations.db`:
-  key `<schema>:<subject>` with full ids, slot-monotonic, `Error` rows never
-  stored, `max_age_secs = 0` forces a live read. Failed reads are
+  `application/observe.rs::observe()` in `<workspace>/.tengu/observations.db`
+  (open it with `outbound::observations::open_observation_store(workspace,
+  &agent.sandbox)` — with `[recorder]` on it also appends every live result,
+  `Error` and ttl-0 rows too, to `<state dir>/history/<YYYYMMDD>.db`; read
+  with `tengu history range|asof`): key `<schema>:<subject>` with full ids,
+  slot-monotonic, `Error` rows never cached, `max_age_secs = 0` forces a live
+  read. Failed reads are
   `Field::Error` / `ObsStatus`, never 0; `features` ≤ 32 scalars; line 1 of
   `render_text` ≤ 200 chars with full ids. Decision loops read rows via
   `world` (never fetched) and gate actions with `requires`. The 10 Solana
@@ -503,9 +659,10 @@ These are not preferences. They're load-bearing.
   the `wallet` arg) AND `wallets = ["<full pubkey>"]` in that agent's own
   scope for the tool — never in `[default_scopes]`, only on an agent with no
   `description`, not `default`, no webhook `agent`. With a signer,
-  `Config::load` refuses `claude_code` agents, `[[mcp_servers]]`, any scope
-  granting `shell_bins`, and a key inside any fs root / workspace
-  (`config/solana.rs`); the permissive fallback then runs no shell. Sends are
+  `Config::load` refuses `claude_code` agents unless `builtin_tools_profile =
+  "none"` (`config/hardening.rs`), `[[mcp_servers]]`, any scope granting
+  `shell_bins`, and a key inside any fs root / workspace (`config/solana.rs`);
+  the permissive fallback then runs no shell. Sends are
   serialized per wallet by a lease in `<TENGU_HOME>/state/solana-writes.db`
   (+ pending record resolved before the next send, + write fence that makes
   older `lp_snapshot` rows `stale_input`) — it cannot see the TS bot, so
@@ -516,7 +673,10 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. As of 2026-05-14, the
+See `docs/SESSION_HANDOFF.md` for the running list. Next up (2026-09-30): the
+`xmarket` sandbox — start at `docs/xmarket-build-plan-2026-09-30.md` (kickoff
+prompt at its end) and `docs/xmarket-tracker-2026-09-29.md` § 0.
+As of 2026-05-14, the
 agentic-memory migration (Open Brain Postgres + pgvector behind
 `postgres_memory`) has landed all six phases: the `agentic_memory` plugin, the
 schema, the planner/runner recall replacement, the LLM Wiki compiler
@@ -550,7 +710,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-09-29 (Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-01 (W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

@@ -1,10 +1,16 @@
 //! `compress_and_store` — the harness-enforced "step is done" signal.
 //!
 //! The model's "I'm done" tool. `inbound/cli/run_agent.rs::run_agent_subprocess` intercepts
-//! `tool_calls` named `compress_and_store` out-of-band (OpenRouter path),
-//! sets `compress_called = true`, and captures the summary; Claude Code
-//! subagents often just stop instead, in which case the runner's graceful-
-//! degradation path treats the final assistant text as the summary.
+//! `tool_calls` named `compress_and_store` out-of-band (OpenRouter / local),
+//! sets `compress_called = true`, and captures the summary. A Claude Code
+//! step calls it through its bridge (`inbound/mcp_bridge.rs::StepSummary`),
+//! which writes the summary to the step's `TENGU_BRIDGE_SUMMARY_FILE` and
+//! answers `stored — stop now`; the engine (`engines/claude_code.rs`) ends
+//! the CLI run once that call succeeded and the round's other calls are
+//! answered — as the in-process loop stops after its round — and the
+//! runner reads the summary back. A subagent that just stops falls to
+//! the runner's graceful-degradation path: the final assistant text is the
+//! summary.
 //!
 //! Durable capture (when the `postgres_memory` feature is enabled) happens in
 //! `run-agent` via `try_persist_agentic_step_summary` → Open Brain Postgres.
@@ -18,12 +24,16 @@
 
 use crate::domain::message::ToolDef;
 
+/// The tool's name: the runner, the bridge and the Claude Code engine match
+/// calls on it.
+pub(crate) const NAME: &str = "compress_and_store";
+
 /// The canonical tool definition. The runner appends it implicitly to every
 /// subagent (`build_subprocess_tool_executor`) — never list it in
 /// `[agents.<name>].tools`.
 pub fn definition() -> ToolDef {
     ToolDef {
-        name: "compress_and_store".to_string(),
+        name: NAME.to_string(),
         description: "Store a compressed summary of your completed work. \
                       Call this as your FINAL action when the task is done. \
                       Do not call it mid-task."

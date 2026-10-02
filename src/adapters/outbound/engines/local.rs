@@ -5,10 +5,11 @@
 //!
 //! | Aspect | Behaviour |
 //! |---|---|
-//! | Endpoint | `POST {base_url}/v1/chat/completions`, OpenAI `tools` |
+//! | Endpoint | `POST {base_url}/v1/chat/completions`, OpenAI `tools`; a `base_url` ending in `/v1` is accepted (the suffix is dropped) |
 //! | Auth | `Authorization: Bearer $<api_key_env>` when that env is set (Unsloth `sk-unsloth-…`); none otherwise |
 //! | Network | Direct connection, never via the `[egress]` proxy — the server is on this host, not the internet |
 //! | Config | `[agents.<n>.local] base_url`, `api_key_env` (`config::AgentLocalConfig`) |
+//! | Context fit | One tool result ≤ 1/8 of `limits.context_window` (`tool_result_char_cap`; a typed row above it compacts, one that fits arrives whole); a system message repeating the system prompt is sent once |
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -20,6 +21,7 @@ use tracing::{debug, error};
 
 use crate::config::AgentLocalConfig;
 use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolDef};
+use crate::domain::token::tool_result_char_budget;
 use crate::ports::engine::{Engine, EngineContext, EngineDiagnostics};
 
 pub struct LocalEngine {
@@ -107,7 +109,7 @@ impl LocalEngine {
             .build()
             .context("build local LLM http client")?;
         Ok(Self {
-            base_url: local.base_url.trim_end_matches('/').to_string(),
+            base_url: server_root(&local.base_url),
             model: model.to_string(),
             api_key,
             context_window_tokens: context_window,
@@ -193,6 +195,10 @@ impl Engine for LocalEngine {
 
     fn supports_streaming(&self) -> bool {
         false
+    }
+
+    fn tool_result_char_cap(&self) -> Option<usize> {
+        Some(tool_result_char_budget(self.context_window_tokens))
     }
 
     fn diagnostics(&self) -> EngineDiagnostics {
@@ -290,13 +296,29 @@ impl Engine for LocalEngine {
     }
 }
 
-/// Runtime messages → OpenAI chat-completions message array.
+/// `base_url` without trailing `/` or `/v1` — the engine appends
+/// `/v1/chat/completions` (Ollama documents its root as `…:11434/v1`).
+fn server_root(base_url: &str) -> String {
+    let url = base_url.trim_end_matches('/');
+    url.strip_suffix("/v1")
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Runtime messages → OpenAI chat-completions message array. A system
+/// message equal to `system_prompt` is skipped (`run-agent` sends the prompt
+/// both ways): a local window cannot afford it twice.
 fn convert_messages(messages: &[Message], system_prompt: Option<&str>) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
-    if let Some(prompt) = system_prompt.filter(|s| !s.trim().is_empty()) {
+    let system_prompt = system_prompt.filter(|s| !s.trim().is_empty());
+    if let Some(prompt) = system_prompt {
         out.push(serde_json::json!({ "role": "system", "content": prompt }));
     }
     for m in messages {
+        if matches!(m.role, Role::System) && Some(m.content.as_str()) == system_prompt {
+            continue;
+        }
         let msg = match m.role {
             Role::Tool => serde_json::json!({
                 "role": "tool",
@@ -432,6 +454,75 @@ mod tests {
             "{raw}"
         );
         assert!(matches!(&events[0], StreamEvent::TextDelta { text } if text == "ok"));
+    }
+
+    /// Ollama's documented root `…:11434/v1` must not become `/v1/v1/…`.
+    #[tokio::test]
+    async fn base_url_with_v1_suffix_is_accepted() {
+        let (base, server) = serve_once(r#"{"choices":[{"message":{"content":"ok"}}]}"#).await;
+        let engine = LocalEngine::new(
+            &cfg(format!("{base}v1/"), ""),
+            "gemma4:latest",
+            16_384,
+            60,
+            None,
+        )
+        .unwrap();
+        let events = run_hi(&engine).await;
+        let raw = server.await.unwrap();
+        assert!(raw.starts_with("POST /v1/chat/completions "), "{raw}");
+        assert!(matches!(&events[0], StreamEvent::TextDelta { text } if text == "ok"));
+        assert_eq!(
+            server_root("http://127.0.0.1:11434"),
+            "http://127.0.0.1:11434"
+        );
+        assert_eq!(
+            server_root("http://127.0.0.1:8000/api/v1"),
+            "http://127.0.0.1:8000/api"
+        );
+    }
+
+    #[test]
+    fn tool_result_cap_is_an_eighth_of_the_window() {
+        let engine = LocalEngine::new(
+            &cfg("http://127.0.0.1:11434".into(), ""),
+            "m",
+            16_384,
+            60,
+            None,
+        )
+        .unwrap();
+        assert_eq!(engine.tool_result_char_cap(), Some(8_192));
+    }
+
+    #[test]
+    fn system_prompt_is_sent_once() {
+        let msg = |role, content: &str| Message {
+            role,
+            content: content.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        };
+        let messages = vec![
+            msg(Role::System, "SYS"),
+            msg(Role::User, "goal"),
+            msg(Role::System, "memory block"),
+        ];
+        let out = convert_messages(&messages, Some("SYS"));
+        let roles: Vec<(&str, &str)> = out
+            .iter()
+            .map(|m| (m["role"].as_str().unwrap(), m["content"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            roles,
+            vec![
+                ("system", "SYS"),
+                ("user", "goal"),
+                ("system", "memory block")
+            ]
+        );
+        // Without a context prompt every system message is kept.
+        assert_eq!(convert_messages(&messages, None).len(), 3);
     }
 
     #[tokio::test]

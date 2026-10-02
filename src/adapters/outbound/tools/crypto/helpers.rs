@@ -1,7 +1,15 @@
 // src/adapters/outbound/tools/crypto/helpers.rs
 //! Shared Privy + ABI helpers used by the crypto plugin tools.
 //!
-//! Lift-and-shift from `crypto_tool_executor.rs` — behaviour preserved exactly.
+//! Every Privy / EVM RPC request is gated like the other networked tools
+//! (`http_request`, the Solana and Hyperliquid families):
+//!
+//! | Step | Rule |
+//! |---|---|
+//! | env | `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID`, `CHAIN_ID`, `EVM_RPC_URL` read only through `ctx.scope.check_env_read` |
+//! | before sending | `egress::policy().check_url` (scheme, `[egress] allow_hosts` / `deny_hosts`, `https_only`) + `ctx.scope.check_net_host` — a denial sends nothing |
+//! | client | `ctx.http`: the egress tool client (proxy per `[egress]`, redirects off) |
+//! | audit | one egress record per request (`tool`, host, path, verdict, status, ms) |
 
 use alloy::dyn_abi::{DynSolType, DynSolValue};
 use alloy::primitives::{Address, I256, U256};
@@ -11,17 +19,101 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::adapters::outbound::egress;
+use crate::ports::tool::ToolCtx;
+
 pub(crate) const PRIVY_API_URL: &str = "https://api.privy.io";
 pub(crate) const DEFAULT_CHAIN_ID: u64 = 1;
 pub(crate) const DEFAULT_FALLBACK_RPC: &str = "https://ethereum-rpc.publicnode.com";
 
-/// Resolve chain id from `CHAIN_ID` env var when the caller omits it.
-/// Falls back to `DEFAULT_CHAIN_ID` when the env var is unset or unparseable.
-pub(crate) fn resolve_default_chain_id() -> u64 {
-    std::env::var("CHAIN_ID")
+/// Resolve chain id from `CHAIN_ID` env var when the caller omits it (the
+/// scope must allow reading it). Falls back to `DEFAULT_CHAIN_ID` when the
+/// env var is unset or unparseable.
+pub(crate) fn resolve_default_chain_id(ctx: &ToolCtx<'_>) -> Result<u64> {
+    ctx.scope.check_env_read("CHAIN_ID")?;
+    Ok(std::env::var("CHAIN_ID")
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(DEFAULT_CHAIN_ID)
+        .unwrap_or(DEFAULT_CHAIN_ID))
+}
+
+/// One env var a Privy call needs, read through the tool's scope.
+fn privy_env(ctx: &ToolCtx<'_>, name: &str) -> Result<String> {
+    ctx.scope.check_env_read(name)?;
+    std::env::var(name).map_err(|_| anyhow::anyhow!("Missing environment variable {name}"))
+}
+
+/// `(app id, app secret, wallet id)`.
+fn privy_creds(ctx: &ToolCtx<'_>) -> Result<(String, String, String)> {
+    Ok((
+        privy_env(ctx, "PRIVY_APP_ID")?,
+        privy_env(ctx, "PRIVY_APP_SECRET")?,
+        privy_env(ctx, "PRIVY_WALLET_ID")?,
+    ))
+}
+
+/// One egress audit record for a request to `url` by `tool`.
+fn audit(
+    tool: &str,
+    url: &reqwest::Url,
+    verdict: &str,
+    status: Option<u16>,
+    reason: Option<String>,
+    ms: Option<u64>,
+) {
+    egress::policy().audit(json!({
+        "tool": tool, "host": url.host_str(), "path": url.path(), "verdict": verdict,
+        "status": status, "reason": reason, "ms": ms,
+    }));
+}
+
+/// The gate of the module table for `url`: `[egress]` + the tool's
+/// `net_hosts`. `Err` = denied (audited); nothing may be sent.
+fn gate(ctx: &ToolCtx<'_>, tool: &str, url: &str) -> Result<reqwest::Url> {
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("{tool}: invalid URL"))?;
+    let host = parsed.host_str().unwrap_or("").to_string();
+    if let Err(e) = egress::policy()
+        .check_url(&parsed)
+        .and_then(|_| ctx.scope.check_net_host(&host))
+    {
+        audit(tool, &parsed, "denied", None, Some(format!("{e:#}")), None);
+        return Err(e);
+    }
+    Ok(parsed)
+}
+
+/// Send `req` (to `url`) once the gate allows it; one audit record either
+/// way. `Ok` = HTTP status + JSON body.
+async fn send_json(
+    ctx: &ToolCtx<'_>,
+    tool: &str,
+    url: &str,
+    req: reqwest::RequestBuilder,
+) -> Result<(reqwest::StatusCode, serde_json::Value)> {
+    let parsed = gate(ctx, tool, url)?;
+    let audit = |verdict: &str, status: Option<u16>, reason: Option<String>, ms: Option<u64>| {
+        audit(tool, &parsed, verdict, status, reason, ms)
+    };
+    let started = std::time::Instant::now();
+    let ms = || Some(started.elapsed().as_millis() as u64);
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            audit("error", None, Some(e.to_string()), ms());
+            return Err(e.into());
+        }
+    };
+    let status = resp.status();
+    match resp.json::<serde_json::Value>().await {
+        Ok(body) => {
+            audit("allowed", Some(status.as_u16()), None, ms());
+            Ok((status, body))
+        }
+        Err(e) => {
+            audit("error", Some(status.as_u16()), Some(e.to_string()), ms());
+            Err(e.into())
+        }
+    }
 }
 
 /// Canonical wallet label used for scope checks during the migration window.
@@ -34,26 +126,22 @@ pub(crate) const DEFAULT_WALLET_LABEL: &str = "default";
 /// per `sign_message` / `get_wallet_address` call.
 pub(crate) static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None);
 
-pub(crate) async fn privy_wallet_address(client: &reqwest::Client) -> Result<String> {
-    if let Some(cached) = WALLET_ADDRESS_CACHE.lock().unwrap().as_ref() {
-        return Ok(cached.clone());
+pub(crate) async fn privy_wallet_address(ctx: &ToolCtx<'_>) -> Result<String> {
+    // The scope and the gate hold for a cached answer too: the cache is
+    // process-wide, the caller's permissions are not.
+    let (app_id, app_secret, wallet_id) = privy_creds(ctx)?;
+    let url = format!("{}/v1/wallets/{}", PRIVY_API_URL, wallet_id);
+    let cached = WALLET_ADDRESS_CACHE.lock().unwrap().clone();
+    if let Some(cached) = cached {
+        gate(ctx, "get_wallet_address", &url)?;
+        return Ok(cached);
     }
-
-    let app_id = std::env::var("PRIVY_APP_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
-    let app_secret = std::env::var("PRIVY_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_SECRET"))?;
-    let wallet_id = std::env::var("PRIVY_WALLET_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_WALLET_ID"))?;
-
-    let resp = client
-        .get(format!("{}/v1/wallets/{}", PRIVY_API_URL, wallet_id))
+    let req = ctx
+        .http
+        .get(&url)
         .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id)
-        .send()
-        .await?;
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
+        .header("privy-app-id", &app_id);
+    let (status, body) = send_json(ctx, "get_wallet_address", &url, req).await?;
     if !status.is_success() {
         bail!("Privy wallet lookup failed: {} {:?}", status, body);
     }
@@ -67,18 +155,13 @@ pub(crate) async fn privy_wallet_address(client: &reqwest::Client) -> Result<Str
 }
 
 pub(crate) async fn privy_send_transaction(
-    client: &reqwest::Client,
+    ctx: &ToolCtx<'_>,
     to: &str,
     data: Option<&str>,
     value: Option<&str>,
     chain_id: u64,
 ) -> Result<String> {
-    let app_id = std::env::var("PRIVY_APP_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
-    let app_secret = std::env::var("PRIVY_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_SECRET"))?;
-    let wallet_id = std::env::var("PRIVY_WALLET_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_WALLET_ID"))?;
+    let (app_id, app_secret, wallet_id) = privy_creds(ctx)?;
 
     let hex_value = match value {
         Some(v) => {
@@ -94,19 +177,18 @@ pub(crate) async fn privy_send_transaction(
         transaction["data"] = json!(d);
     }
 
-    let resp = client
-        .post(format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id))
+    let url = format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id);
+    let req = ctx
+        .http
+        .post(&url)
         .basic_auth(&app_id, Some(&app_secret))
         .header("privy-app-id", &app_id)
         .json(&json!({
             "method": "eth_sendTransaction",
             "caip2": format!("eip155:{}", chain_id),
             "params": { "transaction": transaction }
-        }))
-        .send()
-        .await?;
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
+        }));
+    let (status, body) = send_json(ctx, "sign_and_send_transaction", &url, req).await?;
     if !status.is_success() {
         bail!("Privy eth_sendTransaction failed: {} {:?}", status, body);
     }
@@ -116,26 +198,20 @@ pub(crate) async fn privy_send_transaction(
         .map(String::from)
 }
 
-pub(crate) async fn privy_personal_sign(client: &reqwest::Client, message: &str) -> Result<String> {
-    let app_id = std::env::var("PRIVY_APP_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_ID"))?;
-    let app_secret = std::env::var("PRIVY_APP_SECRET")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_APP_SECRET"))?;
-    let wallet_id = std::env::var("PRIVY_WALLET_ID")
-        .map_err(|_| anyhow::anyhow!("Missing environment variable PRIVY_WALLET_ID"))?;
+pub(crate) async fn privy_personal_sign(ctx: &ToolCtx<'_>, message: &str) -> Result<String> {
+    let (app_id, app_secret, wallet_id) = privy_creds(ctx)?;
 
-    let resp = client
-        .post(format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id))
+    let url = format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id);
+    let req = ctx
+        .http
+        .post(&url)
         .basic_auth(&app_id, Some(&app_secret))
         .header("privy-app-id", &app_id)
         .json(&json!({
             "method": "personal_sign",
             "params": { "message": message, "encoding": "utf-8" }
-        }))
-        .send()
-        .await?;
-    let status = resp.status();
-    let body: serde_json::Value = resp.json().await?;
+        }));
+    let (status, body) = send_json(ctx, "sign_message", &url, req).await?;
     if !status.is_success() {
         bail!("Privy personal_sign failed: {} {:?}", status, body);
     }
@@ -153,27 +229,24 @@ pub(crate) async fn privy_personal_sign(client: &reqwest::Client, message: &str)
 }
 
 pub(crate) async fn wait_for_receipt(
-    client: &reqwest::Client,
+    ctx: &ToolCtx<'_>,
     tx_hash: &str,
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<serde_json::Value> {
+    ctx.scope.check_env_read("EVM_RPC_URL")?;
     let rpc_url = std::env::var("EVM_RPC_URL").unwrap_or_else(|_| DEFAULT_FALLBACK_RPC.to_string());
 
     for _ in 0..90 {
         if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
             bail!("Cancelled by /stop while waiting for receipt: {}", tx_hash);
         }
-        let resp = client
-            .post(&rpc_url)
-            .json(&json!({
-                "jsonrpc": "2.0",
-                "method": "eth_getTransactionReceipt",
-                "params": [tx_hash],
-                "id": 1
-            }))
-            .send()
-            .await?;
-        let body: serde_json::Value = resp.json().await?;
+        let req = ctx.http.post(&rpc_url).json(&json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getTransactionReceipt",
+            "params": [tx_hash],
+            "id": 1
+        }));
+        let (_, body) = send_json(ctx, "sign_and_send_transaction", &rpc_url, req).await?;
         if let Some(result) = body.get("result") {
             if !result.is_null() {
                 return Ok(result.clone());

@@ -1,7 +1,8 @@
 //! Observation store port — the TTL cache typed tools read through
 //! (`application::observe`) and decision loops read `state.world` from.
 //! Impl: `adapters::outbound::observations::SqliteObservationStore`
-//! (`<workspace>/.tengu/observations.db`).
+//! (`<workspace>/.tengu/observations.db`), wrapped by
+//! `RecordingObservationStore` when `[recorder]` is on (`ports::history`).
 
 use async_trait::async_trait;
 
@@ -33,5 +34,12 @@ pub(crate) trait ObservationStore: Send + Sync {
     /// The write tools drop the rows a landed transaction made stale.
     async fn remove(&self, _keys: &[String]) -> anyhow::Result<usize> {
         anyhow::bail!("observation store does not support removal")
+    }
+    /// Offer a live observation to the history recorder
+    /// (`ops-history-recorder`): `observe()` calls it for every live result,
+    /// `Error` and ttl-0 rows included (`put` stores neither). Default:
+    /// no-op; `RecordingObservationStore` appends it to the history.
+    async fn record(&self, _obs: &Observation) -> anyhow::Result<()> {
+        Ok(())
     }
 }

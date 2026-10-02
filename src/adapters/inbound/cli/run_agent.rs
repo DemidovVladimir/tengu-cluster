@@ -4,7 +4,6 @@
 //! `SubprocessRunner`.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
 
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::paths::default_config_path;
@@ -51,17 +50,30 @@ async fn try_persist_agentic_step_summary(
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
 /// 3. Loads the parent's config (sandbox via IPC, else the default config) and
 ///    takes `[agents.<name>]` from it — model, engine, tools, skills, limits.
+///    Its workspace (`bootstrap::tools::workspace_or_temp`): the agent's,
+///    else a temp dir for this step — the executor's and the engine's (a
+///    Claude Code CLI's cwd, its bridge).
 /// 4. Composes the system prompt: base template + skill bodies (three-tier
 ///    loader) + mandatory `compress_and_store` suffix.
-/// 5. Builds the engine (`engine` = `openrouter` | `claude_code`) for the agent's model.
-/// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪ {compress_and_store}`
-///    plus a `PluginToolExecutor` over those tools.
+/// 5. Builds the engine (`engine` = `openrouter` | `local` | `claude_code`) for
+///    the agent's model as a step (`build_step_engine`: a Claude Code bridge
+///    grants the workspace and writes `compress_and_store` into a summary file).
+/// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪
+///    {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools` plus a
+///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`).
 /// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
-///    dispatch each → append assistant + tool messages → repeat. Stop on:
-///    - empty tool_calls (model done)
+///    dispatch each → append assistant + tool messages → repeat. Results
+///    enter as in-process chat feeds them (`tool_loop::tool_result_content`:
+///    `limits.max_tool_result_chars`, local models fitted to the window),
+///    older rounds compacted to line 1 from turn 1 on. Stop on:
+///    - empty tool_calls (model done; a Claude Code turn ends here — its
+///      bridged `compress_and_store` summary is read from the summary file,
+///      and the engine ends the CLI run right after that call)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
 ///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
-/// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit.
+/// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
+///    per-turn `metrics` and the tool activity `tools` (every call and its
+///    outcome, bridged Claude Code calls included).
 pub(super) async fn run_agent_subprocess() -> Result<()> {
     use crate::domain::message::{Message, Role};
     use crate::ports::engine::EngineContext;
@@ -139,7 +151,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // which may be a synthetic label for events/logs), then override the
     // base's `skills` and `tools` with the values the planner picked from
     // the planner registry roster. The override is in-memory only — the config
-    // on disk is unchanged.
+    // on disk is unchanged. In a hardened sandbox it may only narrow the
+    // base (`bootstrap::tools::compose_agent`); a widening compose fails the
+    // step here, before the engine is built.
     let (spec_load_name, compose_override) = match &input.compose {
         Some(c) => {
             tracing::info!(
@@ -175,15 +189,30 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 known
             )
         })?;
-    // `~` in `workspace` is expanded by every in-process consumer; do the
-    // same here so scopes / memory / the engine agree on one absolute path.
-    spec.workspace = spec
-        .workspace
-        .as_ref()
-        .map(|p| crate::config::paths::expand_tilde(p));
     if let Some(c) = compose_override {
-        spec.skill_packages = c.skills;
-        spec.tools = c.tools;
+        spec = crate::bootstrap::tools::compose_agent(
+            &spec_load_name,
+            &spec,
+            &c,
+            crate::config::hardening::requires_hardened_claude_code(&parent_config),
+            parent_config.memory.enabled,
+        )?;
+    }
+    // The step's one workspace (`workspace_or_temp`): the executor, the memory
+    // store and the engine — a Claude Code CLI's cwd and its bridge — all
+    // use it. `step_dir` (an agent without `workspace`) is removed when the
+    // step ends.
+    let configured_workspace = spec.workspace.is_some();
+    let (workspace, step_dir) =
+        crate::bootstrap::tools::workspace_or_temp(spec.workspace.as_deref(), "tengu-step-")
+            .context("run-agent: the step's workspace")?;
+    spec.workspace = Some(workspace.clone());
+    if let Some(dir) = &step_dir {
+        tracing::info!(
+            workspace = %workspace.display(),
+            temp_dir = %dir.path().display(),
+            "run-agent: the agent has no `workspace` — this step runs in a temp dir"
+        );
     }
     // Resolved agent name (the base for composed agents) — exposed like
     // TENGU_SESSION_ID so plugins can attribute writes without ToolCtx plumbing.
@@ -229,18 +258,29 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     system_prompt.push_str(MANDATORY_SUFFIX);
 
     // ----- Build engine (Phase 7.3 — honour the agent's engine) -----
-    let workspace = spec
-        .workspace
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let mut agent_cfg_for_engine = crate::bootstrap::tools::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
     crate::bootstrap::tools::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
-    let engine = crate::adapters::outbound::engines::build_engine(
-        &input.agent_name,
+    // A Claude Code step's bridge serves `compress_and_store` into this file
+    // (the loop below intercepts it for the other engines); read back after
+    // the turn. Removed when this process ends.
+    let summary_file = if spec.engine == "claude_code" {
+        Some(tempfile::NamedTempFile::new().context("run-agent: step summary file")?)
+    } else {
+        None
+    };
+    // The base block's name: a Claude Code bridge loads `[agents.<it>]` and
+    // grants this step's workspace, as the executor below does.
+    let engine = crate::adapters::outbound::engines::build_step_engine(
+        &spec_load_name,
         &agent_cfg_for_engine,
         parent_config.claude_code.as_ref(),
+        crate::adapters::outbound::engines::StepOpts {
+            grant_workspace: true,
+            summary_file: summary_file.as_ref().map(|f| f.path().to_path_buf()),
+            config_file: None,
+        },
     )
     .with_context(|| {
         format!(
@@ -255,9 +295,19 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         "subprocess engine built"
     );
     let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
+    // Every result enters capped and older rounds are compacted to line 1,
+    // as `collect_engine_response` does in-process (`tool_loop` module
+    // table): `limits.max_tool_result_chars`, and for local models
+    // (`Engine::tool_result_char_cap`) the window fit.
+    let engine_result_cap = engine.tool_result_char_cap();
+    let max_tool_result_chars = spec.limits.max_tool_result_chars as usize;
 
     // ----- Build tool stack (Phase 5b) -----
-    let secret_registry = std::sync::Arc::new(crate::domain::secrets::SecretRegistry::new());
+    // The parent's vault values (inherited, never prompts): tool output is
+    // redacted like in the parent and in a Claude Code bridge.
+    let secret_registry = std::sync::Arc::new(
+        crate::adapters::outbound::secrets::process_secret_registry(None),
+    );
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
     // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
@@ -266,11 +316,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // MCP-routed Claude Code calls to those tools fail with
     // "Tool 'X' is not available to this agent" even though the tool def is
     // in the advertised list.
+    // The store sits in the agent's own workspace, else at `[memory]
+    // store_path` (as in-process chat and the bridge): never in a step's
+    // temp dir, which goes when the step ends.
     let memory_manager = if parent_config.memory.enabled {
         Some(
             crate::bootstrap::memory::build_memory_manager_async(
                 &parent_config.memory,
-                Some(&workspace),
+                configured_workspace.then_some(workspace.as_path()),
             )
             .await,
         )
@@ -286,6 +339,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         activity,
         memory_manager.clone(),
     );
+    let executor = executor.map(|e| {
+        crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
+            std::sync::Arc::new(e),
+            std::sync::Arc::clone(&secret_registry),
+        )
+    });
     // Diagnostic: log the actual tool NAMES the subprocess can call, so we
     // can verify (in the parent log) whether expected tools like
     // `persistent_store` made it through the `[agents.<name>].tools` allow-list +
@@ -332,7 +391,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             None
         };
     let context = EngineContext {
-        workspace: spec.workspace.clone(),
+        // Always set: a Claude Code engine starts its bridge (and runs the
+        // CLI) only in a workspace.
+        workspace: Some(workspace.clone()),
         system_prompt: Some(system_prompt),
         bridge_tools: bridge_tools_for_ctx,
         max_tool_rounds: Some(input.max_turns),
@@ -347,6 +408,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // Per-turn metrics records — shipped back to the parent in the IPC
     // output so they can be re-emitted on the parent's metrics bus.
     let mut subagent_metrics: Vec<crate::domain::metrics::MetricsRecord> = Vec::new();
+    // Tool activity in call order (IPC `tools`): calls dispatched below and
+    // the ones a Claude Code engine ran through its bridge.
+    let mut tool_runs: Vec<crate::domain::message::ToolRun> = Vec::new();
 
     for turn in 0..input.max_turns {
         // Compute the prompt size BEFORE the engine call so the metric
@@ -358,17 +422,23 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         let prompt_bytes: u32 = messages.iter().map(|m| m.content.len() as u32).sum();
         let turn_started = std::time::Instant::now();
 
-        let (text, tool_calls, input_delta, output_delta) =
-            crate::application::chat::tool_loop::run_single_engine_turn(
-                engine.as_ref(),
-                &messages,
-                &tools,
-                &context,
-                None,
-                stream_event_timeout_secs,
-            )
-            .await
-            .context("engine turn failed")?;
+        let drained = crate::application::chat::tool_loop::run_single_engine_turn(
+            engine.as_ref(),
+            &messages,
+            &tools,
+            &context,
+            None,
+            stream_event_timeout_secs,
+        )
+        .await
+        .context("engine turn failed")?;
+        tool_runs.extend(drained.engine_runs);
+        let (text, tool_calls, input_delta, output_delta) = (
+            drained.text,
+            drained.tool_calls,
+            drained.input_tokens,
+            drained.output_tokens,
+        );
 
         // Record one metric per engine turn. `input_delta`/`output_delta`
         // come from `StreamEvent::Usage` frames (OpenRouter + Claude Code
@@ -404,6 +474,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
         // Append the assistant message carrying the tool_calls so the next
         // engine turn sees the full call/result history.
+        let compact_cutoff = messages.len();
         messages.push(Message {
             role: Role::Assistant,
             content: text.clone(),
@@ -416,7 +487,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
         // Dispatch each tool call.
         for call in &tool_calls {
-            let result = if call.name == "compress_and_store" {
+            let (result, observation, ok) = if call.name == "compress_and_store" {
                 // Out-of-band handling: capture the summary here; with
                 // `postgres_memory` it is persisted to Postgres `agentic_memory`.
                 let extracted_summary = call
@@ -437,23 +508,53 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                     )
                     .await;
                 }
-                "stored".to_string()
+                ("stored".to_string(), None, true)
             } else if let Some(ref exec) = executor {
                 use crate::ports::engine::ToolExecutor;
-                match exec.execute(call, &messages).await {
-                    Ok(s) => s,
-                    Err(e) => format!("tool error: {}", e),
+                match exec.execute_typed(call, &messages).await {
+                    Ok(out) => (out.text, out.observation, true),
+                    Err(e) => {
+                        // The error is redacted by `SanitizedToolExecutor`;
+                        // in the step's log with the model's arguments so a
+                        // failed call is diagnosable (the parent forwards
+                        // stderr).
+                        let args = call.arguments.to_string();
+                        let args = crate::domain::token::truncate_at_boundary(&args, 300)
+                            .map_or(args.as_str(), |(prefix, _)| prefix);
+                        tracing::warn!(tool = %call.name, error = %e, arguments = %args, "subagent tool call failed");
+                        (format!("tool error: {}", e), None, false)
+                    }
                 }
             } else {
-                format!("tool '{}' is not available in this subprocess", call.name)
+                (
+                    format!("tool '{}' is not available in this subprocess", call.name),
+                    None,
+                    false,
+                )
             };
+            tool_runs.push(crate::domain::message::ToolRun {
+                name: call.name.clone(),
+                ok,
+            });
+            let content = crate::application::chat::tool_loop::tool_result_content(
+                &result,
+                observation.as_ref(),
+                engine_result_cap,
+                max_tool_result_chars,
+            );
 
             messages.push(Message {
                 role: Role::Tool,
-                content: result,
+                content,
                 tool_call_id: Some(call.id.clone()),
                 tool_calls: None,
             });
+        }
+        if turn >= 1 {
+            crate::application::chat::tool_loop::compact_older_tool_results(
+                &mut messages[..compact_cutoff],
+                spec.limits.compact_result_limit as usize,
+            );
         }
 
         if compress_called {
@@ -473,6 +574,30 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         }
     }
 
+    // A Claude Code step called `compress_and_store` through its bridge.
+    if summary.is_none() {
+        if let Some(text) = summary_file
+            .as_ref()
+            .and_then(|f| bridged_summary(f.path()))
+        {
+            tracing::info!(
+                chars = text.chars().count(),
+                "compress_and_store called through the bridge; its summary is the step summary"
+            );
+            compress_called = true;
+            #[cfg(feature = "postgres_memory")]
+            {
+                let _ = try_persist_agentic_step_summary(
+                    &parent_config,
+                    &input.session_id,
+                    &input.step_id,
+                    &text,
+                )
+                .await;
+            }
+            summary = Some(text);
+        }
+    }
     // If the model never called compress_and_store, treat the final
     // assistant text as the summary (graceful degradation, same as Phase 5a).
     let summary = summary.unwrap_or_else(|| final_text.clone());
@@ -539,6 +664,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             output,
             summary,
             metrics: subagent_metrics,
+            tools: tool_runs,
         }
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
@@ -550,11 +676,23 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             ),
             output,
             metrics: subagent_metrics,
+            tools: tool_runs,
         }
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;
     println!("{}", json);
+    // The temp workspace of a step without one goes now, not earlier.
+    drop(step_dir);
     Ok(())
+}
+
+/// The summary a Claude Code step's bridge wrote for `compress_and_store`
+/// (`mcp_bridge::StepSummary`); `None` when the model never called it (the
+/// file is empty) or it holds only whitespace.
+fn bridged_summary(file: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(file)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
 }
 
 /// Subprocess `ToolActivityPort` impl — silent. The parent runner sees
@@ -652,4 +790,25 @@ fn load_skill_body_three_tier(name: &str) -> Option<String> {
         return Some(content);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The step summary a Claude Code bridge leaves: none until
+    /// `compress_and_store` wrote one; whitespace is none.
+    #[test]
+    fn bridged_summary_is_the_written_text() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        assert_eq!(bridged_summary(file.path()), None);
+        std::fs::write(file.path(), " \n").unwrap();
+        assert_eq!(bridged_summary(file.path()), None);
+        std::fs::write(file.path(), "done: 42").unwrap();
+        assert_eq!(bridged_summary(file.path()).as_deref(), Some("done: 42"));
+        assert_eq!(
+            bridged_summary(std::path::Path::new("/nonexistent/x")),
+            None
+        );
+    }
 }

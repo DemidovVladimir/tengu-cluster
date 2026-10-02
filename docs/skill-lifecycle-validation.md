@@ -516,11 +516,11 @@ Expected:
 - Frontmatter with `name`, `description`, `metrics:` block.
 - Body with Overview / When to Use / Procedure / Common Mistakes.
 - `prompts.yaml` seeded with the conversation slice (args schema-redacted — long strings replaced with `"<elided>"`).
-- `config.toml` with `[agents.<name>-agent]` mirroring the calling agent's `engine` + `model`; `workspace_tools` = tool names seen in the fixtures. `tengu eval` refuses `engine = "claude_code"` here — pass `--sandbox <openrouter-config>` or edit the file.
+- `config.toml` with `[agents.<name>-agent]` mirroring the calling agent's `engine` + `model`; `workspace_tools` = tool names seen in the fixtures. With `engine = "claude_code"`, `tengu eval` runs the agent's tools through the MCP bridge, which loads this file with `Config::load` — `workspace_tools` must then hold opt-in names only (move catalog tools such as `http_request` to `tools`; the row fails naming the field otherwise), and rows with `stubs` need an openrouter / local agent (the bridge has no stub layer).
 
 ### 9.3 Known limitation
 
-`PluginToolExecutor` threads the live message slice into `ConversationView` via the `ToolExecutor::execute` trait (commit `e243468`). If you see `from_message_index` errors or an empty fixtures.yaml, the engine dispatch path may not be passing `messages` correctly — file a bug.
+`PluginToolExecutor` threads the live message slice into `ConversationView` via the `ToolExecutor::execute` trait (commit `e243468`). Under Claude Code the bridge builds it from the engine's transcript of the run (`TENGU_BRIDGE_TRANSCRIPT_FILE`, `docs/mcp-bridge.md` § Dispatch); `tengu tool call` from `--transcript`. A call with no conversation at all is refused ("no conversation to distill") instead of writing `fixtures: []`. If you see `from_message_index` errors or an empty fixtures.yaml otherwise, the engine dispatch path may not be passing `messages` correctly — file a bug.
 
 ---
 

@@ -13,7 +13,11 @@
 //!
 //! Failure semantics: a bad MCP server config (unreachable, broken handshake,
 //! non-JSON output) logs a warning and is skipped. We never let a misbehaving
-//! external server prevent tengu from booting.
+//! external server prevent tengu from booting. A tool whose schema leaves the
+//! subset every engine accepts (`tools/schema_lint.rs`: e.g. a top-level
+//! `anyOf`, a `.` in its name) is dropped with a warning naming the server,
+//! the tool and each rule ([`linted_tool`], on every discovery path) — one bad
+//! external tool must not break a Gemini or Ollama turn.
 
 #![allow(dead_code)]
 
@@ -78,9 +82,9 @@ impl ToolPlugin for McpPlugin {
             };
 
             for remote in manifest {
-                let qualified = qualified_tool_name(&cfg.name, &remote.name);
-                let def =
-                    ToolDef::new(&qualified, &remote.description, remote.input_schema.clone());
+                let Some(def) = linted_tool(&cfg.name, &remote) else {
+                    continue;
+                };
                 out.push(Arc::new(McpProxyTool {
                     def,
                     remote_name: remote.name,
@@ -129,15 +133,39 @@ pub(crate) async fn enumerate_tools(servers: &[McpServerConfig]) -> Vec<ToolDef>
                 continue;
             }
         };
-        for remote in manifest {
-            out.push(ToolDef {
-                name: qualified_tool_name(&cfg.name, &remote.name),
-                description: remote.description,
-                parameters: remote.input_schema,
-            });
-        }
+        out.extend(
+            manifest
+                .iter()
+                .filter_map(|remote| linted_tool(&cfg.name, remote)),
+        );
     }
     out
+}
+
+/// `remote` as the `{server}__{tool}` definition an engine receives, or
+/// `None` — with a warning naming the server, the tool and every rule it
+/// breaks — when its schema leaves the subset all engines accept
+/// (`tools::schema_lint::violations`, `docs/tools.md` § Tool schema subset).
+/// Both discovery paths (`McpPlugin::tools`, [`enumerate_tools`]) go through
+/// here, so the planner registry, the bridge list and the in-process
+/// executor agree on what an external server offers.
+pub(crate) fn linted_tool(server: &str, remote: &protocol::McpRemoteTool) -> Option<ToolDef> {
+    let def = ToolDef::new(
+        &qualified_tool_name(server, &remote.name),
+        &remote.description,
+        remote.input_schema.clone(),
+    );
+    let rules = crate::adapters::outbound::tools::schema_lint::violations(&def);
+    if rules.is_empty() {
+        return Some(def);
+    }
+    tracing::warn!(
+        server = %server,
+        tool = %remote.name,
+        rules = %rules.join(" | "),
+        "mcp: tool schema outside the subset every engine accepts — tool dropped"
+    );
+    None
 }
 
 /// Separator between server and tool name. Provider function names allow only
@@ -329,11 +357,98 @@ pub(crate) mod tests {
             activity: &NoActivity,
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
+            call_id: None,
         };
         let out = tools[0]
             .execute(&serde_json::json!({}), &tool_ctx)
             .await
             .unwrap();
         assert_eq!(out.text, "pong");
+    }
+
+    fn remote(name: &str, schema: serde_json::Value) -> protocol::McpRemoteTool {
+        protocol::McpRemoteTool {
+            name: name.to_string(),
+            description: "external tool".to_string(),
+            input_schema: schema,
+        }
+    }
+
+    /// Fixture schemas: a subset-clean tool passes as `{server}__{tool}`;
+    /// a top-level `anyOf`, a nested `$ref`, a rootless schema and a name the
+    /// model APIs reject are dropped.
+    #[test]
+    fn linted_tool_drops_schemas_outside_the_subset() {
+        let ok = serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}}});
+        let def = linted_tool("srv", &remote("search", ok.clone())).expect("clean schema");
+        assert_eq!(
+            (def.name.as_str(), def.description.as_str()),
+            ("srv__search", "external tool")
+        );
+        assert_eq!(def.parameters, ok);
+        for (name, schema) in [
+            (
+                "union",
+                serde_json::json!({"type": "object", "properties": {},
+                    "anyOf": [{"required": ["a"]}, {"required": ["b"]}]}),
+            ),
+            (
+                "refs",
+                serde_json::json!({"type": "object",
+                    "properties": {"a": {"$ref": "#/$defs/a"}}}),
+            ),
+            ("rootless", serde_json::json!({"type": "string"})),
+            ("dotted.name", ok.clone()),
+        ] {
+            assert!(
+                linted_tool("srv", &remote(name, schema)).is_none(),
+                "{name} must be dropped"
+            );
+        }
+    }
+
+    /// Both discovery paths drop the same violator: a live stdio server
+    /// listing a clean tool and one with a top-level `anyOf`.
+    #[tokio::test]
+    async fn discovery_drops_a_violating_external_tool() {
+        let tmp = TempDir::new().unwrap();
+        let script = tmp.path().join("two_tools.sh");
+        std::fs::write(
+            &script,
+            r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"two","version":"0"}}}\n' "$id" ;;
+    *'"method":"tools/list"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"good","description":"ok","inputSchema":{"type":"object","properties":{}}},{"name":"bad","description":"union","inputSchema":{"type":"object","properties":{},"anyOf":[{"required":["a"]}]}}]}}\n' "$id" ;;
+  esac
+done
+"#,
+        )
+        .unwrap();
+        let server = McpServerConfig {
+            name: "two".to_string(),
+            transport: "stdio".to_string(),
+            command: vec!["sh".to_string(), script.display().to_string()],
+            url: None,
+            env: Default::default(),
+            auth: None,
+        };
+        let listed: Vec<String> = enumerate_tools(std::slice::from_ref(&server))
+            .await
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert_eq!(listed, ["two__good"]);
+
+        let config = Config::default();
+        let agent = config.agents.get("main").unwrap().clone();
+        let tools = McpPlugin::new(vec![server])
+            .tools(&plugin_ctx(tmp.path(), &agent))
+            .await
+            .unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t.definition().name.as_str()).collect();
+        assert_eq!(names, ["two__good"]);
     }
 }

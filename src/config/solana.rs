@@ -9,14 +9,12 @@
 //!
 //! | Rule (load time — any violation fails `Config::load`) | Why |
 //! |---|---|
-//! | Signer: no `engine = "claude_code"` agent | the CLI runs its own shell with the full environment |
-//! | Signer: no `[[mcp_servers]]` | foreign processes with our filesystem |
-//! | Signer: no configured scope grants `shell_bins`; tools without a scope get a no-shell fallback (`AgentConfig::no_shell_fallback`, runtime) | a shell reads any file |
-//! | Signer: the key file is absolute (or `~/…`) and outside every `fs_roots` and agent `workspace` | `read_file` / `list_directory` must not reach it |
+//! | Signer: a hardened sandbox (`config/hardening.rs`, shared with `[risk]`) — `claude_code` agents only with `builtin_tools_profile = "none"`, no `[[mcp_servers]]`, no scope granting `shell_bins` (tools without a scope get a no-shell fallback), the key, `<TENGU_HOME>/state` and the config file outside every `fs_roots` and agent `workspace` | built-in tools, foreign processes and a shell ignore tengu scopes; `read_file` / `list_directory` must not reach the key |
+//! | Signer: the key file is set, absolute (or `~/…`) | one file for the parent, `run-agent` children and the bridge |
 //! | A write tool's scope with `wallets`: never in `[default_scopes]`; the agent has no `description`, is not `default`, is no webhook endpoint's `agent` | only a non-routable agent (decision loops, direct runs) may send |
 //! | A loop action running a write tool with `read_only = true` sets `args.mode = "simulate"` | `read_only` bypasses `dry_run` |
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,31 +41,6 @@ impl SolanaConfig {
     }
 }
 
-/// Lexical normalisation (no symlink resolution) of an absolute path.
-fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// Absolute, normalised, and symlink-resolved when the path exists.
-fn resolved(p: &Path) -> PathBuf {
-    let abs = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_default().join(p)
-    };
-    std::fs::canonicalize(&abs).unwrap_or_else(|_| normalize(&abs))
-}
-
 pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     let mut errors = Vec::new();
     signer_rules(cfg, &mut errors);
@@ -76,6 +49,8 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     errors
 }
 
+/// The key path itself; where it may live (outside every fs root and
+/// workspace) is a hardened-sandbox rule (`config/hardening.rs`).
 fn signer_rules(cfg: &Config, errors: &mut Vec<String>) {
     let Some(raw) = cfg.solana.signer_key_file.as_deref() else {
         return;
@@ -84,70 +59,10 @@ fn signer_rules(cfg: &Config, errors: &mut Vec<String>) {
         errors.push("solana.signer_key_file must not be empty when set".into());
         return;
     }
-    let key = expand_tilde(Path::new(raw));
-    if !key.is_absolute() {
+    if !expand_tilde(Path::new(raw)).is_absolute() {
         errors.push(format!(
             "solana.signer_key_file `{raw}` must be absolute or start with `~/`"
         ));
-        return;
-    }
-    let key = resolved(&key);
-
-    let mut agents: Vec<_> = cfg.agents.iter().collect();
-    agents.sort_by(|a, b| a.0.cmp(b.0));
-    for (id, agent) in &agents {
-        if agent.engine == "claude_code" {
-            errors.push(format!(
-                "solana.signer_key_file: agents.{id} uses engine = \"claude_code\" — its CLI \
-                 runs a shell with the full environment and could read the key; keep signing \
-                 sandboxes free of Claude Code agents"
-            ));
-        }
-        if let Some(ws) = &agent.workspace {
-            let ws = resolved(&expand_tilde(ws));
-            if key.starts_with(&ws) {
-                errors.push(format!(
-                    "solana.signer_key_file is inside agents.{id}.workspace `{}` — move the key \
-                     outside every workspace",
-                    ws.display()
-                ));
-            }
-        }
-    }
-    if !cfg.mcp_servers.is_empty() {
-        errors.push(
-            "solana.signer_key_file: [[mcp_servers]] are not allowed in a signing sandbox \
-             (foreign processes with this filesystem)"
-                .into(),
-        );
-    }
-    let default = cfg
-        .default_scopes
-        .iter()
-        .map(|(t, s)| (format!("default_scopes.{t}"), s));
-    let per_agent = agents.iter().flat_map(|(id, a)| {
-        a.scopes
-            .iter()
-            .map(move |(t, s)| (format!("agents.{id}.scopes.{t}"), s))
-    });
-    let mut scopes: Vec<_> = default.chain(per_agent).collect();
-    scopes.sort_by(|a, b| a.0.cmp(&b.0));
-    for (at, scope) in scopes {
-        if !scope.shell_bins.is_empty() {
-            errors.push(format!(
-                "solana.signer_key_file: {at}.shell_bins grants a shell — a signing sandbox runs no shell"
-            ));
-        }
-        for root in &scope.fs_roots {
-            let root = resolved(&expand_tilde(root));
-            if key.starts_with(&root) {
-                errors.push(format!(
-                    "solana.signer_key_file is inside {at}.fs_roots `{}` — move the key outside \
-                     every fs root",
-                    root.display()
-                ));
-            }
-        }
     }
 }
 
@@ -260,56 +175,18 @@ mod tests {
         assert_eq!(errs(&cfg), "");
     }
 
+    /// The key path must be set and absolute; where it may live, and the
+    /// no-MCP / no-shell rules, are hardened-sandbox rules
+    /// (`config/hardening.rs` tests).
     #[test]
-    fn signer_refuses_claude_code_mcp_and_shell() {
+    fn signer_key_path_must_be_absolute() {
         let mut cfg = with_signer("/keys/signer.json");
         cfg.agents.get_mut("main").unwrap().engine = "claude_code".into();
-        cfg.mcp_servers.push(crate::config::McpServerConfig {
-            name: "x".into(),
-            transport: "stdio".into(),
-            command: vec!["x".into()],
-            url: None,
-            env: Default::default(),
-            auth: None,
-        });
-        cfg.default_scopes.insert(
-            "run_command".into(),
-            scope(|s| s.shell_bins = vec!["ls".into()]),
-        );
-        let e = errs(&cfg);
-        assert!(
-            e.contains("agents.main uses engine = \"claude_code\""),
-            "{e}"
-        );
-        assert!(e.contains("[[mcp_servers]] are not allowed"), "{e}");
-        assert!(e.contains("default_scopes.run_command.shell_bins"), "{e}");
-    }
-
-    #[test]
-    fn signer_key_must_be_outside_fs_roots_and_workspaces() {
-        let mut cfg = with_signer("/home/op/ws/keys/../signer.json");
         cfg.default_scopes.insert(
             "read_file".into(),
-            scope(|s| s.fs_roots = vec![PathBuf::from("/home/op/ws")]),
+            scope(|s| s.fs_roots = vec![PathBuf::from("/keys")]),
         );
-        let e = errs(&cfg);
-        assert!(
-            e.contains("inside default_scopes.read_file.fs_roots"),
-            "{e}"
-        );
-
-        let mut cfg = with_signer("/home/op/keys/signer.json");
-        cfg.agents.get_mut("main").unwrap().workspace = Some(PathBuf::from("/home/op"));
-        assert!(errs(&cfg).contains("inside agents.main.workspace"));
-
-        let mut cfg = with_signer("/home/op/keys/signer.json");
-        cfg.default_scopes.insert(
-            "read_file".into(),
-            scope(|s| s.fs_roots = vec![PathBuf::from("/home/op/ws")]),
-        );
-        cfg.agents.get_mut("main").unwrap().workspace = Some(PathBuf::from("/home/op/ws"));
-        assert_eq!(errs(&cfg), "", "sibling of the workspace is fine");
-
+        assert_eq!(errs(&cfg), "", "hardening.rs owns those");
         assert!(errs(&with_signer("keys/signer.json")).contains("must be absolute"));
         assert!(errs(&with_signer("  ")).contains("must not be empty"));
     }

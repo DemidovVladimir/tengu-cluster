@@ -538,8 +538,8 @@ const MECHS = [
     title: "Per-result truncation",
     where: "application/chat/tool_loop.rs::truncate_tool_result",
     file: "src/adapters/outbound/engines/mod.rs:944",
-    body: "Each tool result is char-capped at <code>max_tool_result_chars</code> (default 300_000) when it's first inserted into <code>messages</code>. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe.",
-    config: ["max_tool_result_chars = 300_000", "applied on every tool result"],
+    body: "Each tool result is char-capped at <code>max_tool_result_chars</code> (default 300_000) when it's first inserted into <code>messages</code>. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. Local engines (<code>Engine::tool_result_char_cap</code>) use <code>fit_tool_result</code>: a result within 1/8 of <code>context_window</code> × 4 chars stays whole; above it typed <code>data</code> → store-key pointer, then the cut, footer included.",
+    config: ["max_tool_result_chars = 300_000", "applied on every tool result", "local: context_window / 8 × 4 chars"],
     code: `<span class="kw">fn</span> <span class="fn">truncate_tool_result</span>(result: &amp;<span class="kw">str</span>, max_chars: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
     <span class="kw">match</span> token::<span class="fn">truncate_at_boundary</span>(result, max_chars) {
         <span class="kw">None</span> =&gt; result.to_string(),

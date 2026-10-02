@@ -1,10 +1,11 @@
 //! Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool
 //! catalog (`adapters/outbound/tools`), shell skills, `[[mcp_servers]]`, and
-//! the per-tool scope map. Also the `run-agent` subagent variant and the
-//! Claude Code bridge tool list.
+//! the per-tool scope map. Also the `run-agent` subagent variant, the
+//! Claude Code bridge tool list and a step / one-shot turn's workspace
+//! (`workspace_or_temp`).
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::config::{AgentConfig, Config, McpServerConfig};
@@ -107,6 +108,10 @@ pub(crate) fn build_tool_executor(
     if tools.is_empty() {
         return None;
     }
+    // The workspace-tool opt-ins the agent lists in `tools` are on for its
+    // plugins too (`persistent_store` reads `workspace_tools`), on every
+    // surface — chat passes the config block as loaded.
+    let agent_config = &subagent_config(agent_config);
 
     let shell: Arc<dyn ShellExecutionPort> = Arc::new(match cancel {
         Some(ref flag) => LocalShellExecutor::new().with_cancel(Arc::clone(flag)),
@@ -166,15 +171,17 @@ pub(crate) fn build_tool_executor(
     );
 
     // MCP plugin — connects to each configured external server and registers
-    // its tools as `{server_name}__{tool_name}`. The Claude Code bridge does
-    // the same for the servers its engine passes (`TENGU_BRIDGE_MCP_SERVERS`).
+    // its tools as `{server_name}__{tool_name}`: all of them when the agent's
+    // `tools` is empty, else only the listed ones — the allow-list the Claude
+    // Code bridge applies to the servers its engine passes
+    // (`TENGU_BRIDGE_MCP_SERVERS`), so an unlisted server tool runs nowhere.
     if !mcp_servers.is_empty() {
         let mcp_plugin = McpPlugin::new(mcp_servers.to_vec());
         register_plugin_safe(
             &mut registry,
             &mcp_plugin,
             &plugin_ctx,
-            &[],
+            &agent_config.tools,
             "Failed to register mcp plugin — external MCP tools unavailable",
         );
     }
@@ -242,13 +249,51 @@ pub(crate) fn resolve_tool_scopes(
 /// cwd when unset), so grant that root on every inherited scope — otherwise
 /// `read_file` / multipart `http_request` under the child's own workspace is
 /// scope-denied. Tools without a configured scope already get the workspace
-/// via `permissive_scope`, so this only equalises the configured ones.
+/// via `permissive_scope`, so this only equalises the configured ones. An
+/// explicit deny (every field empty, `ToolScope::is_deny_all` — e.g.
+/// `[default_scopes.write_file]` with no keys) stays a deny: a plan step's
+/// `compose.tools` must not turn it into a workspace grant.
 pub(crate) fn grant_workspace_root(scopes: &mut HashMap<String, ToolScope>, workspace: &Path) {
     for scope in scopes.values_mut() {
-        if !scope.fs_roots.iter().any(|r| r == workspace) {
+        if !scope.is_deny_all() && !scope.fs_roots.iter().any(|r| r == workspace) {
             scope.fs_roots.push(workspace.to_path_buf());
         }
     }
+}
+
+/// The workspace of one `run-agent` step or one-shot turn (webhooks, `tengu
+/// tool turn` / `call`) — the executor's and the engine's (a Claude Code
+/// CLI's cwd, its bridge). Callers keep the memory store at `[memory]
+/// store_path` when it is a temp dir.
+///
+/// | `[agents.<a>] workspace` | Workspace |
+/// |---|---|
+/// | set | it, `~` expanded; a relative path made absolute against this process's cwd — one path for the executor, the engine and the bridge |
+/// | unset | a fresh `<prefix>*` temp dir (canonical), returned too: removed when it drops at the end of the step / turn |
+///
+/// Never the bare cwd: a Claude Code CLI runs there with its built-ins, and
+/// the permissive fallback scope (`permissive_scope`) roots every tool in it.
+pub(crate) fn workspace_or_temp(
+    configured: Option<&Path>,
+    prefix: &str,
+) -> anyhow::Result<(PathBuf, Option<tempfile::TempDir>)> {
+    use anyhow::Context;
+    if let Some(path) = configured {
+        let path = crate::config::paths::expand_tilde(path);
+        let path = if path.is_relative() {
+            crate::config::paths::absolute_path(&path)
+        } else {
+            path
+        };
+        return Ok((path, None));
+    }
+    let dir = tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir()
+        .context("create a temp workspace")?;
+    // Canonical: scope checks compare resolved paths (macOS /var → /private/var).
+    let path = std::fs::canonicalize(dir.path()).context("temp workspace")?;
+    Ok((path, Some(dir)))
 }
 
 /// Build the fallback `ToolScope` for tools with no configured entry:
@@ -276,18 +321,43 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
 // ---------------------------------------------------------------------------
 
 /// Bridge tool list for an in-process Claude Code agent: `base` (the catalog
-/// defs) plus every `[[mcp_servers]]` tool as `{server}__{tool}`, which the
-/// bridge then proxies (the engine passes the servers along via
+/// defs) plus the `[[mcp_servers]]` tools as `{server}__{tool}` — every one
+/// when `allow` (the agent's `tools`) is empty, else only the listed ones —
+/// which the bridge then proxies (the engine passes the servers along via
 /// `EngineContext.mcp_servers`). Listed once at agent setup — live
 /// `tools/list`, fail-soft per server.
 pub(crate) async fn with_mcp_bridge_tools(
     mut base: Vec<ToolDef>,
+    allow: &[String],
     mcp_servers: &[McpServerConfig],
 ) -> Vec<ToolDef> {
     if !base.is_empty() {
-        base.extend(crate::adapters::outbound::mcp_client::enumerate_tools(mcp_servers).await);
+        base.extend(
+            crate::adapters::outbound::mcp_client::enumerate_tools(mcp_servers)
+                .await
+                .into_iter()
+                .filter(|d| allow.is_empty() || allow.contains(&d.name)),
+        );
     }
     base
+}
+
+/// What a Claude Code engine (one that manages its own workspace) needs to
+/// reach tengu tools on a per-turn surface: the tool list for its MCP bridge
+/// — catalog, skills and `[[mcp_servers]]` tools, i.e. exactly what the
+/// executor advertises — plus the servers behind `{server}__{tool}` entries.
+/// Other engines get tools through the model API and need neither. An empty
+/// list (an orchestrator agent) means no bridge. Webhook turns and
+/// `tengu eval` / `tengu skill evolve` rows build their engine context with it.
+pub(crate) fn bridge_inputs(
+    manages_own_workspace: bool,
+    tool_defs: &[ToolDef],
+    mcp_servers: &[McpServerConfig],
+) -> (Option<Vec<ToolDef>>, Vec<McpServerConfig>) {
+    if !manages_own_workspace || tool_defs.is_empty() {
+        return (None, Vec::new());
+    }
+    (Some(tool_defs.to_vec()), mcp_servers.to_vec())
 }
 
 /// Compute the base tool list from workspace primitives and memory subsystem tools.
@@ -324,18 +394,118 @@ pub(crate) fn subagent_config(agent: &AgentConfig) -> AgentConfig {
     cfg
 }
 
-/// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`.
+/// The catalog tools an agent gets on every surface — in-process chat (TUI,
+/// Telegram, webhooks, eval, `tengu tool turn`), `run-agent`, `tengu tool
+/// call`, decision loops, and so the Claude Code bridge list: the base tools
+/// (`compute_base_tools`) with the workspace-tool opt-ins the agent lists in
+/// `tools` switched on (`subagent_config`); a non-empty `tools` then keeps
+/// only the listed tools and the opted-in ones. Empty `tools` = every base
+/// tool. `[[mcp_servers]]` tools follow the same list
+/// (`build_tool_executor`); shell skills come from `skill_packages`.
+pub(crate) fn agent_base_tools(
+    agent: &AgentConfig,
+    uses_tools: bool,
+    has_memory: bool,
+) -> Vec<ToolDef> {
+    let cfg = subagent_config(agent);
+    let base = compute_base_tools(uses_tools, has_memory, &cfg.workspace_tools);
+    if agent.tools.is_empty() {
+        return base;
+    }
+    base.into_iter()
+        .filter(|t| agent.tools.contains(&t.name) || cfg.workspace_tools.contains(&t.name))
+        .collect()
+}
+
+/// A plan step's `compose` applied to its base `[agents.<compose.base_agent>]`
+/// block: `skills` and `tools` replace the base's wholesale (doctrine #3).
+/// In a hardened sandbox (`hardened`: a `[solana]` signer or `[risk]`,
+/// `config::hardening`) a compose may only narrow: a catalog tool the
+/// composed agent would get that the base does not (an empty `tools` = every
+/// catalog tool), or a skill the base does not list, refuses the step — a
+/// planner fed hostile text must not hand a routable agent `write_file` or
+/// an exec tool. (A hardened sandbox has no `[[mcp_servers]]` and loads no
+/// shell skill, so the catalog is every tool there is.)
+pub(crate) fn compose_agent(
+    base_name: &str,
+    base: &AgentConfig,
+    compose: &crate::domain::plan::AgentCompose,
+    hardened: bool,
+    has_memory: bool,
+) -> anyhow::Result<AgentConfig> {
+    let mut agent = base.clone();
+    agent.skill_packages = compose.skills.clone();
+    agent.tools = compose.tools.clone();
+    if !hardened {
+        return Ok(agent);
+    }
+    let names = |a: &AgentConfig| -> HashSet<String> {
+        agent_base_tools(a, true, has_memory)
+            .into_iter()
+            .map(|t| t.name)
+            .collect()
+    };
+    let held = names(base);
+    let mut tools: Vec<String> = names(&agent)
+        .into_iter()
+        .filter(|t| !held.contains(t))
+        .collect();
+    tools.sort();
+    let mut skills: Vec<&str> = compose
+        .skills
+        .iter()
+        .filter(|s| !base.skill_packages.contains(s))
+        .map(String::as_str)
+        .collect();
+    skills.sort();
+    if tools.is_empty() && skills.is_empty() {
+        return Ok(agent);
+    }
+    anyhow::bail!(
+        "compose would widen agent `{base_name}` in a hardened sandbox (Solana signer or \
+         [risk]): a composed plan step may only narrow its base agent's tools and skills — \
+         adds tools {tools:?}, skills {skills:?}"
+    )
+}
+
+/// The skills an agent loads where no channel keeps a hot-reloaded registry
+/// (`run-agent`, `tengu tool`, decision loops, the MCP bridge) — the rule
+/// in-process chat applies: the three-tier scan from `workspace`
+/// (`FileSystemSkillSource`), only names in `skill_packages`, none named like
+/// one of its catalog tools, and shell skills only when the agent runs a
+/// shell (`no_shell_fallback` — a `[risk]` / signer sandbox — loads none).
+pub(crate) fn agent_skill_registry(
+    workspace: &Path,
+    agent: &AgentConfig,
+    has_memory: bool,
+) -> SkillRegistry {
+    let reserved = compute_base_tools(true, has_memory, &subagent_config(agent).workspace_tools)
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    let mut registry = SkillRegistry::new(reserved)
+        .with_allowlist(Some(agent.skill_packages.clone()))
+        .with_shell_skills(!agent.no_shell_fallback);
+    registry.reload(
+        &crate::application::skills::registry::FileSystemSkillSource::new(workspace.to_path_buf()),
+    );
+    registry
+}
+
+/// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`
+/// (also `tengu tool call` and decision loops).
 ///
-/// Resolves `effective_tools = (compute_base_tools ∩ agent.tools) ∪ {compress_and_store}`,
-/// then constructs a `PluginToolExecutor` over those tools. Returns the
-/// resolved ToolDef list (so `run-agent` can pass it to `engine.run`) plus
-/// the executor.
+/// Resolves `effective_tools = agent_base_tools ∪ {compress_and_store} ∪
+/// shell skills (skill_packages) ∪ [[mcp_servers]] tools (tools list)`, then
+/// constructs a `PluginToolExecutor` over those tools. Returns the resolved
+/// ToolDef list (so `run-agent` can pass it to `engine.run`, or a Claude
+/// Code bridge as `bridge_tools`) plus the executor.
 ///
 /// `compress_and_store` is dispatched out-of-band by the run-agent loop
 /// (the summary is captured there and persisted to Postgres
-/// `agentic_memory` with `postgres_memory`) so its `ToolDef` is appended
-/// to the advertised list but its execution path bypasses the
-/// `PluginToolExecutor`.
+/// `agentic_memory` with `postgres_memory`; a Claude Code step's bridge
+/// writes it to the step's summary file) so its `ToolDef` is appended to the
+/// advertised list but its execution path bypasses the `PluginToolExecutor`.
 pub(crate) fn build_subprocess_tool_executor(
     agent: &AgentConfig,
     config: &Config,
@@ -353,45 +523,20 @@ pub(crate) fn build_subprocess_tool_executor(
     let mut agent_cfg = subagent_config(agent);
     grant_workspace_root(&mut agent_cfg.scopes, workspace);
 
-    // Full base tool list (workspace + http + crypto + memory if enabled).
-    let base_tools = compute_base_tools(
-        true,                  // uses_tools
-        config.memory.enabled, // has_memory
-        &agent_cfg.workspace_tools,
-    );
-
-    // Filter to `tools` when the agent declares an allow-list. Empty
-    // `tools` means "no allow-list" — keep all base tools available.
-    // compress_and_store is appended unconditionally regardless of `tools`.
-    //
-    // Workspace-tools opt-ins are always-on for this agent regardless of
-    // whether they appear in `tools` — they're separately gated by the
-    // workspace_tools allowlist + per-agent declaration. Pre-fix bug: an
-    // agent with `tools = ["read_file", ...]` and `workspace_tools = ["foo"]`
-    // would NOT get `foo` because `tools` filtered it out.
-    let mut effective: Vec<ToolDef> = if agent.tools.is_empty() {
-        base_tools
-    } else {
-        let mut allow: std::collections::HashSet<&str> =
-            agent.tools.iter().map(|s| s.as_str()).collect();
-        for wt in &agent_cfg.workspace_tools {
-            allow.insert(wt.as_str());
-        }
-        base_tools
-            .into_iter()
-            .filter(|t| allow.contains(t.name.as_str()))
-            .collect()
-    };
+    // The agent's catalog tools: `tools` when listed (its workspace-tool
+    // opt-ins included), else every base tool.
+    let mut effective = agent_base_tools(agent, true, config.memory.enabled);
 
     // Always-on protocol tool. Phase 5b dispatches it out-of-band, so we
     // only need its description here for the LLM to see + call.
     effective
         .push(crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::definition());
 
-    // Skill registry is empty for the subprocess (skill bodies are loaded
-    // separately and merged into the system prompt; no shell-skills exposed
-    // as tools yet).
-    let skill_registry = crate::application::skills::registry::SkillRegistry::new(Vec::new());
+    // Shell skills named in `skill_packages` are tools here too, as in
+    // in-process chat (skill bodies also reach the system prompt, loaded by
+    // `run-agent`); none in a sandbox that runs no shell.
+    let skill_registry = agent_skill_registry(workspace, &agent_cfg, config.memory.enabled);
+    effective.extend(skill_registry.active_tools());
 
     let executor = build_tool_executor(
         workspace,
@@ -437,6 +582,41 @@ mod golden_tests {
     struct StubActivity;
     impl ToolActivityPort for StubActivity {
         fn publish_tool_activity(&self, _call: &ToolCall) {}
+    }
+
+    /// No `workspace`: a fresh temp dir (canonical, named by the prefix,
+    /// removed when it drops) — never the cwd; a configured one as given,
+    /// `~` expanded, a relative one made absolute.
+    #[test]
+    fn workspace_or_temp_is_the_agents_or_a_temp_dir() {
+        let (ws, dir) = workspace_or_temp(None, "tengu-step-").unwrap();
+        let dir = dir.expect("a temp dir for an agent without workspace");
+        assert!(ws.is_absolute() && ws.is_dir(), "{}", ws.display());
+        assert_eq!(ws, std::fs::canonicalize(dir.path()).unwrap());
+        assert!(
+            ws.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("tengu-step-"),
+            "{}",
+            ws.display()
+        );
+        assert_ne!(ws, std::env::current_dir().unwrap());
+        drop(dir);
+        assert!(!ws.exists(), "removed when dropped: {}", ws.display());
+
+        let pinned = TempDir::new().unwrap();
+        let (ws, dir) = workspace_or_temp(Some(pinned.path()), "x-").unwrap();
+        assert_eq!(ws, pinned.path());
+        assert!(dir.is_none(), "a configured workspace is never removed");
+        let (ws, _) = workspace_or_temp(Some(Path::new(".")), "x-").unwrap();
+        assert_eq!(ws, std::fs::canonicalize(".").unwrap());
+        let (ws, _) = workspace_or_temp(Some(Path::new("~/tengu-ws-x")), "x-").unwrap();
+        assert!(
+            ws.is_absolute() && ws.ends_with("tengu-ws-x"),
+            "{}",
+            ws.display()
+        );
     }
 
     /// A `[solana]` signing sandbox: the fallback runs no shell (a shell
@@ -638,6 +818,161 @@ mod golden_tests {
         );
     }
 
+    /// W1-gate review regression (was `run_agent_grant_turns_an_empty_
+    /// writer_scope_into_the_workspace`): a routable agent handed
+    /// `write_file` (a plan step's `compose.tools`) in a sandbox that denies
+    /// it with an empty `[default_scopes.write_file]` (sandboxes/xmarket) is
+    /// denied in-process AND in the run-agent child — the workspace grant
+    /// leaves a deny-all scope alone, while a scope that configures
+    /// something (the matrix fixtures' `fs_roots` elsewhere) still gets it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn run_agent_grant_keeps_an_empty_writer_scope_a_deny() {
+        use crate::ports::engine::ToolExecutor;
+        let ws = tempfile::TempDir::new().unwrap();
+        let toml = format!(
+            "[agents.arch]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"routable\"\n\
+             workspace = \"{}\"\ntools = [\"write_file\", \"read_file\"]\n\n\
+             [default_scopes.write_file]\n\n\
+             [default_scopes.read_file]\nfs_roots = [\"/nonexistent/elsewhere\"]\n",
+            ws.path().display()
+        );
+        let mut cfg: Config = toml::from_str(&toml).unwrap();
+        cfg.fold_default_scopes();
+        let agent = cfg.agents["arch"].clone();
+        let secrets = Arc::new(SecretRegistry::new());
+        std::fs::write(ws.path().join("notes.txt"), "hello").unwrap();
+        let write = ToolCall {
+            id: "probe:1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({"path": "answer.txt", "content": "not allowed"}),
+        };
+        let read = ToolCall {
+            id: "probe:2".into(),
+            name: "read_file".into(),
+            arguments: serde_json::json!({"path": "notes.txt"}),
+        };
+
+        // In-process executor (chat): the empty scope denies.
+        let tools = agent_base_tools(&agent, true, false);
+        let skills = agent_skill_registry(ws.path(), &agent, false);
+        let inproc = build_tool_executor(
+            ws.path(),
+            &tools,
+            &skills,
+            &None,
+            &secrets,
+            Arc::new(crate::adapters::outbound::noop::NoopActivity),
+            None,
+            None,
+            &agent,
+            &[],
+        )
+        .unwrap();
+        assert!(inproc.execute(&write, &[]).await.is_err());
+
+        // run-agent child executor (plan step): still denied; the configured
+        // read_file scope gets the workspace grant.
+        let (_, exec) = build_subprocess_tool_executor(
+            &agent,
+            &cfg,
+            ws.path(),
+            &secrets,
+            Arc::new(crate::adapters::outbound::noop::NoopActivity),
+            None,
+        );
+        let exec = exec.unwrap();
+        let denied = exec.execute(&write, &[]).await;
+        assert!(denied.is_err(), "run-agent child wrote: {denied:?}");
+        assert!(!ws.path().join("answer.txt").exists());
+        assert_eq!(exec.execute(&read, &[]).await.unwrap(), "hello");
+        assert!(exec.scopes["write_file"].is_deny_all());
+    }
+
+    /// `grant_workspace_root`: a deny-all scope stays one; every other
+    /// configured scope gains the workspace once.
+    #[test]
+    fn grant_workspace_root_skips_deny_all_scopes() {
+        let ws = Path::new("/srv/step-ws");
+        let mut scopes = HashMap::from([
+            ("write_file".to_string(), ToolScope::default()),
+            (
+                "http_request".to_string(),
+                ToolScope {
+                    net_hosts: vec!["api.example.com".into()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "read_file".to_string(),
+                ToolScope {
+                    fs_roots: vec![ws.to_path_buf()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+        grant_workspace_root(&mut scopes, ws);
+        assert!(scopes["write_file"].is_deny_all());
+        assert_eq!(scopes["http_request"].fs_roots, [ws]);
+        assert_eq!(scopes["read_file"].fs_roots, [ws]);
+    }
+
+    /// Hardened sandbox: a compose may only narrow its base agent — a tool
+    /// or skill the base lacks, or an empty `tools` (= every catalog tool)
+    /// over a listed base, refuses the step. Elsewhere it replaces wholesale.
+    #[test]
+    fn compose_only_narrows_in_a_hardened_sandbox() {
+        use crate::domain::plan::AgentCompose;
+        let mut base = Config::default().agents.remove("main").unwrap();
+        base.tools = vec!["read_file".into(), "list_directory".into(), "hl_ctx".into()];
+        base.skill_packages = vec!["research".into()];
+        let compose = |tools: &[&str], skills: &[&str]| AgentCompose {
+            base_agent: "arch".into(),
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            skills: skills.iter().map(|s| s.to_string()).collect(),
+        };
+        let run = |base: &AgentConfig, c: &AgentCompose, hardened: bool| {
+            compose_agent("arch", base, c, hardened, false)
+        };
+
+        let narrowed = run(&base, &compose(&["read_file"], &[]), true).unwrap();
+        assert_eq!(narrowed.tools, ["read_file"]);
+        assert!(narrowed.skill_packages.is_empty());
+        run(
+            &base,
+            &compose(&["hl_ctx", "list_directory"], &["research"]),
+            true,
+        )
+        .unwrap();
+
+        for (c, want) in [
+            (
+                compose(&["read_file", "write_file"], &[]),
+                "[\"write_file\"]",
+            ),
+            (compose(&["paper_order"], &[]), "[\"paper_order\"]"),
+            (compose(&[], &[]), "\"run_command\""),
+            (compose(&["read_file"], &["evil"]), "skills [\"evil\"]"),
+        ] {
+            let err = run(&base, &c, true).unwrap_err().to_string();
+            assert!(
+                err.contains("compose would widen agent `arch` in a hardened sandbox")
+                    && err.contains(want),
+                "{c:?}: {err}"
+            );
+            let open = run(&base, &c, false).unwrap();
+            assert_eq!(open.tools, c.tools, "not hardened: wholesale");
+        }
+
+        // A base with every catalog tool (`tools = []`): an opt-in tool it
+        // never enabled (an exec tool) is still a widening.
+        base.tools.clear();
+        run(&base, &compose(&["write_file"], &[]), true).unwrap();
+        let err = run(&base, &compose(&["paper_order"], &[]), true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("paper_order"), "{err}");
+    }
+
     // A plan-step subagent must see `[[mcp_servers]]` tools, filtered by its
     // `tools` allow-list like every other tool. Multi-thread runtime: the
     // executor build `block_on`s plugin registration (as in `run-agent`).
@@ -671,6 +1006,30 @@ mod golden_tests {
         assert!(listed.contains(&"read_file".to_string()));
     }
 
+    // Claude Code webhook and eval agents used to get `bridge_tools: None` —
+    // no tengu tools and no `[[mcp_servers]]` tools at all.
+    #[test]
+    fn bridge_inputs_go_to_engines_that_manage_their_workspace() {
+        let tools = vec![
+            ToolDef::new("http_request", "d", serde_json::json!({})),
+            ToolDef::new("fake__echo", "d", serde_json::json!({})),
+        ];
+        let servers = vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+            "fake",
+        )];
+
+        let (bridge, passed) = bridge_inputs(true, &tools, &servers);
+        let names: Vec<String> = bridge.unwrap().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["http_request", "fake__echo"]);
+        assert_eq!(passed.len(), 1);
+
+        // OpenRouter-style engines: tools go through the model API instead.
+        let (bridge, passed) = bridge_inputs(false, &tools, &servers);
+        assert!(bridge.is_none() && passed.is_empty());
+        // Orchestrator agent (no tools): no bridge.
+        assert!(bridge_inputs(true, &[], &servers).0.is_none());
+    }
+
     // In-process Claude Code agents (TUI / Telegram): the bridge tool list
     // gains the `[[mcp_servers]]` tools, and `ChatRuntimeService` hands the
     // servers to the engine so its bridge can proxy them. (Engine → bridge
@@ -685,11 +1044,16 @@ mod golden_tests {
             "fake",
         )];
         let base = vec![ToolDef::new("read_file", "d", serde_json::json!({}))];
-        let bridge = with_mcp_bridge_tools(base, &servers).await;
+        let bridge = with_mcp_bridge_tools(base.clone(), &[], &servers).await;
         let names: Vec<&str> = bridge.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, ["read_file", "fake__echo"]);
+        // A `tools` list keeps only the listed server tools.
+        let listed = with_mcp_bridge_tools(base, &["read_file".to_string()], &servers).await;
+        assert_eq!(listed.len(), 1, "fake__echo is not in the agent's tools");
         // No bridge (non-Claude-Code agent) stays empty — servers not dialled.
-        assert!(with_mcp_bridge_tools(Vec::new(), &servers).await.is_empty());
+        assert!(with_mcp_bridge_tools(Vec::new(), &[], &servers)
+            .await
+            .is_empty());
 
         #[derive(Default)]
         struct Recording(Mutex<Option<(Vec<String>, Vec<String>)>>);

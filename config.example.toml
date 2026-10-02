@@ -52,9 +52,11 @@ model = "nvidia/nemotron-3-super-120b-a12b:free"
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
-# workspace_tools = ["shared_cache", "skill_distill"]  # allow-list: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill,
+# workspace_tools = ["shared_cache", "skill_distill"]  # opt-in tools: only names in src/domain/tools.rs::WORKSPACE_TOOLS (memory, skill lifecycle — and the families below)
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
 #   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
+#   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
+#   + xmarket risk (typed): risk_status — needs [xmarket] + [risk] + [paper]; scope example under "Risk + paper trading" below
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -82,7 +84,7 @@ idle_timeout_minutes = 30
 
 [agents.main.limits]
 max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /reset to start fresh.
-# context_window_override = 200000
+# context_window = 200000           # model's real window (default 1_000_000)
 # max_output_tokens_per_turn = 4096  # optional; unset omits max_tokens (model/provider default)
 # request_timeout_secs = 600         # total budget for one non-streaming HTTP call (default 600)
 # max_cost_per_flow = 5.0           # USD cost limit (optional)
@@ -118,7 +120,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [telegram]
 # enabled = true
-# allowed_users = ["123456789"]
+# allowed_users = ["123456789"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 # --- Webhooks (inbound HTTP) ---
 # Run with: tengu webhooks --sandbox <name>   (build with --features webhooks)
@@ -175,13 +177,323 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # key, only for an agent whose scope for the tool lists the wallet:
 #   [agents.lp_executor.scopes.dlmm_open_position]
 #   wallets = ["<full wallet pubkey>"]      # never in [default_scopes]
-# With a signer the sandbox must have: no claude_code agents, no
+# With a signer the sandbox is hardened: claude_code agents only with
+# [agents.<name>.claude_code] builtin_tools_profile = "none", no
 # [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
 # no-shell fallback), and the key outside every fs_roots / workspace. The
 # signing agent has no `description`, is not `default`, and is no webhook
-# endpoint's `agent`. Rules: src/config/solana.rs.
+# endpoint's `agent`. Rules: src/config/solana.rs, src/config/hardening.rs.
 # [solana]
 # signer_key_file = "~/.tengu/keys/signer.json"   # solana-keygen JSON or base58; chmod 600
+
+# --- xmarket (docs/xmarket-tracker-2026-09-29.md) ---
+# Install-wide state of the xmarket runtime lives in <TENGU_HOME>/state/<state>/
+# (ledger.db, runtime.db, history/<YYYYMMDD>.db; catalog / events / audit /
+# spend .db reserved) — `tengu prune` keeps it. One directory name. Load rules
+# with [feeds], [risk] or [xmarket] (src/config/xmarket.rs,
+# docs/runtime-2026-09-30.md § State layout): the agents of feeds, decision
+# loops and xmarket tools (hl_*, risk_status, paper_*, xm_*) share one
+# `workspace`, absolute or ~/ (it keeps only .tengu/observations.db); with
+# [risk] every agent sets one and [xmarket] is required; the state dir sits
+# outside every fs_roots and workspace.
+# [xmarket]
+# state = "xmarket"                         # the weekend sandbox uses "xmarket-weekend"
+#
+# Session calendars (src/domain/calendar.rs; fields: src/config/xmarket.rs).
+# kind = "exchange" | "weekly" | "24x7"; tz = America/New_York | Europe/Paris | UTC.
+# Same rows as tests/fixtures/xmarket/calendars.toml — keep in sync. NYSE
+# dates from https://www.nyse.com/markets/hours-calendars (checked 2026-09-30).
+# [xmarket.calendars.us_equity]             # NYSE; also drives the weekend clock
+# kind = "exchange"
+# tz = "America/New_York"
+# core = ["09:30", "16:00"]
+# pre = "04:00"                             # pre-market from
+# post = "20:00"                            # post-market until
+# overnight = true                          # 20:00 → 04:00, only before a trading day
+# early_close = "13:00"                     # core close on early_closes dates
+# early_post = "17:00"                      # late trading until, on those dates
+# holidays = [
+#   "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+#   "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+#   "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+#   "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+#   "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+#   "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+# ]
+# early_closes = ["2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24"]
+#
+# [xmarket.calendars.xyz_stocks]            # trade[XYZ] external price, US stocks (24x5)
+# kind = "weekly"
+# tz = "America/New_York"
+# open = "Sun 20:00"
+# close = "Fri 20:00"
+#
+# [xmarket.calendars.xyz_indices]           # trade[XYZ] indices + commodities
+# kind = "weekly"
+# tz = "America/New_York"
+# open = "Sun 18:00"
+# close = "Fri 17:00"
+# daily_break = ["17:00", "18:00"]
+#
+# [xmarket.calendars.xyz_fx]                # trade[XYZ] FX
+# kind = "weekly"
+# tz = "America/New_York"
+# open = "Sun 17:00"
+# close = "Fri 17:00"
+#
+# [xmarket.calendars.rh_tokenization]       # Robinhood token mint / redeem window
+# kind = "weekly"
+# tz = "Europe/Paris"
+# open = "Mon 02:00"
+# close = "Sat 02:00"
+#
+# [xmarket.calendars.crypto]                # Hyperliquid crypto perps
+# kind = "24x7"
+#
+# Weekend fade, rule W (docs/xmarket-risk-paper-2026-09-30.md § Weekend fade):
+# the exec tool xm_weekend_fade, run by [feeds.xm_weekend_fade] below. Every
+# key required, unknown keys refused. Load rules (src/config/xmarket.rs):
+# [risk] + [paper]; [recorder] records mkt_ctx/1 (the anchor price);
+# every universe name not excluded tradable under [risk] (instruments_allow
+# lists them all — the weekend sandbox's does); capped_top_n ×
+# capped_notional_usd ≤ max_gross_exposure_usd; expected_edge_bps ≥
+# min_edge_bps.
+# [xmarket.weekend_fade]
+# calendar = "us_equity"                    # an exchange calendar: the weekend clock (Sat + Sun breaks)
+# universe = [                              # 75 xyz single stocks: HL perpCategories "stocks" minus 17 ETFs, STRC, OURA, IBIDEN
+#   "hyperliquid:xyz:AAOI", "hyperliquid:xyz:AAPL", "hyperliquid:xyz:AMAT", "hyperliquid:xyz:AMD",
+#   "hyperliquid:xyz:AMZN", "hyperliquid:xyz:ARM", "hyperliquid:xyz:ASML", "hyperliquid:xyz:AVGO",
+#   "hyperliquid:xyz:BABA", "hyperliquid:xyz:BB", "hyperliquid:xyz:BE", "hyperliquid:xyz:BIRD",
+#   "hyperliquid:xyz:BMNR", "hyperliquid:xyz:BOT", "hyperliquid:xyz:BX", "hyperliquid:xyz:CBRS",
+#   "hyperliquid:xyz:COIN", "hyperliquid:xyz:COST", "hyperliquid:xyz:CRCL", "hyperliquid:xyz:CRWD",
+#   "hyperliquid:xyz:CRWV", "hyperliquid:xyz:CVX", "hyperliquid:xyz:CXMT", "hyperliquid:xyz:DELL",
+#   "hyperliquid:xyz:DKNG", "hyperliquid:xyz:EBAY", "hyperliquid:xyz:GEV", "hyperliquid:xyz:GIGADEV",
+#   "hyperliquid:xyz:GME", "hyperliquid:xyz:GOOGL", "hyperliquid:xyz:HIMS", "hyperliquid:xyz:HOOD",
+#   "hyperliquid:xyz:HYUNDAI", "hyperliquid:xyz:IBM", "hyperliquid:xyz:INTC", "hyperliquid:xyz:IREN",
+#   "hyperliquid:xyz:KIOXIA", "hyperliquid:xyz:LITE", "hyperliquid:xyz:LLY", "hyperliquid:xyz:META",
+#   "hyperliquid:xyz:MINIMAX", "hyperliquid:xyz:MRNA", "hyperliquid:xyz:MRVL", "hyperliquid:xyz:MSFT",
+#   "hyperliquid:xyz:MSTR", "hyperliquid:xyz:MU", "hyperliquid:xyz:NBIS", "hyperliquid:xyz:NET",
+#   "hyperliquid:xyz:NFLX", "hyperliquid:xyz:NOK", "hyperliquid:xyz:NOW", "hyperliquid:xyz:NVDA",
+#   "hyperliquid:xyz:ORCL", "hyperliquid:xyz:PLTR", "hyperliquid:xyz:PURRDAT", "hyperliquid:xyz:QCOM",
+#   "hyperliquid:xyz:QNT", "hyperliquid:xyz:RDDT", "hyperliquid:xyz:RIVN", "hyperliquid:xyz:RKLB",
+#   "hyperliquid:xyz:SHAZ", "hyperliquid:xyz:SHEIN", "hyperliquid:xyz:SKHX", "hyperliquid:xyz:SKHY",
+#   "hyperliquid:xyz:SMSN", "hyperliquid:xyz:SNDK", "hyperliquid:xyz:SOFTBANK", "hyperliquid:xyz:SPCX",
+#   "hyperliquid:xyz:TSLA", "hyperliquid:xyz:TSM", "hyperliquid:xyz:UNITREE", "hyperliquid:xyz:USAR",
+#   "hyperliquid:xyz:WDC", "hyperliquid:xyz:ZHIPU", "hyperliquid:xyz:ZM",
+# ]
+# exclude = []                              # full ids neither ledger trades (a split halt: KIOXIA on 2026-09-26)
+# capped_top_n = 4                          # capped ledger ([risk] account): the 4 largest |s| …
+# min_abs_signal_bps = 50                   # … of at least 50 bps
+# capped_notional_usd = 25                  # each, through the [risk] gate
+# shadow_account = "xmarket-shadow"         # shadow ledger: every eligible name, no caps, executable prices
+# shadow_initial_cash_usd = 10000
+# shadow_notional_usd = 100
+# expected_edge_bps = 23                    # edge the per-name opportunity row carries (min_edge_bps): half the in-sample +46 bps
+# anchor_max_age_secs = 600                 # recorded mkt_ctx/1 row at most this old at the anchor (≥ [recorder] heartbeat_secs)
+# entry_max_age_secs = 120                  # stored mkt_ctx/1 row at most this old at the entry (≥ the hl_ctx interval + jitter)
+# entry_lateness_max_secs = 600             # no snapshot by entry + this ⇒ missed_entry (no late entry)
+# max_slippage_bps = 100                    # IOC bound of every fade order (the shadow ledger has no slippage cap; exits ≤ 500)
+
+# --- Risk + paper trading (xmarket, $100 budget — tracker § 7 #3) ---
+# The gate inside every exec tool enforces [risk]; no [risk] = every order is
+# refused. Every key is required (no defaults), unknown keys are errors, and
+# [paper] comes with [risk]. Rules: src/config/risk.rs.
+# [risk]
+# account = "xmarket"                        # ledger account in <state dir>/ledger.db
+# mode = "paper"                             # "live" is refused until the live pilot (M3b)
+# venues = ["hyperliquid"]
+# min_lifecycle = "paper_tradable"           # §29; M0 permits by instruments_allow only
+# instruments_allow = ["hyperliquid:xyz:TSLA"]   # full <venue>:<native id>, never shortened
+# instruments_deny = []
+# max_order_notional_usd = 25                # HL minimum order is $10
+# max_position_notional_usd = 50
+# max_asset_exposure_usd = 50                # net per underlying, across venues
+# max_venue_exposure_usd = 100
+# max_gross_exposure_usd = 100               # the whole budget
+# max_net_exposure_usd = 100
+# max_leverage = 1                           # no leverage
+# daily_loss_limit_usd = 10                  # halt; clears 00:00 UTC
+# total_loss_limit_usd = 25                  # halt; clears only via `tengu risk resume` (TTY)
+# min_edge_bps = 10                          # edge after costs an entry needs (its opportunity row: same side, strategy, size)
+# max_slippage_bps = 30
+# min_depth_usd = 250                        # book depth within max_slippage_bps
+# require_hedge_for = ["convergence"]        # entries refused (hedge_not_supported) until hedge legs are placed
+# max_data_age_ms = { book = 5000, ctx = 20000, reference = 60000, quote = 20000 }
+# max_skew_ms = 5000
+# max_orders_per_min = 6
+# max_open_orders = 4
+# kill_switch_file = "~/.tengu/state/xmarket/KILL"   # present = halted; absolute or ~/
+# allow_reduce_degraded = true               # stale data / halted: reduce-only + close still pass
+# exits = { take_profit_bps = 200, stop_loss_bps = 100, max_hold_secs = 86400 }   # [risk.exits]: xm_exits closes at TP / SL (bps vs the entry: a fresh mark, else the live book; a fired one stays due) or after max hold; all required
+# [paper]
+# initial_cash_usd = 100
+# latency_ms = 250                           # sleep, re-read the book, fill against it
+# latency_jitter_ms = 100
+# fee_tier = 0                               # Hyperliquid tier 0–6
+# staking_discount_pct = 0                   # HYPE staking discount, 0–40
+# order_types = ["market", "ioc"]
+# [default_scopes.sign_and_send_transaction]   # required with [risk], no wallets: Privy signing off
+# [default_scopes.sign_message]                # (a tool without a scope would get the `default` wallet)
+
+# The `risk_status` tool (opt-in; row risk_state/1:<account>) reads the
+# ledger and the kill-switch file itself; its scope needs only the workspace
+# (observation store). Operator: `tengu risk status | halt | resume
+# --sandbox <name>` (halt / resume at a terminal only) —
+# docs/xmarket-risk-paper-2026-09-30.md.
+# [default_scopes.risk_status]
+# fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
+#
+# Exec tools paper_order / paper_close / xm_exits / xm_weekend_fade (opt-in; the [risk] gate runs inside
+# the tool: gate + fill + ledger write in one transaction) — only on a
+# private agent: no `description`, not `default`, no webhook `agent`
+# (config load refuses otherwise; the tools check the caller again).
+# paper_positions (not an exec tool) reads the account at fresh marks.
+# xm_exits closes every due position (deadline, max hold, [risk.exits]) —
+# run it from the feed below, every 15 s. xm_weekend_fade runs rule W (the
+# [xmarket.weekend_fade] block above) from its feed, every 60 s.
+# Rows paper_fill/1, paper_close/1, paper_positions/1, xm_exits/1, xm_weekend/1 —
+# docs/xmarket-risk-paper-2026-09-30.md § Exec tools.
+# [agents.xm_exec]                          # a decision loop's / feed's agent
+# engine = "openrouter"
+# model = "google/gemini-2.5-flash-lite"
+# workspace = "~/xmarket-workspace"
+# tools = ["hl_ctx", "paper_order", "paper_close", "paper_positions", "risk_status", "xm_exits", "xm_weekend_fade"]
+#
+# [default_scopes.paper_order]              # the live book after the latency
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+#
+# [default_scopes.paper_close]
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+#
+# [default_scopes.paper_positions]
+# fs_roots = ["~/xmarket-workspace"]
+#
+# [default_scopes.xm_exits]                 # closes read the live book too
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+#
+# [default_scopes.xm_weekend_fade]          # fades and shadow exits read the live book too
+# fs_roots = ["~/xmarket-workspace"]
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+
+# --- Request budgets (src/config/rate_limits.rs) ---
+# One token bucket per name, shared by every feed and tool of this process
+# that budgets against it (weights in the venue's units). No section = the
+# name is unlimited (one debug line). Unknown keys fail config load.
+# [rate_limits.hyperliquid]
+# per_minute = 1200                         # HL: 1200 weight / min / IP (l2Book 2, most info requests 20)
+# burst = 1200                              # bucket size; default = per_minute
+# exec_reserve = 0                          # weight reads leave for order calls
+#
+# Hyperliquid tools (opt-in: list them in the agent's `tools`; args, keys,
+# weights: docs/typed-observations-2026-09-24.md § Hyperliquid tools). Each
+# needs its scope: the workspace (observation store), the HL host, and
+# HL_API_URL (testnet override https://api.hyperliquid-testnet.xyz; unset = mainnet).
+# [default_scopes.hl_ctx]
+# fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+#
+# [default_scopes.hl_book]                  # l2Book weight 2 (+ recentTrades 20 with include_trades)
+# fs_roots = ["~/xmarket-workspace"]        # = the agent's workspace
+# net_hosts = ["api.hyperliquid.xyz"]
+# env_reads = ["HL_API_URL"]
+
+# --- tengu run (docs/runtime-2026-09-30.md) ---
+# `tengu run --sandbox <name>`: one long-running process per sandbox (lease
+# runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
+# once + the [webhooks] routes (build with --features webhooks). All optional.
+# [runtime]
+# shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events get this long, then abort
+# max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
+# max_queued_per_loop = 64                  # events one loop holds waiting; one more is refused (warn, webhook 429)
+# heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
+# heartbeat_stale_secs = 30                 # `tengu doctor --sandbox <name> --live` fails past this
+#
+# --- Feeds: scheduled work of `tengu run` (docs/runtime-2026-09-30.md § Feeds) ---
+# kind = "tool" calls a tool of `agent` (the executor its decision loop would
+# get: scopes, workspace, secret redaction; call id feed:<name>:<slot ms>:<i>);
+# kind = "tick" sends `event` + ts_ms to a [decision_loops.*] block. When:
+# every_secs (UTC grid) · windows (local time in tz; replace every_secs inside)
+# · at (clock ticks in tz: "Sun 18:00", "daily 09:00"). Rules: src/config/feeds.rs.
+# [feeds.hl_ctx]
+# kind = "tool"
+# agent = "xm_feeds"                        # its `tools` list hl_ctx, hl_book and risk_status; workspace = xm_exec's
+# tool = "hl_ctx"
+# args = { dex = "xyz" }
+# every_secs = 60
+# jitter_pct = 10                           # start up to 6 s late (spreads the request budget)
+# run_on_start = true
+# required = true                           # `tengu doctor --live` fails when down or stale
+# stale_after_secs = 180                    # default 3 × the longest interval
+#
+# [feeds.hl_book]
+# kind = "tool"
+# agent = "xm_feeds"
+# tool = "hl_book"
+# each = { coin = ["xyz:TSLA", "xyz:NVDA"] }  # one call per value, in order
+# every_secs = 300
+# tz = "America/New_York"
+# windows = [                               # every 60 s around the weekend clock
+#   { days = ["Sun"], from = "17:00", to = "19:00", every_secs = 60 },
+#   { days = ["Mon"], from = "08:30", to = "09:30", every_secs = 60 },
+# ]
+# required = true
+#
+# [feeds.risk_day]                          # rolls the daily-loss base (day-start equity)
+# kind = "tool"
+# agent = "xm_feeds"
+# tool = "risk_status"                      # no args
+# tz = "UTC"
+# at = ["daily 00:01"]                      # shortly after the UTC day starts
+# run_on_start = true
+# required = true
+# stale_after_secs = 90000                  # 25 h (default without every_secs: 8 days)
+#
+# [feeds.xm_exits]                          # the exit rules (x-exit-rules): no LLM, no Jev
+# kind = "tool"
+# agent = "xm_exec"                         # the private exec agent; its `tools` list xm_exits
+# tool = "xm_exits"                         # no args (IOC bound: [risk] max_slippage_bps, ≤ 500 bps); needs the hl_ctx feed
+#                                           # (mkt_ctx/1 marks for TP / SL — stale: the live book decides;
+#                                           # mkt_instrument/1 rows — missing: the facts kept at the entry);
+#                                           # exits never count toward max_orders_per_min; a rejected close
+#                                           # waits 15 s … 15 min, a final rejection (delisted) is never retried
+# every_secs = 15
+# required = true
+#
+# [feeds.xm_weekend_fade]                   # rule W (x-weekend-fade-strategy): no LLM, no Jev
+# kind = "tool"
+# agent = "xm_exec"                         # the private exec agent; its `tools` list xm_weekend_fade
+# tool = "xm_weekend_fade"                  # no args: one step of the window per call (waiting → entered →
+#                                           # closing → closed); needs the hl_ctx feed (dex xyz) + the recorder
+# every_secs = 60
+# required = true
+#
+# [feeds.weekend_review]                    # a Jev loop event at clock times
+# kind = "tick"
+# target = "xm_main"                        # a [decision_loops.*] block
+# tz = "America/New_York"
+# at = ["Sun 18:00", "Mon 09:00"]           # wall-clock times, DST-safe
+# event = { phase = "review" }              # the loop gets { phase, ts_ms }
+
+# --- Observation history (recorder; needs [xmarket]) ---
+# Typed-tool observations appended to <TENGU_HOME>/state/<xmarket.state>/history/
+# <YYYYMMDD>.db (UTC day). Read: tengu history range|asof. Rules:
+# docs/typed-observations-2026-09-24.md § History recorder.
+# [recorder]
+# enabled = true
+# schemas = ["mkt_ctx/1", "hl_book/1"]       # "*" = every schema
+# keep_data = ["hl_book/1"]                  # full payload; others keep features only
+# change_only = true                         # skip rows equal to the key's last one …
+# heartbeat_secs = 300                       # … until it is this old (0 = never)
+# min_interval_secs = { "hl_book/1" = 60 }   # at most one row per key per interval
+# retention_days = 30                        # older day files deleted (0 = keep all)
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
@@ -199,10 +511,14 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # A subagent the planner can route to. `description` + `example_queries` are
 # what the planner LLM reads — say what it is good at AND what it is NOT for.
-# `tools` is the allow-list for its subprocess runs (empty = every base tool;
-# workspace-tool names listed here are opted in like `workspace_tools`).
-# `limits.max_tool_rounds` caps its LLM turns per step, `limits.step_timeout_secs`
-# the wall clock (default 600). No `workspace` = a temp dir per step.
+# `tools` is its allow-list on every surface — plan steps, chat, the bridge
+# (empty = every base tool; opt-in names listed here switch on like `workspace_tools`).
+# `limits.max_tool_rounds` caps its LLM turns per step (tool calls on
+# `claude_code`), `limits.step_timeout_secs` the wall clock (default 600).
+# No `workspace` = a temp dir per step (and per webhook turn), removed after
+# it: files it writes go too; the memory store then sits at `[memory]
+# store_path`; load warns when the agent's tools write files or skills. Pin
+# `workspace` for anything that must persist.
 
 # [agents.researcher]
 # engine = "openrouter"
@@ -260,9 +576,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # Run agents powered by your Claude Code subscription instead of API tokens.
 # Requires: cargo build --features claude_code
 # Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
-# Claude loads your CLAUDE.md, skills, MCP servers — everything from the workspace.
-# Tengu-native tools (http_request, crypto, cache) are bridged via MCP.
-# See docs/engine-backends.md for details.
+# Claude loads your CLAUDE.md and skills from the workspace. MCP: only the tengu
+# bridge (--strict-mcp-config) — Tengu-native tools (http_request, crypto,
+# cache) and this sandbox's [[mcp_servers]]; your own Claude MCP servers are
+# not loaded. See docs/engine-backends.md for details.
 
 # [claude_code]
 # cli_path = "claude"              # Path to Claude CLI binary (default: "claude")
@@ -275,7 +592,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer or [risk]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"
@@ -314,10 +631,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.skill-improver]
 # engine = "openrouter"
 # model = "anthropic/claude-opus-4-7"
-# # `workspace_tools` allow-list: agentic_memory / shared_cache / persistent_store /
-# # skill_distill / apply_improver_proposal / manage_skill (+ the Solana LP tools,
-# # docs/tools.md). Regular tools like
-# # read_file / list_directory go in `tools`.
+# # Opt-in names (src/domain/tools.rs::WORKSPACE_TOOLS) listed in `tools` are
+# # switched on like `workspace_tools`; regular tools like read_file /
+# # list_directory go in `tools` too.
 # tools = ["read_file", "list_directory"]  # Read-only; harness applies diffs
 #
 # [agents.skill-improver.identity]

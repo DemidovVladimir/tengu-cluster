@@ -1,0 +1,314 @@
+# Tengu Cluster — "xmarket-weekend" sandbox (2026-10-01)
+# The weekend investigation run (xmarket W1, tracker `x-weekend-sandbox`): rule W,
+# the weekend fade, paper-traded on the 75 Hyperliquid xyz single-stock perps,
+# with their contexts and order books recorded around it. Floor profile: no LLM,
+# no X, no Jev — `tengu run` feeds call tools directly. Paper only: no key, no
+# order leaves this Mac. Build plan § The weekend investigation sandbox; rule W:
+# docs/xmarket-risk-paper-2026-09-30.md § Weekend fade; runtime:
+# docs/runtime-2026-09-30.md § Weekend run.
+#
+# RUNBOOK — commands run from the repo root (`--sandbox` resolves
+# sandboxes/<name>/ from the cwd; the repo-root .env sets TENGU_HOME=~/.tengu). Each tengu
+# command asks for the vault password at a terminal: Enter skips it (nothing
+# here needs a secret). Never start `tengu run` with `&`: the prompt stops a
+# background job — run it in the foreground of a tmux pane.
+#   binary the W1-gate build, soaked 30 min 2026-10-01 06:34-07:04 UTC (commit 6fcb455, sha256
+#          e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72), frozen for this weekend:
+#          T=$HOME/.cache/tengu-xm.noindex/weekend/tengu-6fcb455      (a later build replaces only
+#          main/release/tengu: CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2
+#          nice -n 10 cargo build --release, default features)
+#   start  tmux new -s xmw      (survives a closed terminal; detach Ctrl-b d, back: tmux attach -t xmw)
+#          T=$HOME/.cache/tengu-xm.noindex/weekend/tengu-6fcb455; cd ~/development/tengu-cluster
+#          caffeinate -i -s nice -n 10 "$T" run --sandbox xmarket-weekend
+#          caffeinate holds the Mac awake exactly while the run lives — ON AC POWER (`-s` holds only
+#          on AC; the battery lasts ~7 h), lid open, online;
+#          a restart in the pane included — no separate `caffeinate -w <pid>`
+#          logs: the pane + ~/.tengu/logs/tengu.log; a second start exits 1 (lease runtime:xmarket-weekend)
+#   check  "$T" doctor --sandbox xmarket-weekend --live      exit 0 = heartbeat fresh, every required feed live —
+#          not proof of fills: a fade row other than `error` counts as live even when every fade failed
+#          "$T" risk status --sandbox xmarket-weekend        capped ledger: equity, positions, halts
+#          "$T" history range --sandbox xmarket-weekend mkt_ctx/1:hyperliquid:xyz:TSLA --from 2026-10-02T19:55:00-04:00 --to 2026-10-02T20:05:00-04:00
+#          "$T" tool call --sandbox xmarket-weekend --agent xm_weekend --tool xm_weekend_fade --args '{}'
+#              → xm_weekend/1:2026-10-02, phase waiting (next_entry_s) → entered → closing → closed (P&L)
+#          "$T" tool call --sandbox xmarket-weekend --agent xm_weekend --tool paper_positions --args '{"account":"xmarket-weekend-shadow"}'
+#   entry  Sun 2026-10-04 18:11 New York: the xm_weekend_fade tool call above (phase entered,
+#          n_capped_filled / n_shadow_filled, every fade not filled named in its errors) or risk status.
+#          A capped pick whose book fails the gate (30 bps slippage, $250 depth) is denied and not
+#          replaced: the risk policy, kept — the shadow ledger measures every name at the 100 bps IOC
+#          bound. Until 18:10 a fill rejection that may pass later (no mid, no liquidity, a stale book,
+#          missing data) is placed again as <id>:2, <id>:3 …; an unknown OI-cap state is denied and
+#          judged again (rule W: docs/xmarket-risk-paper-2026-09-30.md § Weekend fade)
+#   stop   Ctrl-C in the pane (or kill -TERM <pid>): drains ≤ 20 s, exit 0, lease released,
+#          ~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json state "stopped"
+#   P&L    sqlite3 ~/xmarket-weekend-ws/.tengu/observations.db "select body from observations where key = 'xm_weekend/1:2026-10-02'" | jq .features
+#          (once closed, the tool call above already shows the next window)
+#   timeline  America/New_York        UTC          Mac (Europe/Berlin)  Almaty (UTC+5)
+#     start   ≤ Fri 2026-10-02 19:30  ≤ Fri 23:30  ≤ Sat 01:30         ≤ Sat 04:30   recording before the anchor, or nothing enters
+#     anchor    Fri 2026-10-02 20:00    Sat 00:00    Sat 02:00           Sat 05:00   mkt_ctx/1 recorded (the anchor price)
+#     entry     Sun 2026-10-04 18:00    Sun 22:00    Mon 00:00           Mon 03:00   snapshot, 4 capped + every shadow fade
+#     exit      Mon 2026-10-05 09:00    Mon 13:00    Mon 15:00           Mon 18:00   xm_exits closes capped, the fade tool shadow
+#     stop      Mon 2026-10-05 10:00    Mon 14:00    Mon 16:00           Mon 19:00   once the fade row says closed (else keep running)
+# State: ~/.tengu/state/xmarket-weekend/ (ledger.db, runtime.db, history/, KILL = halt);
+# workspace ~/xmarket-weekend-ws (only .tengu/observations.db).
+
+runtime_profile = "auto"
+
+# Open: latency-sensitive book reads. Tool ceiling = the HL host; the
+# placeholder engine's API traffic is not under this ceiling (egress.rs: LLM
+# API = proxy only), so nothing else is listed.
+[egress]
+network = "open"
+allow_hosts = ["api.hyperliquid.xyz"]
+https_only = true
+
+[memory]
+enabled = false          # no LLM, no embeddings
+
+# --- xmarket: state dir, the weekend clock, rule W ---------------------------
+[xmarket]
+state = "xmarket-weekend"
+
+# NYSE (config.example.toml / tests/fixtures/xmarket/calendars.toml).
+[xmarket.calendars.us_equity]
+kind = "exchange"
+tz = "America/New_York"
+core = ["09:30", "16:00"]
+pre = "04:00"
+post = "20:00"
+overnight = true
+early_close = "13:00"
+early_post = "17:00"
+holidays = [
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+    "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+]
+early_closes = ["2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24"]
+
+# Rule W (the replay golden's knobs; tests: config/xmarket.rs).
+[xmarket.weekend_fade]
+calendar = "us_equity"
+universe = [                     # 75 xyz single stocks: HL perpCategories "stocks" minus 17 ETFs, STRC, OURA, IBIDEN
+    "hyperliquid:xyz:AAOI", "hyperliquid:xyz:AAPL", "hyperliquid:xyz:AMAT", "hyperliquid:xyz:AMD",
+    "hyperliquid:xyz:AMZN", "hyperliquid:xyz:ARM", "hyperliquid:xyz:ASML", "hyperliquid:xyz:AVGO",
+    "hyperliquid:xyz:BABA", "hyperliquid:xyz:BB", "hyperliquid:xyz:BE", "hyperliquid:xyz:BIRD",
+    "hyperliquid:xyz:BMNR", "hyperliquid:xyz:BOT", "hyperliquid:xyz:BX", "hyperliquid:xyz:CBRS",
+    "hyperliquid:xyz:COIN", "hyperliquid:xyz:COST", "hyperliquid:xyz:CRCL", "hyperliquid:xyz:CRWD",
+    "hyperliquid:xyz:CRWV", "hyperliquid:xyz:CVX", "hyperliquid:xyz:CXMT", "hyperliquid:xyz:DELL",
+    "hyperliquid:xyz:DKNG", "hyperliquid:xyz:EBAY", "hyperliquid:xyz:GEV", "hyperliquid:xyz:GIGADEV",
+    "hyperliquid:xyz:GME", "hyperliquid:xyz:GOOGL", "hyperliquid:xyz:HIMS", "hyperliquid:xyz:HOOD",
+    "hyperliquid:xyz:HYUNDAI", "hyperliquid:xyz:IBM", "hyperliquid:xyz:INTC", "hyperliquid:xyz:IREN",
+    "hyperliquid:xyz:KIOXIA", "hyperliquid:xyz:LITE", "hyperliquid:xyz:LLY", "hyperliquid:xyz:META",
+    "hyperliquid:xyz:MINIMAX", "hyperliquid:xyz:MRNA", "hyperliquid:xyz:MRVL", "hyperliquid:xyz:MSFT",
+    "hyperliquid:xyz:MSTR", "hyperliquid:xyz:MU", "hyperliquid:xyz:NBIS", "hyperliquid:xyz:NET",
+    "hyperliquid:xyz:NFLX", "hyperliquid:xyz:NOK", "hyperliquid:xyz:NOW", "hyperliquid:xyz:NVDA",
+    "hyperliquid:xyz:ORCL", "hyperliquid:xyz:PLTR", "hyperliquid:xyz:PURRDAT", "hyperliquid:xyz:QCOM",
+    "hyperliquid:xyz:QNT", "hyperliquid:xyz:RDDT", "hyperliquid:xyz:RIVN", "hyperliquid:xyz:RKLB",
+    "hyperliquid:xyz:SHAZ", "hyperliquid:xyz:SHEIN", "hyperliquid:xyz:SKHX", "hyperliquid:xyz:SKHY",
+    "hyperliquid:xyz:SMSN", "hyperliquid:xyz:SNDK", "hyperliquid:xyz:SOFTBANK", "hyperliquid:xyz:SPCX",
+    "hyperliquid:xyz:TSLA", "hyperliquid:xyz:TSM", "hyperliquid:xyz:UNITREE", "hyperliquid:xyz:USAR",
+    "hyperliquid:xyz:WDC", "hyperliquid:xyz:ZHIPU", "hyperliquid:xyz:ZM",
+]
+exclude = []                     # full ids neither ledger trades (a split / halt that weekend)
+capped_top_n = 4                 # [risk] account: the 4 largest |s| …
+min_abs_signal_bps = 50          # … of at least 50 bps
+capped_notional_usd = 25         # each, through the [risk] gate
+shadow_account = "xmarket-weekend-shadow"   # every eligible name, executable prices, no caps
+shadow_initial_cash_usd = 10000
+shadow_notional_usd = 100
+expected_edge_bps = 23           # half the in-sample +46 bps; ≥ [risk] min_edge_bps
+anchor_max_age_secs = 600        # ≥ [recorder] heartbeat_secs
+entry_max_age_secs = 120         # ≥ the hl_ctx interval + jitter
+entry_lateness_max_secs = 600    # no snapshot by entry + 10 min ⇒ missed_entry
+max_slippage_bps = 100           # IOC bound of every fade order and shadow exit
+
+# --- Risk + paper: the $100 budget (rules: src/config/risk.rs) ---------------
+[risk]
+account = "xmarket-weekend"
+mode = "paper"
+venues = ["hyperliquid"]
+min_lifecycle = "paper_tradable"
+instruments_allow = [            # = the universe (load rule: every name not excluded tradable)
+    "hyperliquid:xyz:AAOI", "hyperliquid:xyz:AAPL", "hyperliquid:xyz:AMAT", "hyperliquid:xyz:AMD",
+    "hyperliquid:xyz:AMZN", "hyperliquid:xyz:ARM", "hyperliquid:xyz:ASML", "hyperliquid:xyz:AVGO",
+    "hyperliquid:xyz:BABA", "hyperliquid:xyz:BB", "hyperliquid:xyz:BE", "hyperliquid:xyz:BIRD",
+    "hyperliquid:xyz:BMNR", "hyperliquid:xyz:BOT", "hyperliquid:xyz:BX", "hyperliquid:xyz:CBRS",
+    "hyperliquid:xyz:COIN", "hyperliquid:xyz:COST", "hyperliquid:xyz:CRCL", "hyperliquid:xyz:CRWD",
+    "hyperliquid:xyz:CRWV", "hyperliquid:xyz:CVX", "hyperliquid:xyz:CXMT", "hyperliquid:xyz:DELL",
+    "hyperliquid:xyz:DKNG", "hyperliquid:xyz:EBAY", "hyperliquid:xyz:GEV", "hyperliquid:xyz:GIGADEV",
+    "hyperliquid:xyz:GME", "hyperliquid:xyz:GOOGL", "hyperliquid:xyz:HIMS", "hyperliquid:xyz:HOOD",
+    "hyperliquid:xyz:HYUNDAI", "hyperliquid:xyz:IBM", "hyperliquid:xyz:INTC", "hyperliquid:xyz:IREN",
+    "hyperliquid:xyz:KIOXIA", "hyperliquid:xyz:LITE", "hyperliquid:xyz:LLY", "hyperliquid:xyz:META",
+    "hyperliquid:xyz:MINIMAX", "hyperliquid:xyz:MRNA", "hyperliquid:xyz:MRVL", "hyperliquid:xyz:MSFT",
+    "hyperliquid:xyz:MSTR", "hyperliquid:xyz:MU", "hyperliquid:xyz:NBIS", "hyperliquid:xyz:NET",
+    "hyperliquid:xyz:NFLX", "hyperliquid:xyz:NOK", "hyperliquid:xyz:NOW", "hyperliquid:xyz:NVDA",
+    "hyperliquid:xyz:ORCL", "hyperliquid:xyz:PLTR", "hyperliquid:xyz:PURRDAT", "hyperliquid:xyz:QCOM",
+    "hyperliquid:xyz:QNT", "hyperliquid:xyz:RDDT", "hyperliquid:xyz:RIVN", "hyperliquid:xyz:RKLB",
+    "hyperliquid:xyz:SHAZ", "hyperliquid:xyz:SHEIN", "hyperliquid:xyz:SKHX", "hyperliquid:xyz:SKHY",
+    "hyperliquid:xyz:SMSN", "hyperliquid:xyz:SNDK", "hyperliquid:xyz:SOFTBANK", "hyperliquid:xyz:SPCX",
+    "hyperliquid:xyz:TSLA", "hyperliquid:xyz:TSM", "hyperliquid:xyz:UNITREE", "hyperliquid:xyz:USAR",
+    "hyperliquid:xyz:WDC", "hyperliquid:xyz:ZHIPU", "hyperliquid:xyz:ZM",
+]
+instruments_deny = []
+max_order_notional_usd = 25      # = capped_notional_usd (HL minimum $10)
+max_position_notional_usd = 50
+max_asset_exposure_usd = 50
+max_venue_exposure_usd = 110
+max_gross_exposure_usd = 110     # 4 × $25 + headroom: marks move between fills
+max_net_exposure_usd = 110       # fades often share a side
+max_leverage = 1.2               # $100 gross on ~$99.99 equity after fees
+daily_loss_limit_usd = 10
+total_loss_limit_usd = 25
+min_edge_bps = 10                # ≤ expected_edge_bps
+max_slippage_bps = 30            # capped entries: book walk VWAP ≤ 30 bps from mid
+min_depth_usd = 250
+require_hedge_for = []           # never "overreaction": the fades have no hedge leg
+max_data_age_ms = { book = 5000, ctx = 90000, reference = 60000, quote = 20000 }   # ctx ≥ hl_ctx 60 s + jitter
+max_skew_ms = 5000
+max_orders_per_min = 12          # 4 entries Sun 18:00, 4 exits Mon 09:00 + retries
+max_open_orders = 4
+kill_switch_file = "~/.tengu/state/xmarket-weekend/KILL"   # present = halted
+allow_reduce_degraded = true
+
+[risk.exits]                     # the deadline (Mon 09:00) closes; the rest are disaster stops
+take_profit_bps = 2000
+stop_loss_bps = 1000
+max_hold_secs = 86400            # > the 15 h hold (entry 18:00 → 09:00 next trading day)
+
+[paper]
+initial_cash_usd = 100
+latency_ms = 250
+latency_jitter_ms = 100
+fee_tier = 0
+staking_discount_pct = 0
+order_types = ["market", "ioc"]
+
+# --- The one agent: a private tool owner (no description, not default) -----
+# Exec tools run only on a private agent. The engine is never called by
+# `tengu run` (feeds call tools directly); it only satisfies the schema.
+[agents.xm_weekend]
+engine = "openrouter"
+model = "google/gemini-2.5-flash-lite"
+workspace = "~/xmarket-weekend-ws"
+tools = ["hl_ctx", "hl_book", "risk_status", "paper_positions", "xm_exits", "xm_weekend_fade"]
+
+# --- Tool scopes (each explicit: no tool gets the fallback) -----------------
+[default_scopes.sign_and_send_transaction]   # required with [risk], no wallets: Privy signing off
+
+[default_scopes.sign_message]
+
+[default_scopes.hl_ctx]
+fs_roots = ["~/xmarket-weekend-ws"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.hl_book]
+fs_roots = ["~/xmarket-weekend-ws"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.risk_status]
+fs_roots = ["~/xmarket-weekend-ws"]
+
+[default_scopes.paper_positions]
+fs_roots = ["~/xmarket-weekend-ws"]
+
+[default_scopes.xm_exits]
+fs_roots = ["~/xmarket-weekend-ws"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+[default_scopes.xm_weekend_fade]
+fs_roots = ["~/xmarket-weekend-ws"]
+net_hosts = ["api.hyperliquid.xyz"]
+env_reads = ["HL_API_URL"]
+
+# --- Request budget, recorder, runtime --------------------------------------
+[rate_limits.hyperliquid]
+per_minute = 1200                # HL: 1200 weight / min / IP; this sandbox peaks near 200
+
+[recorder]
+enabled = true
+schemas = ["mkt_ctx/1", "hl_book/1", "mkt_instrument/1"]
+keep_data = ["hl_book/1"]        # full books (levels); the others keep features
+change_only = true
+heartbeat_secs = 300             # ≤ anchor_max_age_secs
+retention_days = 90              # covers the run + its analysis
+
+[runtime]                        # the defaults, written out
+shutdown_grace_secs = 20
+max_decisions_in_flight = 4
+heartbeat_secs = 5
+heartbeat_stale_secs = 30
+
+# --- Feeds (no LLM, no Jev: every feed is a tool call) ----------------------
+[feeds.hl_ctx]                   # every xyz market: mkt_ctx/1 (prices) + mkt_instrument/1 (fills, closes)
+kind = "tool"
+agent = "xm_weekend"
+tool = "hl_ctx"
+args = { dex = "xyz" }
+every_secs = 60
+jitter_pct = 10
+run_on_start = true
+required = true
+
+[feeds.hl_book]                  # the 75 books every 5 min; every 60 s around entry and exit
+kind = "tool"
+agent = "xm_weekend"
+tool = "hl_book"
+every_secs = 300
+tz = "America/New_York"
+windows = [
+    { days = ["Sun"], from = "17:00", to = "19:00", every_secs = 60 },
+    { days = ["Mon"], from = "08:30", to = "09:30", every_secs = 60 },
+]
+concurrency = 4                  # one sweep in a few seconds
+run_on_start = true
+required = true
+
+[feeds.hl_book.each]
+coin = [
+    "xyz:AAOI", "xyz:AAPL", "xyz:AMAT", "xyz:AMD", "xyz:AMZN", "xyz:ARM",
+    "xyz:ASML", "xyz:AVGO", "xyz:BABA", "xyz:BB", "xyz:BE", "xyz:BIRD",
+    "xyz:BMNR", "xyz:BOT", "xyz:BX", "xyz:CBRS", "xyz:COIN", "xyz:COST",
+    "xyz:CRCL", "xyz:CRWD", "xyz:CRWV", "xyz:CVX", "xyz:CXMT", "xyz:DELL",
+    "xyz:DKNG", "xyz:EBAY", "xyz:GEV", "xyz:GIGADEV", "xyz:GME", "xyz:GOOGL",
+    "xyz:HIMS", "xyz:HOOD", "xyz:HYUNDAI", "xyz:IBM", "xyz:INTC", "xyz:IREN",
+    "xyz:KIOXIA", "xyz:LITE", "xyz:LLY", "xyz:META", "xyz:MINIMAX", "xyz:MRNA",
+    "xyz:MRVL", "xyz:MSFT", "xyz:MSTR", "xyz:MU", "xyz:NBIS", "xyz:NET",
+    "xyz:NFLX", "xyz:NOK", "xyz:NOW", "xyz:NVDA", "xyz:ORCL", "xyz:PLTR",
+    "xyz:PURRDAT", "xyz:QCOM", "xyz:QNT", "xyz:RDDT", "xyz:RIVN", "xyz:RKLB",
+    "xyz:SHAZ", "xyz:SHEIN", "xyz:SKHX", "xyz:SKHY", "xyz:SMSN", "xyz:SNDK",
+    "xyz:SOFTBANK", "xyz:SPCX", "xyz:TSLA", "xyz:TSM", "xyz:UNITREE", "xyz:USAR",
+    "xyz:WDC", "xyz:ZHIPU", "xyz:ZM",
+]
+
+[feeds.xm_weekend_fade]          # rule W: one idempotent step of the window per call
+kind = "tool"
+agent = "xm_weekend"
+tool = "xm_weekend_fade"
+every_secs = 60
+run_on_start = true
+required = true
+
+[feeds.xm_exits]                 # closes the capped fades at the deadline
+kind = "tool"
+agent = "xm_weekend"
+tool = "xm_exits"
+args = { max_slippage_bps = 100 }   # = the shadow exits' bound (fade max_slippage_bps)
+every_secs = 15
+run_on_start = true
+required = true
+
+[feeds.risk_day]                 # rolls the daily-loss base (day-start equity)
+kind = "tool"
+agent = "xm_weekend"
+tool = "risk_status"
+tz = "UTC"
+at = ["daily 00:01"]
+run_on_start = true
+required = true
+stale_after_secs = 90000         # 25 h

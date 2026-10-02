@@ -38,9 +38,11 @@ pub struct EngineContext {
     pub system_prompt: Option<String>,
     /// Tools to expose via MCP bridge (used by Claude Code engine).
     pub bridge_tools: Option<Vec<ToolDef>>,
-    /// Maximum tool call rounds before killing the session.
-    /// Enforced inside the Claude Code NDJSON reader (the outer
-    /// `collect_engine_response` loop already caps OpenRouter rounds).
+    /// `limits.max_tool_rounds` as the Claude Code engine enforces it: the
+    /// tool calls (`tool_use` blocks) of one CLI run — not rounds — past
+    /// which the CLI is killed with an error. In-process engines are capped
+    /// by their loop instead, in rounds (`collect_engine_response`, a
+    /// `run-agent` step's turns).
     pub max_tool_rounds: Option<u32>,
     /// Maximum chars per MCP bridge tool result. Passed to the bridge
     /// subprocess via `TENGU_BRIDGE_MAX_RESULT_CHARS`.
@@ -62,6 +64,15 @@ pub trait Engine: Send + Sync {
     fn manages_own_workspace(&self) -> bool;
     fn supports_streaming(&self) -> bool {
         false
+    }
+    /// Max chars of one tool result fed back to this engine. `Some` also
+    /// swaps a typed row's `data` for its store key
+    /// (`Observation::compact_text`) when the row exceeds the cap — a row
+    /// that fits arrives whole — in both tool loops (`chat/tool_loop.rs`,
+    /// `run-agent`). `None` = the agent's `limits.max_tool_result_chars`
+    /// only. `LocalEngine`: `domain::token::tool_result_char_budget`.
+    fn tool_result_char_cap(&self) -> Option<usize> {
+        None
     }
     fn capabilities(&self) -> EngineCapabilities {
         EngineCapabilities {

@@ -15,7 +15,8 @@
 //! | Path | Control | Strength |
 //! |---|---|---|
 //! | `http_request` | proxy + `check_url` on every hop (redirects re-checked) + audit | enforced |
-//! | crypto tools (Privy) | proxy (shared tool client) | enforced |
+//! | crypto tools (Privy, `tools/crypto/helpers.rs`) | tool client + `check_url` + scope `net_hosts` per request (Privy API, EVM receipt polls) + env through `env_reads` + audit (`tool` = the crypto tool) | enforced |
+//! | Hyperliquid info (`outbound/hyperliquid/info.rs`) | tool client + `check_url` + scope `net_hosts` per request + `[rate_limits.hyperliquid]` + audit (`hl_info`) | enforced |
 //! | MCP `http` servers | proxy, loopback exempt | enforced |
 //! | Telegram Bot API (`tengu telegram`) | teloxide client (reqwest 0.11) via HTTP CONNECT on the proxy port (`http_connect_proxy`), 30s/60s timeouts | enforced |
 //! | LLM API (OpenRouter chat, embeddings, wiki compiler) | proxy iff `route_llm_api` (default: on under Tor) | enforced |
@@ -28,7 +29,21 @@
 //! appended to the JSONL audit log (`audit_log`, default
 //! `<TENGU_HOME>/logs/egress.jsonl`) and mirrored as a `tengu::egress`
 //! tracing line.
+//!
+//! | Audit field | Source |
+//! |---|---|
+//! | `agent` | the record's own, else the call's [`CallScope`], else `TENGU_AGENT_NAME` (`run-agent` children) |
+//! | `session` | the call's [`CallScope`], else `TENGU_SESSION_ID` |
+//! | `call_id` | the call's [`CallScope`] (`ToolCall.id`), else `null` |
+//!
+//! A [`CallScope`] is set per tool call by [`AttributedExecutor`] — the
+//! executor `tengu run` wraps around each `[feeds.<n>]` tool feed (agent =
+//! the feed's, session `feed:<name>`) and each decision loop (`tengu run`,
+//! `tengu webhooks`, `tengu decide`: agent = the loop's, session = the
+//! event's session id). One process runs every feed and loop, so the
+//! process env cannot name them.
 
+use std::future::Future;
 use std::io::Write;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -41,10 +56,98 @@ use reqwest::Url;
 use serde_json::Value;
 
 use crate::config::egress::{EgressConfig, SHELL_ISOLATED};
+use crate::domain::message::{Message, ToolCall};
 use crate::domain::scope::host_matches;
+use crate::ports::engine::ToolExecutor;
+use crate::ports::tool::ToolOutput;
 
 /// Env var carrying the parent's resolved `EgressConfig` (JSON) to children.
 pub(crate) const EGRESS_ENV: &str = "TENGU_EGRESS";
+
+/// Who the egress records of one tool call belong to (module table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CallScope {
+    pub agent: String,
+    pub session: String,
+    pub call_id: String,
+}
+
+tokio::task_local! {
+    static CALL_SCOPE: CallScope;
+}
+
+/// Run `fut` with `scope` naming every egress record it writes (on this
+/// task; a task it spawns does not inherit it).
+pub(crate) async fn audited_as<F: Future>(scope: CallScope, fut: F) -> F::Output {
+    CALL_SCOPE.scope(scope, fut).await
+}
+
+/// The scope of the call running on this task, if any.
+pub(crate) fn call_scope() -> Option<CallScope> {
+    CALL_SCOPE.try_with(Clone::clone).ok()
+}
+
+/// How [`AttributedExecutor`] names a call's session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CallSession {
+    /// Every call: this session (a feed: `feed:<name>`).
+    Fixed(String),
+    /// Decision loop `<name>`: its call ids are `<name>:<session_id>:<t>`
+    /// (`application/decision_loop`) — the event's `session_id`.
+    Loop(String),
+}
+
+impl CallSession {
+    /// The session of call `call_id`; a loop id of another shape is its own
+    /// session.
+    pub(crate) fn of(&self, call_id: &str) -> String {
+        match self {
+            CallSession::Fixed(s) => s.clone(),
+            CallSession::Loop(name) => call_id
+                .strip_prefix(name.as_str())
+                .and_then(|rest| rest.strip_prefix(':'))
+                .and_then(|rest| rest.rsplit_once(':'))
+                .map_or_else(|| call_id.to_string(), |(session, _)| session.to_string()),
+        }
+    }
+}
+
+/// A tool executor whose every call runs under a [`CallScope`]: `agent`,
+/// [`CallSession::of`] the call id, the call id (module table).
+pub(crate) struct AttributedExecutor {
+    inner: Arc<dyn ToolExecutor>,
+    agent: String,
+    session: CallSession,
+}
+
+impl AttributedExecutor {
+    pub(crate) fn new(inner: Arc<dyn ToolExecutor>, agent: &str, session: CallSession) -> Self {
+        Self {
+            inner,
+            agent: agent.to_string(),
+            session,
+        }
+    }
+
+    fn scope(&self, call: &ToolCall) -> CallScope {
+        CallScope {
+            agent: self.agent.clone(),
+            session: self.session.of(&call.id),
+            call_id: call.id.clone(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for AttributedExecutor {
+    async fn execute(&self, call: &ToolCall, messages: &[Message]) -> Result<String> {
+        audited_as(self.scope(call), self.inner.execute(call, messages)).await
+    }
+
+    async fn execute_typed(&self, call: &ToolCall, messages: &[Message]) -> Result<ToolOutput> {
+        audited_as(self.scope(call), self.inner.execute_typed(call, messages)).await
+    }
+}
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
@@ -462,23 +565,13 @@ impl EgressPolicy {
     }
 
     /// Append one audit record (JSONL) and mirror it to tracing. Adds
-    /// `ts`, `pid`, `session`, `agent`, `via`, `proxy`. Fail-soft on I/O.
+    /// `ts`, `pid`, `session`, `agent`, `call_id` (module table), `via`,
+    /// `proxy`. Fail-soft on I/O.
     pub(crate) fn audit(&self, mut event: Value) {
         let Some(path) = &self.audit_path else {
             return;
         };
-        if let Value::Object(map) = &mut event {
-            map.insert("ts".into(), chrono::Utc::now().to_rfc3339().into());
-            map.insert("pid".into(), std::process::id().into());
-            map.insert(
-                "session".into(),
-                std::env::var("TENGU_SESSION_ID").ok().into(),
-            );
-            map.entry("agent")
-                .or_insert_with(|| std::env::var("TENGU_AGENT_NAME").ok().into());
-            map.insert("via".into(), self.via().into());
-            map.insert("proxy".into(), self.cfg.proxy.clone().into());
-        }
+        self.stamp(&mut event, call_scope());
         let line = event.to_string();
         tracing::info!(target: "tengu::egress", "{line}");
         let written = std::fs::OpenOptions::new()
@@ -489,6 +582,29 @@ impl EgressPolicy {
         if let Err(e) = written {
             tracing::warn!(target: "tengu::egress", path = %path.display(), error = %e, "egress audit write failed");
         }
+    }
+
+    /// The fields [`EgressPolicy::audit`] adds (module table); `scope` =
+    /// the call running on this task.
+    fn stamp(&self, event: &mut Value, scope: Option<CallScope>) {
+        let Value::Object(map) = event else {
+            return;
+        };
+        map.insert("ts".into(), chrono::Utc::now().to_rfc3339().into());
+        map.insert("pid".into(), std::process::id().into());
+        let (agent, session, call_id) = match scope {
+            Some(s) => (Some(s.agent), Some(s.session), Some(s.call_id)),
+            None => (
+                std::env::var("TENGU_AGENT_NAME").ok(),
+                std::env::var("TENGU_SESSION_ID").ok(),
+                None,
+            ),
+        };
+        map.insert("session".into(), session.into());
+        map.entry("agent").or_insert_with(|| agent.into());
+        map.insert("call_id".into(), call_id.into());
+        map.insert("via".into(), self.via().into());
+        map.insert("proxy".into(), self.cfg.proxy.clone().into());
     }
 }
 
@@ -769,5 +885,90 @@ mod tests {
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("alive"), "{stdout}");
         assert!(stdout.contains("BLOCKED"), "{stdout}");
+    }
+
+    /// `tengu run`'s feed and loop calls share one process: an egress line
+    /// written inside a call names its agent, session and call id in full;
+    /// outside one, the record's own agent and the env still apply.
+    #[tokio::test]
+    async fn audit_lines_name_the_call_that_made_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("egress.jsonl");
+        let policy = Arc::new(EgressPolicy {
+            cfg: EgressConfig::open().resolved(),
+            audit_path: Some(path.clone()),
+        });
+        let scope = CallScope {
+            agent: "xm_weekend".into(),
+            session: "feed:hl_ctx".into(),
+            call_id: "feed:hl_ctx:1790775300000:0".into(),
+        };
+        let p = Arc::clone(&policy);
+        audited_as(scope, async move {
+            p.audit(serde_json::json!({"tool": "hl_info"}));
+        })
+        .await;
+        policy.audit(serde_json::json!({"tool": "hl_info", "agent": "own"}));
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["agent"], "xm_weekend");
+        assert_eq!(lines[0]["session"], "feed:hl_ctx");
+        assert_eq!(lines[0]["call_id"], "feed:hl_ctx:1790775300000:0");
+        assert_eq!(lines[1]["agent"], "own");
+        assert_eq!(lines[1]["call_id"], Value::Null);
+        let env_session: Value = std::env::var("TENGU_SESSION_ID").ok().into();
+        assert_eq!(lines[1]["session"], env_session);
+    }
+
+    #[test]
+    fn call_sessions_name_feeds_and_loop_events() {
+        let feed = CallSession::Fixed("feed:hl_book".into());
+        assert_eq!(feed.of("feed:hl_book:1790775300000:3"), "feed:hl_book");
+        let lp = CallSession::Loop("xm_main".into());
+        assert_eq!(
+            lp.of("xm_main:exit_tick:1790775300000:2"),
+            "exit_tick:1790775300000"
+        );
+        assert_eq!(
+            lp.of("xm_main:webhook-h-0f8c6a52-5d0e-4c8e-9a71-3b2f1c9d7e44:0"),
+            "webhook-h-0f8c6a52-5d0e-4c8e-9a71-3b2f1c9d7e44"
+        );
+        // Not this loop's shape: the whole id.
+        assert_eq!(lp.of("xm_mainx:s:1"), "xm_mainx:s:1");
+        assert_eq!(lp.of("other:s:1"), "other:s:1");
+    }
+
+    /// Each call through `AttributedExecutor` runs under its own scope —
+    /// concurrent calls on one task included; none outside it.
+    #[tokio::test]
+    async fn attributed_calls_run_under_their_scope() {
+        struct Probe;
+        #[async_trait::async_trait]
+        impl ToolExecutor for Probe {
+            async fn execute(&self, _c: &ToolCall, _m: &[Message]) -> Result<String> {
+                tokio::task::yield_now().await;
+                let s = call_scope().map(|s| (s.agent, s.session, s.call_id));
+                Ok(serde_json::to_string(&s).unwrap())
+            }
+        }
+        let ex = AttributedExecutor::new(
+            Arc::new(Probe),
+            "xm_exec",
+            CallSession::Loop("xm_main".into()),
+        );
+        let call = |id: &str| ToolCall {
+            id: id.into(),
+            name: "hl_ctx".into(),
+            arguments: serde_json::json!({}),
+        };
+        let (a, b) = (call("xm_main:s-1:2"), call("xm_main:s-2:0"));
+        let (ra, rb) = tokio::join!(ex.execute_typed(&a, &[]), ex.execute(&b, &[]));
+        assert_eq!(ra.unwrap().text, r#"["xm_exec","s-1","xm_main:s-1:2"]"#);
+        assert_eq!(rb.unwrap(), r#"["xm_exec","s-2","xm_main:s-2:0"]"#);
+        assert_eq!(Probe.execute(&a, &[]).await.unwrap(), "null");
     }
 }

@@ -23,10 +23,21 @@ persistent_store_chunk_overlap = 200
 
 [telegram]
 tool_approvals = false
+# allowed_users = ["<your Telegram user id>"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 [scaffold]
 root = "~/storage-test-workspace"
 directories = ["uploads", "documents"]
+
+# --- Tool scopes (narrower than the permissive fallback) ----------------------
+# http_request fetches the URLs users share: any host, over Tor; no `$VAR`
+# expansion (no env_reads) and no multipart upload (no fs_roots).
+[default_scopes.http_request]
+net_hosts = ["*"]
+
+# write_file: the workspace only (`.tengu-attachments/url-*.txt`, `note-*.txt`).
+[default_scopes.write_file]
+fs_roots = ["~/storage-test-workspace"]
 
 [agents.storage]
 engine = "claude_code"
@@ -35,9 +46,12 @@ default = true
 workspace = "~/storage-test-workspace"
 workspace_tools = ["persistent_store"]
 skill_packages = ["telegram-rag-ingest"]
-# Subagent view (used when an [orchestrator] routes a step here): tool
-# allow-list + planner-facing description.
-tools = ["persistent_store", "read_file"]
+# Tool allow-list on every surface (chat included): what telegram-rag-ingest
+# calls — attachments → persistent_store; URLs → http_request → write_file →
+# persistent_store; pasted text → write_file → persistent_store. Scopes: the
+# [default_scopes] above.
+tools = ["persistent_store", "read_file", "http_request", "write_file"]
+# Planner-facing description (used when an [orchestrator] routes a step here).
 description = """
 Stores files and searches them by semantic query. Best for: ingesting a set \
 of documents (PDFs, notes, transcripts) and later retrieving them by natural \

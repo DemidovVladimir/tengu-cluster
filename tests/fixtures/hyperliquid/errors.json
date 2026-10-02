@@ -1,0 +1,20 @@
+{
+  "unknown_dex": {
+    "request": {"type": "metaAndAssetCtxs", "dex": "nope"},
+    "status": 500,
+    "content_type": "application/json",
+    "body": "null"
+  },
+  "bogus_type": {
+    "request": {"type": "bogus"},
+    "status": 422,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "Failed to deserialize the JSON body into the target type"
+  },
+  "unknown_coin": {
+    "request": {"type": "l2Book", "coin": "xyz:NOPE"},
+    "status": 200,
+    "content_type": "application/json",
+    "body": "null"
+  }
+}

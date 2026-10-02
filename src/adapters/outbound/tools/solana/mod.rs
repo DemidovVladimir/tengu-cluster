@@ -24,8 +24,9 @@
 //! | `write_perps.rs` | `jup_perps_order` |
 //!
 //! The plugin opens `<workspace>/.tengu/observations.db` once
-//! (`SqliteObservationStore`); when that fails the tools read live without
-//! caching (fail-soft). It also opens the install-wide write store
+//! (`open_observation_store`: plus the history recorder when `[recorder]` is
+//! on); when that fails the tools read live without caching (fail-soft). It
+//! also opens the install-wide write store
 //! (`<TENGU_HOME>/state/solana-writes.db`: lease, in-flight sends, write
 //! fence); when that fails there is no fence and `mode = "send"` is
 //! refused.
@@ -49,7 +50,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::adapters::outbound::observations::SqliteObservationStore;
+use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::solana::writes_store::SqliteWriteStore;
 use crate::ports::observation::ObservationStore;
 use crate::ports::solana_writes::SolanaWriteStore;
@@ -92,8 +93,8 @@ impl ToolPlugin for SolanaPlugin {
     }
 
     async fn tools(&self, ctx: &PluginCtx<'_>) -> Result<Vec<Arc<dyn Tool>>> {
-        let store = match SqliteObservationStore::open(ctx.workspace) {
-            Ok(s) => Some(Arc::new(s) as Arc<dyn ObservationStore>),
+        let store = match open_observation_store(ctx.workspace, &ctx.config.sandbox) {
+            Ok(s) => Some(s),
             Err(e) => {
                 let error = format!("{e:#}");
                 tracing::warn!(%error, "observation store unavailable; Solana tools read live");
