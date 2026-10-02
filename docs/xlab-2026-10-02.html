@@ -374,7 +374,7 @@
       <!-- architect -->
       <rect class="bx-ag" x="16" y="440" width="576" height="108" rx="8"/>
       <text class="bt" x="28" y="462">xl_architect · skill xlab-research</text>
-      <text class="bs" x="28" y="482">OpenRouter Sonnet · tools market_history, backtest, read_file, list_directory</text>
+      <text class="bs" x="28" y="482">Claude CLI Opus · tools market_history, backtest, read_file, list_directory</text>
       <text class="bs" x="28" y="500">market_history — stats + bars of one instrument, splits applied</text>
       <text class="bs" x="28" y="518">backtest — spec → in-sample run · "holdout": true = one counted read</text>
       <text class="bs" x="28" y="536">every holdout read → backtests/holdout-reads.jsonl · no order tool</text>
@@ -832,7 +832,7 @@ result: action "skip", outcome "stopped"</pre>
 <!-- ============ ARCHITECT ============ -->
 <section class="panel" id="p-architect" role="tabpanel" aria-labelledby="t-architect" tabindex="0" hidden>
   <h2>The Architect — <code>xl_architect</code> + skill <code>xlab-research</code></h2>
-  <p>OpenRouter <code>anthropic/claude-sonnet-4-6</code>; tools <code>market_history</code>, <code>backtest</code>, <code>read_file</code>, <code>list_directory</code>; <code>max_tool_rounds</code> 40. Read-only: no order tool, it cannot move money. The Jev arm stays CLI-only (spend).</p>
+  <p>Claude CLI (<code>claude_code</code>, the operator login) <code>claude-opus-5-5</code>, <code>builtin_tools_profile = "none"</code> — was OpenRouter <code>anthropic/claude-sonnet-4-6</code> until 2026-10-02; Jev is the only OpenRouter model; tools <code>market_history</code>, <code>backtest</code>, <code>read_file</code>, <code>list_directory</code>; <code>max_tool_rounds</code> 40. Read-only: no order tool, it cannot move money. The Jev arm stays CLI-only (spend).</p>
 
   <h3>Holdout discipline (as built)</h3>
   <div class="tw"><table style="min-width:680px">
