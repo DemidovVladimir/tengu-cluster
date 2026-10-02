@@ -7,7 +7,12 @@
 #
 # QUICKSTART — from the repo root (`--sandbox` resolves sandboxes/<name>/ from
 # the cwd; the repo .env sets TENGU_HOME=~/.tengu). Enter skips the vault prompt.
-#   1. data      tengu history backfill --sandbox xlab --instruments @xyz_stocks --interval 1h --from 2026-03-01 --funding
+# Models: the Architect is Opus and xl_jev Sonnet on the Claude CLI (the operator's
+# login: build with `--features claude_code`, `claude` logged in); Jev is the only
+# OpenRouter model (OPENROUTER_API_KEY).
+#   0. build     CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main cargo build --release --features claude_code
+#                tengu doctor --sandbox xlab --engines   (one small CLI turn per agent)
+#   1. data     tengu history backfill --sandbox xlab --instruments @xyz_stocks --interval 1h --from 2026-03-01 --funding
 #                tengu history backfill --sandbox xlab --instruments @crypto --interval 1h --from 2026-03-01 --funding
 #                tengu history coverage --sandbox xlab
 #                (≈ 1 h for the 75 names: [rate_limits.hyperliquid] leaves room for a
@@ -328,8 +333,8 @@ order_types = ["market", "ioc"]
 # order tool and cannot move money.
 [agents.xl_architect]
 default = true
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"            # the Claude CLI (operator's login), not OpenRouter; build with --features claude_code
+model = "claude-opus-5-5"         # bare slug for claude_code
 workspace = "~/xlab-ws"
 tools = ["market_history", "backtest", "read_file", "list_directory"]
 skill_packages = ["xlab-research"]
@@ -357,23 +362,23 @@ backtest run id for every number. A missing or failed read is unknown, never 0. 
 instrument ids, run ids and hashes in full, never shortened. You cannot trade."""
 
 [agents.xl_architect.limits]
-max_tool_rounds = 40
+max_tool_rounds = 40              # claude_code counts tool calls, not engine turns
 step_timeout_secs = 900
 
-# Hardened claude_code option (a build with `--features claude_code`), replacing
-# engine + model above:
-#   engine = "claude_code"
-#   model = "claude-sonnet-4-6"
-#   [agents.xl_architect.claude_code]
-#   builtin_tools_profile = "none"             # required in a [risk] sandbox
+[agents.xl_architect.claude_code]
+builtin_tools_profile = "none"    # required in a [risk] sandbox (config/hardening.rs)
 
 # JEV's agent (private: no description, not default). The gate loop runs terminal
-# actions only; its engine is never called.
+# actions only; its engine is never called — Sonnet on the Claude CLI only keeps
+# OpenRouter down to Jev itself ([decision_loops.xl_gate] model).
 [agents.xl_jev]
-engine = "openrouter"
-model = "google/gemini-2.5-flash-lite"
+engine = "claude_code"
+model = "claude-sonnet-5-5"
 workspace = "~/xlab-ws"
 tools = ["read_file"]
+
+[agents.xl_jev.claude_code]
+builtin_tools_profile = "none"
 
 # --- Tool scopes: explicit for every tool an agent holds ---------------------
 [default_scopes.sign_and_send_transaction]   # required with [risk]: Privy signing off
