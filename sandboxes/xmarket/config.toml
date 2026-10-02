@@ -9,9 +9,9 @@
 #
 # RUNBOOK — from the repo root (`--sandbox` resolves sandboxes/<name>/ from the
 # cwd; the repo-root .env sets TENGU_HOME=~/.tengu and OPENROUTER_API_KEY). At a
-# terminal each tengu command asks for the vault password: Enter skips it
-# (stdin /dev/null too). Never start `tengu run` with `&` at a terminal: the
-# prompt stops a background job — run it in a tmux pane.
+# terminal each tengu command asks for the vault password on /dev/tty: Enter
+# skips it (stdin /dev/null does not). Never start `tengu run` with `&` at a
+# terminal: the prompt stops a background job — run it in a tmux pane.
 #   build   CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release
 #           T=$HOME/.cache/tengu-xm.noindex/main/release/tengu        (default features suffice)
 #   start   tmux new -s xm, then: nice -n 10 "$T" run --sandbox xmarket

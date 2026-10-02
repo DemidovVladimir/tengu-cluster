@@ -4,6 +4,8 @@ End-to-end acceptance check for the work landed across PRs #6 → #13, updated 2
 
 Runs in ~30 minutes of your time. Automated parts cost ~$0.50–$1.00 in OpenRouter API fees.
 
+**2026-10-02:** § 9 (xmarket paper desk) and § 10 (xlab history-first research) cover the `feature/xmarket` work — operator-runnable; `tengu` commands checked against `tengu <cmd> --help`, test filters against the test sources; § 10's numbers were re-run on a copy of `market.db` on 2026-10-02.
+
 ---
 
 ## 0. Prerequisites
@@ -107,14 +109,15 @@ cargo test --test scope_lint 2>&1 | tail -3
 cargo test --test run_agent_ipc 2>&1 | tail -3
 ```
 
-| Filter | Expected (2026-09-18) |
+| Filter | Expected (2026-10-02, default features) |
 |---|---|
-| `application::memory` | 21 passed, 0 failed |
-| `application::orchestrator` | 30 passed, 0 failed |
+| `application::memory` | 11 passed, 0 failed |
+| `application::orchestrator` | 24 passed, 0 failed |
 | `adapters::outbound::tools::memory` | 17 passed, 0 failed |
-| `config` | 20 passed, 0 failed |
+| `config` | 121 passed, 0 failed |
 | `scope_lint` | 2 passed, 0 failed |
-| `run_agent_ipc` | 4 passed, 0 failed |
+| `run_agent_ipc` | 7 passed, 0 failed |
+| whole bin (`cargo test --bin tengu -- --list`) | 1,539 tests |
 
 **If any fail:** don't continue — something regressed.
 
@@ -339,6 +342,8 @@ For each validation section, record:
 | 4. Retention | pass / fail | |
 | 5. TUI smoke | pass / partial / fail | which sub-step failed |
 | 6. Telegram (optional) | pass / skip | |
+| 9. xmarket paper desk | pass / fail | `doctor --live` exit code, feeds live, ledger owner |
+| 10. xlab research | pass / fail | research-arm n · mean vs the expected rows, gate cache hits |
 
 If anything fails:
 - §1 or §2 fail → code regression. Don't proceed.
@@ -358,5 +363,138 @@ Known gaps (documented in `docs/harness-architecture.md` §9):
 - **Eval stubs vs subprocess workers** — row `stubs` reach the planner turn (`EvalChatServiceFactory`) only; worker steps are real `tengu run-agent` children.
 - **5+ step plans** — `prompts.yaml` tops out at 4 steps (diamond).
 - **Mid-step LLM streaming cancellation** — `/stop` between steps is tested; mid-LLM-call cancel is not.
+- **Live `local` engine legs** — run only on the operator's PC (`TENGU_MATRIX_LOCAL_BASE_URL`); never start a local model on the dev Mac.
+- **Real money** — no live send anywhere (Solana `send`, Privy signing, M3b Hyperliquid orders): paper / simulate only, by operator rule.
 
 If any of these matter for your use case, add a scenario in `docs/orchestration-test-scenarios.md` and a matching row in `prompts.yaml`.
+
+---
+
+## 9. xmarket — paper desk (`sandboxes/xmarket`, ~15 min, ≈ free)
+
+Runbook: top of `sandboxes/xmarket/config.toml`. Docs: `docs/runtime-2026-09-30.md` § xmarket sandbox, `docs/xmarket-risk-paper-2026-09-30.md`. Run from the repo root (`--sandbox` resolves `sandboxes/<name>/` from the cwd; the repo `.env` sets `TENGU_HOME=~/.tengu`). At a terminal each command asks for the vault password on `/dev/tty`: Enter skips it (stdin `/dev/null` does not).
+
+```bash
+CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release   # default features
+T=$HOME/.cache/tengu-xm.noindex/main/release/tengu
+```
+
+### 9.1 Offline (no network, scoped runs)
+
+```bash
+cargo test --bin tengu config::xmarket::tests::xmarket_sandbox_m0_stage
+cargo test --bin tengu config::xmarket::tests::weekend_sandbox_replays_the_golden
+cargo test --bin tengu config::risk::tests::every_sandbox_and_the_example_load
+TENGU_CONFORMANCE_ONLY=paper_ cargo test --test bridge_conformance bridge_matches_in_process
+TENGU_CONFORMANCE_ONLY=xm_ cargo test --test bridge_conformance bridge_matches_in_process
+cargo test --test engine_matrix offline_local_xm
+```
+
+**Pass:** each `ok`. `TENGU_CONFORMANCE_ONLY` keeps the cases whose name contains the value (`paper_order*`, `paper_close`, `paper_positions`; `xm_exits`, `xm_weekend_fade`); each runs in-process and through a real `tengu mcp-bridge` and must agree.
+
+### 9.2 Config + run + live health
+
+```bash
+"$T" doctor --sandbox xmarket </dev/null                 # exit 0: agents xm, xm_architect, xm_executor; network open, allow api.hyperliquid.xyz
+tmux new -s xm                                            # then, in the pane (foreground — never with &: the vault prompt stops a background job)
+nice -n 10 "$T" run --sandbox xmarket
+# second terminal:
+"$T" run --sandbox xmarket </dev/null                    # exit 1: lease runtime:xmarket held
+"$T" doctor --sandbox xmarket --live </dev/null          # exit 0 = heartbeat fresh + every required feed live
+```
+
+**Expect** (smoke 2026-10-01): `doctor --live` exit 0 at +2 min — 4 / 4 required feeds live (`hl_ctx`, `hl_book`, `xm_exits`, `risk_day`); 0 WARN / ERROR in `~/.tengu/logs/tengu.log`; HL weight ≤ 126 / min. Ctrl-C in the pane drains in ≤ 20 s, exit 0; `doctor --live` then exits 1 (`stopped`).
+
+**Fail:** `doctor --live` exit 1 with `FAIL heartbeat missing: no run-xmarket.json` while the run is up → the doctor reads another `TENGU_HOME` than the run (run both from the repo root); `FAIL feed …` → the line carries the feed's state and `last_error`.
+
+### 9.3 Ledger + kill switch
+
+```bash
+"$T" risk status --sandbox xmarket </dev/null            # read-only: account xmarket $100, owner sandbox xmarket, halts, positions, last verdicts
+"$T" tool call --sandbox xmarket --agent xm_executor --tool risk_status </dev/null   # risk_state/1:xmarket — equity at mark, loss headroom
+touch ~/.tengu/state/xmarket/KILL
+"$T" risk status --sandbox xmarket </dev/null            # "kill-switch file …/KILL: PRESENT — every account is halted"
+rm ~/.tengu/state/xmarket/KILL
+"$T" risk resume --sandbox xmarket                       # at a terminal, if a halt is recorded: type the account name
+```
+
+**Expect:** before the first `tengu run`: `no ledger yet: <path>` (status never creates the ledger). `risk resume` is refused while `KILL` exists.
+
+### 9.4 Engine matrix — xm set (live, costs tokens)
+
+```bash
+cargo test --features claude_code --test engine_matrix _xm -- --ignored --nocapture --test-threads 1
+```
+
+**Expect:** one `engine_matrix |` line per leg; gemini · haiku · claude_code green (W1 gate: 39 / 39 over 13 sets); `local_xm` skipped without `TENGU_MATRIX_LOCAL_BASE_URL` (operator's PC). Needs `OPENROUTER_API_KEY` (env or `.env`) and `claude` logged in.
+
+### 9.5 Weekend sandbox (optional run)
+
+Checks for `sandboxes/xmarket-weekend` use the FROZEN binary only (`~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455`, sha256 `e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72`) — a newer build must not touch `~/.tengu/state/xmarket-weekend/` before Mon 2026-10-05 10:00 New York. Commands + timeline: runbook at the top of `sandboxes/xmarket-weekend/config.toml`.
+
+---
+
+## 10. xlab — history-first research (`sandboxes/xlab`, ~5 min, free without a live gate)
+
+Runbook: top of `sandboxes/xlab/config.toml`. Doc: `docs/xlab-2026-10-01.md` § 10 (commands), § 14 (results). Same `$T` as § 9; no LLM unless noted.
+
+### 10.1 Offline (no network, scoped runs)
+
+```bash
+cargo test --bin tengu domain::backtest::checks           # 5 tests: time integrity (§ 39) + the rule W golden
+cargo test --bin tengu config::backtest                   # 6 tests: [backtest] load rules, the strategy library checked at load
+TENGU_CONFORMANCE_ONLY=market_history cargo test --test bridge_conformance bridge_matches_in_process
+TENGU_CONFORMANCE_ONLY=backtest cargo test --test bridge_conformance bridge_matches_in_process
+cargo test --test engine_matrix offline_local_xlab        # offline_local_xlab + offline_local_xlab_holdout
+```
+
+### 10.2 Config + data
+
+```bash
+"$T" doctor --sandbox xlab </dev/null                    # exit 0: xl_architect, xl_jev; network open, allow api.hyperliquid.xyz + api.geckoterminal.com
+"$T" history coverage --sandbox xlab </dev/null          # instrument | kind | interval | first | last | rows | sources
+```
+
+**Expect** (data through 2026-10-01): 162 rows, 79 instruments (75 `hyperliquid:xyz:*` + `hyperliquid:BTC` / `ETH` / `SOL` / `HYPE`); 1h bars from `2026-03-07T08:00:00Z` (later for names listed later), funding from `2026-03-01T00:00:00Z`; `ctx` rows (`hl-archive:asset_ctxs`) for the four crypto perps, 2026-09-01 → 2026-09-30.
+
+Extend (resumes; ≈ 1 h for the 75 names at xlab's HL budget — one HL-heavy xlab process at a time):
+
+```bash
+"$T" history backfill --sandbox xlab --instruments @crypto,@xyz_stocks --interval 1h --from 2026-03-01 --funding </dev/null
+```
+
+### 10.3 Rules backtest with a holdout split (≈ 1 s)
+
+```bash
+"$T" backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01T00:00:00Z </dev/null
+"$T" backtest --sandbox xlab --strategy weekend_fade_liquid --split time:2026-07-01T00:00:00Z </dev/null
+```
+
+**Expect** on the 2026-10-01 data (re-run 2026-10-02; a later backfill adds weekends and moves these):
+
+| Strategy | Research n · mean net bps (95 % CI) | In-sample n · mean | Holdout n · mean (CI) | Capped ($100 book) |
+|---|---|---|---|---|
+| `weekend_fade` | 1500 · +50.45 (+15.7 … +81.5) | 614 · +57.67 | 886 · +45.44 (−7.3 … +93.1) | 116 · +147.57 (+53.0 … +247.6); 1384 `max_gross_exposure_usd` refusals |
+| `weekend_fade_liquid` | 875 · +58.26 (+15.8 … +98.9) | 374 · +39.55 | 501 · +72.22 (+6.3 … +130.9) | 116 · +119.64; `thin_entry` skips 625 |
+
+Each run prints its run dir `~/.tengu/state/xlab/backtests/<run id>/` (`report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json`). **Fail:** `market.db` missing → § 10.2 backfill (or add `--fetch`).
+
+### 10.4 Jev gate — offline rerun (no key, no spend)
+
+```bash
+"$T" backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01T00:00:00Z --gate xl_gate --max-decisions 1500 --offline </dev/null
+```
+
+**Expect:** `decided 1500 · take 277 · skip 1223 · … · error 0`, then `cache 1500 hits · 0 misses · est $0.0000 · jev − rules +28.93 bps ci95=[-23.5,+81.6] · Brier 0.349`. `--max-decisions` defaults to 500 (the rest counted as `cut`). A cache miss under `--offline` is class `error`, never a call; drop `--offline` for a live first run (≈ $0.00004 per decision, `OPENROUTER_API_KEY`).
+
+### 10.5 Engine matrix — xlab sets (live, costs tokens)
+
+```bash
+cargo test --features claude_code --test engine_matrix xlab -- --ignored --nocapture --test-threads 1
+```
+
+**Expect:** 8 legs (`openrouter_gemini_*`, `openrouter_haiku_*`, `claude_code_*`, `local_*` × `xlab`, `xlab_holdout`). 2026-10-01: haiku-4.5 and the Claude CLI pass both sets; gemini-2.5-flash-lite calls every tool but may misquote numbers — re-run; `local_*` skipped without `TENGU_MATRIX_LOCAL_BASE_URL`.
+
+### 10.6 Architect turn (live, optional, ≈ $0.14–0.37 a turn on Sonnet)
+
+`"$T" chat --sandbox xlab` → "test a weekend follow placebo on the holdout split". **Expect:** `backtest` with a split shows the in-sample half only; one `"holdout": true` read adds a line to `~/.tengu/state/xlab/backtests/holdout-reads.jsonl`; the verdict is judged on the holdout line.

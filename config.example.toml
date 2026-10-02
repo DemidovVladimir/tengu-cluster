@@ -55,8 +55,11 @@ default_lens = "eco"
 # workspace_tools = ["shared_cache", "skill_distill"]  # opt-in tools: only names in src/domain/tools.rs::WORKSPACE_TOOLS (memory, skill lifecycle — and the families below)
 #   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
 #   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
+#   + Solana writes (simulate by default): solana_close_token_accounts, jupiter_swap, dlmm_open_position, dlmm_close_position, jup_perps_order — "Solana signing" below
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
-#   + xmarket risk (typed): risk_status — needs [xmarket] + [risk] + [paper]; scope example under "Risk + paper trading" below
+#   + xmarket risk (typed): risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade (private agent only) — needs [xmarket] + [risk] + [paper]; scope examples under "Risk + paper trading" below
+#   + xlab (typed, ttl 0): market_history, backtest — need [xmarket] (backtest also [backtest]); scope examples under "Backtests" below
+#   `tengu tool list` (hidden) prints every catalog name.
 
 # OpenRouter model examples (just change the model line):
 # model = "nvidia/nemotron-3-super-120b-a12b:free"  # Nemotron 120B (free)
@@ -89,6 +92,20 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # request_timeout_secs = 600         # total budget for one non-streaming HTTP call (default 600)
 # max_cost_per_flow = 5.0           # USD cost limit (optional)
 # warn_at_cost = 4.0                # USD cost warning threshold (must be <= max_cost_per_flow)
+# max_tool_rounds = 70              # per chat turn / plan step (tool calls on claude_code)
+# step_timeout_secs = 600           # wall clock of one plan step as a `tengu run-agent` subprocess
+
+# --- Tool scopes (default-deny per field; docs/configuration.md § Scopes) ---
+# [default_scopes.<tool>] is the fallback for every agent; an agent's own
+# [agents.<name>.scopes.<tool>] replaces it wholesale. A tool with neither runs
+# on a permissive fallback (no shell in a [risk] / signer sandbox).
+# [default_scopes.http_request]
+# net_hosts = ["api.example.com"]   # exact, "*.suffix" or "*"
+# env_reads = ["EXAMPLE_API_KEY"]   # env vars the tool may read ($VAR headers)
+# fs_roots = ["~/projects/my-app"]  # files (multipart uploads); empty = none
+# [agents.main.scopes.run_command]
+# shell_bins = ["git", "cargo"]     # first command word only — a guard rail, not a sandbox
+# (wallets = [...]: Privy labels / Solana pubkeys, see "Solana signing" below)
 
 # --- Persistent Vector Memory ---
 # Shared across agents. Stores facts/insights for cross-session retrieval.
@@ -102,6 +119,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # store_path = "~/.tengu/memory/"
 # session_recent_n = 10                       # last-N messages reloaded each orchestrator turn for dialogue coherence
 # cross_plan_top_k = 5                        # fuzzy recall breadth during replan (recall over agentic_memory step outputs)
+# cross_session_msg_top_k = 0                 # prior user messages recalled across sessions (0 = off)
 #
 # --- Agentic memory (Open Brain — Postgres + pgvector) ---
 # Requires: cargo build --features postgres_memory
@@ -140,6 +158,17 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [webhooks.endpoints.helius]
 # loop = "watch"
 # auth_header_env = "HELIUS_WEBHOOK_AUTH"
+
+# --- Workspace scaffold ---
+# Created when `tengu telegram` starts (existing files are never overwritten).
+# `project` is the template of Telegram's `/project <name>`; a soft
+# `tengu prune --sandbox <name>` clears its directories.
+# [scaffold]
+# root = "~/my-workspace"
+# directories = ["notes", "downloads"]
+# files = [{ path = "notes/README.md", content = "Notes go here.\n" }]
+# [scaffold.project]
+# directories = ["research", "outputs"]
 
 # --- Decision loops (Jev picks, tools execute) ---
 # Test one event: tengu decide --sandbox <name> --loop watch [--event e.json]
@@ -533,6 +562,20 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # min_abs_signal_bps = 0
 # top_n = 4                                 # optional: the 4 largest |s| per window
 # min_entry_trades = 50                     # optional: skip a name whose entry bar counted fewer trades (`thin_entry`)
+#
+# The xlab tools (opt-in, any agent — sandboxes/xlab gives them to xl_architect):
+# market_history (stored history of one instrument; `fetch = true` backfills the
+# missing part first) and backtest (rules arms on a library name or an inline
+# spec; a split's holdout stays hidden until `"holdout": true`, every read counted
+# in <state dir>/backtests/holdout-reads.jsonl; `run_id` reads a stored run's rows).
+# Both need [xmarket]; backtest also [backtest]. market.db and backtests/ are their
+# own state, outside every fs root. docs/xlab-2026-10-01.md § 8.
+# [default_scopes.market_history]
+# fs_roots = ["~/xlab-ws"]                  # = the agent's workspace (observation store)
+# net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]   # used by fetch = true
+# env_reads = ["HL_API_URL", "GECKO_API_URL"]                    # optional API-base overrides
+# [default_scopes.backtest]
+# fs_roots = ["~/xlab-ws"]                  # no host, no env
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
@@ -622,6 +665,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [claude_code]
 # cli_path = "claude"              # Path to Claude CLI binary (default: "claude")
+# timeout_secs = 120               # default 120
 
 # [agents.editor]
 # engine = "claude_code"
@@ -653,7 +697,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # deny_hosts = []
 # https_only = true
 # shell_network = "isolated"           # proxy_env (advisory) | isolated (macOS kernel sandbox)
-# audit = true                         # JSONL at ~/.tengu/logs/egress.jsonl
+# audit = true                         # JSONL at <TENGU_HOME>/logs/egress.jsonl
+# audit_log = "~/.tengu/logs/egress.jsonl"   # another audit path (~ expanded)
 
 # --- Skill Lifecycle ---
 # Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
@@ -663,9 +708,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [skill_lifecycle]
 # improver_agent = "skill-improver"        # Required for `tengu skill evolve`
-# fixture_runner_agent = "fixture-runner"  # Unused — `tengu eval` runs rows on the eval config default agent (field is serde-required, value is ignored; no [agents.fixture-runner] block needed)
-# default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles
-# default_rolling_window = 10              # Window over which metrics.json pass_rate is computed
+# fixture_runner_agent = "fixture-runner"  # Optional and unused — `tengu eval` runs rows on the eval config's default agent (no [agents.fixture-runner] block needed)
+# default_max_evolve_cycles = 3            # Tier 2 cap on rewrite→rescore cycles (`--max-cycles` overrides)
+# worktree_stale_hours = 24                # evolve startup sweep of .tengu/worktrees/ older than this (0 = off)
+# default_rolling_window = 10              # parsed but not read yet: `tengu eval` uses a window of 10
 
 # [agents.skill-improver]
 # engine = "openrouter"

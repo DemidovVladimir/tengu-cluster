@@ -35,6 +35,12 @@ messages into a TUI / Telegram chat. The harness:
    loop until it calls `compress_and_store`, then writes the result to
    Postgres `agentic_memory` when `postgres_memory` is enabled.
 
+| Beyond chat | What | Doc |
+|---|---|---|
+| `tengu run --sandbox <s>` | long-running: `[feeds.*]`, `[decision_loops.*]` (Jev picks the action, tools execute), lease, heartbeat, `doctor --live` | `docs/runtime-2026-09-30.md` |
+| `sandboxes/xmarket` | paper trading desk: every order tool runs the `[risk]` gate inside it ($100 budget) | `docs/xmarket-tracker-2026-09-29.md` § 0 |
+| `sandboxes/xlab` | research on backfilled history: `tengu history`, `tengu backtest`, Jev replayed | `docs/xlab-2026-10-01.md` |
+
 All network traffic is **Tor by default** (`[egress] network = "tor"`, the
 Arti + lyrebird-rs proxy from `make tor`); a sandbox opts out with
 `network = "open"`. See `docs/egress-2026-09-16.md`.
@@ -49,13 +55,13 @@ tools/memory/grounding on the planner-side LLM call).
 
 | Layer | Path | Holds | May import |
 |---|---|---|---|
-| domain | `src/domain/` | plain data + pure policy (messages, plan, `ToolScope`, secrets redaction, metrics records) | nothing else |
-| ports | `src/ports/` | traits: `Engine`, `Tool`, `MemoryService`, `RecallStore`, `Planner`, `WorkerHandle`, … | domain, config |
+| domain | `src/domain/` | plain data + pure policy (messages, plan, `ToolScope`, secrets redaction, metrics records, observations, decisions, risk / paper / backtest math, calendars) | nothing else |
+| ports | `src/ports/` | traits: `Engine`, `Tool`, `MemoryService`, `RecallStore`, `Planner`, `WorkerHandle`, `Clock`, `ObservationStore`, `PaperLedger`, `MarketDataStore`, … | domain, config |
 | config | `src/config/` | TOML schema, validation, paths | domain |
-| application | `src/application/` | use cases: chat turn + tool loop, orchestrator, memory manager, skills, tool dispatch | domain, ports, config |
-| outbound adapters | `src/adapters/outbound/` | engines, **tools**, memory stores, MCP client, egress, secrets, subprocess runner | all but inbound/bootstrap |
-| bootstrap | `src/bootstrap/` | composition root: tool executor, memory, orchestrator, sandbox | all but inbound |
-| inbound adapters | `src/adapters/inbound/` | CLI (`cli/`), TUI, Telegram, webhooks, MCP bridge, eval/evolve | everything |
+| application | `src/application/` | use cases: chat turn + tool loop, orchestrator, memory manager, skills, tool dispatch, decision loops, runtime (`tengu run`), paper gate + fill, backtests | domain, ports, config |
+| outbound adapters | `src/adapters/outbound/` | engines, **tools**, memory stores, MCP client, egress, secrets, subprocess runner, SQLite stores (observations, ledger, `market.db`), backfill, Hyperliquid / Solana clients | all but inbound/bootstrap |
+| bootstrap | `src/bootstrap/` | composition root: tool executor, memory, orchestrator, sandbox, decision loops, runtime | all but inbound |
+| inbound adapters | `src/adapters/inbound/` | CLI (`cli/`), TUI, Telegram, webhooks, `tengu run`, MCP bridge, eval/evolve | everything |
 
 Enforced by `tests/layering_lint.rs`. **Where does X live / how do I add Y** → `docs/code-map.md` (+ `docs/code-map.html`, interactive knowledge graph).
 
@@ -165,10 +171,10 @@ flow, audit these for staleness **before declaring done**:
 | `docs/SESSION_HANDOFF.md` | Almost always — mark the items you closed, add new opens, update the "TL;DR" if behaviour changed |
 | `docs/architecture-2026-04-27.md` | If you changed the per-turn flow, added/removed a subsystem, or moved a file's responsibilities |
 | `docs/architecture-2026-04-27.svg` | If you changed the per-turn flow OR added/removed a file in a subsystem panel |
-| `docs/architecture-2026-04-27.html` | Same triggers as the svg + md. The SUBSYSTEMS / STEPS / FILE_MAP arrays in the inline `<script>` need to stay in sync |
+| `docs/architecture-2026-04-27.html` | Same triggers as the svg + md. The STEPS / FLOWS / SUBSYSTEM_GROUPS / SUBSYSTEMS / FILE_MAP arrays in the inline `<script>` need to stay in sync |
 | `docs/agentic-memory-*-2026-05-13.md` + `src/adapters/outbound/tools/agentic_memory/mod.rs` doc-comment | If you changed the memory schema, the `agentic_memory` tool API / operations, the recall lanes, or the Open Brain ↔ LLM Wiki split |
 | `src/application/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `TENGU_PLAN.md` shape, or who writes/reads them |
-| `docs/comparison-2026-04-26.md` + `.svg` | If your change affects how Tengu compares to Hermes or PI on memory/skills/tools/routing |
+| `docs/comparison-2026-04-26.md` + `.svg` | If your change affects how Tengu compares to Hermes or PI on memory/skills/tools/routing or the trading runtime axes (typed decisions, runtime, money safety, research on history, engine parity) |
 | `docs/skill-research-2026-04-28.md` | If the skill-lifecycle plan, gap inventory, or learning-platform A1/A2/A3 decisions change. |
 | `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `application/chat/flow.rs`, `application/chat/tool_loop.rs::collect_engine_response`, `application/chat/service.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or `rag/cleanup.rs`). The .html keeps inline JS arrays — keep them in sync with the .md. |
 | `CLAUDE.md` (this file) **and** `AGENTS.md` (its twin) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc. Update both — they must not drift. |
@@ -193,8 +199,10 @@ made the doc stale, not later.
 
 ## How to read context/token metrics
 
-Every LLM and embedding call emits a `MetricsRecord` (see
-`src/domain/metrics.rs`). Three surfaces:
+Every successful planner call, `run-agent` step turn, embedding, wiki-compiler
+and Jev decisions call emits a `MetricsRecord` (see `src/domain/metrics.rs`);
+a failed call and an in-process chat turn (TUI / Telegram / webhook agent
+without a plan) emit none. Three surfaces:
 
 1. **Always-on tracing** — `RUST_LOG=tengu=info` prints one structured line
    per call: `kind=`, `agent=`, `model=`, `prompt_tokens=`,
@@ -277,7 +285,12 @@ These are not preferences. They're load-bearing.
 
 4. **Fail-soft on memory operations, hard on plan-shape errors.** Open Brain
    unavailable → log warn, continue with file registry + recent history.
-   JSON parse error on plan output → hard error, retried up to 3x. The split
+   Planner output is parsed tolerantly (`planner.rs::parse_verdict`: raw
+   JSON → fenced → embedded JSON → non-empty prose becomes a `Direct` reply
+   with a warn); an empty reply fails the turn — the planner call is not
+   retried. A failing plan step runs up to `max_attempts_per_step` times
+   (default 3; it waits 1 s, then 3 s, 9 s for any later attempt), then
+   the plan is replanned up to `max_replans` times (default 2). The split
    is deliberate: memory degradation should not break a session, but a plan
    you can't parse means the model is broken.
 
@@ -423,9 +436,12 @@ These are not preferences. They're load-bearing.
   happens in `SubprocessRunner::run_step` for both the Ok and Failed paths,
   so a partial subagent run still surfaces its consumed tokens.
 - **`session_id` is unified between planner and runner (Fix B 2026-05-09)** —
-  `bootstrap::orchestrator::build_orchestrator` resolves the id ONCE
-  (env override `TENGU_SESSION_ID` > fresh UUID), passes the same string to
-  `RagPlanner::new(...)` AND `SubprocessRunner::new(sandbox_name, session_id)`.
+  each surface resolves the id ONCE (`bootstrap::orchestrator::resolve_session_id`:
+  env override `TENGU_SESSION_ID` > fresh UUID — `tengu chat` / `tengu
+  telegram` once per process, `tengu eval` once per row; `tengu webhooks`
+  mints `webhook-<name>-<uuid>` per request) and hands it to `build_orchestrator`,
+  which passes the same string to `RagPlanner::new(...)` AND
+  `SubprocessRunner::new(sandbox_name, session_id, agents)`.
   Planner messages and subagent step summaries share the same session key,
   so `RagPlanner::session_output_recall_block` can filter to it on the next
   turn. `SubprocessRunner::default()` still mints a fresh UUID for standalone
@@ -637,7 +653,8 @@ These are not preferences. They're load-bearing.
   default, one more is refused with a warn — webhook 429); `/webhooks/:name` with `--features webhooks`;
   SIGINT/SIGTERM drain ≤ `shutdown_grace_secs`; heartbeat
   `<state dir>/run-<s>.json` + `loop/1` / `feed/1` rows; `tengu doctor
-  --sandbox <s> --live` is the Docker healthcheck. `tengu risk resume` may
+  --sandbox <s> --live` is the healthcheck for a `tengu run` container (the
+  shipped image runs `tengu telegram` + plain `tengu doctor`). `tengu risk resume` may
   also ask for a secret (`TENGU_RISK_RESUME_SECRET_FILE`, 0600; a terminal is
   not a human). Budgets: `[rate_limits.<name>]`
   (`outbound/rate_limit.rs`, per process; unconfigured = unlimited); backoff
@@ -707,10 +724,12 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. Next up (2026-10-01): `xlab` — history-first
-research (`docs/xlab-2026-10-01.md` § 12 Next); then the
-`xmarket` sandbox — start at `docs/xmarket-build-plan-2026-09-30.md` (kickoff
-prompt at its end) and `docs/xmarket-tracker-2026-09-29.md` § 0.
+See `docs/SESSION_HANDOFF.md` for the running list. State 2026-10-02: xmarket W1 +
+its gate done, `xlab` built. Next, in order: the operator decisions
+(`docs/xmarket-tracker-2026-09-29.md` § 0 + W1 notes) → W2
+(`docs/xmarket-build-plan-2026-09-30.md`: status, waves, W2 kickoff prompt at its
+end), judged on history first (`docs/xlab-2026-10-01.md` § 12 Next). The weekend
+run is optional; the live `local` engine legs run on the operator's PC.
 As of 2026-05-14, the
 agentic-memory migration (Open Brain Postgres + pgvector behind
 `postgres_memory`) has landed all six phases: the `agentic_memory` plugin, the
@@ -734,9 +753,12 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
    postgres_memory` to exercise Open Brain recall), type "what is the BTC
    price?", and follow the logs. The flow is in §1 of
    `docs/architecture-2026-04-27.md`.
-2. **Open `docs/code-map.html` or `docs/architecture-2026-04-27.html` in a
-   browser** — both are searchable. Type the symbol you're looking for; it'll surface
-   which subsystem owns it.
+2. **Open `docs/index.html` (the docs hub) or an HTML explorer in a browser** —
+   searchable: `docs/code-map.html` (where X lives, recipes),
+   `docs/architecture-2026-04-27.html` (walk a turn),
+   `docs/context-management-2026-04-27.html` (what an LLM sees); interactive:
+   `docs/context-cutting-flow-2026-04-27.html` (the inner tool loop). Type the
+   symbol you're looking for; it'll surface which subsystem owns it.
 3. **`SESSION_HANDOFF.md` "Active gotchas" section** — most weird symptoms
    are documented there with the fix.
 4. **If you're about to add a new abstraction layer** — stop and check
@@ -745,7 +767,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-10-01 (xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-02 (docs refresh: "What this project is" names `tengu run`, the xmarket paper desk and xlab; the layer table lists the new ports / stores; "stuck" starts at `docs/index.html` + the HTML explorers; open items = operator decisions → W2; before that 2026-10-01 xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

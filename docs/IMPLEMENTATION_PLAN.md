@@ -1,5 +1,11 @@
 # Tengu-cluster — Implementation Plan
 
+> **Status (2026-10-02):** the v2 redesign (phases 0–7.2 below) is done. Five
+> phases have shipped since 2026-09-23: hexagonal layout, typed observations +
+> decision loops, Solana writes, xmarket W1, xlab. Their state, commits and next
+> steps: [§ Since 2026-09-23](#since-2026-09-23--what-shipped). Running state:
+> `docs/SESSION_HANDOFF.md` (top).
+>
 > **Superseded note (2026-05-14):** old retrieval-first phases are kept for
 > history. Current target is Open Brain live memory + Karpathy LLM Wiki
 > compiled Markdown; planner routing is file-backed.
@@ -42,6 +48,66 @@
 > this plan says *what order to land it in so nothing breaks between commits*.
 > Every phase ends with a binary you can launch manually and exercise via TUI and
 > Telegram.
+
+---
+
+## Since 2026-09-23 — what shipped
+
+Commit hashes in full. `main` = merged; `feature/xmarket` = local branch, not pushed (HEAD `699bb83e79e3dac2f76ca9cbef69b3573b31252d`).
+
+| Phase | Dates | Status | Key commits | Docs | Next |
+|---|---|---|---|---|---|
+| H — hexagonal layout | 2026-09-23 | ✅ `main` (#17) + `engine = "local"` | `51c16256e5a900ccafa30c2c618bdb34da4ee32a` (phases 0–6, one squash) · `647837bc661da464069275d09c7a80a28e751c75` (local engine) | `docs/hexagonal-plan-2026-09-23.md`, `docs/code-map.{md,html}` | — held by `tests/layering_lint.rs` + `tests/code_map.rs` |
+| D — typed observations + decision loops + Solana LP read tools | 2026-09-24 → 09-29 | ✅ `main` (#18) | `ff90d131039a3c169a4f082ad1f13a7bd0e24418` | `docs/typed-observations-2026-09-24.md`, `docs/decision-loop-plan-2026-09-24.md`, `docs/lping-2026-09-24.md` | phase 5: push feed (Yellowstone gRPC → `acct/1` rows) |
+| 6b — Solana write tools | 2026-09-29 | ✅ `main`: steps 1–6 in #18, 7–9 in #19; `simulate` verified live, `send` never run | `ff90d131039a3c169a4f082ad1f13a7bd0e24418` · `90c4dcc02cf85756d3e4331a8c68f60206eedbba` · Rust-only cleanup `9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8` | `docs/typed-observations-2026-09-24.md` § Write tools | first live send on a dedicated wallet (operator's go) |
+| X — xmarket wave W1 | 2026-09-30 → 10-01 | ✅ `feature/xmarket`: 34 items + W1 gate passed | [§ X below](#x--xmarket-w1-34-items) | `docs/xmarket-tracker-2026-09-29.md` § 0, `docs/xmarket-build-plan-2026-09-30.md`, `docs/runtime-2026-09-30.md`, `docs/xmarket-risk-paper-2026-09-30.md` | operator decisions → W2 |
+| XL — xlab, history first | 2026-10-01 | ✅ `feature/xmarket`: built, adversarial review (17 confirmed) fixed | [§ XL below](#xl--xlab-history-first-harness) | `docs/xlab-2026-10-01.md` | xlab § 12 |
+
+### X — xmarket W1 (34 items)
+
+| Area | Item → commit |
+|---|---|
+| Planning + seams | docs `47fc090de426205df91425df789849466e962399` · `[xmarket]` sections + NY / Paris clock `f2a3fae70bbccc4582b3ae46aa49de1a05cf902d` · `Clock` port `ce56fd34c39b06912d5304dd37508bfacf0acc06` |
+| E0 engine parity (7) | `x-tool-schema-lint` `f77320fe0974199d370dab47ec4d7111fb0c081d` · `x-bridge-parity` `c9d3755917b990e6b26f5ac7f735f8c3f050dc0a` · `x-claude-code-hardening` `f3e6bea786913c71c6c21b512a297e30c719b9b2` · `x-local-model-fit` `450d1cfadbca590b7b2e832195d22e3c16b5f58c` · `x-bridge-conformance-test` `7f02717d6533558d5ba90d675dbf9a4eae680691` · `x-engine-matrix-smoke` `0ad160d2d28ee6156f2082ad39fc6695fa21eb6a` · `x-engine-parity-audit` `1f52df0e711904d62a14a279ecba6b430511a8f8` |
+| Runtime (5) | `rt-daemon` (`tengu run`) `a5ff4184e963c5f9a889cf75fa8b8247c09d55b2` · `rt-backoff-budget` `6af07a4006fcfc969d4f1ccd5202c2f106c9b10b` · `rt-scheduler` (feeds) `24a7dd359faea06bfdcadb2366a236980b0d4192` · `rt-health` (`doctor --live`) `7fad3a6b4c5bc035d772c188d5e76d9032a27cd5` · `ops-audit-atomic-write` `3963c5930c95c0ca3532385879c55e3bc90be63d` |
+| Hyperliquid (4) | `hl-info-client` `28312690f0ff63a878853f9583eb906993b99e44` · `hl-market-schema` `f8a46b3d5ca8fe4a3fbed2efa0a90f296df24077` · `hl-ctx-tool` `ea0b05b9503c0fae58d0171adf90ca1a155b4db2` · `hl-book-tool` `1e6c3721a619c883900fcee2df0304641b04b60b` |
+| Risk + paper (11) | `risk-config-schema` `21e093633248a936a73c4b9555278a6dec51500b` · `risk-calc-costs` `b2f4c5cca8695b8a72ff9a9a97011bb9709cc137` · `risk-paper-ledger-domain` `7bd877c9f645414455ca03a40b941511c1ab6174` · `risk-gate-domain` `81e00651ff24058eaccd4f12f6a2e76f08748a14` · `risk-paper-ledger-store` `b71d1be57099e5914e4b8c32ccbe1e708bc562ee` · `risk-paper-fill-engine` `78593839a260664456fb3b5e1ae58a2a3628afae` · `risk-exec-idempotency-ids` `b2082d7e3295b0ab4d5c8ca34165793eab87c5bb` · `risk-gate-enforcement` `5dd0a96cfbc5ed7402f98694d449ec23f27ac3d7` · `risk-paper-tools` `4209d6423668102eb3049763cdb6c6b568c5557f` · `risk-kill-switch` `ea69033b92635bfbe14790a7f9a2fea6cecad363` · `risk-audit-verdicts` `1cd924d92f3e984b6d24b1a0da948345b4a8144e` |
+| Strategy + sandboxes (5) | `x-exit-rules` `845cf25efee3bd92aa00768e50a98c52d68e4f5c` (+ `ebd3d17f4091fd5c62ac176d8ccccb3c973efd18`) · `x-shared-workspace-and-state-layout` `5e03e86bb08dc0b76c597d3c6b959a647fc212c9` · `x-weekend-fade-strategy` `fbb3246a171bbfedf13f50ba98153e90ce20d357` · `x-weekend-sandbox` `bc510871c69db05b61a99ba29cfe6787b906e91f` · `ops-sandbox-config` (`sandboxes/xmarket` M0 stage) `a27f9b5560387d20daa91e7fbb5859747e3e886c` |
+| M1 (2) | `kg-calendars` `43427da8ff1947429135360f3af88b3fc96eea2e` · `ops-history-recorder` `9b2280f3d44fd8949ecd6f9106075d4d2a9eee03` |
+
+| W1 gate (2026-10-01) | Commits |
+|---|---|
+| Weekend-path review → fixes | `6fcb455bae5553e2d51390e4cedd334779ca0d9c` = the frozen weekend binary `~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455` (sha256 `e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72`) |
+| Money-safety review → fixes | access `0fd620b5fc5f368ba75538621b8b9fb1718156e9` · ledger `270f23e4f144503ca4e7564cdb6ef1118855d5f3` |
+| Batch 2 (safety + engine-parity reviews) | `8e35c28de6880fb53ac8e5d06d97ddbeaf33e21e` · `78f6f6f0357d474587d80c863fc539892a203b94` · `b0e3e31a353e55fe7ba700a4740d60313af3c743` · `e50483c8f6271188090550ccbc35343469700438` · `7e8cfb081be0d4d126dd2797940b71bf1422daca` · `b389d066d5aede8115c27896397888d4ce7fcd3a` |
+| Record | `018e47c1a3bae9eb0bba57222a22bbfb21a9119a` (final checks on `11900f78894867e3427ca828d10ec80b4d3d4e4b`: 1,328 unit tests, live engine matrix 39 / 39) · xmarket smoke on the release build `c91f6981f9ae561dca63e94e41914cd881c68c36` |
+
+### XL — xlab (history-first harness)
+
+| Step | Commits |
+|---|---|
+| Design + seams | `b19c91539e6862c0cbe832c7306774db4c6b2252` · Jev on a `Clock` + decision cache `18221e8049073c66d59f1f58a0a2fb3fce490999` (ticks `ops-clock-port`) |
+| Sandbox `xlab` + skill `xlab-research` | `d1154b1031b453694f67f2cc45eda722bf441866` |
+| `market.db` + backfill + `tengu history backfill / import-* / coverage` | `e7cd0633bb30cc34886026fb41759248fd14e83d` |
+| Pure engine (six spec kinds) | `9645fc0f6482ff962ddb9c45a5aa0b1ed76a0e12` |
+| Jev gate arm · `tengu backtest` · `--gate` wiring | `90242ef64a0a8063b0c135921dc2ec396be8f5a3` · `d46639b2de669ff285bc6d2471cb52fddda41608` · `2750f788746c2de8049530b55a3148296cdca115` |
+| Tools `market_history` · `backtest` · the Architect gets both | `6b7a0e0b4262f5a4616e1b3bd6dc751a47592e01` · `02f0c6117f552542ea8b8b4dfa1490e68488528a` · `f7baf25d57a14c74099307e43f44aef007afb9c7` · split CIs + skill call shapes `e6b0075c9239fc571a1d6c8c748511b9947bfdc5` |
+| Adversarial review fixes (17 confirmed, re-verified) | engine `db96cb25c0ffa1efa13f8d7c388e407dfb107d24` · tools `dba04d59922ba1922304a41351b1b4431efe9e75` |
+| Follow-ups (live Architect turns, matrix) | tool text bound `998641179a4c2c25e33ea81832e3994a1ba8601f` · matrix fixture regenerated `1c600de5117cf153f8a1e0642cd8297afe8b8929` · a holdout read prints out-of-sample figures only `0f93d3295f4c5b7e077d6d3a0d903eb4350d926f`, `f554db01379f5bfc82cdf020934710084118c0c0` · `4b3270af4731adac26e6c51dde092f5cafebb577` |
+| Docs | `b8bb07559f5cdbe8937375beec193df549e627c9` · `9e24ffc2f2b2df126d2d26340a1311cc2f6a08c9` · `699bb83e79e3dac2f76ca9cbef69b3573b31252d` |
+
+Results (xlab § 14, after the review fixes): rule W +50.4 bps (n 1,500, CI +15.7 … +81.5, t 2.9 clustered by weekend); liquid entries' holdout +72.2 (CI +6.3 … +130.9); every other library strategy no-go after costs; Jev gate +28.9 bps vs rules, CI −23.5 … +81.6 — no evidence yet that Jev adds value.
+
+### Next (2026-10-02)
+
+| # | What | Where |
+|---|---|---|
+| 1 | Operator decisions (5 open) | tracker W1 notes, row "W1 gate — operator decisions (open)" |
+| 2 | W2 = rest of M0 (EDGAR 8-K → one Jev loop → gate → paper; Docker on the VPS), judged on history first | build plan § Waves; inputs: VPS + SSH alias, dedicated OpenRouter key |
+| 3 | xlab: HL-archive L2 import, info layer on history, `ask_architect` escalation, capability lifecycle, forward paper of a validated spec | `docs/xlab-2026-10-01.md` § 12 |
+| 4 | Weekend run — optional (adds only executable xyz weekend books) | runbook at the top of `sandboxes/xmarket-weekend/config.toml` |
+| 5 | Live `local` engine legs | the operator's PC (`TENGU_MATRIX_LOCAL_BASE_URL`), never this Mac |
+| 6 | Solana: first live send (dedicated wallet, operator's go), phase 5 push feed | `docs/SESSION_HANDOFF.md` open rows of the 2026-09-29 and 2026-09-24 TL;DRs |
 
 ---
 

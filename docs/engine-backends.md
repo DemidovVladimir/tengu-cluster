@@ -5,8 +5,8 @@ Tengu supports three engine backends (`openrouter`, `local`, `claude_code`). Eac
 ## OpenRouter (`engine = "openrouter"`)
 
 **Transport:** HTTP JSON to OpenRouter API
-**Feature flag:** `openrouter` (default)
-**File:** `src/adapters/outbound/engines/mod.rs`
+**Feature flag:** none — always built (the `openrouter` cargo feature is an empty marker, on by default)
+**File:** `src/adapters/outbound/engines/openrouter.rs` (`build_engine` in `engines/mod.rs`)
 
 The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.).
 

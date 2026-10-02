@@ -1,4 +1,6 @@
-//! Disk-backed `VectorStore` — bincode file at `<workspace>/.tengu/memory.bin`.
+//! Disk-backed `VectorStore` — bincode `<store dir>/vectors.bin` (`<workspace>/memory`).
+//! Without a workspace the store dir is `[memory] store_path` (default
+//! `~/.tengu/memory/`), see `bootstrap::memory::resolve_memory_store_path`.
 //!
 //! Ported from `src/adapters/memory_builder.rs::DiskVectorMemoryStore` with the
 //! signatures adapted to the new `VectorStore` trait. Uses an in-memory

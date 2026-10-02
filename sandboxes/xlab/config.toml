@@ -201,6 +201,8 @@ direction = "fade"
 hold_bars = 12
 cooldown_bars = 12
 
+# Funding carry on the crypto perps: receive funding while |rate| ≥ 30 % APR,
+# out below 10 % APR or after 72 h.
 [backtest.strategies.crypto_funding_carry]
 kind = "funding_carry"
 universe = "@crypto"

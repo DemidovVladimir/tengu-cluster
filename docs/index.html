@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>Docs Hub · Tengu-Cluster · 2026-10-02</title>
+<style>
+  :root {
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --surface3: #2D2D4A;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #A3B1C6;
+    --text-dim: #8B9AB3;
+    --accent: #7C3AED;
+    --accent-mid: #A78BFA;
+    --accent-light: #EDE9FE;
+    --link: #93C5FD;
+    --focus: #C4B5FD;
+    --current: #4ADE80;
+    --new: #FBBF24;
+    --snapshot: #A3B1C6;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.55;
+  }
+  a { color: var(--link); text-decoration: underline; text-decoration-color: rgba(147, 197, 253, .45); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--link); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--surface2); padding: 1px 5px; border-radius: 3px; color: var(--accent-light); overflow-wrap: anywhere; }
+  .hash { font-family: var(--mono); font-size: 12px; color: var(--accent-light); overflow-wrap: anywhere; word-break: break-all; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+  .top {
+    position: sticky; top: 0; z-index: 100;
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar { padding: 14px 36px 10px; max-width: 1320px; margin: 0 auto; display: grid; gap: 8px; }
+  .bar h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .bar .sub { color: var(--text-muted); font-size: 12px; }
+  .bar-row { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+  .search { flex: 1 1 280px; min-width: 0; max-width: 520px; }
+  .search input {
+    width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px;
+  }
+  .search input::placeholder { color: var(--text-dim); }
+  .jump { display: flex; gap: 4px 14px; flex-wrap: wrap; font-size: 13px; }
+  .jump a { color: var(--text-muted); text-decoration: none; padding: 2px 0; border-bottom: 2px solid transparent; }
+  .jump a:hover { color: #fff; border-bottom-color: var(--accent-mid); }
+  .count { font-size: 12px; color: var(--text-muted); }
+
+  .content { padding: 24px 36px 80px; max-width: 1320px; margin: 0 auto; }
+  section { scroll-margin-top: 140px; margin-bottom: 30px; }
+  h2 { font-size: 16px; font-weight: 700; margin-bottom: 10px; color: #fff; }
+  p { color: var(--text-muted); margin-bottom: 10px; }
+  .note { font-size: 12px; color: var(--text-dim); }
+
+  /* start-here path */
+  .path { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; counter-reset: step; }
+  .step { background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--accent-mid); border-radius: 8px; padding: 12px 14px; }
+  .step .n { font-size: 11px; font-weight: 700; color: var(--text-dim); letter-spacing: .5px; }
+  .step a.t { display: block; font-weight: 700; font-family: var(--mono); font-size: 13px; color: var(--accent-light); margin: 2px 0 4px; overflow-wrap: anywhere; }
+  .step p { font-size: 12.5px; margin: 0; }
+  .callout {
+    margin-top: 14px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--new);
+    border-radius: 8px; padding: 12px 16px; font-size: 13px; color: var(--text-muted);
+  }
+  .callout strong { color: #fff; }
+  .callout .links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+
+  /* explorer cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; align-items: start; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; display: grid; gap: 6px; }
+  .card h3 { font-size: 15px; color: #fff; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+  .card h3 a { color: #fff; text-decoration-color: rgba(255, 255, 255, .35); }
+  .card .file { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); overflow-wrap: anywhere; }
+  .card .what { font-size: 13px; color: var(--text-muted); margin: 0; }
+  .card .meta { font-size: 12px; color: var(--text-dim); }
+  .card .meta a { color: var(--link); }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;
+    padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+  }
+  .chip::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--snapshot); }
+  .chip.current::before { background: var(--current); }
+  .chip.new::before { background: var(--new); }
+
+  /* docs table */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 12.5px; vertical-align: top; }
+  th { background: var(--surface2); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.doc { font-family: var(--mono); font-size: 12px; min-width: 230px; overflow-wrap: anywhere; }
+  td.doc a { color: var(--accent-light); }
+  td.doc .also { display: block; font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  td.doc .also a { color: var(--link); }
+  td.what { color: var(--text-muted); min-width: 260px; }
+  td.n, th.n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  tr.group td { background: var(--surface2); color: #fff; font-weight: 700; font-size: 12px; letter-spacing: .3px; }
+  tr.group td .gnote { font-weight: 400; color: var(--text-muted); margin-left: 8px; }
+  .empty { display: none; padding: 14px; color: var(--text-muted); font-size: 13px; }
+
+  /* narrow screens: each doc row stacks — name, description, commit count */
+  @media (max-width: 700px) {
+    #docs-table thead, #outside-table thead { display: none; }
+    #docs-table tr, #outside-table tr { display: block; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    #docs-table td, #outside-table td { display: block; border: 0; padding: 2px 0; min-width: 0; }
+    #docs-table td.n, #outside-table td.n { text-align: left; }
+    #docs-table td.n::before, #outside-table td.n::before { content: "Commits in range: "; color: var(--text-dim); }
+    #docs-table tr.group { background: var(--surface2); }
+    #docs-table tr.group td { background: none; }
+  }
+
+  footer { border-top: 1px solid var(--border); padding-top: 14px; font-size: 12px; color: var(--text-dim); display: grid; gap: 6px; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  @media (max-width: 700px) {
+    .bar { padding: 10px 16px 8px; }
+    .bar h1 { font-size: 16px; }
+    .bar .sub { display: none; }
+    .content { padding: 16px 16px 60px; }
+    th, td { padding: 6px 8px; }
+    section { scroll-margin-top: 150px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <header class="bar">
+    <h1>Tengu-Cluster · Docs hub</h1>
+    <p class="sub">2026-10-02 · every HTML explorer and markdown doc in one place · one search filters both · self-contained, works offline · the change history of <code>feature/xmarket</code> is on the <a href="changes-2026-09-29-to-10-02.html">change timeline</a></p>
+    <div class="bar-row">
+      <label class="search"><span class="sr-only">Search the docs</span><input type="search" id="q" placeholder="Search docs and explorers, e.g. risk, bridge, xlab, memory" autocomplete="off" spellcheck="false"></label>
+      <nav class="jump" aria-label="Sections">
+        <a href="#start">Start here</a>
+        <a href="#explorers">Explorers</a>
+        <a href="#docs">Markdown docs</a>
+        <a href="#outside">Runbooks</a>
+      </nav>
+      <span class="count" id="count" aria-live="polite"></span>
+    </div>
+  </header>
+</div>
+
+<main class="content">
+
+<!-- ============ START HERE ============ -->
+<section id="start" aria-labelledby="h-start">
+  <h2 id="h-start">Start here — in this order</h2>
+  <div class="path">
+    <div class="step"><span class="n">1</span><a class="t" href="../CLAUDE.md">CLAUDE.md</a><p>Doctrine, hexagonal layout, required reading, the docs to update after a change, key gotchas. Read first, every session. Twin for other assistants: <a href="../AGENTS.md">AGENTS.md</a>.</p></div>
+    <div class="step"><span class="n">2</span><a class="t" href="code-map.md">docs/code-map.md</a><p>Where every source file lives and how to add a tool, an engine or a config section. Interactive graph: <a href="code-map.html">code-map.html</a>.</p></div>
+    <div class="step"><span class="n">3</span><a class="t" href="architecture-2026-04-27.md">docs/architecture-2026-04-27.md</a><p>One user message from prompt to reply in seven steps, file by file. Picture: <a href="architecture-2026-04-27.svg">.svg</a>; explorer: <a href="architecture-2026-04-27.html">.html</a>.</p></div>
+    <div class="step"><span class="n">4</span><a class="t" href="SESSION_HANDOFF.md">docs/SESSION_HANDOFF.md</a><p>Running state: the resume table at the top, open items, active gotchas.</p></div>
+  </div>
+  <div class="callout">
+    <strong>What changed lately:</strong> 90 commits on <code>feature/xmarket</code> (2026-09-30 → 10-01) — the xmarket build (planning docs, wave W1, the W1 gate), then xlab (history-first backtesting).
+    <div class="links">
+      <a href="changes-2026-09-29-to-10-02.html">change timeline</a>
+      <a href="xmarket-2026-10-02.html">xmarket explorer</a>
+      <a href="xlab-2026-10-02.html">xlab explorer</a>
+      <a href="xmarket-tracker-2026-09-29.md">xmarket tracker</a>
+      <a href="xlab-2026-10-01.md">xlab doc</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============ EXPLORERS ============ -->
+<section id="explorers" aria-labelledby="h-explorers">
+  <h2 id="h-explorers">Interactive explorers (HTML)</h2>
+  <p class="note">Status: <span class="chip new">new</span> written 2026-10-02 · <span class="chip current">current</span> touched by a commit in <code>main..HEAD</code> · <span class="chip">snapshot</span> dated content, unchanged since. "Commits" = commits of <code>main..</code><span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span> that touched the file (<code>git log main..HEAD -- &lt;file&gt;</code>), linked to the change timeline.</p>
+  <div class="cards" id="cards">
+    <article class="card" data-k="changes timeline commits history git xmarket xlab w1 gate phases">
+      <h3><a href="changes-2026-09-29-to-10-02.html">Change timeline</a> <span class="chip new">new</span></h3>
+      <div class="file">docs/changes-2026-09-29-to-10-02.html · 2026-10-02</div>
+      <p class="what">Every commit of <code>main..HEAD</code> (90, 2026-09-30 → 10-01) in ten phases, from the xmarket planning docs to the xlab review fixes: phase summaries with sources, search and phase filters, commits / lines per phase, day or hour, every path touched, the tracker items closed.</p>
+      <div class="meta">Tabs: Overview · Commits · Charts · Files · Tracker items · Method</div>
+    </article>
+    <article class="card" data-k="xmarket paper desk risk gate ledger weekend fade hyperliquid runtime w1">
+      <h3><a href="xmarket-2026-10-02.html">xmarket explorer</a> <span class="chip new">new</span></h3>
+      <div class="file">docs/xmarket-2026-10-02.html · 2026-10-02</div>
+      <p class="what">What was built for xmarket, how it works and where it stands: the W1 items, the architecture, the <code>[risk]</code> gate and paper ledger, <code>tengu run</code>, rule W, engine parity and hardening, the evidence, the W1 gate, state and commands, what comes next.</p>
+      <div class="meta">Tabs: Overview · W1 items · Architecture · Risk &amp; paper · Runtime · Rule W · Engine parity &amp; hardening · Evidence · W1 gate · State &amp; commands · Next</div>
+      <div class="meta">Companions: <a href="xmarket-tracker-2026-09-29.md">tracker</a> · <a href="xmarket-prd-2026-09-29.md">PRD</a> · <a href="xmarket-build-plan-2026-09-30.md">build plan</a> · <a href="xmarket-risk-paper-2026-09-30.md">risk + paper</a> · <a href="runtime-2026-09-30.md">runtime</a></div>
+    </article>
+    <article class="card" data-k="xlab history backtest market.db backfill jev gate architect strategy">
+      <h3><a href="xlab-2026-10-02.html">xlab explorer</a> <span class="chip new">new</span></h3>
+      <div class="file">docs/xlab-2026-10-02.html · 2026-10-02</div>
+      <p class="what">The history-first trading harness built 2026-10-01 for the operator's PRD v0.5: why history first, the architecture, the data, strategy specs, engine rules, results on real history, the live Architect, the adversarial review, commands and next steps.</p>
+      <div class="meta">Tabs: Why history first · Architecture · Data · Strategy specs · Engine rules · Results · Architect · Review · Commands &amp; next</div>
+      <div class="meta">Companion: <a href="xlab-2026-10-01.md">xlab-2026-10-01.md</a></div>
+    </article>
+    <article class="card" data-k="architecture turn subsystems file map planner runner">
+      <h3><a href="architecture-2026-04-27.html">Architecture Explorer</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/architecture-2026-04-27.html · 2026-04-27, synced 2026-10-02</div>
+      <p class="what">Walk a chat turn step by step, plus the two flows with no user message (<code>tengu run</code>, <code>tengu backtest</code>); subsystem cards; which stores each piece writes and reads; key mechanics; a searchable file map.</p>
+      <div class="meta">Tabs: Walk a Turn · Other Flows · Subsystems · Stores · Key Mechanics · File Map</div>
+      <div class="meta">Companions: <a href="architecture-2026-04-27.md">.md</a> · <a href="architecture-2026-04-27.svg">.svg</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/architecture-2026-04-27.html">2</a></div>
+    </article>
+    <article class="card" data-k="code map layers source files recipes graph">
+      <h3><a href="code-map.html">Code map</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/code-map.html · regenerated with the code</div>
+      <p class="what">Every source file by layer — what it uses and implements, which config sections, env vars and outside systems touch it; click a node for its connections; step-by-step recipes. File nodes and edges are generated from <code>src/</code>; <code>tests/code_map.rs</code> fails when the graph is stale.</p>
+      <div class="meta">Companion: <a href="code-map.md">code-map.md</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/code-map.html">59</a></div>
+    </article>
+    <article class="card" data-k="context management layers mechanisms tokens prompt budget">
+      <h3><a href="context-management-2026-04-27.html">Context Management Explorer</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/context-management-2026-04-27.html · 2026-04-27</div>
+      <p class="what">The canonical reference for what an LLM sees: 7 layers, ~25 mechanisms — walk a turn, config knobs, symptom → cause, what's missing.</p>
+      <div class="meta">Tabs: Layers Overview · All Mechanisms · Walk a Turn · Config Knobs · Symptom → Cause · What's Missing</div>
+      <div class="meta">Companions: <a href="context-management-2026-04-27.md">.md</a> · <a href="context-management-2026-04-27.svg">.svg</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/context-management-2026-04-27.html">3</a></div>
+    </article>
+    <article class="card" data-k="context cutting tool loop layer 3 truncation">
+      <h3><a href="context-cutting-flow-2026-04-27.html">Context-Cutting Explorer</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/context-cutting-flow-2026-04-27.html · 2026-04-27</div>
+      <p class="what">Layer 3 only: the inner tool loop — walk the loop, its 5 mechanisms, a live demo, config knobs.</p>
+      <div class="meta">Tabs: Overview · Walk the Loop · 5 Mechanisms · Live Demo · Config Knobs · What's Missing</div>
+      <div class="meta">Companion: <a href="context-cutting-flow-2026-04-27.svg">.svg</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/context-cutting-flow-2026-04-27.html">2</a></div>
+    </article>
+    <article class="card" data-k="orchestrator pipeline planner dag run-agent sequential parallel diamond replan retention">
+      <h3><a href="orchestrator-pipeline.html">Orchestrator Pipeline</a> <span class="chip">snapshot</span></h3>
+      <div class="file">docs/orchestrator-pipeline.html · line numbers as of 2026-09-18</div>
+      <p class="what">A message becomes plan JSON (planner, tools stripped), a Rust DAG executor runs each step as a <code>tengu run-agent</code> child: architecture, lifecycle, sequential, parallel, diamond, replan, retention, code refs.</p>
+      <div class="meta">Tabs: Overview · Architecture · Lifecycle · Sequential · Parallel · Diamond · Replan · Retention · Code refs</div>
+      <div class="meta">Companion: <a href="orchestrator-pipeline.md">orchestrator-pipeline.md</a> · Commits: 0</div>
+    </article>
+    <article class="card" data-k="skill lifecycle distill eval evolve metrics">
+      <h3><a href="skill-lifecycle.html">Skill Lifecycle</a> <span class="chip">snapshot</span></h3>
+      <div class="file">docs/skill-lifecycle.html</div>
+      <p class="what">From conversation to evolving skill: <code>skill_distill</code> writes a skill mid-chat, <code>tengu eval</code> scores its fixtures, <code>tengu skill evolve</code> runs bounded rewrite loops behind a user approval gate.</p>
+      <div class="meta">Companions: <a href="skill-lifecycle-pipeline-diagrams.md">pipeline diagrams</a> · <a href="skill-lifecycle-validation.md">validation guide</a> · Commits: 0</div>
+    </article>
+    <article class="card" data-k="memory recall debug planner forgets session">
+      <h3><a href="memory-recall-debug-2026-05-11.html">Memory recall debug map</a> <span class="chip">snapshot</span></h3>
+      <div class="file">docs/memory-recall-debug-2026-05-11.html · 2026-05-11</div>
+      <p class="what">"Why can't the planner remember what I just said?" — three stacked recall failures; toggle knobs to simulate other configs.</p>
+      <div class="meta">Commits: 0</div>
+    </article>
+    <article class="card" data-k="feature parity radar hermes pi cowork comparison">
+      <h3><a href="feature-parity-radar-2026-05-08.html">Feature-parity radar</a> <span class="chip">snapshot</span></h3>
+      <div class="file">docs/feature-parity-radar-2026-05-08.html · 2026-05-08</div>
+      <p class="what">Tengu vs Hermes vs PI/Cowork on 9 axes. Scores are the 2026-05-08 estimates (superseded 2026-09-18; Tengu facts corrected in place).</p>
+      <div class="meta">Companion: <a href="comparison-2026-04-26.md">comparison-2026-04-26.md</a> · Commits: 0</div>
+    </article>
+    <article class="card" data-k="deep architecture analysis hermes cowork pi maturity gaps">
+      <h3><a href="tengu-analysis.html">Deep Architecture Analysis</a> <span class="chip">snapshot</span></h3>
+      <div class="file">docs/tengu-analysis.html · April 2026</div>
+      <p class="what">Comparative study Tengu vs Hermes Agent vs Cowork/PI: memory, skills and self-adjustment, tools, gaps, maturity scores. Superseded 2026-09-18 (Tengu facts corrected in place; percentages are the April estimates).</p>
+      <div class="meta">Tabs: Overview · Memory · Skills &amp; Self-Adjustment · Tools · Gaps &amp; Improvements · Maturity Scores</div>
+      <div class="meta">Commits: 0</div>
+    </article>
+  </div>
+  <p class="empty" id="cards-empty">No explorer matches the search.</p>
+</section>
+
+<!-- ============ MARKDOWN DOCS ============ -->
+<section id="docs" aria-labelledby="h-docs">
+  <h2 id="h-docs">Markdown docs</h2>
+  <p class="note">One line each, from the doc's title and opening section. Grouped by what you are about to do. "Commits" as above.</p>
+  <div class="table-wrap">
+    <table id="docs-table">
+      <thead><tr><th scope="col">Doc</th><th scope="col">What it is</th><th scope="col" class="n">Commits</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="3">Start here <span class="gnote">CLAUDE.md → code map → architecture → SESSION_HANDOFF</span></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="../CLAUDE.md">CLAUDE.md</a></td><td class="what">Project guide for AI assistants: doctrine, hexagonal layout, required reading, the docs to update after a change, key gotchas. Read first, every session.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=CLAUDE.md">14</a></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="../AGENTS.md">AGENTS.md</a></td><td class="what">CLAUDE.md's twin for non-Claude assistants — same substance, kept in sync.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=AGENTS.md">14</a></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="code-map.md">docs/code-map.md</a><span class="also">+ <a href="code-map.html">code-map.html</a></span></td><td class="what">Index into the code: the layers, every source file, how to add a tool, an engine or a config section.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/code-map.md">55</a></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="architecture-2026-04-27.md">docs/architecture-2026-04-27.md</a><span class="also">+ <a href="architecture-2026-04-27.svg">.svg</a> · <a href="architecture-2026-04-27.html">.html</a></span></td><td class="what">Architecture walkthrough: a five-sentence TL;DR, seven steps from prompt to reply, every file per subsystem, how to trace one turn.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/architecture-2026-04-27.md">6</a></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="SESSION_HANDOFF.md">docs/SESSION_HANDOFF.md</a></td><td class="what">Running state log: the resume table at the top, earlier states below it, open items, active gotchas.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/SESSION_HANDOFF.md">20</a></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="../README.md">README.md</a></td><td class="what">What tengu is and how to run it: prerequisites, quickstart, CLI, history-first research (xlab), the paper desk (xmarket), orchestration, engines, tools, feature flags, sandboxes, Telegram, Docker, configuration, module map.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=README.md">3</a></td></tr>
+
+        <tr class="group"><td colspan="3">Runtime + trading <span class="gnote">tengu run, typed observations, decision loops, xmarket, xlab</span></td></tr>
+        <tr data-k="runtime trading"><td class="doc"><a href="runtime-2026-09-30.md">docs/runtime-2026-09-30.md</a></td><td class="what"><code>tengu run</code>: one process per sandbox — feeds, decision loops, webhook routes, single-runner lease, shutdown, health, <code>doctor --live</code>, state layout, the weekend run, the xmarket sandbox.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/runtime-2026-09-30.md">16</a></td></tr>
+        <tr data-k="runtime trading"><td class="doc"><a href="typed-observations-2026-09-24.md">docs/typed-observations-2026-09-24.md</a></td><td class="what">Typed tool results (the <code>Observation</code> envelope), the observation cache and history recorder, decision-loop <code>world</code> / <code>requires</code>; Solana LP read + write tools, market rows, Hyperliquid tools, market history, backtest, risk + paper rows.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/typed-observations-2026-09-24.md">26</a></td></tr>
+        <tr data-k="runtime trading"><td class="doc"><a href="decision-loop-plan-2026-09-24.md">docs/decision-loop-plan-2026-09-24.md</a></td><td class="what">Jev decision loops (<code>[decision_loops.*]</code>): status, shape, config, phases, observability, open questions.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/decision-loop-plan-2026-09-24.md">7</a></td></tr>
+        <tr data-k="runtime trading"><td class="doc"><a href="lping-2026-09-24.md">docs/lping-2026-09-24.md</a></td><td class="what">The lping sandbox: crypto research + dry-run Solana LP / hedge decision loops over the typed read tools.</td><td class="n">0</td></tr>
+        <tr data-k="runtime trading xmarket"><td class="doc"><a href="xmarket-prd-2026-09-29.md">docs/xmarket-prd-2026-09-29.md</a></td><td class="what">The operator's PRD v0.4 (event-driven cross-market trading intelligence), verbatim, under the 2026-09-30 operator addendum that wins where they differ.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-prd-2026-09-29.md">1</a></td></tr>
+        <tr data-k="runtime trading xmarket"><td class="doc"><a href="xmarket-tracker-2026-09-29.md">docs/xmarket-tracker-2026-09-29.md</a></td><td class="what">Gap tracker: 185 items in 11 milestones (E0, M0–M8, M3b); § 0 = rules R1–R13, definition of done, where to begin, W1 notes.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-tracker-2026-09-29.md">53</a></td></tr>
+        <tr data-k="runtime trading xmarket"><td class="doc"><a href="xmarket-gaps-2026-09-29.md">docs/xmarket-gaps-2026-09-29.md</a></td><td class="what">The research behind each tracker item, in tracker order — look an item up by id before starting it.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-gaps-2026-09-29.md">1</a></td></tr>
+        <tr data-k="runtime trading xmarket"><td class="doc"><a href="xmarket-build-plan-2026-09-30.md">docs/xmarket-build-plan-2026-09-30.md</a></td><td class="what">How to build it: the operator's mandate, operating model, waves W1–W9 with gates, the weekend sandbox, the engine validation matrix, operator inputs, the kickoff prompt.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-build-plan-2026-09-30.md">3</a></td></tr>
+        <tr data-k="runtime trading xmarket"><td class="doc"><a href="xmarket-feasibility-2026-09-30.md">docs/xmarket-feasibility-2026-09-30.md</a></td><td class="what">Feasibility from public data: verdict re-scope (cross-venue convergence fails after costs), what it is worth, the holdout result, limitations.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-feasibility-2026-09-30.md">1</a></td></tr>
+        <tr data-k="runtime trading xmarket risk paper"><td class="doc"><a href="xmarket-risk-paper-2026-09-30.md">docs/xmarket-risk-paper-2026-09-30.md</a></td><td class="what">Operator reference for the <code>[risk]</code> gate, the paper ledger and the kill switch: load rules, gate enforcement, exec tools, ledger, funding, audit, exits, the weekend fade, halts, <code>tengu risk</code>.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-risk-paper-2026-09-30.md">14</a></td></tr>
+        <tr data-k="runtime trading xlab history backtest"><td class="doc"><a href="xlab-2026-10-01.md">docs/xlab-2026-10-01.md</a></td><td class="what">xlab, history first (PRD v0.5): <code>market.db</code> + backfill, strategy specs, the backtest engine, Jev on history (gate arm), tools, sandbox, commands, limits, the PRD review (§ 13), results on real history (§ 14).</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xlab-2026-10-01.md">14</a></td></tr>
+
+        <tr class="group"><td colspan="3">Tools, engines, bridge, egress, config</td></tr>
+        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="tools.md">docs/tools.md</a></td><td class="what">Tools: pick the lightest option, the built-in catalog, adding a Rust tool, the schema subset, typed (cached) tools, giving tools to an agent, MCP servers.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/tools.md">21</a></td></tr>
+        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="engine-backends.md">docs/engine-backends.md</a></td><td class="what">The three engines — <code>openrouter</code>, <code>local</code>, <code>claude_code</code> — their settings, the engine matrix, adding a backend.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/engine-backends.md">15</a></td></tr>
+        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="mcp-bridge.md">docs/mcp-bridge.md</a></td><td class="what"><code>tengu mcp-bridge</code>, the stdio MCP server that serves tengu tools to Claude Code: protocol, tool mapping, dispatch, config, the standalone <code>agentic-memory</code> server, testing, the parity rule, limits.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/mcp-bridge.md">20</a></td></tr>
+        <tr data-k="tools engines bridge egress config tor network"><td class="doc"><a href="egress-2026-09-16.md">docs/egress-2026-09-16.md</a></td><td class="what">Egress policy (<code>[egress]</code>, <code>src/adapters/outbound/egress.rs</code>): Tor by default, host allowlist, the hosts of each tool family (Solana, Hyperliquid, xlab backfill), the Tor stack, the audit log.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/egress-2026-09-16.md">10</a></td></tr>
+        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="webhooks-2026-05-11.md">docs/webhooks-2026-05-11.md</a></td><td class="what"><code>tengu webhooks</code>: HMAC-verified endpoints, 202 Accepted, one-shot orchestrator turns.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/webhooks-2026-05-11.md">4</a></td></tr>
+        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="configuration.md">docs/configuration.md</a></td><td class="what">One TOML per sandbox: the load pipeline, root sections, agents, scopes, orchestrator, memory, Telegram, webhooks, decision loops, egress, the Solana signer, <code>[xmarket]</code>, risk + paper, hardened sandboxes, rate limits, runtime, recorder, backtest, feeds, env vars, feature flags.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/configuration.md">2</a></td></tr>
+        <tr data-k="tools engines bridge egress config archived"><td class="doc"><a href="claude-code-backend-prd.md">docs/claude-code-backend-prd.md</a></td><td class="what">Archived PRD of the <code>claude_code</code> engine (implemented).</td><td class="n">0</td></tr>
+        <tr data-k="tools engines bridge egress config archived"><td class="doc"><a href="claude-code-backend-plan.md">docs/claude-code-backend-plan.md</a></td><td class="what">Archived technical plan of the <code>claude_code</code> engine (implemented).</td><td class="n">0</td></tr>
+
+        <tr class="group"><td colspan="3">Context + memory</td></tr>
+        <tr data-k="context memory"><td class="doc"><a href="context-management-2026-04-27.md">docs/context-management-2026-04-27.md</a><span class="also">+ <a href="context-management-2026-04-27.svg">.svg</a> · <a href="context-management-2026-04-27.html">.html</a></span></td><td class="what">The canonical reference for what an LLM sees: 7 layers, ~25 mechanisms.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/context-management-2026-04-27.md">3</a></td></tr>
+        <tr data-k="context memory compaction"><td class="doc"><a href="compression-flow-2026-04-27.md">docs/compression-flow-2026-04-27.md</a><span class="also">+ <a href="compression-flow-2026-04-27.svg">.svg</a></span></td><td class="what">Layer 5 slice: compression / compaction — the <code>compress_and_store</code> step protocol.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/compression-flow-2026-04-27.md">1</a></td></tr>
+        <tr data-k="context memory"><td class="doc"><a href="context-cutting-flow-2026-04-27.svg">docs/context-cutting-flow-2026-04-27.svg</a><span class="also">+ <a href="context-cutting-flow-2026-04-27.html">.html</a></span></td><td class="what">Layer 3 slice, as a picture: the inner tool loop.</td><td class="n">0</td></tr>
+        <tr data-k="context memory agentic open brain wiki"><td class="doc"><a href="agentic-memory-prd-2026-05-13.md">docs/agentic-memory-prd-2026-05-13.md</a></td><td class="what">Agentic memory PRD (Open Brain + Karpathy LLM Wiki); 2026-05-15 direction change: a standalone portable plugin, Tengu as the reference spike.</td><td class="n">0</td></tr>
+        <tr data-k="context memory agentic open brain wiki"><td class="doc"><a href="agentic-memory-implementation-2026-05-13.md">docs/agentic-memory-implementation-2026-05-13.md</a></td><td class="what">Agentic memory implementation: phase plan, schema, tool API, Tengu touchpoints (same direction change).</td><td class="n">0</td></tr>
+        <tr data-k="context memory agentic open brain wiki"><td class="doc"><a href="agentic-memory-examples-2026-05-13.md">docs/agentic-memory-examples-2026-05-13.md</a></td><td class="what">Agentic memory workflows, MVP setup and sources (same direction change).</td><td class="n">0</td></tr>
+        <tr data-k="context memory agentic plugin"><td class="doc"><a href="portable-agentic-memory-plugin-2026-05-15.md">docs/portable-agentic-memory-plugin-2026-05-15.md</a></td><td class="what">Decision: a standalone hybrid memory plugin, MCP first, for Codex, Claude Cowork, Claude Code and any MCP-capable agent.</td><td class="n">0</td></tr>
+
+        <tr class="group"><td colspan="3">Skills</td></tr>
+        <tr data-k="skills"><td class="doc"><a href="skills.md">docs/skills.md</a></td><td class="what">Skills: the inventory of <code>skills/</code>, kinds (documentation vs shell), loading, engines, frontmatter, metrics and evolution, distillation, CLI commands.</td><td class="n">0</td></tr>
+        <tr data-k="skills"><td class="doc"><a href="skill-research-2026-04-28.md">docs/skill-research-2026-04-28.md</a></td><td class="what">Skill research &amp; plan: the personalized learning-agent use case, the gap inventory, the A1 / A2 / A3 decisions.</td><td class="n">0</td></tr>
+        <tr data-k="skills"><td class="doc"><a href="skill-redesign-2026-04-29.md">docs/skill-redesign-2026-04-29.md</a></td><td class="what">Skill redesign reference in tables: the patchwork problem (four agents, three bespoke tools) and the target shape.</td><td class="n">0</td></tr>
+        <tr data-k="skills lifecycle"><td class="doc"><a href="skill-lifecycle-pipeline-diagrams.md">docs/skill-lifecycle-pipeline-diagrams.md</a><span class="also">+ <a href="skill-lifecycle.html">skill-lifecycle.html</a></span></td><td class="what">Mermaid diagrams of distill, eval, metrics and evolve, each linked to its <code>file:line</code>.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/skill-lifecycle-pipeline-diagrams.md">1</a></td></tr>
+        <tr data-k="skills lifecycle"><td class="doc"><a href="skill-lifecycle-validation.md">docs/skill-lifecycle-validation.md</a></td><td class="what">Validation guide for the skill lifecycle: prereqs, commands, expected output, failure modes — unit suite to a full evolve.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/skill-lifecycle-validation.md">2</a></td></tr>
+
+        <tr class="group"><td colspan="3">Orchestration + testing</td></tr>
+        <tr data-k="orchestration testing"><td class="doc"><a href="orchestrator-pipeline.md">docs/orchestrator-pipeline.md</a><span class="also">+ <a href="orchestrator-pipeline.html">.html</a></span></td><td class="what">Orchestration diagrams + code refs: PR timeline, runtime pipeline, sequential / parallel / diamond execution, retention (line numbers as of 2026-09-18).</td><td class="n">0</td></tr>
+        <tr data-k="orchestration testing"><td class="doc"><a href="orchestration-test-scenarios.md">docs/orchestration-test-scenarios.md</a></td><td class="what">Live orchestration runbook: prerequisites, sanity, sequential, parallel, mixed, replan, cancellation, edge cases, memory integration.</td><td class="n">0</td></tr>
+        <tr data-k="orchestration testing validation"><td class="doc"><a href="validation-checklist.md">docs/validation-checklist.md</a></td><td class="what">End-to-end acceptance check (~30 min): structural audit, unit tests, orchestration e2e, retention, TUI / Telegram smoke; § 9 xmarket paper desk and § 10 xlab history-first research (2026-10-02).</td><td class="n">0</td></tr>
+        <tr data-k="orchestration testing smoke"><td class="doc"><a href="manual-test-checklist.md">docs/manual-test-checklist.md</a></td><td class="what">Manual smoke test after every phase: pre-flight, TUI and Telegram smokes (default + aura), debug probes, the xmarket paper-desk and xlab smokes, regression baselines, rollback.</td><td class="n">0</td></tr>
+
+        <tr class="group"><td colspan="3">Plans + history <span class="gnote">roadmaps, snapshots, superseded and archived docs</span></td></tr>
+        <tr data-k="plans history"><td class="doc"><a href="IMPLEMENTATION_PLAN.md">docs/IMPLEMENTATION_PLAN.md</a></td><td class="what">Phase-by-phase roadmap of the v2 redesign (phases 0–7.2, done) + § Since 2026-09-23 — what shipped: hexagonal layout, typed observations + decision loops, Solana writes, xmarket W1, xlab.</td><td class="n">0</td></tr>
+        <tr data-k="plans history hexagonal"><td class="doc"><a href="hexagonal-plan-2026-09-23.md">docs/hexagonal-plan-2026-09-23.md</a></td><td class="what">The hexagonal rewrite plan (2026-09-23); its dependency rule is enforced by <code>tests/layering_lint.rs</code>.</td><td class="n">0</td></tr>
+        <tr data-k="plans history"><td class="doc"><a href="../REDESIGN.md">REDESIGN.md</a></td><td class="what">The original v2 redesign brief (retrieval-first); superseded note 2026-05-14.</td><td class="n">0</td></tr>
+        <tr data-k="plans history comparison hermes"><td class="doc"><a href="comparison-2026-04-26.md">docs/comparison-2026-04-26.md</a><span class="also">+ <a href="comparison-2026-04-26.svg">.svg</a></span></td><td class="what">Tengu vs Hermes Agent vs PI/Cowork, 2026-04-26 snapshot — memory, skills, tools, routing (Tengu facts corrected in place) — plus the trading-runtime axes added 2026-10-02.</td><td class="n">0</td></tr>
+        <tr data-k="plans history superseded"><td class="doc"><a href="architecture.md">docs/architecture.md</a></td><td class="what">Historical overview of the PR #6–#8-era design (banner refreshed 2026-10-02) — the canonical read is <code>architecture-2026-04-27.md</code>.</td><td class="n">0</td></tr>
+        <tr data-k="plans history superseded"><td class="doc"><a href="harness-architecture.md">docs/harness-architecture.md</a></td><td class="what">Historical snapshot (PRs #6–#8, 2026-04): harness-owned orchestration + memory; the flow no longer runs as written (banner refreshed 2026-10-02).</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/specs/2026-04-15-phase-a-tool-plugin-architecture-design.md">docs/superpowers/specs/2026-04-15-phase-a-tool-plugin-architecture-design.md</a></td><td class="what">Archived: Phase A tool plugin architecture — design.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/plans/2026-04-16-phase-a-tool-plugin-architecture.md">docs/superpowers/plans/2026-04-16-phase-a-tool-plugin-architecture.md</a></td><td class="what">Archived: Phase A tool plugin architecture — implementation plan.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/specs/2026-04-20-harness-orchestration-memory-design.md">docs/superpowers/specs/2026-04-20-harness-orchestration-memory-design.md</a></td><td class="what">Archived: harness-owned orchestration + memory — design.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/plans/2026-04-20-harness-orchestration-memory.md">docs/superpowers/plans/2026-04-20-harness-orchestration-memory.md</a></td><td class="what">Archived: harness-owned orchestration + memory — implementation plan.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/specs/2026-04-20-skill-metrics-evolution-design.md">docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md</a></td><td class="what">Archived: skill metrics + evolution — design.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/plans/2026-04-20-skill-metrics-evolution.md">docs/superpowers/plans/2026-04-20-skill-metrics-evolution.md</a></td><td class="what">Archived: skill metrics + evolution — implementation plan.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/plans/2026-04-21-skill-metrics-evolution-phase2.md">docs/superpowers/plans/2026-04-21-skill-metrics-evolution-phase2.md</a></td><td class="what">Archived: skill metrics + evolution — phase 2 plan.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/specs/2026-04-22-simplification-analysis.md">docs/superpowers/specs/2026-04-22-simplification-analysis.md</a></td><td class="what">Archived: simplification analysis — dependency graph, duplication, refactor plan.</td><td class="n">0</td></tr>
+        <tr data-k="plans history archived superpowers"><td class="doc"><a href="superpowers/plans/2026-04-22-simplification-cleanup-pr.md">docs/superpowers/plans/2026-04-22-simplification-cleanup-pr.md</a></td><td class="what">Archived: the first simplification cleanup PR — plan.</td><td class="n">0</td></tr>
+        <tr data-k="plans history ideas"><td class="doc"><a href="ideas/adaptive-ai-learning-marketplace-prd.md">docs/ideas/adaptive-ai-learning-marketplace-prd.md</a></td><td class="what">Idea note: Adaptive AI Learning Marketplace — PRD (draft, April 2026).</td><td class="n">0</td></tr>
+        <tr data-k="plans history ideas"><td class="doc"><a href="ideas/auto-improving-agent-skills.md">docs/ideas/auto-improving-agent-skills.md</a></td><td class="what">Idea note: auto-improving agent skills in Tengu (draft, 2026-03-28).</td><td class="n">0</td></tr>
+        <tr data-k="plans history ideas"><td class="doc"><a href="ideas/permanent-memory-in-tengu.md">docs/ideas/permanent-memory-in-tengu.md</a></td><td class="what">Idea note: permanent memory in Tengu (draft, 2026-03-28).</td><td class="n">0</td></tr>
+      </tbody>
+    </table>
+    <p class="empty" id="docs-empty">No doc matches the search.</p>
+  </div>
+</section>
+
+<!-- ============ OUTSIDE docs/ ============ -->
+<section id="outside" aria-labelledby="h-outside">
+  <h2 id="h-outside">Runbooks and protocols outside <code>docs/</code></h2>
+  <div class="table-wrap">
+    <table id="outside-table">
+      <thead><tr><th scope="col">File</th><th scope="col">What it holds</th><th scope="col" class="n">Commits</th></tr></thead>
+      <tbody>
+        <tr data-k="runbook weekend sandbox xmarket-weekend frozen binary caffeinate"><td class="doc"><a href="../sandboxes/xmarket-weekend/config.toml">sandboxes/xmarket-weekend/config.toml</a></td><td class="what">The weekend fade run (rule W on paper, no LLM, no Jev). Runbook at the top: the frozen W1-gate binary, start in tmux under <code>caffeinate</code>, checks (<code>doctor --live</code>, <code>risk status</code>, <code>history range</code>).</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xmarket-weekend/config.toml">4</a></td></tr>
+        <tr data-k="runbook xmarket paper desk m0 staged"><td class="doc"><a href="../sandboxes/xmarket/config.toml">sandboxes/xmarket/config.toml</a></td><td class="what">The xmarket paper desk at stage M0: runbook at the top, the STAGED list of what later items add; paper only, the $100 budget is <code>[risk]</code>.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xmarket/config.toml">6</a></td></tr>
+        <tr data-k="runbook xlab quickstart backfill backtest"><td class="doc"><a href="../sandboxes/xlab/config.toml">sandboxes/xlab/config.toml</a></td><td class="what">The xlab sandbox. Quickstart at the top: backfill history → backtest the rules → add the Jev gate.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xlab/config.toml">6</a></td></tr>
+        <tr data-k="skill xlab research protocol architect holdout"><td class="doc"><a href="../skills/xlab-research/SKILL.md">skills/xlab-research/SKILL.md</a></td><td class="what">The xlab Architect's research protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → read the holdout once → criticise failures.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=skills/xlab-research/SKILL.md">6</a></td></tr>
+        <tr data-k="config example every section"><td class="doc"><a href="../config.example.toml">config.example.toml</a></td><td class="what">Commented example configuration — the same schema every <code>sandboxes/&lt;name&gt;/config.toml</code> uses.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=config.example.toml">28</a></td></tr>
+      </tbody>
+    </table>
+    <p class="empty" id="outside-empty">No file matches the search.</p>
+  </div>
+</section>
+
+<footer>
+  <div>Not listed: <code>TENGU_PLAN.md</code>, <code>TENGU_PLANNER_REGISTRY.md</code> — gitignored runtime artifacts, regenerated by tengu; <code>lastrun.md</code> — a gitignored local copy of a terminal run log (no tengu code writes it).</div>
+  <div>Commit counts: <code>git log --format=%H main..HEAD -- &lt;path&gt;</code> at HEAD <span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span>, base <code>main</code> = <span class="hash">9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8</span>, run 2026-10-02.</div>
+</footer>
+
+</main>
+
+<script>
+(function () {
+  'use strict';
+  const q = document.getElementById('q');
+  const count = document.getElementById('count');
+  const cards = Array.from(document.querySelectorAll('#cards .card'));
+  const tables = ['docs', 'outside'].map(id => ({
+    rows: Array.from(document.querySelectorAll('#' + id + '-table tbody tr')),
+    empty: document.getElementById(id + '-empty')
+  }));
+  const text = el => (el.getAttribute('data-k') || '') + '\n' + el.textContent.toLowerCase();
+  cards.forEach(c => { c._k = text(c); });
+  tables.forEach(t => t.rows.forEach(r => { r._k = text(r); }));
+  function apply() {
+    const terms = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = el => terms.every(t => el._k.indexOf(t) >= 0);
+    let nc = 0, nd = 0;
+    cards.forEach(c => { const on = hit(c); c.hidden = !on; if (on) nc++; });
+    document.getElementById('cards-empty').style.display = nc ? 'none' : 'block';
+    tables.forEach(t => {
+      let group = null, groupHits = 0, shown = 0;
+      const close = () => { if (group) group.hidden = groupHits === 0; };
+      t.rows.forEach(r => {
+        if (r.classList.contains('group')) { close(); group = r; groupHits = 0; return; }
+        const on = hit(r);
+        r.hidden = !on;
+        if (on) { groupHits++; shown++; }
+      });
+      close();
+      t.empty.style.display = shown ? 'none' : 'block';
+      nd += shown;
+    });
+    const totalDocs = tables.reduce((s, t) => s + t.rows.filter(r => !r.classList.contains('group')).length, 0);
+    count.textContent = terms.length ? nc + ' of ' + cards.length + ' explorers · ' + nd + ' of ' + totalDocs + ' files' : cards.length + ' explorers · ' + totalDocs + ' files';
+  }
+  q.addEventListener('input', apply);
+  const m = location.hash.match(/^#q=(.+)$/);
+  if (m) q.value = decodeURIComponent(m[1]);
+  apply();
+})();
+</script>
+</body>
+</html>

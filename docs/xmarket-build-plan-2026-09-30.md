@@ -2,6 +2,18 @@
 
 How the next sessions build everything in the PRD. **What** to build: [`xmarket-tracker-2026-09-29.md`](xmarket-tracker-2026-09-29.md) (185 items, milestones E0, M0–M8, M3b; rules R1–R13 and the definition of done in its § 0). **Why**: [`xmarket-prd-2026-09-29.md`](xmarket-prd-2026-09-29.md) + its operator addendum. **Evidence**: [`xmarket-feasibility-2026-09-30.md`](xmarket-feasibility-2026-09-30.md) (attached as a warning). Per-item detail: [`xmarket-gaps-2026-09-29.md`](xmarket-gaps-2026-09-29.md).
 
+## Status (2026-10-02)
+
+| Topic | State |
+|---|---|
+| W1 | ✅ done 2026-10-01 on `feature/xmarket` (not pushed): 34 items + the gate — three read-only adversarial reviews (weekend path, money safety, engine parity / doctrine), every confirmed finding fixed (`6fcb455bae5553e2d51390e4cedd334779ca0d9c`, `0fd620b5fc5f368ba75538621b8b9fb1718156e9`, `270f23e4f144503ca4e7564cdb6ef1118855d5f3`, batch 2) or recorded as an operator decision. Tracker § 0 + W1 notes; commits per item: `docs/IMPLEMENTATION_PLAN.md` § X |
+| Sequencing change | **History first** (operator rule 2026-10-01): sandbox `xlab` ([`xlab-2026-10-01.md`](xlab-2026-10-01.md)) pulled the M7 replay work forward — `ops-clock-port` ✅; `ops-replay-harness`, `ops-report-decisions`, `x-hl-historical-backfill` 🟡. Each later wave is judged by replay on backfilled history before it runs live; live recording only for data with no historical source |
+| Evidence on history | xlab § 14: rule W +50.4 bps (n 1,500, CI +15.7 … +81.5), liquid entries' holdout +72.2 (CI +6.3 … +130.9); every other library strategy no-go after costs; Jev gate: no evidence yet that it adds value |
+| Weekend run | optional: adds only executable xyz weekend books; if it runs, the frozen-binary rules hold (tracker § 0 step 2a) |
+| Next | the operator decisions (tracker W1 notes, 5 open) → W2 (§ Waves; inputs: VPS + SSH alias, dedicated OpenRouter key; prompt in § Kickoff) |
+| Machine load | operator 2026-10-01 (supersedes "one agent at a time"): workflows / parallel agents allowed, ≤ 3 at once, each build in its own `CARGO_TARGET_DIR` under `~/.cache/tengu-xm.noindex/`; never a local model on this Mac |
+| Engine matrix | 15 tool sets (W1: 13, + `xlab`, `xlab_holdout`); W1-gate live run 39 / 39 on `11900f78894867e3427ca828d10ec80b4d3d4e4b`; xlab sets: haiku-4.5 + Claude CLI green, gemini-2.5-flash-lite misquotes numbers (xlab § 14); `local` legs on the operator's PC |
+
 ## Mandate (operator, 2026-09-30)
 
 | # | Requirement |
@@ -13,13 +25,13 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | 5 | Docs adjusted in the same commits; the system is ready to run |
 | 6 | Real money moves only with the operator's explicit go (M3b sends, deposits); everything else runs on paper, simulate or testnet |
 
-## Before the first item
+## Before the first item (✅ done 2026-09-30)
 
 | Step | Command / action |
 |---|---|
-| 1 | `git switch -c feature/xmarket` from `main`, then commit the uncommitted planning docs as the first commit (`CLAUDE.md`, `AGENTS.md`, `docs/SESSION_HANDOFF.md`, `docs/tools.md`, `docs/mcp-bridge.md`, `docs/engine-backends.md`, `docs/egress-2026-09-16.md`, `docs/xmarket-*.md`) — explicit paths, never `git add -A` |
+| 1 | `git switch -c feature/xmarket` from `main`, then commit the uncommitted planning docs as the first commit (`CLAUDE.md`, `AGENTS.md`, `docs/SESSION_HANDOFF.md`, `docs/tools.md`, `docs/mcp-bridge.md`, `docs/engine-backends.md`, `docs/egress-2026-09-16.md`, `docs/xmarket-*.md`) — explicit paths, never `git add -A` (done: `47fc090de426205df91425df789849466e962399`) |
 | 2 | Baseline: `cargo check --all-features`; `cargo test --test layering_lint --test scope_lint --test code_map`; one scoped unit run (`cargo test --bin tengu decision_loop`). Record failures that pre-exist — they are not yours to hide |
-| 3 | Engines ready: `OPENROUTER_API_KEY` in `.env`; Ollama running with `gemma4:latest` (`ollama list`); `claude --version` works and is logged in (subscription). `cargo build --release --features claude_code,webhooks` |
+| 3 | Engines ready: `OPENROUTER_API_KEY` in `.env`; Ollama with `gemma4:latest` on the operator's Windows PC (operator rule 2026-09-30: never on this Mac); `claude --version` works and is logged in (subscription). `cargo build --release --features claude_code,webhooks` |
 | 4 | Leave the throwaway weekend sampler running (`~/.tengu/state/xmarket/research/weekend-2026-10-02/`, pid in `sampler.pid`) — it is the fallback for the weekend data |
 
 ## Operating model
@@ -27,7 +39,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Topic | Rule |
 |---|---|
 | Unit of work | One tracker item = one commit on `feature/xmarket` whose message starts with the item id; code, tests and docs together; tick the item (✅ + short hash) in the tracker in the same commit |
-| Machine load (operator 2026-09-30) | On the operator's Mac: one agent at a time, low priority (`renice` + `taskpolicy -b`, `CARGO_BUILD_JOBS=2`, build dirs under a `.noindex` folder), no local models — parallel waves only on a machine the operator is not using |
+| Machine load (operator 2026-09-30, relaxed 2026-10-01) | On the operator's Mac: low priority (`renice` + `taskpolicy -b`, `CARGO_BUILD_JOBS=2`, build dirs under a `.noindex` folder), no local models. Since 2026-10-01 workflows / parallel agents are allowed: ≤ 3 at once, each build in its own `CARGO_TARGET_DIR` under `~/.cache/tengu-xm.noindex/` (was: one agent at a time) |
 | Parallelism | Workflows with `isolation: "worktree"` for items that touch disjoint files. Shared files — `src/adapters/outbound/tools/mod.rs` (catalog), `src/domain/tools.rs`, `src/config/mod.rs`, `docs/code-map.{md,html}`, the tracker — are edited only by the coordinator when merging. Merge one worktree at a time and run the item gate after each merge |
 | Order | Follow the waves below; inside a wave follow the tracker's M-table order unless the "After:" lines in the gaps doc allow parallel work |
 | Loop | For long waves run `/loop` (self-paced): each iteration takes the next ☐ item of the current wave, implements it, runs the item gate, commits, ticks. The loop stops at a wave gate for the full validation |
@@ -40,7 +52,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 
 | Wave | Goal | Items | Gate |
 |---|---|---|---|
-| W1 | Engine parity foundation + the weekend investigation run | E0 (all 7) · M0: `ops-sandbox-config`, `x-shared-workspace-and-state-layout`, `rt-daemon`, `rt-backoff-budget`, `rt-scheduler` (incl. clock-time ticks in `America/New_York`), `hl-info-client`, `hl-market-schema`, `hl-ctx-tool`, `hl-book-tool`, `risk-config-schema`, `risk-calc-costs`, `risk-paper-ledger-domain`, `risk-gate-domain`, `risk-paper-ledger-store`, `risk-paper-fill-engine`, `risk-exec-idempotency-ids`, `risk-gate-enforcement`, `risk-paper-tools`, `risk-kill-switch`, `risk-audit-verdicts`, `x-exit-rules`, `ops-audit-atomic-write`, `rt-health`, `x-weekend-fade-strategy`, `x-weekend-sandbox` · M1: `kg-calendars`, `ops-history-recorder` | Wave gate green and a 30-minute live soak of `tengu run --sandbox xmarket-weekend` **by Fri 2026-10-02 18:00 ET** → it runs Fri 19:30 ET → Mon 10:00 ET. If not green by then, do not start it; the throwaway sampler covers the data and the sandbox runs the next weekend |
+| W1 ✅ 2026-10-01 | Engine parity foundation + the weekend investigation run | E0 (all 7) · M0: `ops-sandbox-config`, `x-shared-workspace-and-state-layout`, `rt-daemon`, `rt-backoff-budget`, `rt-scheduler` (incl. clock-time ticks in `America/New_York`), `hl-info-client`, `hl-market-schema`, `hl-ctx-tool`, `hl-book-tool`, `risk-config-schema`, `risk-calc-costs`, `risk-paper-ledger-domain`, `risk-gate-domain`, `risk-paper-ledger-store`, `risk-paper-fill-engine`, `risk-exec-idempotency-ids`, `risk-gate-enforcement`, `risk-paper-tools`, `risk-kill-switch`, `risk-audit-verdicts`, `x-exit-rules`, `ops-audit-atomic-write`, `rt-health`, `x-weekend-fade-strategy`, `x-weekend-sandbox` · M1: `kg-calendars`, `ops-history-recorder` | Wave gate green and a 30-minute live soak of `tengu run --sandbox xmarket-weekend` **by Fri 2026-10-02 18:00 ET** → it runs Fri 19:30 ET → Mon 10:00 ET. If not green by then, do not start it; the throwaway sampler covers the data and the sandbox runs the next weekend |
 | W2 | Rest of M0 | `info-fetch`, `info-parsers`, `info-edgar`, `jev-event-key`, `jev-event-templating`, `risk-calc-tools`, `jev-xmarket-loops-toml`, `ops-deploy-compose`, `x-m0-e2e-test`, `ops-openrouter-budget-key`, the four M0 docs items | M0 exit check (tracker § 1) + deploy to the operator's VPS |
 | W3 | M1 + M2 | all M1 and M2 items | M1 and M2 exit checks; the VPS runs 24 h unattended |
 | W4 | M3 edge check | all M3 items + analysis of the recorded weekends | Verdict recorded in the tracker (go / re-scope / stop) |
@@ -50,10 +62,13 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | W8 | M6 + M7 | all M6 and M7 items | M6 and M7 exit checks; ablation report |
 | W9 | M8 extensions | all M8 items | M8 exit check |
 
+History first (operator rule 2026-10-01): a wave's question is answered on backfilled history wherever history exists, before any live wait — xlab (`tengu backtest`, the Jev gate arm; [`xlab-2026-10-01.md`](xlab-2026-10-01.md) § 6–7) already covers part of M7 (`ops-clock-port` ✅; `ops-replay-harness`, `ops-report-decisions`, `x-hl-historical-backfill` 🟡). Live recording only for data with no historical source (e.g. executable xyz weekend books).
+
 ## The weekend investigation sandbox (`sandboxes/xmarket-weekend`)
 
 | Part | Spec |
 |---|---|
+| State (2026-10-02) | Built (`bc510871c69db05b61a99ba29cfe6787b906e91f`), golden replay bit-exact, 30-min soak green; W1-gate fixes `6fcb455bae5553e2d51390e4cedd334779ca0d9c`, frozen as `~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455`, soak 2 green. The run is optional now (history first: xlab measures rule W over ~30 weekends); it adds only executable xyz weekend books |
 | Purpose | First out-of-time evidence for the weekend fade (W) at executable prices; a real run of the new runtime |
 | Process | `tengu run --sandbox xmarket-weekend` on this Mac, started under `caffeinate -i -s` (awake while the run lives; runbook in the sandbox file), state in `<TENGU_HOME>/state/xmarket-weekend/` |
 | Feeds | `hl_ctx` for every listed xyz market every 60 s; `hl_book` for every listed xyz single-stock perp every 5 min (every 60 s from Sun 17:00 to 19:00 ET and Mon 08:30 to 09:30 ET); recorder on for both |
@@ -67,10 +82,10 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Engine | How tools run | Offline check | Live smoke |
 |---|---|---|---|
 | `openrouter` | in-process `PluginToolExecutor`; OpenAI-style function schemas | `x-tool-schema-lint`: every catalog schema in the subset OpenRouter's providers accept (names `^[a-zA-Z0-9_-]{1,64}$`, no `$ref` / `oneOf` at the top level, bounded description length) | `x-engine-matrix-smoke` with `google/gemini-2.5-flash-lite` and `anthropic/claude-haiku-4.5`: a scripted turn that calls each tool of the set under test and reads the result |
-| `local` | in-process; OpenAI-compatible server (Ollama, llama.cpp, vLLM, Unsloth) | same lint, plus `x-local-model-fit`: tool results fit `limits.context_window` (compact rendering, bounded `data`) | Ollama `gemma4:latest` on `http://127.0.0.1:11434/v1` (`[agents.<n>.local] base_url`) |
+| `local` | in-process; OpenAI-compatible server (Ollama, llama.cpp, vLLM, Unsloth) | same lint, plus `x-local-model-fit`: tool results fit `limits.context_window` (compact rendering, bounded `data`); offline mock legs `offline_local_*` | Ollama `gemma4:latest` on the operator's Windows PC over the LAN (`TENGU_MATRIX_LOCAL_BASE_URL`; never on this Mac) |
 | `claude_code` | Claude CLI → `tengu mcp-bridge` (stdio MCP) | `x-bridge-conformance-test`: same result through the bridge as in-process (config, scopes, stores, secrets + redaction, `no_shell`, call id) | `claude -p` on the subscription with `builtin_tools_profile = "none"` and `--strict-mcp-config`, same scripted turn |
 
-A tool is done only when all three rows pass for it (R1). `x-engine-parity-audit` runs the matrix over every existing catalog tool first and fixes what fails.
+A tool is done only when all three rows pass for it (R1). `x-engine-parity-audit` runs the matrix over every existing catalog tool first and fixes what fails — done 2026-10-01 (`1f52df0e711904d62a14a279ecba6b430511a8f8`): every catalog tool, a shell skill and an `[[mcp_servers]]` proxy pass on `openrouter` and `claude_code`; the live `local` column waits for the operator's PC.
 
 ## Gates and self-validation
 
@@ -85,7 +100,7 @@ A tool is done only when all three rows pass for it (R1). `x-engine-parity-audit
 
 | Input | Needed for | When |
 |---|---|---|
-| Mac on, lid open, online Fri 2026-10-02 19:30 ET → Mon 2026-10-05 10:00 ET (Sat 04:30 → Mon 19:00 UTC+5) | weekend run + sampler | W1 |
+| Mac on, lid open, online Fri 2026-10-02 19:30 ET → Mon 2026-10-05 10:00 ET (Sat 04:30 → Mon 19:00 UTC+5) | weekend run + sampler — optional since 2026-10-01 (history first) | W1 |
 | Ollama with `gemma4:latest` on the operator's **Windows gaming PC** (reached over the LAN; never on the dev Mac), `OLLAMA_HOST=0.0.0.0`, `OLLAMA_CONTEXT_LENGTH=16384`, its address; Claude CLI logged in | engine matrix (`local` column live check) | when the operator says go |
 | Dedicated xmarket OpenRouter key, $40 / day limit | 24/7 runs | before W2 deploy (the current key is fine for development) |
 | VPS choice (Hetzner or Hostinger) + an SSH alias; Docker installed | `ops-deploy-compose` | W2 |
@@ -93,16 +108,21 @@ A tool is done only when all three rows pass for it (R1). `x-engine-parity-audit
 | X bearer token + spending limit | `info-x-ingest` | W6 |
 | Hyperliquid sub-account funded with $100 + API wallet (testnet first) | M3b | W5, after an M3 "go" |
 
-## Kickoff prompt for the next session
+## Kickoff prompt for the next session (W2)
+
+The W1 prompt (used 2026-09-30) is in this file at `47fc090de426205df91425df789849466e962399`.
 
 ```text
-Implement the xmarket plan. Read, in order: CLAUDE.md (required reading #11),
-docs/xmarket-build-plan-2026-09-30.md, docs/xmarket-tracker-2026-09-29.md § 0 and § 4,
-and docs/xmarket-feasibility-2026-09-30.md. Do "Before the first item", then Wave 1:
-E0 engine parity first, then the weekend-run slice, deadline Fri 2026-10-02 18:00 ET.
-Use workflows with worktree isolation for parallel items and /loop for the iterations;
-validate every tool under openrouter (gemini-2.5-flash-lite, claude-haiku-4.5), local
-(Ollama gemma4:latest) and claude_code (subscription). One commit per item on
-feature/xmarket, explicit paths, no pushes. Stop only for the operator inputs listed
-in the build plan.
+Implement xmarket wave W2. Read, in order: CLAUDE.md (required reading #11, #12),
+docs/SESSION_HANDOFF.md (top), docs/xmarket-build-plan-2026-09-30.md (Status, § Waves),
+docs/xmarket-tracker-2026-09-29.md § 0 and the W1 notes (the open operator decisions),
+and docs/xlab-2026-10-01.md § 12–14. Confirm the operator decisions first. History
+first: judge each W2 piece on xlab history before it runs live. W2 = info-fetch,
+info-parsers, info-edgar, jev-event-key, jev-event-templating, risk-calc-tools,
+jev-xmarket-loops-toml, ops-deploy-compose, x-m0-e2e-test, ops-openrouter-budget-key,
+rt-docs, hl-docs, x-info-docs, risk-docs; gate = the M0 exit check (tracker § 1) +
+the deploy to the operator's VPS. Every tool works under openrouter, local and
+claude_code (R1). One commit per item on feature/xmarket, explicit paths, no pushes;
+≤ 3 parallel agents, no local model on this Mac. Stop only for the operator inputs
+listed in the build plan.
 ```

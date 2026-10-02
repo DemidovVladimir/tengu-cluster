@@ -7,8 +7,8 @@
 //! directly.
 //!
 //! Files are saved raw at `<workspace>/.tengu/storage/<file_id>/` and each
-//! file is chunked, embedded, and stored in the vector memory backend (disk or
-//! Qdrant).
+//! file is chunked, embedded, and stored in the disk vector store
+//! (`<workspace>/memory/vectors.bin`).
 
 use std::collections::HashMap;
 use std::io::Read as _;
