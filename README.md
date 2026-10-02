@@ -132,7 +132,7 @@ Paper only — no key, no order leaves the process. The `[risk]` gate runs insid
 
 | Sandbox | Runs | Runbook |
 |---|---|---|
-| `xmarket` (M0) | `tengu run --sandbox xmarket`: HL contexts + a starter set of books recorded, exit rules every 15 s, daily risk roll; planner `xm`, routable `xm_architect` (read-only), private `xm_executor`. Entries wait for later tracker items | top of `sandboxes/xmarket/config.toml`; `docs/runtime-2026-09-30.md` § xmarket sandbox |
+| `xmarket` (M0) | `tengu run --sandbox xmarket`: HL contexts + a starter set of books recorded, exit rules every 15 s, daily risk roll; no planner: `xm_architect` default + routable (read-only, Claude CLI Opus), private `xm_executor` (Claude CLI Sonnet). Entries wait for later tracker items | top of `sandboxes/xmarket/config.toml`; `docs/runtime-2026-09-30.md` § xmarket sandbox |
 | `xmarket-weekend` | `tengu run --sandbox xmarket-weekend`: rule W (weekend fade) on 75 Hyperliquid xyz stock perps — capped + shadow ledgers, no LLM, no Jev | top of `sandboxes/xmarket-weekend/config.toml`; `docs/runtime-2026-09-30.md` § Weekend run |
 
 | Operator action | Command |

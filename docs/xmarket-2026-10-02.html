@@ -772,7 +772,7 @@ T.sandboxes = {
   rows: [
     ["`sandboxes/xmarket`",
      "Paper desk, stage M0: records HL contexts + books, runs exits and the daily risk roll on the $100 budget. No entries yet — they need an `xm_compare/1` row (`risk-calc-tools`) and the M0 loop (`jev-xmarket-loops-toml`), both W2",
-     "`xm` default planner, read-only · `xm_architect` the only routable agent, never trades · `xm_executor` private, the only exec tools, runs the feeds — all OpenRouter",
+     "no planner (2026-10-02) · `xm_architect` default + the only routable agent, never trades (Claude CLI Opus) · `xm_executor` private, the only exec tools, runs the feeds (Claude CLI Sonnet, never called)",
      "`hl_ctx` dex `xyz` 15 s · `hl_book` `xyz:TSLA` `xyz:NVDA` `xyz:AAPL` 60 s · `xm_exits` 15 s · `risk_day` daily 00:01 UTC",
      "`~/.tengu/state/xmarket/` · `~/xmarket-workspace`"],
     ["`sandboxes/xmarket-weekend`",
@@ -1515,7 +1515,7 @@ T.commands = {
     ["`tengu tool call --sandbox <s> --agent <a> --tool <t> --args '<json>'`", "run one catalog tool as an agent; prints `{text, observation, is_error}`", "hidden; e.g. `--agent xm_weekend --tool xm_weekend_fade --args '{}'`"],
     ["`tengu tool turn --sandbox <s> --agent <a> --goal \"<text>\"`", "one engine turn as an agent (the `@<agent>` chat path)", "hidden; the engine matrix's `xm` legs"],
     ["`tengu tool list`", "every catalog tool name as a JSON array", "hidden; 44 in the default build at HEAD"],
-    ["`tengu chat --sandbox xmarket`", "operator chat: planner `xm` → `xm_architect` (read-only research + the paper book)", "nobody trades from chat"],
+    ["`tengu chat --sandbox xmarket`", "operator chat with `xm_architect`, Opus (read-only research + the paper book)", "nobody trades from chat"],
     ["`tengu webhooks --sandbox <s>`", "the webhook listener (`--features webhooks`)", "takes the same leases as `tengu run` — never beside it"],
     ["`tengu decide --sandbox <s> --loop <l> --event <file>`", "one event through a decision loop", "xmarket has no loop until `jev-xmarket-loops-toml` (W2)"],
     ["`tengu prune`", "removes cached / ephemeral state", "never deletes `<TENGU_HOME>/state` (only `state/flows`)"],
