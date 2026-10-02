@@ -9,6 +9,13 @@
 > Qdrant / `rag/`. Tengu facts below are corrected in place; the
 > "What landed today" table is historical.
 >
+> **2026-10-02:** Tengu gained trading-runtime axes (typed observations,
+> System One decision loops with Jev, an in-tool risk gate + paper ledger,
+> history-first backtesting, engine parity through the MCP bridge) — new
+> section [Trading runtime axes](#trading-runtime-axes-added-2026-10-02). For
+> Hermes and PI/Cowork it states only what this snapshot already establishes;
+> anything else is marked "not covered here".
+>
 > Companion to `docs/tengu-analysis.html` (the deep version). This doc is the
 > obsidian-friendly **state snapshot** taken at the end of the 2026-04-26
 > session that landed per-example vectors, TUI debug panel, and durable
@@ -23,9 +30,9 @@
 |---|---|---|---|
 | **Language** | Rust | Python | TypeScript + Claude Agent SDK |
 | **Origin** | Vibe-coded v2 redesign | Nous Research, mature | Anthropic, this product |
-| **Surfaces** | TUI (cursive), Telegram, webhooks listener | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
-| **Models** | OpenRouter (any) + Claude Code engine | 200+ providers, multi-backend terminal | Sonnet / Opus / Haiku |
-| **Persistence** | Open Brain Postgres + Karpathy LLM Wiki Markdown + file registry | SQLite + FTS5 + Honcho dialectic model | CLAUDE.md + plain-text memory files |
+| **Surfaces** | TUI (cursive), Telegram, webhooks listener; long-running `tengu run` (feeds + decision loops); CLIs `tengu decide`, `tengu backtest`, `tengu history` | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
+| **Models** | OpenRouter (any) + `local` (any OpenAI-compatible server: Ollama, llama.cpp, vLLM, Unsloth) + Claude Code engine; Jev (`~typesafe/jev-latest`) as the decision model of `[decision_loops]` | 200+ providers, multi-backend terminal | Sonnet / Opus / Haiku |
+| **Persistence** | Open Brain Postgres + Karpathy LLM Wiki Markdown + file registry; SQLite stores for typed observations, the paper ledger and the market-data warehouse | SQLite + FTS5 + Honcho dialectic model | CLAUDE.md + plain-text memory files |
 | **Network** | Tor by default (`[egress] network = "tor"`: Arti + lyrebird-rs proxy, host allow/deny ceiling, JSONL audit — code-enforced, fail-closed; `"open"` per sandbox) | not a first-class feature | platform-managed |
 | **Strength** | Doctrine clarity (LLM=heart, Open Brain / Karpathy LLM Wiki=brain, tools=hands) | Breadth: platforms, scheduler, self-improving skills | UX: artifacts, computer-use, MCP marketplace |
 | **Weakness** | Agent-layer features partial / vibecoded gaps | Heavier deployment surface, Python perf | No vector memory; no autonomous skill evolution |
@@ -81,8 +88,9 @@ PI/Cowork takes a different path: rather than autonomous evolution, it leans on 
 ## Tools
 
 ### Tengu
-- `PluginToolExecutor` over a plugin registry; tools are namespaced and scoped.
-- `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the six-element `WORKSPACE_TOOLS` opt-ins (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`); `[agents.<name>].tools` narrows it per subagent.
+- `PluginToolExecutor` over a plugin registry; tools are namespaced and scoped. One catalog row per tool (`adapters/outbound/tools/mod.rs::catalog()`): 44 tools in the default build (`tengu tool list`), + `agentic_memory` with `postgres_memory`.
+- `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the opt-ins named in `domain/tools.rs::WORKSPACE_TOOLS` (31 names: memory / skill lifecycle, Solana read + write, Hyperliquid, xmarket risk / paper, xlab); `[agents.<name>].tools` narrows it on every surface (`bootstrap::tools::agent_base_tools`).
+- Every catalog tool works under `openrouter`, `local` and `claude_code` (the latter through `tengu mcp-bridge`): schema lint, bridge conformance, live engine matrix — § Trading runtime axes.
 - `compress_and_store` is implicitly appended to every subagent — never list it in `[agents.<name>].tools`.
 - Real MCP bridge via `outbound/mcp_client/client.rs::tools/list`; the planner registry lists core tool defs plus enumerated MCP server tools (`<server>__<tool>`, once per `RagPlanner`). Item 6.6 closed 2026-09-12.
 - Every network path goes through `egress.rs`: Tor by default (`socks5h://127.0.0.1:9050`, fail-closed), `allow_hosts` / `deny_hosts` / `https_only` re-checked on each redirect hop, JSONL audit; children inherit the resolved policy via `TENGU_EGRESS`.
@@ -114,6 +122,23 @@ Each is suited to its product's context. Tengu's registry + planner design wins 
 
 ---
 
+## Trading runtime axes (added 2026-10-02)
+
+What Tengu gained 2026-09-24 → 10-01. Hermes / PI cells hold only what this snapshot already says (§ Tools, § TL;DR); "not covered here" = this doc has no evidence either way.
+
+| Axis | Tengu | Hermes | PI / Cowork |
+|---|---|---|---|
+| Typed tool results | ✅ `Observation` envelope (≤ 32 scalar features, line 1 ≤ 200 chars with full ids, failed reads never 0) + TTL cache `<workspace>/.tengu/observations.db`; `[recorder]` day files — `docs/typed-observations-2026-09-24.md` | not covered here | not covered here |
+| Decision model ("System One") | ✅ `[decision_loops.*]`: Jev picks the next action + argument slots from a typed menu, existing tools execute it, low confidence (`act_at`) escalates to the orchestrator, `dry_run` by default, audit `logs/decisions.jsonl` — `docs/decision-loop-plan-2026-09-24.md` | not covered here (this snapshot lists the agent loop + model-spawned subagents) | not covered here |
+| Long-running runtime | ✅ `tengu run`: `[feeds.*]` on a UTC grid / local windows, single-runner lease, heartbeat, `tengu doctor --live`, graceful drain — `docs/runtime-2026-09-30.md` | built-in cron scheduler with delivery to any platform (§ Tools) | not covered here |
+| Money safety | ✅ `[risk]` gate inside every exec tool (gate + fill + ledger write in one transaction, fail closed), kill-switch file, exit rules (`xm_exits`), paper ledger filled against live L2 books; only private agents hold exec tools — `docs/xmarket-risk-paper-2026-09-30.md` | not covered here | not covered here |
+| Research on history | ✅ `market.db` warehouse + backfill (HL candles / funding, GeckoTerminal, HL S3 archive), strategy-spec DSL (six kinds — data, never code), pure backtest engine (costs, funding, `[risk]` caps, time-integrity checks), Jev replayed on history with a decision cache, holdout reads counted — `docs/xlab-2026-10-01.md` | not covered here | not covered here |
+| Engine parity | ✅ every catalog tool on `openrouter`, `local` and `claude_code` (through `tengu mcp-bridge`, run as the sandbox agent): schema lint, a bridge conformance case per tool, live engine matrix (15 tool sets; `local` legs on the operator's PC) — `docs/mcp-bridge.md`, `docs/engine-backends.md` | 200+ providers, 6 terminal backends (§ TL;DR, § Tools); per-tool parity checks not covered here | one model vendor (Sonnet / Opus / Haiku); not applicable |
+
+Net: these axes are Tengu's xmarket / xlab work. The snapshot holds no evidence that Hermes or PI ship equivalents — which is not evidence that they lack them; check their current docs before deciding "build vs borrow".
+
+---
+
 ## What landed today (2026-04-26)
 
 Historical — `src/adapters/rag/` was deleted 2026-05-14; per-example vectors are now `example_queries` lines in the Markdown registry.
@@ -126,9 +151,9 @@ Historical — `src/adapters/rag/` was deleted 2026-05-14; per-example vectors a
 
 Carryover from earlier this session (already committed):
 
-- `c3fe7fd` — Phase 6.1 full: `OrchestratorEvent::RagQueried` variant + bus plumbing.
-- `e248d82` — registry recall: example_queries per agent + threshold realism.
-- `7d1fa55` — auto-reindex `tengu_registry` (Qdrant) on first rag-mode chat turn. Superseded by the file-backed `TENGU_PLANNER_REGISTRY.md` registry.
+- `c3fe7fd2be0f91fe7f4ffb2b41088622c536d2ee` — Phase 6.1 full: `OrchestratorEvent::RagQueried` variant + bus plumbing.
+- `e248d82ead03d7e99eae098137f09405aa61cd6b` — registry recall: example_queries per agent + threshold realism.
+- `7d1fa552b2d9e8bb52590d3aaf4ffaa79674b7c4` — auto-reindex `tengu_registry` (Qdrant) on first rag-mode chat turn. Superseded by the file-backed `TENGU_PLANNER_REGISTRY.md` registry.
 
 ---
 
@@ -188,4 +213,4 @@ These are all additive — they don't conflict with the doctrine ("LLM = heart, 
 
 ---
 
-*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above and a 2026-09-18 fact pass (banner at top). The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*
+*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above, a 2026-09-18 fact pass (banner at top) and a 2026-10-02 pass (§ Trading runtime axes; Tengu rows of the TL;DR and § Tools). The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*

@@ -38,7 +38,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 
 | Concern | File(s) |
 |---|---|
-| CLI subcommands (`chat status doctor telegram webhooks run decide history risk eval secret prune mcp-bridge agentic-memory-server skill run-agent`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor}.rs` |
+| CLI subcommands (`chat status doctor telegram webhooks run decide history backtest risk eval secret prune mcp-bridge agentic-memory-server skill run-agent`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor,history,backtest,risk}.rs` |
 | Hidden test commands `tengu tool list` (catalog names) · `tengu tool call` (one or a `--batch` of calls through the executor a `run-agent` child builds, `--transcript` = the conversation: bridge conformance) · `tengu tool turn` (one engine turn as any agent, private exec agents included — the `@<agent>` chat path; Claude Code tools through the real bridge: engine-matrix xm legs) | `src/adapters/inbound/cli/tool.rs` |
 | Config schema, defaults, validation, loading | `src/config/mod.rs` (`Config`, `AgentConfig`, `impl Default for Config`, `default_*` fns, `validation_errors`, `validate_agent`, `Config::load`) |
 | `[egress]` schema / runtime policy | `src/config/egress.rs` / `src/adapters/outbound/egress.rs` |
@@ -62,7 +62,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Skills registry / lifecycle | `src/application/skills/registry.rs` / `src/application/skills/lifecycle/` |
 | Secrets vault / redaction | `src/adapters/outbound/secrets.rs` / `src/domain/secrets.rs` |
 | Metrics records / bus | `src/domain/metrics.rs` / `src/application/metrics.rs` |
-| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` |
+| Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · config `src/config/decision_loop.rs` · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` · replay (`SimClock`, terminal-only loop, `Verdict`) + decision cache `src/adapters/outbound/decision_cache.rs` · backtest gate arm `src/application/backtest/gate.rs` + `src/domain/backtest/gate.rs` (`build_gate`; `docs/xlab-2026-10-01.md` § 7) |
 | Typed tool observations + TTL cache | `src/domain/observation.rs` (`Observation`, `Observed`, `Field`, `CachePolicy`) · port `src/ports/observation.rs` · `src/application/observe.rs` (`observe`) · store `src/adapters/outbound/observations.rs` (`<workspace>/.tengu/observations.db`) · loop `world` `src/application/decision_loop/world.rs` |
 | Solana LP tools (`sol_price` … `lp_decide`; writes `solana_close_token_accounts` …) | interfaces `src/adapters/outbound/tools/solana/defs.rs` · plugin + families `src/adapters/outbound/tools/solana/` · RPC / accounts `src/adapters/outbound/solana/` · pure types + policy `src/domain/solana.rs`, `src/domain/lp/` · tx wire format `src/domain/solana_tx.rs` |
 | `tengu run` (loops, feeds, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health,feeds}.rs` · `src/domain/runtime.rs` · fire times `src/domain/schedule.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · `[feeds.<n>]` `src/config/feeds.rs` · doc `docs/runtime-2026-09-30.md` |
@@ -71,6 +71,8 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Risk gate + paper fills + ledger + kill switch (`[risk]` limits → `RiskVerdict` → `ledger.db`) | gate `src/domain/xm/risk.rs` (`evaluate`) · halts `src/domain/xm/risk_state.rs` · limits + load rules `src/config/risk.rs` (`RiskConfig::limits`), `src/config/hardening.rs` · fill engine `src/domain/xm/paper.rs` + latency and the ledger closure `src/application/paper.rs` · exec orders `src/domain/xm/exec.rs` + `src/adapters/outbound/tools/xm/exec_common.rs` (`run_exec`) · ledger math `src/domain/xm/ledger.rs` · ledger port `src/ports/paper.rs` + store `src/adapters/outbound/paper_store.rs` · tools `src/adapters/outbound/tools/xm/` (`risk_status`, `paper_positions`, exec tools `paper_order` / `paper_close` / `xm_exits` / `xm_weekend_fade`) · exit rules `src/domain/xm/exits.rs` + `tools/xm/exits.rs` · shadow gate `evaluate_shadow` (`src/domain/xm/risk.rs`) · CLI `src/adapters/inbound/cli/risk.rs` · doc `docs/xmarket-risk-paper-2026-09-30.md` |
 | Weekend fade (rule W: window, signals, capped + shadow ledgers, replay) | pure rule + rows `src/domain/xm/weekend_fade.rs` · exec tool `src/adapters/outbound/tools/xm/weekend_fade.rs` · knobs + load rules `src/config/xmarket.rs` (`WeekendFadeConfig`) · golden `tests/fixtures/xmarket/weekend_2026-09-26_*.json` (test helpers `weekend_fade::golden`) · the weekend run `sandboxes/xmarket-weekend/config.toml` (runbook at its top; its replay test `config::xmarket::tests::weekend_sandbox_replays_the_golden`) · doc `docs/xmarket-risk-paper-2026-09-30.md` § Weekend fade, `docs/runtime-2026-09-30.md` § Weekend run |
 | History recorder, budgets, backoff, time | `src/adapters/outbound/history_sqlite.rs` + `open_observation_store` (`outbound/observations.rs`) · `src/adapters/outbound/rate_limit.rs` · `src/domain/backoff.rs` · `src/adapters/outbound/http_class.rs` · `src/domain/{tz,calendar}.rs` · `src/ports/clock.rs` |
+| Market-data warehouse + backfill (xlab: `tengu history backfill / import-hl-archive / import-json / coverage`) | types `src/domain/marketdata.rs` · decoders `src/domain/marketdata_decode.rs` · port `src/ports/market_data.rs` · store `src/adapters/outbound/market_data.rs` (`<state dir>/market.db`) · fetchers + importers `src/adapters/outbound/backfill/` · CLI `src/adapters/inbound/cli/history.rs` · `[backtest]` universes `src/config/backtest.rs` · doc `docs/xlab-2026-10-01.md` § 4, § 10 |
+| Backtests (xlab: `tengu backtest`, strategy specs, arms, run dirs) | engine (pure) `src/domain/backtest/` (`spec`, `kinds`, `engine`, `fills`, `costs`, `features`, `stats`, `report`) · share splits `StockSplit` in `src/domain/marketdata.rs` · use case `src/application/backtest/mod.rs` (`resolve` → `prepare` → [gate: `run_gate` → `evaluate_gated`] → `evaluate`) + run dir `run_dir.rs` (`<state dir>/backtests/<run id>/`) · spec hash `src/domain/canonical.rs` · `[backtest]` (+ `splits`) + strategy-library load rules `src/config/backtest.rs` · CLI `src/adapters/inbound/cli/backtest.rs` (`--gate`, `--max-decisions`, `--concurrency`, `--offline`) · library `sandboxes/xlab/config.toml` · doc `docs/xlab-2026-10-01.md` § 5–7, § 10 |
 | Engine matrix (every engine × model runs tool sets; every catalog tool, a shell skill and an `[[mcp_servers]]` proxy in a set) | live legs `tests/engine_matrix.rs` + fixtures `tests/fixtures/engine_matrix/` (hardened, `[risk]`) and `tests/fixtures/engine_matrix/open/` (memory, shell, `token_mcp_server.sh`), fixture skill `tests/fixtures/skills/matrix_cat` (exec tools on private `xm_*` agents via `tengu tool turn`, `src/adapters/inbound/cli/tool.rs`) · `tengu doctor --engines` `src/adapters/inbound/cli/doctor.rs` (`doctor_engines`) + `src/domain/engine_smoke.rs` · activity: `StreamEvent::ToolRan` → `EngineResponse.tool_runs` / IPC `AgentIpcOutput.tools` · doc `docs/engine-backends.md` § Engine matrix |
 | Channels | `src/adapters/inbound/{tui/,telegram.rs,webhooks.rs}` + shared `channel.rs` |
 
@@ -78,7 +80,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 
 | # | Source | Used when |
 |---|---|---|
-| 1 | `sandboxes/<name>/config.toml` | `--sandbox <name>` on `chat`, `doctor`, `telegram`, `webhooks`, `skill evolve`, `skill doctor` — replaces the base config wholesale (`bootstrap/sandbox.rs::load_sandbox_or`). `eval --sandbox` overrides the skill's `evals/config.toml`; `prune --sandbox` also clears that sandbox's workspace state |
+| 1 | `sandboxes/<name>/config.toml` | `--sandbox <name>` on `chat`, `doctor`, `telegram`, `webhooks`, `run`, `decide`, `history`, `backtest`, `risk`, `tool call` / `tool turn`, `skill evolve`, `skill doctor` — replaces the base config wholesale (`bootstrap/sandbox.rs::load_sandbox_or`). `eval --sandbox` overrides the skill's `evals/config.toml`; `prune --sandbox` also clears that sandbox's workspace state |
 | 2 | `-c/--config <path>` | given |
 | 3 | `$TENGU_CONFIG` | set (the CLI pins it to the file actually used, so children see the same one) |
 | 4 | `<TENGU_HOME>/config.toml` | default; `TENGU_HOME` defaults to `~/.tengu` (`config/paths.rs`) |
@@ -109,7 +111,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[scaffold]` | `ScaffoldConfig` | `outbound/scaffold.rs` | ignored |
 | `[xmarket]` | `XmarketConfig` (`config/xmarket.rs`) | `Config::fold_default_scopes` → `AgentConfig::sandbox` (`config/sections.rs`) | **error** |
 | `[risk]` / `[paper]` | `RiskConfig` / `PaperConfig` (`config/risk.rs`) | `AgentConfig::sandbox` → the exec tools' gate and fill engine | **error** |
-| `[rate_limits.<name>]` | `RateLimitConfig` (`config/rate_limits.rs`) | `outbound/rate_limit.rs` (feeds, `hl-info-client`, `info-fetch`) | **error** |
+| `[rate_limits.<name>]` | `RateLimitConfig` (`config/rate_limits.rs`) | `outbound/rate_limit.rs` (feeds, `hl-info-client`, `info-fetch`, backfill: `hyperliquid`, `geckoterminal`) | **error** |
 | `[runtime]` | `RuntimeConfig` (`config/runtime.rs`) | `bootstrap/runtime.rs`, `inbound/run.rs` | **error** |
 | `[feeds.<n>]` | `FeedConfig` (`config/feeds.rs`) | `bootstrap/runtime.rs::start_feeds` → `application/runtime/feeds.rs` (`tengu run`) | **error** |
 | `[recorder]` | `RecorderConfig` (`config/recorder.rs`) | `outbound/observations.rs::open_observation_store` (every typed-tool store) | **error** |
@@ -186,10 +188,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/secrets.vault` | `tengu secret` | AES-GCM vault, loaded into env at start |
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit; `agent` / `session` / `call_id` of the call (a `tengu run` feed or loop call: `AttributedExecutor`) |
 | `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at`, `call_id` of a tool step (`outcome = "refused"` when the risk gate denied it) |
+| `<state dir>/backtests/<YYYYMMDDTHHMMSSZ>-<strategy>[-N]/` | `application/backtest/run_dir.rs` (`tengu backtest`) | one run: `report.json` (`backtest/1:<run id>`), `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json`, the gate's `decisions.jsonl`; the id claimed with `create_dir` |
+| `<state dir>/backtests/decision-cache.db` | `outbound/decision_cache.rs` | replay-deterministic Jev answers (key = sha256 hex of the canonical `{model, state, questions}`); only misses call Jev. A replay's audit lines go to the run's `decisions.jsonl` (`trigger = "backtest"`, `ts_ms` = the simulated decision time), never `logs/decisions.jsonl` |
 | `<TENGU_HOME>/logs/risk.jsonl` | `outbound/paper_store.rs` | one line per risk verdict — mirror of `ledger.db` `risk_decisions` (canonical); joins `decisions.jsonl` by `call_id` (`docs/xmarket-risk-paper-2026-09-30.md` § Audit) |
-| `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (leases `runtime:<sandbox>` + `state:<dir>`), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`); `catalog` / `events` / `audit` / `spend` `.db` reserved — layout + load rules in `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout; `tengu prune` never deletes it; `<TENGU_HOME>/state/` without `[xmarket]` |
+| `<TENGU_HOME>/state/<xmarket.state>/` | `tengu run` + xmarket stores | `runtime.db` (leases `runtime:<sandbox>` + `state:<dir>`), `run-<sandbox>.json` (heartbeat), `history/<YYYYMMDD>.db` (`[recorder]`), `ledger.db` (paper ledger, `outbound/paper_store.rs`), `market.db` (market-data warehouse, `outbound/market_data.rs`); `catalog` / `events` / `audit` / `spend` `.db` reserved — layout + load rules in `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout; `tengu prune` never deletes it; `<TENGU_HOME>/state/` without `[xmarket]` |
 | `~/.tengu/skills/`, `<workspace>/.tengu/skills/`, `skills/` | you / `tengu skill install` | three skill tiers (`application/skills/registry.rs`) |
-| `<workspace>/.tengu/memory.bin`, `<workspace>/.tengu/cache.db` | memory tools / `shared_cache` | disk vector store / SQLite cache |
+| `<workspace>/memory/vectors.bin` (no workspace: `[memory] store_path`, default `~/.tengu/memory/`), `<workspace>/.tengu/storage/`, `<workspace>/.tengu/cache.db` | memory tools (`bootstrap/memory.rs::resolve_memory_store_path`) / `persistent_store` / `shared_cache` | disk vector store / stored files / SQLite cache |
 | `TENGU_PLANNER_REGISTRY.md`, `TENGU_PLAN.md` (repo root) | `application/orchestrator/shared_files.rs` | planner registry / debug copy of the plan |
 | Postgres `agentic_memory` | `outbound/tools/agentic_memory/` | Open Brain (feature `postgres_memory`) |
 
@@ -206,6 +210,9 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | forwarded to the bridge |
 | `TELEGRAM_BOT_TOKEN`, `TENGU_TELEGRAM_ALLOWED_USERS` | Telegram channel |
 | `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID` | crypto tools |
+| `HL_API_URL`, `GECKO_API_URL`, `SOLANA_RPC_URL` | Hyperliquid info / GeckoTerminal / Solana RPC base URL overrides (a tool reads one only when its scope lists it in `env_reads`; the CLI backfill grants its own; the RPC URL is never rendered) |
+| `UNSLOTH_API_KEY` | default `api_key_env` of `engine = "local"` (`[agents.<n>.local]`) |
+| `TENGU_RISK_RESUME_SECRET_FILE` | 0600 file whose content `tengu risk resume` asks for |
 | `TENGU_TUI_METRICS`, `TENGU_TUI_RAG_DEBUG`, `TENGU_GPU_HINT`, `RUST_LOG` | TUI panels / runtime profile / logging |
 | `ANTHROPIC_API_KEY` | removed from the Claude CLI child env (it uses its own login) |
 
@@ -231,15 +238,28 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (45 files)
+### domain — data + pure policy (60 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
+| `src/domain/backtest/mod.rs` | 33 | Backtests (xlab) — pure: spec → `candidates` → arms → report; module table. |
+| `src/domain/backtest/checks.rs` | 337 | Backtest cross-kind checks (tests only): time integrity on worlds at 15m across both spring-forward switches, 1h (every kind), 4h and 1d (bar kinds), 1h / 1d with a split (one inside a day bar) — under every move after t (next bar ×1.5, all later bars / funding / ctx moved, the next bar deleted, everything cut) candidates and skips at or before t unchanged, per arm the admissions by t and the trades closed by t unchanged; `data_asof_ms ≤ decided_at_ms` everywhere; no mixed split bar or fake move; the rule W golden (= `weekend_fade::replay`, gross converted to simple returns). |
+| `src/domain/backtest/costs.rs` | 192 | Backtest cost model `CostSpec`: taker fee, half-spread (`fixed` / `abdi_ranaldo` / `ctx`; unknown keys refused, as in the cost), slippage, funding on / off; `cost_for` = longest `[backtest.costs]` prefix. |
+| `src/domain/backtest/engine.rs` | 1184 | Backtest engine: `candidates` (checks, then `kinds.rs`; `max_candidates` guard) → `simulate` per arm: decision-time drops (`future_data`, `no_costs`) before any cap, then the capped book as of the decision, then the fill — research: censors plans the data cannot finish, drawdown in bps of a trade; `[risk]`-capped ledger: an instant's candidates by descending \|signal\|, order clamp, gross / net exposure, daily / total loss halts (equity once per exit instant), an unfilled exit holds its slot (`missing_exit`), refusals by rule, drawdown % of cash — `MarketData` (+ `adjust_for_splits`: a straddling bar dropped), `RunParams`, `Candidate`, `ExitPlan::horizon_ms`, `Trade` (the audit row), `ArmResult`, `SkipReason`, `Skip` (+ `seq` on arm drops). |
+| `src/domain/backtest/features.rs` | 327 | Features as-of t for the Jev gate: returns 1 / 24 / 168 h, 24 h vol, volume ratio, trades, funding APR, half-spread, hour of week — only rows observable at t, missing ⇒ absent. |
+| `src/domain/backtest/fills.rs` | 607 | Backtest fills: gross = a linear perp's simple return side × (exit / entry − 1); cost per side (fee + half-spread fixed / Abdi–Ranaldo / ctx + slippage), funding over a hold (settlement hours, complete flag), exits (TP / SL / hold on the simple return, funding under the exit APR, pair \|z\|), the pair spread series. |
+| `src/domain/backtest/gate.rs` | 845 | The Jev gate arm's pure half: `gate_event` (strategy, instrument, side, signal, decided_at, features — rounded, nothing after the decision), `GateClass` of a `Verdict` (take / skip / ask_architect / unsure / rejected / error), `p_take`, `GateSummary` (counts, take rate, cache, est. cost at `COST_PER_DECISION_USD` $0.00004, calibration, jev − rules) + its `report.md` section, CLI lines and `jev_*` row features. |
+| `src/domain/backtest/kinds.rs` | 1339 | Decisions of the six strategy kinds as-of t: rule W windows (`fade_window`, `signal_of`, `select_capped`), daily windows (a day whose anchor / entry / exit fall out of order in UTC — a DST gap — skipped with a note; the anchor read in `data_asof_ms`), move triggers, funding carry, pair spread, event windows; `min_entry_trades` (`thin_entry` before ranking / cooldown / position); the `max_candidates` stop; skips and data notes. |
+| `src/domain/backtest/report.rs` | 908 | `BacktestReport` = `report.json` + row `backtest/1:<run id>` (≤ 32 features, line 1 ids whole; `max_drawdown_bps`, `capped_max_drawdown_pct`, the gate's `jev_*`), `report.md` (summary with drawdown units, split, per instrument, the Jev gate, limits), compact text ≤ 3 KB; `gate` = the `GateSummary` when the gate ran. |
+| `src/domain/backtest/spec.rs` | 1320 | Strategy specs: six kinds, `deny_unknown_fields`, bounds naming the field, `min_entry_trades`, `to_value`, `data_range`; `SplitSpec` (`time:` / `instruments:`). |
+| `src/domain/backtest/stats.rs` | 687 | Backtest statistics: `Summary` (mean / median / hit, t clustered by period (CR1; `t_stat_iid` kept, labelled), USD, drawdown once per exit instant — USD + % of cash (capped) / bps of a trade (research), Sharpe annualised by the rate of periods with trades over the arm's decision range, seeded splitmix64 cluster-bootstrap CI, robustness, per instrument), `paired_diff_ci` (none unless each arm traded in ≥ 2 periods and ≥ 99 % of resamples hold both), `calibration` + Brier. |
+| `src/domain/backtest/testkit.rs` | 292 | Backtest test fixtures (tests only): clocks, bars, the NYSE `us_equity` calendar, run params, hand-made trades, a seeded random market (hourly; `random_intraday` at 1m–1h; `aggregate` re-cuts to 4h / 1d). |
 | `src/domain/book.rs` | 853 | Venue-neutral L2 book (`L2Level`, `L2Book`, validated), depth walk by qty / notional (VWAP, slippage vs mid / touch, unfilled), `depth_within`, imbalance. |
+| `src/domain/canonical.rs` | 101 | Canonical JSON (object keys sorted at every depth) + sha256 hex: a backtest run's `spec_sha256`, the decision cache key. |
 | `src/domain/calendar.rs` | 636 | Session calendars: exchange sessions with holidays / early closes, weekly windows (trade[XYZ], RH tokenization), 24x7; weekend clock (anchor / entry / exit) for rule W. |
-| `src/domain/decision.rs` | 192 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate). |
+| `src/domain/decision.rs` | 282 | Decision-model data — `Question` / `Answer` / `Decision` (Jev wire shape, round-trips through JSON), `HistoryEntry` (+ `obs` meta), `StepOutcome` (incl. `Refused` by the risk gate), `Verdict` (a terminal-only loop's decision: action, confidence, p per action, below `act_at`). |
 | `src/domain/engine_smoke.rs` | 221 | `tengu doctor --engines` smoke turn (pure): prompt, `SMOKE_TOOLS`, verdict (every tool called, none failed, token in the answer), "tools called" cell. |
 | `src/domain/hl/book.rs` | 608 | `hl_book` decoders (pure): `l2Book` (≤ 20 levels a side, validated) + `recentTrades` → `hl_book/1` (touch, spread, depth 10 / 50 bps, imbalance, slippage vs mid per notional via `domain/book.rs`, last trade). |
 | `src/domain/hl/ctx.rs` | 1426 | `hl_ctx` decoders (pure): `metaAndAssetCtxs` / `spotMetaAndAssetCtxs` / `perpDexs` / `perpCategories` / `perpsAtOpenInterestCap` → `mkt_ctx/1` + `mkt_instrument/1` rows, side rows `hl_perp_meta/1`, `hl_at_oi_cap/1`, summary `hl_sweep/1`. |
@@ -255,9 +275,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/lp/snapshot.rs` | 4837 | `lp_snapshot` + `hedge_decide` / `lp_decide` envelopes composed from the family builders. |
 | `src/domain/lp/wallet.rs` | 1977 | Wallet typed outputs — `solana_wallet` inventory and `solana_tx` status. |
 | `src/domain/market.rs` | 1289 | Cross-venue market rows keyed by instrument id (`<venue>:<native id>`): `mkt_instrument/1` + `mkt_ctx/1` (`Observed`), normalisers. |
+| `src/domain/marketdata.rs` | 691 | Market data for history-first research (xlab): `Interval`, `Bar`, `FundingPoint`, `CtxPoint`, `BarSeries` / `FundingSeries` / `CtxSeries` (a bar observable only at its close: `close_at`, `bar_ending_at`, `observable_at`), `StockSplit` + `adjust_for_split` (bars closed before a split / ctx rows before it: prices ÷ ratio, volume / OI × ratio; a bar straddling the split dropped — `SplitAdjusted`), `parse_time` / `fmt_time`. |
+| `src/domain/marketdata_decode.rs` | 678 | Market-data decoders (xlab): HL `candleSnapshot` / `fundingHistory`, GeckoTerminal OHLCV (newest first, seconds), HL archive `asset_ctxs` CSV rows, JSON dataset files → bars / funding / ctx; a bad row is an error naming its row and time; `closed_bars`, `hl_coin`. |
+| `src/domain/marketdata_stats.rs` | 662 | Market-history statistics + the `mkt_history/1` row (xlab, `market_history`): `bar_stats` (ret / vol / max drawdown in bps, avg volume — too few bars ⇒ omitted), `funding_mean_apr_pct`, `sample_indices` (even, both ends kept), `closed_slots` / `gap_count`, `MarketHistory` (`Observed`: ok / partial / absent / error; `notes` = the share splits the reader applied, `splits_applied`). |
 | `src/domain/message.rs` | 209 | Messages, tool calls/definitions, stream events, and the precision `Lens` |
 | `src/domain/metrics.rs` | 298 | Metrics — context/token consumption telemetry. |
-| `src/domain/mod.rs` | 18 | Domain — plain data and pure policy. Imports nothing from the rest of the |
+| `src/domain/mod.rs` | 34 | Domain — plain data and pure policy. Imports nothing from the rest of the |
 | `src/domain/observation.rs` | 697 | Typed tool observations — `Observation` envelope (LLM text, decision-loop features, cache row), `Observed`, `Field<T>`, `ObsStatus`, `CachePolicy`. |
 | `src/domain/plan.rs` | 276 | Plan types and topology helpers. |
 | `src/domain/runtime.rs` | 933 | `tengu run` pure data — the single-runner leases (`runtime:<sandbox>`: one runner per sandbox; `state:<dir>`: one owner per `[xmarket]` state dir); `now_ms` always an input. |
@@ -269,7 +292,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/solana_tx.rs` | 735 | Transaction wire format — instructions, legacy compile + serialize, legacy / v0 parse (signer slot), System / SPL / ATA / ComputeBudget ix (web3.js-golden). |
 | `src/domain/solana_write.rs` | 485 | Write results + send policy — `WriteResult` (`write/1`, never cached), `WriteStatus` → obs status, `TxReport`, `Check`, `Lease`, `PendingSend`, CU limit / price rules. |
 | `src/domain/token.rs` | 43 | Shared token-estimation helpers. |
-| `src/domain/tools.rs` | 123 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
+| `src/domain/tools.rs` | 134 | Names of the opt-in workspace tools (incl. the ten Solana LP tools) — the values `[agents.<name>]` |
 | `src/domain/tz.rs` | 277 | Civil time in `America/New_York` / `Europe/Paris` / UTC with hand-rolled DST rules (xmarket clocks, calendars). |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
 | `src/domain/xm/mod.rs` | 25 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
@@ -282,14 +305,15 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/xm/weekend_fade.rs` | 1958 | Weekend-fade rule W (pure): the Sat + Sun window (`fade_window`, DST-safe, a mid-week holiday skipped), `mkt_ctx/1` mid-else-mark prices, signal / fade side / eligibility, `select_capped`, the order ids, the 5 m candle `replay` (golden in `tests/fixtures/xmarket/`; test module `golden` shared with the weekend sandbox test), rows `xm_weekend/1:<anchor date>` (phases, snapshot, P&L once flat with funding booked) and `xm_weekend_signal/1:<anchor date>:<id>`. |
 | `src/domain/xm/risk_state.rs` | 671 | Account risk state (pure): halts (`daily_loss` clears 00:00 UTC; `total_loss` / `operator` / `file` only by resume), UTC day roll + day-start equity, `valuation_trips`, `RiskStatus` → `risk_state/1:<account>`. |
 
-### ports — traits (17 files)
+### ports — traits (18 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/ports/engine.rs` | 137 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
 | `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
-| `src/ports/decision.rs` | 33 | Decision-loop ports — `DecisionEngine` (Jev), `Escalator` (low confidence → orchestrator). |
-| `src/ports/clock.rs` | 75 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `ManualClock` test double. |
+| `src/ports/market_data.rs` | 81 | `MarketDataStore` — the market-data warehouse (bars, funding, contexts per full instrument id; `coverage`); impl `outbound/market_data.rs` (`<state dir>/market.db`). |
+| `src/ports/decision.rs` | 52 | Decision-loop ports — `DecisionEngine` (Jev; `cache_stats` → `CacheStats` for a caching engine), `Escalator` (low confidence → orchestrator). |
+| `src/ports/clock.rs` | 93 | `Clock` — wall time + sleeping (`now_ms`, `sleep_until_ms`) for feeds, fill latency and replay; `SimClock` settable time (the decision loop's replay clock; `ManualClock` in tests). |
 | `src/ports/book.rs` | 188 | `BookSource` — a fresh L2 book per instrument (`BookRead`), live or replayed; `ScriptedBooks` test fake. |
 | `src/ports/memory.rs` | 153 | Memory ports — `MemoryProvider` (harness-level memory backends driven by |
 | `src/ports/mod.rs` | 12 | Ports — traits the application layer depends on; adapters implement them. |
@@ -304,17 +328,18 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 
-### config — TOML schema (14 files)
+### config — TOML schema (15 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/config/backtest.rs` | 569 | `[backtest]` — history-first research knobs (xlab): `notional_usd`, `bootstrap`, `seed`, `costs."<prefix>"`, `universes`, `strategies` (raw specs), `splits."<id>"` (share splits `{at, ratio}` → `stock_splits()`), `gate`, `max_candidates` (50 000: a run past it stops before any arm or file), `keep_runs` (100: run-dir retention, 0 = all); needs `[xmarket]`. Load rules: every strategy parses (`StrategySpec::from_value`), its `@universe` exists, its calendar is an exchange `[xmarket.calendars]` row, every id it trades has a costs prefix (or the spec's costs) — errors start `backtest.strategies.<name>:`; splits: full id, RFC 3339, ratio > 0 ≠ 1, sorted — `backtest.splits."<id>"`; `max_candidates` 1–1 000 000, `keep_runs` 0 or ≥ 10; `strategy(name)`, `spec_instruments`. |
 | `src/config/egress.rs` | 203 | `[egress]` — network policy schema and validation. The runtime policy |
 | `src/config/decision_loop.rs` | 401 | `[decision_loops.<name>]` — Jev control loop: goal, agent, actions, slots (static / history / observation), caps, reducers, `dry_run`, `world`, `requires`. |
 | `src/config/feeds.rs` | 743 | `[feeds.<name>]` — `tool` / `tick` feeds: schedule (`every_secs`, `windows`, `at`, `tz`, `jitter_pct`, `run_on_start`), fan-out `each`, health; validated against agents' tools and loops. |
 | `src/config/hardening.rs` | 586 | Hardened sandboxes (`[solana]` signer or `[risk]`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"` (that CLI runs without settings files, hooks, plugins, skills, CLAUDE.md), no `[[mcp_servers]]`, no shell scope, the signer key / `<TENGU_HOME>/state` / kill-switch file / the config file outside every fs root and workspace; no-shell fallback; a plan step's `compose` only narrows. |
 | `src/config/mod.rs` | 2016 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default config file, `~` expansion; `sandbox_of_config_file` (`sandboxes/<name>/config.toml` → `<name>`, the ledger owner) |
-| `src/config/rate_limits.rs` | 141 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`. |
+| `src/config/rate_limits.rs` | 166 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`; a test keeps xlab's HL bucket inside HL's per-IP 1200 / min next to the xmarket runs. |
 | `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
 | `src/config/risk.rs` | 1078 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required), `[risk.exits]` (take-profit / stop-loss bps, max hold) and the paper fill engine's knobs; load rules. |
 | `src/config/runtime.rs` | 143 | `[runtime]` — `tengu run` knobs: `shutdown_grace_secs`, `max_decisions_in_flight`, `max_queued_per_loop` (64), `heartbeat_secs`. |
@@ -323,10 +348,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/sections.rs` | 44 | `SandboxSections` — sandbox-level sections tools read at call time, shared by every agent via `AgentConfig::sandbox`; `owner()` = the sandbox of the config file (else `default`). |
 | `src/config/xmarket.rs` | 1566 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` and its layout (`ledger_db`, `runtime_db`, `history_dir`, reserved store names) + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`) + `[xmarket.weekend_fade]` (`WeekendFadeConfig`, its load rules against `[risk]`, `[recorder]` and the agents); xmarket load rules: `[risk]` needs `[xmarket]`, one shared workspace for feed / loop / xmarket-tool agents (`XM_TOOLS`), with `[risk]` a workspace on every agent, the state dir outside every fs root and workspace. |
 
-### application — use cases (51 files)
+### application — use cases (54 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/application/backtest/gate.rs` | 1119 | The Jev gate arm on history: `run_gate` (the first `--max-decisions` candidates by seq, the rest counted as cut; K workers, each a replay loop + `SimClock`, on one queue; results by seq, identical for any K; failed calls = class error), `gate_arms` (rules vs jev arms, research + capped, calibration, paired diff → `GateSummary`), `GateArms::add_to_report` / `add_to_run` (one source of truth for the arms), `GateAudit` (temp audit, removed on drop, lines by seq → `decisions.jsonl`), `evaluate_gated` (`tengu backtest --gate`'s step 3). |
+| `src/application/backtest/mod.rs` | 1183 | Backtest use case (xlab): `resolve` (spec from `[backtest.strategies]` or JSON — `spec_of`: every problem, the `backtest` tool's spec check —, universe, instruments minus `exclude`, `spec_sha256`) → `prepare` (default from = earliest stored bar / to = now, series over `data_window`, `[backtest.splits]` applied + noted, `RunParams` (+ `max_candidates`: past it the run stops here), `engine::candidates`, `RiskCaps`, run id proposed) → [the Jev gate arm: `run_gate` + `gate::evaluate_gated`] → `evaluate` (research, capped with `[risk]` + `[paper]`, extra arms over a candidate subset compared with their base arm) → `write_run_dir` (then `keep_runs` retention); IO injected (`BacktestEnv`: store, sections, run-dir root, now). |
+| `src/application/backtest/run_dir.rs` | 239 | A backtest's run dir `<state dir>/backtests/<YYYYMMDDTHHMMSSZ>-<strategy>[-N]/`: run id (claimed with `create_dir`), `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` (compact; `.jsonl` + it streamed), extra files (the gate's `decisions.jsonl`); `prune_runs` = `[backtest] keep_runs` retention (oldest run dirs first, never the run just written, the decision cache or a name that is not a run id). |
 | `src/application/chat/flow.rs` | 271 | Flow management: key resolution, history turn limits, compaction policy, and compaction. |
 | `src/application/chat/mod.rs` | 7 | Chat use cases — one user turn (`service`), flow/session budgeting |
 | `src/application/chat/prompt_budget.rs` | 91 | Prompt budgeting helpers for runtime turns. |
@@ -338,11 +366,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/decision_loop/mod.rs` | 1670 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`). |
+| `src/application/decision_loop/mod.rs` | 1999 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`; `trigger` when set); time from an optional `Clock` (`with_clock`); `decide_terminal` → `Verdict` (replay). |
 | `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
 | `src/application/decision_loop/slots.rs` | 314 | Argument slots — static / history- / observation-sourced candidates, caps, `{slot}` arg rendering. |
 | `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
-| `src/application/mod.rs` | 12 | Application — use cases (chat turn, orchestration, memory, skills, tool |
+| `src/application/mod.rs` | 15 | Application — use cases (chat turn, orchestration, memory, skills, tool |
 | `src/application/observe.rs` | 182 | `observe()` — cache-or-fetch for typed tools (fresh rows only, `Error` never cached, store failure → live). |
 | `src/application/paper.rs` | 519 | `fill_with_latency` — sleep the `[paper]` latency on the `Clock`, then read the book, then fill against it (convention 16); `decide` — the exec tools' gate (or the shadow gate) + fill closure run inside the ledger transaction (an entry re-probes the kill-switch file there). |
 | `src/application/orchestrator/events.rs` | 87 | `OrchestratorEvent` + broadcast channel. |
@@ -384,38 +412,45 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/bootstrap/memory.rs` | 123 | Memory wiring — builds the `MemoryManager` (builtin provider + disk vector |
-| `src/bootstrap/decision.rs` | 120 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. |
+| `src/bootstrap/decision.rs` | 496 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. Replay: `build_replay_loop` (terminal-only, no history, caller's clock, run-dir audit, no tools / store / escalator), `cached_decision_engine` (`<state dir>/backtests/decision-cache.db` over `JevClient`, or offline), `build_gate` (the gate arm: cached engine + K replay loops, each on its own `SimClock`). |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
 | `src/bootstrap/runtime.rs` | 833 | `tengu run` composition — the leases (`LeasePlan` / `OwnerLeases`: `runtime:<sandbox>` + `state:<dir>` for an `[xmarket]` state dir; `tengu webhooks` takes the same), every `[decision_loops.*]` built once, every `[feeds.*]` started (`start_feeds`, `SystemClock`, executors under `egress::AttributedExecutor`), webhook routes via `Runtime::spawn`. |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool |
 
-### adapters/outbound — driven adapters (98 files)
+### adapters/outbound — driven adapters (110 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/adapters/outbound/backfill/mod.rs` | 575 | Backfill into `market.db` (xlab): module table (HL, Gecko, archive, JSON), `Retry` (`next_delay`, Retry-After; `BACKFILL` for operators, `TOOL` for `market_history`), `ReportRow` (`fail`: text + class per error) / `BackfillReport` (full ids, rendered table), `missing_ranges` (resume: head + tail), `text_table`. |
+| `src/adapters/outbound/backfill/hl.rs` | 488 | HL `candleSnapshot` (newest 5 000 bars: start clamped + noted; open bar dropped) and `fundingHistory` (paged by `last.time + 1`) through `HlInfo` (egress, `[rate_limits.hyperliquid]`, audit); `operator_hl` for the CLI. |
+| `src/adapters/outbound/backfill/gecko.rs` | 641 | `GeckoClient` — GeckoTerminal pool OHLCV over the egress tool client (`check_url`, scope, audit `gecko_ohlcv`), `[rate_limits.geckoterminal]`, `http_class` errors; paged backwards; `source = gecko:<network>:<pool>`; `$GECKO_API_URL` override (a tool's only through its scope's `env_reads`: `api_url`). |
+| `src/adapters/outbound/backfill/hl_archive.rs` | 220 | HL S3 archive import: local `asset_ctxs` `*.csv.lz4` (LZ4 frame, `lz4_flex`) / `*.csv` files → `ctx` (`hl-archive:asset_ctxs`); a bad file is a run error, the rest import. |
+| `src/adapters/outbound/backfill/json.rs` | 159 | JSON dataset import (`[{instrument, interval, source?, bars?, funding?}]`) → `bars` / `funding`; every row checked before anything is written. |
 | `src/adapters/outbound/bridge_env.rs` | 11 | Env contract between the Claude Code engine (writes it into the CLI's |
 | `src/adapters/outbound/clock.rs` | 40 | `SystemClock` — OS wall time, tokio sleep (`ports::clock::Clock`). |
-| `src/adapters/outbound/egress.rs` | 773 | Egress policy — the one choke point for LLM-initiated network traffic; the JSONL audit (`AttributedExecutor` / `CallScope`: a feed or loop call's agent, session and call id on its lines). |
+| `src/adapters/outbound/egress.rs` | 975 | Egress policy — the one choke point for LLM-initiated network traffic; the JSONL audit (`AttributedExecutor` / `CallScope`: a feed or loop call's agent, session and call id on its lines). |
 | `src/adapters/outbound/http_class.rs` | 478 | HTTP status / transport error → `ErrorClass` (`HttpError`), credential `Scrubber`, `display_url`; shared by Solana, Hyperliquid and feeds. |
 | `src/adapters/outbound/history_sqlite.rs` | 531 | `SqliteHistoryStore` — `<state dir>/history/<YYYYMMDD>.db` UTC day files (WAL), range / asof across days, retention sweeper. |
 | `src/adapters/outbound/hyperliquid/mod.rs` | 6 | Hyperliquid outbound — the `POST /info` client (`info.rs`). |
 | `src/adapters/outbound/hyperliquid/info.rs` | 833 | `HlInfo` — Hyperliquid `POST /info` over the scoped egress client, request weights from `[rate_limits.hyperliquid]`, HL error mapping (`500 null` ⇒ not applicable, 403 ⇒ geo / WAF); a keyed `HL_API_URL` path never renders (`redacted_path`, `Scrubber::for_keyed_path`). |
-| `src/adapters/outbound/decisions.rs` | 130 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
+| `src/adapters/outbound/decision_cache.rs` | 436 | `CachedDecisionEngine` — replay-deterministic `DecisionEngine` over SQLite (`<state dir>/backtests/decision-cache.db`, WAL): key = sha256 hex of the canonical `{model, state, questions}` (keys sorted at every depth — `domain/canonical.rs`), hit = the stored `Decision`, miss = inner call + store, offline miss = error naming the key; `CacheStats` hits / misses / errors. |
+| `src/adapters/outbound/decisions.rs` | 363 | `JevClient` — `DecisionEngine` over OpenRouter `/api/alpha/decisions` (egress `llm_api_client`). |
 | `src/adapters/outbound/engines/claude_code.rs` | 800 | Claude Code engine — runs agents through the local Claude CLI subprocess. |
 | `src/adapters/outbound/engines/mod.rs` | 163 | Engine adapters — implementations of `ports::engine::Engine` and the |
 | `src/adapters/outbound/engines/local.rs` | 448 | Local engine — Unsloth / Ollama / llama.cpp via OpenAI-compatible `/v1/chat/completions`, direct (no proxy) |
 | `src/adapters/outbound/engines/openrouter.rs` | 535 | OpenRouter engine — OpenAI-compatible chat completions with streaming |
+| `src/adapters/outbound/market_data.rs` | 640 | `SqliteMarketData` — `MarketDataStore` over `<state dir>/market.db` (WAL, `WITHOUT ROWID` tables `bars` / `funding` / `ctx`, `INSERT OR REPLACE` upserts, half-open reads, `GROUP BY` coverage); `open_market_data` refused without `[xmarket]`. |
 | `src/adapters/outbound/mcp_client/client.rs` | 418 | Outbound MCP client — stdio and http transports over JSON-RPC 2.0. |
 | `src/adapters/outbound/mcp_client/mod.rs` | 339 | MCP client — tengu connects to the `[[mcp_servers]]` in the sandbox |
 | `src/adapters/outbound/mcp_client/protocol.rs` | 60 | JSON-RPC 2.0 wire types plus the MCP-specific `tools/list` response shapes. |
 | `src/adapters/outbound/mcp_client/proxy_tool.rs` | 121 | `McpProxyTool` — forwards an `execute` call to a remote MCP server. |
 | `src/adapters/outbound/memory/builtin.rs` | 190 | `BuiltinMemoryProvider` — MEMORY.md + identity + daily logs + vector. |
-| `src/adapters/outbound/memory/disk_vector.rs` | 372 | Disk-backed `VectorStore` — bincode file at `<workspace>/.tengu/memory.bin`. |
+| `src/adapters/outbound/memory/disk_vector.rs` | 372 | Disk-backed `VectorStore` — bincode `<store dir>/vectors.bin` (`<workspace>/memory`, else `[memory] store_path`). |
 | `src/adapters/outbound/memory/embedder.rs` | 220 | Text embedding client. |
 | `src/adapters/outbound/memory/mod.rs` | 9 | Memory adapters — `BuiltinMemoryProvider` (MEMORY.md, identity files, |
-| `src/adapters/outbound/mod.rs` | 18 | Outbound (driven) adapters — implementations of `crate::ports` and the |
+| `src/adapters/outbound/mod.rs` | 28 | Outbound (driven) adapters — implementations of `crate::ports` and the |
 | `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
 | `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/paper_store.rs` | 2658 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline, kept venue facts, fired TP / SL), orders `UNIQUE(account, client_order_id)` + request `fingerprint` (a replay asking for another order is refused), the order rate counting entries only, fills, funding + `funding_owed` (settled before every fill at the size held), `risk_decisions` (+ call id, tool, session id; older ledgers gain added columns and tables on open), each verdict mirrored to `<TENGU_HOME>/logs/risk.jsonl` (one `write_all` per line); `accounts.sandbox` = the owner (every write claims an unowned account, refuses another sandbox's: `account_owner_mismatch`); refused without `[xmarket]`. |
@@ -453,6 +488,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/hyperliquid/ctx.rs` | 1217 | `hl_ctx` — a perp dex sweep or ≤ 64 coins through the cache: one ctx read per dex (+ at-cap, perp meta), `mkt_ctx/1` + `mkt_instrument/1` for every coin, `hl_sweep/1` summary. |
 | `src/adapters/outbound/tools/hyperliquid/defs.rs` | 99 | The Hyperliquid family's interface — names, descriptions, JSON input schemas. |
 | `src/adapters/outbound/tools/hyperliquid/mod.rs` | 241 | Hyperliquid tool family — `HyperliquidPlugin` (observation store once, `[paper]` fee basis), `HlShared`, cache `policy` / `store_live`, a test `POST /info` server. |
+| `src/adapters/outbound/tools/xlab/defs.rs` | 151 | The xlab research family's interface — names, descriptions, JSON input schemas (`market_history`, `backtest`: `spec` a free-form object whose description names the format; `holdout`, and `run_id` / `view` / `arm` / `limit` for a stored run's rows). |
+| `src/adapters/outbound/tools/xlab/history.rs` | 1170 | `market_history` — strict args (window default 7 days, ≤ 100 000 bars, `points` 1–200), optional fetch first (`hl_bars` + `hl_funding_history` / `gecko_bars`, `Retry::TOOL`, failures as classed error fields), the read from `market.db` with the sandbox's `[backtest.splits]` applied as a backtest applies them (`MarketData::adjust_for_splits`, a note each), `mkt_history/1` (ttl 0) and its text: line 1 + features + split notes + a ≤ 48-row bar table + one line per stored series (fits a local model's cap). |
+| `src/adapters/outbound/tools/xlab/holdout.rs` | 436 | `backtest`'s holdout discipline: a split hidden by default (`hide`: a time split ends the decisions at it; `leave_out`: an instruments split's candidates dropped after `prepare`, renumbered), `holdout: true` a read (`check_readable`), the append-only ledger `<state dir>/backtests/holdout-reads.jsonl` (`record`: #n per spec and per split, counted up to the append's own offset), the tool's lines (`hidden_line`, `read_line`, `split_label`). |
+| `src/adapters/outbound/tools/xlab/mod.rs` | 219 | xlab tool family — `XlabPlugin` (market-data store + observation store once), `XlabShared` (`market` / `market_arc`), `state_dir_missing` / `market_data_unavailable` refusals, the family's strict-argument helpers (`object_args`, `opt_str`, `opt_time`, `whole`). |
+| `src/adapters/outbound/tools/xlab/rows.rs` | 927 | `backtest` with `run_id` — a stored run's rows by run id (a plain name inside `backtests/`, never a path; no symlink): `periods` / `instruments` / `trades` (streamed from `trades-<arm>.jsonl`; the `limit` best and worst by Σ net USD, as self-describing `#<rank> field=value` rows fitted to 4 000 chars) and `notes` (`report.json`); a split run's holdout rows hidden unless `holdout: true` (a counted read). |
+| `src/adapters/outbound/tools/xlab/run.rs` | 1840 | `backtest` — a `[backtest.strategies]` name or an inline spec (strict args; every spec problem in one error: `spec_of`, `@universe`, exchange calendar; `backtest_config_missing` without `[backtest]`; `run_id` routes to `rows.rs`) through `application/backtest/` (`prepare` → the holdout hidden or checked (`holdout.rs`) → at most `MAX_TOOL_ROWS` candidates / skips → `evaluate` + `write_run_dir` on a blocking thread; rules arms, no Jev gate, no network), `backtest/1:<run id>` (ttl 0; `holdout_reads` on a read) and its text: line 1 + features + errors, `render_compact`'s lines, best / worst periods, the hidden-holdout or holdout-read line, the window, `no_costs` ids (full, bounded), `spec_sha256`, the rows hint by run id — never the run dir's path (fits a local model's cap). |
 | `src/adapters/outbound/tools/xm/defs.rs` | 229 | The xmarket risk / paper family's interface — names, descriptions, JSON input schemas. |
 | `src/adapters/outbound/tools/xm/exec_common.rs` | 1613 | `run_exec` / `exec` — the `[risk]` gate (or a shadow account's, `ExecGate` — paper only via `PaperFills`, never the `[risk]` account) inside every exec tool: private-agent + idempotency-key refusals, `hedge_not_supported` (a `require_hedge_for` entry: no hedge leg is placed yet), fingerprint-checked replays, the exit IOC ceiling, replay without latency, store-only market rows (a close falls back to the kept venue facts), funding owed, `fill_with_latency` on the live `HlBookSource`, TP / SL judged on that book (`tp_sl_on_book`), gate + fill + ledger write in one `place` transaction, `paper_fill/1` row. |
 | `src/adapters/outbound/tools/xm/exits.rs` | 1216 | `xm_exits` (exec tool, `x-exit-rules`) — books the account's funding, then closes every due position of the `[risk]` account through `run_exec` (reduce-only IOC of the whole position) under its deterministic exit id (next unstored attempt after a rejected / partial one; `plan_exit`: backoff after a rejection, `stuck` after a final one); a fired TP / SL recorded first and kept; a stale mark ⇒ TP / SL on the live book; `xm_exits/1:<account>`. |
@@ -465,7 +506,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/memory/mod.rs` | 311 | Memory plugin — vector-memory-backed tools. |
 | `src/adapters/outbound/tools/memory/persistent_store.rs` | 766 | `persistent_store` tool — chunked file storage with vector semantic search. |
 | `src/adapters/outbound/tools/memory/search.rs` | 306 | `memory_search` tool — targeted vector read of the memory store. |
-| `src/adapters/outbound/tools/mod.rs` | 473 | Tools — one directory per tool (or tool group). Each implements |
+| `src/adapters/outbound/tools/mod.rs` | 487 | Tools — one directory per tool (or tool group). Each implements |
 | `src/adapters/outbound/tools/schema_lint.rs` | 392 | Every engine-facing tool schema stays in the subset OpenRouter providers, local OpenAI-compatible servers and Claude accept (`x-tool-schema-lint`): CI over the catalog, skills and a fixture MCP server; at runtime `mcp_client::linted_tool` drops a violating `[[mcp_servers]]` tool. |
 | `src/adapters/outbound/tools/skill/mod.rs` | 96 | Skill plugin — dispatch for shell skills. |
 | `src/adapters/outbound/tools/skill/shell_tool.rs` | 171 | Reusable `SkillShellTool` — executes a shell skill template. |
@@ -495,17 +536,18 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/workspace/test_support.rs` | 79 | Shared test harness for workspace tool unit tests. |
 | `src/adapters/outbound/tools/workspace/write_file.rs` | 135 | `write_file` tool — write content to a file in the workspace. |
 
-### adapters/inbound — driving adapters (20 files)
+### adapters/inbound — driving adapters (21 files)
 
 | File | Lines | What it is |
 |---|---:|---|
 | `src/adapters/inbound/activity.rs` | 96 | Human-readable tool-activity lines shown by the TUI and Telegram. |
 | `src/adapters/inbound/channel.rs` | 231 | Helpers shared by the chat channels (TUI, Telegram): loop-state factory, |
 | `src/adapters/inbound/cli/doctor.rs` | 557 | `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live` runner health, `--engines` smoke turn per agent: `list_directory` + `read_file` on its own engine + model; a loopback `local` agent on macOS is skipped, never contacted). |
+| `src/adapters/inbound/cli/backtest.rs` | 541 | `tengu backtest --sandbox <s> (--strategy <name> \| --spec <file.json>) [--from] [--to] [--split time:… \| instruments:…] [--format table\|json] [--fetch] [--gate [<loop>] [--max-decisions 500] [--concurrency 4] [--offline]]` — the rules arms on `market.db`: compact summary + run dir, or `report.json`; `--fetch` = `history::backfill` of the run's HL instruments first; `--gate` = the Jev gate arm (`build_gate` before any work, `run_gate`, `evaluate_gated`; no value = `[backtest] gate`; failed calls on stderr). |
 | `src/adapters/inbound/cli/decide.rs` | 49 | `tengu decide --sandbox <s> --loop <name> [--event f.json]` — one event through a decision loop. |
-| `src/adapters/inbound/cli/history.rs` | 107 | `tengu history range|asof <key>` — read the recorder day files (no LLM). |
+| `src/adapters/inbound/cli/history.rs` | 560 | `tengu history range\|asof` (recorder day files) and the `market.db` commands `backfill` (HL bars + funding, Gecko pool bars; `@<universe>`, `<id>@<pool>`; resumes; run table, exit 1 on a failed row; `backfill` is also `tengu backtest --fetch`'s), `import-hl-archive`, `import-json`, `coverage` — no LLM; traffic through the installed `[egress]` policy. |
 | `src/adapters/inbound/cli/risk.rs` | 642 | `tengu risk status|halt|resume` — ledger risk state (no LLM; verdict lines name the exec tool and call id; positions with a fired TP / SL; funding owed; each account's owner); halt / resume only at a TTY and never under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME`; resume asks for the account name (+ the secret of an optional 0600 `TENGU_RISK_RESUME_SECRET_FILE`), refused while the kill-switch file exists. |
-| `src/adapters/inbound/cli/mod.rs` | 682 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
+| `src/adapters/inbound/cli/mod.rs` | 716 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
 | `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from stdin; one workspace per step (the agent's, else a temp dir: `bootstrap::tools::workspace_or_temp`); results capped / compacted as in chat |
 | `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |
 | `src/adapters/inbound/cli/tool.rs` | 394 | Hidden `tengu tool list|call|turn` — catalog names; one or a `--batch` of tool calls through the executor a `run-agent` child builds, `--transcript` the conversation (bridge conformance harness); one engine turn as any agent, private ones included (engine matrix xm set). |

@@ -38,6 +38,15 @@ pub(crate) const PAPER_POSITIONS: &str = "paper_positions";
 pub(crate) const XM_EXITS: &str = "xm_exits";
 pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 
+// xlab research family (`adapters/outbound/tools/xlab/`) — read-only typed
+// rows over the sandbox's market-data warehouse (`<state dir>/market.db`);
+// one `xlab` plugin serves all of them. Not in `XM_TOOLS`: their rows are
+// never cached in a workspace store (ttl 0) and their state is the state
+// dir's (`market.db`, `backtests/`), so their holders need not share the
+// xmarket workspace.
+pub(crate) const MARKET_HISTORY: &str = "market_history";
+pub(crate) const BACKTEST: &str = "backtest";
+
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
 /// transaction). Only a private agent may hold one — no `description`, not
@@ -100,6 +109,8 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     PAPER_POSITIONS,
     XM_EXITS,
     XM_WEEKEND_FADE,
+    MARKET_HISTORY,
+    BACKTEST,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

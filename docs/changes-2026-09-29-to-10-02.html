@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark">
+<title>Change Timeline · Tengu-Cluster · 2026-10-02</title>
+<style>
+  :root {
+    --bg: #0F0F1A;
+    --surface: #1A1A2E;
+    --surface2: #242438;
+    --surface3: #2D2D4A;
+    --border: #2D2D4A;
+    --text: #E2E8F0;
+    --text-muted: #A3B1C6;
+    --text-dim: #8B9AB3;
+    --accent: #7C3AED;
+    --accent-mid: #A78BFA;
+    --accent-light: #EDE9FE;
+    --link: #93C5FD;
+    --focus: #C4B5FD;
+    --xmarket: #22D3EE;
+    --xlab: #FBBF24;
+    --done: #4ADE80;
+    --wip: #FBBF24;
+    --commits: #9085e9;
+    --add: #3987e5;
+    --del: #d95926;
+    --grid: #2D2D4A;
+    --plus-text: #93C5FD;
+    --minus-text: #FDBA74;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    font-size: 14px; line-height: 1.55;
+  }
+  a { color: var(--link); text-decoration: underline; text-decoration-color: rgba(147, 197, 253, .45); text-underline-offset: 2px; }
+  a:hover { text-decoration-color: var(--link); }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 3px; }
+  code {
+    font-family: var(--mono); font-size: 12px; background: var(--surface2);
+    padding: 1px 5px; border-radius: 3px; color: var(--accent-light); overflow-wrap: anywhere;
+  }
+  .hash { font-family: var(--mono); font-size: 12px; color: var(--accent-light); overflow-wrap: anywhere; word-break: break-all; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+  /* ── sticky header + tabs ── */
+  .top {
+    position: sticky; top: 0; z-index: 100;
+    background: linear-gradient(135deg, var(--surface) 0%, #1A1040 100%);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar { padding: 16px 36px 8px; max-width: 1320px; margin: 0 auto; }
+  .bar h1 { font-size: 20px; font-weight: 700; color: #fff; }
+  .bar .sub { color: var(--text-muted); font-size: 12px; margin-top: 4px; }
+  .tabs { display: flex; gap: 2px; padding: 0 36px; overflow-x: auto; max-width: 1320px; margin: 0 auto; scrollbar-width: thin; }
+  .tab {
+    padding: 10px 16px; font-family: inherit; font-size: 13px; font-weight: 500;
+    color: var(--text-muted); border: none; background: none; cursor: pointer;
+    border-bottom: 2px solid transparent; white-space: nowrap;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--accent-mid); }
+
+  .content { padding: 24px 36px 80px; max-width: 1320px; margin: 0 auto; }
+  .panel:focus { outline: none; }
+  .panel:focus-visible { outline: 2px solid var(--focus); outline-offset: 6px; }
+  h2 { font-size: 16px; font-weight: 700; margin: 4px 0 10px; color: #fff; }
+  h3 { font-size: 14px; font-weight: 700; color: #fff; }
+  p { color: var(--text-muted); margin-bottom: 10px; }
+  .lede { color: var(--text); max-width: 920px; }
+  .note { font-size: 12px; color: var(--text-dim); }
+
+  /* ── range + KPI tiles ── */
+  .range {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px; margin: 12px 0 18px; display: grid; gap: 6px; font-size: 12px; color: var(--text-muted);
+  }
+  .range .k { color: var(--text-dim); display: inline-block; min-width: 92px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 12px; margin: 0 0 26px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .kpi .label { font-size: 12px; color: var(--text-muted); }
+  .kpi .value { font-size: 24px; font-weight: 650; color: #fff; margin-top: 2px; line-height: 1.25; }
+  .kpi .value small { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+  .kpi .src { font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+  .explorers { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 18px; font-size: 13px; }
+
+  /* ── phase cards ── */
+  .phase-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 430px), 1fr)); gap: 14px; align-items: start; }
+  .phase {
+    background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--xmarket);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .phase.xlab { border-left-color: var(--xlab); }
+  .phase h3 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 15px; }
+  .phase .num { font-size: 11px; font-weight: 700; color: var(--text-dim); }
+  .phase .meta { font-size: 12px; color: var(--text-muted); margin: 4px 0 8px; }
+  .phase ul { padding-left: 18px; color: var(--text-muted); font-size: 13px; }
+  .phase li { margin-bottom: 5px; }
+  .phase .links { margin-top: 8px; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 12px; }
+  .phase .src { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+  .btn {
+    display: inline-block; margin-top: 10px; padding: 6px 12px; border-radius: 6px;
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    font-family: inherit; font-size: 12px; cursor: pointer;
+  }
+  .btn:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .prog { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--text-muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--xmarket); display: inline-block; flex: none; }
+  .xlab .dot, .dot.xlab { background: var(--xlab); }
+
+  /* ── filters ── */
+  .filters { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .chip {
+    border: 1px solid var(--border); background: var(--bg); color: var(--text-muted);
+    border-radius: 999px; padding: 4px 10px; font-family: inherit; font-size: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .chip:hover { color: var(--text); border-color: var(--accent-mid); }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .filter-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .search { flex: 1 1 260px; min-width: 0; }
+  .search input, .select {
+    width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px;
+  }
+  .search input::placeholder { color: var(--text-dim); }
+  .select { width: auto; }
+  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+  .check input { accent-color: var(--accent-mid); width: 15px; height: 15px; }
+  .count { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); }
+
+  /* ── commit cards ── */
+  .phase-head {
+    margin: 22px 0 10px; display: flex; align-items: baseline; gap: 6px 12px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border); padding-bottom: 6px;
+  }
+  .phase-head:first-child { margin-top: 4px; }
+  .phase-head .meta { font-size: 12px; color: var(--text-muted); }
+  .commit { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 8px; }
+  .commit:target { border-color: var(--accent-mid); }
+  .c-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; color: var(--text-muted); }
+  .c-num { font-weight: 700; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  }
+  .badge.item { color: var(--accent-light); font-family: var(--mono); font-weight: 500; }
+  .badge.label { color: var(--text-muted); font-family: var(--mono); font-weight: 500; }
+  .badge.docs { color: var(--text-muted); font-weight: 500; }
+  .c-subj { font-size: 14px; color: var(--text); margin: 6px 0; overflow-wrap: anywhere; }
+  .c-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; font-size: 12px; color: var(--text-muted); }
+  .plus { color: var(--plus-text); font-variant-numeric: tabular-nums; }
+  .minus { color: var(--minus-text); font-variant-numeric: tabular-nums; }
+  .c-docs { font-size: 12px; color: var(--text-muted); margin-top: 6px; overflow-wrap: anywhere; }
+  .c-docs a { font-family: var(--mono); font-size: 11.5px; }
+  details.c-more { margin-top: 8px; }
+  details.c-more summary { cursor: pointer; font-size: 12px; color: var(--link); width: fit-content; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; font-size: 12px; color: var(--text-muted); margin: 8px 0; }
+  .kv dt { color: var(--text-dim); }
+  .kv dd { overflow-wrap: anywhere; }
+
+  /* ── tables ── */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  th { background: var(--surface2); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); white-space: nowrap; }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.path { font-family: var(--mono); overflow-wrap: anywhere; min-width: 220px; }
+  td.phases { min-width: 260px; color: var(--text-muted); }
+  td.path a { color: var(--accent-light); }
+  .ftable { margin-top: 6px; border: 1px solid var(--border); border-radius: 6px; overflow-x: auto; }
+  .ftable td, .ftable th { padding: 4px 8px; }
+  .group-row td { background: var(--surface2); color: #fff; font-weight: 700; font-size: 12px; }
+  #item-table { min-width: 860px; }
+  #item-table td code { white-space: nowrap; overflow-wrap: normal; }
+  #file-table { min-width: 820px; }
+
+  /* ── charts ── */
+  .seg-group { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg {
+    background: var(--surface); color: var(--text-muted); border: 0; border-right: 1px solid var(--border);
+    padding: 7px 14px; font-family: inherit; font-size: 13px; cursor: pointer;
+  }
+  .seg:last-child { border-right: 0; }
+  .seg[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 16px; margin: 14px 0 18px; }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 14px 10px; margin: 0; min-width: 0; }
+  .chart-card figcaption { font-size: 13px; font-weight: 600; color: #fff; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; margin-bottom: 8px; }
+  .legend { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; font-weight: 400; color: var(--text-muted); }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .chart { width: 100%; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart svg text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+  .chart .row:hover .bar-seg { filter: brightness(1.25); }
+  .chart .row:hover .hit { fill: rgba(255, 255, 255, .04); }
+
+  /* ── milestone meters ── */
+  .meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 10px; margin: 0 0 18px; }
+  .meter { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .meter .top-line { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted); }
+  .meter .top-line b { color: #fff; }
+  .meter .track { height: 8px; background: #2c2550; border-radius: 4px; margin-top: 6px; overflow: hidden; }
+  .meter .fill { height: 100%; background: var(--accent-mid); border-radius: 4px; }
+  .st-done { color: var(--done); font-weight: 600; }
+  .st-wip { color: var(--wip); font-weight: 600; }
+
+  /* ── method ── */
+  .method-grid { display: grid; gap: 16px; }
+  .method-grid section { min-width: 0; }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  @media (max-width: 700px) {
+    .bar { padding: 10px 16px 6px; }
+    .bar h1 { font-size: 16px; }
+    .bar .sub { display: none; }
+    .tabs { padding: 0 8px; }
+    .tab { padding: 9px 10px; }
+    .content { padding: 16px 16px 60px; }
+    .kpi .value { font-size: 20px; }
+    th, td { padding: 6px 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <header class="bar">
+    <h1>Tengu-Cluster · Change Timeline</h1>
+    <p class="sub">main → feature/xmarket · 90 commits, 2026-09-30 15:14 → 2026-10-01 21:45 (+02:00) · starting from xmarket · <a href="index.html">docs hub</a> · <a href="xmarket-2026-10-02.html">xmarket explorer</a> · <a href="xlab-2026-10-02.html">xlab explorer</a></p>
+  </header>
+  <nav class="tabs" role="tablist" aria-label="Page sections">
+    <button class="tab" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" id="tab-commits" aria-controls="panel-commits" aria-selected="false" tabindex="-1">Commits</button>
+    <button class="tab" role="tab" id="tab-charts" aria-controls="panel-charts" aria-selected="false" tabindex="-1">Charts</button>
+    <button class="tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" tabindex="-1">Files</button>
+    <button class="tab" role="tab" id="tab-tracker" aria-controls="panel-tracker" aria-selected="false" tabindex="-1">Tracker items</button>
+    <button class="tab" role="tab" id="tab-method" aria-controls="panel-method" aria-selected="false" tabindex="-1">Method</button>
+  </nav>
+</div>
+
+<main class="content">
+
+<!-- ============ OVERVIEW ============ -->
+<section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+  <h2>What changed, starting from xmarket</h2>
+  <p class="lede">Every commit on <code>feature/xmarket</code> since <code>main</code>: the xmarket build — planning docs, wave W1 (34 tracker items: waves A–D and the E0 parity audit) and the W1 gate — then <strong>xlab</strong>, the history-first harness for the operator's PRD v0.5. Ten phases; the grouping rule is on the Method tab.</p>
+  <div class="range" id="range"></div>
+  <div class="explorers">
+    <span class="note">Deeper reads:</span>
+    <a href="xmarket-2026-10-02.html">xmarket explorer</a>
+    <a href="xlab-2026-10-02.html">xlab explorer</a>
+    <a href="index.html">docs hub</a>
+    <a href="xmarket-tracker-2026-09-29.md">xmarket tracker</a>
+    <a href="xlab-2026-10-01.md">xlab doc</a>
+    <a href="SESSION_HANDOFF.md">SESSION_HANDOFF</a>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <h2>Ten phases</h2>
+  <p class="note">Bullets cite their source doc and section; counts, line totals and times are computed from the embedded git data (Method tab). Commit hashes link to the commit in the Commits tab.</p>
+  <div class="phase-list" id="phase-list"></div>
+</section>
+
+<!-- ============ COMMITS ============ -->
+<section class="panel" id="panel-commits" role="tabpanel" aria-labelledby="tab-commits" tabindex="0" hidden>
+  <h2>Every commit, in merge order</h2>
+  <div class="filters">
+    <div class="chips" id="phase-chips" role="group" aria-label="Filter by phase"></div>
+    <div class="filter-row">
+      <label class="search"><span class="sr-only">Search commits</span><input type="search" id="commit-q" placeholder="Search hash, subject, item id, path…" autocomplete="off" spellcheck="false"></label>
+      <label class="check"><input type="checkbox" id="only-items"> tracker items only</label>
+      <label class="check"><input type="checkbox" id="hide-docs"> hide docs-only commits</label>
+    </div>
+    <p class="count" id="commit-count" aria-live="polite"></p>
+  </div>
+  <div id="commit-list"></div>
+</section>
+
+<!-- ============ CHARTS ============ -->
+<section class="panel" id="panel-charts" role="tabpanel" aria-labelledby="tab-charts" tabindex="0" hidden>
+  <h2>Commits and lines changed</h2>
+  <div class="filter-row">
+    <div class="seg-group" role="group" aria-label="Group by">
+      <button class="seg" data-g="phase" aria-pressed="true">Phase</button>
+      <button class="seg" data-g="day" aria-pressed="false">Day</button>
+      <button class="seg" data-g="hour" aria-pressed="false">Hour</button>
+    </div>
+    <span class="note" id="chart-total"></span>
+  </div>
+  <div class="charts">
+    <figure class="chart-card">
+      <figcaption><span id="cap-commits">Commits per phase</span><span class="legend">count of commits</span></figcaption>
+      <div class="chart" id="chart-commits"></div>
+    </figure>
+    <figure class="chart-card">
+      <figcaption><span id="cap-lines">Lines changed per phase</span>
+        <span class="legend"><span><span class="sw" style="background:var(--add)"></span>+ added</span><span><span class="sw" style="background:var(--del)"></span>− deleted</span></span>
+      </figcaption>
+      <div class="chart" id="chart-lines"></div>
+    </figure>
+  </div>
+  <p class="note">Hover a bar for its values. Times are author dates as committed (+02:00); hours with no commit show as empty rows. Lines are per-commit numstat sums (a line touched by two commits counts twice).</p>
+  <h3 style="margin:16px 0 8px">Table view (same numbers)</h3>
+  <div class="table-wrap"><table id="chart-table"></table></div>
+</section>
+
+<!-- ============ FILES ============ -->
+<section class="panel" id="panel-files" role="tabpanel" aria-labelledby="tab-files" tabindex="0" hidden>
+  <h2>Every path touched</h2>
+  <div class="filters">
+    <div class="filter-row">
+      <label class="search"><span class="sr-only">Search paths</span><input type="search" id="file-q" placeholder="Search a path, e.g. src/config/risk.rs or docs/" autocomplete="off" spellcheck="false"></label>
+      <label class="check">Sort
+        <select class="select" id="file-sort">
+          <option value="n">by commits</option>
+          <option value="add">by lines added</option>
+          <option value="path">by path</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="file-docs"> docs only</label>
+    </div>
+    <p class="count" id="file-count" aria-live="polite"></p>
+  </div>
+  <div class="table-wrap"><table id="file-table"></table></div>
+</section>
+
+<!-- ============ TRACKER ============ -->
+<section class="panel" id="panel-tracker" role="tabpanel" aria-labelledby="tab-tracker" tabindex="0" hidden>
+  <h2>Tracker items in this range</h2>
+  <p>Items of <a href="xmarket-tracker-2026-09-29.md">xmarket-tracker-2026-09-29.md</a> § 5 that a commit here starts with, or whose backlog row cites a commit here. Done = ✅ in the tracker; meters count items per milestone (totals from tracker § 1).</p>
+  <div class="meters" id="meters"></div>
+  <div class="table-wrap"><table id="item-table"></table></div>
+</section>
+
+<!-- ============ METHOD ============ -->
+<section class="panel" id="panel-method" role="tabpanel" aria-labelledby="tab-method" tabindex="0" hidden>
+  <h2>How this page was built</h2>
+  <div class="method-grid">
+    <section>
+      <h3 style="margin-bottom:8px">Data</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Piece</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td>Commit list</td><td><code>git log --reverse --format='%H%x09%ad%x09%s' --date=iso-strict main..HEAD</code> (plus <code>%cd</code>, the committer date), run 2026-10-02 at HEAD <span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span>; <code>main</code> = merge base <span class="hash">9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8</span>. Linear: every commit has one parent.</td></tr>
+          <tr><td>Files, +/−</td><td><code>git show --numstat --format= &lt;hash&gt;</code> per commit (the numbers behind <code>--stat</code>); no binary files, no renames in the range.</td></tr>
+          <tr><td>Net diff</td><td><code>git diff --shortstat main..HEAD</code> → 253 files changed, 98,752 insertions, 1,946 deletions; <code>--diff-filter=A</code> / <code>M</code> / <code>D --name-only</code> → 145 added, 108 modified, 0 deleted.</td></tr>
+          <tr><td>Tracker ids</td><td>The 185 ids of <a href="xmarket-tracker-2026-09-29.md">xmarket-tracker-2026-09-29.md</a> § 5 (milestone = the § 5 table it sits in); citations = backlog rows whose status cell names a commit of this range (the tracker at HEAD writes 7-character hashes, its 2026-10-02 refresh full ones; matched by prefix and shown in full here).</td></tr>
+          <tr><td>Phase summaries</td><td>Authored from the cited docs (each card names its sections) and the commit messages.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+    <section>
+      <h3 style="margin-bottom:8px">Rules</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Rule</th><th>Definition</th></tr></thead>
+        <tbody>
+          <tr><td>Order</td><td>Merge order (<code>git log --reverse</code>). Worktree commits were cherry-picked one at a time, so an author date can precede the previous commit's; the merge time (committer date) is in each commit's details.</td></tr>
+          <tr><td>Dates</td><td>Author dates as committed (+02:00, the Mac's clock). Day and hour groups use that local date.</td></tr>
+          <tr><td>xmarket phases</td><td>By tracker item, as the waves were run: wave A = the 16 items of SESSION_HANDOFF § "Current (2026-09-30)" plus the two shared seams <span class="hash">f2a3fae70bbccc4582b3ae46aa49de1a05cf902d</span> and <span class="hash">ce56fd34c39b06912d5304dd37508bfacf0acc06</span>; wave B = the 9 items listed there as running; waves C + D = the items listed there as next, except <code>x-engine-parity-audit</code>, which is its own phase (E0 closed). A <code>docs(xmarket): progress</code> commit belongs to the phase of the item it records.</td></tr>
+          <tr><td>W1 gate</td><td>From the first review fix to "W1 gate passed" and the xmarket smoke; sub-labels per tracker § 0 W1 notes: weekend review, batch 1 (the money-safety fixes), batch 2 (six worktree fixes + code-map regenerations), gate passed.</td></tr>
+          <tr><td>xlab phases</td><td>Prep = the shared seams commit. Waves = merge bursts: a pause of ≥ 25 min between consecutive xlab merges (committer time) starts the next wave — three bursts (17:24–17:46, 18:16–18:26, 18:58–19:11). The sandbox commit's message calls the Architect's tool hookup "xlab wave 3"; it lands in the third burst. Review fixes = from <code>xlab-fix-engine</code> on; final docs = the last commit.</td></tr>
+          <tr><td>Docs touched</td><td>A path under <code>docs/</code> or a root <code>*.md</code> (<code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>README.md</code>). Docs-only commit = every path is a doc.</td></tr>
+          <tr><td>Tracker item badge</td><td>The subject starts with <code>&lt;id&gt;:</code> and the id is one of the 185. Other prefixes (<code>xlab-*</code>, batch-2 worktree names) show as plain labels.</td></tr>
+          <tr><td>Lines</td><td>Σ of per-commit numstat (+102,791 / −5,985) counts a line once per commit that touched it; the net diff (+98,752 / −1,946) counts it once.</td></tr>
+          <tr><td>Program colour</td><td>Cyan dot = xmarket phases, amber dot = xlab phases; the phase name is always written next to it.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+    <section>
+      <h3 style="margin-bottom:8px">Sources</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Doc</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr><td><a href="SESSION_HANDOFF.md">SESSION_HANDOFF.md</a></td><td>§ "Resume here (Thu 2026-10-01 evening)", § "Previous: Resume here", § "Current (2026-09-30)", § "Next session (2026-09-30)"</td></tr>
+          <tr><td><a href="xmarket-tracker-2026-09-29.md">xmarket-tracker-2026-09-29.md</a></td><td>header, § 0 (rules, Where to begin, W1 notes, parity-audit table), § 1 milestones, § 5 backlog</td></tr>
+          <tr><td><a href="xmarket-build-plan-2026-09-30.md">xmarket-build-plan-2026-09-30.md</a></td><td>§ Mandate, § Operating model, § Waves</td></tr>
+          <tr><td><a href="xmarket-prd-2026-09-29.md">xmarket-prd-2026-09-29.md</a></td><td>operator addendum (2026-09-30)</td></tr>
+          <tr><td><a href="xmarket-feasibility-2026-09-30.md">xmarket-feasibility-2026-09-30.md</a></td><td>§ Verdict: re-scope</td></tr>
+          <tr><td><a href="xlab-2026-10-01.md">xlab-2026-10-01.md</a></td><td>§ 3 architecture, § 8 tools, § 9 sandbox, § 14 results (adversarial review, live Architect, engine parity)</td></tr>
+          <tr><td>commit messages</td><td>wave labels, xlab pieces (<code>git log -1 --format=%B &lt;hash&gt;</code>)</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+  </div>
+</section>
+
+</main>
+
+<script>
+(function () {
+'use strict';
+
+/* ── data: git (main..HEAD), one commit per line ──
+   h = hash · a = author date · c = committer date · s = subject · p = phase · w = sub-label
+   t = tracker id the subject starts with · m = its milestone
+   r = tracker backlog rows citing this commit: [id, milestone, done|wip] · f = [path, added, deleted] */
+const COMMITS = [
+{"h":"47fc090de426205df91425df789849466e962399","a":"2026-09-30T15:14:16+02:00","c":"2026-09-30T15:14:16+02:00","s":"docs(xmarket): PRD, tracker, gaps, feasibility, build plan + engine-parity rule","p":"plan","w":"","t":null,"m":null,"r":[],"f":[["AGENTS.md",33,4],["CLAUDE.md",33,4],["docs/SESSION_HANDOFF.md",30,0],["docs/egress-2026-09-16.md",1,1],["docs/engine-backends.md",8,1],["docs/mcp-bridge.md",9,2],["docs/tools.md",1,0],["docs/xmarket-build-plan-2026-09-30.md",107,0],["docs/xmarket-feasibility-2026-09-30.md",90,0],["docs/xmarket-gaps-2026-09-29.md",2636,0],["docs/xmarket-prd-2026-09-29.md",1327,0],["docs/xmarket-tracker-2026-09-29.md",494,0]]},
+{"h":"f2a3fae70bbccc4582b3ae46aa49de1a05cf902d","a":"2026-09-30T15:28:38+02:00","c":"2026-09-30T15:28:38+02:00","s":"xmarket W1 foundation: [xmarket] state dir, shared sandbox sections, NY/Paris DST clock","p":"wA","w":"prep","t":null,"m":null,"r":[],"f":[["config.example.toml",7,0],["docs/code-map.html",1,1],["docs/code-map.md",6,2],["src/config/mod.rs",68,0],["src/config/sections.rs",17,0],["src/config/xmarket.rs",82,0],["src/domain/mod.rs",1,0],["src/domain/tz.rs",280,0]]},
+{"h":"21e093633248a936a73c4b9555278a6dec51500b","a":"2026-09-30T15:52:38+02:00","c":"2026-09-30T16:03:33+02:00","s":"risk-config-schema: [risk] + [paper] sections, unknown top-level keys rejected","p":"wA","w":"","t":"risk-config-schema","m":"M0","r":[["risk-config-schema","M0","done"]],"f":[["config.example.toml",39,1],["docs/code-map.html",1,1],["docs/code-map.md",4,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/config/mod.rs",22,1],["src/config/risk.rs",758,0],["src/config/sections.rs",7,0]]},
+{"h":"3963c5930c95c0ca3532385879c55e3bc90be63d","a":"2026-09-30T16:00:31+02:00","c":"2026-09-30T16:04:42+02:00","s":"ops-audit-atomic-write: one write per audit line, lines for failed Jev calls, ms fields","p":"wA","w":"","t":"ops-audit-atomic-write","m":"M0","r":[["ops-audit-atomic-write","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/decision-loop-plan-2026-09-24.md",2,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/application/decision_loop/mod.rs",236,35],["src/bootstrap/decision.rs",4,1],["src/domain/decision.rs",3,0]]},
+{"h":"f3e6bea786913c71c6c21b512a297e30c719b9b2","a":"2026-09-30T15:52:12+02:00","c":"2026-09-30T16:07:21+02:00","s":"x-claude-code-hardening: --strict-mcp-config always; hardened sandboxes admit claude_code only with built-ins off","p":"wA","w":"","t":"x-claude-code-hardening","m":"E0","r":[["x-claude-code-hardening","E0","done"]],"f":[["config.example.toml",8,6],["docs/code-map.html",1,1],["docs/code-map.md",2,1],["docs/egress-2026-09-16.md",1,0],["docs/engine-backends.md",6,4],["docs/mcp-bridge.md",1,1],["docs/typed-observations-2026-09-24.md",1,1],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/engines/claude_code.rs",134,36],["src/config/hardening.rs",177,0],["src/config/mod.rs",9,5],["src/config/solana.rs",6,13]]},
+{"h":"f8a46b3d5ca8fe4a3fbed2efa0a90f296df24077","a":"2026-09-30T15:52:41+02:00","c":"2026-09-30T16:09:25+02:00","s":"hl-market-schema: cross-venue mkt_instrument/1 + mkt_ctx/1 rows","p":"wA","w":"","t":"hl-market-schema","m":"M0","r":[["hl-market-schema","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",2,1],["docs/typed-observations-2026-09-24.md",21,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/domain/market.rs",1167,0],["src/domain/mod.rs",1,0]]},
+{"h":"43427da8ff1947429135360f3af88b3fc96eea2e","a":"2026-09-30T15:52:55+02:00","c":"2026-09-30T16:11:09+02:00","s":"kg-calendars: one session evaluator + [xmarket.calendars.<id>]","p":"wA","w":"","t":"kg-calendars","m":"M1","r":[["kg-calendars","M1","done"]],"f":[["config.example.toml",51,0],["docs/code-map.html",1,1],["docs/code-map.md",3,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/config/mod.rs",5,0],["src/config/sections.rs",5,0],["src/config/xmarket.rs",499,9],["src/domain/calendar.rs",636,0],["src/domain/mod.rs",1,0],["tests/fixtures/xmarket/calendars.toml",61,0]]},
+{"h":"c9d3755917b990e6b26f5ac7f735f8c3f050dc0a","a":"2026-09-30T16:03:38+02:00","c":"2026-09-30T16:13:58+02:00","s":"x-bridge-parity: tengu mcp-bridge runs tools as the sandbox agent","p":"wA","w":"","t":"x-bridge-parity","m":"E0","r":[["x-bridge-parity","E0","done"]],"f":[["docs/architecture-2026-04-27.md",1,1],["docs/code-map.html",1,1],["docs/mcp-bridge.md",54,16],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/mod.rs",6,45],["src/adapters/inbound/cli/run_agent.rs",13,2],["src/adapters/inbound/mcp_bridge.rs",513,135],["src/adapters/outbound/bridge_env.rs",12,1],["src/adapters/outbound/engines/claude_code.rs",67,14],["src/adapters/outbound/engines/mod.rs",11,7],["src/adapters/outbound/mcp_client/mod.rs",1,0],["src/adapters/outbound/mcp_client/proxy_tool.rs",1,0],["src/adapters/outbound/secrets.rs",83,0],["src/adapters/outbound/tools/http/request.rs",1,0],["src/adapters/outbound/tools/skill_lifecycle/distill.rs",2,0],["src/adapters/outbound/tools/workspace/test_support.rs",1,0],["src/application/skills/lifecycle/metric_kinds/tool_assertion.rs",1,0],["src/application/tools/registry.rs",33,0],["src/bootstrap/sandbox.rs",7,1],["src/config/paths.rs",33,1],["src/ports/tool.rs",4,0],["tests/mcp_bridge_external.rs",132,47]]},
+{"h":"b2082d7e3295b0ab4d5c8ca34165793eab87c5bb","a":"2026-09-30T16:06:19+02:00","c":"2026-09-30T16:14:57+02:00","s":"risk-exec-idempotency-ids: restart-safe loop call ids reach ToolCtx.call_id","p":"wA","w":"","t":"risk-exec-idempotency-ids","m":"M0","r":[["risk-exec-idempotency-ids","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/decision-loop-plan-2026-09-24.md",1,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/application/decision_loop/mod.rs",100,1],["src/ports/tool.rs",11,2]]},
+{"h":"f77320fe0974199d370dab47ec4d7111fb0c081d","a":"2026-09-30T16:09:42+02:00","c":"2026-09-30T16:15:58+02:00","s":"x-tool-schema-lint: every engine-facing tool schema stays in the OpenRouter / local / Claude subset","p":"wA","w":"","t":"x-tool-schema-lint","m":"E0","r":[["x-tool-schema-lint","E0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",1,0],["docs/tools.md",18,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/tools/manage_skill/mod.rs",1,0],["src/adapters/outbound/tools/mod.rs",2,0],["src/adapters/outbound/tools/schema_lint.rs",392,0],["src/adapters/outbound/tools/skill_lifecycle/apply_improver_proposal.rs",20,1],["src/adapters/outbound/tools/skill_lifecycle/distill.rs",1,1],["src/adapters/outbound/tools/skill_lifecycle/mod.rs",17,0]]},
+{"h":"450d1cfadbca590b7b2e832195d22e3c16b5f58c","a":"2026-09-30T16:02:15+02:00","c":"2026-09-30T16:17:07+02:00","s":"x-local-model-fit: tool results fit a local model's context window","p":"wA","w":"","t":"x-local-model-fit","m":"E0","r":[["x-local-model-fit","E0","done"]],"f":[["docs/code-map.html",1,1],["docs/context-cutting-flow-2026-04-27.html",2,2],["docs/context-management-2026-04-27.html",3,3],["docs/context-management-2026-04-27.md",14,4],["docs/context-management-2026-04-27.svg",3,3],["docs/engine-backends.md",42,2],["docs/typed-observations-2026-09-24.md",1,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/run_agent.rs",34,8],["src/adapters/outbound/engines/local.rs",95,4],["src/application/chat/tool_loop.rs",288,22],["src/config/mod.rs",45,1],["src/domain/observation.rs",100,7],["src/domain/token.rs",39,1],["src/ports/engine.rs",8,0],["tests/run_agent_ipc.rs",156,6]]},
+{"h":"6af07a4006fcfc969d4f1ccd5202c2f106c9b10b","a":"2026-09-30T16:10:26+02:00","c":"2026-09-30T16:19:16+02:00","s":"rt-backoff-budget: shared backoff, [rate_limits.<name>] limiter, Jev retry + breaker","p":"wA","w":"","t":"rt-backoff-budget","m":"M0","r":[["rt-backoff-budget","M0","done"]],"f":[["config.example.toml",9,0],["docs/code-map.html",1,1],["docs/code-map.md",8,3],["docs/decision-loop-plan-2026-09-24.md",1,0],["docs/typed-observations-2026-09-24.md",1,1],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/decisions.rs",252,19],["src/adapters/outbound/http_class.rs",433,0],["src/adapters/outbound/mod.rs",2,0],["src/adapters/outbound/rate_limit.rs",365,0],["src/adapters/outbound/solana/rpc.rs",15,318],["src/config/mod.rs",12,0],["src/config/rate_limits.rs",141,0],["src/config/sections.rs",5,1],["src/domain/backoff.rs",398,0],["src/domain/mod.rs",1,0]]},
+{"h":"b2f4c5cca8695b8a72ff9a9a97011bb9709cc137","a":"2026-09-30T16:03:15+02:00","c":"2026-09-30T16:20:34+02:00","s":"risk-calc-costs: pure L2 depth walk, HL tick/lot rounding, fee schedules, funding carry, gas, edge after costs","p":"wA","w":"","t":"risk-calc-costs","m":"M0","r":[["risk-calc-costs","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",4,1],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/domain/book.rs",853,0],["src/domain/mod.rs",2,0],["src/domain/xm/cost.rs",915,0],["src/domain/xm/mod.rs",11,0],["tests/fixtures/xm/l2_xyz_TSLA.json",1,0],["tests/fixtures/xm/meta.json",35,0]]},
+{"h":"7bd877c9f645414455ca03a40b941511c1ab6174","a":"2026-09-30T16:10:16+02:00","c":"2026-09-30T16:21:46+02:00","s":"risk-paper-ledger-domain: pure paper ledger math and paper_positions/1","p":"wA","w":"","t":"risk-paper-ledger-domain","m":"M0","r":[["risk-paper-ledger-domain","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",3,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/domain/xm/ledger.rs",1160,0],["src/domain/xm/mod.rs",2,0]]},
+{"h":"a5ff4184e963c5f9a889cf75fa8b8247c09d55b2","a":"2026-09-30T16:05:55+02:00","c":"2026-09-30T16:24:42+02:00","s":"rt-daemon: tengu run — one process per sandbox: loops, webhook routes, lease, graceful shutdown","p":"wA","w":"","t":"rt-daemon","m":"M0","r":[["rt-daemon","M0","done"]],"f":[["config.example.toml",8,0],["docs/code-map.html",1,1],["docs/code-map.md",16,7],["docs/runtime-2026-09-30.md",58,0],["docs/webhooks-2026-05-11.md",5,3],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/mod.rs",20,4],["src/adapters/inbound/mod.rs",1,0],["src/adapters/inbound/run.rs",176,0],["src/adapters/inbound/webhooks.rs",222,75],["src/adapters/outbound/mod.rs",1,0],["src/adapters/outbound/runtime_store.rs",182,0],["src/application/mod.rs",1,0],["src/application/runtime/loops.rs",466,0],["src/application/runtime/mod.rs",381,0],["src/bootstrap/mod.rs",1,0],["src/bootstrap/runtime.rs",393,0],["src/config/mod.rs",9,0],["src/config/runtime.rs",101,0],["src/domain/mod.rs",1,0],["src/domain/runtime.rs",60,0],["src/ports/mod.rs",1,0],["src/ports/runtime.rs",25,0]]},
+{"h":"28312690f0ff63a878853f9583eb906993b99e44","a":"2026-09-30T16:17:25+02:00","c":"2026-09-30T16:25:53+02:00","s":"hl-info-client: Hyperliquid POST /info client on the shared limiter","p":"wA","w":"","t":"hl-info-client","m":"M0","r":[["hl-info-client","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",4,2],["docs/egress-2026-09-16.md",14,0],["docs/typed-observations-2026-09-24.md",10,1],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/egress.rs",1,0],["src/adapters/outbound/hyperliquid/info.rs",775,0],["src/adapters/outbound/hyperliquid/mod.rs",6,0],["src/adapters/outbound/mod.rs",1,0],["src/domain/market.rs",124,2],["tests/fixtures/hyperliquid/allPerpMetas.json",1,0],["tests/fixtures/hyperliquid/candleSnapshot_xyz_TSLA_1h.json",1,0],["tests/fixtures/hyperliquid/errors.json",20,0],["tests/fixtures/hyperliquid/l2Book_flx_TSLA.json",1,0],["tests/fixtures/hyperliquid/l2Book_xyz_TSLA.json",1,0],["tests/fixtures/hyperliquid/meta.json",17,0],["tests/fixtures/hyperliquid/metaAndAssetCtxs_default.json",1,0],["tests/fixtures/hyperliquid/metaAndAssetCtxs_xyz.json",1,0],["tests/fixtures/hyperliquid/perpDexs.json",1,0],["tests/fixtures/hyperliquid/perpsAtOpenInterestCap_default.json",1,0],["tests/fixtures/hyperliquid/perpsAtOpenInterestCap_xyz.json",1,0]]},
+{"h":"7fad3a6b4c5bc035d772c188d5e76d9032a27cd5","a":"2026-09-30T16:22:34+02:00","c":"2026-09-30T16:27:54+02:00","s":"rt-health: heartbeat, loop/1 + feed/1 health rows, tengu doctor --live","p":"wA","w":"","t":"rt-health","m":"M0","r":[["rt-health","M0","done"]],"f":[["config.example.toml",2,0],["docs/code-map.html",1,1],["docs/code-map.md",8,7],["docs/runtime-2026-09-30.md",37,5],["docs/typed-observations-2026-09-24.md",2,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/doctor.rs",87,3],["src/adapters/inbound/cli/mod.rs",8,2],["src/adapters/outbound/runtime_store.rs",81,6],["src/application/runtime/health.rs",474,0],["src/application/runtime/mod.rs",8,0],["src/bootstrap/runtime.rs",156,20],["src/config/runtime.rs",48,6],["src/domain/runtime.rs",876,3],["src/ports/runtime.rs",8,5]]},
+{"h":"9b2280f3d44fd8949ecd6f9106075d4d2a9eee03","a":"2026-09-30T16:12:05+02:00","c":"2026-09-30T16:30:29+02:00","s":"ops-history-recorder: HistoryStore + SQLite day files + [recorder]","p":"wA","w":"","t":"ops-history-recorder","m":"M1","r":[["ops-history-recorder","M1","done"]],"f":[["config.example.toml",12,0],["docs/code-map.html",1,1],["docs/code-map.md",11,6],["docs/typed-observations-2026-09-24.md",17,3],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/history.rs",107,0],["src/adapters/inbound/cli/mod.rs",24,0],["src/adapters/outbound/history_sqlite.rs",531,0],["src/adapters/outbound/mod.rs",1,0],["src/adapters/outbound/observations.rs",399,0],["src/adapters/outbound/tools/solana/mod.rs",6,5],["src/application/observe.rs",63,6],["src/bootstrap/decision.rs",5,5],["src/bootstrap/runtime.rs",12,4],["src/config/mod.rs",16,0],["src/config/recorder.rs",209,0],["src/config/sections.rs",7,0],["src/config/xmarket.rs",9,0],["src/ports/history.rs",73,0],["src/ports/mod.rs",1,0],["src/ports/observation.rs",9,1]]},
+{"h":"ce56fd34c39b06912d5304dd37508bfacf0acc06","a":"2026-09-30T16:35:40+02:00","c":"2026-09-30T16:35:40+02:00","s":"xmarket W1 prep: Clock port + SystemClock (shared seam for rt-scheduler and the paper fill engine)","p":"wA","w":"prep","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",4,2],["src/adapters/outbound/clock.rs",41,0],["src/adapters/outbound/mod.rs",1,0],["src/ports/clock.rs",77,0],["src/ports/mod.rs",1,0]]},
+{"h":"572395e93c13b13fb000cf502b39b2e45db21038","a":"2026-09-30T16:41:12+02:00","c":"2026-09-30T16:41:12+02:00","s":"docs(xmarket): W1 wave A — gotchas, code map, tracker hashes + notes, handoff","p":"wA","w":"","t":null,"m":null,"r":[],"f":[["AGENTS.md",77,26],["CLAUDE.md",77,26],["docs/SESSION_HANDOFF.md",13,0],["docs/code-map.md",8,3],["docs/mcp-bridge.md",1,1],["docs/xmarket-tracker-2026-09-29.md",33,18],["sandboxes/lping/config.toml",3,2]]},
+{"h":"7f02717d6533558d5ba90d675dbf9a4eae680691","a":"2026-09-30T17:25:15+02:00","c":"2026-09-30T17:37:47+02:00","s":"x-bridge-conformance-test: every catalog tool in-process vs through a real tengu mcp-bridge","p":"wB","w":"","t":"x-bridge-conformance-test","m":"E0","r":[["x-bridge-conformance-test","E0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",3,1],["docs/mcp-bridge.md",40,1],["docs/tools.md",6,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/mod.rs",26,0],["src/adapters/inbound/cli/tool.rs",254,0],["src/adapters/inbound/mcp_bridge.rs",3,2],["tests/bridge_conformance.rs",1345,0]]},
+{"h":"78593839a260664456fb3b5e1ae58a2a3628afae","a":"2026-09-30T17:22:02+02:00","c":"2026-09-30T17:42:55+02:00","s":"risk-paper-fill-engine: paper fills for market / IOC orders against an L2 book","p":"wB","w":"","t":"risk-paper-fill-engine","m":"M0","r":[["risk-paper-fill-engine","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",7,4],["docs/typed-observations-2026-09-24.md",16,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/application/mod.rs",1,0],["src/application/paper.rs",323,0],["src/domain/xm/mod.rs",2,0],["src/domain/xm/paper.rs",1422,0],["src/ports/book.rs",191,0],["src/ports/mod.rs",1,0],["tests/fixtures/xm/meta.json",26,0]]},
+{"h":"0dabab2d9b199876509c351d5aa85c4086ab4f52","a":"2026-09-30T17:45:02+02:00","c":"2026-09-30T17:45:15+02:00","s":"docs(xmarket): pause point — resume state, operator load rules, local check on the Windows PC","p":"wB","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",11,0],["docs/xmarket-build-plan-2026-09-30.md",2,1],["docs/xmarket-tracker-2026-09-29.md",3,3]]},
+{"h":"ea0b05b9503c0fae58d0171adf90ca1a155b4db2","a":"2026-09-30T17:21:00+02:00","c":"2026-09-30T19:06:17+02:00","s":"hl-ctx-tool: hl_ctx — mkt_ctx/1 + mkt_instrument/1 rows for a dex sweep or up to 64 coins","p":"wB","w":"","t":"hl-ctx-tool","m":"M0","r":[["hl-ctx-tool","M0","done"]],"f":[["config.example.toml",10,0],["docs/code-map.html",1,1],["docs/code-map.md",8,3],["docs/mcp-bridge.md",4,6],["docs/tools.md",2,0],["docs/typed-observations-2026-09-24.md",24,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/tools/hyperliquid/ctx.rs",1245,0],["src/adapters/outbound/tools/hyperliquid/defs.rs",67,0],["src/adapters/outbound/tools/hyperliquid/mod.rs",200,0],["src/adapters/outbound/tools/mod.rs",9,0],["src/domain/hl/ctx.rs",1426,0],["src/domain/hl/mod.rs",212,0],["src/domain/mod.rs",1,0],["src/domain/tools.rs",5,0],["tests/bridge_conformance.rs",35,1],["tests/fixtures/hyperliquid/meta.json",2,0],["tests/fixtures/hyperliquid/perpCategories.json",1,0],["tests/fixtures/hyperliquid/spotMetaAndAssetCtxs_trimmed.json",1,0]]},
+{"h":"1e6c3721a619c883900fcee2df0304641b04b60b","a":"2026-09-30T19:26:19+02:00","c":"2026-09-30T19:26:19+02:00","s":"hl-book-tool: hl_book — hl_book/1:hyperliquid:<coin> L2 book, depth, slippage per notional","p":"wB","w":"","t":"hl-book-tool","m":"M0","r":[["hl-book-tool","M0","done"]],"f":[["config.example.toml",6,1],["docs/code-map.html",1,1],["docs/code-map.md",9,7],["docs/mcp-bridge.md",1,1],["docs/tools.md",1,1],["docs/typed-observations-2026-09-24.md",9,2],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/tools/hyperliquid/book.rs",747,0],["src/adapters/outbound/tools/hyperliquid/ctx.rs",5,33],["src/adapters/outbound/tools/hyperliquid/defs.rs",33,1],["src/adapters/outbound/tools/hyperliquid/mod.rs",42,1],["src/adapters/outbound/tools/mod.rs",6,0],["src/domain/hl/book.rs",608,0],["src/domain/hl/mod.rs",6,3],["src/domain/tools.rs",2,0],["src/ports/book.rs",1,1],["tests/bridge_conformance.rs",17,0],["tests/fixtures/hyperliquid/meta.json",1,0],["tests/fixtures/hyperliquid/recentTrades_xyz_TSLA.json",1,0]]},
+{"h":"bb55f3f4ad09c1e560df106ca257c447335f056a","a":"2026-09-30T19:27:59+02:00","c":"2026-09-30T19:27:59+02:00","s":"docs(xmarket): progress — hl-ctx-tool + hl-book-tool merged, next items","p":"wB","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,2],["docs/xmarket-tracker-2026-09-29.md",4,4]]},
+{"h":"81e00651ff24058eaccd4f12f6a2e76f08748a14","a":"2026-09-30T19:47:33+02:00","c":"2026-09-30T19:47:33+02:00","s":"risk-gate-domain: pure pre-trade gate — every §28 rule a Check, fail closed","p":"wB","w":"","t":"risk-gate-domain","m":"M0","r":[["risk-gate-domain","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",5,3],["docs/xmarket-tracker-2026-09-29.md",2,1],["src/config/risk.rs",87,12],["src/domain/xm/mod.rs",2,0],["src/domain/xm/risk.rs",2688,0]]},
+{"h":"b71d1be57099e5914e4b8c32ccbe1e708bc562ee","a":"2026-09-30T20:03:49+02:00","c":"2026-09-30T20:03:49+02:00","s":"risk-paper-ledger-store: ledger.db — gate + fill + write in one transaction","p":"wB","w":"","t":"risk-paper-ledger-store","m":"M0","r":[["risk-paper-ledger-store","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",7,5],["docs/xmarket-tracker-2026-09-29.md",2,1],["src/adapters/outbound/mod.rs",1,0],["src/adapters/outbound/paper_store.rs",1404,0],["src/domain/xm/ledger.rs",53,0],["src/ports/mod.rs",1,0],["src/ports/paper.rs",182,0]]},
+{"h":"ea69033b92635bfbe14790a7f9a2fea6cecad363","a":"2026-09-30T20:38:53+02:00","c":"2026-09-30T20:38:53+02:00","s":"risk-kill-switch: halts, kill-switch file, tengu risk CLI, risk_status tool","p":"wB","w":"","t":"risk-kill-switch","m":"M0","r":[["risk-kill-switch","M0","done"]],"f":[["config.example.toml",9,0],["docs/code-map.html",1,1],["docs/code-map.md",18,13],["docs/mcp-bridge.md",1,1],["docs/tools.md",1,0],["docs/typed-observations-2026-09-24.md",14,1],["docs/xmarket-risk-paper-2026-09-30.md",51,0],["docs/xmarket-tracker-2026-09-29.md",2,1],["src/adapters/inbound/cli/mod.rs",20,2],["src/adapters/inbound/cli/risk.rs",583,0],["src/adapters/outbound/paper_store.rs",293,29],["src/adapters/outbound/tools/mod.rs",9,0],["src/adapters/outbound/tools/xm/defs.rs",46,0],["src/adapters/outbound/tools/xm/mod.rs",99,0],["src/adapters/outbound/tools/xm/risk_status.rs",383,0],["src/config/risk.rs",0,2],["src/domain/tools.rs",5,0],["src/domain/xm/ledger.rs",11,3],["src/domain/xm/mod.rs",2,0],["src/domain/xm/risk_state.rs",671,0],["src/ports/paper.rs",23,3],["tests/bridge_conformance.rs",56,0]]},
+{"h":"d231b9d422f4387a8f209570f4020606d1174054","a":"2026-09-30T20:40:30+02:00","c":"2026-09-30T20:40:30+02:00","s":"docs(xmarket): progress — risk gate, ledger store, kill switch merged","p":"wB","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,2],["docs/xmarket-tracker-2026-09-29.md",5,5]]},
+{"h":"24a7dd359faea06bfdcadb2366a236980b0d4192","a":"2026-09-30T21:17:35+02:00","c":"2026-09-30T21:17:35+02:00","s":"rt-scheduler: [feeds.<n>] tool / tick feeds on a UTC grid, local windows and DST-safe clock ticks","p":"wB","w":"","t":"rt-scheduler","m":"M0","r":[["rt-scheduler","M0","done"]],"f":[["config.example.toml",48,0],["docs/code-map.html",1,1],["docs/code-map.md",19,15],["docs/runtime-2026-09-30.md",28,4],["docs/xmarket-tracker-2026-09-29.md",2,1],["src/adapters/inbound/run.rs",4,2],["src/adapters/outbound/clock.rs",3,4],["src/adapters/outbound/rate_limit.rs",2,2],["src/application/runtime/feeds.rs",1340,0],["src/application/runtime/health.rs",3,4],["src/application/runtime/loops.rs",60,6],["src/application/runtime/mod.rs",4,2],["src/bootstrap/decision.rs",39,16],["src/bootstrap/runtime.rs",308,12],["src/config/feeds.rs",696,0],["src/config/mod.rs",11,0],["src/domain/backoff.rs",3,2],["src/domain/calendar.rs",2,2],["src/domain/mod.rs",1,0],["src/domain/runtime.rs",1,1],["src/domain/schedule.rs",804,0],["src/domain/tz.rs",0,3],["src/ports/clock.rs",1,3]]},
+{"h":"e92cabd8de522e07ef4acd12b0d72fad62b11cb1","a":"2026-09-30T21:18:43+02:00","c":"2026-09-30T21:18:43+02:00","s":"docs(xmarket): progress — rt-scheduler merged","p":"wB","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,2],["docs/xmarket-tracker-2026-09-29.md",3,3]]},
+{"h":"0ad160d2d28ee6156f2082ad39fc6695fa21eb6a","a":"2026-09-30T22:15:00+02:00","c":"2026-09-30T22:15:00+02:00","s":"x-engine-matrix-smoke: live engine × model × tool-set legs, IPC tool activity, tengu doctor --engines","p":"wB","w":"","t":"x-engine-matrix-smoke","m":"E0","r":[["x-engine-matrix-smoke","E0","done"]],"f":[["docs/architecture-2026-04-27.md",1,1],["docs/code-map.html",1,1],["docs/code-map.md",7,4],["docs/engine-backends.md",42,2],["docs/mcp-bridge.md",4,3],["docs/tools.md",1,1],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/inbound/cli/doctor.rs",285,8],["src/adapters/inbound/cli/mod.rs",14,2],["src/adapters/inbound/cli/run_agent.rs",34,16],["src/adapters/inbound/eval.rs",1,0],["src/adapters/outbound/engines/claude_code.rs",67,3],["src/adapters/outbound/subprocess_runner.rs",45,2],["src/application/chat/tool_loop.rs",184,17],["src/domain/engine_smoke.rs",228,0],["src/domain/message.rs",19,0],["src/domain/mod.rs",1,0],["tests/engine_matrix.rs",898,0],["tests/fixtures/engine_matrix/claude_code.toml",102,0],["tests/fixtures/engine_matrix/local.toml",105,0],["tests/fixtures/engine_matrix/openrouter.toml",107,0]]},
+{"h":"3d0fbe1a5720d157e6c0c4bff0414a1a23fd2368","a":"2026-09-30T22:16:35+02:00","c":"2026-09-30T22:16:35+02:00","s":"docs(xmarket): progress — x-engine-matrix-smoke merged (9/9 live legs), wave B complete","p":"wB","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,2],["docs/xmarket-tracker-2026-09-29.md",3,3]]},
+{"h":"5dd0a96cfbc5ed7402f98694d449ec23f27ac3d7","a":"2026-09-30T23:13:42+02:00","c":"2026-09-30T23:13:42+02:00","s":"risk-gate-enforcement: [risk] gate inside every exec tool + hardened load rules + bridge call-id nonce","p":"wCD","w":"C","t":"risk-gate-enforcement","m":"M0","r":[["risk-gate-enforcement","M0","done"]],"f":[["config.example.toml",2,0],["docs/architecture-2026-04-27.md",1,1],["docs/code-map.html",1,1],["docs/code-map.md",8,6],["docs/engine-backends.md",2,2],["docs/mcp-bridge.md",3,3],["docs/tools.md",2,1],["docs/typed-observations-2026-09-24.md",3,2],["docs/xmarket-risk-paper-2026-09-30.md",36,1],["docs/xmarket-tracker-2026-09-29.md",5,4],["src/adapters/inbound/cli/tool.rs",4,5],["src/adapters/inbound/mcp_bridge.rs",33,8],["src/adapters/outbound/paper_store.rs",21,0],["src/adapters/outbound/tools/crypto/sign_message.rs",1,1],["src/adapters/outbound/tools/crypto/sign_tx.rs",1,1],["src/adapters/outbound/tools/hyperliquid/book.rs",42,9],["src/adapters/outbound/tools/xm/exec_common.rs",1029,0],["src/adapters/outbound/tools/xm/mod.rs",21,10],["src/adapters/outbound/tools/xm/risk_status.rs",3,3],["src/application/paper.rs",152,4],["src/config/hardening.rs",396,9],["src/config/mod.rs",10,3],["src/config/risk.rs",177,0],["src/config/solana.rs",12,128],["src/domain/hl/ctx.rs",6,9],["src/domain/hl/mod.rs",33,2],["src/domain/tools.rs",17,0],["src/domain/xm/exec.rs",536,0],["src/domain/xm/ledger.rs",53,0],["src/domain/xm/mod.rs",2,0],["src/ports/paper.rs",12,2],["src/ports/tool.rs",5,4],["tests/bridge_conformance.rs",6,1],["tests/fixtures/engine_matrix/claude_code.toml",7,1],["tests/fixtures/engine_matrix/local.toml",7,1],["tests/fixtures/engine_matrix/openrouter.toml",7,1],["tests/mcp_bridge_external.rs",56,0]]},
+{"h":"4209d6423668102eb3049763cdb6c6b568c5557f","a":"2026-09-30T23:51:32+02:00","c":"2026-09-30T23:53:23+02:00","s":"risk-paper-tools: paper_order, paper_close, paper_positions + engine-matrix xm set via tengu tool turn","p":"wCD","w":"C","t":"risk-paper-tools","m":"M0","r":[["risk-paper-tools","M0","done"]],"f":[["config.example.toml",26,0],["docs/code-map.html",1,1],["docs/code-map.md",20,18],["docs/engine-backends.md",8,8],["docs/mcp-bridge.md",8,5],["docs/tools.md",2,2],["docs/typed-observations-2026-09-24.md",7,1],["docs/xmarket-risk-paper-2026-09-30.md",23,2],["docs/xmarket-tracker-2026-09-29.md",6,4],["src/adapters/inbound/cli/tool.rs",141,0],["src/adapters/outbound/paper_store.rs",0,4],["src/adapters/outbound/tools/hyperliquid/book.rs",0,3],["src/adapters/outbound/tools/mod.rs",20,0],["src/adapters/outbound/tools/xm/defs.rs",131,1],["src/adapters/outbound/tools/xm/exec_common.rs",18,16],["src/adapters/outbound/tools/xm/mod.rs",5,1],["src/adapters/outbound/tools/xm/paper.rs",768,0],["src/application/paper.rs",0,3],["src/domain/tools.rs",4,0],["src/domain/xm/exec.rs",139,8],["src/domain/xm/ledger.rs",6,0],["src/ports/book.rs",0,3],["src/ports/paper.rs",2,4],["tests/bridge_conformance.rs",171,6],["tests/engine_matrix.rs",239,63],["tests/fixtures/engine_matrix/claude_code.toml",42,2],["tests/fixtures/engine_matrix/local.toml",45,2],["tests/fixtures/engine_matrix/openrouter.toml",55,3]]},
+{"h":"d9db0472327ddf7785e360705d88f0019b6b721e","a":"2026-09-30T23:53:25+02:00","c":"2026-09-30T23:53:52+02:00","s":"docs(xmarket): progress — gate enforcement + paper tools merged; parity-audit leads recorded","p":"wCD","w":"C","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,2],["docs/xmarket-tracker-2026-09-29.md",4,3]]},
+{"h":"1cd924d92f3e984b6d24b1a0da948345b4a8144e","a":"2026-10-01T00:23:48+02:00","c":"2026-10-01T00:23:48+02:00","s":"risk-audit-verdicts: verdict rows carry tool + session, mirrored to logs/risk.jsonl; StepOutcome::Refused; audit call_id join","p":"wCD","w":"C","t":"risk-audit-verdicts","m":"M0","r":[["risk-audit-verdicts","M0","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",8,7],["docs/decision-loop-plan-2026-09-24.md",2,2],["docs/tools.md",1,1],["docs/typed-observations-2026-09-24.md",1,1],["docs/xmarket-risk-paper-2026-09-30.md",23,3],["docs/xmarket-tracker-2026-09-29.md",4,3],["src/adapters/inbound/cli/risk.rs",3,2],["src/adapters/outbound/paper_store.rs",308,13],["src/adapters/outbound/tools/xm/exec_common.rs",34,5],["src/application/decision_loop/mod.rs",311,16],["src/domain/decision.rs",5,0],["src/ports/paper.rs",16,0]]},
+{"h":"845cf25efee3bd92aa00768e50a98c52d68e4f5c","a":"2026-10-01T00:56:01+02:00","c":"2026-10-01T00:56:01+02:00","s":"x-exit-rules: [risk.exits] + exec tool xm_exits (deadline, max hold, stop-loss, take-profit) via a kind = \"tool\" feed","p":"wCD","w":"C","t":"x-exit-rules","m":"M0","r":[["x-exit-rules","M0","done"]],"f":[["config.example.toml",18,3],["docs/code-map.html",1,1],["docs/code-map.md",17,15],["docs/engine-backends.md",1,1],["docs/mcp-bridge.md",1,1],["docs/runtime-2026-09-30.md",2,2],["docs/tools.md",1,1],["docs/typed-observations-2026-09-24.md",3,1],["docs/xmarket-risk-paper-2026-09-30.md",22,4],["docs/xmarket-tracker-2026-09-29.md",4,3],["src/adapters/inbound/cli/risk.rs",1,0],["src/adapters/outbound/tools/mod.rs",6,0],["src/adapters/outbound/tools/xm/defs.rs",26,0],["src/adapters/outbound/tools/xm/exec_common.rs",1,0],["src/adapters/outbound/tools/xm/exits.rs",586,0],["src/adapters/outbound/tools/xm/mod.rs",3,0],["src/adapters/outbound/tools/xm/paper.rs",12,2],["src/adapters/outbound/tools/xm/risk_status.rs",1,0],["src/config/feeds.rs",26,1],["src/config/hardening.rs",1,0],["src/config/risk.rs",67,4],["src/domain/tools.rs",3,1],["src/domain/xm/exits.rs",615,0],["src/domain/xm/mod.rs",2,0],["src/ports/paper.rs",2,2],["tests/bridge_conformance.rs",19,0],["tests/engine_matrix.rs",92,21],["tests/fixtures/engine_matrix/claude_code.toml",14,2],["tests/fixtures/engine_matrix/local.toml",14,2],["tests/fixtures/engine_matrix/openrouter.toml",15,3]]},
+{"h":"07013bed3aafb6d6e5176d944ed5668f146e0124","a":"2026-10-01T00:57:00+02:00","c":"2026-10-01T00:57:00+02:00","s":"docs(xmarket): progress — audit verdicts + exit rules merged; weekend path next","p":"wCD","w":"C","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",1,1],["docs/xmarket-tracker-2026-09-29.md",3,3]]},
+{"h":"ebd3d17f4091fd5c62ac176d8ccccb3c973efd18","a":"2026-10-01T01:01:06+02:00","c":"2026-10-01T01:01:06+02:00","s":"x-exit-rules: document what exits need — hl_ctx rows and room in max_orders_per_min","p":"wCD","w":"C","t":"x-exit-rules","m":"M0","r":[["x-exit-rules","M0","done"]],"f":[["config.example.toml",3,1],["docs/code-map.html",1,1],["docs/code-map.md",1,1],["docs/xmarket-risk-paper-2026-09-30.md",2,0],["docs/xmarket-tracker-2026-09-29.md",1,1],["src/adapters/outbound/tools/xm/defs.rs",2,1],["src/adapters/outbound/tools/xm/exits.rs",1,1]]},
+{"h":"5e03e86bb08dc0b76c597d3c6b959a647fc212c9","a":"2026-10-01T01:26:17+02:00","c":"2026-10-01T01:26:17+02:00","s":"x-shared-workspace-and-state-layout: one xmarket workspace + the state-dir layout, enforced at load; prune spares state/","p":"wCD","w":"C","t":"x-shared-workspace-and-state-layout","m":"M0","r":[["x-shared-workspace-and-state-layout","M0","done"]],"f":[["config.example.toml",9,3],["docs/code-map.html",1,1],["docs/code-map.md",8,8],["docs/runtime-2026-09-30.md",20,0],["docs/xmarket-risk-paper-2026-09-30.md",1,0],["docs/xmarket-tracker-2026-09-29.md",5,4],["src/adapters/inbound/cli/risk.rs",6,5],["src/adapters/outbound/observations.rs",1,1],["src/adapters/outbound/paper_store.rs",6,12],["src/adapters/outbound/prune.rs",111,3],["src/adapters/outbound/runtime_store.rs",1,1],["src/adapters/outbound/tools/mod.rs",19,0],["src/config/feeds.rs",4,1],["src/config/hardening.rs",22,5],["src/config/mod.rs",2,4],["src/config/risk.rs",14,7],["src/config/xmarket.rs",422,2],["src/domain/tools.rs",15,0],["tests/bridge_conformance.rs",4,1]]},
+{"h":"225af42388ad4a521c247ea3888f51cad42b7f19","a":"2026-10-01T01:28:45+02:00","c":"2026-10-01T01:28:45+02:00","s":"docs(xmarket): progress — shared workspace + state layout merged; weekend fade next","p":"wCD","w":"C","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",1,1],["docs/xmarket-tracker-2026-09-29.md",3,3]]},
+{"h":"fbb3246a171bbfedf13f50ba98153e90ce20d357","a":"2026-10-01T02:52:27+02:00","c":"2026-10-01T02:52:27+02:00","s":"x-weekend-fade-strategy: rule W as the exec tool xm_weekend_fade (capped + shadow ledgers), bit-exact golden replay","p":"wCD","w":"D","t":"x-weekend-fade-strategy","m":"M0","r":[["x-weekend-fade-strategy","M0","done"]],"f":[["config.example.toml",63,5],["docs/code-map.html",1,1],["docs/code-map.md",20,17],["docs/engine-backends.md",1,1],["docs/mcp-bridge.md",1,1],["docs/runtime-2026-09-30.md",3,3],["docs/tools.md",1,1],["docs/typed-observations-2026-09-24.md",4,1],["docs/xmarket-risk-paper-2026-09-30.md",41,4],["docs/xmarket-tracker-2026-09-29.md",5,4],["src/adapters/outbound/tools/mod.rs",6,0],["src/adapters/outbound/tools/xm/defs.rs",23,0],["src/adapters/outbound/tools/xm/exec_common.rs",36,6],["src/adapters/outbound/tools/xm/exits.rs",6,3],["src/adapters/outbound/tools/xm/mod.rs",35,1],["src/adapters/outbound/tools/xm/paper.rs",4,2],["src/adapters/outbound/tools/xm/risk_status.rs",2,0],["src/adapters/outbound/tools/xm/weekend_fade.rs",1515,0],["src/application/paper.rs",6,3],["src/config/feeds.rs",21,2],["src/config/mod.rs",1,0],["src/config/sections.rs",4,0],["src/config/xmarket.rs",577,5],["src/domain/calendar.rs",6,3],["src/domain/tools.rs",4,1],["src/domain/xm/mod.rs",2,0],["src/domain/xm/risk.rs",334,65],["src/domain/xm/weekend_fade.rs",1729,0],["tests/bridge_conformance.rs",53,0],["tests/engine_matrix.rs",25,2],["tests/fixtures/engine_matrix/claude_code.toml",52,3],["tests/fixtures/engine_matrix/local.toml",52,3],["tests/fixtures/engine_matrix/openrouter.toml",54,5],["tests/fixtures/xmarket/meta.json",21,0],["tests/fixtures/xmarket/weekend_2026-09-26_candles.json",76,0],["tests/fixtures/xmarket/weekend_2026-09-26_golden.json",987,0]]},
+{"h":"7c11969e7c94c1d743f5fa10b0c1bc89ba0fceb3","a":"2026-10-01T02:54:55+02:00","c":"2026-10-01T02:54:55+02:00","s":"docs(xmarket): progress — weekend fade strategy merged; weekend sandbox next","p":"wCD","w":"D","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",1,1],["docs/xmarket-tracker-2026-09-29.md",2,2]]},
+{"h":"bc510871c69db05b61a99ba29cfe6787b906e91f","a":"2026-10-01T04:06:03+02:00","c":"2026-10-01T04:06:03+02:00","s":"x-weekend-sandbox: sandboxes/xmarket-weekend runs rule W on paper (no LLM, no Jev) + golden replay test; 30-min soak green","p":"wCD","w":"D","t":"x-weekend-sandbox","m":"M0","r":[["x-weekend-sandbox","M0","done"]],"f":[["README.md",1,0],["docs/code-map.html",1,1],["docs/code-map.md",2,2],["docs/runtime-2026-09-30.md",27,0],["docs/xmarket-tracker-2026-09-29.md",4,3],["sandboxes/xmarket-weekend/config.toml",300,0],["src/config/xmarket.rs",103,0],["src/domain/xm/weekend_fade.rs",123,83]]},
+{"h":"585965f461004f9d3306653edcbb93aae5eb9a6a","a":"2026-10-01T04:07:59+02:00","c":"2026-10-01T04:07:59+02:00","s":"docs(xmarket): progress — weekend sandbox merged (bc51087); runbook timeline in Mac (Berlin) time; ops-sandbox-config next","p":"wCD","w":"D","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",4,3],["docs/xmarket-tracker-2026-09-29.md",1,1],["sandboxes/xmarket-weekend/config.toml",7,7]]},
+{"h":"a27f9b5560387d20daa91e7fbb5859747e3e886c","a":"2026-10-01T04:36:34+02:00","c":"2026-10-01T04:36:34+02:00","s":"ops-sandbox-config: sandboxes/xmarket M0 stage — read-only planner, routable architect, private executor; HL ctx + books recorded, exits, daily risk roll on the $100 paper budget; 5-min smoke green","p":"wCD","w":"C","t":"ops-sandbox-config","m":"M0","r":[["ops-sandbox-config","M0","done"]],"f":[["AGENTS.md",4,3],["CLAUDE.md",4,3],["README.md",1,0],["docs/code-map.html",1,1],["docs/egress-2026-09-16.md",1,1],["docs/runtime-2026-09-30.md",29,0],["sandboxes/xmarket/config.toml",380,0],["src/config/xmarket.rs",110,0]]},
+{"h":"273e55a2a7c5b17008498272fc44929650d48c8d","a":"2026-10-01T04:37:48+02:00","c":"2026-10-01T04:37:48+02:00","s":"docs(xmarket): progress — ops-sandbox-config merged (a27f9b5); parity leads 11-12; x-engine-parity-audit next","p":"wCD","w":"C","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",3,3],["docs/xmarket-tracker-2026-09-29.md",5,4]]},
+{"h":"1f52df0e711904d62a14a279ecba6b430511a8f8","a":"2026-10-01T06:50:21+02:00","c":"2026-10-01T06:50:21+02:00","s":"x-engine-parity-audit: every catalog tool, a shell skill and an [[mcp_servers]] proxy pass lint + conformance + live matrix on openrouter and claude_code; leads 1-12 fixed","p":"e0","w":"","t":"x-engine-parity-audit","m":"E0","r":[["x-engine-parity-audit","E0","done"]],"f":[["AGENTS.md",39,28],["CLAUDE.md",39,28],["docs/architecture-2026-04-27.html",1,1],["docs/architecture-2026-04-27.md",3,3],["docs/code-map.html",1,1],["docs/code-map.md",5,5],["docs/egress-2026-09-16.md",1,1],["docs/engine-backends.md",47,21],["docs/mcp-bridge.md",30,23],["docs/tools.md",6,4],["docs/xmarket-tracker-2026-09-29.md",42,7],["sandboxes/xmarket/config.toml",5,3],["src/adapters/inbound/cli/doctor.rs",16,12],["src/adapters/inbound/cli/run_agent.rs",88,7],["src/adapters/inbound/cli/tool.rs",12,14],["src/adapters/inbound/eval.rs",102,26],["src/adapters/inbound/mcp_bridge.rs",255,23],["src/adapters/inbound/telegram.rs",8,10],["src/adapters/inbound/tui/mod.rs",19,20],["src/adapters/inbound/webhooks.rs",17,8],["src/adapters/outbound/bridge_env.rs",16,4],["src/adapters/outbound/egress.rs",1,1],["src/adapters/outbound/engines/claude_code.rs",214,31],["src/adapters/outbound/engines/mod.rs",43,4],["src/adapters/outbound/engines/openrouter.rs",405,60],["src/adapters/outbound/secrets.rs",52,3],["src/adapters/outbound/tools/crypto/helpers.rs",137,64],["src/adapters/outbound/tools/crypto/mod.rs",7,3],["src/adapters/outbound/tools/crypto/sign_message.rs",2,2],["src/adapters/outbound/tools/crypto/sign_tx.rs",5,4],["src/adapters/outbound/tools/crypto/wallet_address.rs",24,1],["src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs",7,4],["src/application/chat/tool_loop.rs",157,4],["src/application/skills/registry.rs",65,0],["src/application/tools/registry.rs",9,1],["src/bootstrap/tools.rs",91,49],["src/config/hardening.rs",16,13],["src/config/mod.rs",32,8],["src/ports/tool.rs",2,1],["tests/bridge_conformance.rs",62,4],["tests/engine_matrix.rs",1112,238],["tests/fixtures/engine_matrix/open/claude_code.toml",143,0],["tests/fixtures/engine_matrix/open/local.toml",145,0],["tests/fixtures/engine_matrix/open/openrouter.toml",150,0],["tests/fixtures/engine_matrix/token_mcp_server.sh",18,0],["tests/fixtures/skills/matrix_cat/SKILL.md",13,0],["tests/mcp_bridge_external.rs",2,0]]},
+{"h":"5fb98a99a4ebb015a66ee2a7fdca31a7e10d7154","a":"2026-10-01T06:56:20+02:00","c":"2026-10-01T06:56:20+02:00","s":"docs(xmarket): progress — x-engine-parity-audit merged (1f52df0), E0 closed; W1 gate next","p":"e0","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",3,3],["docs/xmarket-tracker-2026-09-29.md",2,2]]},
+{"h":"6fcb455bae5553e2d51390e4cedd334779ca0d9c","a":"2026-10-01T08:22:10+02:00","c":"2026-10-01T08:22:10+02:00","s":"x-weekend-fade-strategy: W1-gate review fixes — unknown OI cap fails closed, transient entry rejections retried, outcomes recovered from the ledger, complete snapshot, clock-step clamp; runbook caffeinate","p":"gate","w":"weekend review","t":"x-weekend-fade-strategy","m":"M0","r":[],"f":[["docs/code-map.html",1,1],["docs/runtime-2026-09-30.md",6,1],["docs/typed-observations-2026-09-24.md",1,1],["docs/xmarket-build-plan-2026-09-30.md",1,1],["docs/xmarket-risk-paper-2026-09-30.md",16,5],["sandboxes/xmarket-weekend/config.toml",13,3],["src/adapters/outbound/tools/xm/exits.rs",1,1],["src/adapters/outbound/tools/xm/weekend_fade.rs",638,116],["src/application/runtime/feeds.rs",1,1],["src/domain/schedule.rs",56,4],["src/domain/xm/exec.rs",11,5],["src/domain/xm/paper.rs",80,0],["src/domain/xm/risk.rs",151,49],["src/domain/xm/weekend_fade.rs",126,16]]},
+{"h":"a37d54dcf7d2631c139a0f78510d9289f51fe709","a":"2026-10-01T09:05:06+02:00","c":"2026-10-01T09:18:06+02:00","s":"docs(xmarket): W1 gate — weekend review fixed (6fcb455), soak 2 of the frozen weekend binary green; runbook uses it","p":"gate","w":"weekend review","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,2],["docs/runtime-2026-09-30.md",8,0],["docs/xmarket-tracker-2026-09-29.md",1,0],["sandboxes/xmarket-weekend/config.toml",8,4]]},
+{"h":"0fd620b5fc5f368ba75538621b8b9fb1718156e9","a":"2026-10-01T10:42:01+02:00","c":"2026-10-01T10:42:01+02:00","s":"W1 gate safety fixes (access): deny scopes stay deny in run-agent, hardened compose only narrows, writers refuse .tengu/.claude/CLAUDE.md, Telegram fails closed without an allow-list, hardened claude_code without settings/hooks/plugins","p":"gate","w":"batch 1","t":null,"m":null,"r":[],"f":[["AGENTS.md",34,6],["CLAUDE.md",34,6],["README.md",1,1],["config.example.toml",2,2],["docs/architecture-2026-04-27.md",1,1],["docs/code-map.html",1,1],["docs/code-map.md",2,2],["docs/configuration.md",4,2],["docs/engine-backends.md",6,5],["docs/mcp-bridge.md",3,2],["docs/tools.md",3,2],["docs/xmarket-risk-paper-2026-09-30.md",1,1],["sandboxes/storage-test/config.toml",1,0],["sandboxes/unlimited/config.toml",1,1],["sandboxes/xmarket/config.toml",7,5],["skills/orchestrator/SKILL.md",1,0],["src/adapters/inbound/cli/doctor.rs",36,0],["src/adapters/inbound/cli/run_agent.rs",10,3],["src/adapters/inbound/telegram.rs",250,43],["src/adapters/outbound/engines/claude_code.rs",74,1],["src/adapters/outbound/tools/agentic_memory/mod.rs",20,0],["src/adapters/outbound/tools/args.rs",91,28],["src/adapters/outbound/tools/manage_skill/mod.rs",2,2],["src/adapters/outbound/tools/workspace/write_file.rs",35,12],["src/application/skills/lifecycle/evolve.rs",30,1],["src/bootstrap/tools.rs",211,2],["src/config/hardening.rs",3,1],["src/config/mod.rs",3,0],["src/config/risk.rs",1,1],["src/domain/scope.rs",187,29],["tests/run_agent_ipc.rs",77,0]]},
+{"h":"270f23e4f144503ca4e7564cdb6ef1118855d5f3","a":"2026-10-01T11:13:56+02:00","c":"2026-10-01T11:19:18+02:00","s":"W1 gate safety fixes (ledger): exits back off and skip the order rate, shadow is paper-only, KILL inside the transaction, exit bound ceiling, replay fingerprints + reserved ids, future rows stale, feed retry, HL path redacted","p":"gate","w":"batch 1","t":null,"m":null,"r":[],"f":[["AGENTS.md",3,1],["CLAUDE.md",3,1],["config.example.toml",4,3],["docs/code-map.html",1,1],["docs/code-map.md",11,11],["docs/egress-2026-09-16.md",1,1],["docs/runtime-2026-09-30.md",1,1],["docs/xmarket-risk-paper-2026-09-30.md",18,16],["sandboxes/xmarket/config.toml",1,1],["src/adapters/inbound/cli/risk.rs",2,2],["src/adapters/outbound/http_class.rs",49,4],["src/adapters/outbound/hyperliquid/info.rs",65,7],["src/adapters/outbound/paper_store.rs",151,9],["src/adapters/outbound/tools/xm/exec_common.rs",339,18],["src/adapters/outbound/tools/xm/exits.rs",324,35],["src/adapters/outbound/tools/xm/paper.rs",109,9],["src/adapters/outbound/tools/xm/weekend_fade.rs",47,28],["src/application/paper.rs",50,2],["src/application/runtime/feeds.rs",112,8],["src/domain/xm/exec.rs",76,1],["src/domain/xm/exits.rs",176,1],["src/domain/xm/ledger.rs",62,13],["src/domain/xm/risk.rs",177,46],["src/domain/xm/weekend_fade.rs",35,3],["src/ports/paper.rs",26,4]]},
+{"h":"60092c467c0a32387003989834af9de9f79ed946","a":"2026-10-01T11:28:31+02:00","c":"2026-10-01T11:28:31+02:00","s":"docs(xmarket): W1 gate — safety review fixes (0fd620b, 270f23e) and the engine-parity review recorded; batch 2 running","p":"gate","w":"batch 1","t":null,"m":null,"r":[],"f":[["docs/xmarket-tracker-2026-09-29.md",3,1]]},
+{"h":"8e35c28de6880fb53ac8e5d06d97ddbeaf33e21e","a":"2026-10-01T12:47:15+02:00","c":"2026-10-01T13:02:20+02:00","s":"W1 gate parity-local-eval: local typed rows whole under the cap, eval/evolve bridge + redaction, external MCP schemas linted, env credentials redacted","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["AGENTS.md",12,5],["CLAUDE.md",12,5],["docs/code-map.html",1,1],["docs/code-map.md",3,3],["docs/context-cutting-flow-2026-04-27.html",1,1],["docs/context-management-2026-04-27.html",1,1],["docs/context-management-2026-04-27.md",4,3],["docs/engine-backends.md",3,3],["docs/mcp-bridge.md",2,2],["docs/skill-lifecycle-pipeline-diagrams.md",1,1],["docs/skill-lifecycle-validation.md",1,1],["docs/tools.md",5,2],["docs/typed-observations-2026-09-24.md",2,2],["src/adapters/inbound/cli/doctor.rs",1,0],["src/adapters/inbound/cli/run_agent.rs",1,0],["src/adapters/inbound/eval.rs",553,45],["src/adapters/inbound/webhooks.rs",5,45],["src/adapters/outbound/engines/local.rs",1,1],["src/adapters/outbound/engines/mod.rs",16,7],["src/adapters/outbound/mcp_client/mod.rs",125,11],["src/adapters/outbound/secrets.rs",71,0],["src/adapters/outbound/tools/mod.rs",1,2],["src/adapters/outbound/tools/schema_lint.rs",8,7],["src/application/chat/tool_loop.rs",48,4],["src/bootstrap/tools.rs",42,0],["src/domain/hl/ctx.rs",2,1],["src/domain/observation.rs",5,2],["src/domain/secrets.rs",212,1],["src/ports/engine.rs",2,1],["tests/engine_matrix.rs",68,4],["tests/fixtures/engine_matrix/open/claude_code.toml",2,2],["tests/fixtures/engine_matrix/open/local.toml",2,2],["tests/fixtures/engine_matrix/open/openrouter.toml",2,2],["tests/fixtures/engine_matrix/token_mcp_server.sh",7,5]]},
+{"h":"78f6f6f0357d474587d80c863fc539892a203b94","a":"2026-10-01T12:48:39+02:00","c":"2026-10-01T13:02:28+02:00","s":"W1 gate safety-exits-funding: closes keep their venue facts, TP / SL on the live book and kept once fired, funding settled at the size held and owed without a rate","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["config.example.toml",3,2],["docs/code-map.md",12,12],["docs/xmarket-risk-paper-2026-09-30.md",32,19],["sandboxes/xmarket/config.toml",1,1],["src/adapters/inbound/cli/risk.rs",58,2],["src/adapters/outbound/paper_store.rs",624,82],["src/adapters/outbound/tools/xm/defs.rs",13,10],["src/adapters/outbound/tools/xm/exec_common.rs",275,74],["src/adapters/outbound/tools/xm/exits.rs",358,20],["src/adapters/outbound/tools/xm/paper.rs",5,2],["src/adapters/outbound/tools/xm/weekend_fade.rs",8,7],["src/domain/xm/exec.rs",122,1],["src/domain/xm/exits.rs",187,21],["src/domain/xm/ledger.rs",338,3],["src/domain/xm/weekend_fade.rs",50,3],["src/ports/paper.rs",41,12]]},
+{"h":"6bb5df7844b67b34e974337e0aadbd478a8d87ae","a":"2026-10-01T13:19:29+02:00","c":"2026-10-01T13:19:29+02:00","s":"docs: regenerate code-map.html after the batch-2 merges","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1]]},
+{"h":"b0e3e31a353e55fe7ba700a4740d60313af3c743","a":"2026-10-01T13:26:58+02:00","c":"2026-10-01T13:41:05+02:00","s":"W1 gate parity-engines: step workspace + bridge, transcript, result caps, ${VAR}, system prompt once, compress_and_store ends the run","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["AGENTS.md",16,4],["CLAUDE.md",16,4],["config.example.toml",6,2],["docs/architecture-2026-04-27.html",2,2],["docs/architecture-2026-04-27.md",3,3],["docs/code-map.md",6,6],["docs/compression-flow-2026-04-27.md",3,2],["docs/compression-flow-2026-04-27.svg",5,5],["docs/context-management-2026-04-27.html",4,4],["docs/context-management-2026-04-27.md",9,5],["docs/engine-backends.md",11,5],["docs/mcp-bridge.md",22,9],["docs/skill-lifecycle-validation.md",1,1],["docs/tools.md",1,1],["docs/webhooks-2026-05-11.md",3,1],["sandboxes/aura/config.toml",7,1],["src/adapters/inbound/cli/run_agent.rs",46,31],["src/adapters/inbound/cli/tool.rs",39,23],["src/adapters/inbound/mcp_bridge.rs",338,19],["src/adapters/inbound/webhooks.rs",8,14],["src/adapters/outbound/bridge_env.rs",15,5],["src/adapters/outbound/engines/claude_code.rs",585,33],["src/adapters/outbound/engines/openrouter.rs",46,2],["src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs",10,3],["src/adapters/outbound/tools/skill_lifecycle/distill.rs",45,1],["src/application/chat/tool_loop.rs",59,9],["src/bootstrap/tools.rs",74,3],["src/config/mod.rs",72,0],["src/ports/engine.rs",5,3],["tests/bridge_conformance.rs",62,9],["tests/engine_matrix.rs",14,2],["tests/fixtures/engine_matrix/open/claude_code.toml",2,2],["tests/fixtures/engine_matrix/open/local.toml",2,2],["tests/fixtures/engine_matrix/open/openrouter.toml",2,2],["tests/run_agent_ipc.rs",252,0]]},
+{"h":"e50483c8f6271188090550ccbc35343469700438","a":"2026-10-01T13:28:50+02:00","c":"2026-10-01T13:43:30+02:00","s":"W1 gate safety-gate-inputs: opportunity rows back one side, strategy and size; require_hedge_for entries refused (review #8)","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["config.example.toml",2,2],["docs/code-map.md",2,2],["docs/typed-observations-2026-09-24.md",4,2],["docs/xmarket-risk-paper-2026-09-30.md",13,5],["sandboxes/xmarket/config.toml",2,2],["src/adapters/outbound/paper_store.rs",3,0],["src/adapters/outbound/tools/xm/defs.rs",4,3],["src/adapters/outbound/tools/xm/exec_common.rs",146,3],["src/adapters/outbound/tools/xm/weekend_fade.rs",75,2],["src/config/risk.rs",6,2],["src/domain/xm/risk.rs",425,72],["src/domain/xm/weekend_fade.rs",27,5],["tests/bridge_conformance.rs",20,2],["tests/engine_matrix.rs",4,2]]},
+{"h":"bea1e1df3c3d61fa806f7e7954ebd036c90a063d","a":"2026-10-01T13:51:28+02:00","c":"2026-10-01T13:51:28+02:00","s":"docs: regenerate code-map.html after the parity-engines + gate-inputs merges","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1]]},
+{"h":"7e8cfb081be0d4d126dd2797940b71bf1422daca","a":"2026-10-01T14:04:40+02:00","c":"2026-10-01T14:13:32+02:00","s":"W1 gate safety-ops: one owner per ledger (state-dir lease, tengu webhooks leased, account owners), feed/loop egress attribution, hardened prompt files, resume secret","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["AGENTS.md",20,9],["CLAUDE.md",20,9],["docs/code-map.md",12,12],["docs/egress-2026-09-16.md",9,1],["docs/runtime-2026-09-30.md",11,5],["docs/tools.md",1,1],["docs/webhooks-2026-05-11.md",10,0],["docs/xmarket-risk-paper-2026-09-30.md",24,4],["src/adapters/inbound/cli/mod.rs",4,2],["src/adapters/inbound/cli/risk.rs",296,3],["src/adapters/inbound/evolve.rs",2,1],["src/adapters/inbound/run.rs",5,4],["src/adapters/inbound/webhooks.rs",81,6],["src/adapters/outbound/egress.rs",214,14],["src/adapters/outbound/memory/builtin.rs",27,8],["src/adapters/outbound/paper_store.rs",241,10],["src/adapters/outbound/runtime_store.rs",1,1],["src/adapters/outbound/tools/agentic_memory/mod.rs",16,9],["src/adapters/outbound/tools/args.rs",49,7],["src/adapters/outbound/tools/manage_skill/mod.rs",25,7],["src/adapters/outbound/tools/skill_lifecycle/apply_improver_proposal.rs",4,1],["src/adapters/outbound/tools/workspace/write_file.rs",39,2],["src/adapters/outbound/tools/xm/exec_common.rs",51,0],["src/application/skills/lifecycle/evolve.rs",30,10],["src/application/skills/registry.rs",19,1],["src/bootstrap/decision.rs",11,1],["src/bootstrap/runtime.rs",388,63],["src/config/hardening.rs",9,0],["src/config/mod.rs",54,3],["src/config/paths.rs",53,0],["src/config/risk.rs",1,1],["src/config/sections.rs",18,0],["src/config/xmarket.rs",2,2],["src/domain/runtime.rs",15,2],["src/domain/scope.rs",69,0],["src/ports/paper.rs",17,1],["src/ports/runtime.rs",1,1]]},
+{"h":"ea4e53c8715ed9296e7c60d881c5f21c84021811","a":"2026-10-01T14:25:39+02:00","c":"2026-10-01T14:25:39+02:00","s":"docs: regenerate code-map.html after the safety-ops merge","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1]]},
+{"h":"b389d066d5aede8115c27896397888d4ce7fcd3a","a":"2026-10-01T14:19:58+02:00","c":"2026-10-01T14:28:24+02:00","s":"W1 gate parity-configs-docs: skills get their tools back (storage-test ingest, aura run_command), Telegram approval keys warn, loop queues bounded, config docs","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["AGENTS.md",20,12],["CLAUDE.md",20,12],["config.example.toml",7,7],["docs/code-map.md",5,5],["docs/configuration.md",14,8],["docs/decision-loop-plan-2026-09-24.md",1,1],["docs/runtime-2026-09-30.md",1,0],["docs/tools.md",2,2],["docs/webhooks-2026-05-11.md",2,1],["sandboxes/aura/config.toml",18,1],["sandboxes/jev-exec/config.toml",1,1],["sandboxes/storage-test/config.toml",16,3],["src/adapters/inbound/mcp_bridge.rs",146,0],["src/adapters/inbound/webhooks.rs",63,2],["src/adapters/outbound/tools/skill/shell_tool.rs",1,6],["src/adapters/outbound/tools/workspace/run_command.rs",34,6],["src/application/runtime/feeds.rs",8,0],["src/application/runtime/health.rs",1,1],["src/application/runtime/loops.rs",94,6],["src/bootstrap/runtime.rs",2,0],["src/config/mod.rs",85,9],["src/config/runtime.rs",30,2],["src/domain/scope.rs",128,1]]},
+{"h":"11900f78894867e3427ca828d10ec80b4d3d4e4b","a":"2026-10-01T14:44:39+02:00","c":"2026-10-01T14:44:39+02:00","s":"docs: regenerate code-map.html after the last batch-2 merge","p":"gate","w":"batch 2","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1]]},
+{"h":"018e47c1a3bae9eb0bba57222a22bbfb21a9119a","a":"2026-10-01T14:55:36+02:00","c":"2026-10-01T14:55:36+02:00","s":"docs(xmarket): W1 gate passed — batch 2 recorded, final checks + live engine matrix 39/39, open operator decisions, next steps","p":"gate","w":"gate passed","t":null,"m":null,"r":[],"f":[["AGENTS.md",1,1],["CLAUDE.md",1,1],["docs/SESSION_HANDOFF.md",5,3],["docs/xmarket-tracker-2026-09-29.md",5,2]]},
+{"h":"c91f6981f9ae561dca63e94e41914cd881c68c36","a":"2026-10-01T15:07:25+02:00","c":"2026-10-01T15:07:25+02:00","s":"docs(xmarket): W1 gate — xmarket smoke on the HEAD release build green","p":"gate","w":"gate passed","t":null,"m":null,"r":[],"f":[["docs/xmarket-tracker-2026-09-29.md",1,1]]},
+{"h":"b19c91539e6862c0cbe832c7306774db4c6b2252","a":"2026-10-01T16:45:55+02:00","c":"2026-10-01T16:45:55+02:00","s":"xlab prep: design doc + shared seams — market-data types, MarketDataStore port, CostSpec, [backtest] section, market.db / backtests paths, venue solana","p":"xprep","w":"","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",8,3],["docs/xlab-2026-10-01.md",198,0],["src/config/backtest.rs",212,0],["src/config/mod.rs",14,0],["src/config/sections.rs",4,0],["src/config/xmarket.rs",14,0],["src/domain/backtest/costs.rs",195,0],["src/domain/backtest/mod.rs",10,0],["src/domain/market.rs",1,0],["src/domain/marketdata.rs",441,0],["src/domain/mod.rs",2,0],["src/ports/market_data.rs",81,0],["src/ports/mod.rs",1,0]]},
+{"h":"18221e8049073c66d59f1f58a0a2fb3fce490999","a":"2026-10-01T17:13:45+02:00","c":"2026-10-01T17:24:47+02:00","s":"xlab-jev-replay: decision loop on a Clock + replay-deterministic Jev cache (ops-clock-port)","p":"xw","w":"wave 1","t":null,"m":null,"r":[["ops-clock-port","M7","done"]],"f":[["docs/code-map.html",1,1],["docs/code-map.md",11,9],["docs/decision-loop-plan-2026-09-24.md",1,0],["src/adapters/outbound/decision_cache.rs",474,0],["src/adapters/outbound/mod.rs",1,0],["src/application/decision_loop/mod.rs",351,21],["src/bootstrap/decision.rs",244,5],["src/domain/decision.rs",93,3],["src/ports/clock.rs",29,10],["src/ports/decision.rs",21,1]]},
+{"h":"d1154b1031b453694f67f2cc45eda722bf441866","a":"2026-10-01T17:27:46+02:00","c":"2026-10-01T17:27:46+02:00","s":"xlab sandbox (draft) + skill xlab-research: history-first harness config — [backtest] costs, universes, strategy library, Jev gate loop xl_gate, $100 [risk] caps","p":"xw","w":"wave 1","t":null,"m":null,"r":[],"f":[["sandboxes/xlab/config.toml",363,0],["skills/xlab-research/SKILL.md",57,0]]},
+{"h":"e7cd0633bb30cc34886026fb41759248fd14e83d","a":"2026-10-01T17:28:58+02:00","c":"2026-10-01T17:31:18+02:00","s":"xlab-data: market.db warehouse + backfill (HL candles / funding, GeckoTerminal OHLCV, HL archive, JSON) + history CLI","p":"xw","w":"wave 1","t":null,"m":null,"r":[["x-hl-historical-backfill","M7","wip"]],"f":[["Cargo.lock",16,0],["Cargo.toml",4,0],["config.example.toml",2,0],["docs/code-map.html",1,1],["docs/code-map.md",18,10],["docs/egress-2026-09-16.md",18,0],["docs/runtime-2026-09-30.md",3,1],["docs/xlab-2026-10-01.md",10,5],["src/adapters/inbound/cli/history.rs",492,41],["src/adapters/inbound/cli/mod.rs",3,1],["src/adapters/outbound/backfill/gecko.rs",618,0],["src/adapters/outbound/backfill/hl.rs",488,0],["src/adapters/outbound/backfill/hl_archive.rs",220,0],["src/adapters/outbound/backfill/json.rs",159,0],["src/adapters/outbound/backfill/mod.rs",535,0],["src/adapters/outbound/egress.rs",1,0],["src/adapters/outbound/market_data.rs",640,0],["src/adapters/outbound/mod.rs",2,0],["src/domain/marketdata.rs",4,3],["src/domain/marketdata_decode.rs",678,0],["src/domain/mod.rs",1,0],["src/ports/market_data.rs",3,3]]},
+{"h":"9645fc0f6482ff962ddb9c45a5aa0b1ed76a0e12","a":"2026-10-01T17:44:18+02:00","c":"2026-10-01T17:46:09+02:00","s":"xlab-engine: pure backtest engine — specs, six kinds, fills, research + capped arms, stats, report","p":"xw","w":"wave 1","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",12,3],["src/domain/backtest/checks.rs",328,0],["src/domain/backtest/costs.rs",0,3],["src/domain/backtest/engine.rs",956,0],["src/domain/backtest/features.rs",327,0],["src/domain/backtest/fills.rs",607,0],["src/domain/backtest/kinds.rs",1150,0],["src/domain/backtest/mod.rs",22,1],["src/domain/backtest/report.rs",847,0],["src/domain/backtest/spec.rs",1292,0],["src/domain/backtest/stats.rs",629,0],["src/domain/backtest/testkit.rs",293,0]]},
+{"h":"6b7a0e0b4262f5a4616e1b3bd6dc751a47592e01","a":"2026-10-01T18:13:58+02:00","c":"2026-10-01T18:16:24+02:00","s":"xlab-tools: market_history — the xlab tool family's first tool (mkt_history/1)","p":"xw","w":"wave 2","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",12,8],["docs/egress-2026-09-16.md",1,0],["docs/engine-backends.md",5,3],["docs/mcp-bridge.md",1,1],["docs/tools.md",2,0],["docs/typed-observations-2026-09-24.md",23,0],["docs/xlab-2026-10-01.md",10,0],["src/adapters/outbound/backfill/gecko.rs",29,6],["src/adapters/outbound/backfill/hl.rs",2,2],["src/adapters/outbound/backfill/mod.rs",40,0],["src/adapters/outbound/tools/mod.rs",9,0],["src/adapters/outbound/tools/xlab/defs.rs",80,0],["src/adapters/outbound/tools/xlab/history.rs",1074,0],["src/adapters/outbound/tools/xlab/mod.rs",133,0],["src/domain/marketdata_stats.rs",652,0],["src/domain/mod.rs",1,0],["src/domain/tools.rs",8,0],["tests/bridge_conformance.rs",119,3],["tests/engine_matrix.rs",146,4],["tests/fixtures/engine_matrix/claude_code.toml",9,1],["tests/fixtures/engine_matrix/local.toml",9,1],["tests/fixtures/engine_matrix/openrouter.toml",10,2],["tests/fixtures/hyperliquid/fundingHistory_xyz_TSLA.json",1,0],["tests/fixtures/xlab/dataset_xyz_TSLA_1h.json",1,0]]},
+{"h":"90242ef64a0a8063b0c135921dc2ec396be8f5a3","a":"2026-10-01T18:18:23+02:00","c":"2026-10-01T18:20:16+02:00","s":"xlab-gate: Jev gate arm on history — run_gate, gate_arms, history-free replay loops, build_gate","p":"xw","w":"wave 2","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",13,10],["docs/decision-loop-plan-2026-09-24.md",2,1],["docs/xlab-2026-10-01.md",16,0],["src/adapters/outbound/decision_cache.rs",0,3],["src/application/backtest/gate.rs",974,0],["src/application/backtest/mod.rs",4,0],["src/application/decision_loop/mod.rs",0,1],["src/application/mod.rs",1,0],["src/bootstrap/decision.rs",137,9],["src/domain/backtest/gate.rs",846,0],["src/domain/backtest/mod.rs",2,0],["src/ports/clock.rs",1,2],["src/ports/decision.rs",0,1]]},
+{"h":"d46639b2de669ff285bc6d2471cb52fddda41608","a":"2026-10-01T18:19:36+02:00","c":"2026-10-01T18:22:51+02:00","s":"xlab-backtest-app: backtest use case, tengu backtest, strategy-library load rules","p":"xw","w":"wave 2","t":null,"m":null,"r":[],"f":[["config.example.toml",31,0],["docs/code-map.html",1,1],["docs/code-map.md",14,9],["docs/egress-2026-09-16.md",2,2],["docs/runtime-2026-09-30.md",2,1],["docs/xlab-2026-10-01.md",40,6],["sandboxes/xlab/config.toml",2,2],["src/adapters/inbound/cli/backtest.rs",329,0],["src/adapters/inbound/cli/history.rs",16,14],["src/adapters/inbound/cli/mod.rs",19,1],["src/adapters/outbound/decision_cache.rs",6,41],["src/adapters/outbound/egress.rs",1,1],["src/application/backtest/mod.rs",860,2],["src/application/backtest/run_dir.rs",239,0],["src/config/backtest.rs",226,39],["src/config/mod.rs",8,1],["src/domain/backtest/engine.rs",1,3],["src/domain/backtest/features.rs",2,3],["src/domain/backtest/fills.rs",1,3],["src/domain/backtest/kinds.rs",0,3],["src/domain/backtest/report.rs",0,3],["src/domain/backtest/spec.rs",3,4],["src/domain/backtest/stats.rs",3,3],["src/domain/canonical.rs",101,0],["src/domain/marketdata.rs",1,4],["src/domain/mod.rs",1,0],["src/ports/market_data.rs",0,3]]},
+{"h":"b8bb07559f5cdbe8937375beec193df549e627c9","a":"2026-10-01T18:26:33+02:00","c":"2026-10-01T18:26:33+02:00","s":"docs: xlab in CLAUDE.md / AGENTS.md (required reading 12, update row, gotcha \"history first\", open network) + tracker: M7 replay items pulled forward by xlab (ops-clock-port ✅)","p":"xw","w":"wave 2","t":null,"m":null,"r":[],"f":[["AGENTS.md",30,3],["CLAUDE.md",30,3],["docs/xmarket-tracker-2026-09-29.md",5,4]]},
+{"h":"02f0c6117f552542ea8b8b4dfa1490e68488528a","a":"2026-10-01T18:58:30+02:00","c":"2026-10-01T18:58:40+02:00","s":"xlab-backtest-tool: backtest — the Architect's second tool (backtest/1, rules arms, inline specs)","p":"xw","w":"wave 3","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",9,8],["docs/engine-backends.md",3,2],["docs/mcp-bridge.md",2,2],["docs/tools.md",2,2],["docs/typed-observations-2026-09-24.md",14,0],["docs/xlab-2026-10-01.md",16,3],["src/adapters/outbound/tools/mod.rs",6,0],["src/adapters/outbound/tools/xlab/defs.rs",46,2],["src/adapters/outbound/tools/xlab/history.rs",9,58],["src/adapters/outbound/tools/xlab/mod.rs",92,10],["src/adapters/outbound/tools/xlab/run.rs",847,0],["src/application/backtest/mod.rs",14,6],["src/domain/tools.rs",4,1],["tests/bridge_conformance.rs",97,3],["tests/engine_matrix.rs",115,14],["tests/fixtures/engine_matrix/claude_code.toml",26,1],["tests/fixtures/engine_matrix/local.toml",26,1],["tests/fixtures/engine_matrix/openrouter.toml",27,2]]},
+{"h":"2750f788746c2de8049530b55a3148296cdca115","a":"2026-10-01T19:02:26+02:00","c":"2026-10-01T19:04:38+02:00","s":"xlab-integrate: tengu backtest --gate (Jev arm wired), |s|-ranked capped arm, research drawdown in bps, share splits, min_entry_trades","p":"xw","w":"wave 3","t":null,"m":null,"r":[],"f":[["config.example.toml",4,0],["docs/code-map.html",1,1],["docs/code-map.md",15,15],["docs/xlab-2026-10-01.md",48,20],["sandboxes/xlab/config.toml",30,3],["skills/xlab-research/SKILL.md",1,1],["src/adapters/inbound/cli/backtest.rs",225,13],["src/application/backtest/gate.rs",159,14],["src/application/backtest/mod.rs",323,10],["src/bootstrap/decision.rs",0,1],["src/config/backtest.rs",171,1],["src/domain/backtest/checks.rs",12,3],["src/domain/backtest/engine.rs",246,16],["src/domain/backtest/gate.rs",6,7],["src/domain/backtest/kinds.rs",192,0],["src/domain/backtest/report.rs",73,10],["src/domain/backtest/spec.rs",32,3],["src/domain/backtest/stats.rs",62,4],["src/domain/backtest/testkit.rs",0,1],["src/domain/marketdata.rs",257,5]]},
+{"h":"f7baf25d57a14c74099307e43f44aef007afb9c7","a":"2026-10-01T19:05:23+02:00","c":"2026-10-01T19:05:23+02:00","s":"xlab: the Architect gets market_history + backtest (explicit scopes: workspace fs root, HL + GeckoTerminal for fetches, no network for backtest)","p":"xw","w":"wave 3","t":null,"m":null,"r":[],"f":[["sandboxes/xlab/config.toml",14,2]]},
+{"h":"e6b0075c9239fc571a1d6c8c748511b9947bfdc5","a":"2026-10-01T19:09:52+02:00","c":"2026-10-01T19:10:00+02:00","s":"xlab: split lines show both halves' CIs; xlab-research skill gets copy-paste call shapes (the live Architect turn spent 14 of 23 backtest calls on argument-shape errors)","p":"xw","w":"wave 3","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["skills/xlab-research/SKILL.md",11,0],["src/domain/backtest/report.rs",2,1]]},
+{"h":"9e24ffc2f2b2df126d2d26340a1311cc2f6a08c9","a":"2026-10-01T19:11:19+02:00","c":"2026-10-01T19:11:19+02:00","s":"docs(xlab): PRD v0.5 review (§ 13), first results on real history (§ 14), SESSION_HANDOFF resume section — weekend run optional","p":"xw","w":"wave 3","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",15,1],["docs/code-map.md",1,1],["docs/xlab-2026-10-01.md",41,0]]},
+{"h":"db96cb25c0ffa1efa13f8d7c388e407dfb107d24","a":"2026-10-01T20:40:49+02:00","c":"2026-10-01T20:41:11+02:00","s":"xlab-fix-engine: engine, statistics and run-guard fixes from the adversarial review","p":"xfix","w":"review fixes","t":null,"m":null,"r":[],"f":[["AGENTS.md",4,1],["CLAUDE.md",4,1],["config.example.toml",4,2],["docs/SESSION_HANDOFF.md",2,1],["docs/code-map.html",1,1],["docs/code-map.md",11,11],["docs/runtime-2026-09-30.md",1,1],["docs/typed-observations-2026-09-24.md",1,1],["docs/xlab-2026-10-01.md",60,30],["sandboxes/xlab/config.toml",3,2],["src/application/backtest/gate.rs",13,1],["src/application/backtest/mod.rs",113,4],["src/application/backtest/run_dir.rs",121,18],["src/config/backtest.rs",87,1],["src/domain/backtest/checks.rs",605,127],["src/domain/backtest/costs.rs",43,3],["src/domain/backtest/engine.rs",443,93],["src/domain/backtest/fills.rs",44,3],["src/domain/backtest/gate.rs",30,22],["src/domain/backtest/kinds.rs",156,30],["src/domain/backtest/report.rs",24,9],["src/domain/backtest/stats.rs",170,23],["src/domain/backtest/testkit.rs",88,1],["src/domain/marketdata.rs",95,10],["tests/bridge_conformance.rs",1,1],["tests/engine_matrix.rs",3,3]]},
+{"h":"dba04d59922ba1922304a41351b1b4431efe9e75","a":"2026-10-01T21:15:15+02:00","c":"2026-10-01T21:19:01+02:00","s":"xlab-fix-tools: holdout discipline, stored-run rows, split-adjusted history, bounded tool runs, shared HL budget","p":"xfix","w":"review fixes","t":null,"m":null,"r":[],"f":[["AGENTS.md",6,1],["CLAUDE.md",6,1],["docs/SESSION_HANDOFF.md",1,0],["docs/code-map.html",1,1],["docs/code-map.md",8,6],["docs/engine-backends.md",3,2],["docs/mcp-bridge.md",2,2],["docs/tools.md",2,2],["docs/typed-observations-2026-09-24.md",7,5],["docs/xlab-2026-10-01.md",21,11],["sandboxes/xlab/config.toml",18,3],["skills/xlab-research/SKILL.md",19,17],["src/adapters/outbound/tools/xlab/defs.rs",36,9],["src/adapters/outbound/tools/xlab/history.rs",165,20],["src/adapters/outbound/tools/xlab/holdout.rs",436,0],["src/adapters/outbound/tools/xlab/mod.rs",6,2],["src/adapters/outbound/tools/xlab/rows.rs",927,0],["src/adapters/outbound/tools/xlab/run.rs",886,69],["src/config/rate_limits.rs",25,0],["src/domain/marketdata_stats.rs",10,0],["tests/bridge_conformance.rs",161,2],["tests/engine_matrix.rs",226,7],["tests/fixtures/xlab/run_conf_rows/report.json",219,0],["tests/fixtures/xlab/run_conf_rows/trades-capped.jsonl",2,0],["tests/fixtures/xlab/run_conf_rows/trades-research.jsonl",2,0]]},
+{"h":"998641179a4c2c25e33ea81832e3994a1ba8601f","a":"2026-10-01T21:20:08+02:00","c":"2026-10-01T21:20:08+02:00","s":"xlab: backtest tool text bound 4 608 → 5 120 chars (the merged engine + holdout fixes made the crowded worst case 4 766; still under ¾ of a 16k local model's 8 192 cap)","p":"xfix","w":"follow-ups","t":null,"m":null,"r":[],"f":[["docs/typed-observations-2026-09-24.md",1,1],["docs/xlab-2026-10-01.md",1,1],["src/adapters/outbound/tools/xlab/run.rs",1,1]]},
+{"h":"1c600de5117cf153f8a1e0642cd8297afe8b8929","a":"2026-10-01T21:30:27+02:00","c":"2026-10-01T21:30:27+02:00","s":"xlab engine matrix: the stored-run fixture regenerated by the simple-return engine (its holdout −57.00 log vs the live −56.86 made weak models quote the wrong step); constants −56.86 / −52.88","p":"xfix","w":"follow-ups","t":null,"m":null,"r":[],"f":[["tests/engine_matrix.rs",4,5],["tests/fixtures/xlab/run_conf_rows/report.json",62,54],["tests/fixtures/xlab/run_conf_rows/trades-capped.jsonl",2,2],["tests/fixtures/xlab/run_conf_rows/trades-research.jsonl",2,2]]},
+{"h":"0f93d3295f4c5b7e077d6d3a0d903eb4350d926f","a":"2026-10-01T21:34:31+02:00","c":"2026-10-01T21:34:31+02:00","s":"xlab backtest tool: a holdout read prints the OUT-OF-SAMPLE line right under line 1 (holdout n / mean / CI, labelled) — a live Sonnet turn quoted the whole-window CI as the holdout's; skill: judge the holdout on that line","p":"xfix","w":"follow-ups","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",1,1],["docs/typed-observations-2026-09-24.md",1,1],["docs/xlab-2026-10-01.md",1,1],["skills/xlab-research/SKILL.md",2,2],["src/adapters/outbound/tools/xlab/run.rs",54,2]]},
+{"h":"f554db01379f5bfc82cdf020934710084118c0c0","a":"2026-10-01T21:40:28+02:00","c":"2026-10-01T21:40:28+02:00","s":"xlab backtest tool: a holdout read prints out-of-sample figures only — line 1 = the holdout half (HOLDOUT of <split>), HOLDOUT capped, in-sample as a labelled reference, holdout periods; no whole-window figure or features dump in its text","p":"xfix","w":"follow-ups","t":null,"m":null,"r":[],"f":[["docs/code-map.html",1,1],["docs/code-map.md",1,1],["docs/typed-observations-2026-09-24.md",1,1],["docs/xlab-2026-10-01.md",1,1],["skills/xlab-research/SKILL.md",2,2],["src/adapters/outbound/tools/xlab/run.rs",174,50],["tests/engine_matrix.rs",6,3]]},
+{"h":"4b3270af4731adac26e6c51dde092f5cafebb577","a":"2026-10-01T21:45:20+02:00","c":"2026-10-01T21:45:20+02:00","s":"xlab backtest tool: drop an unused import","p":"xfix","w":"follow-ups","t":null,"m":null,"r":[],"f":[["src/adapters/outbound/tools/xlab/run.rs",1,1]]},
+{"h":"699bb83e79e3dac2f76ca9cbef69b3573b31252d","a":"2026-10-01T21:45:50+02:00","c":"2026-10-01T21:45:50+02:00","s":"docs(xlab): review, live Architect and engine-parity results (§ 14) + SESSION_HANDOFF final state","p":"fin","w":"","t":null,"m":null,"r":[],"f":[["docs/SESSION_HANDOFF.md",2,1],["docs/xlab-2026-10-01.md",3,0]]}
+];
+const BASE = '9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8';
+const HEAD = '699bb83e79e3dac2f76ca9cbef69b3573b31252d';
+const NET = { files: 253, add: 98752, del: 1946, added: 145, modified: 108, deleted: 0 }; // git diff --shortstat / --diff-filter=A|M|D --name-only main..HEAD
+const MILESTONE_ITEMS = { E0: 7, M0: 39, M1: 20, M2: 25, M3: 4, M3b: 6, M4: 19, M5: 35, M6: 9, M7: 8, M8: 13 }; // tracker § 1
+const EXPLORER = { xmarket: ['xmarket-2026-10-02.html', 'xmarket explorer'], xlab: ['xlab-2026-10-02.html', 'xlab explorer'] };
+
+/* Phase summaries. `code` spans and {{full hash}} links are expanded at render time. */
+const PHASES = [
+  { k: 'plan', name: 'Planning docs', short: 'Planning docs', prog: 'xmarket',
+    sum: [
+      'The operator PRD (v0.4) stored verbatim, with the operator addendum of 2026-09-30: build the full scope, every tool on every engine, paper first, a $100 budget behind a `[risk]` gate, network `open` (switchable to Tor), no legal gates.',
+      'Gap tracker: 185 items in 11 milestones (E0, M0–M8, M3b); rules R1–R13 and the definition of done in its § 0. Per-item detail: the gaps doc.',
+      'Feasibility study from public data: verdict re-scope — cross-venue convergence fails after costs; two Hyperliquid-only rules are worth a paper test. The operator kept the full plan.',
+      'Build plan: mandate, operating model, waves W1–W9 with gates, the weekend sandbox, the engine validation matrix, a kickoff prompt. The engine-parity rule went into `CLAUDE.md` / `AGENTS.md`.'
+    ],
+    src: 'tracker header + § 0 · build plan § Mandate, § Waves · PRD addendum · feasibility § Verdict',
+    links: [['xmarket-prd-2026-09-29.md', 'PRD + addendum'], ['xmarket-tracker-2026-09-29.md', 'tracker'], ['xmarket-gaps-2026-09-29.md', 'gaps'], ['xmarket-feasibility-2026-09-30.md', 'feasibility'], ['xmarket-build-plan-2026-09-30.md', 'build plan']] },
+  { k: 'wA', name: 'W1 wave A', short: 'W1 wave A', prog: 'xmarket',
+    sum: [
+      '16 tracker items built in parallel worktrees and merged one at a time — E0: `x-bridge-parity`, `x-claude-code-hardening`, `x-tool-schema-lint`, `x-local-model-fit`; M0: `risk-config-schema`, `ops-audit-atomic-write`, `hl-market-schema`, `risk-exec-idempotency-ids`, `rt-backoff-budget`, `hl-info-client`, `risk-calc-costs`, `risk-paper-ledger-domain`, `rt-daemon`, `rt-health`; M1: `kg-calendars`, `ops-history-recorder`.',
+      'Two shared seams, not tracker items: the `[xmarket]` state dir + `AgentConfig::sandbox` sections + the New York / Paris DST clock ({{f2a3fae70bbccc4582b3ae46aa49de1a05cf902d}}), and the `Clock` port + `SystemClock` ({{ce56fd34c39b06912d5304dd37508bfacf0acc06}}).',
+      'New commands: `tengu run [--sandbox <s>]` (lease, heartbeat, drain), `tengu doctor --sandbox <s> --live`, `tengu history range|asof <key>`.',
+      'Verified live: all 38 tool schemas accepted by gemini-2.5-flash-lite, claude-haiku-4.5 and gpt-4o-mini (OpenRouter) and parsed by Ollama 0.24; with `--strict-mcp-config` the Claude CLI loads none of the operator\'s 28 MCP servers.'
+    ],
+    src: 'SESSION_HANDOFF § Current (2026-09-30, W1 in progress) · tracker § 0 W1 notes',
+    links: [['runtime-2026-09-30.md', 'runtime'], ['typed-observations-2026-09-24.md', 'typed observations'], ['engine-backends.md', 'engine backends'], ['mcp-bridge.md', 'MCP bridge']] },
+  { k: 'wB', name: 'W1 wave B', short: 'W1 wave B', prog: 'xmarket',
+    sum: [
+      '`x-bridge-conformance-test` — every catalog tool in-process vs through a real `tengu mcp-bridge` (hidden `tengu tool list|call`); `x-engine-matrix-smoke` — live engine × model × tool-set legs and `tengu doctor --engines`, 9 / 9 legs green.',
+      'Hyperliquid tools `hl_ctx` (contexts + instruments, a dex sweep or up to 64 coins) and `hl_book` (L2 book, depth, slippage per notional).',
+      'Risk + paper: `risk-gate-domain` (every §28 rule a check, fail closed), `risk-paper-fill-engine` (market / IOC fills against an L2 book), `risk-paper-ledger-store` (`ledger.db`: gate + fill + write in one transaction), `risk-kill-switch` (`tengu risk status|halt|resume`, tool `risk_status`).',
+      '`rt-scheduler` — `[feeds.<n>]` tool / tick feeds on a UTC grid, local windows and DST-safe clock ticks. A pause point recorded the operator\'s load rules (one agent at a time, low priority, no local model on this Mac).'
+    ],
+    src: 'SESSION_HANDOFF § Previous: Resume here ("Merged since wave A", "Operator rules") · commit subjects',
+    links: [['xmarket-risk-paper-2026-09-30.md', 'risk + paper'], ['engine-backends.md', 'engine matrix'], ['mcp-bridge.md', 'MCP bridge'], ['runtime-2026-09-30.md', 'runtime § Feeds']] },
+  { k: 'wCD', name: 'W1 waves C + D', short: 'W1 waves C + D', prog: 'xmarket',
+    sum: [
+      'Wave C: `risk-gate-enforcement` — the `[risk]` gate inside every exec tool, exec tools only on private agents, bridge call ids `mcp:<uuid>:<id>`; `risk-paper-tools` — `paper_order`, `paper_close`, `paper_positions` (hidden `tengu tool turn`); `risk-audit-verdicts` — `logs/risk.jsonl`, `StepOutcome::Refused`.',
+      'Wave C: `x-exit-rules` — `[risk.exits]` and exec tool `xm_exits` via a `kind = "tool"` feed; `x-shared-workspace-and-state-layout`; `ops-sandbox-config` — `sandboxes/xmarket` at stage M0 (planner `xm`, routable `xm_architect`, private `xm_executor`), 5-min smoke green.',
+      'Wave D: `x-weekend-fade-strategy` — rule W as exec tool `xm_weekend_fade` (capped + shadow ledgers, 60 s idempotent steps, bit-exact golden replay of the 2026-09-26 weekend); `x-weekend-sandbox` — `sandboxes/xmarket-weekend`, no LLM and no Jev; 30-min soak: 0 WARN / ERROR, HL weight ≤ 190 / min of 1200, SIGTERM drain 0.32 s.'
+    ],
+    src: 'SESSION_HANDOFF § Previous: Resume here ("Merged since wave A") · tracker § 0 W1 notes',
+    links: [['xmarket-risk-paper-2026-09-30.md', 'risk + paper § Exits, § Weekend fade'], ['runtime-2026-09-30.md', 'runtime § Weekend run, § xmarket sandbox']] },
+  { k: 'e0', name: 'E0 parity audit', short: 'E0 parity audit', prog: 'xmarket',
+    sum: [
+      '`x-engine-parity-audit`: every catalog tool, a shell skill and an `[[mcp_servers]]` proxy pass schema lint, bridge conformance (57 cases) and the live engine matrix on gemini-2.5-flash-lite, claude-haiku-4.5 (OpenRouter) and the Claude CLI — 12 / 12 sets each. E0 closed: 7 of 7.',
+      'Leads 1–12 fixed: parent-session env stripped, explicit bridge workspace grant, OpenRouter failed-turn retry + `native_finish_reason`, `compress_and_store` through the bridge, no secrets in `--mcp-config`, shell skills bridged, chat honours `tools`, chat call ids namespaced, Privy under the egress ceiling.',
+      'Open: the live `local` legs (the operator\'s PC), `agentic_memory` live (Postgres), Privy signing and Solana `send` legs (never run, operator rule).'
+    ],
+    src: 'SESSION_HANDOFF § Previous: Resume here · tracker § 0 W1 notes (x-engine-parity-audit rows)',
+    links: [['xmarket-tracker-2026-09-29.md', 'tracker § 0 parity table'], ['engine-backends.md', 'engine backends'], ['mcp-bridge.md', 'MCP bridge'], ['tools.md', 'tools']] },
+  { k: 'gate', name: 'W1 gate reviews + batch fixes', short: 'W1 gate', prog: 'xmarket',
+    sum: [
+      'Three read-only adversarial reviews. Weekend path: 1 blocker, 2 major, 5 minor → fixed in {{6fcb455bae5553e2d51390e4cedd334779ca0d9c}}. Money safety: 16 findings (1 critical latent, 4 major, 11 minor) → batch 1, {{0fd620b5fc5f368ba75538621b8b9fb1718156e9}} (access) and {{270f23e4f144503ca4e7564cdb6ef1118855d5f3}} (ledger), then batch 2. Engine parity / doctrine: 3 critical, 5 major, 9 minor → batch 2.',
+      'Batch 2, six parallel worktrees: `parity-local-eval`, `safety-exits-funding`, `parity-engines`, `safety-gate-inputs`, `safety-ops`, `parity-configs-docs`, merged in that order; `code-map.html` regenerated in four commits — three between the merges, one after the last.',
+      'Weekend binary frozen from {{6fcb455bae5553e2d51390e4cedd334779ca0d9c}} as `~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455` (sha256 `e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72`); soak 2: 30 min green.',
+      'Final checks on {{11900f78894867e3427ca828d10ec80b4d3d4e4b}}: fmt, lints, conformance, `run_agent_ipc`, `mcp_bridge_external`, offline matrix, 1328 unit tests, `cargo check --all-features --all-targets`; live engine matrix 39 / 39. `sandboxes/xmarket` smoke on the release build of {{018e47c1a3bae9eb0bba57222a22bbfb21a9119a}}: green.',
+      'Open operator decisions: aura `editor_shell` built-ins, aura wallet tools vs signing without approval, aura `learning-agent` without a workspace, the weekend capped book limits, the Docker owner name.'
+    ],
+    src: 'tracker § 0 W1 notes (W1 gate, money-safety review, engine-parity review, batch 2 fixes, operator decisions) · SESSION_HANDOFF § Previous: Resume here',
+    links: [['xmarket-tracker-2026-09-29.md', 'tracker § 0 W1 notes'], ['xmarket-risk-paper-2026-09-30.md', 'risk + paper'], ['runtime-2026-09-30.md', 'runtime § Weekend run']] },
+  { k: 'xprep', name: 'xlab prep', short: 'xlab prep', prog: 'xlab',
+    sum: [
+      'Operator, 2026-10-01: "why do I have to wait 2 days" → history first: answer from backfilled history, never block on live recording.',
+      'Design doc `docs/xlab-2026-10-01.md` and the shared seams the parallel xlab agents build on: market-data types, the `MarketDataStore` port, `CostSpec`, the `[backtest]` section, `market.db` / backtests paths, venue `solana`. No behaviour yet.'
+    ],
+    src: 'SESSION_HANDOFF § Resume here (2026-10-01 evening) · commit message',
+    links: [['xlab-2026-10-01.md', 'xlab doc']] },
+  { k: 'xw', name: 'xlab waves 1–3', short: 'xlab waves 1–3', prog: 'xlab',
+    sum: [
+      'Wave 1: `xlab-jev-replay` — the decision loop on a `Clock` + a replay-deterministic Jev cache (tracker `ops-clock-port` ✅); sandbox `xlab` (draft) + skill `xlab-research`; `xlab-data` — `market.db` + backfill (HL candles / funding, GeckoTerminal OHLCV, HL S3 archive, JSON) + `tengu history backfill|import-hl-archive|import-json|coverage`; `xlab-engine` — the pure backtest engine (six spec kinds, research + capped arms, stats, report).',
+      'Wave 2: tool `market_history` (`mkt_history/1`); `xlab-gate` — the Jev gate arm on history; `xlab-backtest-app` — `tengu backtest` and the strategy-library load rules; `CLAUDE.md` / `AGENTS.md` (required reading 12, gotcha "history first").',
+      'Wave 3: tool `backtest` (`backtest/1`, rules arms, inline specs); `xlab-integrate` — `tengu backtest --gate`, share splits, `min_entry_trades`; the Architect gets both tools; split lines with both halves\' CIs and copy-paste call shapes in the skill; doc § 13 (PRD v0.5 review) and § 14 (first results).'
+    ],
+    src: 'commit messages · xlab doc § 3–10, § 13, § 14',
+    links: [['xlab-2026-10-01.md', 'xlab doc'], ['typed-observations-2026-09-24.md', 'typed observations § Market history, § Backtest'], ['decision-loop-plan-2026-09-24.md', 'decision-loop plan']] },
+  { k: 'xfix', name: 'xlab review fixes', short: 'xlab review fixes', prog: 'xlab',
+    sum: [
+      'Adversarial review (3 lenses, 19 verifiers): 17 confirmed findings — 5 major: holdout peeking, a split straddling a bar, log-return P&L, drawdown inside an instant, an overconfident paired CI — and 2 refuted. All 17 fixed in {{db96cb25c0ffa1efa13f8d7c388e407dfb107d24}} (engine, statistics, run guards) and {{dba04d59922ba1922304a41351b1b4431efe9e75}} (holdout discipline, stored-run rows, split-adjusted history, bounded tool runs, shared HL budget), re-verified by 17 independent checks.',
+      'Follow-ups from live turns: the `backtest` tool text bound 4 608 → 5 120 chars; the engine-matrix fixture regenerated by the simple-return engine; a holdout read prints out-of-sample figures only (a live Sonnet turn had quoted the whole-window CI as the holdout\'s).'
+    ],
+    src: 'xlab doc § 14 (Adversarial review, Architect after the review fixes) · commit subjects',
+    links: [['xlab-2026-10-01.md', 'xlab doc § 8, § 11, § 14']] },
+  { k: 'fin', name: 'Final docs', short: 'Final docs', prog: 'xlab',
+    sum: [
+      'xlab § 14 gains three rows: the adversarial review (17 confirmed, all fixed); the live Architect after the fixes (3 more Sonnet turns — holdout hidden while tuning, one counted read, final verdict "not robust: the holdout CI crosses 0"); live engine parity on the xlab sets (haiku-4.5 and the Claude CLI 4 / 4; gemini-2.5-flash-lite calls every tool but misquotes the numbers).',
+      'SESSION_HANDOFF "Validation (final)": unit suite 1,511 green, `cargo check --all-features --all-targets` clean (2 old warnings), conformance 68+ cases, offline engine matrix and lints green.'
+    ],
+    src: 'SESSION_HANDOFF § Resume here (Validation (final)) · xlab doc § 14',
+    links: [['SESSION_HANDOFF.md', 'SESSION_HANDOFF'], ['xlab-2026-10-01.md', 'xlab doc § 14']] }
+];
+const PHASE = {};
+PHASES.forEach((p, i) => { p.i = i; PHASE[p.k] = p; });
+
+/* ── helpers ── */
+const fmt = n => n.toLocaleString('en-US');
+const signed = (n, sign) => sign + fmt(n);
+const isDoc = p => p.startsWith('docs/') || /^[^/]+\.md$/.test(p);
+const relHref = p => p.startsWith('docs/') ? p.slice(5) : '../' + p;
+const dt = iso => iso.slice(0, 10) + ' ' + iso.slice(11, 16);
+const $ = id => document.getElementById(id);
+
+function el(tag, props) {
+  const e = document.createElement(tag);
+  if (props) {
+    for (const k of Object.keys(props)) {
+      const v = props[k];
+      if (v == null || v === false) continue;
+      if (k === 'class') e.className = v;
+      else if (k === 'text') e.textContent = v;
+      else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? '' : v);
+    }
+  }
+  for (let i = 2; i < arguments.length; i++) append(e, arguments[i]);
+  return e;
+}
+function append(parent, kid) {
+  if (kid == null || kid === false) return;
+  if (Array.isArray(kid)) { kid.forEach(k => append(parent, k)); return; }
+  parent.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+}
+
+/* ── derived fields ── */
+const BY_HASH = {};
+COMMITS.forEach((c, i) => {
+  c.n = i + 1;
+  c.add = 0; c.del = 0;
+  c.f.forEach(f => { c.add += f[1]; c.del += f[2]; });
+  c.docs = c.f.filter(f => isDoc(f[0])).map(f => f[0]);
+  c.docsOnly = c.docs.length === c.f.length;
+  const m = c.s.match(/^(?:W1 gate )?([a-z0-9]+(?:-[a-z0-9]+)+):/);
+  c.label = m && m[1] !== c.t ? m[1] : null;
+  c.hay = [c.h, c.s, c.t || '', c.m || '', c.label || '', PHASE[c.p].name, c.w,
+    c.r.map(r => r[0]).join(' '), c.f.map(f => f[0]).join(' ')].join('\n').toLowerCase();
+  BY_HASH[c.h] = c;
+});
+const TOTAL = COMMITS.reduce((t, c) => { t.add += c.add; t.del += c.del; t.files += c.f.length; return t; }, { add: 0, del: 0, files: 0 });
+
+function hashLink(h) {
+  if (!BY_HASH[h]) { console.error('unknown commit', h); return el('span', { class: 'hash' }, h); }
+  return el('a', { class: 'hash', href: '#commits?q=' + h, title: 'Show commit #' + BY_HASH[h].n }, h);
+}
+/* `code` and {{40-hex}} → nodes; everything else is text */
+function rich(s) {
+  const out = [];
+  s.split(/(`[^`]+`|\{\{[0-9a-f]{40}\}\})/).forEach(part => {
+    if (!part) return;
+    if (part[0] === '`') out.push(el('code', { text: part.slice(1, -1) }));
+    else if (part.slice(0, 2) === '{{') out.push(hashLink(part.slice(2, -2)));
+    else out.push(part);
+  });
+  return out;
+}
+function progBadge(prog) {
+  return el('span', { class: 'prog ' + prog }, el('span', { class: 'dot ' + prog, 'aria-hidden': 'true' }), prog);
+}
+function phaseBadge(p) {
+  return el('span', { class: 'badge ' + p.prog }, el('span', { class: 'dot ' + p.prog, 'aria-hidden': 'true' }), p.name);
+}
+function plusMinus(add, del) {
+  return [el('span', { class: 'plus' }, signed(add, '+')), ' ', el('span', { class: 'minus' }, signed(del, '−'))];
+}
+function span(iso1, iso2) {
+  const ms = Date.parse(iso2) - Date.parse(iso1);
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return h + ' h ' + m + ' min';
+}
+
+/* ── tabs + hash routing (#tab?q=…&p=…) ── */
+const TABS = ['overview', 'commits', 'charts', 'files', 'tracker', 'method'];
+let current = 'overview';
+function showTab(name, focusTab) {
+  if (TABS.indexOf(name) < 0) name = 'overview';
+  current = name;
+  TABS.forEach(t => {
+    const on = t === name;
+    const tab = $('tab-' + t);
+    tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    tab.tabIndex = on ? 0 : -1;
+    $('panel-' + t).hidden = !on;
+  });
+  if (name === 'charts') drawCharts();
+  if (focusTab) $('tab-' + name).focus();
+}
+function setHash(tab, params) {
+  const qs = params && params.toString();
+  history.replaceState(null, '', '#' + tab + (qs ? '?' + qs : ''));
+}
+function tabParams(t) {
+  if (t === 'commits') return commitParams();
+  if (t === 'files') return fileParams();
+  if (t === 'charts' && chartGroup !== 'phase') return new URLSearchParams({ g: chartGroup });
+  return null;
+}
+TABS.forEach(t => $('tab-' + t).addEventListener('click', () => { showTab(t); setHash(t, tabParams(t)); }));
+document.querySelector('.tabs').addEventListener('keydown', e => {
+  const i = TABS.indexOf(current);
+  let j = -1;
+  if (e.key === 'ArrowRight') j = (i + 1) % TABS.length;
+  else if (e.key === 'ArrowLeft') j = (i - 1 + TABS.length) % TABS.length;
+  else if (e.key === 'Home') j = 0;
+  else if (e.key === 'End') j = TABS.length - 1;
+  if (j < 0) return;
+  e.preventDefault();
+  showTab(TABS[j], true);
+  setHash(TABS[j], tabParams(TABS[j]));
+});
+function readHash() {
+  const raw = location.hash.slice(1);
+  const qi = raw.indexOf('?');
+  const tab = qi < 0 ? raw : raw.slice(0, qi);
+  const params = new URLSearchParams(qi < 0 ? '' : raw.slice(qi + 1));
+  if (tab === 'commits') {
+    cstate.q = params.get('q') || '';
+    cstate.phase = PHASE[params.get('p')] ? params.get('p') : 'all';
+    $('commit-q').value = cstate.q;
+    renderChips(); renderCommits();
+  } else if (tab === 'files') {
+    fstate.q = params.get('q') || '';
+    $('file-q').value = fstate.q;
+    renderFiles();
+  } else if (tab === 'charts' && ['phase', 'day', 'hour'].indexOf(params.get('g')) >= 0) {
+    setGroup(params.get('g'));
+  }
+  showTab(TABS.indexOf(tab) < 0 ? 'overview' : tab);
+  if (raw) window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', readHash);
+
+/* ── overview ── */
+function renderOverview() {
+  const first = COMMITS[0], last = COMMITS[COMMITS.length - 1];
+  $('range').append(
+    el('div', null, el('span', { class: 'k' }, 'branch'), el('code', { text: 'feature/xmarket' }), ' — local, no upstream configured'),
+    el('div', null, el('span', { class: 'k' }, 'base (main)'), el('span', { class: 'hash' }, BASE)),
+    el('div', null, el('span', { class: 'k' }, 'head'), hashLink(HEAD)),
+    el('div', null, el('span', { class: 'k' }, 'first → last'), dt(first.a) + ' → ' + dt(last.a) + ' (+02:00), ' + span(first.a, last.a))
+  );
+  const docsOnly = COMMITS.filter(c => c.docsOnly).length;
+  const itemsDone = new Set(), itemsWip = new Set();
+  COMMITS.forEach(c => c.r.forEach(r => (r[2] === 'done' ? itemsDone : itemsWip).add(r[0])));
+  const days = new Set(COMMITS.map(c => c.a.slice(0, 10)));
+  const tiles = [
+    ['Commits', fmt(COMMITS.length), 'linear history, one parent each'],
+    ['Lines added', '+' + fmt(TOTAL.add), 'Σ per-commit numstat'],
+    ['Lines deleted', '−' + fmt(TOTAL.del), 'Σ per-commit numstat'],
+    ['Net diff vs main', [fmt(NET.files), el('small', null, ' files')], '+' + fmt(NET.add) + ' / −' + fmt(NET.del) + ' · ' + NET.added + ' added, ' + NET.modified + ' modified, ' + NET.deleted + ' deleted'],
+    ['Tracker items ✅', fmt(itemsDone.size), itemsWip.size + ' more 🟡 cites a commit here · tracker § 5'],
+    ['Docs-only commits', fmt(docsOnly), 'of ' + COMMITS.length + ' · docs/ or root *.md'],
+    ['Days', fmt(days.size), Array.from(days).sort().join(', ')]
+  ];
+  tiles.forEach(t => $('kpis').append(el('div', { class: 'kpi' }, el('div', { class: 'label' }, t[0]), el('div', { class: 'value' }, t[1]), el('div', { class: 'src' }, t[2]))));
+
+  PHASES.forEach(p => {
+    const cs = COMMITS.filter(c => c.p === p.k);
+    const add = cs.reduce((s, c) => s + c.add, 0), del = cs.reduce((s, c) => s + c.del, 0);
+    const subs = {};
+    cs.forEach(c => { if (c.w) subs[c.w] = (subs[c.w] || 0) + 1; });
+    const subText = Object.keys(subs).map(k => k + ' (' + subs[k] + ')').join(' · ');
+    const exp = EXPLORER[p.prog];
+    const card = el('article', { class: 'phase ' + p.prog, 'aria-labelledby': 'ph-' + p.k },
+      el('h3', { id: 'ph-' + p.k }, el('span', { class: 'num' }, String(p.i + 1).padStart(2, '0')), p.name, progBadge(p.prog)),
+      el('div', { class: 'meta' },
+        dt(cs[0].a) + ' → ' + dt(cs[cs.length - 1].a) + ' · ' + cs.length + (cs.length === 1 ? ' commit · ' : ' commits · '),
+        plusMinus(add, del), subText ? ' · ' + subText : ''),
+      el('ul', null, p.sum.map(s => el('li', null, rich(s)))),
+      el('div', { class: 'src' }, 'Source: ' + p.src),
+      el('div', { class: 'links' },
+        el('a', { href: exp[0] }, exp[1]),
+        p.links.map(l => el('a', { href: l[0] }, l[1]))),
+      el('button', { class: 'btn', type: 'button', onclick: () => { location.hash = 'commits?p=' + p.k; } },
+        'Show ' + (cs.length === 1 ? 'the commit' : 'the ' + cs.length + ' commits') + ' →')
+    );
+    $('phase-list').append(card);
+  });
+}
+
+/* ── commits ── */
+const cstate = { phase: 'all', q: '', items: false, hideDocs: false };
+function commitParams() {
+  const ps = new URLSearchParams();
+  if (cstate.q) ps.set('q', cstate.q);
+  if (cstate.phase !== 'all') ps.set('p', cstate.phase);
+  return ps;
+}
+function renderChips() {
+  const box = $('phase-chips');
+  box.textContent = '';
+  const mk = (k, label, n, prog) => el('button', {
+    class: 'chip', type: 'button', 'aria-pressed': cstate.phase === k ? 'true' : 'false',
+    onclick: () => { cstate.phase = k; renderChips(); renderCommits(); setHash('commits', commitParams()); }
+  }, prog ? el('span', { class: 'dot ' + prog, 'aria-hidden': 'true' }) : null, label + ' (' + n + ')');
+  box.append(mk('all', 'All', COMMITS.length, null));
+  PHASES.forEach(p => box.append(mk(p.k, p.name, COMMITS.filter(c => c.p === p.k).length, p.prog)));
+}
+function commitCard(c) {
+  const p = PHASE[c.p];
+  const head = el('div', { class: 'c-head' },
+    el('span', { class: 'c-num' }, '#' + c.n),
+    el('time', { datetime: c.a }, dt(c.a)),
+    phaseBadge(p),
+    c.w ? el('span', { class: 'badge' }, c.w) : null,
+    c.t ? el('span', { class: 'badge item', title: 'tracker item (milestone ' + c.m + ')' }, c.t + ' · ' + c.m) : null,
+    c.label ? el('span', { class: 'badge label', title: 'subject label (not a tracker id)' }, c.label) : null,
+    c.docsOnly ? el('span', { class: 'badge docs' }, 'docs only') : null
+  );
+  const meta = el('div', { class: 'c-meta' },
+    el('span', { class: 'hash' }, c.h),
+    el('span', null, c.f.length + (c.f.length === 1 ? ' file' : ' files')),
+    el('span', null, plusMinus(c.add, c.del)));
+  const docs = c.docs.length
+    ? el('div', { class: 'c-docs' }, 'Docs: ', c.docs.map((d, i) => [i ? ' · ' : '', el('a', { href: relHref(d) }, d)]))
+    : el('div', { class: 'c-docs' }, 'Docs: none');
+  const more = el('details', { class: 'c-more' },
+    el('summary', null, 'Files (' + c.f.length + '), dates' + (c.r.length ? ', tracker rows' : '')),
+    el('dl', { class: 'kv' },
+      el('dt', null, 'authored'), el('dd', null, c.a),
+      el('dt', null, 'merged'), el('dd', null, c.c + ' (committer date)'),
+      c.r.length ? [el('dt', null, 'tracker row'), el('dd', null, c.r.map((r, i) => [i ? ' · ' : '', el('code', { text: r[0] }), ' ', r[1], ' ',
+        el('span', { class: r[2] === 'done' ? 'st-done' : 'st-wip' }, r[2] === 'done' ? '✅ done' : '🟡 in progress')]))] : null),
+    el('div', { class: 'ftable' }, el('table', null,
+      el('thead', null, el('tr', null, el('th', null, 'Path'), el('th', { class: 'n' }, '+'), el('th', { class: 'n' }, '−'))),
+      el('tbody', null, c.f.map(f => el('tr', null,
+        el('td', { class: 'path' }, el('a', { href: relHref(f[0]) }, f[0])),
+        el('td', { class: 'n plus' }, '+' + fmt(f[1])),
+        el('td', { class: 'n minus' }, '−' + fmt(f[2]))))))));
+  /* a short hash quoted in the subject → the full hash it names (unique prefix in this range) */
+  const named = [];
+  (c.s.match(/\b[0-9a-f]{7,39}\b/g) || []).forEach(s => {
+    const hit = COMMITS.filter(x => x.h.indexOf(s) === 0);
+    if (hit.length === 1 && named.indexOf(hit[0]) < 0) named.push(hit[0]);
+  });
+  const namedRow = named.length
+    ? el('div', { class: 'c-docs' }, 'Named in the subject: ', named.map((x, i) => [i ? ' · ' : '', '#' + x.n + ' ', hashLink(x.h)]))
+    : null;
+  return el('article', { class: 'commit', id: 'c-' + c.h }, head, el('p', { class: 'c-subj' }, c.s), namedRow, meta, docs, more);
+}
+function renderCommits() {
+  const terms = cstate.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = COMMITS.filter(c =>
+    (cstate.phase === 'all' || c.p === cstate.phase) &&
+    (!cstate.items || c.t || c.r.length) &&
+    (!cstate.hideDocs || !c.docsOnly) &&
+    terms.every(t => c.hay.indexOf(t) >= 0));
+  const add = list.reduce((s, c) => s + c.add, 0), del = list.reduce((s, c) => s + c.del, 0);
+  const cnt = $('commit-count');
+  cnt.textContent = '';
+  append(cnt, ['Showing ' + list.length + ' of ' + COMMITS.length + ' commits · ', plusMinus(add, del)]);
+  const box = $('commit-list');
+  box.textContent = '';
+  let lastPhase = null;
+  list.forEach(c => {
+    if (c.p !== lastPhase) {
+      lastPhase = c.p;
+      const p = PHASE[c.p];
+      const inPhase = list.filter(x => x.p === c.p);
+      box.append(el('div', { class: 'phase-head' }, el('h3', null, String(p.i + 1).padStart(2, '0') + ' · ' + p.name), progBadge(p.prog),
+        el('span', { class: 'meta' }, inPhase.length + (inPhase.length === 1 ? ' commit' : ' commits'))));
+    }
+    box.append(commitCard(c));
+  });
+  if (!list.length) box.append(el('p', null, 'No commit matches. Clear the search or pick "All".'));
+}
+let qTimer = 0;
+$('commit-q').addEventListener('input', e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { cstate.q = e.target.value.trim(); renderCommits(); setHash('commits', commitParams()); }, 120);
+});
+$('only-items').addEventListener('change', e => { cstate.items = e.target.checked; renderCommits(); });
+$('hide-docs').addEventListener('change', e => { cstate.hideDocs = e.target.checked; renderCommits(); });
+
+/* ── charts (inline SVG, horizontal bars) ── */
+let chartGroup = 'phase';
+let measureCtx = null;
+function textW(s, size) {
+  if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+  measureCtx.font = size + 'px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  return measureCtx.measureText(s).width;
+}
+function cssVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+function agg(label, cs) {
+  return { label: label, commits: cs.length,
+    add: cs.reduce((s, c) => s + c.add, 0), del: cs.reduce((s, c) => s + c.del, 0) };
+}
+function chartRows(kind) {
+  if (kind === 'phase') return PHASES.map(p => agg(p.short, COMMITS.filter(c => c.p === p.k)));
+  if (kind === 'day') {
+    return Array.from(new Set(COMMITS.map(c => c.a.slice(0, 10)))).sort()
+      .map(d => agg(d, COMMITS.filter(c => c.a.slice(0, 10) === d)));
+  }
+  const keys = COMMITS.map(c => c.a.slice(0, 13)).sort();       // "2026-09-30T15"
+  const toMs = k => Date.parse(k + ':00:00Z');                    // a calendar counter on the local clock
+  const rows = [];
+  for (let t = toMs(keys[0]); t <= toMs(keys[keys.length - 1]); t += 3600000) {
+    const k = new Date(t).toISOString().slice(0, 13);
+    rows.push(agg(k.slice(5, 10) + ' ' + k.slice(11, 13) + ':00', COMMITS.filter(c => c.a.slice(0, 13) === k)));
+  }
+  return rows;
+}
+function niceStep(max, count, integer) {
+  const raw = Math.max(max, 1) / count;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const n = raw / pow;
+  let step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
+  if (integer) step = Math.max(1, Math.round(step));
+  return step;
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function sv(tag, attrs, text) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  return e;
+}
+function endRounded(x, y, w, h, r) {
+  r = Math.min(r, w, h / 2);
+  return 'M' + x + ',' + y + 'H' + (x + w - r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x + w) + ',' + (y + r) +
+    'V' + (y + h - r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x + w - r) + ',' + (y + h) + 'H' + x + 'Z';
+}
+/* rows: [{label, …}] · series: [{key, color}] · tip(row) · title(row) · aria */
+function hbar(box, rows, series, tip, title, aria, integer) {
+  box.textContent = '';
+  const W = Math.max(280, Math.round(box.clientWidth || 600));
+  const fs = 12, rowH = 26, barH = 16, top = 4, axisH = 24;
+  const labelW = Math.ceil(Math.max.apply(null, rows.map(r => textW(r.label, fs)))) + 10;
+  const tipW = Math.ceil(Math.max.apply(null, rows.map(r => textW(tip(r), 11)))) + 10;
+  const plotX = labelW + 4, plotW = Math.max(60, W - plotX - tipW);
+  const H = top + rows.length * rowH + axisH;
+  const totals = rows.map(r => series.reduce((s, sr) => s + r[sr.key], 0));
+  const maxV = Math.max.apply(null, totals);
+  const step = niceStep(maxV, W < 480 ? 3 : 4, integer);
+  const niceMax = Math.max(step, Math.ceil(maxV / step) * step);
+  const x = v => plotX + v / niceMax * plotW;
+  const svg = sv('svg', { viewBox: '0 0 ' + W + ' ' + H, width: W, height: H, role: 'img', 'aria-label': aria });
+  const grid = cssVar('--grid', '#2D2D4A'), ink = cssVar('--text-muted', '#A3B1C6'), dim = cssVar('--text-dim', '#8B9AB3');
+  for (let v = 0; v <= niceMax + 1e-9; v += step) {
+    const gx = Math.round(x(v)) + 0.5;
+    svg.append(sv('line', { x1: gx, x2: gx, y1: top, y2: top + rows.length * rowH, stroke: grid, 'stroke-width': 1 }));
+    svg.append(sv('text', { x: gx, y: H - 7, 'text-anchor': 'middle', 'font-size': 11, fill: dim }, fmt(v)));
+  }
+  rows.forEach((r, i) => {
+    const y = top + i * rowH, by = y + (rowH - barH) / 2;
+    const g = sv('g', { class: 'row' });
+    g.append(sv('title', {}, title(r)));
+    g.append(sv('rect', { class: 'hit', x: 0, y: y, width: W, height: rowH, fill: 'transparent' }));
+    g.append(sv('text', { x: labelW, y: y + rowH / 2 + 4, 'text-anchor': 'end', 'font-size': fs, fill: ink }, r.label));
+    let acc = 0;
+    const nonZero = series.filter(sr => r[sr.key] > 0);
+    nonZero.forEach((sr, j) => {
+      const x0 = x(acc) + (j > 0 ? 2 : 0);                       // 2px surface gap between stacked segments
+      let w = r[sr.key] / niceMax * plotW - (j > 0 ? 2 : 0);
+      w = Math.max(w, 1.5);
+      acc += r[sr.key];
+      const last = j === nonZero.length - 1;
+      g.append(last
+        ? sv('path', { class: 'bar-seg', d: endRounded(x0, by, w, barH, 4), fill: sr.color })
+        : sv('rect', { class: 'bar-seg', x: x0, y: by, width: w, height: barH, fill: sr.color }));
+    });
+    const endX = nonZero.length ? Math.max(x(acc), plotX + 1.5) : plotX;
+    g.append(sv('text', { x: endX + 6, y: y + rowH / 2 + 4, 'font-size': 11, fill: ink }, tip(r)));
+    svg.append(g);
+  });
+  svg.append(sv('line', { x1: plotX + 0.5, x2: plotX + 0.5, y1: top, y2: top + rows.length * rowH, stroke: dim, 'stroke-width': 1 }));
+  box.append(svg);
+}
+function drawCharts() {
+  if (current !== 'charts') return;
+  const rows = chartRows(chartGroup);
+  const word = { phase: 'phase', day: 'day', hour: 'hour' }[chartGroup];
+  $('cap-commits').textContent = 'Commits per ' + word;
+  $('cap-lines').textContent = 'Lines changed per ' + word;
+  const nonEmpty = rows.filter(r => r.commits).length;
+  $('chart-total').textContent = rows.length + ' ' + word + (rows.length === 1 ? '' : 's') +
+    (chartGroup === 'hour' ? ' (' + nonEmpty + ' with commits)' : '') + ' · ' + COMMITS.length + ' commits · +' + fmt(TOTAL.add) + ' / −' + fmt(TOTAL.del);
+  hbar($('chart-commits'), rows, [{ key: 'commits', color: cssVar('--commits', '#9085e9') }],
+    r => r.commits ? String(r.commits) : '',
+    r => r.label + ': ' + r.commits + (r.commits === 1 ? ' commit' : ' commits'),
+    'Commits per ' + word + ': ' + rows.filter(r => r.commits).map(r => r.label + ' ' + r.commits).join(', '), true);
+  const compact = $('chart-lines').clientWidth < 520;
+  const k = n => n >= 10000 ? (n / 1000).toFixed(1) + 'k' : fmt(n);
+  hbar($('chart-lines'), rows, [{ key: 'add', color: cssVar('--add', '#3987e5') }, { key: 'del', color: cssVar('--del', '#d95926') }],
+    r => r.commits ? (compact ? '+' + k(r.add) + ' −' + k(r.del) : '+' + fmt(r.add) + ' / −' + fmt(r.del)) : '',
+    r => r.label + ': +' + fmt(r.add) + ' added, −' + fmt(r.del) + ' deleted (net ' + (r.add - r.del >= 0 ? '+' : '−') + fmt(Math.abs(r.add - r.del)) + ')',
+    'Lines added and deleted per ' + word + ': ' + rows.filter(r => r.commits).map(r => r.label + ' +' + r.add + ' −' + r.del).join(', '), false);
+  const t = $('chart-table');
+  t.textContent = '';
+  t.append(el('thead', null, el('tr', null, el('th', null, word), el('th', { class: 'n' }, 'Commits'),
+    el('th', { class: 'n' }, '+ added'), el('th', { class: 'n' }, '− deleted'), el('th', { class: 'n' }, 'Net'))));
+  t.append(el('tbody', null, rows.map(r => el('tr', null, el('td', null, r.label), el('td', { class: 'n' }, fmt(r.commits)),
+    el('td', { class: 'n plus' }, r.add ? '+' + fmt(r.add) : '0'), el('td', { class: 'n minus' }, r.del ? '−' + fmt(r.del) : '0'),
+    el('td', { class: 'n' }, r.add === r.del ? '0' : (r.add > r.del ? '+' : '−') + fmt(Math.abs(r.add - r.del))))),
+    el('tr', null, el('td', null, el('strong', null, 'Total')), el('td', { class: 'n' }, fmt(COMMITS.length)),
+      el('td', { class: 'n plus' }, '+' + fmt(TOTAL.add)), el('td', { class: 'n minus' }, '−' + fmt(TOTAL.del)),
+      el('td', { class: 'n' }, '+' + fmt(TOTAL.add - TOTAL.del)))));
+}
+function setGroup(g) {
+  chartGroup = g;
+  document.querySelectorAll('.seg').forEach(x => x.setAttribute('aria-pressed', x.getAttribute('data-g') === g ? 'true' : 'false'));
+}
+document.querySelectorAll('.seg').forEach(b => b.addEventListener('click', () => {
+  setGroup(b.getAttribute('data-g'));
+  drawCharts();
+  setHash('charts', chartGroup === 'phase' ? null : new URLSearchParams({ g: chartGroup }));
+}));
+let rTimer = 0;
+window.addEventListener('resize', () => { clearTimeout(rTimer); rTimer = setTimeout(drawCharts, 150); });
+
+/* ── files ── */
+const FILES = (() => {
+  const m = new Map();
+  COMMITS.forEach(c => c.f.forEach(f => {
+    let o = m.get(f[0]);
+    if (!o) { o = { p: f[0], n: 0, add: 0, del: 0, phases: [], first: c.n, last: c.n }; m.set(f[0], o); }
+    o.n++; o.add += f[1]; o.del += f[2]; o.last = c.n;
+    if (o.phases.indexOf(c.p) < 0) o.phases.push(c.p);
+  }));
+  return Array.from(m.values());
+})();
+const fstate = { q: '', sort: 'n', docs: false };
+function fileParams() { const ps = new URLSearchParams(); if (fstate.q) ps.set('q', fstate.q); return ps; }
+function renderFiles() {
+  const terms = fstate.q.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = FILES.filter(f => (!fstate.docs || isDoc(f.p)) && terms.every(t => f.p.toLowerCase().indexOf(t) >= 0));
+  list.sort(fstate.sort === 'path' ? (a, b) => a.p.localeCompare(b.p)
+    : fstate.sort === 'add' ? (a, b) => b.add - a.add || a.p.localeCompare(b.p)
+    : (a, b) => b.n - a.n || a.p.localeCompare(b.p));
+  const add = list.reduce((s, f) => s + f.add, 0), del = list.reduce((s, f) => s + f.del, 0);
+  const cnt = $('file-count');
+  cnt.textContent = '';
+  append(cnt, ['Showing ' + list.length + ' of ' + FILES.length + ' paths · ', plusMinus(add, del), ' (Σ per commit)']);
+  const t = $('file-table');
+  t.textContent = '';
+  t.append(el('thead', null, el('tr', null, el('th', null, 'Path'), el('th', { class: 'n' }, 'Commits'),
+    el('th', { class: 'n' }, '+'), el('th', { class: 'n' }, '−'), el('th', null, 'Phases'), el('th', { class: 'n' }, 'First → last #'))));
+  t.append(el('tbody', null, list.map(f => el('tr', null,
+    el('td', { class: 'path' }, el('a', { href: relHref(f.p) }, f.p)),
+    el('td', { class: 'n' }, el('a', { href: '#commits?q=' + encodeURIComponent(f.p), title: 'Show the commits that touched ' + f.p }, fmt(f.n))),
+    el('td', { class: 'n plus' }, '+' + fmt(f.add)),
+    el('td', { class: 'n minus' }, '−' + fmt(f.del)),
+    el('td', { class: 'phases' }, f.phases.map(k => PHASE[k].short).join(' · ')),
+    el('td', { class: 'n' }, '#' + f.first + ' → #' + f.last)))));
+}
+$('file-q').addEventListener('input', e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { fstate.q = e.target.value.trim(); renderFiles(); setHash('files', fileParams()); }, 120);
+});
+$('file-sort').addEventListener('change', e => { fstate.sort = e.target.value; renderFiles(); });
+$('file-docs').addEventListener('change', e => { fstate.docs = e.target.checked; renderFiles(); });
+
+/* ── tracker items ── */
+function renderTracker() {
+  const m = new Map();
+  const touch = (id, ms, c, cited, status) => {
+    let o = m.get(id);
+    if (!o) { o = { id: id, ms: ms, status: null, commits: [] }; m.set(id, o); }
+    if (status) o.status = status;
+    let e = o.commits.find(x => x.c === c);
+    if (!e) { e = { c: c, cited: false }; o.commits.push(e); }
+    if (cited) e.cited = true;
+  };
+  COMMITS.forEach(c => {
+    if (c.t) touch(c.t, c.m, c, false, null);
+    c.r.forEach(r => touch(r[0], r[1], c, true, r[2]));
+  });
+  const items = Array.from(m.values());
+  const done = {};
+  items.forEach(o => { if (o.status === 'done') done[o.ms] = (done[o.ms] || 0) + 1; });
+  Object.keys(MILESTONE_ITEMS).forEach(ms => {
+    if (!done[ms]) return;
+    const pct = Math.round(done[ms] / MILESTONE_ITEMS[ms] * 100);
+    $('meters').append(el('div', { class: 'meter' },
+      el('div', { class: 'top-line' }, el('span', null, el('b', null, ms), ' done in this range'), el('span', null, done[ms] + ' / ' + MILESTONE_ITEMS[ms])),
+      el('div', { class: 'track', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': String(MILESTONE_ITEMS[ms]), 'aria-valuenow': String(done[ms]), 'aria-label': ms + ' items done' },
+        el('div', { class: 'fill', style: 'width:' + pct + '%' }))));
+  });
+  const t = $('item-table');
+  t.append(el('thead', null, el('tr', null, el('th', null, '#'), el('th', null, 'Item'), el('th', null, 'Milestone'),
+    el('th', null, 'Tracker status'), el('th', null, 'Commits (★ = the row cites it)'), el('th', null, 'Phase'))));
+  t.append(el('tbody', null, items.map((o, i) => el('tr', null,
+    el('td', { class: 'n' }, String(i + 1)),
+    el('td', null, el('code', { text: o.id })),
+    el('td', null, o.ms),
+    el('td', null, o.status === 'done' ? el('span', { class: 'st-done' }, '✅ done') : o.status === 'wip' ? el('span', { class: 'st-wip' }, '🟡 in progress') : '—'),
+    el('td', null, o.commits.map((e, j) => el('div', null, '#' + e.c.n + ' ', hashLink(e.c.h), e.cited ? ' ★' : ''))),
+    el('td', null, Array.from(new Set(o.commits.map(e => PHASE[e.c.p].name))).join(' · '))))));
+}
+
+/* ── boot ── */
+renderOverview();
+renderChips();
+renderCommits();
+renderFiles();
+renderTracker();
+if (location.hash) readHash();
+})();
+</script>
+</body>
+</html>

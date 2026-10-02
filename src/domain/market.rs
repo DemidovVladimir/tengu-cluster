@@ -119,6 +119,7 @@ pub(crate) fn decimal_field(obj: &Value, key: &str, field: &str) -> Field<f64> {
 pub(crate) const VENUES: &[&str] = &[
     "hyperliquid",
     "robinhood",
+    "solana",
     "binance-spot",
     "binance-usdm",
     "bybit-spot",

@@ -1,7 +1,18 @@
 # Harness-Owned Orchestration + Memory — Architecture
 
-> **Superseded (2026-09-18):** PR #6–#8-era snapshot. Current architecture: `docs/architecture-2026-04-27.md`; config shape: `docs/configuration.md` — the `tengu.toml` examples in §7 / §12 predate today's `AgentConfig` (`workspace_tools = ["memory_search"]` fails validation; subagents use `tools` + `description`).
-> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`); plan steps run as `tengu run-agent` subprocesses (`runner.rs`), not `ChatWorker`.
+> **Historical snapshot (PR #6–#8, 2026-04) — banner refreshed 2026-10-02.** Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer); every file: `docs/code-map.md`; config: `docs/configuration.md`.
+> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). The flow below no longer runs as written. Corrected in place on 2026-10-02: the file tables in § 3, the `build_orchestrator` signature in § 5. Still as of PR #8: the `tengu.toml` examples (§ 7, § 12), the line numbers in § 11, the sequence diagrams (§ 4, § 10).
+
+| Then (this doc) | Now | Where |
+|---|---|---|
+| `OrchestratorAgentPlanner`: an orchestrator agent with one `memory_search` tool | `RagPlanner`: file registry `TENGU_PLANNER_REGISTRY.md` + `skills/orchestrator/SKILL.md`; the planner call gets no tools | `src/application/orchestrator/planner.rs` |
+| `ChatWorker` runs each step in-process | `SubprocessRunner` spawns `tengu run-agent` per step (IPC JSON over stdin / stdout) | `src/adapters/outbound/subprocess_runner.rs` → `src/adapters/inbound/cli/run_agent.rs` |
+| `MemoryInjector` / `MemoryWriter` around every step | only the planner-side `ChatOrchestratorPortImpl` uses them; durable memory = Postgres `agentic_memory` (feature `postgres_memory`) | `src/application/memory/`, `src/adapters/outbound/tools/agentic_memory/` |
+| `tengu.toml` | one config per sandbox: `sandboxes/<name>/config.toml` (else `<TENGU_HOME>/config.toml`) | `docs/configuration.md` |
+| `workspace_tools = ["memory_search"]` | fails validation — `memory_search` is a base tool; subagents use `tools` + `description` | `src/domain/tools.rs::WORKSPACE_TOOLS` |
+| Qdrant vector backend | removed 2026-05-14; `DiskVectorStore` is the only `VectorStore` | `src/adapters/outbound/memory/disk_vector.rs` |
+| flat `src/adapters/` | hexagonal layout since 2026-09-23 | `docs/code-map.md`, `tests/layering_lint.rs` |
+| the chat turn only | + `tengu run` (feeds, loops, lease), decision loops (Jev) + replay, typed observations, xmarket risk / paper, xlab backtests (2026-09-24 → 2026-10-01) | `docs/architecture-2026-04-27.md` §1b, §2.7–2.13 |
 
 This document describes the architecture that landed across PRs #6, #7, #8. It replaces the heart/brain/sensors doctrine and all prior skill-based orchestration.
 
@@ -81,12 +92,12 @@ Each step dispatch:
 | `mod.rs` | `Orchestrator` struct. Public API: `new`, `handle`, `subscribe`, `cancel`. |
 | `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/mod.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
-| `plan.rs` | `Step`, `StepId`, `Plan` types. Topology helpers: `ready_steps`, `validate` (cycles, single-leaf, known agents), `single_leaf`. |
-| `planner.rs` | `Planner` trait + `OrchestratorAgentPlanner` impl. Wraps the orchestrator agent's LLM call. Parses verdicts (handles markdown fences). |
+| `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `single_leaf`. `validate` (cycles, single-leaf, known agents) is dead code since Phase 7.1. |
+| `planner.rs` | `RagPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
 | `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Exponential backoff, emits `StepFailed` / `StepExhausted`. |
-| `executor.rs` | `DagExecutor` + `WorkerHandle` trait. Parallel ready-set scheduling via `tokio::spawn`. Observes cancel flag. |
+| `executor.rs` | `DagExecutor`. Parallel ready-set scheduling via `tokio::spawn`. Observes cancel flag. (`WorkerHandle` trait: `src/ports/orchestration.rs`.) |
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
-| `wiring.rs` | `ChatServiceFactory` trait + `ChatOrchestratorPortImpl` (planner LLM port). `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`runner.rs`) is the only `WorkerHandle`. |
+| `wiring.rs` | `ChatOrchestratorPortImpl` (planner LLM port). The `ChatServiceFactory` trait lives in `src/ports/orchestration.rs`. `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`src/adapters/outbound/subprocess_runner.rs`) is the only `WorkerHandle`. |
 | `roster.rs` | Removed (Phase 7.1) — roster is rendered to `TENGU_PLANNER_REGISTRY.md` by `shared_files.rs`. |
 | `telemetry.rs` | Removed — see `src/domain/metrics.rs`. |
 
@@ -95,17 +106,17 @@ Each step dispatch:
 | File | What it does |
 |---|---|
 | `mod.rs` | Module root. |
-| `provider.rs` | `MemoryProvider` trait (Hermes-shaped). Methods: `system_prompt_block`, `prefetch(agent, query)`, `sync_turn(agent, user, asst)`, `on_pre_compress`, `shutdown`. |
-| `builtin.rs` | `BuiltinMemoryProvider` — always-registered. Loads AGENTS.md + MEMORY.md + identity files + daily logs into system prompt; vector-searches on prefetch. |
-| `manager.rs` | `MemoryManager` — holds one builtin + at most one external. Exposes `prefetch_all`, `sync_all`, `ingest_one`, `search`, `set_vector_backend`. |
-| `injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock`. Called pre-turn by the orchestrator + executor. |
-| `writer.rs` | `sync_turn` — spawns a detached task for post-turn writes. Never blocks the user reply. |
+| `provider.rs` | Moved: the `MemoryProvider` trait (Hermes-shaped: `system_prompt_block`, `prefetch(agent, query)`, `sync_turn(agent, user, asst)`, `on_pre_compress`, `shutdown`) lives in `src/ports/memory.rs`. |
+| `builtin.rs` | Moved to `src/adapters/outbound/memory/builtin.rs`: `BuiltinMemoryProvider` — always-registered. Loads AGENTS.md + MEMORY.md + identity files + daily logs into system prompt; vector-searches on prefetch. |
+| `manager.rs` | `MemoryManager` — holds one builtin + at most one external. Exposes `prefetch_all`, `sync_all`, `ingest_one`, `ingest_batch`, `search`, `set_vector_backend`, `clear_all`, `stats`. |
+| `injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock`. Since Phase 7.1 only the planner-side `ChatOrchestratorPortImpl` calls it. |
+| `writer.rs` | `sync_turn` — spawns a detached task for post-turn writes. Never blocks the user reply. Same Phase 7.1 note. |
 | `fencing.rs` | `<memory-context>` block building + sanitization (nested fences stripped defensively). |
-| `context_block.rs` | Shared types: `PinnedMemoryBlock`, `ChunkMetadata`, `MemoryHit`. |
-| `vector.rs` | `VectorStore` trait + submodules. |
-| `vector/disk.rs` | `DiskVectorStore` — bincode on disk. |
+| `context_block.rs` | Moved: `PinnedMemoryBlock`, `ChunkMetadata`, `MemoryHit` live in `src/domain/memory.rs`. |
+| `vector.rs` | Moved: the `VectorStore` trait lives in `src/ports/memory.rs`. |
+| `vector/disk.rs` | Moved to `src/adapters/outbound/memory/disk_vector.rs`: `DiskVectorStore` — bincode on disk, the only `VectorStore`. |
 | `vector/qdrant.rs` | Removed Phase 6 (2026-05-14) — `DiskVectorStore` is the only built-in `VectorStore`; durable memory is Postgres `outbound/tools/agentic_memory/` (feature `postgres_memory`). |
-| `vector/embedder.rs` | `Embedder` — OpenRouter embeddings client, `text-embedding-3-small`. |
+| `vector/embedder.rs` | Moved to `src/adapters/outbound/memory/embedder.rs`: `Embedder` — OpenRouter embeddings client, `text-embedding-3-small`. |
 
 LLM-callable memory tools live in `src/adapters/outbound/tools/memory/` and go through `MemoryManager`:
 
@@ -113,9 +124,9 @@ LLM-callable memory tools live in `src/adapters/outbound/tools/memory/` and go t
 |---|---|---|
 | `memory_ingest` | `outbound/tools/memory/ingest.rs` | Explicit document/fact ingestion (chunks + metadata). |
 | `memory_search` | `outbound/tools/memory/search.rs` | Targeted vector read mid-turn. |
-| `persistent_store` | `outbound/tools/memory/persistent_store.rs` | Deterministic KV scratchpad (SQLite-backed). |
+| `persistent_store` | `outbound/tools/memory/persistent_store.rs` | Chunked file storage with vector semantic search (files under `<workspace>/.tengu/storage/`; opt-in). |
 
-Pre-turn retrieval and post-turn writes are ALSO automatic through `MemoryInjector` / `MemoryWriter` — the LLM-callable tools are a complement, not the only path.
+Pre-turn retrieval and post-turn writes were ALSO automatic through `MemoryInjector` / `MemoryWriter` in this design — the LLM-callable tools are a complement, not the only path. Today plan steps run in `tengu run-agent` subprocesses and only the planner-side port uses the injector / writer.
 
 ---
 
@@ -204,7 +215,7 @@ Helpers in `bootstrap/`:
 - `ChatInputsFn = Arc<dyn Fn(&str) -> Result<ChatTurnInputs> + Send + Sync>` — the closure shape.
 - `RuntimeChatServiceFactory::new(inputs_fn)` — impl of the `ChatServiceFactory` trait.
 - `snapshots_inputs_fn(snapshots: OrchestratorSnapshots) -> ChatInputsFn` — returns a closure that reads from the shared map.
-- `build_orchestrator(config, factory, memory) -> Option<Orchestrator>` — builds the full stack.
+- `build_orchestrator(config, factory, memory, session_id) -> Option<Orchestrator>` — builds the full stack (`session_id` from `resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — `tengu webhooks` mints `webhook-<name>-<uuid>` per request instead; shared by `RagPlanner` and `SubprocessRunner`).
 
 **Telegram** (`adapters/inbound/telegram.rs`): `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. Writes snapshots for every agent, awaits `handle`, sends the reply chunked + secret-redacted.
 
@@ -404,6 +415,8 @@ Note: AtomicBool is checked between step dispatches, NOT mid-step. A worker alre
 
 When the TL;DR isn't enough. Follow these paths in order.
 
+> Stale as of 2026-10-02: the line numbers below are from the PR #8 tree, and `ChatWorker` / `OrchestratorAgentPlanner` no longer exist. The functions `route_and_chat`, `execute_chat_turn` and `execute_orchestrator_turn` are still in `src/adapters/inbound/telegram.rs`. Current end-to-end trace: `docs/architecture-2026-04-27.md` § 5.
+
 ### 11.1 A user message arrives in Telegram
 
 1. `adapters/inbound/telegram.rs:878` — dispatcher calls `route_and_chat(msg, sender_id)`.
@@ -496,7 +509,7 @@ Logs to grep for:
 - `"TUI orchestrator constructed"` / `"Telegram orchestrator constructed"` — confirms construction at startup.
 - `"orch: plan created"` — confirms a plan was built on a message.
 - `"orch: ▶ <step> [<agent>]"` — confirms a step fired.
-- `"orch: replan triggered"` — step exhausted, planner re-invoked.
+- `"orch: ↻ replan — <reason>"` (TUI bubble) / `"orch ReplanTriggered"` (Telegram log) — step exhausted, planner re-invoked.
 
 ### 12.4 Debugging: memory didn't kick in
 
@@ -507,7 +520,7 @@ Memory is automatic IF `build_memory_manager` returned `Some` at startup. Precon
 
 Logs:
 - `"DiskVectorStore loaded"` — disk backend ready.
-- `"QdrantVectorStore connected"` — legacy vector DB backend ready.
+- `"QdrantVectorStore connected"` — legacy vector DB backend ready (removed 2026-05-14 with the Qdrant backend; never logged today).
 - `"OPENROUTER_API_KEY not set, memory disabled"` — backend didn't initialize.
 
 Status:
@@ -580,8 +593,8 @@ Runbook for smoke testing orchestration: see `docs/orchestration-test-scenarios.
 
 | PR | Title | Merged SHA | Net LOC |
 |---|---|---|---|
-| #9 | ci: remove step referencing missing scripts/check_rust_file_descriptions.sh | `6139d78` | −3 |
-| #6 | feat: harness-owned orchestration + memory subsystem | `e76c08d` | +10,252 / −12,226 |
-| #7 | refactor(memory): port MemoryService to memory::vector::* and delete old files | `9667ea3` | +575 / −1,175 |
-| #8 | feat(channels): wire Telegram + TUI through Orchestrator::handle | `1533c48` | +570 / −58 |
+| #9 | ci: remove step referencing missing scripts/check_rust_file_descriptions.sh | `6139d782e75d03df83c9a655b0c1253db58fd259` | −3 |
+| #6 | feat: harness-owned orchestration + memory subsystem | `e76c08d849fdb5a747856b5804188c00e168623c` | +10,252 / −12,226 |
+| #7 | refactor(memory): port MemoryService to memory::vector::* and delete old files | `9667ea37acb08ba7dfb2487e6f72fdb672988121` | +575 / −1,175 |
+| #8 | feat(channels): wire Telegram + TUI through Orchestrator::handle | `1533c48e83eacc9a270956c47358d7de5879071d` | +570 / −58 |
 | post-merge polish | embed_batch, delete/clear_all/entry_count/storage_bytes, route_explicit_agents, activity-in-snapshots, /purge → clear_all, TUI stats | (current branch) | +~400 / −~50 |

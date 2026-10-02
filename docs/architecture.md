@@ -1,11 +1,11 @@
 # Architecture
 
-> **Superseded (2026-09-18):** PR #6–#8-era doc. Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` / `.html`); config: `docs/configuration.md`.
-> Doctrine below (harness owns control flow; orchestrator = agent with one `memory_search` tool) was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — see `CLAUDE.md`.
+> **Historical overview — banner refreshed 2026-10-02.** Read the canonical set instead: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer) — the chat turn, `tengu run` (feeds, loops, lease), decision loops + replay, typed observations, the tool families, xmarket risk / paper and xlab backtests. Every file: `docs/code-map.md` (+ `.html`). Config: `docs/configuration.md`.
+> The doctrine below (harness owns control flow; orchestrator = an agent with one `memory_search` tool) is the PR #6–#8 design, replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). Paths, engines, trait locations, the plugin list and the module map were corrected in place on 2026-10-02; this page does not cover anything added since 2026-09-24.
 
 > Historical: every implementation plan referenced this document; every PR was reviewed against it.
 
-Tengu is a single-binary AI agent runtime. All code lives in `src/adapters/` + `src/main.rs` — flat structure, no sub-crates.
+Tengu is a single-binary AI agent runtime. Since 2026-09-23 the code is hexagonal — `src/{domain,ports,config,application,bootstrap}` + `src/adapters/{inbound,outbound}`, no sub-crates; `tests/layering_lint.rs` enforces who may import whom.
 
 ---
 
@@ -39,7 +39,7 @@ Two mechanisms coexist. They answer different questions:
 
 | Question | Mechanism | Where |
 |----------|-----------|-------|
-| Does this tool exist at all for this agent? | Allow-list derived from the `tools` slice passed to `build_tool_executor` (coarse, binary) | `src/bootstrap/` |
+| Does this tool exist at all for this agent? | Allow-list derived from the `tools` slice passed to `build_tool_executor` (coarse, binary) | `src/bootstrap/tools.rs` |
 | When the tool runs, what can it touch? | `ToolScope` (fine, default-deny) | `src/domain/scope.rs` |
 
 Order of checks:
@@ -62,47 +62,51 @@ Channel (TUI/Telegram) → ChatRuntimeService → Engine → StreamEvent → Res
 1. A **channel adapter** (TUI, Telegram) receives user input
 2. **ChatRuntimeService** handles memory recall, prompt budgeting, history management
 3. The **engine** processes the prompt and returns `StreamEvent`s
-4. **collect_engine_response** runs the outer tool loop for engines that don't manage their own tools (OpenRouter)
+4. **collect_engine_response** runs the outer tool loop for engines that don't manage their own tools (OpenRouter, local)
 5. For engines that manage their own tools (Claude Code), the tool loop runs inside the engine subprocess
 
 ## Engine Backends
 
-Tengu supports two engine backends, selectable per agent via `engine = "..."` in config:
+Tengu supports three engine backends, selectable per agent via `engine = "..."` in config:
 
 | Backend | Transport | Tool Loop | Workspace | Feature Flag |
 |---------|-----------|-----------|-----------|-------------|
-| [[engine-backends#OpenRouter|OpenRouter]] | HTTP JSON | Tengu outer loop | Tengu tools | `openrouter` (default) |
-| [[engine-backends#Claude Code|Claude Code]] | CLI subprocess | Claude internal | Claude native + MCP bridge | `claude_code` |
+| [[engine-backends#OpenRouter\|OpenRouter]] | HTTP JSON | Tengu outer loop | Tengu tools | `openrouter` (default) |
+| [[engine-backends#Local\|Local]] (Unsloth, Ollama, llama.cpp, vLLM) | OpenAI-compatible HTTP, direct (never via the egress proxy) | Tengu outer loop | Tengu tools | none (always built) |
+| [[engine-backends#Claude Code\|Claude Code]] | CLI subprocess | Claude internal | Claude native + MCP bridge | `claude_code` |
 
 See [[engine-backends]] for detailed comparison.
 
 ## Key Abstractions
 
-### Engine trait (`src/domain/message.rs`)
+### Engine trait (`src/ports/engine.rs`, abridged)
 ```rust
 trait Engine: Send + Sync {
     fn id(&self) -> &str;
     fn context_window(&self) -> usize;
     fn supports_tool_use(&self) -> bool;
     fn manages_own_workspace(&self) -> bool;
+    fn tool_result_char_cap(&self) -> Option<usize>; // default None; LocalEngine fits its window
+    fn available_models(&self) -> Vec<ModelInfo>;
     async fn run(&self, messages, tools, context) -> Stream<StreamEvent>;
 }
 ```
 
 The `manages_own_workspace()` flag is the key discriminator:
-- `false` (OpenRouter): Tengu builds tools, runs the outer tool loop, manages workspace operations
+- `false` (OpenRouter, local): Tengu builds tools, runs the outer tool loop, manages workspace operations
 - `true` (Claude Code): Engine handles workspace ops natively; Tengu tools are bridged via [[mcp-bridge]]
 
-### EngineContext (`src/domain/message.rs`)
+### EngineContext (`src/ports/engine.rs`)
 Passed to every `engine.run()` call:
 - `workspace` — filesystem path for the agent
 - `system_prompt` — Tengu-composed prompt with identity, skills, memory
 - `bridge_tools` — tool definitions for the [[mcp-bridge]] (Claude Code only)
+- `max_tool_rounds`, `max_mcp_result_chars`, `mcp_servers` — the Claude Code engine's tool-call cap, bridge result cap and the `[[mcp_servers]]` it hands its bridge
 
-### Tool Assembly (`src/bootstrap/`)
-- `compute_base_tools()` — static tool defs from the workspace, http, crypto, memory, cache, and skill-lifecycle plugins for the outer loop (`skill_distill`, `shared_cache`, `persistent_store` are opt-in per agent via `workspace_tools`)
-- `advertised_defs()` — tool defs for the MCP bridge when `manages_own_workspace = true`
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers the core plugins through `register_catalog` (agentic_memory, workspace, memory, cache, http, crypto, skill-lifecycle) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+### Tool Assembly (`src/bootstrap/tools.rs`, catalog in `src/adapters/outbound/tools/mod.rs`)
+- `compute_base_tools()` — static tool defs for the outer loop; opt-in names (`src/domain/tools.rs::WORKSPACE_TOOLS`) join via `workspace_tools` or `tools`
+- `advertised_defs()` (`adapters/outbound/tools/mod.rs`) — the catalog's tool defs an agent sees (memory gate + its opt-ins)
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers the catalog plugins through `register_catalog` (workspace, memory, cache, `agentic_memory` with feature `postgres_memory`, skill-lifecycle, manage_skill, http, crypto, skill_resource, view_skill, solana, hyperliquid, xm, xlab) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
 
 ### Skill Lifecycle (`src/application/skills/lifecycle/`, `src/adapters/outbound/tools/skill_lifecycle/`)
 A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
@@ -115,83 +119,91 @@ All three honour harness-owned doctrine: cycle counts, regression tolerance, bes
 
 ### Plugin Architecture (`src/adapters/outbound/tools/`, `src/application/tools/registry.rs`)
 
-Every tool is a small struct implementing the async `Tool` trait. Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, and activity port.
+Every tool is a small struct implementing the async `Tool` trait (`src/ports/tool.rs`). Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, activity port, the conversation, the agent's config and the call id.
 
-- **Static plugins** (tool defs known at compile time): `workspace`, `http`, `crypto`, `cache`, `memory`, `skill`, `skill_lifecycle`, `agentic_memory` (feature `postgres_memory`)
-- **Dynamic plugin** (tool defs discovered at boot): `mcp` — connects to each `[[mcp_servers]]` entry, calls `tools/list`, registers each remote tool as `{server}.{tool_name}`
+- **Catalog plugins** (one `ToolEntry` row per tool in `catalog()`): `workspace`, `memory`, `cache`, `agentic_memory` (feature `postgres_memory`), `skill_lifecycle`, `manage_skill`, `http`, `crypto`, `skill_resource`, `view_skill`, `solana`, `hyperliquid`, `xm`, `xlab`
+- **Outside the catalog**: `skill` (`SkillPlugin`, shell skills) and `mcp` (`McpPlugin`, dynamic) — connects to each `[[mcp_servers]]` entry, calls `tools/list`, registers each remote tool as `{server}__{tool}` (a schema outside the engine subset is dropped at discovery)
 
-Adding a new platform tool: write a `Tool` impl under a new `plugins/<name>/` directory, expose it through a `ToolPlugin`, and add one registration line in `adapters::outbound::tools::register_catalog` (the in-process executor and the MCP bridge both call it). No changes to the engine loop, no new executor plumbing.
+Adding a new platform tool: write a `Tool` impl under `src/adapters/outbound/tools/<name>/`, expose it through a `ToolPlugin`, and add one `ToolEntry` row to `catalog()` in `adapters/outbound/tools/mod.rs` (+ the name in `WORKSPACE_TOOLS` if opt-in); the in-process executor and the MCP bridge both read it. A tool is done when its schema lint, bridge conformance case and live engine-matrix leg pass (`docs/tools.md`).
 
 ## Module Map
+
+Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 
 ### Core
 | Module | Purpose |
 |--------|---------|
-| `config.rs` | TOML config schema, validation |
-| `types.rs` | Engine trait, Message, ToolCall, StreamEvent, EngineContext |
-| `ports.rs` | Port traits for dependency inversion |
+| `config/mod.rs` (+ `config/*.rs`) | TOML config schema, validation |
+| `domain/message.rs` | Message, ToolCall, ToolDef, StreamEvent |
+| `ports/` | Port traits for dependency inversion (`engine.rs`: Engine, EngineContext, ToolExecutor; `tool.rs`: Tool, ToolPlugin, ToolCtx; …) |
 
 ### Engines
 | Module | Purpose |
 |--------|---------|
-| `adapters/outbound/engines/mod.rs` | Engine factory + OpenRouter implementation |
+| `adapters/outbound/engines/mod.rs` | Engine factory (`build_engine`, `build_step_engine`, `build_planner_engine`) |
+| `adapters/outbound/engines/openrouter.rs` | OpenRouter engine |
+| `adapters/outbound/engines/local.rs` | Local OpenAI-compatible engine |
 | `adapters/outbound/engines/claude_code.rs` | Claude Code engine (feature-gated) |
-| `mcp_bridge.rs` | Stdio MCP server for tool bridging |
+| `adapters/inbound/mcp_bridge.rs` | Stdio MCP server for tool bridging |
 
 ### Runtime
 | Module | Purpose |
 |--------|---------|
 | `application/chat/service.rs` | ChatRuntimeService — per-turn orchestration |
-| `bootstrap/` | Shared logic for all channel adapters (tool assembly, session registry) |
+| `bootstrap/` | Composition root shared by all channel adapters (tool assembly, memory, orchestrator, sandbox) |
 | `application/chat/flow.rs` | Flow/session management |
-| `prompt_budget.rs` | Token budget calculation |
-| `token.rs` | Token counting utilities |
-| `usage.rs` | Usage/cost tracking |
+| `application/chat/prompt_budget.rs` | Token budget calculation |
+| `domain/token.rs` | Token counting utilities |
+| `domain/usage.rs` | Usage/cost tracking |
 
 ### Tools
 | Module | Purpose |
 |--------|---------|
-| `application/tools/registry.rs` | `Tool` / `ToolPlugin` traits, `ToolRegistry`, `PluginToolExecutor`, `ToolCtx`, `PluginCtx` |
-| `outbound/tools/workspace/` | `read_file`, `list_directory`, `write_file`, `run_command` |
-| `outbound/tools/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
-| `outbound/tools/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
-| `outbound/tools/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
-| `outbound/tools/memory/` | `memory_ingest`, `memory_search` + `persistent_store` (chunked file store, opt-in via `workspace_tools`) |
-| `outbound/tools/skill/` | `SkillShellTool` — one struct reused per active shell skill |
-| `outbound/mcp_client/` | Inbound MCP client (stdio + http) — proxies each remote tool as `{server}__{tool}` |
-| `outbound/tools/skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (opt-in via `workspace_tools`); `compress_and_store` definition (appended implicitly to every `run-agent` subagent) |
-| `skill_lifecycle/` | Metric types + 4 kinds (`shell_check`, `llm_judge`, `tool_assertion`, `script`), rolling `metrics.json` storage, `evals/prompts.yaml` fixtures, scratch-worktree helper, evolve loop, approval gate |
-| `adapters/inbound/activity.rs` | Path validation + tool-activity UI helpers (no executors) |
+| `application/tools/registry.rs` | `ToolRegistry`, `PluginToolExecutor` (traits `Tool` / `ToolPlugin` / `ToolCtx` / `PluginCtx` in `ports/tool.rs`) |
+| `adapters/outbound/tools/workspace/` | `read_file`, `list_directory`, `write_file`, `run_command` |
+| `adapters/outbound/tools/http/` | `http_request` (async, env-var + bearer/basic auth + multipart) |
+| `adapters/outbound/tools/crypto/` | Privy wallet tools: `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` |
+| `adapters/outbound/tools/cache/` | `shared_cache` (SQLite, workspace-scoped, opt-in via `workspace_tools`) |
+| `adapters/outbound/tools/memory/` | `memory_ingest`, `memory_search` + `persistent_store` (chunked file store, opt-in via `workspace_tools`) |
+| `adapters/outbound/tools/skill/` | `SkillShellTool` — one struct reused per active shell skill |
+| `adapters/outbound/mcp_client/` | Outbound MCP client (stdio + http) — proxies each remote tool as `{server}__{tool}` |
+| `adapters/outbound/tools/skill_lifecycle/` | `skill_distill`, `apply_improver_proposal` (opt-in via `workspace_tools`); `compress_and_store` definition (appended implicitly to every `run-agent` subagent) |
+| `application/skills/lifecycle/` | Metric types + kinds (`shell_check`, `llm_judge`, `tool_assertion`, `script`, `description_trigger`, `dialog_replay`), rolling `metrics.json` storage, `evals/prompts.yaml` fixtures, scratch-worktree helper, evolve loop, approval gate |
+| `adapters/inbound/activity.rs` | Tool-activity UI helpers (no executors) |
 | `adapters/outbound/shell.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
-| `application/skills/registry.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `outbound/tools/skill/`) |
-| `mcp_bridge.rs` | Outbound stdio MCP server (exposes Tengu tools to external Claude Code) |
+| `application/skills/registry.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `adapters/outbound/tools/skill/`) |
+| `adapters/outbound/tools/{solana,hyperliquid,xm,xlab}/` | added 2026-09-24 → 10-01 — see `docs/architecture-2026-04-27.md` §2.10 |
 
 ### Memory
 | Module | Purpose |
 |--------|---------|
-| `memory/` | `MemoryManager` + providers, `<memory-context>` fencing, `vector/disk.rs` (bincode store), `vector/embedder.rs` (OpenRouter `text-embedding-3-small`) |
-| `outbound/tools/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
+| `application/memory/` + `ports/memory.rs` + `adapters/outbound/memory/` | `MemoryManager` + providers, `<memory-context>` fencing, `disk_vector.rs` (bincode store), `embedder.rs` (OpenRouter `text-embedding-3-small`) |
+| `adapters/outbound/tools/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
 
 ### Channel Adapters
 | Module | Purpose |
 |--------|---------|
-| `tui/mod.rs` | Terminal UI adapter (cursive) |
+| `adapters/inbound/tui/mod.rs` | Terminal UI adapter (cursive) |
 | `adapters/inbound/telegram.rs` | Telegram bot adapter |
+| `adapters/inbound/webhooks.rs` | Inbound webhook listener (feature `webhooks`) |
 
 ### Orchestration
 | Module | Purpose |
 |--------|---------|
-| `orchestrator/` | `RagPlanner` (`planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `plan.rs`, `events.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state), `wiring.rs` (planner LLM port) |
-| `runner.rs` | `SubprocessRunner` — spawns `tengu run-agent` per plan step (IPC JSON over stdin/stdout) |
+| `application/orchestrator/` | `RagPlanner` (`planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state), `wiring.rs` (planner LLM port); `Plan` types in `domain/plan.rs` |
+| `adapters/outbound/subprocess_runner.rs` | `SubprocessRunner` — spawns `tengu run-agent` per plan step (IPC JSON over stdin/stdout) |
 
 ### Infrastructure
 | Module | Purpose |
 |--------|---------|
-| `adapters/outbound/secrets.rs` | Encrypted secrets vault (AES-256-GCM) |
-| `scaffold.rs` | Workspace directory scaffolding |
-| `prune.rs` | State/cache cleanup |
+| `adapters/outbound/secrets.rs` | Encrypted secrets vault (AES-256-GCM) + `SanitizedToolExecutor` redaction |
+| `adapters/outbound/egress.rs` | Network policy: Tor by default, host allowlist, shell sandbox, JSONL audit |
+| `adapters/outbound/scaffold.rs` | Workspace directory scaffolding |
+| `adapters/outbound/prune.rs` | State/cache cleanup (never `<TENGU_HOME>/state` beyond `state/flows`) |
 
 ## Related
+- `docs/architecture-2026-04-27.md` (+ `.svg`, `.html`) — the current architecture
+- `docs/code-map.md` — every source file, recipes
 - [[engine-backends]] — detailed engine comparison
 - [[configuration]] — config reference
 - [[mcp-bridge]] — MCP tool bridge details

@@ -1,0 +1,420 @@
+# Tengu Cluster — "xlab" sandbox (2026-10-01)
+# History-first adaptive trading harness — the operator's PRD v0.5 (Architect +
+# TypeSafe JEV + deterministic layer + risk + paper) on Hyperliquid / HIP-3,
+# Solana and Robinhood Chain. Every question is answered from backfilled
+# history first; nothing here waits for live recording. Doc:
+# docs/xlab-2026-10-01.md.
+#
+# QUICKSTART — from the repo root (`--sandbox` resolves sandboxes/<name>/ from
+# the cwd; the repo .env sets TENGU_HOME=~/.tengu). Enter skips the vault prompt.
+#   1. data      tengu history backfill --sandbox xlab --instruments @xyz_stocks --interval 1h --from 2026-03-01 --funding
+#                tengu history backfill --sandbox xlab --instruments @crypto --interval 1h --from 2026-03-01 --funding
+#                tengu history coverage --sandbox xlab
+#                (≈ 1 h for the 75 names: [rate_limits.hyperliquid] leaves room for a
+#                weekend run on the same IP — see the budget note at the end)
+#   2. rules     tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
+#   3. + Jev     tengu backtest --sandbox xlab --strategy weekend_fade_top4 --gate --max-decisions 200
+#                (rerun with --offline: the same decisions from the cache, nothing called)
+#   4. Architect tengu chat --sandbox xlab      ("test a weekend follow placebo on the holdout split")
+#                (its backtest calls show the in-sample half of a split; a holdout
+#                read is "holdout": true, counted in backtests/holdout-reads.jsonl)
+# State: ~/.tengu/state/xlab/ (market.db, backtests/<run>/, ledger.db, KILL = halt);
+# workspace ~/xlab-ws (only .tengu/observations.db).
+
+runtime_profile = "auto"
+
+# --- Network: open now, switchable to Tor (every transport through egress.rs) --
+# Tool ceiling = the history hosts; LLM / Jev API traffic is separate (proxy only).
+[egress]
+network = "open"
+allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]
+https_only = true
+
+[memory]
+enabled = false
+
+# --- xmarket state dir + calendars --------------------------------------------
+[xmarket]
+state = "xlab"
+
+# NYSE (same as sandboxes/xmarket-weekend).
+[xmarket.calendars.us_equity]
+kind = "exchange"
+tz = "America/New_York"
+core = ["09:30", "16:00"]
+pre = "04:00"
+post = "20:00"
+overnight = true
+early_close = "13:00"
+early_post = "17:00"
+holidays = [
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+    "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+]
+early_closes = ["2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24"]
+
+# --- Backtests: the deterministic layer + the strategy library ----------------
+# Specs = the Architect's level-2 capabilities (docs/xlab-2026-10-01.md § 5):
+# data, never code. The Architect proposes new ones through the `backtest` tool.
+[backtest]
+notional_usd = 100               # research arm: every candidate at $100
+bootstrap = 2000
+seed = 7
+gate = "xl_gate"
+
+# Costs per side, longest id prefix wins (§ 6). xyz: the feasibility study's
+# 3.8 bps round trip (0.9 fee growth mode + 1.0 half-spread); main-dex perps:
+# tier-0 taker 4.5 bps + archive impact spread when imported; DEX tokens:
+# pool fee + a bar-estimated spread (RH tokens cost 30–220 bps round trip).
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.costs."hyperliquid:"]
+taker_fee_bps = 4.5
+half_spread = { model = "ctx", fallback_bps = 1.0 }
+
+[backtest.costs."solana:"]
+taker_fee_bps = 5.0
+half_spread = { model = "abdi_ranaldo", window_bars = 48, floor_bps = 2.0 }
+funding = false
+
+[backtest.costs."robinhood:"]
+taker_fee_bps = 25.0
+half_spread = { model = "abdi_ranaldo", window_bars = 48, floor_bps = 10.0 }
+funding = false
+
+[backtest.universes]
+xyz_stocks = [                   # 75 xyz single stocks (= sandboxes/xmarket-weekend)
+    "hyperliquid:xyz:AAOI", "hyperliquid:xyz:AAPL", "hyperliquid:xyz:AMAT", "hyperliquid:xyz:AMD",
+    "hyperliquid:xyz:AMZN", "hyperliquid:xyz:ARM", "hyperliquid:xyz:ASML", "hyperliquid:xyz:AVGO",
+    "hyperliquid:xyz:BABA", "hyperliquid:xyz:BB", "hyperliquid:xyz:BE", "hyperliquid:xyz:BIRD",
+    "hyperliquid:xyz:BMNR", "hyperliquid:xyz:BOT", "hyperliquid:xyz:BX", "hyperliquid:xyz:CBRS",
+    "hyperliquid:xyz:COIN", "hyperliquid:xyz:COST", "hyperliquid:xyz:CRCL", "hyperliquid:xyz:CRWD",
+    "hyperliquid:xyz:CRWV", "hyperliquid:xyz:CVX", "hyperliquid:xyz:CXMT", "hyperliquid:xyz:DELL",
+    "hyperliquid:xyz:DKNG", "hyperliquid:xyz:EBAY", "hyperliquid:xyz:GEV", "hyperliquid:xyz:GIGADEV",
+    "hyperliquid:xyz:GME", "hyperliquid:xyz:GOOGL", "hyperliquid:xyz:HIMS", "hyperliquid:xyz:HOOD",
+    "hyperliquid:xyz:HYUNDAI", "hyperliquid:xyz:IBM", "hyperliquid:xyz:INTC", "hyperliquid:xyz:IREN",
+    "hyperliquid:xyz:KIOXIA", "hyperliquid:xyz:LITE", "hyperliquid:xyz:LLY", "hyperliquid:xyz:META",
+    "hyperliquid:xyz:MINIMAX", "hyperliquid:xyz:MRNA", "hyperliquid:xyz:MRVL", "hyperliquid:xyz:MSFT",
+    "hyperliquid:xyz:MSTR", "hyperliquid:xyz:MU", "hyperliquid:xyz:NBIS", "hyperliquid:xyz:NET",
+    "hyperliquid:xyz:NFLX", "hyperliquid:xyz:NOK", "hyperliquid:xyz:NOW", "hyperliquid:xyz:NVDA",
+    "hyperliquid:xyz:ORCL", "hyperliquid:xyz:PLTR", "hyperliquid:xyz:PURRDAT", "hyperliquid:xyz:QCOM",
+    "hyperliquid:xyz:QNT", "hyperliquid:xyz:RDDT", "hyperliquid:xyz:RIVN", "hyperliquid:xyz:RKLB",
+    "hyperliquid:xyz:SHAZ", "hyperliquid:xyz:SHEIN", "hyperliquid:xyz:SKHX", "hyperliquid:xyz:SKHY",
+    "hyperliquid:xyz:SMSN", "hyperliquid:xyz:SNDK", "hyperliquid:xyz:SOFTBANK", "hyperliquid:xyz:SPCX",
+    "hyperliquid:xyz:TSLA", "hyperliquid:xyz:TSM", "hyperliquid:xyz:UNITREE", "hyperliquid:xyz:USAR",
+    "hyperliquid:xyz:WDC", "hyperliquid:xyz:ZHIPU", "hyperliquid:xyz:ZM",
+]
+crypto = ["hyperliquid:BTC", "hyperliquid:ETH", "hyperliquid:SOL", "hyperliquid:HYPE"]
+
+# Share splits: a run divides the loaded bars closed before `at` by `ratio`
+# (volume × ratio), drops a bar straddling `at` (a 1d bar here) and says so in
+# report.md's data notes. KIOXIA 3-for-1, verified in
+# market.db: the 07:00 UTC bar of 2026-09-28 is a no-trade halt at 340.79, the
+# 08:00 bar opens at 114.93 (340.79 / 113.9 ≈ 2.99).
+[backtest.splits]
+"hyperliquid:xyz:KIOXIA" = [{ at = "2026-09-28T08:00:00Z", ratio = 3.0 }]
+
+# Rule W exactly (docs/xmarket-feasibility-2026-09-30.md): Sun 18:00 NY fade the
+# move since Fri 20:00, exit Mon 09:00 — every eligible name (the shadow ledger).
+[backtest.strategies.weekend_fade]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+
+# Rule W on liquid entries only: a name whose entry hour (the bar closing Sun
+# 18:00 NY) counted < 50 trades is skipped (`thin_entry`). HL keeps no-trade
+# hours as flat bars at the previous close (n = 0) — stale prices; thin xyz
+# names have hundreds (xyz:DKNG 1 278 of 4 561 hourly bars). The feasibility
+# study's "entry bars with ≥ 50 trades" cut.
+[backtest.strategies.weekend_fade_liquid]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+min_entry_trades = 50
+
+# The capped ledger's selection: the 4 largest |s| ≥ 50 bps.
+[backtest.strategies.weekend_fade_top4]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+
+# Placebo: the same window, following the move instead of fading it.
+[backtest.strategies.weekend_follow]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "follow"
+min_abs_signal_bps = 0
+
+# Overnight follow-through: the move from the 16:00 close to 20:00, held to
+# 09:00 the next trading day (a generic cousin of rule E, without events).
+[backtest.strategies.xyz_overnight_follow]
+kind = "daily_window"
+universe = "@xyz_stocks"
+interval = "1h"
+days = "trading"
+calendar = "us_equity"
+tz = "America/New_York"
+anchor = "16:00"
+entry = "20:00"
+exit = "09:00"
+direction = "follow"
+min_abs_signal_bps = 100
+
+# Funding dislocation on the stock perps: receive funding while |rate| is
+# extreme, out when it normalises.
+[backtest.strategies.xyz_funding_carry]
+kind = "funding_carry"
+universe = "@xyz_stocks"
+interval = "1h"
+min_apr_pct = 50
+exit_apr_pct = 15
+hold_hours = 48
+
+# Market-first anomaly on crypto perps: fade a ≥ 3 % move in 4 h on ≥ 2× volume.
+[backtest.strategies.crypto_move_fade]
+kind = "move_trigger"
+universe = "@crypto"
+interval = "1h"
+lookback_bars = 4
+threshold_bps = 300
+min_volume_ratio = 2.0
+volume_baseline_bars = 168
+direction = "fade"
+hold_bars = 12
+cooldown_bars = 12
+
+# Funding carry on the crypto perps: receive funding while |rate| ≥ 30 % APR,
+# out below 10 % APR or after 72 h.
+[backtest.strategies.crypto_funding_carry]
+kind = "funding_carry"
+universe = "@crypto"
+interval = "1h"
+min_apr_pct = 30
+exit_apr_pct = 10
+hold_hours = 72
+
+# Convergence: SOL vs ETH log spread, 1 week z-score (a pair names its legs:
+# no universe).
+[backtest.strategies.sol_eth_spread]
+kind = "pair_spread"
+legs = ["hyperliquid:SOL", "hyperliquid:ETH"]
+interval = "1h"
+lookback_bars = 168
+entry_z = 2.0
+exit_z = 0.5
+max_hold_bars = 72
+
+# --- JEV: the gate arm (PRD §37 / §38 baseline C) ------------------------------
+# Replayed on history by `tengu backtest --gate xl_gate`: one decision per rule
+# candidate, terminal actions only, no tools; decisions cached in
+# ~/.tengu/state/xlab/backtests/decision-cache.db (a rerun is free + identical).
+# The pinned build (not ~typesafe/jev-latest): the cache key names it, so a
+# model bump re-decides cleanly instead of mixing builds. act_at 0.01: Jev's
+# menu-normalised confidence ran 0.13–0.48 live, so 0.6 made every decision
+# `unsure`; at 0.01 the gate acts on Jev's argmax and the calibration reads
+# p(take) (docs/xlab-2026-10-01.md § 7).
+[decision_loops.xl_gate]
+model = "typesafe/jev-1.13-20260917"
+agent = "xl_jev"
+goal = """Gate for trades a deterministic rule proposes on Hyperliquid perps (paper research, \
+$100 book). The event carries the rule, the instrument, the trade side, the signal size in bps \
+and features measured before the decision: recent returns, volatility, volume vs normal, \
+trades in the last bar, funding (APR %), the estimated half-spread and the hour of the week. \
+Take the trade only when it looks like the dislocation the rule bets on and is cheap to trade; \
+skip it when the market is thin (few trades, wide spread), the move looks like news the price \
+should keep, or volatility makes the edge noise. Ask the architect when the event needs \
+research you cannot do from these numbers."""
+act_at = 0.01
+max_steps = 1
+escalate = false
+dry_run = true
+history = 1
+
+[decision_loops.xl_gate.actions.take]
+description = "Take the proposed trade exactly as the rule specifies (side, size, exit)."
+
+[decision_loops.xl_gate.actions.skip]
+description = "Do not trade this candidate."
+
+[decision_loops.xl_gate.actions.ask_architect]
+description = "Unsure from the numbers: the move needs research (news, filings, related assets) first."
+
+# --- Risk + paper: the $100 budget (PRD §31) — the capped arm's caps ----------
+[risk]
+account = "xlab"
+mode = "paper"
+venues = ["hyperliquid"]
+min_lifecycle = "paper_tradable"
+instruments_allow = [
+    "hyperliquid:BTC", "hyperliquid:ETH", "hyperliquid:SOL", "hyperliquid:HYPE",
+    "hyperliquid:xyz:AAOI", "hyperliquid:xyz:AAPL", "hyperliquid:xyz:AMAT", "hyperliquid:xyz:AMD",
+    "hyperliquid:xyz:AMZN", "hyperliquid:xyz:ARM", "hyperliquid:xyz:ASML", "hyperliquid:xyz:AVGO",
+    "hyperliquid:xyz:BABA", "hyperliquid:xyz:BB", "hyperliquid:xyz:BE", "hyperliquid:xyz:BIRD",
+    "hyperliquid:xyz:BMNR", "hyperliquid:xyz:BOT", "hyperliquid:xyz:BX", "hyperliquid:xyz:CBRS",
+    "hyperliquid:xyz:COIN", "hyperliquid:xyz:COST", "hyperliquid:xyz:CRCL", "hyperliquid:xyz:CRWD",
+    "hyperliquid:xyz:CRWV", "hyperliquid:xyz:CVX", "hyperliquid:xyz:CXMT", "hyperliquid:xyz:DELL",
+    "hyperliquid:xyz:DKNG", "hyperliquid:xyz:EBAY", "hyperliquid:xyz:GEV", "hyperliquid:xyz:GIGADEV",
+    "hyperliquid:xyz:GME", "hyperliquid:xyz:GOOGL", "hyperliquid:xyz:HIMS", "hyperliquid:xyz:HOOD",
+    "hyperliquid:xyz:HYUNDAI", "hyperliquid:xyz:IBM", "hyperliquid:xyz:INTC", "hyperliquid:xyz:IREN",
+    "hyperliquid:xyz:KIOXIA", "hyperliquid:xyz:LITE", "hyperliquid:xyz:LLY", "hyperliquid:xyz:META",
+    "hyperliquid:xyz:MINIMAX", "hyperliquid:xyz:MRNA", "hyperliquid:xyz:MRVL", "hyperliquid:xyz:MSFT",
+    "hyperliquid:xyz:MSTR", "hyperliquid:xyz:MU", "hyperliquid:xyz:NBIS", "hyperliquid:xyz:NET",
+    "hyperliquid:xyz:NFLX", "hyperliquid:xyz:NOK", "hyperliquid:xyz:NOW", "hyperliquid:xyz:NVDA",
+    "hyperliquid:xyz:ORCL", "hyperliquid:xyz:PLTR", "hyperliquid:xyz:PURRDAT", "hyperliquid:xyz:QCOM",
+    "hyperliquid:xyz:QNT", "hyperliquid:xyz:RDDT", "hyperliquid:xyz:RIVN", "hyperliquid:xyz:RKLB",
+    "hyperliquid:xyz:SHAZ", "hyperliquid:xyz:SHEIN", "hyperliquid:xyz:SKHX", "hyperliquid:xyz:SKHY",
+    "hyperliquid:xyz:SMSN", "hyperliquid:xyz:SNDK", "hyperliquid:xyz:SOFTBANK", "hyperliquid:xyz:SPCX",
+    "hyperliquid:xyz:TSLA", "hyperliquid:xyz:TSM", "hyperliquid:xyz:UNITREE", "hyperliquid:xyz:USAR",
+    "hyperliquid:xyz:WDC", "hyperliquid:xyz:ZHIPU", "hyperliquid:xyz:ZM",
+]
+instruments_deny = []
+max_order_notional_usd = 25
+max_position_notional_usd = 50
+max_asset_exposure_usd = 50
+max_venue_exposure_usd = 110
+max_gross_exposure_usd = 110
+max_net_exposure_usd = 110
+max_leverage = 1.2
+daily_loss_limit_usd = 10
+total_loss_limit_usd = 25
+min_edge_bps = 10
+max_slippage_bps = 30
+min_depth_usd = 250
+require_hedge_for = []
+max_data_age_ms = { book = 5000, ctx = 90000, reference = 60000, quote = 20000 }
+max_skew_ms = 5000
+max_orders_per_min = 12
+max_open_orders = 4
+kill_switch_file = "~/.tengu/state/xlab/KILL"
+allow_reduce_degraded = true
+
+[risk.exits]
+take_profit_bps = 2000
+stop_loss_bps = 1000
+max_hold_secs = 259200           # 72 h: the longest library hold
+
+[paper]
+initial_cash_usd = 100
+latency_ms = 250
+latency_jitter_ms = 100
+fee_tier = 0
+staking_discount_pct = 0
+order_types = ["market", "ioc"]
+
+# --- Agents --------------------------------------------------------------------
+# The Architect (PRD §4): researcher, analyst, strategist, critic — on history.
+# Default chat agent (no orchestrator: `tengu chat --sandbox xlab` talks to it).
+# Tools: market_history (history + fetch, [backtest.splits] applied) and backtest
+# (rules arms on a named or inline spec; a split's holdout hidden until read with
+# "holdout": true, every read counted; a stored run's rows by run id). It has no
+# order tool and cannot move money.
+[agents.xl_architect]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-sonnet-4-6"
+workspace = "~/xlab-ws"
+tools = ["market_history", "backtest", "read_file", "list_directory"]
+skill_packages = ["xlab-research"]
+description = """
+The xlab Architect: researches trading hypotheses on backfilled market history \
+(Hyperliquid perps incl. the xyz stock perps, Solana and Robinhood Chain tokens) and \
+tests them with deterministic backtests after fees, spread and funding. Best for: \
+"does fading weekend moves on xyz stock perps survive costs on the holdout?", \
+"backtest a funding-carry rule on SOL", "why did this strategy fail in July?". \
+Reads and backtests only; it never trades.
+"""
+example_queries = [
+    "does the weekend fade survive costs on the holdout split?",
+    "backtest fading 3% four-hour moves on SOL and HYPE",
+    "which weekends carried the weekend fade's profit?",
+]
+
+[agents.xl_architect.identity]
+name = "xlab architect"
+instructions = """You are the Architect of the xlab research harness. You answer questions
+from history, never by waiting for live data. Follow the xlab-research skill: state the
+hypothesis, express it as a strategy spec, backtest it in-sample, then judge it on the
+holdout split; report n, mean net bps, the 95 % CI and what carried the result. Cite the
+backtest run id for every number. A missing or failed read is unknown, never 0. Show
+instrument ids, run ids and hashes in full, never shortened. You cannot trade."""
+
+[agents.xl_architect.limits]
+max_tool_rounds = 40
+step_timeout_secs = 900
+
+# Hardened claude_code option (a build with `--features claude_code`), replacing
+# engine + model above:
+#   engine = "claude_code"
+#   model = "claude-sonnet-4-6"
+#   [agents.xl_architect.claude_code]
+#   builtin_tools_profile = "none"             # required in a [risk] sandbox
+
+# JEV's agent (private: no description, not default). The gate loop runs terminal
+# actions only; its engine is never called.
+[agents.xl_jev]
+engine = "openrouter"
+model = "google/gemini-2.5-flash-lite"
+workspace = "~/xlab-ws"
+tools = ["read_file"]
+
+# --- Tool scopes: explicit for every tool an agent holds ---------------------
+[default_scopes.sign_and_send_transaction]   # required with [risk]: Privy signing off
+
+[default_scopes.sign_message]
+
+[default_scopes.write_file]
+
+[default_scopes.run_command]
+
+[default_scopes.http_request]
+
+[default_scopes.read_file]
+fs_roots = ["~/xlab-ws"]
+
+[default_scopes.list_directory]
+fs_roots = ["~/xlab-ws"]
+
+# The xlab tools: market.db + backtests/ are their own state in ~/.tengu/state/xlab
+# (outside every fs root); fs_roots = the workspace (observation rows);
+# market_history fetch = true reads HL / GeckoTerminal; backtest has no network.
+[default_scopes.market_history]
+fs_roots = ["~/xlab-ws"]
+net_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]
+env_reads = ["HL_API_URL", "GECKO_API_URL"]
+
+[default_scopes.backtest]
+fs_roots = ["~/xlab-ws"]
+
+# --- Request budgets ---------------------------------------------------------
+# HL allows 1200 weight / min per IP, shared with xmarket-weekend (peaks near
+# 190 / min) and xmarket (≈ 110 / min) when they run on this host. A 1h backfill
+# of the 75 xyz names asks ≈ 34 000 weight (candles 20 + 1 per 60 bars, funding
+# 20 a page): at 1200 / min it took HL's whole per-IP budget for 27 min (the
+# weekend run's book reads would get 429s); at 600 / min it takes ≈ 1 h. burst
+# 200: no 60 s window passes 800 (200 + 600), so 800 + 190 + 110 < 1200 even with
+# both xmarket sandboxes up. Budgets are per process: one HL-heavy xlab process
+# (backfill, backtest --fetch, an Architect fetching) at a time.
+[rate_limits.hyperliquid]
+per_minute = 600
+burst = 200
+
+[rate_limits.geckoterminal]
+per_minute = 25                  # free API: ~30 calls / min

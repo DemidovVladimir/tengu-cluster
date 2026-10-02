@@ -3,13 +3,18 @@
 //! `tests/layering_lint.rs`).
 
 pub(crate) mod backoff;
+pub(crate) mod backtest;
 pub(crate) mod book;
 pub(crate) mod calendar;
+pub(crate) mod canonical;
 pub(crate) mod decision;
 pub(crate) mod engine_smoke;
 pub(crate) mod hl;
 pub(crate) mod lp;
 pub(crate) mod market;
+pub(crate) mod marketdata;
+pub(crate) mod marketdata_decode;
+pub(crate) mod marketdata_stats;
 pub(crate) mod memory;
 pub(crate) mod message;
 pub(crate) mod metrics;

@@ -1,61 +1,76 @@
 # Skills
 
-Skills are portable, cross-platform workflow documents that compose Tengu's [[architecture#Key Abstractions|platform primitives]] into higher-level capabilities. Skills are never modified by the platform — they are copied as-is from external sources.
+Skills are portable workflow documents that compose Tengu's platform primitives (tools) into higher-level capabilities. The platform never modifies a skill on its own — they are copied as-is from external sources; only the opt-in lifecycle tools and `tengu skill evolve` (with the operator's approval) write one.
 
-**File:** `src/application/skills/registry.rs`
+**Code:** `src/application/skills/registry.rs` (parse, discover, registry), `src/application/skills/lifecycle/` (metrics, eval, evolve, scanner).
 
-## Skill Types
+## Inventory (`skills/`, 2026-10-02)
 
-| Type | Creates Tools | How It Works |
-|------|--------------|-------------|
-| **Documentation** (frontmatter) | No | Compact XML catalog in system prompt; agent reads SKILL.md on demand |
-| **Shell** (classic) | Yes | Named tools with execution templates, injected inline |
+| Skill | Kind | Purpose | Loaded by |
+|---|---|---|---|
+| `aura-orchestrator` | documentation (`env_vars`) | End-to-end DeSci pipeline: POI registration, IP-NFT mint, Molecule auth, project creation, file upload (public or encrypted), announcement | `aura` → agent `aura` |
+| `molecule-x402` | documentation (`env_vars`) | Paid Molecule Labs mutations via x402 (USDC on Base): project, uploads, announcements, ownership | `aura` → `aura` |
+| `beach-science` | API reference (`homepage`) | Beach.science, a science social platform for AI agents: post hypotheses, discuss research | `aura` → `aura` |
+| `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) | Privy agentic wallets: create / manage wallets, policies, transactions | `aura` → `aura` |
+| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | `aura` → `learning-agent` |
+| `telegram-rag-ingest` | documentation | Resources shared in Telegram (attachments, URLs, text) → searchable vector memory; answer from it later (`http_request` → `write_file` → `persistent_store`) | `storage-test` → `storage` |
+| `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab` → `xl_architect` |
+| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`aura`, `lping`, `xmarket`) — read by the planner from the cwd, not through `skill_packages` |
+| `skill-eval` | documentation | Points to `tengu eval` / `tengu skill metrics` / `tengu skill evolve` | none |
+| `german-teacher` · `spanish-teacher` | documentation, learner-facing (`resources/`, `evals/prompts.yaml`) | Teacher-seeded skills (`tengu skill seed`), `editable_by_learner: true`; read their materials with `skill_resource` | none |
+| `orchestration-e2e` | no `SKILL.md` — `evals/` only | 9 eval rows + an orchestrated eval config (`tengu eval orchestration-e2e`) | `tengu eval` |
 
-API skills are documentation-only — they describe API endpoints for the agent to use with `http_request`. They do not create tools.
+## Kinds
+
+| Kind | Frontmatter | Creates tools | How it works |
+|---|---|---|---|
+| Documentation | `name` + `description` | no | Body is a context fragment in the system prompt |
+| API reference | + `base_url` (alias `homepage`) | no | Documentation for `http_request` — the agent calls the API itself |
+| Shell (classic) | none: `# <tool_name>`, `## Parameters`, `## Execution` with a fenced command | yes | A named tool; the template runs with parameter substitution |
+
+An agent that runs no shell (`[risk]` or a `[solana]` signer sandbox: `AgentConfig::hardened`) loads no shell skill (`SkillRegistry::with_shell_skills`, warn naming them).
 
 ## Loading
 
-Skills are loaded from three tiers — first match wins (`application/skills/registry.rs::skill_directories`):
-1. **Managed:** `~/.tengu/skills/` (`tengu skill install --tier managed`)
-2. **Workspace (dotdir):** `<workspace>/.tengu/skills/`
-3. **Project:** `<workspace>/skills/`
+| Order (first match wins) | Directory |
+|---|---|
+| 1 Managed | `~/.tengu/skills/` — the home dir's, even when `TENGU_HOME` points elsewhere (`tengu skill install --tier managed`) |
+| 2 Workspace dotdir | `<workspace>/.tengu/skills/` |
+| 3 Project | `<workspace>/skills/` |
+| 4 Cwd | `<cwd>/skills/` when it differs from 3 — the repo's `skills/` when tengu runs from the repo root |
 
-Agents select skills via `skill_packages` on any `[agents.<name>]` block of the sandbox config ([[configuration]]); `skills = [...]` is an accepted alias:
+An agent loads only the skills named in its `skill_packages` (`skills = [...]` alias; each entry is lowercased with `-` → `_` and compared with the skill name — a frontmatter `name` is normalised the same way, a classic skill's `# heading` is taken as written) — an empty list loads none:
+
 ```toml
-[agents.main]
-skill_packages = ["aura-orchestrator", "beach-science"]
+[agents.xl_architect]
+skill_packages = ["xlab-research"]
+tools = ["market_history", "backtest", "read_file", "list_directory"]   # a skill gets only these tools
 ```
 
-## Cross-Engine Compatibility
+List every tool the `SKILL.md` calls in the agent's `tools` (an empty `tools` = every base tool + configured opt-ins).
 
-Skills work identically with both [[engine-backends]]:
+## Engines
 
-### OpenRouter
-- Skill tools are registered in Tengu's tool loop
-- Skill context injected into system prompt
-- Agent calls skill tools directly
+Every skill works under `openrouter`, `local` and `claude_code` (operator rule 2026-09-30).
 
-### Claude Code
-- Skill context still injected into system prompt (via `build_system_prompt()`)
-- Skill tools exposed via [[mcp-bridge]] as MCP tools
-- Agent calls MCP tools by name (same names as the Tengu tools the skill references)
-- Claude's native tools (Read, Write, Bash) also available alongside MCP tools
+| Engine | Documentation / API skills | Shell skills |
+|---|---|---|
+| `openrouter`, `local` | in the system prompt | tools in Tengu's tool loop |
+| `claude_code` | in the system prompt (`build_system_prompt()`) | served by `tengu mcp-bridge` (`skill_packages` + the requested names), seen as `mcp__tengu-tools__<name>` |
 
-The skill document references Tengu tool names like `http_request`, `sign_and_send_transaction`, `shared_cache`. These exact names are registered as MCP tools in the bridge, so skill instructions work unchanged across engines.
+Claude's own built-ins (Read, Write, Bash) follow `[agents.<a>.claude_code] builtin_tools_profile`; `none` (required in a hardened sandbox) also stops the CLI loading its own skills, settings, hooks and plugins. Skill text names Tengu tools (`http_request`, `shared_cache`, …); the bridge serves them under those names behind the `mcp__tengu-tools__` prefix.
 
 ## Frontmatter
 
 ```yaml
 ---
 name: my-skill
-description: What this skill does
-homepage: https://example.com
-requires_bins: ["curl"]     # optional: required CLI tools
-requires_env: ["API_KEY"]   # optional: required env vars
-os: ["linux", "macos"]      # optional: OS filter
-editable_by_learner: true   # optional (default false): in-chat `adjust yourself` / `fix it` may mutate this skill
-learner_facing: true        # optional (default false): per-learner state at skills/<name>/state/<learner_id>.json
-metrics:                    # optional: accuracy metrics (see below)
+description: What this skill does — the planner and the agent read it
+env_vars:                   # optional; `NAME?` = optional
+  - MY_API_URL
+editable_by_learner: false # optional; absent = editable: `manage_skill` writes refuse only an explicit false
+learner_facing: true        # optional marker (`tengu skill seed`, `manage_skill create`)
+metrics:                    # optional: accuracy metrics (below)
   - name: output_quality
     kind: llm_judge
     rubric_file: metrics/rubric.md
@@ -63,11 +78,21 @@ metrics:                    # optional: accuracy metrics (see below)
 ---
 ```
 
-Gating metadata (`requires_bins`, `requires_env`, `os`) is evaluated at load time. Skills that fail gating checks are silently skipped.
+| Key | Read by | Effect |
+|---|---|---|
+| `name` · `description` | registry | identity (`-` → `_`, lowercase) · catalog / planner text |
+| `base_url` / `homepage` | registry | makes it an API-reference skill; must be a valid URL |
+| `env_vars` | registry | `$VAR` / `${VAR}` of listed, non-secret names (no `KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`) expanded in the body; `/skills` marks a skill whose required vars are unset (`missing: …`) — it still loads |
+| `commands` | registry | slash commands the skill declares |
+| `metrics` | lifecycle | `tengu eval` / `skill evolve` / `skill doctor` |
+| `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
+| `learner_facing` | written by `skill seed` / `manage_skill create` | marker; the per-learner state module (`skills/<name>/state/<learner_id>.json`, `lifecycle/learner_state.rs`) is landed but not wired |
+
+`requires_bins`, `requires_env`, `os` are not read — no gating happens at load.
 
 ## Metrics & Evolution
 
-A skill's `metrics:` block declares accuracy characteristics the harness can measure against. Six built-in kinds (`src/application/skills/lifecycle/metric_kinds/`):
+A skill's `metrics:` block declares accuracy characteristics the harness measures. Six built-in kinds (`src/application/skills/lifecycle/metric_kinds/`):
 
 | Kind | What it does |
 |------|--------------|
@@ -78,40 +103,37 @@ A skill's `metrics:` block declares accuracy characteristics the harness can mea
 | `dialog_replay` | Reflective eval: scores the current dialog slice from `from_message_index` by delegating to a sibling `llm_judge` / `tool_assertion` metric (`delegate_metric`). |
 | `description_trigger` | Judge LLM decides whether the planner would route to this skill for each query in `queries_file` (`{queries: [{query, should_trigger}]}`); `runs_per_query` (3), `holdout` (0.4). |
 
-Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric.
+Each metric may set `min_pass_rate` (0.0..=1.0). A metric whose rolling pass rate falls below its threshold is **gated** — `tengu skill evolve` targets the lowest-scoring gated metric. Full frontmatter schema: `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6.1.
 
-See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6.1 for the complete frontmatter schema.
+## Distillation and in-chat edits
 
-## Distillation
+| Tool (opt-in unless noted) | Does |
+|---|---|
+| `skill_distill` | Authors a new skill mid-conversation: `skills/<name>/{SKILL.md, evals/prompts.yaml, evals/config.toml, metrics/<scaffolds>}` atomically (`evals/config.toml` mirrors the calling agent's engine + model). Loads on the next session (stable tool / skill inventory per conversation). Refuses a call with no conversation (a bridged call gets the run's transcript) |
+| `manage_skill` | `create \| edit_body \| patch \| add_resource \| remove_resource \| delete` — the unified write API (`docs/skill-redesign-2026-04-29.md`) |
+| `view_skill` (always) | `list \| read \| read_resource` |
+| `skill_resource` (always), `apply_improver_proposal` | back-compat aliases |
 
-An agent with `workspace_tools = ["skill_distill"]` (or `skill_distill` in a subagent block's `tools`) can author a new skill mid-conversation via the `skill_distill` tool. Given in-context understanding plus a starting message index, the tool writes `skills/<name>/{SKILL.md, evals/prompts.yaml, evals/config.toml, metrics/<scaffolds>}` atomically (`evals/config.toml` mirrors the calling agent's engine + model). The new skill does **not** load into the current conversation — cache discipline requires a stable tool/skill inventory per conversation. It becomes available on next session start.
-
-`manage_skill` (`create | edit_body | patch | add_resource | remove_resource | delete`; opt-in like `skill_distill`) + `view_skill` (`list | read | read_resource`; always on) are the unified in-chat read/write API — `docs/skill-redesign-2026-04-29.md`. `skill_resource` and `apply_improver_proposal` are kept as back-compat aliases. Audit log: `skills/.audit.jsonl`.
+Writers refuse agent / CLI state paths (`.tengu/`, `.claude/`, `skills/` via `write_file`, `CLAUDE.md`, `AGENTS.md`, …; `domain::scope::protected_write`). Audit log: `skills/.audit.jsonl`.
 
 ## CLI commands
 
 | Command | Purpose |
 |---------|---------|
-| `tengu eval <skill>` | Replay `evals/prompts.yaml` fixtures, score each via the skill's metrics, write `metrics.json` + append to `metrics/history.jsonl`, emit per-row transcripts under `evals/runs/<ts>/`. |
-| `tengu skill metrics <skill>` | Show rolling `metrics.json` + recent history entries (read-only, no API calls). |
-| `tengu skill evolve <skill>` | Bounded rewrite→rescore loop. Baseline-evals, picks the lowest-gated metric as target, spawns `skill-improver` in a scratch git worktree for N cycles, picks the best cycle (no regression > 0.05 on other gated metrics), shows a diff + metric delta, prompts y/n/d/o. |
-| `tengu skill accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1). |
-| `tengu skill list [--tier T]` | Walk the three tiers; print name, tier, metrics health. |
-| `tengu skill remove <name> [--tier T] [--yes]` | Delete a skill dir (default tier `project`). |
-| `tengu skill doctor [--no-fail]` | Cross-check `[agents.*].skill_packages` of the active config vs disk: phantoms (exit non-zero unless `--no-fail`), orphans, missing rubric files, scanner findings. |
-| `tengu skill export <name> [--out <path>]` | Tar.gz bundle of the skill. |
-| `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine → scan → validate → install from URL / git / local path (default tier `managed`; `--strict` refuses caution/dangerous verdicts). |
-| `tengu skill seed <name> [<resources_dir>] [--tier T]` | Teacher onboarding: SKILL.md template + `resources/` folder. |
+| `tengu eval [<skill>...] [--sandbox] [--judge-model] [--concurrency] [--format table\|json] [--out] [--filter] [--keep-workspace] [--keep-runs] [--no-persist] [--max-runs]` | Replay `evals/prompts.yaml` (or `prompts.md`) fixtures, score each via the skill's metrics, write `metrics.json` + append `metrics/history.jsonl`, per-row transcripts under `evals/runs/<ts>/`. No skill = every skill with evals; judge default `anthropic/claude-opus-4-7` |
+| `tengu skill metrics <skill> [--last N]` | Rolling `metrics.json` + recent history entries (read-only, no API calls) |
+| `tengu skill evolve <skill> [--max-cycles] [--target-metric] [--base-branch] [--sandbox]` | Bounded rewrite → rescore loop: baseline eval, target = the lowest gated metric, `skill-improver` in a scratch git worktree for N cycles, best cycle (no regression > 0.05 on other gated metrics), diff + metric delta, y/n/d/o prompt |
+| `tengu skill accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1) |
+| `tengu skill list [--tier T]` | Walk the tiers; name, tier, metrics health |
+| `tengu skill remove <name> [--tier T] [--yes]` | Delete a skill dir (default tier `project`) |
+| `tengu skill doctor [--sandbox] [--no-fail]` | Cross-check `[agents.*].skill_packages` of the active config vs disk: phantoms (exit non-zero unless `--no-fail`), orphans, missing rubric files, scanner findings |
+| `tengu skill export <name> [--out <path>]` | Tar.gz bundle of the skill |
+| `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine → scan → validate → install from URL / git / local path (default tier `managed`; `--strict` refuses caution / dangerous verdicts) |
+| `tengu skill seed <name> [<resources_dir>] [--tier T] [--description] [--learner-facing] [--yes]` | Teacher onboarding: SKILL.md template + `resources/` folder |
 
-Activating evolve requires `[skill_lifecycle]` + `[agents.skill-improver]` in the active config (`sandboxes/<name>/config.toml` via `--sandbox`, else `~/.tengu/config.toml`); `fixture_runner_agent` is accepted but unused. `sandboxes/aura/config.toml` ships a working block — see [[configuration]].
+Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); `sandboxes/aura/config.toml` ships one — `docs/configuration.md` § Skill lifecycle.
 
-## Example: Documentation Skill
-
-`skills/aura-orchestrator/SKILL.md` — a documentation skill that orchestrates a 7-phase DeSci pipeline:
-- References `http_request`, `sign_and_send_transaction`, `abi_encode`, `sign_message`, `get_wallet_address`, `shared_cache`, `read_file`, `run_command`
-- Works on OpenRouter (Tengu tool loop) and Claude Code (MCP bridge)
-
-## Example: Shell Skill
+## Example: shell skill
 
 ```markdown
 # test_runner
@@ -124,11 +146,10 @@ cargo test {{filter}} 2>&1
 \```
 ```
 
-Shell skills create named tools that execute templates with parameter substitution. They are injected inline into the tool list.
+Its command is gated by `shell_bins` in its scope (first command word only — a guard rail, not a sandbox); it never loads in a hardened sandbox.
 
 ## Related
-- [[architecture]] — where skills fit in the system
-- [[configuration]] — skill_packages config + `[skill_lifecycle]` block
-- [[mcp-bridge]] — how skill tools reach Claude Code
-- [[engine-backends]] — how skills work with different backends
-- `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` — metrics + evolve design spec
+- `docs/configuration.md` — `skill_packages`, `[skill_lifecycle]`
+- `docs/mcp-bridge.md` — how skill tools reach Claude Code
+- `docs/engine-backends.md` — engines
+- `docs/skill-redesign-2026-04-29.md` · `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md`

@@ -34,7 +34,16 @@
 //! (`Reply::Gma`), or an `l2Book` capture stamped now (`Reply::Book`: a
 //! live book the paper gate accepts). Tools with a base-URL override reach
 //! it through `.scoped(<env>)` (`SOLANA_RPC_URL`, `HL_API_URL`: `POST /info`
-//! routes by body `type`, captured replies in `tests/fixtures/hyperliquid/`).
+//! routes by body `type`, captured replies in `tests/fixtures/hyperliquid/`;
+//! `GECKO_API_URL`: GeckoTerminal OHLCV). `market_history` fetches into the
+//! side's `<TENGU_HOME>/state/conf/market.db`: its HL case replays the
+//! `xyz:TSLA` candle + funding captures moved to the current hours
+//! (`recent_tsla_history`: HL's newest-5 000-bars reach), then reads them
+//! back; `backtest` runs on those bars (the side's `[backtest]` library and
+//! an inline spec) into `<TENGU_HOME>/state/conf/backtests/<run id>/` — a
+//! split's holdout hidden, then read (`holdout-reads.jsonl` beside the runs);
+//! its read mode (`run_id`) reads a stored run seeded by `.home_file(..)` (a
+//! file under the side's `TENGU_HOME`) from `tests/fixtures/xlab/run_conf_rows/`.
 //! `.row(..)` seeds the workspace observation store (the opportunity row a
 //! paper entry names).
 //!
@@ -47,7 +56,7 @@
 //! | observation age after its status (`\| ok 3s`; line-start `ok 3s`) | `<AGE>s` |
 //! | `*age_s` / `*age_ms` / `*age_secs` values (ages at read time; `max_*` / `min_*` limits kept) | `<AGE>` |
 //! | `next_*_s` values (countdowns at read time: `next_funding_s`) | `<COUNTDOWN>` |
-//! | ISO-8601 timestamps | `<TIME>` |
+//! | ISO-8601 timestamps, extended and basic (`20261001T120034Z`: a backtest run id's stamp, in its text, run-dir path and files) | `<TIME>` |
 //! | history day files `YYYYMMDD.db` | `<DAY>.db` |
 //! | epoch ms / s within 2 days of now (fixture timestamps stay) | `<EPOCH_MS>` / `<EPOCH_S>` |
 //! | JSON-RPC `"id":<n>` (request bodies) | `"id":<N>` |
@@ -56,7 +65,8 @@
 //! Add a case: one `case("<tool>", json!({..}))` row in `cases()` plus the
 //! TOML its scope needs, `.route(..)` replies and `.ok("…")` / `.err("…")`
 //! (`docs/mcp-bridge.md` § Testing). `TENGU_CONFORMANCE_VERBOSE=1` (with
-//! `--nocapture`) prints every case's in-process text, stores and requests.
+//! `--nocapture`) prints every case's in-process text, stores and requests;
+//! `TENGU_CONFORMANCE_ONLY=<text>` runs only the cases whose name holds it.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -153,6 +163,9 @@ struct Case {
     env: Vec<(String, String)>,
     /// Workspace files; `{secret}` expanded.
     files: Vec<(String, String)>,
+    /// Files under the side's `TENGU_HOME` (`.home_file(..)`: a stored
+    /// backtest run a read names), verbatim.
+    home_files: Vec<(String, String)>,
     /// Observation rows seeded into the workspace store, stamped now.
     rows: Vec<Value>,
     routes: Vec<Route>,
@@ -193,6 +206,7 @@ fn case(tool: &str, args: Value) -> Case {
         scope_env: None,
         env: Vec::new(),
         files: Vec::new(),
+        home_files: Vec::new(),
         rows: Vec::new(),
         routes: Vec::new(),
         mcp_servers: None,
@@ -273,6 +287,12 @@ impl Case {
     }
     fn file(mut self, path: &str, content: &str) -> Self {
         self.files.push((path.to_string(), content.to_string()));
+        self
+    }
+    /// A file at `path` under the side's `TENGU_HOME`.
+    fn home_file(mut self, path: &str, content: &str) -> Self {
+        self.home_files
+            .push((path.to_string(), content.to_string()));
         self
     }
     /// A row in `<ws>/.tengu/observations.db` before the first step
@@ -394,6 +414,309 @@ fn hl_xyz(c: Case) -> Case {
     )
     .route(info("perpDexs").file("hyperliquid/perpDexs.json"))
     .route(info("perpCategories").file("hyperliquid/perpCategories.json"))
+}
+
+/// A GeckoTerminal SOL / USDC pool (`docs/xlab-2026-10-01.md` § 4), in full.
+const GECKO_POOL: &str = "Gf7sXMoP8iRw4iiXmJ1nq4vxcRycbGXy5RL8a8LnTd3v";
+/// Its OHLCV path on the mock (`GECKO_API_URL` = the mock root).
+const GECKO_OHLCV_PATH: &str =
+    "/networks/solana/pools/Gf7sXMoP8iRw4iiXmJ1nq4vxcRycbGXy5RL8a8LnTd3v/ohlcv/hour";
+
+/// The xlab warehouse (`market.db`) in `<TENGU_HOME>/state/conf/`.
+const XLAB_TOML: &str = "[xmarket]\nstate = \"conf\"\n";
+
+/// The `xyz:TSLA` captures (`hyperliquid/candleSnapshot_xyz_TSLA_1h.json`:
+/// 67 hourly bars from Fri 2026-09-25 20:00Z; `fundingHistory_xyz_TSLA.json`:
+/// 68 settlements) moved by whole hours so the last bar closes two hours
+/// before the current one — HL serves only its newest 5 000 bars, so fixed
+/// dates would one day fall out of reach and be clamped. Returns the two
+/// replies and the window `[from, to)` they fill.
+fn recent_tsla_history() -> (String, String, i64, i64) {
+    const H: i64 = 3_600_000;
+    let mut candles: Value =
+        serde_json::from_str(&fixture("hyperliquid/candleSnapshot_xyz_TSLA_1h.json")).unwrap();
+    let mut funding: Value =
+        serde_json::from_str(&fixture("hyperliquid/fundingHistory_xyz_TSLA.json")).unwrap();
+    let bars = candles.as_array_mut().unwrap();
+    let first = bars[0]["t"].as_i64().unwrap();
+    let last = bars[bars.len() - 1]["t"].as_i64().unwrap();
+    let shift = (now_ms() / H * H - 3 * H) - last;
+    let moved = |v: &Value| json!(v.as_i64().unwrap() + shift);
+    for b in bars.iter_mut() {
+        b["t"] = moved(&b["t"]);
+        b["T"] = moved(&b["T"]);
+    }
+    for f in funding.as_array_mut().unwrap() {
+        f["time"] = moved(&f["time"]);
+    }
+    (
+        candles.to_string(),
+        funding.to_string(),
+        first + shift,
+        last + shift + H,
+    )
+}
+
+/// `market_history` with `fetch = true` (HL bars + funding through the mock
+/// into `market.db`), then the same window read back without a fetch.
+fn market_history_hl() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let window = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                        "from": from, "to": to});
+    let mut fetch = window.clone();
+    fetch["fetch"] = json!(true);
+    case("market_history", fetch)
+        .toml(XLAB_TOML)
+        .scoped("HL_API_URL")
+        .route(info("candleSnapshot").has("\"coin\":\"xyz:TSLA\"").json(&candles))
+        .route(info("fundingHistory").has("\"coin\":\"xyz:TSLA\"").json(&funding))
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then("market_history", window)
+        .ok("mkt_history hyperliquid:xyz:TSLA 1h bars=67 <TIME> … <TIME> last_close=360.2 ret_bps=-331.2 | ok <AGE>s live")
+}
+
+/// `market_history` with `[backtest.splits]`: a 2-for-1 split 30 bars into
+/// the fetched `xyz:TSLA` captures reaches both sides (the sandbox's
+/// sections), the bars before it are read adjusted, as a backtest reads
+/// them, and the row says so.
+fn market_history_splits() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let at = chrono::DateTime::from_timestamp_millis(from + 30 * 3_600_000)
+        .unwrap()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let window = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                        "from": from, "to": to});
+    let mut fetch = window.clone();
+    fetch["fetch"] = json!(true);
+    case("market_history", fetch)
+        .named("splits")
+        .toml(XLAB_TOML)
+        .toml(&format!(
+            "[backtest]\n[backtest.splits]\n\"hyperliquid:xyz:TSLA\" = [{{ at = \"{at}\", ratio = \
+             2.0 }}]\n"
+        ))
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then("market_history", window)
+        .ok(
+            "\nsplit-adjusted hyperliquid:xyz:TSLA: ratio 2 (new shares per old) at <TIME> — 30 \
+             bars before it: prices ÷ 2, volume × 2 — [backtest.splits], as a backtest reads the \
+             bars",
+        )
+}
+
+/// `market_history` on a Solana mint: GeckoTerminal pool bars through the
+/// mock (`GECKO_API_URL`), then read back.
+fn market_history_gecko() -> Case {
+    let id = format!("solana:{WSOL}");
+    let window = json!({"instrument": id, "from": "2026-09-25T07:00:00Z",
+                        "to": "2026-09-25T10:00:00Z"});
+    let mut fetch = window.clone();
+    fetch["fetch"] = json!(true);
+    fetch["pool"] = json!(GECKO_POOL);
+    // 07:00 … 09:00 UTC, newest first as Gecko sends them.
+    let ohlcv: Vec<Value> = [(9, 117.66), (8, 117.41), (7, 117.52)]
+        .iter()
+        .map(|(h, c)| {
+            json!([
+                1_790_319_600 + (h - 7) * 3600,
+                117.5,
+                117.9,
+                117.3,
+                c,
+                250_000.5
+            ])
+        })
+        .collect();
+    let page = json!({"data": {"id": "x", "type": "ohlcv_request_response",
+                      "attributes": {"ohlcv_list": ohlcv}}, "meta": {}});
+    case("market_history", fetch)
+        .named("gecko")
+        .toml(XLAB_TOML)
+        .scoped("GECKO_API_URL")
+        .route(
+            get(GECKO_OHLCV_PATH)
+                .has(&format!("token={WSOL}"))
+                .json(&page.to_string()),
+        )
+        .ok(&format!(
+            "fetched: 3 bar(s) written from gecko:solana:{GECKO_POOL}"
+        ))
+        .then("market_history", window)
+        .ok(&format!(
+            "mkt_history {id} 1h bars=3 <TIME> … <TIME> last_close=117.66 ret_bps=11.9"
+        ))
+}
+
+/// `[backtest]` over the `xyz:TSLA` captures: xyz costs, a one-name
+/// universe and a move trigger — a kind without wall-clock instants, so
+/// the captures at the current hours trade the same bars whenever it runs.
+const BACKTEST_TOML: &str = r#"
+[backtest]
+bootstrap = 200
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.universes]
+conf = ["hyperliquid:xyz:TSLA"]
+
+[backtest.strategies.conf_move]
+kind = "move_trigger"
+universe = "@conf"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+"#;
+
+/// The inline spec of the `backtest` case: the library move trigger's
+/// placebo (follow), named.
+fn conf_follow_spec() -> Value {
+    json!({"name": "conf_follow", "kind": "move_trigger", "universe": "@conf",
+           "interval": "1h", "lookback_bars": 1, "threshold_bps": 25,
+           "direction": "follow", "hold_bars": 3})
+}
+
+/// `backtest` on the bars `market_history` fetched through the mock (the HL
+/// captures of `market_history_hl`): the library strategy, then an inline
+/// spec — rules arms, a run dir each under the side's state dir (its run
+/// id's stamp normalised to `<TIME>`).
+fn backtest_hl() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let fetch = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                       "from": from, "to": to, "fetch": true});
+    case("market_history", fetch)
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then(
+            "backtest",
+            json!({"strategy": "conf_move", "from": from, "to": to}),
+        )
+        .ok("backtest <TIME>-conf_move conf_move move_trigger 1h research n=2 mean_net_bps=-27.39")
+        .then(
+            "backtest",
+            json!({"spec": conf_follow_spec(), "from": from, "to": to}),
+        )
+        .ok("backtest <TIME>-conf_follow conf_follow move_trigger 1h research n=2 mean_net_bps=")
+        .retool("backtest")
+}
+
+/// `backtest`'s holdout on the HL captures (`backtest_hl`'s fetch): a split
+/// between the move trigger's two trades (the captures' 2026-09-27 00:00Z,
+/// moved like them) runs the in-sample half only — the first trade —; with
+/// `holdout: true` both halves run and each read is a line of
+/// `<TENGU_HOME>/state/conf/backtests/holdout-reads.jsonl` (#1 of each spec,
+/// the split's 1st then 2nd), alike on both sides. Distinct spec names: no
+/// two runs share a run id's second.
+fn backtest_holdout() -> Case {
+    let (candles, funding, from, to) = recent_tsla_history();
+    let split = format!("time:{}", from + 28 * 3_600_000);
+    let fetch = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                       "from": from, "to": to, "fetch": true});
+    let mut hidden = conf_follow_spec();
+    hidden["name"] = json!("conf_hidden");
+    hidden["direction"] = json!("fade");
+    case("market_history", fetch)
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then(
+            "backtest",
+            json!({"spec": hidden, "from": from, "to": to, "split": split}),
+        )
+        .ok(
+            "\nholdout hidden: split time:<TIME> — no decision at or after the split (<TIME>): no \
+             holdout trade was simulated",
+        )
+        .then(
+            "backtest",
+            json!({"strategy": "conf_move", "from": from, "to": to, "split": split,
+                   "holdout": true}),
+        )
+        .ok("\nholdout read #1 for this spec · 1 read(s) of split time:<TIME> in this sandbox")
+        .then(
+            "backtest",
+            json!({"spec": conf_follow_spec(), "from": from, "to": to, "split": split,
+                   "holdout": true}),
+        )
+        .ok("\nholdout read #1 for this spec · 2 read(s) of split time:<TIME> in this sandbox")
+        .retool("backtest")
+        .named("holdout")
+}
+
+/// A stored run's id (`tests/fixtures/xlab/run_conf_rows/`: a holdout read
+/// of the matrix move trigger, split `time:2026-09-27`, one trade a half).
+const ROWS_RUN: &str = "20261001T182112Z-conf_rows";
+
+/// `backtest` with `run_id`: the seeded split run's rows by run id — its
+/// holdout trade hidden, then shown on purpose (a read, counted: `via =
+/// "rows"`); a path and an unknown id refused alike.
+fn backtest_rows() -> Case {
+    let dir = format!("state/conf/backtests/{ROWS_RUN}");
+    let mut c = case("backtest", json!({"run_id": ROWS_RUN, "view": "trades"}))
+        .named("rows")
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML);
+    for f in [
+        "report.json",
+        "trades-research.jsonl",
+        "trades-capped.jsonl",
+    ] {
+        c = c.home_file(
+            &format!("{dir}/{f}"),
+            &fixture(&format!("xlab/run_conf_rows/{f}")),
+        );
+    }
+    c.ok("\nsplit time:<TIME>: holdout hidden — its 1 trade(s) left out")
+        .then(
+            "backtest",
+            json!({"run_id": ROWS_RUN, "view": "periods", "holdout": true}),
+        )
+        .ok("both halves shown (1 holdout trade(s)) · holdout read #1 for this spec")
+        .then("backtest", json!({"run_id": "../conf/market.db"}))
+        .err("'run_id' `../conf/market.db` is not a run id")
+        .then(
+            "backtest",
+            json!({"run_id": "20200101T000000Z-nope", "view": "notes"}),
+        )
+        .err("no run `<TIME>-nope` in the state dir's backtests/ (the newest: <TIME>-conf_rows)")
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -916,6 +1239,43 @@ fn cases() -> Vec<Case> {
             .toml(&weekend_fade_toml())
             .scoped("HL_API_URL")
             .ok(" waiting next_entry_s=<COUNTDOWN> universe=1 excluded=0 | ok <AGE>s live"),
+        // ── xlab research reads: `[xmarket]` → `market.db` in the state dir
+        market_history_hl(),
+        market_history_gecko(),
+        market_history_splits(),
+        // Without `[xmarket]` there is no warehouse: refused alike.
+        case(
+            "market_history",
+            json!({"instrument": "hyperliquid:xyz:TSLA"}),
+        )
+        .named("no_xmarket")
+        .err("state_dir_missing: market data unavailable: no [xmarket] section"),
+        backtest_hl(),
+        // A split's holdout hidden by default, read on purpose and counted;
+        // a stored run's rows by run id.
+        backtest_holdout(),
+        backtest_rows(),
+        // A bad inline spec: refused alike, every problem named, no run dir.
+        case(
+            "backtest",
+            json!({"spec": {"kind": "move_trigger", "universe": "@conf", "interval": "1h",
+                            "lookback_bars": 0, "threshold_bps": 0, "direction": "fade",
+                            "hold_bars": 0}}),
+        )
+        .named("bad_spec")
+        .toml(XLAB_TOML)
+        .toml(BACKTEST_TOML)
+        .err(
+            "backtest: spec refused — 3 problem(s), fix each and call again:\n\
+             strategy `architect_spec`: lookback_bars must be within 1..=10000\n\
+             strategy `architect_spec`: threshold_bps must be finite, > 0 and ≤ 10000\n\
+             strategy `architect_spec`: hold_bars must be within 1..=10000",
+        ),
+        // `[xmarket]` without `[backtest]`: refused alike.
+        case("backtest", json!({"strategy": "conf_move"}))
+            .named("no_backtest")
+            .toml(XLAB_TOML)
+            .err("backtest_config_missing: backtests unavailable: no [backtest] section"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))
@@ -1244,6 +1604,11 @@ impl Side {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, content.replace("{secret}", SECRET)).unwrap();
         }
+        for (path, content) in &case.home_files {
+            let p = root.join("home/.tengu").join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, content).unwrap();
+        }
         seed_rows(&ws, &case.rows);
         let tools: Vec<String> = case
             .agent_tools()
@@ -1485,6 +1850,8 @@ fn normalize(s: &str, roots: &[String]) -> String {
                 r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?",
                 "<TIME>",
             ),
+            // Basic format: the UTC second a backtest run id embeds.
+            (r"\b\d{8}T\d{6}Z\b", "<TIME>"),
             (r"\b20\d{6}\.db\b", "<DAY>.db"),
             (r#""id":\d+"#, r#""id":<N>"#),
             (r"\bmcp:[0-9a-f]{32}:", "mcp:<NONCE>:"),
@@ -1757,9 +2124,11 @@ fn every_catalog_tool_has_a_case() {
 #[test]
 fn bridge_matches_in_process() {
     let catalog = catalog();
+    let only = std::env::var("TENGU_CONFORMANCE_ONLY").ok();
     let queue: Vec<Case> = cases()
         .into_iter()
         .filter(|c| !c.gated || catalog.contains(&c.tool))
+        .filter(|c| only.as_deref().is_none_or(|o| c.name.contains(o)))
         .collect();
     let queue = Arc::new(Mutex::new(queue));
     let failures = Arc::new(Mutex::new(Vec::<String>::new()));

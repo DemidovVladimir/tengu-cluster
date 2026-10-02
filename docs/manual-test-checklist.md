@@ -52,6 +52,28 @@ Launch with `cargo run --features claude_code -- telegram --sandbox aura`. The s
 - [ ] `TENGU_PLAN.md` at the repo root holds the last accepted plan (debug mirror — children receive the plan over IPC as `plan_state`)
 - [ ] (with `--features postgres_memory`) step summaries landed: `psql "$TENGU_MEMORY_DATABASE_URL" -c "select session_id, agent, left(content, 80) from agentic_memory order by created_at desc limit 5"`
 
+## xmarket paper desk smoke (`sandboxes/xmarket`, ~10 min, no LLM)
+
+From the repo root. Build: `CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release`; `T=$HOME/.cache/tengu-xm.noindex/main/release/tengu`. Enter skips the vault prompt. Runbook: top of `sandboxes/xmarket/config.toml`; full checks: `docs/validation-checklist.md` § 9.
+
+- [ ] `"$T" doctor --sandbox xmarket </dev/null` exits 0 (agents `xm`, `xm_architect`, `xm_executor`; `network: open`)
+- [ ] `tmux new -s xm`, then `nice -n 10 "$T" run --sandbox xmarket` in the pane (foreground — never `&`)
+- [ ] a second `"$T" run --sandbox xmarket </dev/null` exits 1 (lease `runtime:xmarket`)
+- [ ] `"$T" doctor --sandbox xmarket --live </dev/null` exits 0 at +2 min (heartbeat fresh, 4 / 4 required feeds live)
+- [ ] `"$T" risk status --sandbox xmarket </dev/null`: account `xmarket`, owner sandbox `xmarket`, no halt, `kill-switch file …: absent`
+- [ ] `touch ~/.tengu/state/xmarket/KILL` → `risk status` says `PRESENT — every account is halted`; `rm` it (then `"$T" risk resume --sandbox xmarket` at a terminal if a halt was recorded)
+- [ ] Ctrl-C in the pane: drained ≤ 20 s, exit 0; `doctor --live` now exits 1 (`stopped`); 0 WARN / ERROR for the run in `~/.tengu/logs/tengu.log`
+
+## xlab smoke (`sandboxes/xlab`, ~5 min, no LLM)
+
+Same `$T`. Runbook: top of `sandboxes/xlab/config.toml`; expected numbers: `docs/validation-checklist.md` § 10.
+
+- [ ] `"$T" doctor --sandbox xlab </dev/null` exits 0 (`xl_architect`, `xl_jev`; allow `api.hyperliquid.xyz`, `api.geckoterminal.com`)
+- [ ] `"$T" history coverage --sandbox xlab </dev/null` lists 79 instruments (75 xyz stock perps + BTC / ETH / SOL / HYPE), 1h bars from 2026-03-07
+- [ ] `"$T" backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01T00:00:00Z </dev/null` → research `n=1500 mean_net_bps=+50.45`, holdout `n=886 mean_net_bps=+45.44` (data through 2026-10-01), a run dir under `~/.tengu/state/xlab/backtests/`
+- [ ] the same + `--gate xl_gate --max-decisions 1500 --offline` → `cache 1500 hits · 0 misses`, `jev − rules +28.93 bps`
+- [ ] (live, optional) `"$T" chat --sandbox xlab`: "test a weekend follow placebo on the holdout split" → in-sample runs first, one counted holdout read (`~/.tengu/state/xlab/backtests/holdout-reads.jsonl` gains a line)
+
 ## Regression baselines
 
 Fill these in on the first run of Phase 0, then treat them as the diff target for every later phase. Record any intentional change inline as a comment.

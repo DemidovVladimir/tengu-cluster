@@ -36,6 +36,7 @@ pub(crate) mod skill_resource;
 pub(crate) mod solana;
 pub(crate) mod view_skill;
 pub(crate) mod workspace;
+pub(crate) mod xlab;
 pub(crate) mod xm;
 
 use std::collections::HashSet;
@@ -302,6 +303,20 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: || xm::defs_named(names::PAPER_POSITIONS),
             plugin: |_| Box::new(xm::XmPlugin),
+        },
+        // xlab research family: one opt-in row per tool, all sharing the
+        // `xlab` plugin (interfaces in `xlab/defs.rs`); read-only.
+        ToolEntry {
+            opt_in: Some(names::MARKET_HISTORY),
+            needs_memory: false,
+            defs: || xlab::defs_named(names::MARKET_HISTORY),
+            plugin: |_| Box::new(xlab::XlabPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::BACKTEST),
+            needs_memory: false,
+            defs: || xlab::defs_named(names::BACKTEST),
+            plugin: |_| Box::new(xlab::XlabPlugin),
         },
     ]);
     rows

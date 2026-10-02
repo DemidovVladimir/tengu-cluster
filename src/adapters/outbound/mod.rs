@@ -1,14 +1,17 @@
 //! Outbound (driven) adapters — implementations of `crate::ports` and the
 //! other side-effecting clients the application uses.
 
+pub(crate) mod backfill;
 pub(crate) mod bridge_env;
 pub(crate) mod clock;
+pub(crate) mod decision_cache;
 pub(crate) mod decisions;
 pub(crate) mod egress;
 pub(crate) mod engines;
 pub(crate) mod history_sqlite;
 pub(crate) mod http_class;
 pub(crate) mod hyperliquid;
+pub(crate) mod market_data;
 pub(crate) mod mcp_client;
 pub(crate) mod memory;
 pub(crate) mod noop;

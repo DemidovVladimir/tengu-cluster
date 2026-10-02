@@ -195,7 +195,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 ### Conformance harness (`x-bridge-conformance-test`)
 
-`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 60 cases (default features) on 8 threads, < 10 s — besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
+`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 68 cases (default features) on 8 threads, < 10 s — `market_history` fetches through the mock into the side's `market.db` (HL captures moved to the current hours; GeckoTerminal) and reads back; `backtest` runs a library move trigger and an inline spec on those bars (run dirs compared file by file), refuses a bad spec (every problem named) and a sandbox without `[backtest]`; besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
 
 | Must match (both sides normalised) | How |
 |---|---|
@@ -208,11 +208,11 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 |---|---|
 | Network | `[egress] network = "open"`, `allow_hosts = ["127.0.0.1"]`: hard-coded upstream hosts are refused (deterministic error), never reached |
 | Upstreams | mock routes: method + path + substrings → inline JSON, a `tests/fixtures/…` file, `getMultipleAccounts` built from captured accounts, or an `l2Book` capture stamped now (`.book(..)`: a live book the paper gate accepts); base-URL overrides via `.scoped("SOLANA_RPC_URL")` / `.scoped("HL_API_URL")` (scope with the workspace, `127.0.0.1`, the env var → the mock) |
-| Store rows | `.row(..)` seeds `<ws>/.tengu/observations.db` stamped now (the opportunity row a paper entry names) |
+| Store rows | `.row(..)` seeds `<ws>/.tengu/observations.db` stamped now (the opportunity row a paper entry names); `.home_file(..)` writes a file under the side's `TENGU_HOME` (a stored backtest run a `run_id` read names) |
 | Secrets | `TENGU_SECRETS_LOADED` names a test secret on both sides; it must come back `[REDACTED]` |
 | Result size | cases stay under the bridge's cap (`TENGU_BRIDGE_MAX_RESULT_CHARS`, 50 000): only the bridge truncates, the in-process executor does not (engines cap later) |
-| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), `next_*_s` countdowns, ISO times, epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids, the call-id nonce `mcp:<32 hex>:` — table in the test's module doc |
-| Debug | `TENGU_CONFORMANCE_VERBOSE=1 cargo test --test bridge_conformance -- --nocapture` prints each case's text, files and requests |
+| Normaliser | temp root → `<ROOT>`, durations, observation ages, `*age_s/ms/secs` (not `max_*` / `min_*`), `next_*_s` countdowns, ISO times (extended, and basic `20261001T120034Z`: a backtest run id's stamp), epoch ms / s within 2 days of now, `YYYYMMDD.db`, JSON-RPC ids, the call-id nonce `mcp:<32 hex>:` — table in the test's module doc |
+| Debug | `TENGU_CONFORMANCE_VERBOSE=1 cargo test --test bridge_conformance -- --nocapture` prints each case's text, files and requests; `TENGU_CONFORMANCE_ONLY=<text>` runs only the cases whose name holds it (`backtest:`) |
 
 Add a case — one row in `cases()`, e.g. a Hyperliquid read (`info(<type>)` = `POST /info` with that body `type`; `hl_xyz` adds the xyz ctx, at-cap and perp-meta replies):
 

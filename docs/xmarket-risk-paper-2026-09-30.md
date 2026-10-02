@@ -135,7 +135,7 @@ Missing input ⇒ deny `missing:<field>` (`kill_switch`, `mark`, `equity`, `day_
 | `ts_ms` · `decision_id` | the row's time and `risk_decisions.id` |
 | `account` · `client_order_id` · `instrument` | full ids |
 | `call_id` | `ToolCtx.call_id` — loop `{loop}:{session}:{t}` (= that step's `call_id` in `decisions.jsonl`), feed `feed:<name>:<slot>:<i>`, bridge / `tengu tool call` `mcp:<nonce>:<id>` |
-| `session_id` · `tool` | `TENGU_SESSION_ID` of the process (a `run-agent` child, its bridge), else null — loop and feed sessions are inside `call_id` · the exec tool (`paper_order`, `paper_close`, `xm_exits`) |
+| `session_id` · `tool` | `TENGU_SESSION_ID` of the process (a `run-agent` child, its bridge), else null — loop and feed sessions are inside `call_id` · the exec tool (`paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade`) |
 | `verdict` · `rule` · `class` · `degraded` · `trips` · `checks` · `headroom` | allow / deny, the first failed rule, entry / exit, every check with its values and limits |
 | `intent` · `context` | the judged `OrderIntent` · the digest of row keys, ages and values the gate read |
 | `fill` | null when denied; else `order_id` (joins `orders` and `fills`), `status`, `reason`, `filled_qty`, `avg_px`, `fee_usd`, `slippage_bps`, `exit_at_ms` |

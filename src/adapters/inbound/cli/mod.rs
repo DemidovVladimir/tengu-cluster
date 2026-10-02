@@ -1,6 +1,7 @@
 //! `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls
 //! [`run`]. Subcommands with real bodies live beside this file.
 
+mod backtest;
 mod decide;
 mod doctor;
 mod history;
@@ -108,13 +109,28 @@ enum Commands {
         event: Option<PathBuf>,
     },
     /// Read recorded observation history (`[recorder]`): `range` / `asof`,
-    /// JSON lines with full keys.
+    /// JSON lines with full keys. Fill and inspect the market-data
+    /// warehouse `<state dir>/market.db` (xlab): `backfill` (Hyperliquid,
+    /// GeckoTerminal), `import-hl-archive`, `import-json`, `coverage`.
     History {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long, global = true)]
         sandbox: Option<String>,
         #[command(subcommand)]
         action: history::HistoryAction,
+    },
+    /// Backtest a strategy spec on the market-data warehouse
+    /// <state dir>/market.db (xlab, no LLM): a [backtest.strategies] name
+    /// or a JSON spec file; the research arm (+ the [risk]-capped arm), an
+    /// optional in-sample / holdout split. Prints the summary and writes the
+    /// run dir <state dir>/backtests/<run id>/. See docs/xlab-2026-10-01.md
+    /// § 6, § 10.
+    Backtest {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long)]
+        sandbox: Option<String>,
+        #[command(flatten)]
+        args: backtest::BacktestArgs,
     },
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
@@ -443,7 +459,7 @@ pub(crate) async fn run() -> Result<()> {
             .expect("Failed to set tracing subscriber");
     } else if matches!(
         cli.command,
-        Some(Commands::History { .. } | Commands::Risk { .. })
+        Some(Commands::History { .. } | Commands::Risk { .. } | Commands::Backtest { .. })
     ) {
         // stdout carries JSON lines / the operator's text; logs go to stderr.
         tracing_subscriber::fmt()
@@ -549,6 +565,10 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Risk { sandbox, action } => {
             let config = load_sandbox_or(sandbox, config)?;
             risk::run_risk(&config, action).await
+        }
+        Commands::Backtest { sandbox, args } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            backtest::run_backtest(&config, args).await
         }
         Commands::Eval {
             skills,
