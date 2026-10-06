@@ -672,8 +672,12 @@ These are not preferences. They're load-bearing.
   `{ from, path }`, `{ observation, path }` — no question, unresolved ⇒ the
   action is illegal; exact amounts from `/data/…`), so a higher-order agent
   hands values via the event and one tool's output feeds the next (lping
-  `hedge_exec` / `lp_exec`). `dry_run` defaults to true (a dry-run write no
-  longer ends the event); low confidence (`act_at`) escalates to
+  `hedge_exec` / `lp_exec`). A `sequence = ["a", "b?"]` makes the loop offer
+  one step at a time (`?` skipped when it cannot run; a failed / refused step
+  halts), and `tengu decide --map <file|->` runs an Architect's JSON execution
+  map that can only NARROW a loop (`config/execution_map.rs`, skill
+  `execution-map`; audit `trigger = "map:<sha256>"`). `dry_run` defaults to
+  true (a dry-run write no longer ends the event); low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
   `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
   in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;

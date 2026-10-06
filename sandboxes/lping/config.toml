@@ -428,12 +428,13 @@ rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
 
 [decision_loops.hedge_exec]
 goal = """Bring the operator wallet's Jupiter perps hedge to what the hedge \
-controller decides. Every event runs exactly this sequence: 1) snapshot — \
-always first, even when world.snap is fresh (it is then served from the \
-cache), 2) decide_hedge, 3) order — \
-only offered when the decision carries an order; it is simulated, never \
-sent, 4) hold. No order offered means hold."""
+controller decides — the controller is the judge, not this loop. The loop \
+offers one step at a time: snapshot (always first, even when world.snap is \
+fresh — it is then served from the cache), decide_hedge, then order only \
+when the decision carries one. Take the offered step; hold only when hold \
+is the only choice. Orders are simulated, never sent."""
 agent = "lp_executor"
+sequence = ["snapshot", "decide_hedge", "order?"]
 dry_run = false                      # the write runs in simulate mode (args)
 act_at = 0.8
 history = 8
@@ -526,13 +527,14 @@ mode = "simulate"
 # balances and the bot's reserves; its one route feeds jupiter_swap.
 [decision_loops.lp_exec]
 goal = """Fund and open the LP position the event asks for (target_sol SOL + \
-target_usdc USDC) in pool 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6. Every \
-event runs exactly this sequence: 1) snapshot — always first, even when \
-world.snap is fresh, 2) plan_swap, 3) ONLY when the plan has a route: \
-swap, then refresh (re-read balances); with no route skip both, 4) open, \
-5) hold. A blocked plan (feasible false) means hold. Everything is \
+target_usdc USDC) in pool 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6. The \
+loop offers one step at a time: snapshot (always first, even when \
+world.snap is fresh), plan_swap, swap + refresh only when the plan has a \
+route, open only when the plan is feasible. Take each offered step; hold \
+when only hold is offered or the state shows a problem. Everything is \
 simulated, never sent."""
 agent = "lp_executor"
+sequence = ["snapshot", "plan_swap", "swap?", "refresh?", "open"]
 dry_run = false                      # the writes run in simulate mode (args)
 act_at = 0.8
 history = 8
@@ -551,9 +553,12 @@ read_only = true
 args = { wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
 
 [decision_loops.lp_exec.actions.refresh]
-description = "Re-read the snapshot live after a swap (balances changed)"
+description = "Re-read the snapshot live after the swap (balances changed)"
 tool = "lp_snapshot"
 read_only = true
+# A gate, not an argument (no `{swapped}` in args): legal only once `swap`
+# succeeded in this event — without a swap the sequence skips it.
+slots = { swapped = { from = "swap", path = "/status" } }
 args = { wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6", max_age_secs = 0 }
 
 # Reserves = the bot's production values (delta_neutral_bot): 0.2 permanent
@@ -564,7 +569,7 @@ description = "Plan the swap that funds the deposit (pure): no swap, one route, 
 tool = "lp_swap_plan"
 read_only = true
 requires = { snap = 30 }
-reduce = { feasible = "/features/feasible", blocked = "/features/blocked", swaps = "/data/swaps" }
+reduce = { feasible = "/features/feasible", blocked = "/features/blocked", swaps = "/data/swaps", deposit = "/data/deposit" }
 caps = { target_sol = 2.0, target_usdc = 250.0 }
 
 [decision_loops.lp_exec.actions.plan_swap.slots]
@@ -607,14 +612,14 @@ mode = "simulate"
 
 # Knobs as lp_watch.open_position (bot production entry values).
 [decision_loops.lp_exec.actions.open]
-description = "Open the DLMM position with the event's amounts (simulated)"
+description = "Open the DLMM position with the plan's deposit (simulated)"
 tool = "dlmm_open_position"
 requires = { snap = 30 }
 caps = { amount_x = 2.0, amount_y = 250.0 }
 
 [decision_loops.lp_exec.actions.open.slots]
-amount_x = { event = "/target_sol" }
-amount_y = { event = "/target_usdc" }
+amount_x = { from = "plan_swap", path = "/deposit/sol" }    # only a feasible plan has a deposit
+amount_y = { from = "plan_swap", path = "/deposit/usdc" }
 
 [decision_loops.lp_exec.actions.open.args]
 wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"

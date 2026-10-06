@@ -6,7 +6,7 @@
 
 ---
 
-## lping execution chains (Tue 2026-10-06) — PR #27 `feature/lp-swap-plan`, then `feature/jev-chains` (step A)
+## lping execution chains (Tue 2026-10-06) — PR #27 (`lp_swap_plan` + step A), then `feature/execution-map` (step B)
 
 | Change | Note |
 |---|---|
@@ -14,7 +14,8 @@
 | Step A: dry-run goes on | a dry-run write no longer ends the event (`run_event`); xlab `xl_gate` (terminal-only) and jev-exec (all `read_only`) unaffected; lping `lp_watch` takes one more step (hold) |
 | Step A: `hedge_decide` `data.order` | `PerpsOrder` = the action as `jup_perps_order` args (close on an entire-position decrease; decrease / close cap ≥ the side's current notional) |
 | Step A: lping `hedge_exec` / `lp_exec` | simulate chains, every arg bound; verified live with Jev (keyless): hedge order simulated (1 tx, 93 733 CU, forced target in a scratch config — the real wallet has no LP, so BUG-011 grace holds), LP swap (1 tx) and open (1 tx, 210 003 CU) simulated |
-| Next (step B) | `ExecutionMap`: the Architect's chain as JSON data, validated as a narrowing of the sandbox TOML, `tengu decide --map`; then money rails (Solana `call_id` idempotency, cross-venue `[risk]`, approval) before any `send` |
+| Step B: `sequence` + execution maps (`feature/execution-map`) | loops offer one step at a time (`sequence`, `?` optional, failure halts); `tengu decide --map` runs an Architect's JSON map that only narrows a loop (`config/execution_map.rs`, skill `execution-map`, audit `trigger = "map:<sha256>"`); `lp_swap_plan` `data.deposit` (feasible only) feeds `dlmm_open_position`; lping exec loops sequenced. Verified live (Jev, keyless simulations) |
+| Next (step C) | money rails before any `send`: Solana `call_id` idempotency, cross-venue `[risk]` on Solana writes, approval gate; a private map tool for hardened sandboxes (no shell there); dedicated wallet |
 | `lp_swap_plan` | pure port of the bot's `planSwapForDeposit`: permanent + rent SOL reserve, refundable position rent, hedge-collateral USDC reserve; one `jupiter_swap` route (token units) or a typed block (`invalid_input`, `insufficient_total_value` / `_sol` / `_usdc`) |
 | lping | 11 observe/plan tools + 5 `simulate \| send` Solana writes on private `lp_executor`; `lp_watch` / `hedge_watch` stay `dry_run`, `hedge_exec` / `lp_exec` simulate; Raydium LP + Hyperliquid live writes remain explicit gaps |
 
