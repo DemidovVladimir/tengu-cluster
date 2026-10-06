@@ -6,6 +6,25 @@
 
 ---
 
+## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
+
+Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568a7`). Review package: `docs/w1-review-2026-10-06.md`. **No Phase 6+ until the operator answers APPROVE / APPROVE_WITH_FIXES / REWORK / ABORT_DIRECTION.**
+
+| Phase | Landed | Doc |
+|---|---|---|
+| P0 | vault `~/.tengu/state/evidence/w1-2026-10-06/` (486 files, read-only, record `lineage/evidence/w1-2026-10-06.toml`); `tengu evidence snapshot / verify / coverage / grade / regrade`; forward run `VALID_WITH_LIMITATIONS` (capped +1.370036060021 USD, +141.82 bps, n 4; shadow +6.213796012 USD, +8.43 bps, n 74; all reconciliation checks PASS); Saturday prereg graded from the books (+54.66 bps as registered, INCONCLUSIVE, validity UNRESOLVED) | `docs/w1-p0-weekend-2026-10-06.md` |
+| P1 | inventory, gap analysis, 11 known defects; 1,514 unit tests + offline suites green; 8 of 10 recorded xlab runs + the Jev gate replay byte-identical; W1 manifest `lineage/generations/W1.toml` (37 pins) frozen in `lineage/locks.toml`; tags `w1-forward-2026-10-02` (`6fcb455bae5553e2d51390e4cedd334779ca0d9c`) + `w1-forward-config-2026-10-02` (local, not pushed) | `docs/w1-inventory-2026-10-06.md` |
+| P2–P4 | `lineage/` registry (14 families, 41 variants, 30 experiments, 3 episodes, 8 incidents) + `tengu lineage verify / show / trace / family / attempts / report / capabilities / generation / seal` | `docs/lineage-2026-10-06.md` |
+| P5 | 17 capabilities; `[generation] id = "W1"` in `sandboxes/xlab` + `xmarket-weekend` — refused at load: a non-W1 opt-in tool, an unlisted sandbox, a drifted pin; `backtest` refuses a kind outside the generation | same, § 4 |
+
+| Open | Note |
+|---|---|
+| PRs #25 / #26 | still open; neither touches a W1 pin (#26 adds unpinned specs of an available kind) |
+| Docker | a bound sandbox loads `lineage/` (`COPY lineage` added); a compose file that mounts only `config.toml` fails closed |
+| Known defects D1–D11 | `docs/w1-inventory-2026-10-06.md` § 5 — proposed for P6 |
+
+---
+
 ## Merged to `main` (Fri 2026-10-02)
 
 | PR | Squash commit on `main` | Original branch (kept on origin) |
