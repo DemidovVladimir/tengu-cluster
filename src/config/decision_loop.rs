@@ -98,6 +98,52 @@ pub(crate) struct DecisionLoopConfig {
     pub world_max_age_secs: u64,
     /// The action set Jev chooses from. Keys are the labels Jev sees.
     pub actions: BTreeMap<String, ActionConfig>,
+    /// Explicit step order: `"action"`, or `"action?"` for an optional
+    /// step. Each step offers Jev only the next action + the terminal
+    /// actions; an optional step that is not legal (a binding unresolved,
+    /// `requires` stale) is skipped; a required one that is not legal, or
+    /// a step whose tool failed or was refused, halts the chain (terminal
+    /// actions only). Empty (default) = Jev picks among every legal action.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sequence: Vec<SeqStep>,
+}
+
+/// One `sequence` step; written `"action"` or `"action?"` (optional).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub(crate) struct SeqStep {
+    pub action: String,
+    pub optional: bool,
+}
+
+impl TryFrom<String> for SeqStep {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        let (action, optional) = match s.strip_suffix('?') {
+            Some(a) => (a, true),
+            None => (s.as_str(), false),
+        };
+        if action.trim().is_empty() || action.contains('?') {
+            return Err(format!(
+                "sequence step `{s}`: an action name, `?` at the end for an optional step"
+            ));
+        }
+        Ok(SeqStep {
+            action: action.to_string(),
+            optional,
+        })
+    }
+}
+
+impl From<SeqStep> for String {
+    fn from(s: SeqStep) -> String {
+        if s.optional {
+            format!("{}?", s.action)
+        } else {
+            s.action
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +275,26 @@ impl DecisionLoopConfig {
                     "{p}.world.{alias}: `{key}` is not an observation key (`<schema>:<subject>`)"
                 ));
             }
+        }
+        for step in &self.sequence {
+            match self.actions.get(&step.action) {
+                None => errs.push(format!(
+                    "{p}.sequence: `{}` is not an action",
+                    step.action
+                )),
+                Some(a) if a.tool.is_none() => errs.push(format!(
+                    "{p}.sequence: `{}` is terminal — terminal actions are always offered, never sequenced",
+                    step.action
+                )),
+                Some(_) => {}
+            }
+        }
+        if !self.sequence.is_empty() && (self.max_steps as usize) <= self.sequence.len() {
+            errs.push(format!(
+                "{p}.max_steps ({}) must exceed the sequence length ({}) so the chain can end on a terminal action",
+                self.max_steps,
+                self.sequence.len()
+            ));
         }
         if !self.actions.values().any(|a| a.tool.is_none()) {
             errs.push(format!(

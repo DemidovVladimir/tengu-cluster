@@ -561,8 +561,9 @@ pub(crate) struct DepositSwapInput {
     pub quote_mint: String,
 }
 
+/// A SOL + USDC pair of token amounts (a shortfall, a deposit).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub(crate) struct DepositSwapShortfall {
+pub(crate) struct SolUsdc {
     pub sol: f64,
     pub usdc: f64,
 }
@@ -599,8 +600,13 @@ pub(crate) struct DepositSwapPlan {
     pub spendable_usdc: f64,
     pub wallet_value_usd: Option<f64>,
     pub required_value_usd: Option<f64>,
-    pub shortfall: DepositSwapShortfall,
+    pub shortfall: SolUsdc,
     pub swaps: Vec<DepositSwap>,
+    /// The deposit this plan funds (the targets) — present only when the
+    /// plan is feasible, so a decision loop that binds `dlmm_open_position`
+    /// amounts to `/data/deposit/{sol,usdc}` cannot open on a blocked plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deposit: Option<SolUsdc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block: Option<DepositSwapBlock>,
 }
@@ -614,7 +620,7 @@ impl DepositSwapPlan {
         spendable_usdc: f64,
         wallet_value_usd: Option<f64>,
         required_value_usd: Option<f64>,
-        shortfall: DepositSwapShortfall,
+        shortfall: SolUsdc,
     ) -> Self {
         Self {
             context: input.context,
@@ -628,6 +634,7 @@ impl DepositSwapPlan {
             required_value_usd,
             shortfall,
             swaps: Vec::new(),
+            deposit: None,
             block: Some(DepositSwapBlock {
                 code,
                 reason: reason.into(),
@@ -663,7 +670,7 @@ pub(crate) fn plan_swap_for_deposit(input: &DepositSwapInput) -> DepositSwapPlan
             0.0,
             None,
             None,
-            DepositSwapShortfall {
+            SolUsdc {
                 sol: 0.0,
                 usdc: 0.0,
             },
@@ -674,7 +681,11 @@ pub(crate) fn plan_swap_for_deposit(input: &DepositSwapInput) -> DepositSwapPlan
     let available_sol_for_swap = (input.wallet_sol - total_sol_reserve).max(0.0);
     let spendable_usdc = (input.wallet_usdc - input.reserve_usdc).max(0.0);
     let required_sol = input.target_sol + input.position_rent_sol;
-    let shortfall = DepositSwapShortfall {
+    let target = SolUsdc {
+        sol: input.target_sol,
+        usdc: input.target_usdc,
+    };
+    let shortfall = SolUsdc {
         sol: (required_sol - available_sol_for_swap).max(0.0),
         usdc: (input.target_usdc - spendable_usdc).max(0.0),
     };
@@ -694,6 +705,7 @@ pub(crate) fn plan_swap_for_deposit(input: &DepositSwapInput) -> DepositSwapPlan
             required_value_usd: Some(required_value_usd),
             shortfall,
             swaps: Vec::new(),
+            deposit: Some(target),
             block: None,
         };
     }
@@ -776,6 +788,7 @@ pub(crate) fn plan_swap_for_deposit(input: &DepositSwapInput) -> DepositSwapPlan
         required_value_usd: Some(required_value_usd),
         shortfall,
         swaps: vec![swap],
+        deposit: Some(target),
         block: None,
     }
 }
@@ -1656,6 +1669,14 @@ mod tests {
             i.wallet_usdc = 500.0;
         });
         assert!(noop.feasible && !noop.needed && noop.swaps.is_empty());
+        assert_eq!(
+            noop.deposit,
+            Some(SolUsdc {
+                sol: 1.0,
+                usdc: 100.0
+            }),
+            "a feasible plan carries the deposit it funds"
+        );
         assert!(close_to(noop.available_sol_for_swap, 4.7, 8));
 
         let to_usdc = deposit(|i| {
@@ -1670,6 +1691,7 @@ mod tests {
         let to_sol = deposit(|i| {
             i.wallet_sol = 0.5;
         });
+        assert!(to_sol.deposit.is_some());
         let swap = &to_sol.swaps[0];
         assert_eq!(swap.direction, DepositSwapDirection::UsdcToSol);
         assert!(close_to(swap.amount, 81.6, 8));
@@ -1685,6 +1707,7 @@ mod tests {
             i.target_usdc = 400.0;
         });
         assert!(!p.feasible && p.swaps.is_empty());
+        assert_eq!(p.deposit, None, "a blocked plan funds no deposit");
         assert_eq!(
             p.block.unwrap().code,
             DepositSwapBlockCode::InsufficientTotalValue

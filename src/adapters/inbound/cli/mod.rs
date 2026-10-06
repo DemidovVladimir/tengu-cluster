@@ -101,12 +101,18 @@ enum Commands {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
         sandbox: Option<String>,
-        /// Loop name (`[decision_loops.<name>]`).
-        #[arg(long = "loop")]
-        loop_name: String,
+        /// Loop name (`[decision_loops.<name>]`); optional with `--map` (the
+        /// map names its loop).
+        #[arg(long = "loop", required_unless_present = "map")]
+        loop_name: Option<String>,
         /// Event JSON file (`-` = stdin). Omitted = `{}`.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "map")]
         event: Option<PathBuf>,
+        /// Execution map JSON file (`-` = stdin): a higher-order agent's run
+        /// of one loop — order, event, tighter caps — that can only narrow
+        /// the sandbox TOML (`config/execution_map.rs`). Carries its event.
+        #[arg(long)]
+        map: Option<PathBuf>,
     },
     /// Read recorded observation history (`[recorder]`): `range` / `asof`,
     /// JSON lines with full keys. Fill and inspect the market-data
@@ -554,9 +560,17 @@ pub(crate) async fn run() -> Result<()> {
             sandbox,
             loop_name,
             event,
+            map,
         } => {
             let config = load_sandbox_or(sandbox, config)?;
-            decide::run_decide(&config, &loop_name, event.as_deref(), secret_registry).await
+            decide::run_decide(
+                &config,
+                loop_name.as_deref(),
+                event.as_deref(),
+                map.as_deref(),
+                secret_registry,
+            )
+            .await
         }
         Commands::History { sandbox, action } => {
             let config = load_sandbox_or(sandbox, config)?;
