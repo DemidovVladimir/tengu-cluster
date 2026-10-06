@@ -1,0 +1,15 @@
+id = "sol_eth_spread.library"
+family = "sol_eth_spread"
+title = "sol_eth_spread (xlab library spec)"
+parent = "ROOT"
+reason = "Library strategy: convergence on a crypto pair."
+registered_at = "2026-10-01"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Runs: 20261001T161329Z, 171027Z (pre-fix), 182847Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "sol_eth_spread"
+spec_sha256 = "c499e65d940cb5ddde04e660b066f67c4ad4e1841a3862940602f17c75f7b174"

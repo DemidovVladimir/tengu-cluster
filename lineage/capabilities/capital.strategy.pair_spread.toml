@@ -1,0 +1,15 @@
+id = "capital.strategy.pair_spread"
+title = "Strategy kind pair_spread"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "HISTORICALLY_TESTED"
+contract = "repo:src/domain/backtest/spec.rs"
+bindings = ["strategy_kind:pair_spread"]
+notes = "Backtested: sol_eth_spread (no-go)."
+
+[[evidence]]
+ref = "record:experiment/xlab.sol_eth_spread.2026-10-01"
+role = "library run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

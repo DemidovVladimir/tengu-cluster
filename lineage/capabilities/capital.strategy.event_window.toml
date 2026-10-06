@@ -1,0 +1,15 @@
+id = "capital.strategy.event_window"
+title = "Strategy kind event_window"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "DISCOVERED"
+contract = "repo:src/domain/backtest/spec.rs"
+bindings = ["strategy_kind:event_window"]
+notes = "Built (events with publication times, entry delay, follow / fade) but no run dir uses it: never tested. The natural home of rule E and of info-layer tests (xlab § 12)."
+
+[[evidence]]
+ref = "repo:docs/xlab-2026-10-01.md"
+role = "kind definition (§ 5)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"

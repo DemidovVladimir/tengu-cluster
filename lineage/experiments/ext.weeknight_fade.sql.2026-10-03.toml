@@ -1,0 +1,68 @@
+id = "ext.weeknight_fade.sql.2026-10-03"
+title = "Weeknight fade screening on 1h bars (weekday.sql) — before the preregistered xlab test"
+family = "weeknight_fade"
+variant = "weeknight_fade.top4_0000"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-10-03T13:00:13Z"
+ran_at = "2026-10-03T13:00:13Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on 1h bar closes (fixed EDT offsets: anchor 23:00Z, entry 03:00Z / 07:00Z, exit 12:00Z); no funding"
+uncertainty = "CI over 113 nights (normal approximation in SQL)"
+incidents = []
+limitations = ["Whole period, no holdout — which is why the later xlab holdout of this spec is contaminated (plan honesty note).", "No stored output: figures only in the plan file (REPORTED).", "ran_at = weekday.sql mtime (its last write)."]
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-09"
+to = "2026-09-29"
+scope = "xyz stock perps, 113 Mon–Thu nights 2026-03-09 … 09-28 (nights before holidays and holiday evenings left out)"
+integrity = "CLEAN"
+
+[[results]]
+label = "top 4 |s| ≥ 50 bps, entry 00:00 New York"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 37.3
+ci95_bps = [6.7, 67.9]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED; 113 nights, 63 up; trade count not stated."
+
+[[results]]
+label = "all names, entry 00:00 New York"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 10.5
+ci95_bps = [-3.5, 24.5]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[[results]]
+label = "top 4, entry 04:00 New York (variant weeknight_fade.top4_0400)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 21.1
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED; CI not stated."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "Screening on the whole period with no holdout; led to the preregistered xlab test (xlab.weeknight_fade.top4_0000.2026-10-05) and named a forward test as the clean one."
+decided_at = "2026-10-03T13:03:50Z"
+decided_by = "weekend research session (plan file)"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "reported figures"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/weekday.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "67ac094a948d12b56f6474f13e092196ebd1706c817817ffcfa4db2780d86c9d"

@@ -1,0 +1,97 @@
+id = "ext.holdout_names.rule_w.2026-09-30"
+title = "Pre-registered names holdout: rule W unchanged on the 53 other xyz single-stock perps"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "HOLDOUT_TEST"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = "Net = gross − 3.8 bps round trip (HL xyz 0.9 bps taker + spread) on traded candle closes; optimistic for the thinnest names"
+uncertainty = "95 % CI with weekends resampled; 30 weekends"
+split_by = "INSTRUMENTS"
+incidents = []
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["New names, not new time: holdout and in-sample weekend results correlate 0.47.", "Pass threshold (W ≥ +15 bps mean net per trade) stated as fixed before the run, but no separate prereg file or hash exists; it is in the doc committed with the results (git 47fc090de426205df91425df789849466e962399).", "One trade removed before computing outcomes: KIOXIA, weekend ending 2026-09-28 (trade.xyz halted and settled it for a 3-for-1 split); kept split-adjusted it would have added +609 bps.", "8.7 % of entry bars had no trades (stale entry price).", "Throwaway scripts; generation UNKNOWN."]
+notes = "The rule code first reproduced the in-sample numbers exactly. Universe: 42 US-listed (incl. ADRs) + 11 foreign-listed single stocks; indices, ETFs, FX, commodities excluded; 5 delisted single-stock markets return no candles."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "the 22 xyz names the rule was found on"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "the 53 other xyz single-stock perps with data (42 US-listed incl. ADRs, 11 foreign-listed)"
+integrity = "CLEAN"
+note = "Names unseen when the rule was formed; the same weekends (correlation 0.47 with the in-sample weekend results)."
+
+[[results]]
+label = "W all names — holdout, 53 names, 30 weekends"
+class = "HOLDOUT"
+n = 950
+mean_net_bps = 49.8
+ci95_bps = [9.6, 86.0]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED. 24 of 30 weekends positive, 62 % of trades."
+
+[[results]]
+label = "W top 4 per weekend — holdout (variant weekend_fade.top4)"
+class = "HOLDOUT"
+n = 120
+mean_net_bps = 118.1
+ci95_bps = [16.3, 216.6]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED. 22 of 30 weekends positive."
+
+[[results]]
+label = "W market-neutral per-stock reversal — holdout"
+class = "HOLDOUT"
+n = "UNKNOWN"
+mean_net_bps = 55.4
+ci95_bps = [22.0, 85.9]
+t_stat = 4.21
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; t across weekends. US-listed +53.3 (CI +20.4 … +82.5); foreign-listed +35.1 (CI spans 0; home market opens inside the hold)."
+
+[[results]]
+label = "W entry bars with ≥ 50 trades — holdout (reading behind variant weekend_fade.liquid50)"
+class = "HOLDOUT"
+n = 363
+mean_net_bps = 72.3
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; CI not stated."
+
+[[results]]
+label = "W all names — pooled in-sample + holdout"
+class = "DEVELOPMENT"
+n = 1525
+mean_net_bps = 48.3
+ci95_bps = [14.8, 80.7]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; mixes both windows (not a holdout figure). xlab reproduced it as +49.4 over 1,499 (log P&L, no KIOXIA split weekend, no funding). W top 4 pooled: +114.4 (n 239)."
+
+[verdict]
+value = "PASS"
+reason = "W ≥ +15 bps threshold fixed before the run: all names +49.8 (CI +9.6 … +86.0), top 4 +118.1 (CI +16.3 … +216.6) — pass, on new names but the same weekends."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study; operator check \"W passes, E not confirmed\" (2026-09-30)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "holdout result (§ Holdout result)"
+class = "HOLDOUT"
+provenance = "REPORTED"
+
+[[evidence]]
+ref = "git:47fc090de426205df91425df789849466e962399"
+role = "prereg"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+note = "Thresholds W ≥ +15 / E ≥ +40 bps \"fixed before the run\" — recorded only in this commit, together with the results (2026-09-30T13:14:16Z); no separate prereg hash."

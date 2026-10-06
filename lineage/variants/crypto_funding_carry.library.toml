@@ -1,0 +1,15 @@
+id = "crypto_funding_carry.library"
+family = "crypto_funding_carry"
+title = "crypto_funding_carry (xlab library spec)"
+parent = "ROOT"
+reason = "Library strategy: funding carry on the crypto perps."
+registered_at = "2026-10-01"
+order = 2
+preregistered = false
+status = "REJECTED"
+notes = "Runs: 20261001T161328Z, 171027Z (pre-fix), 182846Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "crypto_funding_carry"
+spec_sha256 = "b75ab5262ffca5dbad4cfd4d5ce873417ccc7da134722a8a9f42bd9f3291748e"

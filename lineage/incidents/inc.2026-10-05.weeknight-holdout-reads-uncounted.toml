@@ -1,0 +1,39 @@
+id = "inc.2026-10-05.weeknight-holdout-reads-uncounted"
+title = "Weeknight holdouts read from the CLI: not in holdout-reads.jsonl"
+class = "DATA"
+started_at = "2026-10-05T14:03:28Z"
+ended_at = "2026-10-05T14:03:29Z"
+detected_by = "P0 evidence inventory 2026-10-06 (§ 5, § 9): the two weeknight run dirs carry holdout halves, holdout-reads.jsonl has 4 lines, all 2026-10-01"
+generation = "W1"
+experiment = "xlab.weeknight_fade.top4_0000.2026-10-05"
+strategy_impact = "NONE"
+strategy_impact_note = "No trading impact; research integrity: the read counter misses two holdout reads, so the plan's \"ONE holdout read\" is unverifiable from the ledger."
+notes = "By design `tengu backtest --split` records nothing (xlab § 10: only the backtest tool's holdout: true is counted). Affects both xlab.weeknight_fade.top4_0000.2026-10-05 and xlab.weeknight_fade.top4_0400.2026-10-05."
+
+[[data_impact]]
+stream = "xlab/backtests/holdout-reads.jsonl"
+from = "2026-10-05T14:03:28Z"
+to = "2026-10-05T14:03:30Z"
+after = "MISSING"
+note = "2 reads (20261005T140328Z-xyz_weeknight_fade_top4, 20261005T140329Z-xyz_weeknight_fade_top4_0400) not ledgered; the run dirs keep both halves."
+
+[[evidence]]
+ref = "run:xlab/20261005T140328Z-xyz_weeknight_fade_top4"
+role = "run with a holdout half"
+class = "HOLDOUT"
+provenance = "DERIVED"
+sha256 = "e18098c04b2d28448fc44edca9e09408a3346538b451439c8d778d5077ab4e16"
+
+[[evidence]]
+ref = "run:xlab/20261005T140329Z-xyz_weeknight_fade_top4_0400"
+role = "run with a holdout half"
+class = "HOLDOUT"
+provenance = "DERIVED"
+sha256 = "9c11b385d74b981b0858732a1b9318132267abd5bce12d4b15ee6e22052ca1e8"
+
+[[evidence]]
+ref = "state:xlab/backtests/holdout-reads.jsonl"
+role = "the read ledger (4 lines, none for the weeknight specs)"
+class = "HOLDOUT"
+provenance = "LIVE_RECORDED"
+note = "sha256 82e2e4d620e1bd73a47ac033d8da36d4b2604759a62613cc918e3f4c204800eb at the 2026-10-06 inventory (append-only, mutable)."

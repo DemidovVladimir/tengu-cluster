@@ -1,0 +1,11 @@
+id = "hl_rh_token_convergence.feasibility"
+family = "hl_rh_token_convergence"
+title = "HL ↔ Robinhood token convergence as measured by the feasibility study"
+parent = "ROOT"
+reason = "The PRD's central opportunity, checked before building."
+registered_at = "2026-09-30"
+preregistered = false
+status = "REJECTED"
+
+[spec]
+described = "Round trips between HL xyz perps and Robinhood Chain stock-token pools at $25 / $100, using 1,199 real swaps (GeckoTerminal) and HL books from one Wednesday pre-market window; costs = pool fees + HL 0.9 bps taker."

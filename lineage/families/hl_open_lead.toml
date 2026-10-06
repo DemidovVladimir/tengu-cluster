@@ -1,0 +1,15 @@
+id = "hl_open_lead"
+title = "Hyperliquid's lead at the US open"
+hypothesis = "Hyperliquid's closed-market move predicts the stock's opening move, so the open can be traded on it."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go (feasibility 2026-09-30, confidence high): edge ≈ 0 — the open already prices HL's closed-market move (slope 1.03, R² 0.92 at 09:00 ET; R² 0.996 at 09:30 ET); ~92 ticker-opens / week."
+origin_at = "2026-09-29"
+origin = "repo:docs/xmarket-prd-2026-09-29.md"
+origin_by = "operator PRD (§ Information Latency: one market reacts materially faster than another)"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "Not itemised."

@@ -1,0 +1,18 @@
+id = "post_earnings_follow"
+title = "Rule E — overnight follow-through after post-market earnings"
+hypothesis = "1–4 h after a post-market Item 2.02 earnings release, following HL's move since the release and exiting before 09:30 New York earns after costs."
+mechanism = "Earnings news released after the close is priced first on the HL perp; the move continues into the next open."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "Not confirmed on the pre-registered names holdout (2026-09-30): t0 + 4 h +35.5 bps (CI −33.7 … +108.9, n 37) is below the +40 threshold fixed before the run; t0 + 2 h +72.9 (CI −6.7 … +149.2) passes on the mean only; −21.8 without the 5 best events; ARM's 6-K night (−1,580 bps, left out by the protocol) turns t0 + 4 h into a fail; both miss the M3 condition that the CI excludes 0. Never forward-tested; its generic cousin xyz_overnight_follow lost in xlab (−29.4 bps)."
+origin_at = "2026-09-30"
+origin = "repo:docs/xmarket-feasibility-2026-09-30.md"
+origin_by = "xmarket feasibility study (one collector, four analysts, a critic)"
+parent = "NONE"
+notes = "A narrower event rule than generic_8k_reaction (same study, same EDGAR data)."
+
+[prior_search]
+count = 100
+precision = "APPROX"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "\"~27 and ~100 variants tried\" (W and E); not itemised."

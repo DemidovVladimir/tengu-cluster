@@ -1,0 +1,22 @@
+id = "weekend_fade"
+family = "weekend_overshoot_fade"
+title = "Rule W, every name with a signal (the shadow ledger's selection)"
+parent = "ROOT"
+reason = "The rule as found by the feasibility study: fade every eligible name; spec form committed in xlab 2026-10-01 (\"Rule W exactly\")."
+registered_at = "2026-09-30"
+order = 1
+preregistered = false
+status = "SURVIVING"
+notes = "xlab runs with this spec_sha256 (all on 2026-10-01 unless named): 161128Z, 161216Z, 165216Z, 170537Z (Jev live), 170552Z, 170605Z (0 candidates), 170647Z, 170824Z, 170825Z, 171021Z, 182809Z, 182905Z (Jev offline), 193044Z, 193107Z, 193448Z, 193521Z, 193551Z, 194043Z, 194106Z, and 20261002T183833Z (purpose UNKNOWN: in-sample to 2026-07-01, n 614)."
+
+[spec]
+sandbox = "xlab"
+strategy = "weekend_fade"
+spec_sha256 = "e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14"
+
+[[evidence]]
+ref = "run:xlab/20261001T182809Z-weekend_fade"
+role = "post-fix library run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "ad345442b7254f1448bf20f28ba05d4d7e719a31ab68e3d5b25c9fcb1897d7e3"

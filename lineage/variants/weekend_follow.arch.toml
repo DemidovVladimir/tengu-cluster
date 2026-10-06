@@ -1,0 +1,26 @@
+id = "weekend_follow.arch"
+family = "weekend_momentum_follow"
+title = "arch_weekend_follow — the placebo as an inline spec through the backtest tool"
+parent = "weekend_follow"
+reason = "Live smoke of the Architect's backtest tool 2026-10-01 (xlab doc § 8: \"inline weekend follow on @xyz_stocks, split = time:2026-07-01\")."
+registered_at = "2026-10-01T16:52:06Z"
+order = 2
+preregistered = false
+status = "REJECTED"
+notes = "Same parameters as weekend_follow; only the name differs (so a different spec_sha256). Pre-fix run 20261001T165206Z: n 1,500, −66.25 bps, holdout −66.85 (n 886)."
+
+[spec]
+spec_sha256 = "aa07dda98d94eebcf90080592682c5a1ea2b625c2dd9c1b79f5d953225011528"
+source = "run:xlab/20261001T165206Z-arch_weekend_follow"
+
+[[changed]]
+dim = "name"
+from = "weekend_follow"
+to = "arch_weekend_follow"
+
+[[evidence]]
+ref = "run:xlab/20261001T165206Z-arch_weekend_follow"
+role = "spec + result (pre-fix engine)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "596874f29fb8d0f6eb5580330c0a36113232a9b46f42586df5a5f0f7ce3c3ae7"

@@ -1,0 +1,401 @@
+id = "xlab.library.prefix.2026-10-01"
+title = "xlab library runs before the engine fixes (16:11–17:10Z) — malformed research, preserved"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade"
+generation = "UNKNOWN"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01T16:11:28Z"
+ran_at = "2026-10-01T17:10:27Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs] as later (xyz 0.9 bps taker + 1.0 bps half-spread per side; main-dex 4.5 bps + ctx spread) but log-return P&L and the pre-fix statistics'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["intel.backtest", "capital.strategy.weekend_window", "capital.strategy.daily_window", "capital.strategy.funding_carry", "capital.strategy.move_trigger", "capital.strategy.pair_spread"]
+uncertainty = "Pre-fix: t iid (not clustered by period), drawdown per trade, paired CI without the both-arms guard"
+incidents = []
+validity = "INVALID_FOR_STRATEGY_INFERENCE"
+limitations = ["Engine defects confirmed by the adversarial review (17 of 19 findings; 5 major: holdout peeking, a split straddling a bar, log-return P&L, drawdown inside an instant, overconfident paired CI), fixed in db96cb25c0ffa1efa13f8d7c388e407dfb107d24 and dba04d59922ba1922304a41351b1b4431efe9e75.", "One experiment for every family's pre-fix runs: the family / variant fields name rule W; each result's label names its strategy and its run maps to its variant by spec_sha256.", "Generation UNKNOWN: pre-fix xlab code on feature/xlab, not W1."]
+notes = "Superseded, not deleted (handoff § 24: malformed research is Experience). Post-fix counterparts: xlab.<strategy>.2026-10-01. Also pre-fix, listed as evidence: the 16:51–17:08Z development runs (smoke, Jev gate, Architect turn 1, strict variants, a 0-candidate run 20261001T170605Z-weekend_fade)."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T17:10:27Z"
+scope = "@xyz_stocks (75) and @crypto (4), 1h bars"
+integrity = "CLEAN"
+
+[[results]]
+label = "weekend_fade (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1500
+mean_net_bps = 51.32579810002681
+ci95_bps = [15.543773046118226, 82.53883397239053]
+net_usd = 769.8869715004031
+t_stat = 6.531153854424859
+evidence = "run:xlab/20261001T171021Z-weekend_fade"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "weekend_fade_liquid (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 875
+mean_net_bps = 60.26738242044014
+ci95_bps = [16.939303991515377, 101.71675331263627]
+net_usd = 527.3395961788508
+t_stat = 5.430215046359745
+evidence = "run:xlab/20261001T171022Z-weekend_fade_liquid"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "weekend_fade_top4 (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 152.45210420996148
+ci95_bps = [53.116840088954746, 255.8350221953615]
+net_usd = 176.84444088355534
+t_stat = 3.290691066652965
+evidence = "run:xlab/20261001T171023Z-weekend_fade_top4"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "weekend_follow (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1500
+mean_net_bps = -58.92579810002682
+ci95_bps = [-90.13883397239054, -23.14377304611825]
+net_usd = -883.8869715004038
+t_stat = -7.498245865286411
+evidence = "run:xlab/20261001T171024Z-weekend_follow"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "xyz_overnight_follow (pre-fix; t −2.89 iid looked significant beside a CI over 0), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1494
+mean_net_bps = -28.849020907346738
+ci95_bps = [-68.61243321719314, 8.849106414908912]
+net_usd = -431.0043723557595
+t_stat = -2.8859418246386626
+evidence = "run:xlab/20261001T171024Z-xyz_overnight_follow"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "xyz_funding_carry (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 13000
+mean_net_bps = -2.071817794530029
+ci95_bps = [-6.8429538115742465, 2.673865830680935]
+net_usd = -269.3363132889033
+t_stat = -0.9881896888119919
+evidence = "run:xlab/20261001T171025Z-xyz_funding_carry"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "crypto_move_fade (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 138
+mean_net_bps = -31.46619844503132
+ci95_bps = [-92.48966302449917, 27.81809498248913]
+net_usd = -43.42335385414323
+t_stat = -1.2164774397194844
+evidence = "run:xlab/20261001T171027Z-crypto_move_fade"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "crypto_funding_carry (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 70
+mean_net_bps = 31.022146666884918
+ci95_bps = [-53.593576610754255, 117.55380846124014]
+net_usd = 21.715502666819447
+t_stat = 0.7300259756161008
+evidence = "run:xlab/20261001T171027Z-crypto_funding_carry"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[[results]]
+label = "sol_eth_spread (pre-fix), research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 38
+mean_net_bps = -32.37055128351746
+ci95_bps = [-76.16239994222866, 9.556485182242028]
+net_usd = -12.300809487736629
+t_stat = -1.4284403048062297
+evidence = "run:xlab/20261001T171027Z-sol_eth_spread"
+extract = "arm:research"
+note = "Pre-fix figure; t_stat is the iid t of the time."
+
+[verdict]
+value = "INVALID"
+reason = "Superseded by the engine and tool fixes from the adversarial review (log-return P&L, drawdown inside an instant, iid t, split straddling a bar, holdout peeking, overconfident paired CI). The re-runs moved rule W by ≈ 1 bp and halved its t (6.53 iid → 2.93 clustered); figures kept as malformed research."
+decided_at = "2026-10-01T18:41:11Z"
+decided_by = "adversarial review (3 lenses, 19 verifiers) → xlab-fix-engine db96cb25c0ffa1efa13f8d7c388e407dfb107d24 (commit time)"
+
+[[evidence]]
+ref = "run:xlab/20261001T161128Z-weekend_fade"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "affd71aeba1f8f7c038bd0de0d92ca41c86b7cf54e32585b0f806de693970586"
+
+[[evidence]]
+ref = "run:xlab/20261001T161216Z-weekend_fade"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "abe4b3c9568e31c50f93dd5b9e2b55b88d07e316a9ba13d31a06337de671aa80"
+
+[[evidence]]
+ref = "run:xlab/20261001T161222Z-weekend_fade_top4"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "1aaba4a01f7d6a43548e17c5f9150927ba905019ec85d6620132274aa2f6a78b"
+
+[[evidence]]
+ref = "run:xlab/20261001T161222Z-weekend_follow"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "ea1078564e612d35bbf436d0a985717e8dd01dc64b829d08a0ce6a9df8561245"
+
+[[evidence]]
+ref = "run:xlab/20261001T161259Z-btc_eth_carry_probe"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "ec76c7587c8546af5dfb587ba24b1e1d81de25d5bda4525ca76a4011c7b6188d"
+
+[[evidence]]
+ref = "run:xlab/20261001T161326Z-xyz_overnight_follow"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "555286bdfa8626199051e7f9045261c863f4f500382c53acbc4c54756e45edfa"
+
+[[evidence]]
+ref = "run:xlab/20261001T161327Z-xyz_funding_carry"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "12443592f042316a4d607583b0a00e1edcf7cdd5c353e1a1971cccd2aeb0c4d9"
+
+[[evidence]]
+ref = "run:xlab/20261001T161328Z-crypto_funding_carry"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "8ab00de1342cb03399e0af5a5a3ec762362fffe5e9aa2a1521bacf6d0ed466b2"
+
+[[evidence]]
+ref = "run:xlab/20261001T161328Z-crypto_move_fade"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "5c49a54a32f4b2251d406f199a830cb8feb4abf5cb2ee08a4750ebc33fc87195"
+
+[[evidence]]
+ref = "run:xlab/20261001T161329Z-sol_eth_spread"
+role = "first library pass (16:11–16:13Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "084e10e3978a540fa7ce39cebd22eaaa42f84af738f1555a2119ca9f6deed31f"
+
+[[evidence]]
+ref = "run:xlab/20261001T165153Z-weekend_fade_top4"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "e87913f15c691af8aa70046c16670339315c1bde4855ae1c884b2ab1e99c4412"
+
+[[evidence]]
+ref = "run:xlab/20261001T165206Z-arch_weekend_follow"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "596874f29fb8d0f6eb5580330c0a36113232a9b46f42586df5a5f0f7ce3c3ae7"
+
+[[evidence]]
+ref = "run:xlab/20261001T165216Z-weekend_fade"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "e8d35decc43d5b9f2ba6a276d202570d44d7421e67330f2b2ec9d523730f5378"
+
+[[evidence]]
+ref = "run:xlab/20261001T165231Z-weekend_fade_liquid"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "b3b554826f6111ca74fc2d76a0e50853369c28e94e6ea649ce9478f85c4e6fe7"
+
+[[evidence]]
+ref = "run:xlab/20261001T165415Z-weekend_follow"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "4a1cee532c5b2c5c8b6b34a2e55fbc04c5a7d355fb4c87d962bf4f19ad18f6d1"
+
+[[evidence]]
+ref = "run:xlab/20261001T170552Z-weekend_fade"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "469c3f92ceeacc77fbfa376c331aeef4b9bac75a44b036951afb08545f6a3111"
+
+[[evidence]]
+ref = "run:xlab/20261001T170553Z-weekend_fade_liquid"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "054968ca42d65286c5537451650daccacc7ac8e427203b5525b4192942156ca8"
+
+[[evidence]]
+ref = "run:xlab/20261001T170553Z-weekend_follow"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "947dd3417887a860086c515327062c0c48a4d22ad7c9b0a17917c6a2bcd713de"
+
+[[evidence]]
+ref = "run:xlab/20261001T170605Z-weekend_fade"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "015cc4499781c6dfab3a714db778ca26522f891d698623edbe12337d620ce79f"
+
+[[evidence]]
+ref = "run:xlab/20261001T170637Z-weekend_fade_strict"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "c7aea0fbbcfcf88ad18b35cbcc31537b4bce4b0db03b997907bc3461b445dd38"
+
+[[evidence]]
+ref = "run:xlab/20261001T170647Z-weekend_fade"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "7a8393eb6f0640aa9340c142a9179fb81c7d73fc6679d01fda35d37d570de830"
+
+[[evidence]]
+ref = "run:xlab/20261001T170648Z-weekend_fade_liquid"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "0e527eeff8be88cf840bca17a60e022f133d8f3acc7ea3298e3a65fc3ca2f359"
+
+[[evidence]]
+ref = "run:xlab/20261001T170649Z-weekend_fade_strict"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "6fdeb010d514f0229c3d63f7cbf0d299d5c90a491255d065378cce14a1dd34fc"
+
+[[evidence]]
+ref = "run:xlab/20261001T170649Z-weekend_follow"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "4ca82e58fd7e2ccaf13590f505f28fc96f2b3fc0d2b9ed9d8094e430ff0224e5"
+
+[[evidence]]
+ref = "run:xlab/20261001T170824Z-weekend_fade"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "e00e8d35c3e5e883292f9184cbe8cb4bce00d595ffe49211c55106cd18584bf3"
+
+[[evidence]]
+ref = "run:xlab/20261001T170825Z-weekend_fade"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "b154fb6e6e33fe6388353d1ae58a4983686121a48b4ecd8141e3c0065876cbda"
+
+[[evidence]]
+ref = "run:xlab/20261001T170826Z-wf_strict"
+role = "pre-fix development run (16:51–17:08Z)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "06df6b6f23a0a5d8ab0516a5d94f1b2de04e04ab869738da0c6dfedf04324048"
+
+[[evidence]]
+ref = "run:xlab/20261001T171021Z-weekend_fade"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "d4519d70c5b46ac1a513f23be47c85f2df78d2640a93298620064efc3b1f356d"
+
+[[evidence]]
+ref = "run:xlab/20261001T171022Z-weekend_fade_liquid"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "1d52785af28554c075d8e15403678ce2cbe9ebbfc0894245912b979fa86568d3"
+
+[[evidence]]
+ref = "run:xlab/20261001T171023Z-weekend_fade_top4"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "ceae6df71fa83d423dfb4294aa33ff45736ba7056ecaa76894f07d3f2062c073"
+
+[[evidence]]
+ref = "run:xlab/20261001T171024Z-weekend_follow"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "849de5d716c53bced4765eb6a3a86d79fdad9738c2b67b3630252357bc970a3d"
+
+[[evidence]]
+ref = "run:xlab/20261001T171024Z-xyz_overnight_follow"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "947feae4044e7f6ff13b1d9afa00ac894007f695d24b7eb899cee69f68e0a6e5"
+
+[[evidence]]
+ref = "run:xlab/20261001T171025Z-xyz_funding_carry"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "915cc2ebee6d07af21105bb82e702fd45fc5635764b704da78d4daa1b1c3983a"
+
+[[evidence]]
+ref = "run:xlab/20261001T171027Z-crypto_funding_carry"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "d53dab90634e5c89c6c9799e4f6e02f0aa07121201e4f54bef5c0a269cef3268"
+
+[[evidence]]
+ref = "run:xlab/20261001T171027Z-crypto_move_fade"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "e12d728823781de5225ae3fd01f9ab0fb1e24988486435502fb89f7687a07f0b"
+
+[[evidence]]
+ref = "run:xlab/20261001T171027Z-sol_eth_spread"
+role = "pre-fix library run with split time:2026-07-01 (17:10Z; xlab § 14 \"before\" column)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "12b7017b0924cde395990c5e64014789861e906b78a88236be8dfc9ed3798c3e"

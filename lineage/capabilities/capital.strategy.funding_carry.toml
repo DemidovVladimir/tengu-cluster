@@ -1,0 +1,15 @@
+id = "capital.strategy.funding_carry"
+title = "Strategy kind funding_carry"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "HISTORICALLY_TESTED"
+contract = "repo:src/domain/backtest/spec.rs"
+bindings = ["strategy_kind:funding_carry"]
+notes = "Backtested: xyz_funding_carry and crypto_funding_carry (no-go), btc_eth_carry_probe."
+
+[[evidence]]
+ref = "record:experiment/xlab.crypto_funding_carry.2026-10-01"
+role = "library run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

@@ -1,0 +1,32 @@
+id = "weekend_fade.crypto_residual"
+family = "weekend_overshoot_fade"
+title = "BTC-residual fade on the 6 crypto-linked names, stock leg only"
+parent = "weekend_fade.crypto_linked"
+reason = "UNKNOWN (the query fades the move net of BTC's: signal s − s_BTC)."
+registered_at = "2026-10-05"
+order = 23
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "cryptoadj.sql (mtime 2026-10-05T14:36:04Z) and cryptoadj3.sql (14:42:05Z, same via a TEMP table over the fixed 6-name list). Result UNKNOWN: no stored output."
+
+[spec]
+described = "Rule W window on MSTR, COIN, BMNR, CRCL, HOOD, IREN (xyz): signal = s − s_BTC (hyperliquid:BTC 1h bars, same instants); trade when |s − s_BTC| ≥ 50 bps against the residual's sign; stock leg only; 3.8 bps round trip."
+
+[[changed]]
+dim = "signal"
+from = "s"
+to = "s − s_BTC"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/cryptoadj.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "81b74476fbec0a900d3291085531a73f4b7e626363f47c9eb4680e7c1beae7b7"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/cryptoadj3.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "512ffee57e58a3c1328d4545fed68daeab31a6eb384e991ebf46dd83c732e4ef"

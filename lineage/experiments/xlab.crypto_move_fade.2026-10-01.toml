@@ -1,0 +1,104 @@
+id = "xlab.crypto_move_fade.2026-10-01"
+title = "Crypto move fade, time split 2026-07-01 — post-fix library run"
+family = "crypto_move_fade"
+variant = "crypto_move_fade.library"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T18:28:44Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:"]: taker 4.5 bps + ctx half-spread (fallback 1.0 bps) per side + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["capital.strategy.move_trigger", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; periods treated as independent (xlab § 11)"
+split_by = "TIME"
+incidents = []
+notes = "Post-fix library run (figures after xlab-fix-engine, db96cb25c0ffa1efa13f8d7c388e407dfb107d24; xlab doc § 14). CLI --split run: the holdout half is in the report but no holdout-reads.jsonl line (CLI reads are not counted). Earlier runs of this spec: xlab.library.prefix.2026-10-01 (INVALID)."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T18:28:44Z"
+scope = "@crypto: hyperliquid:BTC, hyperliquid:ETH, hyperliquid:SOL, hyperliquid:HYPE, 1h bars"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "@crypto: hyperliquid:BTC, hyperliquid:ETH, hyperliquid:SOL, hyperliquid:HYPE, 1h bars"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T18:28:44Z"
+scope = "@crypto: hyperliquid:BTC, hyperliquid:ETH, hyperliquid:SOL, hyperliquid:HYPE, 1h bars"
+integrity = "UNKNOWN"
+note = "No earlier tengu study of these perps is recorded; whoever wrote the library spec may have seen the period (LLM lookahead: xlab § 11)."
+
+[[results]]
+label = "research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 138
+mean_net_bps = -33.894696548159814
+ci95_bps = [-95.70711201287811, 25.72503746805646]
+net_usd = -46.774681236460566
+t_stat = -1.0761071169314584
+evidence = "run:xlab/20261001T182844Z-crypto_move_fade"
+extract = "arm:research"
+note = "In-sample + holdout together: not a holdout figure."
+
+[[results]]
+label = "research arm, in-sample (to 2026-07-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 83
+mean_net_bps = -28.580471635572373
+ci95_bps = [-102.07657017860056, 40.321814382344165]
+net_usd = -23.72179145752506
+t_stat = -0.7957162361344234
+evidence = "run:xlab/20261001T182844Z-crypto_move_fade"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-07-01)"
+arm = "research"
+class = "HOLDOUT"
+n = 55
+mean_net_bps = -41.91434505260998
+ci95_bps = [-165.2832946202635, 61.86693768064036]
+net_usd = -23.052889778935484
+t_stat = -0.7194063119279537
+evidence = "run:xlab/20261001T182844Z-crypto_move_fade"
+extract = "arm:research/holdout"
+
+[[results]]
+label = "capped arm ($100 [risk] book), whole window"
+arm = "capped"
+class = "DEVELOPMENT"
+n = 138
+mean_net_bps = -33.8946965481598
+ci95_bps = [-95.70711201287811, 25.72503746805646]
+net_usd = -11.693670309115141
+t_stat = -1.076107116931458
+evidence = "run:xlab/20261001T182844Z-crypto_move_fade"
+extract = "arm:capped"
+note = "Capped = research (n 138)."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go after costs: −33.9 bps (CI −95.7 … +25.7, n 138), in-sample −28.6, holdout −41.9."
+decided_at = "2026-10-01"
+decided_by = "xlab doc § 14 verdict (repo:docs/xlab-2026-10-01.md)"
+
+[[evidence]]
+ref = "run:xlab/20261001T182844Z-crypto_move_fade"
+role = "run report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "68244d9d212bfac39bd797ca68d5122802c04ea140662c8bae1d6d3d2d892997"
+note = "Backfilled history only (market.db, BACKFILLED); report.json carries both the in-sample and the holdout halves."

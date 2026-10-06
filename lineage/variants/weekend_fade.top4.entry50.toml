@@ -1,0 +1,25 @@
+id = "weekend_fade.top4.entry50"
+family = "weekend_overshoot_fade"
+title = "Rule W top 4 with a thin / new-name filter: entry hour ≥ 50 trades (hand-rolled SQL)"
+parent = "weekend_fade.top4"
+reason = "Plan addendum § 7 (2026-10-03): the 4 worst fades (SHEIN, MINIMAX, PURRDAT, UNITREE) are thin / newly listed names — test a listing-age / liquidity filter against the stop."
+registered_at = "2026-10-05"
+order = 21
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "One of 6 filters in thin.sql (mtime 2026-10-05T14:05:16Z; the stored file lists 6 filters + none — earlier edits of the file, if any, are UNKNOWN, so the number of filter settings tried is ≥ 6, exact UNKNOWN). Result UNKNOWN: no stored output, no figure in any doc. Listing age = time since the first 1h bar in xlab market.db (a lower bound for names listed before 2026-03-07)."
+
+[spec]
+described = "Rule W top 4 (|s| ≥ 50 bps, Sun 18:00 → Mon 09:00 New York, 1h bars, fixed EDT offsets, 3.8 bps round trip, 24 weekends 2026-03-13 … 09-25, KIOXIA 2026-09-25 left out), candidates filtered by entry hour ≥ 50 trades before ranking."
+
+[[changed]]
+dim = "entry_hour_trades"
+from = "none"
+to = "≥ 50"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/thin.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "2af66a5f464c578d45e562df209bb4e60b32069d1820be668b9a9fbe193939f5"

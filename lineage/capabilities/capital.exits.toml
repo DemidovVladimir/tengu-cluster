@@ -1,0 +1,15 @@
+id = "capital.exits"
+title = "Exit rules tool (xm_exits)"
+class = "CAPITAL"
+version = 1
+permission = "PAPER"
+lifecycle = "FORWARD_PAPER"
+contract = "tool_schema:xm_exits"
+bindings = ["tool:xm_exits"]
+notes = "Closes positions at the deadline (rule W: Mon 09:00 New York), max hold, stop-loss, take-profit ([risk.exits]); a stale mark never triggers TP / SL. Closed the 4 capped positions 2026-10-05T13:00:00–13:00:02Z."
+
+[[evidence]]
+ref = "record:experiment/fwd.rule_w.2026-10-02"
+role = "closed the capped positions"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

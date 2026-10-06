@@ -1,0 +1,76 @@
+id = "ext.holdout_names.rule_e.2026-09-30"
+title = "Pre-registered names holdout: rule E unchanged on the other xyz single-stock perps — not confirmed"
+family = "post_earnings_follow"
+variant = "post_earnings_follow.t0_4h"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "HOLDOUT_TEST"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = "Net = gross − 3.8 bps round trip (HL xyz 0.9 bps taker + spread) on traded candle closes"
+uncertainty = "95 % CI with nights resampled; 37 events"
+split_by = "INSTRUMENTS"
+incidents = []
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["Pass threshold (E ≥ +40 bps) stated as fixed before the run; recorded only with the results (git 47fc090de426205df91425df789849466e962399).", "ARM's 6-K earnings night (accession 0001973239-26-000113, 2026-07-29) was left out by the protocol (6-K rows carry no item codes); it would have lost 1,580 bps and turns E (t0 + 4 h) into a fail.", "Throwaway scripts; generation UNKNOWN."]
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "the 22 xyz names the rule was found on (36 events)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "the other xyz single-stock perps: 37 events on 25 names"
+integrity = "CLEAN"
+
+[[results]]
+label = "E enter t0 + 4 h — holdout"
+class = "HOLDOUT"
+n = 37
+mean_net_bps = 35.5
+ci95_bps = [-33.7, 108.9]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED. 20 of 37 positive. Dropping the 5 best events leaves −21.8 bps."
+
+[[results]]
+label = "E enter t0 + 2 h — holdout (variant post_earnings_follow.t0_2h)"
+class = "HOLDOUT"
+n = 37
+mean_net_bps = 72.9
+ci95_bps = [-6.7, 149.2]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED. 21 of 37 positive; passes on the mean only, CI includes 0."
+
+[[results]]
+label = "E pooled in-sample + holdout"
+class = "DEVELOPMENT"
+n = 73
+mean_net_bps = 75.4
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; looks better only because of the in-sample half — not a holdout figure."
+
+[verdict]
+value = "FAIL"
+reason = "Not confirmed: t0 + 4 h +35.5 bps < the +40 threshold; t0 + 2 h passes on the mean only (CI −6.7 … +149.2); −21.8 without the 5 best events; both miss the M3 condition that the CI excludes 0."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study; operator check \"W passes, E not confirmed\" (2026-09-30)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "holdout result (§ Holdout result)"
+class = "HOLDOUT"
+provenance = "REPORTED"
+
+[[evidence]]
+ref = "git:47fc090de426205df91425df789849466e962399"
+role = "prereg"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+note = "Threshold E ≥ +40 bps \"fixed before the run\" — recorded only in this commit with the results; no separate prereg hash."

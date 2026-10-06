@@ -1,0 +1,15 @@
+id = "intel.hl_market_context"
+title = "Hyperliquid market context (prices, funding, OI caps, venue facts)"
+class = "INTELLIGENCE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "FORWARD_PAPER"
+contract = "tool_schema:hl_ctx"
+bindings = ["tool:hl_ctx"]
+notes = "Rows mkt_ctx/1 (mid, mark, oracle, funding, OI) and mkt_instrument/1 (fees, size decimals) — rule W's anchor and entry prices, the paper engine's funding and fee facts. Used by the forward run's hl_ctx feed (60 s)."
+
+[[evidence]]
+ref = "record:experiment/fwd.rule_w.2026-10-02"
+role = "used in the forward paper test"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

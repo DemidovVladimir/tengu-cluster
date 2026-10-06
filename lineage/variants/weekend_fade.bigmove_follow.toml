@@ -1,0 +1,39 @@
+id = "weekend_fade.bigmove_follow"
+family = "weekend_overshoot_fade"
+title = "Follow (not fade) weekend falls of ≥ 500 bps (hand-rolled SQL, n = 3)"
+parent = "weekend_fade"
+reason = "Operator question 2026-10-03 (plan addendum § 8): do big crashes continue rather than revert?"
+registered_at = "2026-10-03"
+order = 14
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "sides.sql (mtime 2026-10-03T15:00:50Z) split fade vs follow by side and by move-size bucket (50–150, 150–300, 300–500, ≥ 500 bps: ≥ 6 cells read); bucketci.sql clustered the ≥ 500 bps bucket by weekend. REPORTED: ≥ 500 bps falls, follow +83.0 vs fade −90.6, n = 3 — \"needs news labels on weekend moves before it means anything\". Tested in ext.rule_w.bigmove_follow.2026-10-03."
+
+[spec]
+described = "Rule W window (Fri 20:00 → Sun 18:00 → Mon 09:00 New York, 1h bars, fixed EDT offsets, 3.8 bps round trip); for names that fell ≥ 500 bps, follow = +sign(s) instead of fade."
+
+[[changed]]
+dim = "direction (|s| ≥ 500 bps falls)"
+from = "fade"
+to = "follow"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/sides.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "2b06a52194cddb07b351359a59c7ff844345aed52376d340cf69ddfa4cd1dcc8"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/bucketci.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "09ff7e985b34da751375f986c9aa9c37a4a96e99dcbf02a279bc23f9772685e2"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "reported figure (plan addendum § 8)"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"

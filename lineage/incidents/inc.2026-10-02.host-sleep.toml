@@ -1,0 +1,55 @@
+id = "inc.2026-10-02.host-sleep"
+title = "Host sleep before the anchor: both recorders silent 2026-10-02 23:15:45 → 23:17:40Z"
+class = "HOST"
+started_at = "2026-10-02T23:15:45Z"
+ended_at = "2026-10-02T23:17:40Z"
+detected_by = "runner WARN `feed slot skipped: reached too late (system sleep or a stalled clock)` in pane.log at 23:17:40.492918Z (late_ms 100492); the last line before the gap is 23:15:45.004428Z"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+strategy_impact = "NONE"
+strategy_impact_note = "Before the anchor (2026-10-03T00:00:00Z), no position open; the anchor row was recorded on time."
+notes = "The weekend runner's hl_ctx 23:17 slot was silently never run (only 23:16 warned; the `dropped` counters count warned skips only). Operator notes cite a lid close at 23:15:52Z and 103 s on battery — in no file (no pmset log): only the process silence is evidence."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (weekend recorder)"
+from = "2026-10-02T23:16:00Z"
+to = "2026-10-02T23:18:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 23:15:02 → 23:18:03 (181 s): minutes 23:16 and 23:17 have no ctx. 1m bars (150 xyz bars, 92 flat n = 0) backfilled 2026-10-05T14:01–14:12Z stand in for prices only — no mid, funding or OI."
+
+[[data_impact]]
+stream = "xm_weekend/1 fade ticks (weekend runner)"
+from = "2026-10-02T23:16:00Z"
+to = "2026-10-02T23:18:00Z"
+after = "MISSING"
+note = "2 ticks (23:16, 23:17); no decision was due."
+
+[[data_impact]]
+stream = "xm_exits/1 ticks (weekend runner)"
+from = "2026-10-02T23:16:00Z"
+to = "2026-10-02T23:17:45Z"
+after = "MISSING"
+note = "7 ticks 23:16:00–23:17:30; no position open."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (desk recorder, sandbox xmarket)"
+from = "2026-10-02T23:15:46Z"
+to = "2026-10-02T23:17:46Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "One sweep lost (23:15:45 → 23:17:46)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+role = "runner log around the gap"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "93bba3ff7bc62b42459aeb9e03da06aa6e4681dc2e9b0f173612d858c3454d1b"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261002.db"
+role = "recorder rows around the gap"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "b64013bc93ec840542e63b62892fb4a17605680fc699546605e23c9df06c5a42"

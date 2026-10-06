@@ -1,0 +1,15 @@
+id = "infra.paper_ledger"
+title = "Paper ledger + fill engine"
+class = "INFRASTRUCTURE"
+version = 1
+permission = "PAPER"
+lifecycle = "FORWARD_PAPER"
+contract = "config:xmarket-weekend/paper"
+bindings = ["tool:paper_positions"]
+notes = "ledger.db (accounts, cash, orders, fills, positions, funding, risk_decisions): latency then a fresh L2 book walk, HL fee per name, hourly funding; paper_positions reads it. The forward run used the old schema of binary 6fcb455."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+role = "the forward test's ledger"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

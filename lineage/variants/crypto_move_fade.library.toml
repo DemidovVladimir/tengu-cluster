@@ -1,0 +1,15 @@
+id = "crypto_move_fade.library"
+family = "crypto_move_fade"
+title = "crypto_move_fade (xlab library spec)"
+parent = "ROOT"
+reason = "Library strategy: market-first anomaly on crypto perps."
+registered_at = "2026-10-01"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Runs: 20261001T161328Z, 171027Z (pre-fix), 182844Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "crypto_move_fade"
+spec_sha256 = "90b61efa4a5e1fa016e4155c154a086c01bb5151012af47556f0893a27d937ad"

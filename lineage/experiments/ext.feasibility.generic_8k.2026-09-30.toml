@@ -1,0 +1,43 @@
+id = "ext.feasibility.generic_8k.2026-09-30"
+title = "Feasibility study: generic 8-K reaction"
+family = "generic_8k_reaction"
+variant = "generic_8k_reaction.feasibility"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "HL taker 0.9 bps + spread → 3.8 bps round trip"
+uncertainty = "As reported by the study (critic re-computed every load-bearing number); per-figure CIs where given"
+incidents = []
+limitations = ["Throwaway analysis scripts (session scratchpad): only the doc's numbers survive.", "Generation UNKNOWN: outside tengu, before any generation."]
+
+[[windows]]
+role = "DATA"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "22 HL xyz perps; EDGAR 8-K / 6-K since March (~7 filings / week)"
+integrity = "CLEAN"
+
+[[results]]
+label = "net per trade after a generic filing"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 7.0
+ci95_bps = [-58.0, 74.0]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; HL prices a filing within 1–2 h."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go (confidence medium): +7 bps with a CI of −58 … +74."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study (one collector, four analysts, a critic)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"

@@ -1,0 +1,25 @@
+id = "weekend_fade.top4"
+family = "weekend_overshoot_fade"
+title = "Rule W, the 4 largest |s| ≥ 50 bps per weekend (the capped $100 ledger's selection)"
+parent = "weekend_fade"
+reason = "The $100 book holds 4 × $25 under the [risk] caps; the feasibility names holdout already reported a top-4 reading."
+registered_at = "2026-09-30"
+order = 2
+preregistered = false
+status = "SURVIVING"
+notes = "Forward-tested in fwd.rule_w.2026-10-02 (capped account). Runs with this spec_sha256: 20261001T161222Z, 165153Z, 165239Z / 165311Z / 165826Z (Jev gate, pre-fix), 171023Z, 182837Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "weekend_fade_top4"
+spec_sha256 = "aee630b88c13216bb1c812eb53e71dbc2249331f58fa6a9471ab78bb9b4bdf56"
+
+[[changed]]
+dim = "min_abs_signal_bps"
+from = 0
+to = 50
+
+[[changed]]
+dim = "top_n"
+from = "none"
+to = 4

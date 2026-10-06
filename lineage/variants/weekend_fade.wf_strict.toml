@@ -1,0 +1,31 @@
+id = "weekend_fade.wf_strict"
+family = "weekend_overshoot_fade"
+title = "wf_strict — rule W with |s| ≥ 100 bps and entry hour ≥ 100 trades"
+parent = "weekend_fade"
+reason = "UNKNOWN"
+registered_at = "2026-10-01T17:08:26Z"
+order = 6
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "The same spec is the xlab-research skill's example \"tune your own spec\" call shape (skills/xlab-research/SKILL.md); who ran it on 2026-10-01 and why is not recorded (72 s after Architect turn 1's log was last written; attribution UNKNOWN). Pre-fix run 20261001T170826Z: n 330, +101.23 bps (CI +19.6 … +185.0), holdout +138.2 (CI −9.5 … +271.6); no verdict recorded."
+
+[spec]
+spec_sha256 = "1da73f2e7622025b6e85e4fb7bc865964901a46c00cae411ff3443927d8325f5"
+source = "run:xlab/20261001T170826Z-wf_strict"
+
+[[changed]]
+dim = "min_abs_signal_bps"
+from = 0
+to = 100
+
+[[changed]]
+dim = "min_entry_trades"
+from = "none"
+to = 100
+
+[[evidence]]
+ref = "run:xlab/20261001T170826Z-wf_strict"
+role = "spec + result (pre-fix engine)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "06df6b6f23a0a5d8ab0516a5d94f1b2de04e04ab869738da0c6dfedf04324048"

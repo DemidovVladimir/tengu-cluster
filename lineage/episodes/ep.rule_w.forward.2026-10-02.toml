@@ -1,0 +1,155 @@
+id = "ep.rule_w.forward.2026-10-02"
+title = "Rule W, weekend of 2026-10-02: fade the top 4 weekend movers at Sun 18:00 New York (paper, $100 book)"
+kind = "STRATEGY"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4"
+incidents = ["inc.2026-10-02.host-sleep", "inc.2026-10-03.hl-502", "inc.2026-10-05.network-loss-1", "inc.2026-10-05.network-loss-2"]
+notes = "The end-to-end reference episode (handoff § 53, § 57). Signal values of the picks are in the 74 xm_weekend_signal/1 rows (vault observations.db / history 20261004.db), not copied here."
+
+[context]
+summary = "Sunday 2026-10-04 22:00Z (18:00 New York), US stocks closed since Friday; 75 xyz stock perps on Hyperliquid, 74 eligible (ASML flat); a $100 paper book capped by [risk] and a $10,000 shadow book; frozen binary tengu-6fcb455, floor profile (no LLM, no Jev)."
+as_of = "2026-10-04T22:00:00Z"
+
+[[context.facts]]
+key = "anchor"
+value = "Fri 2026-10-02 20:00 New York = 2026-10-03T00:00:00Z, mkt_ctx/1 mid (else mark) as of the anchor (anchor_max_age_secs 600)"
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+
+[[context.facts]]
+key = "universe"
+value = "75 names, n_eligible 74, n_flat 1 (hyperliquid:xyz:ASML)"
+ref = "vault:w1-2026-10-06/ext/xmarket-weekend-ws/observations.db"
+
+[[context.facts]]
+key = "capped picks (4 largest |s| ≥ 50 bps, all short)"
+value = "hyperliquid:xyz:CBRS, hyperliquid:xyz:BIRD, hyperliquid:xyz:MSTR, hyperliquid:xyz:PURRDAT"
+ref = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+
+[[context.facts]]
+key = "risk policy"
+value = "[risk] account xmarket-weekend, paper: $25 order, $50 position / asset, $110 gross / net / venue, leverage 1.2, daily / total loss 10 / 25 USD, max_slippage 30 bps, min_depth $250, 4 open, exits TP 2000 / SL 1000 bps / 86,400 s"
+ref = "repo:sandboxes/xmarket-weekend/config.toml"
+
+[hypothesis]
+statement = "Weekend moves of xyz stock perps overshoot while the underlying is closed; fading the largest at Sun 18:00 New York and exiting Mon 09:00 earns more than fees, spread and funding."
+family = "weekend_overshoot_fade"
+
+[[information]]
+item = "Rule W found in-sample: +46 bps net per trade (CI ≈ +7 … +85), chosen after ~27 variants"
+available_at = "2026-09-30"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+provenance = "REPORTED"
+
+[[information]]
+item = "Names holdout (preregistered threshold +15 bps): all names +49.8 (CI +9.6 … +86.0), top 4 +118.1 (CI +16.3 … +216.6) — same weekends"
+available_at = "2026-09-30"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+provenance = "REPORTED"
+
+[[information]]
+item = "xlab rule W: in-sample +57.7 bps, time holdout +45.4 (CI −7.3 … +93.1, contaminated window)"
+available_at = "2026-10-01T18:28:09Z"
+evidence = "run:xlab/20261001T182809Z-weekend_fade"
+provenance = "DERIVED"
+
+[[information]]
+item = "xlab rule W top 4: in-sample +139.6 bps, holdout +157.3 (CI −32.8 … +338.0)"
+available_at = "2026-10-01T18:28:37Z"
+evidence = "run:xlab/20261001T182837Z-weekend_fade_top4"
+provenance = "DERIVED"
+
+[[information]]
+item = "Jev gate on the same candidates: jev − rules +28.9 bps (CI −23.5 … +81.6) — Jev unproven, not used"
+available_at = "2026-10-01T18:29:05Z"
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+provenance = "DERIVED"
+
+[[information]]
+item = "Frozen rule, binary and config (commit e5daae83febea00e549ce9b8cac83bddce12a0a2 on binary sha256 e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72)"
+available_at = "2026-10-02T19:18:32Z"
+evidence = "git:e5daae83febea00e549ce9b8cac83bddce12a0a2"
+provenance = "NOT_APPLICABLE"
+
+[[information]]
+item = "Anchor prices: mkt_ctx/1 rows as of 2026-10-03T00:00:00Z (live recorder)"
+available_at = "2026-10-03T00:00:00Z"
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+provenance = "LIVE_RECORDED"
+
+[[information]]
+item = "Entry prices: mkt_ctx/1 rows at 2026-10-04T22:00Z (entry_max_age_secs 120) → 74 signals s = ln(P_entry / P_anchor), snapshot by CAS"
+available_at = "2026-10-04T22:00:00Z"
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261004.db"
+provenance = "LIVE_RECORDED"
+
+[[alternatives]]
+action = "HOLD (no trade)"
+chosen = false
+counterfactual = "0 P&L, cash unchanged"
+counterfactual_net_usd = 0.0
+counterfactual_valid = true
+
+[[alternatives]]
+action = "FADE top 4 (|s| ≥ 50 bps) at $25 each through the [risk] gate"
+chosen = true
+counterfactual = "The actual outcome (see [outcome])"
+counterfactual_valid = true
+
+[[alternatives]]
+action = "FADE every eligible name (the shadow ledger, $100 each, no caps)"
+chosen = false
+counterfactual = "Executed in parallel on the shadow account at live books: +6.213796012 USD, +8.43 bps a trade (n 74, $10,000 book — compare in bps, not USD)"
+counterfactual_net_usd = 6.213796012
+counterfactual_ref = "record:experiment/fwd.rule_w.2026-10-02"
+counterfactual_valid = true
+
+[[alternatives]]
+action = "FOLLOW top 4 (the placebo direction)"
+chosen = false
+counterfactual = "Not computed (needs a regrade from the recorded books)"
+counterfactual_valid = false
+
+[[alternatives]]
+action = "Saturday 08:30 New York entry, top 4 (the preregistered variant)"
+chosen = false
+counterfactual = "Grade never saved; pending `tengu evidence regrade`"
+counterfactual_ref = "record:experiment/fwd.saturday_fade.2026-10-03"
+counterfactual_valid = false
+
+[[alternatives]]
+action = "Jev-gated rule W"
+chosen = false
+counterfactual = "Not run forward (floor profile: no Jev in the weekend sandbox)"
+counterfactual_valid = false
+
+[decision]
+action = "Short hyperliquid:xyz:CBRS, hyperliquid:xyz:BIRD, hyperliquid:xyz:MSTR, hyperliquid:xyz:PURRDAT at $25 each (market / IOC, 30 bps bound); shadow-fade all 74 eligible names at $100"
+decided_at = "2026-10-04T22:00:00Z"
+policy = "DETERMINISTIC"
+risk_verdict = "allow (rule ok) on all 4 capped entries and all 74 shadow entries; exits allowed alike (156 verdicts)"
+
+[action]
+executed = true
+executed_at = "2026-10-04T22:00:00Z"
+evidence = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+
+[outcome]
+economic = "Capped (net incl. fees and funding): CBRS +0.955818, BIRD +0.526184, MSTR −0.058035, PURRDAT −0.053930 USD = +1.370036 USD on $98.43 filled; per trade +400.5 / +211.8 / −23.3 / −21.7 bps. Shadow +6.213796 USD, +8.43 bps a trade, 40 of 74 net > 0."
+net_usd = 1.370036060021
+net_bps = 141.81679234698376
+operational = "Entry fills 2026-10-04T22:00:00–22:00:02Z, exits 2026-10-05T13:00:00–13:00:02Z by xm_exits (reason deadline), no WARN at either instant; 4 incidents outside them (sleep, HL 502, two network losses with exit monitoring on stale marks)."
+
+[quality]
+decision = "SUPPORTED"
+decision_note = "Weakly: the frozen preregistered rule was followed exactly; the evidence behind it was a pass on new names (same weekends) and a time holdout whose CI spans 0 on a contaminated window."
+execution = "CLEAN"
+execution_note = "Every order filled at the planned instants without retries; caveats are cost-model ones (MSTR / PURRDAT fees ~9 bps per side vs 0.9 modelled; $98.43 filled of $100), not execution faults. Exit monitoring was degraded during the network losses (charged to the incidents)."
+outcome = "FAVORABLE"
+attribution = ["RANDOM_OUTCOME", "DECISION"]
+
+[lesson]
+text = "One weekend cannot validate rule W: CBRS alone carried +0.955818 of +1.370036 USD and the shadow made +8.4 bps a trade against +141.8 for the capped 4. Per-name fees (~9 bps on MSTR, PURRDAT, BMNR) belong in the cost model. Keep running forward weekends to the M3 bar (≥ 12) before any go."
+status = "PROPOSED"
+affects = ["record:family/weekend_overshoot_fade", "record:variant/weekend_fade.top4", "record:experiment/fwd.rule_w.2026-10-02"]

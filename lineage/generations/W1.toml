@@ -1,0 +1,347 @@
+id = "W1"
+title = "W1 — xlab history-first research harness + xmarket-weekend rule W paper desk (the generation W2 must beat)"
+status = "FROZEN"
+parent = "NONE"
+frozen_at = "2026-10-06T09:35:17Z"
+sandboxes = ["xlab", "xmarket-weekend"]
+notes = "W1 as merged = main at 2aa79717f5cfb1d8a8211672c50ecaed18b568a7 (xmarket W1 #20 131af134b57191850c249008a50b2ec05a59ed53, xlab #21 b7dc915149cc025cc9466748905ab18ca46e075a, #22–#24). W1 as run forward = binary tengu-6fcb455 (commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c, not an ancestor of main) + sandbox config e5daae83febea00e549ce9b8cac83bddce12a0a2 (main's xmarket-weekend config + recorder schemas / keep_data \"*\"). Pins with sha256 = 64 zeros are placeholders the coordinator replaces with the computed values before locking; spec pins carry the run-verified spec_sha256."
+
+[code]
+commit = "2aa79717f5cfb1d8a8211672c50ecaed18b568a7"
+forward_binary = "vault:w1-2026-10-06/ext/binaries/tengu-6fcb455"
+forward_binary_sha256 = "e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72"
+forward_commit = "6fcb455bae5553e2d51390e4cedd334779ca0d9c"
+
+[[capabilities]]
+id = "intel.hl_market_context"
+version = 1
+
+[[capabilities]]
+id = "intel.hl_order_book"
+version = 1
+
+[[capabilities]]
+id = "intel.market_history"
+version = 1
+
+[[capabilities]]
+id = "intel.backtest"
+version = 1
+
+[[capabilities]]
+id = "intel.jev_gate"
+version = 1
+
+[[capabilities]]
+id = "intel.architect"
+version = 1
+
+[[capabilities]]
+id = "capital.weekend_fade_exec"
+version = 1
+
+[[capabilities]]
+id = "capital.exits"
+version = 1
+
+[[capabilities]]
+id = "capital.strategy.weekend_window"
+version = 1
+
+[[capabilities]]
+id = "capital.strategy.daily_window"
+version = 1
+
+[[capabilities]]
+id = "capital.strategy.move_trigger"
+version = 1
+
+[[capabilities]]
+id = "capital.strategy.funding_carry"
+version = 1
+
+[[capabilities]]
+id = "capital.strategy.pair_spread"
+version = 1
+
+[[capabilities]]
+id = "capital.strategy.event_window"
+version = 1
+
+[[capabilities]]
+id = "risk.paper_gate"
+version = 1
+
+[[capabilities]]
+id = "infra.paper_ledger"
+version = 1
+
+[[capabilities]]
+id = "infra.recorder"
+version = 1
+
+[decision_policy]
+primary = "DETERMINISTIC"
+summary = "Rule W, frozen: at Sun 18:00 New York fade every xyz stock perp's move since Fri 20:00 New York, exit Mon 09:00. The $100 capped account trades the 4 largest |s| ≥ 50 bps at $25 through the [risk] gate; a $10,000 shadow account trades every eligible name at $100 as a measurement. No LLM and no Jev in the forward path; every risk verdict is deterministic."
+
+[[decision_policy.arms]]
+name = "rule_w_top4_capped"
+status = "BASELINE"
+summary = "Account xmarket-weekend: top 4 |s| ≥ 50 bps, $25 each, [risk] gate (30 bps / $250 depth; a pick denied by the gate is not replaced). Forward 2026-10-02: +1.370036060021 USD, +141.8 bps a trade (n 4)."
+
+[[decision_policy.arms]]
+name = "rule_w_all_shadow"
+status = "BASELINE"
+summary = "Account xmarket-weekend-shadow: every eligible name, $100 each, 100 bps IOC bound, budget rules skipped (shadow gate). Forward 2026-10-02: +6.213796012 USD, +8.4 bps a trade (n 74)."
+
+[[decision_policy.arms]]
+name = "jev_gate"
+status = "UNPROVEN"
+summary = "Jev (typesafe/jev-1.13-20260917, [decision_loops.xl_gate]) decides take / skip per rule W candidate — research only, never forward: jev − rules +28.9 bps (CI −23.5 … +81.6), capped −25.4 (CI −113.5 … +63.8), Brier 0.349."
+
+[research_policy]
+summary = "History first (xlab): every hypothesis as a typed spec (data, never code) over backfilled market.db; split first (default time:2026-07-01T00:00:00Z), tune on the in-sample half only; the backtest tool hides a split's holdout until read with holdout: true and counts every read in holdout-reads.jsonl per spec_sha256 (CLI --split reads are not counted — inc.2026-10-05.weeknight-holdout-reads-uncounted); one holdout read per chosen variant; robustness on periods / instruments rows; report n, mean net bps, 95 % CI (seeded period bootstrap) and the run id (skill xlab-research). Forward tests preregistered and frozen before the anchor; M3 go for rule W: ≥ 12 weekends, mean ≥ +15 bps at executable prices, t ≥ 1.5, not carried by ≤ 2 weekends."
+
+[[models]]
+role = "architect"
+engine = "claude_code"
+model = "claude-opus-5-5"
+where = "config:xlab/agents.xl_architect"
+
+[[models]]
+role = "xl_jev agent (owns the gate loop; engine never called)"
+engine = "claude_code"
+model = "claude-sonnet-5-5"
+where = "config:xlab/agents.xl_jev"
+
+[[models]]
+role = "jev (decisions API through OpenRouter, pinned build)"
+engine = "openrouter"
+model = "typesafe/jev-1.13-20260917"
+where = "config:xlab/decision_loops.xl_gate"
+
+[[models]]
+role = "xm_weekend agent (private tool owner; engine never called)"
+engine = "openrouter"
+model = "google/gemini-2.5-flash-lite"
+where = "config:xmarket-weekend/agents.xm_weekend"
+
+[[pins]]
+target = "spec:xlab/weekend_fade"
+role = "STRATEGY"
+sha256 = "e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14"
+
+[[pins]]
+target = "spec:xlab/weekend_fade_liquid"
+role = "STRATEGY"
+sha256 = "dabdf28465aeae58204da189d435cf5dd2840308050330932eb40f9be4881a7f"
+
+[[pins]]
+target = "spec:xlab/weekend_fade_top4"
+role = "STRATEGY"
+sha256 = "aee630b88c13216bb1c812eb53e71dbc2249331f58fa6a9471ab78bb9b4bdf56"
+
+[[pins]]
+target = "spec:xlab/weekend_follow"
+role = "STRATEGY"
+sha256 = "61b7c7b896b1e9444821a796754065024879ce5a92639facd243d2e461cbcb4f"
+
+[[pins]]
+target = "spec:xlab/xyz_overnight_follow"
+role = "STRATEGY"
+sha256 = "051791688d07b49900bf10d8a43aad668f735a7bae1f266f155ae13dc9ec711b"
+
+[[pins]]
+target = "spec:xlab/xyz_funding_carry"
+role = "STRATEGY"
+sha256 = "3a95e2149ac0551064ff778a5f9545b5155e0e06dc35c63af30520a304d29165"
+
+[[pins]]
+target = "spec:xlab/crypto_move_fade"
+role = "STRATEGY"
+sha256 = "90b61efa4a5e1fa016e4155c154a086c01bb5151012af47556f0893a27d937ad"
+
+[[pins]]
+target = "spec:xlab/crypto_funding_carry"
+role = "STRATEGY"
+sha256 = "b75ab5262ffca5dbad4cfd4d5ce873417ccc7da134722a8a9f42bd9f3291748e"
+
+[[pins]]
+target = "spec:xlab/sol_eth_spread"
+role = "STRATEGY"
+sha256 = "c499e65d940cb5ddde04e660b066f67c4ad4e1841a3862940602f17c75f7b174"
+
+[[pins]]
+target = "config:xlab/backtest.costs"
+role = "COST_MODEL"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/backtest.splits"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/backtest.universes"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/backtest.notional_usd"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/backtest.bootstrap"
+role = "RESEARCH_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/backtest.seed"
+role = "RESEARCH_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/decision_loops.xl_gate"
+role = "DECISION_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/agents.xl_architect"
+role = "MODEL"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/agents.xl_jev"
+role = "MODEL"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/risk"
+role = "RISK_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/paper"
+role = "COST_MODEL"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xlab/xmarket.calendars.us_equity"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/risk"
+role = "RISK_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/paper"
+role = "COST_MODEL"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/xmarket.weekend_fade"
+role = "STRATEGY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/feeds.xm_weekend_fade"
+role = "DECISION_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/feeds.xm_exits"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/xmarket.calendars.us_equity"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/agents.xm_weekend"
+role = "MODEL"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "config:xmarket-weekend/recorder"
+role = "CONFIG"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:hl_ctx"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:hl_book"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:risk_status"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:paper_positions"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:xm_exits"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:xm_weekend_fade"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:market_history"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "tool_schema:backtest"
+role = "SCHEMA"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "skill:xlab-research"
+role = "RESEARCH_POLICY"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[pins]]
+target = "repo:src/domain/backtest/spec.rs"
+role = "CONTRACT"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+[[evidence]]
+ref = "git:2aa79717f5cfb1d8a8211672c50ecaed18b568a7"
+role = "W1 code as merged (main at freeze)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+
+[[evidence]]
+ref = "git:6fcb455bae5553e2d51390e4cedd334779ca0d9c"
+role = "code of the forward binary"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+
+[[evidence]]
+ref = "git:e5daae83febea00e549ce9b8cac83bddce12a0a2"
+role = "forward sandbox config (xmarket-weekend as run)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/ext/binaries/tengu-6fcb455"
+role = "frozen forward binary"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72"

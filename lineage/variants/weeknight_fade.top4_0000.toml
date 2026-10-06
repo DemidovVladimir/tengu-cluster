@@ -1,0 +1,28 @@
+id = "weeknight_fade.top4_0000"
+family = "weeknight_fade"
+title = "xyz_weeknight_fade_top4 — top 4 |s| ≥ 50 bps, anchor 20:00, entry 00:00, exit 09:00 New York"
+parent = "ROOT"
+reason = "weekday.sql screening (113 nights): top 4 +37.3 bps net of 3.8 (CI +6.7 … +67.9); the xlab run is the cost-realistic check."
+registered_at = "2026-10-03T13:03:50Z"
+order = 1
+preregistered = true
+status = "INCONCLUSIVE"
+notes = "Spec fixed in the plan before any xlab run, committed with the results in 868dabab6edb253125040a09c134e81c91b00ca4 (branch xlab/weeknight-fade-test, not in main / W1). A Monday 00:00 entry anchors on Friday 20:00 and spans the weekend (read apart)."
+
+[spec]
+spec_sha256 = "ad0981422f850136d5e072460d8b2f46f91cfa92c2359fcf902218c2556542d2"
+source = "run:xlab/20261005T140328Z-xyz_weeknight_fade_top4"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "prereg"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"
+note = "Written 2026-10-03T13:03:50Z (file birth) with the spec; the addendum § 6–8 was appended later (last modified 2026-10-03T15:04:45Z). No hash was recorded at registration: the spec section's registration-time hash is UNKNOWN; this sha256 is the whole file now."
+
+[[evidence]]
+ref = "git:868dabab6edb253125040a09c134e81c91b00ca4"
+role = "spec committed + result summary (2026-10-05T14:42:24Z)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"

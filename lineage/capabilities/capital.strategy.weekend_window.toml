@@ -1,0 +1,15 @@
+id = "capital.strategy.weekend_window"
+title = "Strategy kind weekend_window (rule W's window as data)"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "FORWARD_PAPER"
+contract = "repo:src/domain/backtest/spec.rs"
+bindings = ["strategy_kind:weekend_window"]
+notes = "Fri 20:00 → Sun 18:00 → Mon 09:00 New York via domain/xm/weekend_fade::fade_window — the same rule the forward tool runs (test golden_weekend_window_equals_the_rule_w_replay). Lifecycle FORWARD_PAPER through the rule W forward test."
+
+[[evidence]]
+ref = "record:experiment/fwd.rule_w.2026-10-02"
+role = "rule W forward"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

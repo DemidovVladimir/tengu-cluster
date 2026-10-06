@@ -1,0 +1,15 @@
+id = "crypto_funding_carry"
+title = "Funding carry on crypto perps"
+hypothesis = "Receiving funding on BTC / ETH / SOL / HYPE while |rate| ≥ 30 % APR (out below 10 % APR or after 72 h) earns after costs."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go after costs (xlab § 14): +27.8 bps (CI −64.8 … +117.3, n 68) — in-sample +49.9, holdout −65.8 (20261001T182846Z-crypto_funding_carry); the probe btc_eth_carry_probe lost −39.9 (n 40)."
+origin_at = "2026-10-01"
+origin = "repo:sandboxes/xlab/config.toml"
+origin_by = "xlab strategy library"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:sandboxes/xlab/config.toml"
+note = "Parameter choice not recorded; the registered probe variant is one known extra attempt."

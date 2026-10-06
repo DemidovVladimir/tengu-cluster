@@ -1,0 +1,25 @@
+id = "inc.2026-10-05.saturday-grading-unsaved"
+title = "The preregistered Saturday-entry test was graded on Monday but the grade was never saved"
+class = "DATA"
+started_at = "2026-10-05"
+ended_at = "UNKNOWN"
+detected_by = "P0 evidence inventory 2026-10-06 (§ 8 MISSING: no SQL in the research folder reads history/*.db, no output file)"
+generation = "W1"
+experiment = "fwd.saturday_fade.2026-10-03"
+strategy_impact = "NONE"
+strategy_impact_note = "No trading impact (nothing was ordered); the preregistered variant's forward result is unknown until regraded from the vault books."
+notes = "Start = the prereg's grading day (\"grading Monday\"); exact time UNKNOWN. Open until `tengu evidence regrade` (P0) re-grades it. The only record of a grade is an operator memory note (top 4 +47.3, all +2.1, rule W regraded +138.3 bps) — no query or output on disk; not used as a result."
+
+[[data_impact]]
+stream = "Saturday prereg grade (query + output)"
+from = "2026-10-05"
+to = "2026-10-05"
+after = "MISSING"
+note = "Recomputable: the entry (2026-10-03T12:30Z) and exit (2026-10-05T13:00Z) books are in the recorder day files."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+role = "the prereg (grading step)"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "b45f4c5138161d54f1d2034e03c0a156c12ddc958d9973e902f2813f278132e9"

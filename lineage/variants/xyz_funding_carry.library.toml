@@ -1,0 +1,15 @@
+id = "xyz_funding_carry.library"
+family = "xyz_funding_carry"
+title = "xyz_funding_carry (xlab library spec)"
+parent = "ROOT"
+reason = "Library strategy: funding dislocation on the stock perps."
+registered_at = "2026-10-01"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Runs: 20261001T161327Z, 171025Z (pre-fix), 182842Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "xyz_funding_carry"
+spec_sha256 = "3a95e2149ac0551064ff778a5f9545b5155e0e06dc35c63af30520a304d29165"

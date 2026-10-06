@@ -1,0 +1,32 @@
+id = "weekend_overshoot_fade"
+title = "Rule W — weekend overshoot fade on Hyperliquid xyz stock perps"
+hypothesis = "At Sun 18:00 New York, fading each xyz stock perp's move since Fri 20:00 New York and exiting Mon 09:00 New York earns more than fees, spread and funding."
+mechanism = "The underlying stock is closed Sat–Sun while the HIP-3 perp keeps trading on thin books; weekend moves overshoot and the Monday open re-anchors the perp to the stock. trade.xyz's off-hours oracle / mark rules (the likely cause) were not read (feasibility § Limitations)."
+role = "PRIMARY"
+status = "SURVIVING"
+status_reason = "Weak. (1) Chosen after ~27 variants in one 7-month rally regime. (2) Names holdout passed (+49.8 bps, CI +9.6 … +86.0) but on the same weekends (correlation 0.47). (3) xlab time holdout (a contaminated window) CI spans 0 for all names (+45.4, CI −7.3 … +93.1) and top 4 (+157.3, CI −32.8 … +338.0); only liquid entries exclude 0 (+72.2, CI +6.3 … +130.9). (4) One forward window: capped +141.8 bps (n 4), shadow +8.4 bps (n 74); the M3 go needs ≥ 12 weekends."
+origin_at = "2026-09-30"
+origin = "repo:docs/xmarket-feasibility-2026-09-30.md"
+origin_by = "xmarket feasibility study (one collector, four analysts, a critic re-computing every load-bearing number)"
+parent = "NONE"
+preceded_by = ["hl_rh_token_convergence", "hl_underlying_convergence", "hl_open_lead", "generic_8k_reaction"]
+controls = ["weekend_momentum_follow"]
+notes = "PRD opportunity class Overreaction (repo:docs/xmarket-prd-2026-09-29.md); FADE_STRATEGY = \"overreaction\" in src/domain/xm/weekend_fade.rs. The registered variants add to the ~27 tried before the registry."
+
+[prior_search]
+count = 27
+precision = "APPROX"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "\"W and E were chosen after looking at the data (~27 and ~100 variants tried) in one 7-month rally regime\". The 27 are not itemised anywhere (analysis scripts were throwaway, session scratchpad)."
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "origin"
+class = "NONE"
+provenance = "REPORTED"
+
+[[evidence]]
+ref = "git:47fc090de426205df91425df789849466e962399"
+role = "origin commit (feasibility doc incl. the names holdout, committed 2026-09-30T13:14:16Z)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"

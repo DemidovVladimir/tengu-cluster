@@ -1,0 +1,15 @@
+id = "crypto_move_fade"
+title = "Crypto move fade (BTC / ETH / SOL / HYPE)"
+hypothesis = "Fading a ≥ 300 bps 4 h move on ≥ 2× normal volume on the main-dex crypto perps, held 12 h, earns after costs."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go after costs (xlab § 14): −33.9 bps (CI −95.7 … +25.7, n 138), in-sample −28.6, holdout −41.9 (20261001T182844Z-crypto_move_fade)."
+origin_at = "2026-10-01"
+origin = "repo:sandboxes/xlab/config.toml"
+origin_by = "xlab strategy library (\"market-first anomaly on crypto perps\")"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:sandboxes/xlab/config.toml"
+note = "Parameter choice not recorded."

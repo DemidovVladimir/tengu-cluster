@@ -1,0 +1,41 @@
+id = "ext.feasibility.hl_underlying_convergence.2026-09-30"
+title = "Feasibility study: HL xyz perp ↔ underlying convergence"
+family = "hl_underlying_convergence"
+variant = "hl_underlying_convergence.feasibility"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "HL taker 0.9 bps + spread; HL round trip 2–5 bps at $100–$1k"
+uncertainty = "As reported by the study (critic re-computed every load-bearing number); per-figure CIs where given"
+incidents = []
+limitations = ["Throwaway analysis scripts (session scratchpad): only the doc's numbers survive.", "Generation UNKNOWN: outside tengu, before any generation."]
+
+[[windows]]
+role = "DATA"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "22 HL xyz perps vs the underlying stocks (Robinhood public history; hourly only since 2026-06-30), 1h / 5m / 1m bars"
+integrity = "CLEAN"
+
+[[results]]
+label = "|gap| p90 10–11 bps (< costs); HL median +3.6 bps from the stock; gaps halve in 0.5–2 min; gaps > 30 bps in 0.2–0.6 % of bars"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; bar counts not stated."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go (confidence high): the gap is below costs and closes within minutes."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study (one collector, four analysts, a critic)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"

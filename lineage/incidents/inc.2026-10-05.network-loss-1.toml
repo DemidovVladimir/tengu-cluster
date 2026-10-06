@@ -1,0 +1,96 @@
+id = "inc.2026-10-05.network-loss-1"
+title = "Network loss 2026-10-05 07:44:12 → 08:04:03Z with positions open (incl. a host sleep 08:01:45 → 08:03:35Z)"
+class = "NETWORK"
+started_at = "2026-10-05T07:44:12Z"
+ended_at = "2026-10-05T08:04:03Z"
+detected_by = "runner WARN `feed calls failed; backing off` from 07:44:12.394201Z (timeouts, then DNS `failed to lookup` written every minute: the process was awake); feed slot skipped at 08:03:52.853740Z (late_ms 112853) = the sleep; sampler sweeps books=0; recovery: hl_book 08:00 slot ok at 08:03:55.496357Z, hl_ctx ok at 08:04:03.700320Z"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+strategy_impact = "DEGRADED"
+strategy_impact_note = "Positions were open (4 capped, 74 shadow). xm_exits ran on stale marks (partial rows 07:44:45–09:41:00Z, through network-loss-2): take-profit 2000 / stop-loss 1000 bps could not fire on a stale mark — whether one would have fired is UNKNOWN. P&L unaffected: no exit was due before the 13:00Z deadline and the exit instant (13:00:00–13:00:10Z) was clean."
+notes = "Last ok before the loss: hl_ctx 07:43:07.821192Z. Process silence (the sleep) 08:01:45 → 08:03:35Z on the weekend runner, 08:01:11 → 08:03:38Z on the desk. Operator notes say \"lid closed 08:01:44–08:03:52\" — in no file. Older notes called the whole 20 min a sleep: the files show the process awake until 08:01:45."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (weekend recorder)"
+from = "2026-10-05T07:44:00Z"
+to = "2026-10-05T08:04:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 07:43:02 → 08:04:02: minutes 07:44–08:03 (20) lost. 1m bars (1500 xyz bars, 689 flat n = 0) backfilled 2026-10-05T14:01–14:12Z — prices only, no mid / funding / OI."
+
+[[data_impact]]
+stream = "hl_book/1 (weekend recorder), slots 07:45, 07:50, 07:55"
+from = "2026-10-05T07:45:00Z"
+to = "2026-10-05T08:00:00Z"
+after = "MISSING"
+note = "Lost for good: no historical source for xyz books (HL S3 archive has no xyz:*); the sampler lost them too."
+
+[[data_impact]]
+stream = "hl_book/1 (weekend recorder), slot 08:00"
+from = "2026-10-05T08:00:00Z"
+to = "2026-10-05T08:03:42Z"
+after = "LIVE_RECORDED"
+note = "Recorded late at 08:03:41 (after the retries)."
+
+[[data_impact]]
+stream = "xm_exits/1 (weekend runner)"
+from = "2026-10-05T07:44:45Z"
+to = "2026-10-05T09:41:01Z"
+after = "LIVE_RECORDED"
+note = "92 rows with status partial (stale marks) in this span, through inc.2026-10-05.network-loss-2."
+
+[[data_impact]]
+stream = "xm_weekend/1 + xm_exits/1, slot 08:02"
+from = "2026-10-05T08:02:00Z"
+to = "2026-10-05T08:03:00Z"
+after = "MISSING"
+note = "Skipped: reached too late (the sleep)."
+
+[[data_impact]]
+stream = "sampler l2book.jsonl / ctx.jsonl"
+from = "2026-10-05T07:45:36Z"
+to = "2026-10-05T08:00:37Z"
+after = "MISSING"
+note = "Sweeps 07:45:36, 07:50:36, 07:55:36, 08:00:36Z books=0 and no ctx line; next sweep 08:07:29Z (413 s, the sleep)."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (desk recorder, sandbox xmarket)"
+from = "2026-10-05T07:44:00Z"
+to = "2026-10-05T08:04:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 07:43:15 → 08:04:01."
+
+[[data_impact]]
+stream = "hl_book/1 error rows (weekend 4026, desk 221)"
+from = "2026-10-05T07:44:00Z"
+to = "2026-10-05T13:36:00Z"
+after = "LIVE_RECORDED"
+note = "Error rows across both losses and the partial sweeps at 10:00, 13:28, 13:30, 13:35 (completed by retries)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+role = "runner WARN / recovery lines"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "93bba3ff7bc62b42459aeb9e03da06aa6e4681dc2e9b0f173612d858c3454d1b"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261005.db"
+role = "recorder rows (ctx gap, book slots, xm_exits partial rows)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/sampler.log"
+role = "sampler sweeps books=0"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "5e2465b102363947ef4b10221827cde49f991d72a43fe277a9d1fef5dfe545d0"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xlab/market.db"
+role = "1m bars backfilled over the gap"
+class = "FORWARD_PAPER"
+provenance = "BACKFILLED"
+sha256 = "b5a0dc45e37660f8f66be0eb401b3adc67dcd4ef47758c71cafc1951dc503ac7"

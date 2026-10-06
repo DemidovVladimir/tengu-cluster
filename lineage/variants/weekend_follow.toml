@@ -1,0 +1,15 @@
+id = "weekend_follow"
+family = "weekend_momentum_follow"
+title = "Placebo: follow every weekend move (xlab library)"
+parent = "ROOT"
+reason = "Negative control for rule W: the same window and names, the opposite side."
+registered_at = "2026-10-01"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Runs with this spec_sha256: 20261001T161222Z, 165415Z, 170553Z, 170649Z, 171024Z, 182838Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "weekend_follow"
+spec_sha256 = "61b7c7b896b1e9444821a796754065024879ce5a92639facd243d2e461cbcb4f"

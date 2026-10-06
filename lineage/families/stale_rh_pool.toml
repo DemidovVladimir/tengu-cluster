@@ -1,0 +1,15 @@
+id = "stale_rh_pool"
+title = "Stale Robinhood Chain pool after Hyperliquid jumps"
+hypothesis = "After an HL xyz perp jumps, the matching Robinhood Chain token pool lags for ~1 h and can be traded stale after costs."
+role = "PRIMARY"
+status = "OPEN"
+status_reason = "Measure only (feasibility 2026-09-30): edge unknown — tokens lag HL for ~1 h after events, but only the 0.05 % pools could clear their ~15 bps break-even; ~1 / week. Robinhood RHJ quotes were recorded every 5 min over the weekend (rhj.jsonl), not analysed."
+origin_at = "2026-09-30"
+origin = "repo:docs/xmarket-feasibility-2026-09-30.md"
+origin_by = "xmarket feasibility study"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "Not itemised."

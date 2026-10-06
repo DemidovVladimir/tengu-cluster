@@ -1,0 +1,18 @@
+id = "inc.2026-10-03.prereg-kioxia-split"
+title = "Saturday prereg's prior evidence included KIOXIA's split weekend; corrected 20 min after registration"
+class = "DATA"
+started_at = "2026-10-03T12:36:41Z"
+ended_at = "2026-10-03T12:56:02Z"
+detected_by = "the prereg author (correction appended to the prereg file at 12:56:02Z)"
+generation = "W1"
+experiment = "fwd.saturday_fade.2026-10-03"
+strategy_impact = "NONE"
+strategy_impact_note = "Rule unchanged; only the prior-evidence figures were restated (all names +79.0 → +72.6 bps, holdout +66.6 → +52.5; top 4 unchanged)."
+notes = "hyperliquid:xyz:KIOXIA's 2026-09-25 weekend is a 3-for-1 stock split (+11,596 bps on one trade), excluded by the real rule and by xlab's [backtest.splits]. hist.sql / robust.sql / split.sql lacked the exclusion; robust2.sql / split2.sql / usd2.sql (12:55:45Z) add it. The file's sha256 changed with the append (registration body hash ea4d709b87a54b54b3b2a77a3469284d9cf3e394022f05db22eb00b9c88bc10e = its first 4457 bytes)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+role = "prereg + correction"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "b45f4c5138161d54f1d2034e03c0a156c12ddc958d9973e902f2813f278132e9"

@@ -1,0 +1,18 @@
+id = "post_earnings_follow.t0_2h"
+family = "post_earnings_follow"
+title = "Rule E, entry t0 + 2 h after the release"
+parent = "post_earnings_follow.t0_4h"
+reason = "Second entry delay read on the names holdout 2026-09-30."
+registered_at = "2026-09-30"
+order = 2
+preregistered = false
+status = "REJECTED"
+notes = "Holdout +72.9 bps (CI −6.7 … +149.2, n 37): passes the +40 threshold on the mean only; the CI includes 0 (M3 needs it to exclude 0)."
+
+[spec]
+described = "As post_earnings_follow.t0_4h with the entry at t0 + 2 h."
+
+[[changed]]
+dim = "entry_delay"
+from = "4 h"
+to = "2 h"

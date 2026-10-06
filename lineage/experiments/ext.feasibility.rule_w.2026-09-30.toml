@@ -1,0 +1,49 @@
+id = "ext.feasibility.rule_w.2026-09-30"
+title = "Feasibility study: rule W found in-sample on 22 xyz names"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "HL xyz taker 0.9 bps (growth mode; formula-derived, not confirmed by a fill; xyz:MSTR 9 bps) + spread → 3.8 bps round trip on traded candle closes; HL round trip 2–5 bps at $100–$1k"
+uncertainty = "CI ≈ +7 … +85 bps with weekends resampled; in-sample, one 7-month rally regime, 30 weekends"
+incidents = []
+limitations = ["Rule chosen after ~27 variants (prior_search on the family).", "Universe picked by today's volume (selection bias).", "No executable weekend prices: books and quotes from one Wednesday pre-market window; results use traded candle closes.", "Analysis scripts were throwaway (session scratchpad); only the doc's numbers survive.", "Generation UNKNOWN: outside tengu, before any generation."]
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "22 HL xyz stock perps (hourly bars since 2026-03-06), 30 weekends"
+integrity = "CLEAN"
+
+[[results]]
+label = "W in-sample, 22 names, 30 weekends"
+class = "DEVELOPMENT"
+n = 575
+mean_net_bps = 46.0
+ci95_bps = [7.0, 85.0]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED. n derived from the doc: pooled 1,525 − names holdout 950. 21 of 30 weekends positive, 22 of 22 names positive; ~12 names a weekend with a signal ≥ 50 bps. CI given as \"≈ +7 to +85\"."
+
+[verdict]
+value = "PASS"
+reason = "Verdict \"paper-test\" (confidence low): a weak in-sample edge worth a forward paper test — a hypothesis, not a proven edge. The operator kept the full plan and ran both cheap checks first (names holdout, weekend book recording)."
+decided_at = "2026-09-30"
+decided_by = "feasibility study + operator decision 2026-09-30"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+
+[[evidence]]
+ref = "git:47fc090de426205df91425df789849466e962399"
+role = "study committed 2026-09-30T13:14:16Z"
+class = "NONE"
+provenance = "NOT_APPLICABLE"

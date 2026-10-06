@@ -1,0 +1,15 @@
+id = "intel.market_history"
+title = "Backfilled market history (xlab market.db)"
+class = "INTELLIGENCE"
+version = 1
+permission = "RESEARCH"
+lifecycle = "HISTORICALLY_TESTED"
+contract = "tool_schema:market_history"
+bindings = ["tool:market_history"]
+notes = "Read-only rows mkt_history/1 over market.db (HL candles + funding, GeckoTerminal, HL S3 archive ctx); fetch = true backfills first; [backtest.splits] applied. All of it BACKFILLED, never live."
+
+[[evidence]]
+ref = "record:experiment/xlab.architect_holdout.weekend_fade.2026-10-01"
+role = "the Architect's research turns"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

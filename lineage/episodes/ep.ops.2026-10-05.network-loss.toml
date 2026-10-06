@@ -1,0 +1,56 @@
+id = "ep.ops.2026-10-05.network-loss"
+title = "Monday 2026-10-05: two network losses (and a short sleep) while rule W positions were open — an operational episode, not a strategy result"
+kind = "OPERATIONAL_INCIDENT"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4"
+incidents = ["inc.2026-10-05.network-loss-1", "inc.2026-10-05.network-loss-2"]
+notes = "Strategy impact via the incidents: DEGRADED exit monitoring, no economic effect. The rule W result (+1.370036 USD capped) is not attributed to these incidents."
+
+[context]
+summary = "Monday 07:44Z, 4 capped + 74 shadow shorts / longs open since Sun 22:00Z, exit due at 13:00Z; the runner on the operator's MacBook (pid 31380) recording ctx every 60 s, books every 300 s, exits checked every 15 s."
+as_of = "2026-10-05T07:44:12Z"
+
+[[context.facts]]
+key = "host"
+value = "the operator's MacBook (Vladimirs-MacBook-Pro-2.local), run under caffeinate -i -s (holds awake on AC power only); no VPS yet (W2)"
+ref = "repo:sandboxes/xmarket-weekend/config.toml"
+
+[[context.facts]]
+key = "exit rules"
+value = "[risk.exits] TP 2000 / SL 1000 bps, deadline Mon 09:00 New York; a stale mark never triggers TP / SL"
+ref = "repo:sandboxes/xmarket-weekend/config.toml"
+
+[[information]]
+item = "First failure: hl_ctx timeout, then DNS `failed to lookup` (runner WARN)"
+available_at = "2026-10-05T07:44:12Z"
+evidence = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+provenance = "LIVE_RECORDED"
+
+[decision]
+action = "None by an operator: the runner kept running, feeds backed off and retried (no restart, no manual exit)"
+decided_at = "2026-10-05T07:44:12Z"
+policy = "DETERMINISTIC"
+
+[action]
+executed = true
+executed_at = "2026-10-05T07:44:12Z"
+evidence = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+
+[outcome]
+economic = "None: no exit was due 07:44–09:41Z; the 13:00Z exits were clean."
+operational = "ctx lost 07:44–08:03 (20 min) and 09:35–09:40 (6 min), backfilled with 1m bars (prices only); hl_book slots 07:45, 07:50, 07:55, 09:35 lost for good (no xyz book archive); 92 xm_exits partial rows on stale marks 07:44:45–09:41:00 (TP / SL blind); host sleep 08:01:45 → 08:03:35 skipped the 08:02 fade / exit tick."
+
+[quality]
+decision = "SUPPORTED"
+decision_note = "Backoff + retry recovered every feed without intervention; nothing could be done about a lost network from the host itself."
+execution = "DEGRADED"
+execution_note = "Exit monitoring ran on stale marks for ~2 h with positions open; whether a stop would have fired is UNKNOWN."
+outcome = "NEUTRAL"
+attribution = ["INFRASTRUCTURE"]
+
+[lesson]
+text = "A laptop on a home network is not a forward-test host: run the next forward weekends on a VPS (W2), alert on stale-mark exit rows, and remember that lost xyz books cannot be backfilled from any archive."
+status = "PROPOSED"
+affects = ["record:incident/inc.2026-10-05.network-loss-1", "record:incident/inc.2026-10-05.network-loss-2", "record:capability/infra.recorder", "record:capability/capital.exits"]

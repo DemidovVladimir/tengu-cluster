@@ -1,0 +1,104 @@
+id = "xlab.xyz_overnight_follow.2026-10-01"
+title = "xyz overnight follow (rule E's cousin), time split 2026-07-01 — post-fix library run"
+family = "xyz_overnight_follow"
+variant = "xyz_overnight_follow.library"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T18:28:40Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:xyz:"]: taker 0.9 bps + fixed half-spread 1.0 bps per side (3.8 bps round trip) + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders, loss limits 10 / 25 USD)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["capital.strategy.daily_window", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; periods treated as independent (xlab § 11)"
+split_by = "TIME"
+incidents = []
+notes = "Post-fix library run (figures after xlab-fix-engine, db96cb25c0ffa1efa13f8d7c388e407dfb107d24; xlab doc § 14). CLI --split run: the holdout half is in the report but no holdout-reads.jsonl line (CLI reads are not counted). Earlier runs of this spec: xlab.library.prefix.2026-10-01 (INVALID)."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T18:28:40Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T18:28:40Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CONTAMINATED"
+note = "The feasibility study (22 names) and its names holdout (53 names) had already read 2026-03 … 2026-09 for all 75 names before xlab existed."
+
+[[results]]
+label = "research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1494
+mean_net_bps = -29.44487451583347
+ci95_bps = [-69.45984754734503, 8.637855264536652]
+net_usd = -439.90642526655273
+t_stat = -1.4552241686334553
+evidence = "run:xlab/20261001T182840Z-xyz_overnight_follow"
+extract = "arm:research"
+note = "In-sample + holdout together: not a holdout figure."
+
+[[results]]
+label = "research arm, in-sample (to 2026-07-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 702
+mean_net_bps = -33.80547288515101
+ci95_bps = [-89.059735997611, 20.510220292134974]
+net_usd = -237.31441965376058
+t_stat = -1.2193579817958564
+evidence = "run:xlab/20261001T182840Z-xyz_overnight_follow"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-07-01)"
+arm = "research"
+class = "HOLDOUT"
+n = 792
+mean_net_bps = -25.57979868848387
+ci95_bps = [-84.71396550626531, 26.426822395352623]
+net_usd = -202.59200561279235
+t_stat = -0.8711275512239279
+evidence = "run:xlab/20261001T182840Z-xyz_overnight_follow"
+extract = "arm:research/holdout"
+
+[[results]]
+label = "capped arm ($100 [risk] book), whole window"
+arm = "capped"
+class = "DEVELOPMENT"
+n = 164
+mean_net_bps = -61.39803732520864
+ci95_bps = [-141.21896964367997, 7.512019313134576]
+net_usd = -25.173195303335547
+t_stat = -1.637580272181906
+evidence = "run:xlab/20261001T182840Z-xyz_overnight_follow"
+extract = "arm:capped"
+note = "Capped arm halted by total_loss_limit_usd (refusals: max_gross_exposure_usd 142, total_loss_limit_usd 1188)."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go after costs: −29.4 bps (CI −69.5 … +8.6, t −1.46 clustered), in-sample −33.8, holdout −25.6."
+decided_at = "2026-10-01"
+decided_by = "xlab doc § 14 verdict (repo:docs/xlab-2026-10-01.md)"
+
+[[evidence]]
+ref = "run:xlab/20261001T182840Z-xyz_overnight_follow"
+role = "run report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "d251e848d1b95965e60b29c25f574dd703d40b7197ad30ee68d23f91651da2db"
+note = "Backfilled history only (market.db, BACKFILLED); report.json carries both the in-sample and the holdout halves."

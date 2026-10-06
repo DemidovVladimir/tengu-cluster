@@ -1,0 +1,21 @@
+id = "crypto_funding_carry.btc_eth_probe"
+family = "crypto_funding_carry"
+title = "btc_eth_carry_probe — funding carry on BTC + ETH, |rate| ≥ 20 % APR, out < 5 %, hold 24 h"
+parent = "ROOT"
+reason = "UNKNOWN"
+registered_at = "2026-10-01T16:12:59Z"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Name never in a committed config; ran 29 s before the first library crypto_funding_carry run (pre-fix engine): n 40, −39.90 bps (CI −93.1 … +18.0), no split."
+
+[spec]
+spec_sha256 = "f91f41f505c31b99b587be4a3da46215fcb047ca1e21f13c083904927fcdfda6"
+source = "run:xlab/20261001T161259Z-btc_eth_carry_probe"
+
+[[evidence]]
+ref = "run:xlab/20261001T161259Z-btc_eth_carry_probe"
+role = "spec + result (pre-fix engine)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "ec76c7587c8546af5dfb587ba24b1e1d81de25d5bda4525ca76a4011c7b6188d"
