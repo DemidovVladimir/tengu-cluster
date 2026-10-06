@@ -1,0 +1,39 @@
+id = "ep.rule_w.below_cut"
+title = "xyz:NVDA moved 30 bps: below the 50 bps cut, no trade"
+kind = "NO_ACTION"
+generation = "W1"
+experiment = "rule_w.forward"
+family = "rule_w"
+variant = "rule_w.top4"
+
+[context]
+summary = "xyz:NVDA's weekend move was 30 bps."
+as_of = "2026-10-04T22:00:00Z"
+
+[[information]]
+item = "xyz:NVDA Sunday 18:00 New York mark"
+available_at = "2026-10-04T22:00:00Z"
+evidence = "vault:w1-fixture/xmarket-weekend/ledger.db"
+provenance = "LIVE_RECORDED"
+
+[[alternatives]]
+action = "hold"
+chosen = true
+counterfactual_valid = true
+
+[[alternatives]]
+action = "fade xyz:NVDA anyway"
+chosen = false
+counterfactual_net_usd = -0.21
+counterfactual_valid = true
+
+[decision]
+action = "hold"
+decided_at = "2026-10-04T22:00:00Z"
+policy = "HOLD"
+
+[quality]
+decision = "SUPPORTED"
+decision_note = "Below the preregistered cut."
+execution = "NOT_APPLICABLE"
+outcome = "NEUTRAL"

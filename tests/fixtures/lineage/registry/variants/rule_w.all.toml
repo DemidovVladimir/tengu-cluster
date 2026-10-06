@@ -1,0 +1,14 @@
+id = "rule_w.all"
+family = "rule_w"
+title = "Rule W on every eligible name (the shadow ledger)"
+parent = "ROOT"
+reason = "The study's base rule."
+registered_at = "2026-10-06"
+order = 1
+preregistered = false
+status = "SURVIVING"
+
+[spec]
+sandbox = "w1"
+strategy = "rule_w"
+spec_sha256 = "cba7a380444a5e6648f0d1421837ce5504c0a1e55e6b3126a8de6596ea343a7f"

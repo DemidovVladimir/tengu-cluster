@@ -1,0 +1,7 @@
+id = "cap.jev_gate"
+title = "Jev as a gate on rule candidates"
+class = "INTELLIGENCE"
+version = 1
+permission = "ADVISORY"
+lifecycle = "CANDIDATE"
+contract = "repo:docs/study.md"

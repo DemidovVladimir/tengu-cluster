@@ -39,8 +39,9 @@ use crate::domain::backtest::engine::{
     candidates, simulate, Arm, ArmResult, Candidate, CandidateSet, MarketData, RiskCaps, RunParams,
 };
 use crate::domain::backtest::report::{BacktestReport, CAPPED_ARM, PRIMARY_ARM};
-use crate::domain::backtest::spec::{valid_name, SplitSpec, StrategyKind, StrategySpec};
-use crate::domain::canonical::canonical_sha256;
+use crate::domain::backtest::spec::{
+    spec_sha256, valid_name, SplitSpec, StrategyKind, StrategySpec,
+};
 use crate::domain::marketdata::{fmt_time, Interval};
 use crate::ports::market_data::MarketDataStore;
 
@@ -215,7 +216,7 @@ pub(crate) fn resolve(bt: &BacktestConfig, src: &SpecSource) -> Result<Resolved>
         all
     };
     let spec_value = spec.to_value();
-    let spec_sha256 = canonical_sha256(&spec_value);
+    let spec_sha256 = spec_sha256(&spec_value);
     Ok(Resolved {
         spec,
         spec_value,
@@ -597,6 +598,24 @@ mod tests {
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect()
+    }
+
+    /// A generation's `spec:` pin (`domain/lineage/pins.rs`, read from the
+    /// raw config text) is the run's `spec_sha256` for every strategy of the
+    /// xlab library: the hashes in existing run dirs stay matchable.
+    #[test]
+    fn a_spec_pin_is_the_runs_spec_sha256() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/xlab/config.toml");
+        let text = std::fs::read_to_string(path).unwrap();
+        let table: toml::Value = toml::from_str(&text).unwrap();
+        let bt: BacktestConfig = table["backtest"].clone().try_into().unwrap();
+        assert!(bt.strategies.len() >= 5);
+        for name in bt.strategies.keys() {
+            let run = resolve(&bt, &SpecSource::Strategy(name.clone())).unwrap();
+            let pin = crate::domain::lineage::pins::spec_pin(&text, name).unwrap();
+            assert_eq!(run.spec_sha256, pin, "{name}");
+        }
     }
 
     /// The whole use case on a temp store: rule W and a funding carry →

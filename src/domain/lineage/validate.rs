@@ -1,0 +1,751 @@
+//! The registry's checks — `Registry::validate` (`docs/lineage-2026-10-06.md`
+//! § 2): every code of the table in `lineage/mod.rs`, from record fields and
+//! file digests only (pins, evidence and run dirs: `application/lineage/verify.rs`).
+//!
+//! | Check | Codes |
+//! |---|---|
+//! | ids, titles | `invalid_id`, `duplicate_id`, `invalid_field` |
+//! | references (fields, `record:` locators, lock rows) | `dangling_ref`, `inconsistent_ref` |
+//! | families · variants | parents, `[spec]` shape, preregistration |
+//! | experiments | windows, CIs, `holdout_missing`, `holdout_overlaps_development`, `forward_incomplete`, preregistration |
+//! | episodes | alternatives, incidents, `future_leakage` |
+//! | capabilities · generations | `binding_conflict`, `capability_version_missing`, frozen_at, commits, pins |
+//! | `locks.toml` | `frozen_manifest_changed`, `seal_mismatch` |
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::episode::EpisodeKind;
+use super::experiment::{ExperimentKind, SplitBy, WindowRole};
+use super::generation::GenerationStatus;
+use super::registry::{label, Registry};
+use super::value::{
+    parse_seal_record, valid_commit, valid_id, windows_overlap, Binding, EvidenceRef, Locator,
+    RecordKind, TimeOrder, MAX_TITLE_CHARS, UNKNOWN,
+};
+use super::{Finding, Severity};
+use crate::domain::evidence::{valid_sha256, EvidenceClass};
+
+/// Ids that name no record (missing-fact markers).
+const NOT_A_REF: [&str; 2] = [UNKNOWN, "NONE"];
+
+/// Every check, sorted by severity, record and code.
+pub(super) fn run(reg: &Registry) -> Vec<Finding> {
+    let mut v = Checks {
+        reg,
+        out: Vec::new(),
+    };
+    v.ids();
+    v.families();
+    v.variants();
+    v.experiments();
+    v.episodes();
+    v.incidents();
+    v.capabilities();
+    v.generations();
+    v.evidence_records();
+    v.locks();
+    v.locators();
+    let mut out = v.out;
+    out.sort();
+    out.dedup();
+    out
+}
+
+struct Checks<'a> {
+    reg: &'a Registry,
+    out: Vec<Finding>,
+}
+
+impl Checks<'_> {
+    fn err(&mut self, code: &str, record: &str, message: String) {
+        self.out.push(Finding::error(code, record, message));
+    }
+
+    fn warn(&mut self, code: &str, record: &str, message: String) {
+        self.out.push(Finding::warn(code, record, message));
+    }
+
+    /// `field` names a `kind` record `id` (`exempt` ids name none).
+    fn reference(&mut self, at: &str, field: &str, kind: RecordKind, id: &str, exempt: &[&str]) {
+        if exempt.contains(&id) || self.reg.exists(kind, id) {
+            return;
+        }
+        self.err(
+            "dangling_ref",
+            at,
+            format!("{field} names {kind} `{id}`, which is not in the registry"),
+        );
+    }
+
+    fn evidence_refs(&mut self, at: &str, refs: &[EvidenceRef]) {
+        for (i, e) in refs.iter().enumerate() {
+            if let Some(sha) = &e.sha256 {
+                if !valid_sha256(sha) {
+                    self.err(
+                        "invalid_field",
+                        at,
+                        format!("evidence[{i}].sha256 `{sha}` is not 64 lowercase hex chars"),
+                    );
+                }
+            }
+        }
+    }
+
+    fn sha(&mut self, at: &str, field: &str, sha: &str) {
+        if !valid_sha256(sha) {
+            self.err(
+                "invalid_field",
+                at,
+                format!("{field} `{sha}` is not 64 lowercase hex chars"),
+            );
+        }
+    }
+
+    fn ids(&mut self) {
+        let mut by_id: BTreeMap<&str, Vec<RecordKind>> = BTreeMap::new();
+        for (kind, id, title) in self.reg.all_records() {
+            let at = label(kind, id);
+            if !valid_id(id) {
+                self.err(
+                    "invalid_id",
+                    &at,
+                    format!("id `{id}` is not ^[A-Za-z0-9][A-Za-z0-9._-]{{0,79}}$"),
+                );
+            }
+            let n = title.chars().count();
+            if title.trim().is_empty() || n > MAX_TITLE_CHARS {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    format!("title: 1–{MAX_TITLE_CHARS} chars (has {n})"),
+                );
+            }
+            by_id.entry(id).or_default().push(kind);
+        }
+        for (id, kinds) in by_id {
+            if kinds.len() > 1 {
+                let names: Vec<&str> = kinds.iter().map(|k| k.name()).collect();
+                self.err(
+                    "duplicate_id",
+                    &label(kinds[0], id),
+                    format!(
+                        "id `{id}` names a {} — an id is unique across kinds",
+                        names.join(" and a ")
+                    ),
+                );
+            }
+        }
+    }
+
+    fn families(&mut self) {
+        for f in self.reg.families.values() {
+            let at = label(RecordKind::Family, &f.id);
+            if f.parent == f.id {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    "parent names the family itself".into(),
+                );
+            } else {
+                self.reference(&at, "parent", RecordKind::Family, &f.parent, &NOT_A_REF);
+            }
+            for p in &f.preceded_by {
+                self.reference(&at, "preceded_by", RecordKind::Family, p, &[]);
+            }
+            for c in &f.controls {
+                self.reference(&at, "controls", RecordKind::Family, c, &[]);
+            }
+            self.evidence_refs(&at, &f.evidence);
+        }
+    }
+
+    fn variants(&mut self) {
+        let reg = self.reg;
+        for v in reg.variants.values() {
+            let at = label(RecordKind::Variant, &v.id);
+            self.reference(&at, "family", RecordKind::Family, &v.family, &[]);
+            if v.parent != "ROOT" {
+                self.reference(&at, "parent", RecordKind::Variant, &v.parent, &[]);
+                if let Some(p) = reg.variants.get(&v.parent) {
+                    if p.family != v.family {
+                        self.err(
+                            "inconsistent_ref",
+                            &at,
+                            format!(
+                                "parent `{}` is of family `{}`, this variant of `{}`",
+                                p.id, p.family, v.family
+                            ),
+                        );
+                    }
+                }
+                // A parent chain reaches ROOT within the registry's size.
+                let mut cur = v.parent.as_str();
+                let mut seen = BTreeSet::from([v.id.as_str()]);
+                while let Some(p) = reg.variants.get(cur) {
+                    if !seen.insert(p.id.as_str()) {
+                        self.err(
+                            "invalid_field",
+                            &at,
+                            format!("parent chain loops at `{}`", p.id),
+                        );
+                        break;
+                    }
+                    cur = p.parent.as_str();
+                }
+            }
+            match v.spec.shape() {
+                Err(e) => self.err("invalid_field", &at, e),
+                Ok(_) => {
+                    if let Some(sha) = &v.spec.spec_sha256 {
+                        self.sha(&at, "spec.spec_sha256", sha);
+                    }
+                    for (field, name) in [
+                        ("spec.sandbox", &v.spec.sandbox),
+                        ("spec.strategy", &v.spec.strategy),
+                    ] {
+                        if let Some(n) = name.as_deref().filter(|n| !valid_id(n)) {
+                            self.err("invalid_field", &at, format!("{field} `{n}` is not a name"));
+                        }
+                    }
+                }
+            }
+            if v.preregistered {
+                self.prereg(RecordKind::Variant, &v.id, &v.evidence);
+            }
+            self.evidence_refs(&at, &v.evidence);
+        }
+    }
+
+    /// A preregistered record is sealed or carries a `prereg` evidence ref
+    /// (the seal rows themselves: [`Checks::locks`]).
+    fn prereg(&mut self, kind: RecordKind, id: &str, evidence: &[EvidenceRef]) {
+        let key = format!("{kind}:{id}");
+        let sealed = self.reg.locks.sealed.iter().any(|s| s.record == key);
+        if !sealed && !evidence.iter().any(|e| e.role == "prereg") {
+            self.err(
+                "seal_mismatch",
+                &label(kind, id),
+                format!(
+                    "preregistered, but neither sealed (`tengu lineage seal {key}`) nor carrying \
+                     an [[evidence]] with role = \"prereg\""
+                ),
+            );
+        }
+    }
+
+    fn experiments(&mut self) {
+        let reg = self.reg;
+        for e in reg.experiments.values() {
+            let at = label(RecordKind::Experiment, &e.id);
+            self.reference(&at, "family", RecordKind::Family, &e.family, &[]);
+            self.reference(&at, "variant", RecordKind::Variant, &e.variant, &NOT_A_REF);
+            self.reference(
+                &at,
+                "generation",
+                RecordKind::Generation,
+                &e.generation,
+                &NOT_A_REF,
+            );
+            for c in &e.capabilities {
+                self.reference(&at, "capabilities", RecordKind::Capability, c, &[]);
+            }
+            for i in &e.incidents {
+                self.reference(&at, "incidents", RecordKind::Incident, i, &[]);
+            }
+            if let Some(v) = reg.variants.get(&e.variant) {
+                if v.family != e.family {
+                    self.err(
+                        "inconsistent_ref",
+                        &at,
+                        format!(
+                            "variant `{}` is of family `{}`, the experiment of `{}`",
+                            v.id, v.family, e.family
+                        ),
+                    );
+                }
+            }
+            for (i, w) in e.windows.iter().enumerate() {
+                if let (Some(lo), Some(hi)) = (w.from.earliest(), w.to.window_end()) {
+                    if lo >= hi {
+                        self.err(
+                            "invalid_field",
+                            &at,
+                            format!("windows[{i}]: from {} is not before to {}", w.from, w.to),
+                        );
+                    }
+                }
+            }
+            for (i, r) in e.results.iter().enumerate() {
+                if let Some([lo, hi]) = r.ci95_bps {
+                    if lo > hi {
+                        self.err(
+                            "invalid_field",
+                            &at,
+                            format!("results[{i}].ci95_bps: low {lo} > high {hi}"),
+                        );
+                    }
+                }
+            }
+            let has_holdout = e.windows_of(WindowRole::Holdout).next().is_some();
+            if !has_holdout {
+                if let Some(r) = e.results.iter().find(|r| r.class == EvidenceClass::Holdout) {
+                    self.err(
+                        "holdout_missing",
+                        &at,
+                        format!(
+                            "result `{}` is HOLDOUT, but no window has role HOLDOUT",
+                            r.label
+                        ),
+                    );
+                } else if e.kind == ExperimentKind::HoldoutTest {
+                    self.err(
+                        "holdout_missing",
+                        &at,
+                        "a HOLDOUT_TEST without a HOLDOUT window".into(),
+                    );
+                }
+            }
+            if e.split_by != Some(SplitBy::Instruments) {
+                for d in e.windows_of(WindowRole::Development) {
+                    for h in e.windows_of(WindowRole::Holdout) {
+                        if windows_overlap((&d.from, &d.to), (&h.from, &h.to)) == Some(true) {
+                            self.err(
+                                "holdout_overlaps_development",
+                                &at,
+                                format!(
+                                    "DEVELOPMENT {} → {} overlaps HOLDOUT {} → {} — a time \
+                                     overlap needs split_by = \"INSTRUMENTS\"",
+                                    d.from, d.to, h.from, h.to
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+            if e.kind == ExperimentKind::ForwardPaper {
+                let mut missing = Vec::new();
+                if e.windows_of(WindowRole::Forward).next().is_none() {
+                    missing.push("a FORWARD window");
+                }
+                if e.validity.is_none() {
+                    missing.push("a validity");
+                }
+                let forward_evidence = e
+                    .evidence
+                    .iter()
+                    .any(|r| r.class == EvidenceClass::ForwardPaper)
+                    || e.results
+                        .iter()
+                        .any(|r| r.class == EvidenceClass::ForwardPaper);
+                if !forward_evidence {
+                    missing.push("FORWARD_PAPER evidence");
+                }
+                if !missing.is_empty() {
+                    self.err(
+                        "forward_incomplete",
+                        &at,
+                        format!("a FORWARD_PAPER experiment without {}", missing.join(", ")),
+                    );
+                }
+            }
+            if e.preregistered {
+                self.prereg(RecordKind::Experiment, &e.id, &e.evidence);
+            }
+            self.evidence_refs(&at, &e.evidence);
+        }
+    }
+
+    fn episodes(&mut self) {
+        let reg = self.reg;
+        for ep in reg.episodes.values() {
+            let at = label(RecordKind::Episode, &ep.id);
+            self.reference(
+                &at,
+                "generation",
+                RecordKind::Generation,
+                &ep.generation,
+                &NOT_A_REF,
+            );
+            if let Some(x) = &ep.experiment {
+                self.reference(&at, "experiment", RecordKind::Experiment, x, &NOT_A_REF);
+            }
+            if let Some(f) = &ep.family {
+                self.reference(&at, "family", RecordKind::Family, f, &NOT_A_REF);
+            }
+            if let Some(v) = &ep.variant {
+                self.reference(&at, "variant", RecordKind::Variant, v, &NOT_A_REF);
+            }
+            if let Some(f) = ep.hypothesis.as_ref().and_then(|h| h.family.as_ref()) {
+                self.reference(&at, "hypothesis.family", RecordKind::Family, f, &NOT_A_REF);
+            }
+            for i in &ep.incidents {
+                self.reference(&at, "incidents", RecordKind::Incident, i, &[]);
+            }
+            let family = ep.family.as_deref();
+            let x_family = ep
+                .experiment
+                .as_ref()
+                .and_then(|x| reg.experiments.get(x))
+                .map(|x| x.family.as_str());
+            let v_family = ep
+                .variant
+                .as_ref()
+                .and_then(|v| reg.variants.get(v))
+                .map(|v| v.family.as_str());
+            let known: Vec<(&str, &str)> = [
+                ("family", family),
+                ("experiment", x_family),
+                ("variant", v_family),
+            ]
+            .into_iter()
+            .filter_map(|(k, f)| f.filter(|f| !NOT_A_REF.contains(f)).map(|f| (k, f)))
+            .collect();
+            if known.windows(2).any(|w| w[0].1 != w[1].1) {
+                let text: Vec<String> = known.iter().map(|(k, f)| format!("{k} → `{f}`")).collect();
+                self.err(
+                    "inconsistent_ref",
+                    &at,
+                    format!("names more than one family: {}", text.join(", ")),
+                );
+            }
+            if ep.kind == EpisodeKind::OperationalIncident && ep.incidents.is_empty() {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    "an OPERATIONAL_INCIDENT episode names no incident".into(),
+                );
+            }
+            let chosen = ep.alternatives.iter().filter(|a| a.chosen).count();
+            let strict = matches!(
+                ep.kind,
+                EpisodeKind::Strategy | EpisodeKind::RejectedStrategy
+            );
+            if (strict && chosen != 1) || chosen > 1 {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    format!(
+                        "{chosen} alternative(s) chosen — {}",
+                        if strict {
+                            "list the alternatives, exactly one chosen = true"
+                        } else {
+                            "at most one"
+                        }
+                    ),
+                );
+            }
+            let decided = ep.decision.decided_at;
+            if !ep.information.is_empty() && !decided.is_known() {
+                self.err(
+                    "future_leakage",
+                    &at,
+                    "decision.decided_at is UNKNOWN: its information cannot be shown to precede it"
+                        .into(),
+                );
+            }
+            for (i, info) in ep.information.iter().enumerate() {
+                let what = format!("information[{i}] `{}`", info.item);
+                match info.available_at.order(&decided) {
+                    TimeOrder::NotAfter => {}
+                    TimeOrder::After => self.err(
+                        "future_leakage",
+                        &at,
+                        format!(
+                            "{what} became available at {}, after the decision at {decided}",
+                            info.available_at
+                        ),
+                    ),
+                    TimeOrder::Ambiguous => self.warn(
+                        "future_leakage",
+                        &at,
+                        format!(
+                            "{what} available {} vs decision {decided}: not provably before — give instants",
+                            info.available_at
+                        ),
+                    ),
+                    TimeOrder::Unknown if !info.available_at.is_known() => self.err(
+                        "future_leakage",
+                        &at,
+                        format!("{what} has available_at UNKNOWN: unknown-timed information"),
+                    ),
+                    TimeOrder::Unknown => {}
+                }
+            }
+            self.evidence_refs(&at, &ep.evidence);
+        }
+    }
+
+    fn incidents(&mut self) {
+        for inc in self.reg.incidents.values() {
+            let at = label(RecordKind::Incident, &inc.id);
+            self.reference(
+                &at,
+                "generation",
+                RecordKind::Generation,
+                &inc.generation,
+                &NOT_A_REF,
+            );
+            if let Some(x) = &inc.experiment {
+                self.reference(&at, "experiment", RecordKind::Experiment, x, &NOT_A_REF);
+            }
+            if inc.started_at.order(&inc.ended_at) == TimeOrder::After {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    format!(
+                        "ended_at {} is before started_at {}",
+                        inc.ended_at, inc.started_at
+                    ),
+                );
+            }
+            for (i, d) in inc.data_impact.iter().enumerate() {
+                if d.from.order(&d.to) == TimeOrder::After {
+                    self.err(
+                        "invalid_field",
+                        &at,
+                        format!("data_impact[{i}]: to {} is before from {}", d.to, d.from),
+                    );
+                }
+            }
+            self.evidence_refs(&at, &inc.evidence);
+        }
+    }
+
+    fn capabilities(&mut self) {
+        let mut owners: BTreeMap<&Binding, Vec<&str>> = BTreeMap::new();
+        for c in self.reg.capabilities.values() {
+            let at = label(RecordKind::Capability, &c.id);
+            if c.version == 0 {
+                self.err("invalid_field", &at, "version must be ≥ 1".into());
+            }
+            for b in &c.bindings {
+                owners.entry(b).or_default().push(&c.id);
+            }
+            self.evidence_refs(&at, &c.evidence);
+        }
+        for (b, caps) in owners {
+            let mut caps = caps;
+            caps.dedup();
+            if caps.len() > 1 {
+                for c in &caps[1..] {
+                    self.err(
+                        "binding_conflict",
+                        &label(RecordKind::Capability, c),
+                        format!(
+                            "binding `{b}` is owned by capabilities `{}` — a binding belongs to one capability",
+                            caps.join("` and `")
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    fn generations(&mut self) {
+        let reg = self.reg;
+        for g in reg.generations.values() {
+            let at = label(RecordKind::Generation, &g.id);
+            if g.parent == g.id {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    "parent names the generation itself".into(),
+                );
+            } else {
+                self.reference(&at, "parent", RecordKind::Generation, &g.parent, &NOT_A_REF);
+            }
+            if g.status == GenerationStatus::Frozen && !g.frozen_at.is_some_and(|t| t.is_known()) {
+                self.err(
+                    "invalid_field",
+                    &at,
+                    "FROZEN without a known frozen_at".into(),
+                );
+            }
+            for s in &g.sandboxes {
+                if !valid_id(s) {
+                    self.err(
+                        "invalid_field",
+                        &at,
+                        format!("sandboxes: `{s}` is not a name"),
+                    );
+                }
+            }
+            if let Some(code) = &g.code {
+                for (field, c) in [
+                    ("code.commit", Some(&code.commit)),
+                    ("code.forward_commit", code.forward_commit.as_ref()),
+                ] {
+                    if let Some(c) = c.filter(|c| *c != UNKNOWN && !valid_commit(c)) {
+                        self.err(
+                            "invalid_field",
+                            &at,
+                            format!("{field} `{c}` is not a full 40-hex commit (or UNKNOWN)"),
+                        );
+                    }
+                }
+                if let Some(sha) = &code.forward_binary_sha256 {
+                    self.sha(&at, "code.forward_binary_sha256", sha);
+                }
+            }
+            let mut seen = BTreeSet::new();
+            for c in &g.capabilities {
+                if !seen.insert(c.id.as_str()) {
+                    self.err(
+                        "invalid_field",
+                        &at,
+                        format!("capability `{}` listed twice", c.id),
+                    );
+                }
+                match reg.capabilities.get(&c.id) {
+                    None => self.reference(&at, "capabilities", RecordKind::Capability, &c.id, &[]),
+                    Some(cap) if cap.version != c.version => self.err(
+                        "capability_version_missing",
+                        &at,
+                        format!(
+                            "names capability `{}` version {}; the registry holds version {}",
+                            c.id, c.version, cap.version
+                        ),
+                    ),
+                    Some(_) => {}
+                }
+            }
+            let mut targets = BTreeSet::new();
+            for p in &g.pins {
+                self.sha(&at, &format!("pins `{}` sha256", p.target), &p.sha256);
+                if !targets.insert(p.target.to_string()) {
+                    self.err(
+                        "invalid_field",
+                        &at,
+                        format!("pin `{}` listed twice", p.target),
+                    );
+                }
+            }
+            self.evidence_refs(&at, &g.evidence);
+        }
+    }
+
+    fn evidence_records(&mut self) {
+        for r in self.reg.evidence.values() {
+            let at = label(RecordKind::Evidence, &r.id);
+            for e in r.validation_errors() {
+                self.err("invalid_field", &at, e);
+            }
+            if let Some(x) = &r.experiment {
+                self.reference(&at, "experiment", RecordKind::Experiment, x, &NOT_A_REF);
+            }
+        }
+    }
+
+    fn locks(&mut self) {
+        let reg = self.reg;
+        let at = "locks.toml";
+        for f in &reg.locks.frozen {
+            self.reference(
+                at,
+                "[[frozen]] generation",
+                RecordKind::Generation,
+                &f.generation,
+                &[],
+            );
+            self.sha(
+                at,
+                &format!("[[frozen]] {} manifest_sha256", f.generation),
+                &f.manifest_sha256,
+            );
+        }
+        for g in reg.generations.values() {
+            let gat = label(RecordKind::Generation, &g.id);
+            let last = reg.locks.frozen.iter().rev().find(|f| f.generation == g.id);
+            let digest = reg.digests.get(&(RecordKind::Generation, g.id.clone()));
+            match (last, digest) {
+                (None, _) if g.status == GenerationStatus::Frozen => self.err(
+                    "frozen_manifest_changed",
+                    &gat,
+                    "FROZEN, but locks.toml has no [[frozen]] row for it".into(),
+                ),
+                (Some(row), Some(now)) if &row.manifest_sha256 != now => self.err(
+                    "frozen_manifest_changed",
+                    &gat,
+                    format!(
+                        "locks.toml freezes manifest {} (at {}); the file now hashes {now}",
+                        row.manifest_sha256, row.frozen_at
+                    ),
+                ),
+                (Some(_), None) => self.err(
+                    "frozen_manifest_changed",
+                    &gat,
+                    "no file digest to compare with its [[frozen]] row".into(),
+                ),
+                _ => {}
+            }
+        }
+        for s in &reg.locks.sealed {
+            let (kind, id) = match parse_seal_record(&s.record) {
+                Ok(k) => k,
+                Err(e) => {
+                    self.err("invalid_field", at, format!("[[sealed]] {e}"));
+                    continue;
+                }
+            };
+            if !reg.exists(kind, &id) {
+                self.reference(at, "[[sealed]] record", kind, &id, &[]);
+                continue;
+            }
+            let rat = label(kind, &id);
+            self.sha(at, &format!("[[sealed]] {} sha256", s.record), &s.sha256);
+            match reg.digests.get(&(kind, id.clone())) {
+                Some(now) if *now != s.sha256 => self.err(
+                    "seal_mismatch",
+                    &rat,
+                    format!(
+                        "sealed {} at {}; the file now hashes {now}",
+                        s.sha256, s.sealed_at
+                    ),
+                ),
+                None => self.err(
+                    "seal_mismatch",
+                    &rat,
+                    "no file digest to compare with its seal".into(),
+                ),
+                _ => {}
+            }
+            let outcome = reg.first_outcome(kind, &id);
+            match s.sealed_at.order(&outcome) {
+                TimeOrder::After => self.err(
+                    "seal_mismatch",
+                    &rat,
+                    format!(
+                        "sealed at {}, after its first outcome {outcome}: not a preregistration",
+                        s.sealed_at
+                    ),
+                ),
+                TimeOrder::Ambiguous if s.sealed_at != outcome => self.warn(
+                    "seal_mismatch",
+                    &rat,
+                    format!(
+                        "sealed {} vs first outcome {outcome}: not provably before — give instants",
+                        s.sealed_at
+                    ),
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    fn locators(&mut self) {
+        let mut found = Vec::new();
+        for u in self.reg.locator_uses() {
+            if let Locator::Record { kind, id } = u.locator {
+                if !self.reg.exists(*kind, id) {
+                    found.push(Finding::new(
+                        Severity::Error,
+                        "dangling_ref",
+                        u.record.clone(),
+                        format!("{} names {} — not in the registry", u.field, u.locator),
+                    ));
+                }
+            }
+        }
+        self.out.extend(found);
+    }
+}

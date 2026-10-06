@@ -1,0 +1,80 @@
+id = "ep.rule_w.forward"
+title = "Rule W top-4 on the 2026-10-02 weekend"
+kind = "STRATEGY"
+generation = "W1"
+experiment = "rule_w.forward"
+family = "rule_w"
+variant = "rule_w.top4"
+
+[context]
+summary = "Sunday 18:00 New York; 9 xyz names moved at least 50 bps since Friday 20:00."
+as_of = "2026-10-04T22:00:00Z"
+
+[[context.facts]]
+key = "names_over_50bps"
+value = 9
+ref = "vault:w1-fixture/xmarket-weekend/ledger.db"
+
+[hypothesis]
+statement = "The weekend moves revert by Monday's open."
+family = "rule_w"
+
+[[information]]
+item = "Friday 20:00 New York marks"
+available_at = "2026-10-03T00:00:00Z"
+evidence = "vault:w1-fixture/xmarket-weekend/ledger.db"
+provenance = "LIVE_RECORDED"
+
+[[information]]
+item = "Sunday 18:00 New York marks"
+available_at = "2026-10-04T22:00:00Z"
+evidence = "vault:w1-fixture/xmarket-weekend/ledger.db"
+provenance = "LIVE_RECORDED"
+
+[[alternatives]]
+action = "fade the 4 largest moves"
+chosen = true
+counterfactual_valid = true
+
+[[alternatives]]
+action = "hold"
+chosen = false
+counterfactual = "no position"
+counterfactual_net_usd = 0.0
+counterfactual_valid = true
+
+[[alternatives]]
+action = "fade every eligible name (the shadow ledger)"
+chosen = false
+counterfactual = "the shadow ledger"
+counterfactual_net_usd = 6.21
+counterfactual_ref = "vault:w1-fixture/xmarket-weekend/ledger.db"
+counterfactual_valid = true
+
+[decision]
+action = "fade the 4 largest moves"
+decided_at = "2026-10-04T22:00:00Z"
+policy = "DETERMINISTIC"
+risk_verdict = "ALLOW 4 of 4"
+
+[action]
+executed = true
+executed_at = "2026-10-04T22:00:01Z"
+evidence = "vault:w1-fixture/xmarket-weekend/ledger.db"
+
+[outcome]
+economic = "+1.37 USD on a $100 book"
+net_usd = 1.37
+net_bps = 141.8
+
+[quality]
+decision = "SUPPORTED"
+decision_note = "The preregistered rule on information known at 18:00."
+execution = "CLEAN"
+outcome = "FAVORABLE"
+attribution = ["DECISION", "RANDOM_OUTCOME"]
+
+[lesson]
+text = "One positive weekend changes nothing; keep the forward run going."
+status = "PROPOSED"
+affects = ["record:family/rule_w"]

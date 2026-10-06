@@ -1,0 +1,13 @@
+id = "overnight_follow.base"
+family = "overnight_follow"
+title = "Overnight follow-through, 100 bps trigger"
+parent = "ROOT"
+reason = "UNKNOWN"
+registered_at = "2026-10-06"
+preregistered = false
+status = "REJECTED"
+
+[spec]
+sandbox = "w1"
+strategy = "overnight"
+spec_sha256 = "2f9a1d782a79e5ee5c577ff6fed115e525233e632e8962441acb35a8758e93de"

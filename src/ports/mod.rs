@@ -7,6 +7,7 @@ pub(crate) mod decision;
 pub(crate) mod engine;
 pub(crate) mod evidence;
 pub(crate) mod history;
+pub(crate) mod lineage;
 pub(crate) mod market_data;
 pub(crate) mod memory;
 pub(crate) mod observation;

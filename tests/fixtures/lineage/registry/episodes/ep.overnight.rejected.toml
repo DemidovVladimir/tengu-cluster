@@ -1,0 +1,48 @@
+id = "ep.overnight.rejected"
+title = "Overnight follow-through taken to paper without a holdout, then rejected"
+kind = "REJECTED_STRATEGY"
+generation = "W1"
+experiment = "overnight_follow.backtest"
+family = "overnight_follow"
+
+[context]
+summary = "An in-sample backtest looked flat; the idea went to paper anyway."
+as_of = "2026-09-20"
+
+[[information]]
+item = "in-sample backtest, no holdout"
+available_at = "2026-09-20T12:00:00Z"
+evidence = "repo:docs/study.md"
+provenance = "REPORTED"
+
+[[alternatives]]
+action = "paper-trade overnight follow"
+chosen = true
+counterfactual_valid = false
+
+[[alternatives]]
+action = "hold out a quarter first"
+chosen = false
+counterfactual = "would have shown the negative mean before any paper trade"
+counterfactual_valid = false
+
+[decision]
+action = "paper-trade overnight follow"
+decided_at = "2026-09-20T18:00:00Z"
+policy = "ARCHITECT"
+
+[outcome]
+economic = "negative after costs"
+net_bps = -12.4
+
+[quality]
+decision = "UNSUPPORTED"
+decision_note = "No holdout and no edge in-sample."
+execution = "NOT_APPLICABLE"
+outcome = "UNFAVORABLE"
+attribution = ["ANALYSIS", "DECISION"]
+
+[lesson]
+text = "A hypothesis reaches paper only after a positive holdout."
+status = "ACCEPTED"
+affects = ["record:family/overnight_follow", "record:family/rule_w"]

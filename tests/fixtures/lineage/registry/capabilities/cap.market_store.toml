@@ -1,0 +1,7 @@
+id = "cap.market_store"
+title = "Market-data warehouse (market.db)"
+class = "INFRASTRUCTURE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "ACTIVE"
+contract = "repo:docs/market-store-contract.md"

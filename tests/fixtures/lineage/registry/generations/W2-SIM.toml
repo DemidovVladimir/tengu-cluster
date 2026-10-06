@@ -1,0 +1,58 @@
+id = "W2-SIM"
+title = "Simulated W2 candidate: W1 plus an event-window kind and a news probe"
+status = "CANDIDATE"
+parent = "W1"
+sandboxes = ["w2sim"]
+
+[[capabilities]]
+id = "cap.weekend_window"
+version = 1
+
+[[capabilities]]
+id = "cap.daily_window"
+version = 1
+
+[[capabilities]]
+id = "cap.backtest"
+version = 1
+
+[[capabilities]]
+id = "cap.market_history"
+version = 1
+
+[[capabilities]]
+id = "cap.risk_gate"
+version = 1
+
+[[capabilities]]
+id = "cap.paper_exec"
+version = 1
+
+[[capabilities]]
+id = "cap.market_store"
+version = 1
+
+[[capabilities]]
+id = "cap.jev_gate"
+version = 1
+
+[[capabilities]]
+id = "cap.event_window"
+version = 1
+
+[[capabilities]]
+id = "cap.news_probe"
+version = 1
+
+[decision_policy]
+primary = "rule W, deterministic"
+summary = "Unchanged from W1; the news probe only informs."
+
+[[decision_policy.arms]]
+name = "rules"
+status = "BASELINE"
+
+[[pins]]
+target = "spec:w2sim/news_event"
+role = "STRATEGY"
+sha256 = "ded1568b4cea1ce465b4babb9c0116957fc0e6d75ed0781bf5bee99680a73c92"

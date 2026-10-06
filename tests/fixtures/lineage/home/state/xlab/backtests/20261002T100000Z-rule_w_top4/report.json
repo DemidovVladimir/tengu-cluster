@@ -1,0 +1,57 @@
+{
+  "run_id": "20261002T100000Z-rule_w_top4",
+  "strategy": "rule_w_top4",
+  "kind": "weekend_window",
+  "interval": "1h",
+  "spec": {"name": "rule_w_top4", "kind": "weekend_window", "note": "fixture: abridged"},
+  "spec_sha256": "f4dd0eb2fac4ed4cb8c9b045367fdf83ad2f84228227304f46f1f99a26ff395f",
+  "from_ms": 1772323200000,
+  "to_ms": 1790812800000,
+  "n_instruments": 75,
+  "n_candidates": 120,
+  "arms": {
+    "research": {
+      "n_candidates": 120,
+      "summary": {
+        "n": 120, "n_periods": 30, "mean_net_bps": 55.0, "t_stat": 2.2,
+        "net_usd": 66.0, "gross_usd": 111.6, "fees_usd": 22.8, "spread_usd": 22.8,
+        "slippage_usd": 0.0, "funding_usd": 0.0, "funding_incomplete": 0,
+        "max_drawdown_usd": 20.0, "periods_per_year": 52.0,
+        "ci95_lo_bps": 12.0, "ci95_hi_bps": 98.0, "bootstrap": 200
+      }
+    },
+    "rules": {
+      "n_candidates": 120,
+      "summary": {
+        "n": 120, "n_periods": 30, "mean_net_bps": 55.0, "t_stat": 2.2,
+        "net_usd": 66.0, "gross_usd": 111.6, "fees_usd": 22.8, "spread_usd": 22.8,
+        "slippage_usd": 0.0, "funding_usd": 0.0, "funding_incomplete": 0,
+        "max_drawdown_usd": 20.0, "periods_per_year": 52.0,
+        "ci95_lo_bps": 12.0, "ci95_hi_bps": 98.0, "bootstrap": 200
+      }
+    },
+    "jev": {
+      "n_candidates": 61,
+      "summary": {
+        "n": 61, "n_periods": 29, "mean_net_bps": 49.9, "t_stat": 1.4,
+        "net_usd": 30.44, "gross_usd": 53.6, "fees_usd": 11.6, "spread_usd": 11.6,
+        "slippage_usd": 0.0, "funding_usd": 0.0, "funding_incomplete": 0,
+        "max_drawdown_usd": 18.0, "periods_per_year": 52.0,
+        "ci95_lo_bps": -10.0, "ci95_hi_bps": 108.0, "bootstrap": 200
+      }
+    }
+  },
+  "gate": {
+    "loop": "xl_gate",
+    "model": "typesafe/jev-1.13-20260917",
+    "decided": 120, "cut": 0, "take": 61, "skip": 57, "ask_architect": 2,
+    "unsure": 0, "rejected": 0, "errors": 0, "take_rate": 0.5083,
+    "cache_hits": 120, "cache_misses": 0, "cache_errors": 0,
+    "cost_per_decision_usd": 0.00004, "est_cost_usd": 0.0,
+    "rules_n": 120, "jev_n": 61,
+    "rules_mean_net_bps": 55.0, "jev_mean_net_bps": 49.9,
+    "calibration": {"n": 118, "bins": []},
+    "diff_ci": {"diff_bps": -5.1, "lo_bps": -60.2, "hi_bps": 48.7, "n_periods": 30, "resamples": 200},
+    "capped": false
+  }
+}

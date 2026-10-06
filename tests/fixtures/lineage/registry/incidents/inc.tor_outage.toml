@@ -1,0 +1,16 @@
+id = "inc.tor_outage"
+title = "Egress proxy unreachable for 20 minutes on Sunday morning"
+class = "NETWORK"
+started_at = "2026-10-04T09:00:00Z"
+ended_at = "2026-10-04T09:20:00Z"
+detected_by = "egress audit log"
+generation = "W1"
+experiment = "rule_w.forward"
+strategy_impact = "NONE"
+strategy_impact_note = "No read or order was due in the window."
+
+[[data_impact]]
+stream = "hl_ctx/1"
+from = "2026-10-04T09:00:00Z"
+to = "2026-10-04T09:20:00Z"
+after = "MISSING"

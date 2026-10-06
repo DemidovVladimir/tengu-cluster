@@ -6,6 +6,7 @@ pub(crate) mod backtest;
 pub(crate) mod chat;
 pub(crate) mod decision_loop;
 pub(crate) mod evidence;
+pub(crate) mod lineage;
 pub(crate) mod memory;
 pub(crate) mod metrics;
 pub(crate) mod observe;

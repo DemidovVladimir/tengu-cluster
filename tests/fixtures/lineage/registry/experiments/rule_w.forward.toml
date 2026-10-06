@@ -1,0 +1,61 @@
+id = "rule_w.forward"
+title = "Rule W top-4 forward on paper, weekend 2026-10-02"
+family = "rule_w"
+variant = "rule_w.top4"
+generation = "W1"
+environment = "XMARKET"
+kind = "FORWARD_PAPER"
+registered_at = "2026-10-02T12:00:00Z"
+ran_at = "2026-10-02T20:00:00Z"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = "paper fills on recorded books (paper engine)"
+capabilities = ["cap.weekend_window", "cap.paper_exec", "cap.risk_gate"]
+uncertainty = "One weekend, 4 positions: no statistical inference."
+incidents = ["inc.recorder_gap", "inc.tor_outage"]
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["one weekend", "the book recorder gap 2026-10-03 01:00–02:30 UTC"]
+
+[[windows]]
+role = "FORWARD"
+from = "2026-10-02T20:00:00Z"
+to = "2026-10-05T13:00:00Z"
+integrity = "CLEAN"
+
+[[results]]
+label = "capped ledger"
+arm = "capped"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 141.8
+net_usd = 1.37
+evidence = "vault:w1-fixture/xmarket-weekend/ledger.db"
+extract = "ledger:xmarket-weekend"
+
+[[evidence]]
+ref = "vault:w1-fixture/xmarket-weekend/ledger.db"
+role = "ledger"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "f20d3793f2c4430cfa05260f0e01a75b82822cc1644e8a49c6a81e79e0b8c38d"
+
+[[evidence]]
+ref = "vault:w1-fixture/xmarket-weekend/prereg.md"
+role = "prereg"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "194a012a40d670db810261e34ee71795c160410ab0fde6a531030052efc84f60"
+note = "written Saturday 2026-10-03, before the Sunday entry"
+
+[[evidence]]
+ref = "state:xlab/market.db"
+role = "bars"
+class = "NONE"
+provenance = "BACKFILLED"
+note = "5 m bars of the gap, backfilled from Hyperliquid"
+
+[verdict]
+value = "PENDING"
+reason = "One weekend is not evidence; the run continues."
+decided_at = "UNKNOWN"
+decided_by = "operator"

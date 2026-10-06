@@ -1,0 +1,64 @@
+id = "rule_w.backtest"
+title = "Rule W on history, split in time at 2026-07-01"
+family = "rule_w"
+variant = "rule_w.all"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T12:00:34Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on xyz: 0.9 bps fee + 1.0 bps half-spread per side"
+cost_pin = "config:w1/backtest.costs.\"hyperliquid:xyz:\""
+capabilities = ["cap.weekend_window", "cap.backtest", "cap.market_store"]
+uncertainty = "Bootstrap 95 % CI over weekends (200 resamples); t clustered by weekend."
+split_by = "TIME"
+
+[[windows]]
+role = "DATA"
+from = "2026-03-01"
+to = "2026-09-26"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-01"
+to = "2026-06-30"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01"
+to = "2026-09-26"
+integrity = "CLEAN"
+
+[[results]]
+label = "in-sample"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1000
+mean_net_bps = 38.5
+ci95_bps = [10.2, 66.1]
+net_usd = 385.0
+t_stat = 2.4
+evidence = "run:xlab/20261001T120034Z-rule_w"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "holdout"
+arm = "research"
+class = "HOLDOUT"
+n = 480
+mean_net_bps = 47.04
+ci95_bps = [3.1, 91.0]
+net_usd = 225.8
+t_stat = 2.05
+evidence = "run:xlab/20261001T120034Z-rule_w"
+extract = "arm:research/holdout"
+
+[verdict]
+value = "PASS"
+reason = "Positive after costs on the holdout, CI above zero."
+decided_at = "2026-10-01T13:00:00Z"
+decided_by = "operator"

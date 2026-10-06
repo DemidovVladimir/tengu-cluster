@@ -1,0 +1,48 @@
+id = "ep.rule_w.stale_price"
+title = "A fade on a stale price that happened to win (lucky bad)"
+kind = "STRATEGY"
+generation = "W1"
+experiment = "rule_w.forward"
+family = "rule_w"
+incidents = []
+
+[context]
+summary = "xyz:BIRD's Sunday mark was a no-trade bar at Friday's price."
+as_of = "2026-10-04T22:00:00Z"
+
+[[information]]
+item = "xyz:BIRD 18:00 bar: 0 trades"
+available_at = "2026-10-04T22:00:00Z"
+evidence = "vault:w1-fixture/xmarket-weekend/ledger.db"
+provenance = "LIVE_RECORDED"
+
+[[alternatives]]
+action = "fade xyz:BIRD"
+chosen = true
+counterfactual_valid = true
+
+[[alternatives]]
+action = "skip xyz:BIRD (stale)"
+chosen = false
+counterfactual_net_usd = 0.0
+counterfactual_valid = true
+
+[decision]
+action = "fade xyz:BIRD"
+decided_at = "2026-10-04T22:00:00Z"
+policy = "DETERMINISTIC"
+
+[outcome]
+net_usd = 0.42
+
+[quality]
+decision = "UNSUPPORTED"
+decision_note = "The signal came from a stale price; the rule should have skipped it."
+execution = "CLEAN"
+outcome = "FAVORABLE"
+attribution = ["INFORMATION", "RANDOM_OUTCOME"]
+
+[lesson]
+text = "Skip a name whose entry bar has no trades (rule_w.liquid's cut, rejected too early?)."
+status = "PROPOSED"
+affects = ["record:variant/rule_w.liquid"]

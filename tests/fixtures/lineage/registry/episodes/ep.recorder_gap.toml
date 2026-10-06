@@ -1,0 +1,42 @@
+id = "ep.recorder_gap"
+title = "The book recorder stopped for 90 minutes during the forward run"
+kind = "OPERATIONAL_INCIDENT"
+generation = "W1"
+experiment = "rule_w.forward"
+incidents = ["inc.recorder_gap"]
+
+[context]
+summary = "Saturday 01:00 UTC the recorder's heartbeat went stale."
+as_of = "2026-10-03T02:00:00Z"
+
+[[information]]
+item = "recorder heartbeat stale"
+available_at = "2026-10-03T02:00:00Z"
+evidence = "state:xlab/market.db"
+provenance = "LIVE_RECORDED"
+
+[[alternatives]]
+action = "keep the run, backfill the gap"
+chosen = true
+counterfactual_valid = false
+
+[[alternatives]]
+action = "restart the weekend run"
+chosen = false
+counterfactual_valid = false
+
+[decision]
+action = "keep the run, backfill the gap"
+decided_at = "2026-10-03T03:00:00Z"
+policy = "HOLD"
+
+[outcome]
+operational = "bars backfilled; books for the gap are missing"
+
+[quality]
+decision = "UNKNOWN"
+decision_note = "No decision instant fell in the gap."
+execution = "DEGRADED"
+execution_note = "90 minutes without books"
+outcome = "NEUTRAL"
+attribution = ["INFRASTRUCTURE"]
