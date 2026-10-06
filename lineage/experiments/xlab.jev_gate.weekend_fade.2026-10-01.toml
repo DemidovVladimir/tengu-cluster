@@ -158,7 +158,8 @@ sha256 = "6ed76ad2ab6b7a55b94372f8c440137567a0087cbb5f38306ed0186fba12f925"
 note = "jev − rules +32.79 bps (CI −19.83 … +85.99), capped −22.95, Brier 0.349 on the pre-fix engine."
 
 [[evidence]]
-ref = "state:xlab/backtests/decision-cache.db"
+ref = "vault:w1-2026-10-06/xlab/backtests/decision-cache.db"
+sha256 = "45463ba52303ff870f4fbb183c94462b20a5a32e75a582e4605015e87176cdfb"
 role = "Jev decision cache (key = sha256 of model, canonical state, questions)"
 class = "DEVELOPMENT"
 provenance = "LIVE_RECORDED"

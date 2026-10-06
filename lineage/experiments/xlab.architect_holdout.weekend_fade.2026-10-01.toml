@@ -72,7 +72,8 @@ provenance = "DERIVED"
 sha256 = "8b7a6ef265628fde59a103ab847a12e2821d95e57b4fd53c93986f3d705869a4"
 
 [[evidence]]
-ref = "state:xlab/backtests/holdout-reads.jsonl"
+ref = "vault:w1-2026-10-06/xlab/backtests/holdout-reads.jsonl"
+sha256 = "82e2e4d620e1bd73a47ac033d8da36d4b2604759a62613cc918e3f4c204800eb"
 role = "holdout-read ledger (4 lines, all spec e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14)"
 class = "HOLDOUT"
 provenance = "LIVE_RECORDED"

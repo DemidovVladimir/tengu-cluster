@@ -474,6 +474,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/engines/mod.rs` | 163 | Engine adapters — implementations of `ports::engine::Engine` and the |
 | `src/adapters/outbound/engines/local.rs` | 448 | Local engine — Unsloth / Ollama / llama.cpp via OpenAI-compatible `/v1/chat/completions`, direct (no proxy) |
 | `src/adapters/outbound/engines/openrouter.rs` | 535 | OpenRouter engine — OpenAI-compatible chat completions with streaming |
+| `src/adapters/outbound/lineage/ledger.rs` | 55 | `LedgerGrade` (`ResultSource` `ledger:<account>`): a paper `ledger.db` (vault copy) graded by `domain::xm::grade`; an account that does not reconcile is an error. |
 | `src/adapters/outbound/lineage/mod.rs` | 27 | Lineage adapters (read-only): module table; `result_sources()` — the `ResultSource` list `verify` asks. |
 | `src/adapters/outbound/lineage/probe.rs` | 120 | `RepoProbe` (`ContractProbe`): `tool_schema:` from the catalog's input schemas, `config:` / `spec:` from `<repo>/sandboxes/<s>/config.toml`, `skill:` / `repo:` file bytes. |
 | `src/adapters/outbound/lineage/resolver.rs` | 381 | `FsResolver` (`EvidenceResolver`): repo / run (`keep-`, vault copy) / vault (record item or `MANIFEST.json` sha256, dir tree hash) / state (mutable) / git (`git cat-file -e` when asked). |

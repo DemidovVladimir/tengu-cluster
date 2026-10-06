@@ -9,6 +9,8 @@
 //! | a new preregistered variant in a copy | `verify` exit 1 (`seal_mismatch`); `seal variant:<id>` appends the row; `verify` exit 0; a second `seal` refused |
 //! | `report rule_w --forward rule_w.forward --format json` | 21 answers, none `UNKNOWN` |
 //! | `trace ep.recorder_gap` | the start marked, its family and incident shown |
+//! | `verify --pins` on the repo `lineage/` | W1 locked, every pin recomputes (G1 / G5) |
+//! | `report` + `trace` on the repo `lineage/` | 21 Rule-W answers with sources; rule E traced to its FAIL and episode; the network-loss episode is OPERATIONAL_INCIDENT (G2–G4) |
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -222,4 +224,121 @@ fn report_and_trace_answer_from_the_records() {
         &["lineage", "show", "nothing", "--registry", r],
     );
     assert!(!o.status.success());
+}
+
+/// The repo's own registry (`lineage/`), the operator's W1.
+fn repo_registry() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("lineage")
+}
+
+#[test]
+fn the_repo_registry_is_frozen_and_every_pin_recomputes() {
+    // G1 / G5: W1 is locked and its pins (specs, costs, risk, rule W, Jev,
+    // models, tool schemas, the research skill) equal the sources now. No
+    // `--evidence`: the vault lives on the operator's machine only.
+    let home = tempfile::tempdir().unwrap();
+    let reg = repo_registry();
+    let o = tengu(
+        home.path(),
+        &[
+            "lineage",
+            "verify",
+            "--pins",
+            "--registry",
+            reg.to_str().unwrap(),
+        ],
+    );
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.contains(" 0 error(s)"), "{out}");
+    let o = tengu(
+        home.path(),
+        &[
+            "lineage",
+            "generation",
+            "W1",
+            "--registry",
+            reg.to_str().unwrap(),
+        ],
+    );
+    let out = text(&o);
+    assert!(out.contains("FROZEN"), "{out}");
+    assert!(!out.contains("DRIFT") && !out.contains("NO_LOCK"), "{out}");
+}
+
+#[test]
+fn the_repo_registry_answers_the_acceptance_questions() {
+    // G2–G4 on the real records (TENGU_HANDOFF.md § 57–58, roadmap G4).
+    let home = tempfile::tempdir().unwrap();
+    let reg = repo_registry();
+    let r = reg.to_str().unwrap();
+    let o = tengu(
+        home.path(),
+        &[
+            "lineage",
+            "report",
+            "weekend_overshoot_fade",
+            "--forward",
+            "fwd.rule_w.2026-10-02",
+            "--format",
+            "json",
+            "--registry",
+            r,
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let answers: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let answers = answers.as_array().unwrap();
+    assert_eq!(answers.len(), 21);
+    for a in answers {
+        let lines = a["lines"].as_array().unwrap();
+        assert!(!lines.is_empty(), "{a:#}");
+        assert!(a.get("unknown_reason").is_none(), "{a:#}");
+        assert!(!a["sources"].as_array().unwrap().is_empty(), "{a:#}");
+    }
+    // A rejected idea: hypothesis → experiment → evidence → result → verdict
+    // → Experience.
+    let o = tengu(
+        home.path(),
+        &[
+            "lineage",
+            "trace",
+            "ep.rule_e.rejected.2026-09-30",
+            "--registry",
+            r,
+        ],
+    );
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(o.status.success(), "{}", text(&o));
+    for needle in [
+        "family post_earnings_follow",
+        "experiment ext.holdout_names.rule_e.2026-09-30",
+        "evidence ext.holdout_names.rule_e.2026-09-30",
+        "result ext.holdout_names.rule_e.2026-09-30",
+        "verdict ext.holdout_names.rule_e.2026-09-30: FAIL",
+        "episode ep.rule_e.rejected.2026-09-30",
+    ] {
+        assert!(out.contains(needle), "{needle} missing:\n{out}");
+    }
+    // An operational incident, apart from strategy performance.
+    let o = tengu(
+        home.path(),
+        &[
+            "lineage",
+            "trace",
+            "ep.ops.2026-10-05.network-loss",
+            "--registry",
+            r,
+        ],
+    );
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    let start = out
+        .lines()
+        .find(|l| l.starts_with('▶'))
+        .unwrap_or_else(|| panic!("{out}"));
+    assert!(start.contains("OPERATIONAL_INCIDENT"), "{start}");
+    assert!(
+        out.contains("incident inc.2026-10-05.network-loss-1"),
+        "{out}"
+    );
 }
