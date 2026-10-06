@@ -148,7 +148,8 @@ impl ToolActivityPort for BridgeActivity {
 struct BridgeSetup {
     /// `TENGU_BRIDGE_WORKSPACE`, else the cwd.
     workspace: PathBuf,
-    /// `TENGU_BRIDGE_TOOLS`: the allow-list, and what `tools/list` returns.
+    /// `TENGU_BRIDGE_TOOLS`: the allow-list, and what `tools/list` returns —
+    /// minus what the agent's `[generation]` refuses (`bridge_tools`).
     tools: Vec<ToolDef>,
     /// `TENGU_CONFIG` (else `<TENGU_HOME>/config.toml`), loaded; `None` = no file.
     config: Option<Config>,
@@ -283,11 +284,12 @@ async fn serve_mcp_stdio(
         inner: sanitized(build_bridge_executor(&setup, &secrets).await?, &secrets),
         file: setup.summary_file.clone(),
     });
-    let mcp_tools: Vec<McpToolDef> = setup.tools.iter().map(McpToolDef::from).collect();
+    let listed = bridge_tools(&setup)?;
+    let mcp_tools: Vec<McpToolDef> = listed.iter().map(McpToolDef::from).collect();
 
     info!(
         workspace = %setup.workspace.display(),
-        tool_count = setup.tools.len(),
+        tool_count = listed.len(),
         server = server_name,
         "MCP stdio server started"
     );
@@ -719,7 +721,7 @@ fn resolve_mcp_servers(json: &str, config: Option<&Config>) -> Vec<McpServerConf
 /// | Config file + `[agents.<TENGU_BRIDGE_AGENT>]` | Agent |
 /// |---|---|
 /// | both present | that block as `Config::load` folded it (scopes with `[default_scopes]`, `sandbox` sections, `no_shell_fallback`, signer); with `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step) each configured scope also gets the workspace root, like the step's own executor |
-/// | either absent (warn) | `Config::default()`'s `main` with `TENGU_BRIDGE_SCOPES`; shell-free when a loaded config's agents are |
+/// | either absent (warn) | `Config::default()`'s `main` with `TENGU_BRIDGE_SCOPES`; shell-free when a loaded config's agents are; bound to a loaded config's `[generation]` |
 ///
 /// Then every `WORKSPACE_TOOLS` name in the `TENGU_BRIDGE_TOOLS` allow-list
 /// joins `workspace_tools` — the merge `bootstrap::tools::subagent_config`
@@ -757,6 +759,10 @@ fn bridge_agent_config(setup: &BridgeSetup, allowed: &HashSet<String>) -> Result
             agent.scopes = setup.env_scopes.clone();
             if let Some(config) = &setup.config {
                 agent.no_shell_fallback = config.agents.values().any(|a| a.no_shell_fallback);
+                // The loaded config's `[generation]` still bounds what runs.
+                let mut sections = (*agent.sandbox).clone();
+                sections.generation = config.generation_scope.clone();
+                agent.sandbox = Arc::new(sections);
             }
             agent
         }
@@ -814,12 +820,24 @@ async fn bridge_memory(
     }
 }
 
+/// `setup.tools` minus the ones the agent's bound generation refuses
+/// (`[generation]`, `bootstrap::tools::within_generation`): neither listed
+/// nor registered — as in-process executors.
+fn bridge_tools(setup: &BridgeSetup) -> Result<Vec<ToolDef>> {
+    let all: HashSet<String> = setup.tools.iter().map(|t| t.name.clone()).collect();
+    let agent = bridge_agent_config(setup, &all)?;
+    Ok(crate::bootstrap::tools::within_generation(
+        &agent,
+        &setup.tools,
+    ))
+}
+
 async fn build_bridge_executor(
     setup: &BridgeSetup,
     secret_registry: &Arc<SecretRegistry>,
 ) -> Result<PluginToolExecutor> {
     let workspace = setup.workspace.as_path();
-    let allowed_names: HashSet<String> = setup.tools.iter().map(|t| t.name.clone()).collect();
+    let allowed_names: HashSet<String> = bridge_tools(setup)?.into_iter().map(|t| t.name).collect();
     let allowed_list: Vec<String> = allowed_names.iter().cloned().collect();
 
     let agent_config = bridge_agent_config(setup, &allowed_names)?;
@@ -1076,6 +1094,47 @@ net_hosts = ["api.hyperliquid.xyz"]
         s.grant_workspace = true;
         let exec = build_bridge_executor(&s, &no_secrets()).await.unwrap();
         assert_eq!(exec.scopes["http_request"].fs_roots, [ws.path()]);
+    }
+
+    /// Review #14: a bridge over a sandbox bound to W1 registers no tool
+    /// the generation refuses (`hl_ctx`: an opt-in tool no fixture
+    /// capability binds) — with the configured agent, and with the
+    /// default-`main` fallback (`TENGU_BRIDGE_AGENT` unset), which keeps the
+    /// config's generation.
+    #[tokio::test]
+    async fn the_bridge_registers_no_tool_outside_the_generation() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/lineage/sandboxes/w1/config.toml");
+        let ws = TempDir::new().unwrap();
+        for agent in [Some("architect"), None] {
+            let s = setup(
+                ws.path(),
+                &["read_file", "hl_ctx"],
+                Some(Config::load(&file).unwrap()),
+                agent,
+            );
+            assert_eq!(
+                bridge_tools(&s)
+                    .unwrap()
+                    .iter()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["read_file"],
+                "{agent:?}"
+            );
+            let exec = build_bridge_executor(&s, &no_secrets()).await.unwrap();
+            let names = exec.registry.tool_names();
+            assert!(
+                names.iter().any(|n| n == "read_file"),
+                "{agent:?}: {names:?}"
+            );
+            assert!(!names.iter().any(|n| n == "hl_ctx"), "{agent:?}: {names:?}");
+            let gen = exec
+                .agent_config
+                .as_ref()
+                .and_then(|a| a.sandbox.generation.as_ref().map(|g| g.id.clone()));
+            assert_eq!(gen.as_deref(), Some("W1"), "{agent:?}");
+        }
     }
 
     /// No config file or no such agent: the default `main` agent with the

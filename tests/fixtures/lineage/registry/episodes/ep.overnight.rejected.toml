@@ -7,7 +7,7 @@ family = "overnight_follow"
 
 [context]
 summary = "An in-sample backtest looked flat; the idea went to paper anyway."
-as_of = "2026-09-20"
+as_of = "2026-09-20T18:00:00Z"
 
 [[information]]
 item = "in-sample backtest, no holdout"

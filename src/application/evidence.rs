@@ -4,11 +4,11 @@
 //!
 //! | Use case | Rule |
 //! |---|---|
-//! | [`snapshot`] | a plan record (no `captured_at`) → every source checked (exists, kind as declared, no symlink) before anything is created → the vault created (refused when it exists) → items copied, each copy hashed = its source → `MANIFEST.json` (every file `{path, sha256, bytes}`, sorted, pretty JSON + `\n`) → `chmod a-w` → the captured record (`captured_at`, `manifest_sha256` = sha256 of the manifest bytes, per item `sha256` (a file's, a dir's [`tree_hash`]), `files`, `bytes`) |
-//! | [`verify`] | re-hash the vault: the manifest bytes vs `manifest_sha256`; every manifest file; every item recomputed from the fresh hashes vs the record — `MATCH` · `MISMATCH` · `ABSENT`, and `EXTRA` for a vault file the manifest does not list |
+//! | [`snapshot`] | a plan record (no `captured_at`) → every source checked (exists, kind as declared, no symlink; no non-empty SQLite WAL: a FILE database's `<db>-wal` unless that is itself an item, any `*-wal` in a DIR) before anything is created → the vault created (refused when it exists) → items copied, each copy hashed = its source → `MANIFEST.json` (every file `{path, sha256, bytes}`, sorted, pretty JSON + `\n`) → `chmod a-w` → the captured record (`captured_at`, `manifest_sha256` = sha256 of the manifest bytes, per item `sha256` (a file's, a dir's [`tree_hash`]), `files`, `bytes`) |
+//! | [`verify`] | re-hash the vault: the manifest bytes vs `manifest_sha256`; every manifest file; every item recomputed from the fresh hashes vs the record (an empty DIR item present as a dir: the empty tree hash) — `MATCH` · `MISMATCH` · `ABSENT`, and `EXTRA` for a vault file the manifest does not list |
 //! | [`coverage`] | `domain::evidence_coverage` over the `ok` / `partial` instants of one schema in recorder day files (+ `market.db` bars as the second source) |
 //! | [`grade`] | `domain::xm::grade::grade_account` per account of a ledger (all by default) |
-//! | [`regrade`] | `domain::xm::regrade` over rows read around each instant: `mkt_ctx/1` at the anchor, entry, exit and every funding hour; `hl_book/1` (with data) at entry and exit; `market.db` funding + 1 m bars; the universe = the given ids, else every `hl_book/1` key recorded between entry − 1 h and exit + 1 h |
+//! | [`regrade`] | `domain::xm::regrade` over rows read around each instant: `mkt_ctx/1` at the anchor, entry, exit and every funding hour; `hl_book/1` (with data) at entry and exit; `market.db` funding + 1 m bars; the universe = the given ids, else every instrument with a `mkt_ctx/1` row at the anchor or the signal ([`regrade_universe`]; a selected name without a usable book is a MISSING leg); a signal after the entry (look-ahead) refused unless allowed, then flagged |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,14 +78,34 @@ pub(crate) fn snapshot(
         );
     }
     let mut problems = Vec::new();
+    let mut infos = Vec::new();
     for item in &plan.items {
         match vault.inspect_source(&item.source) {
             Ok(info) if info.kind != item.kind => problems.push(format!(
                 "item `{}`: source {} is a {:?}, the record says {:?}",
                 item.path, item.source, info.kind, item.kind
             )),
-            Ok(_) => {}
+            Ok(info) => infos.push((item, info)),
             Err(e) => problems.push(format!("item `{}`: {e:#}", item.path)),
+        }
+    }
+    // A non-empty WAL holds rows the vault's immutable readers never see.
+    let sources: BTreeSet<&str> = infos.iter().map(|(_, i)| i.path.as_str()).collect();
+    for (item, info) in &infos {
+        for wal in &info.live_wals {
+            match item.kind {
+                ItemKind::File if sources.contains(wal.as_str()) => {}
+                ItemKind::File => problems.push(format!(
+                    "item `{}`: SQLite database with a non-empty WAL {wal} that is not itself \
+                     an item — live or uncheckpointed: checkpoint first",
+                    item.path
+                )),
+                ItemKind::Dir => problems.push(format!(
+                    "item `{}`: holds a non-empty WAL {wal} — live or uncheckpointed: \
+                     checkpoint first",
+                    item.path
+                )),
+            }
         }
     }
     if !problems.is_empty() {
@@ -248,7 +268,10 @@ pub(crate) fn verify(record: &EvidenceRecord, vault: &dyn Vault) -> Result<Verif
                 })
                 .cloned()
                 .collect();
-            let actual = (!mine.is_empty()).then(|| {
+            // An empty DIR item is its dir with no file: the empty tree hash.
+            let present =
+                !mine.is_empty() || (item.kind == ItemKind::Dir && vault.has_dir(&item.path));
+            let actual = present.then(|| {
                 let sha = match item.kind {
                     ItemKind::File => mine[0].sha256.clone(),
                     ItemKind::Dir => tree_hash(&item.path, &mine),
@@ -368,16 +391,32 @@ fn merge(mut spans: Vec<(i64, i64)>) -> Vec<(i64, i64)> {
     out
 }
 
-/// The universe a regrade reads (module table).
+/// The universe a regrade reads (module table): every instrument with a
+/// `mkt_ctx/1` row at the anchor or at the signal instant (within their max
+/// ages) — what the signal is computed from; a selected name without a
+/// usable book is then a MISSING leg, never replaced by the next one.
 pub(crate) fn regrade_universe(
     history: &dyn RecordedHistory,
     inst: &Instants,
+    lim: &Limits,
 ) -> Result<Vec<String>> {
-    let keys = history.keys(BOOK_SCHEMA, inst.entry_ms - HOUR_MS, inst.exit_ms + HOUR_MS)?;
-    Ok(keys.iter().map(|k| key_instrument(k).to_string()).collect())
+    let mut keys = history.keys(
+        CTX_SCHEMA,
+        inst.anchor_ms - lim.anchor_max_age_ms,
+        inst.anchor_ms + 1,
+    )?;
+    keys.extend(history.keys(
+        CTX_SCHEMA,
+        inst.signal_at() - lim.ctx_max_age_ms,
+        inst.signal_at() + 1,
+    )?);
+    let ids: BTreeSet<String> = keys.iter().map(|k| key_instrument(k).to_string()).collect();
+    Ok(ids.into_iter().collect())
 }
 
-/// The module table's `regrade`.
+/// The module table's `regrade`. A signal read after the entry instant is
+/// look-ahead: refused unless `allow_signal_after_entry` (then flagged in
+/// `Regrade::look_ahead`).
 pub(crate) fn regrade(
     history: &dyn RecordedHistory,
     market: Option<&dyn BackfillSource>,
@@ -385,6 +424,7 @@ pub(crate) fn regrade(
     rule: &RegradeRule,
     inst: &Instants,
     lim: &Limits,
+    allow_signal_after_entry: bool,
 ) -> Result<Regrade> {
     if !(inst.anchor_ms < inst.entry_ms
         && inst.entry_ms < inst.exit_ms
@@ -392,6 +432,15 @@ pub(crate) fn regrade(
         && inst.signal_at() < inst.exit_ms)
     {
         bail!("instants must satisfy anchor < entry < exit and anchor < signal < exit");
+    }
+    if inst.signal_at() > inst.entry_ms && !allow_signal_after_entry {
+        bail!(
+            "signal at {} is after the entry at {}: the selection would read prices from after \
+             the positions opened (look-ahead) — refused; pass --allow-signal-after-entry to \
+             grade it anyway, flagged LOOK-AHEAD",
+            inst.signal_at(),
+            inst.entry_ms
+        );
     }
     if !(rule.notional_usd.is_finite() && rule.notional_usd > 0.0) {
         bail!("notional_usd {} is not > 0", rule.notional_usd);
@@ -571,6 +620,272 @@ mod tests {
         assert_eq!(rep.items[0].status, Verdict::Absent);
         assert_eq!(rep.items[1].status, Verdict::Mismatch);
         assert_eq!(rep.manifest.status, Verdict::Match);
+    }
+
+    /// A WAL-mode SQLite db under `dir` whose writer keeps rows in a
+    /// non-empty WAL (returned: keep it alive).
+    fn live_db(path: &Path) -> rusqlite::Connection {
+        let c = rusqlite::Connection::open(path).unwrap();
+        c.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+             CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);",
+        )
+        .unwrap();
+        c
+    }
+
+    fn plan(items: Vec<EvidenceItem>) -> EvidenceRecord {
+        EvidenceRecord {
+            id: "t".into(),
+            title: "test".into(),
+            notes: None,
+            vault: "t".into(),
+            captured_at: None,
+            manifest_sha256: None,
+            experiment: None,
+            items,
+        }
+    }
+
+    /// Review #4: a ledger mid-run (or after a crash) — its last fills sit
+    /// in the WAL; a snapshot of the main file alone would freeze a ledger
+    /// without them. A FILE item with its live WAL beside it, a DIR holding
+    /// one: refused, nothing created; the WAL listed as an item too: taken.
+    #[test]
+    fn a_snapshot_refuses_a_database_with_a_live_wal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(src.join("hist")).unwrap();
+        let _ledger = live_db(&src.join("ledger.db"));
+        let _day = live_db(&src.join("hist/20261005.db"));
+        let home = tmp.path().join("home");
+        let vault = FsVault::new(&home, "t");
+        let file = item("s/ledger.db", &src.join("ledger.db"), ItemKind::File);
+        let e = snapshot(&plan(vec![file.clone()]), &vault, "x")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("ledger.db-wal") && e.contains("checkpoint first"),
+            "{e}"
+        );
+        let dir = item("s/history", &src.join("hist"), ItemKind::Dir);
+        let e = snapshot(&plan(vec![dir]), &vault, "x")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("20261005.db-wal"), "{e}");
+        assert!(!vault.exists(), "nothing created");
+        let wal = item(
+            "s/ledger.db-wal",
+            &src.join("ledger.db-wal"),
+            ItemKind::File,
+        );
+        snapshot(&plan(vec![file, wal]), &vault, "x").unwrap();
+        unseal(&home.join("state/evidence/t"));
+    }
+
+    /// Review #18: an empty source dir snapshots as files 0 and verifies
+    /// MATCH (the empty tree hash), not ABSENT.
+    #[test]
+    fn an_empty_dir_item_verifies_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("run-logs");
+        std::fs::create_dir_all(&src).unwrap();
+        let home = tmp.path().join("home");
+        let vault = FsVault::new(&home, "t");
+        let (rec, _) = snapshot(
+            &plan(vec![item("s/run-logs", &src, ItemKind::Dir)]),
+            &vault,
+            "x",
+        )
+        .unwrap();
+        assert_eq!(rec.items[0].files, Some(0));
+        let rep = verify(&rec, &vault).unwrap();
+        assert!(rep.all_match(), "{rep:#?}");
+        assert_eq!(rep.items[0].status, Verdict::Match);
+        unseal(&home.join("state/evidence/t"));
+    }
+
+    /// Recorded rows by key (`<schema>:<instrument>`), oldest first.
+    struct Rows(BTreeMap<String, Vec<crate::ports::evidence::RecordedRow>>);
+
+    impl RecordedHistory for Rows {
+        fn instants(&self, _: &str, _: i64, _: i64) -> Result<Vec<(String, i64, ObsStatus)>> {
+            Ok(Vec::new())
+        }
+        fn keys(&self, schema: &str, from_ms: i64, to_ms: i64) -> Result<BTreeSet<String>> {
+            Ok(self
+                .0
+                .iter()
+                .filter(|(k, rows)| {
+                    k.starts_with(&format!("{schema}:"))
+                        && rows
+                            .iter()
+                            .any(|r| from_ms <= r.observed_at_ms && r.observed_at_ms < to_ms)
+                })
+                .map(|(k, _)| k.clone())
+                .collect())
+        }
+        fn rows(
+            &self,
+            key: &str,
+            from_ms: i64,
+            to_ms: i64,
+            _: bool,
+        ) -> Result<Vec<crate::ports::evidence::RecordedRow>> {
+            Ok(self
+                .0
+                .get(key)
+                .into_iter()
+                .flatten()
+                .filter(|r| from_ms <= r.observed_at_ms && r.observed_at_ms < to_ms)
+                .cloned()
+                .collect())
+        }
+        fn describe(&self) -> String {
+            "rows".into()
+        }
+    }
+
+    const H: i64 = 3_600_000;
+
+    fn ctx_row(id: &str, at: i64, mid: f64) -> crate::ports::evidence::RecordedRow {
+        let features = [
+            ("mid", mid),
+            ("oracle", mid),
+            ("funding_1h", 0.0),
+            ("taker_fee_bps", 1.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), serde_json::json!(v)))
+        .collect();
+        crate::ports::evidence::RecordedRow {
+            key: format!("{CTX_SCHEMA}:{id}"),
+            observed_at_ms: at,
+            status: ObsStatus::Ok,
+            features,
+            data: None,
+            errors: None,
+        }
+    }
+
+    fn book_row(id: &str, at: i64, c: f64) -> crate::ports::evidence::RecordedRow {
+        use crate::domain::book::L2Level;
+        let lvl = |px: f64| L2Level {
+            px,
+            sz: 100.0,
+            n: 1,
+        };
+        let book = L2Book::new(vec![lvl(c - 0.1)], vec![lvl(c + 0.1)], at).unwrap();
+        crate::ports::evidence::RecordedRow {
+            key: format!("{BOOK_SCHEMA}:{id}"),
+            observed_at_ms: at,
+            status: ObsStatus::Ok,
+            features: Default::default(),
+            data: Some(serde_json::json!({ "book": book })),
+            errors: None,
+        }
+    }
+
+    /// Two names priced at the anchor and the entry; only `x:SMALL` has
+    /// books. `x:BIG` moved more.
+    fn two_names() -> Rows {
+        let mut m = BTreeMap::new();
+        for (id, entry_px) in [("x:BIG", 105.0), ("x:SMALL", 102.0)] {
+            let mut rows = vec![
+                ctx_row(id, -1_000, 100.0),
+                ctx_row(id, 10 * H - 30_000, entry_px),
+                ctx_row(id, 11 * H - 30_000, entry_px),
+                ctx_row(id, 12 * H - 30_000, 100.0),
+            ];
+            rows.sort_by_key(|r| r.observed_at_ms);
+            m.insert(format!("{CTX_SCHEMA}:{id}"), rows);
+        }
+        m.insert(
+            format!("{BOOK_SCHEMA}:x:SMALL"),
+            vec![
+                book_row("x:SMALL", 10 * H + 100, 102.0),
+                book_row("x:SMALL", 12 * H + 100, 100.0),
+            ],
+        );
+        Rows(m)
+    }
+
+    fn rule_top1() -> RegradeRule {
+        RegradeRule {
+            direction: regrade::Direction::Fade,
+            top_n: Some(1),
+            min_abs_signal_bps: 50.0,
+            notional_usd: 100.0,
+            fees: regrade::FeeModel::Flat { taker_bps: 1.0 },
+        }
+    }
+
+    const LIM: Limits = Limits {
+        anchor_max_age_ms: 600_000,
+        ctx_max_age_ms: 120_000,
+        book_max_age_ms: 60_000,
+        book_pick: regrade::BookPick::Next,
+        funding_max_age_ms: 120_000,
+    };
+
+    /// Review #9: the book feed failed for the name with the largest |s| —
+    /// it stays in the universe (priced by `mkt_ctx/1`), is selected and is
+    /// a MISSING leg; the next name is not graded in its place.
+    #[test]
+    fn a_selected_name_without_books_is_missing_not_replaced() {
+        let h = two_names();
+        let inst = Instants {
+            anchor_ms: 0,
+            entry_ms: 10 * H,
+            exit_ms: 12 * H,
+            signal_ms: None,
+        };
+        let universe = regrade_universe(&h, &inst, &LIM).unwrap();
+        assert_eq!(universe, vec!["x:BIG".to_string(), "x:SMALL".to_string()]);
+        let r = regrade(&h, None, &universe, &rule_top1(), &inst, &LIM, false).unwrap();
+        assert_eq!(r.selected, vec!["x:BIG".to_string()]);
+        assert_eq!(
+            (r.summary.graded, r.summary.missing),
+            (0, 1),
+            "{:#?}",
+            r.summary
+        );
+        assert!(r
+            .legs
+            .iter()
+            .all(|l| l.instrument != "x:SMALL" || !l.selected));
+    }
+
+    /// Review #8: a signal read 1 h after the entry picks trades with
+    /// prices from after they opened — refused; allowed, flagged.
+    #[test]
+    fn a_signal_after_the_entry_is_refused_unless_allowed_and_flagged() {
+        let h = two_names();
+        let inst = Instants {
+            anchor_ms: 0,
+            entry_ms: 10 * H,
+            exit_ms: 12 * H,
+            signal_ms: Some(11 * H),
+        };
+        let ids = vec!["x:SMALL".to_string()];
+        let e = regrade(&h, None, &ids, &rule_top1(), &inst, &LIM, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("look-ahead") && e.contains("--allow-signal-after-entry"),
+            "{e}"
+        );
+        let r = regrade(&h, None, &ids, &rule_top1(), &inst, &LIM, true).unwrap();
+        assert!(r
+            .look_ahead
+            .as_deref()
+            .is_some_and(|l| l.starts_with("LOOK-AHEAD: signal ")));
+        let early = Instants {
+            signal_ms: Some(10 * H - 60_000),
+            ..inst
+        };
+        let r = regrade(&h, None, &ids, &rule_top1(), &early, &LIM, false).unwrap();
+        assert_eq!(r.look_ahead, None);
     }
 
     #[test]

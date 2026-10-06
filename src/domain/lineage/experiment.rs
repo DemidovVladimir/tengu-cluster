@@ -178,14 +178,24 @@ impl Experiment {
         self.windows.iter().filter(move |w| w.role == role)
     }
 
-    /// When its outcome was first known (seal rule, `locks.rs`): the
-    /// FORWARD window's end for a forward experiment, else `ran_at`.
+    /// When its outcome starts to be known (seal rule, `locks.rs`): a
+    /// forward experiment's FORWARD window START (outcomes accrue from the
+    /// first entry; the earliest when several, UNKNOWN when one start is or
+    /// there is none), else `ran_at`.
     pub fn outcome_at(&self) -> Time {
-        if self.kind == ExperimentKind::ForwardPaper {
-            if let Some(w) = self.windows_of(WindowRole::Forward).next() {
-                return w.to;
-            }
+        if self.kind != ExperimentKind::ForwardPaper {
+            return self.ran_at;
         }
-        self.ran_at
+        let starts: Vec<Time> = self
+            .windows_of(WindowRole::Forward)
+            .map(|w| w.from)
+            .collect();
+        if starts.is_empty() || starts.iter().any(|t| !t.is_known()) {
+            return Time::Unknown;
+        }
+        starts
+            .into_iter()
+            .min_by_key(Time::sort_key)
+            .unwrap_or(Time::Unknown)
     }
 }

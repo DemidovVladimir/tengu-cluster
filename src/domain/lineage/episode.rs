@@ -11,7 +11,7 @@
 //! | `[hypothesis]?` | `statement`, `family?` |
 //! | `[[information]]` | `item`, `available_at`, `evidence`, `provenance` — each known and ≤ `decided_at` (`future_leakage`) |
 //! | `[[alternatives]]` | `action`, `chosen`, `counterfactual?`, `counterfactual_net_usd?`, `counterfactual_ref?`, `counterfactual_valid` — exactly one chosen (at most one for `NO_ACTION` / `OPERATIONAL_INCIDENT`) |
-//! | `[decision]` | `action`, `decided_at`, `policy` (`DETERMINISTIC` `JEV_GATE` `ARCHITECT` `HOLD`), `risk_verdict?` |
+//! | `[decision]` | `action`, `decided_at` (known; `context.as_of` ≤ it ≤ `action.executed_at` — `future_leakage`), `policy` (`DETERMINISTIC` `JEV_GATE` `ARCHITECT` `HOLD`), `risk_verdict?` |
 //! | `[action]?` · `[outcome]?` | `executed`, `executed_at?`, `evidence?` · `economic?`, `net_usd?`, `net_bps?`, `operational?` |
 //! | `[quality]` | `decision` (`SUPPORTED` `UNSUPPORTED` `UNKNOWN`), `decision_note`, `execution` (`CLEAN` `DEGRADED` `FAILED` `NOT_APPLICABLE`), `execution_note?`, `outcome` (`FAVORABLE` `UNFAVORABLE` `NEUTRAL` `UNKNOWN`), `attribution[]` (handoff § 71) |
 //! | `[lesson]?` | `text`, `status` (`PROPOSED` `ACCEPTED` `REJECTED`), `affects[]` (`record:<kind>/<id>`) |

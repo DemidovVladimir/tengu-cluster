@@ -4,7 +4,7 @@
 //!
 //! | Port | Answers |
 //! |---|---|
-//! | [`ContractProbe`] | a pin target's sha256 now; whether a catalog tool / a strategy kind exists |
+//! | [`ContractProbe`] | a pin target's sha256 now; whether a catalog tool / a strategy kind exists; a repo sandbox's `[generation]` ([`SandboxBinding`]) |
 //! | [`EvidenceResolver`] | a locator → present (path, sha256 now, the sha256 the vault records) · missing · nothing to open |
 //! | [`ResultSource`] | an `extract` on a resolved evidence file → the recomputed figures; `None` = not this source's kind (plug and play: one source per kind — `arm:` / `gate` from `report.json`, `ledger:` later) |
 //! | [`AttemptSource`] | the run dirs and holdout reads of a state dir |
@@ -14,6 +14,17 @@ use std::path::{Path, PathBuf};
 use crate::domain::lineage::query::{HoldoutRead, RunAttempt};
 use crate::domain::lineage::value::{Locator, PinTarget};
 
+/// A sandbox's `[generation]` as its repo config file declares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxBinding {
+    /// `[generation] id`.
+    pub generation: String,
+    /// `[generation] registry` as written.
+    pub registry: String,
+    /// It resolves (relative to the config file) to the registry verified.
+    pub same_registry: bool,
+}
+
 /// Pin targets and bindings (module table).
 pub trait ContractProbe {
     /// The target's sha256 now (`domain/lineage/pins.rs`); `Err` = why it
@@ -21,6 +32,9 @@ pub trait ContractProbe {
     fn pin_sha256(&self, target: &PinTarget) -> Result<String, String>;
     fn tool_exists(&self, name: &str) -> bool;
     fn strategy_kind_exists(&self, kind: &str) -> bool;
+    /// `[generation]` of `<repo>/sandboxes/<sandbox>/config.toml`; `Ok(None)`
+    /// = the file binds none; `Err` = it does not read or parse.
+    fn sandbox_binding(&self, sandbox: &str) -> Result<Option<SandboxBinding>, String>;
 }
 
 /// What a locator resolved to.

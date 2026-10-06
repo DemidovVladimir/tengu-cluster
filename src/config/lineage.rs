@@ -22,7 +22,7 @@
 //! | no Error finding of the registry on this generation (`frozen_manifest_changed`, `capability_version_missing`, its references) or any `binding_conflict` | the finding |
 //! | every tool an agent lists (`tools`, `workspace_tools`), every `[feeds.*]` tool and `[decision_loops.*]` action tool passes `GenerationScope::tool_refusal`: a tool some capability binds must be bound by one of the generation's; an opt-in tool (`WORKSPACE_TOOLS`) no capability binds is refused | sandbox, agent / feed / loop + action, tool, capability, generation |
 //! | every `[backtest.strategies.*]` kind passes `GenerationScope::kind_refusal` | sandbox, strategy, kind, capability, generation |
-//! | a `FROZEN` generation's `config:` / `spec:` pins recompute equal from `<repo>/sandboxes/<s>/config.toml` (repo = the registry's parent; `tool_schema:` pins: `tengu lineage verify --pins`) | generation, pin, both hashes |
+//! | a `FROZEN` generation's `config:` / `spec:` pins recompute equal — this sandbox's from the raw text just loaded, another's from `<repo>/sandboxes/<s>/config.toml` (repo = the registry's parent; `tool_schema:` pins: `tengu lineage verify --pins`) | generation, pin, both hashes |
 //!
 //! The resolved `GenerationScope` reaches tools as `SandboxSections::generation`
 //! (`Config::sandbox_sections`): the backtest use case refuses a spec kind
@@ -227,28 +227,68 @@ pub fn sandbox_config_path(registry_dir: &Path, sandbox: &str) -> PathBuf {
         .join("config.toml")
 }
 
+/// The `[generation]` of `<repo>/sandboxes/<sandbox>/config.toml` (raw
+/// text) and the registry dir it resolves to; `Ok(None)` = none declared.
+pub fn declared_binding(
+    registry_dir: &Path,
+    sandbox: &str,
+) -> Result<Option<(GenerationBinding, PathBuf)>, String> {
+    #[derive(Deserialize)]
+    struct OnlyGeneration {
+        generation: Option<GenerationBinding>,
+    }
+    let file = sandbox_config_path(registry_dir, sandbox);
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let parsed: OnlyGeneration =
+        toml::from_str(&text).map_err(|e| format!("{}: {}", file.display(), e.message()))?;
+    Ok(parsed.generation.map(|b| {
+        let dir = b.registry_dir(&file);
+        (b, dir)
+    }))
+}
+
+/// `a` and `b` name the same directory (canonical paths; else absolute).
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| paths::absolute_path(p));
+    norm(a) == norm(b)
+}
+
 /// A `config:` / `spec:` pin recomputed from the sandbox config under the
 /// registry's repo; `None` for the other targets.
 pub fn sandbox_pin(registry_dir: &Path, target: &PinTarget) -> Option<Result<String, String>> {
-    let sandbox = match target {
-        PinTarget::Config { sandbox, .. } | PinTarget::Spec { sandbox, .. } => sandbox,
-        _ => return None,
-    };
+    let sandbox = pin_sandbox(target)?;
     let file = sandbox_config_path(registry_dir, sandbox);
-    let text = match std::fs::read_to_string(&file) {
-        Ok(t) => t,
-        Err(e) => return Some(Err(format!("{}: {e}", file.display()))),
-    };
-    Some(match target {
-        PinTarget::Config { path, .. } => config_pin(&text, path),
-        PinTarget::Spec { strategy, .. } => spec_pin(&text, strategy),
-        _ => unreachable!("matched above"),
+    Some(match std::fs::read_to_string(&file) {
+        Ok(text) => pin_of_text(&text, target)?,
+        Err(e) => Err(format!("{}: {e}", file.display())),
     })
 }
 
-/// The module's load rules for `cfg` read from `path`; the scope when the
-/// config binds a generation that exists.
-pub(crate) fn binding_errors(cfg: &Config, path: &Path) -> (Vec<String>, Option<GenerationScope>) {
+/// The sandbox a `config:` / `spec:` pin reads; `None` for the other targets.
+fn pin_sandbox(target: &PinTarget) -> Option<&str> {
+    match target {
+        PinTarget::Config { sandbox, .. } | PinTarget::Spec { sandbox, .. } => Some(sandbox),
+        _ => None,
+    }
+}
+
+/// A `config:` / `spec:` pin over a config text; `None` for the other targets.
+fn pin_of_text(text: &str, target: &PinTarget) -> Option<Result<String, String>> {
+    match target {
+        PinTarget::Config { path, .. } => Some(config_pin(text, path)),
+        PinTarget::Spec { strategy, .. } => Some(spec_pin(text, strategy)),
+        _ => None,
+    }
+}
+
+/// The module's load rules for `cfg` read from `path` (`text` = the raw
+/// file text it was parsed from); the scope when the config binds a
+/// generation that exists.
+pub(crate) fn binding_errors(
+    cfg: &Config,
+    path: &Path,
+    text: &str,
+) -> (Vec<String>, Option<GenerationScope>) {
     let Some(binding) = &cfg.generation else {
         return (Vec::new(), None);
     };
@@ -345,7 +385,14 @@ pub(crate) fn binding_errors(cfg: &Config, path: &Path) -> (Vec<String>, Option<
     }
     if g.status == GenerationStatus::Frozen {
         for p in &g.pins {
-            match sandbox_pin(&dir, &p.target) {
+            // This sandbox's pins: the text just loaded (no re-read, no other
+            // copy); another sandbox's: its repo file.
+            let now = if sandbox.is_some() && pin_sandbox(&p.target) == sandbox.as_deref() {
+                pin_of_text(text, &p.target)
+            } else {
+                sandbox_pin(&dir, &p.target)
+            };
+            match now {
                 None => {}
                 Some(Ok(now)) if now == p.sha256 => {}
                 Some(Ok(now)) => errs.push(format!(

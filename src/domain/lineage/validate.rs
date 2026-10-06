@@ -8,19 +8,21 @@
 //! | references (fields, `record:` locators, lock rows) | `dangling_ref`, `inconsistent_ref` |
 //! | families · variants | parents, `[spec]` shape, preregistration |
 //! | experiments | windows, CIs, `holdout_missing`, `holdout_overlaps_development`, `forward_incomplete`, preregistration |
+//! | experiments of one family | `holdout_seen_before` (a CLEAN HOLDOUT overlapping another experiment's DEVELOPMENT that ran not after it; Warn under `split_by = "INSTRUMENTS"` or a same-day order), `window_unknown` (Warn: a CLEAN HOLDOUT / DEVELOPMENT window with an UNKNOWN bound) |
 //! | episodes | alternatives, incidents, `future_leakage` |
 //! | capabilities · generations | `binding_conflict`, `capability_version_missing`, frozen_at, commits, pins |
-//! | `locks.toml` | `frozen_manifest_changed`, `seal_mismatch` |
+//! | `locks.toml` | `frozen_manifest_changed` (`Registry::frozen_digest`: the manifest + its listed capability records), `seal_mismatch` |
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::episode::EpisodeKind;
 use super::experiment::{ExperimentKind, SplitBy, WindowRole};
 use super::generation::GenerationStatus;
+use super::query::enum_name;
 use super::registry::{label, Registry};
 use super::value::{
-    parse_seal_record, valid_commit, valid_id, windows_overlap, Binding, EvidenceRef, Locator,
-    RecordKind, TimeOrder, MAX_TITLE_CHARS, UNKNOWN,
+    parse_seal_record, valid_commit, valid_id, windows_overlap, Binding, EvidenceRef, Integrity,
+    Locator, RecordKind, TimeOrder, MAX_TITLE_CHARS, UNKNOWN,
 };
 use super::{Finding, Severity};
 use crate::domain::evidence::{valid_sha256, EvidenceClass};
@@ -326,19 +328,33 @@ impl Checks<'_> {
                 let mut missing = Vec::new();
                 if e.windows_of(WindowRole::Forward).next().is_none() {
                     missing.push("a FORWARD window");
+                } else if !e
+                    .windows_of(WindowRole::Forward)
+                    .any(|w| w.from.is_known() && w.to.is_known())
+                {
+                    missing.push("a FORWARD window with known bounds");
                 }
                 if e.validity.is_none() {
                     missing.push("a validity");
                 }
+                let forward_results: Vec<_> = e
+                    .results
+                    .iter()
+                    .filter(|r| r.class == EvidenceClass::ForwardPaper)
+                    .collect();
                 let forward_evidence = e
                     .evidence
                     .iter()
                     .any(|r| r.class == EvidenceClass::ForwardPaper)
-                    || e.results
-                        .iter()
-                        .any(|r| r.class == EvidenceClass::ForwardPaper);
+                    || !forward_results.is_empty();
                 if !forward_evidence {
                     missing.push("FORWARD_PAPER evidence");
+                } else if !forward_results.is_empty()
+                    && forward_results
+                        .iter()
+                        .all(|r| r.evidence == Locator::Unknown)
+                {
+                    missing.push("a FORWARD_PAPER result with known evidence");
                 }
                 if !missing.is_empty() {
                     self.err(
@@ -352,6 +368,83 @@ impl Checks<'_> {
                 self.prereg(RecordKind::Experiment, &e.id, &e.evidence);
             }
             self.evidence_refs(&at, &e.evidence);
+        }
+        self.holdouts_across_experiments();
+    }
+
+    /// A CLEAN holdout another experiment of the family developed on first
+    /// (`holdout_seen_before`); a CLEAN holdout / development window with an
+    /// UNKNOWN bound (`window_unknown`, Warn: nothing can be compared).
+    fn holdouts_across_experiments(&mut self) {
+        let reg = self.reg;
+        for e in reg.experiments.values() {
+            let at = label(RecordKind::Experiment, &e.id);
+            for (i, w) in e.windows.iter().enumerate() {
+                let checked = matches!(w.role, WindowRole::Holdout | WindowRole::Development);
+                if checked
+                    && w.integrity == Integrity::Clean
+                    && !(w.from.is_known() && w.to.is_known())
+                {
+                    self.warn(
+                        "window_unknown",
+                        &at,
+                        format!(
+                            "windows[{i}] {} {} → {} is CLEAN with an UNKNOWN bound: its overlap \
+                             with development cannot be checked",
+                            enum_name(&w.role),
+                            w.from,
+                            w.to
+                        ),
+                    );
+                }
+            }
+            for h in e
+                .windows_of(WindowRole::Holdout)
+                .filter(|w| w.integrity == Integrity::Clean)
+            {
+                for d_exp in reg
+                    .experiments
+                    .values()
+                    .filter(|d| d.family == e.family && d.id != e.id)
+                {
+                    let order = d_exp.ran_at.order(&e.ran_at);
+                    if matches!(order, TimeOrder::After | TimeOrder::Unknown) {
+                        continue;
+                    }
+                    for d in d_exp.windows_of(WindowRole::Development) {
+                        if windows_overlap((&d.from, &d.to), (&h.from, &h.to)) != Some(true) {
+                            continue;
+                        }
+                        let text = format!(
+                            "HOLDOUT {} → {} is CLEAN, but experiment `{}` (ran {}, not after \
+                             this one's {}) developed on {} → {}",
+                            h.from, h.to, d_exp.id, d_exp.ran_at, e.ran_at, d.from, d.to
+                        );
+                        if e.split_by == Some(SplitBy::Instruments) {
+                            self.warn(
+                                "holdout_seen_before",
+                                &at,
+                                format!(
+                                    "{text} — split_by INSTRUMENTS: scopes are text and cannot \
+                                     be compared"
+                                ),
+                            );
+                        } else if order == TimeOrder::Ambiguous && d_exp.ran_at != e.ran_at {
+                            self.warn(
+                                "holdout_seen_before",
+                                &at,
+                                format!("{text} — same day: give instants"),
+                            );
+                        } else {
+                            self.err(
+                                "holdout_seen_before",
+                                &at,
+                                format!("{text} — mark the window CONTAMINATED"),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -435,13 +528,51 @@ impl Checks<'_> {
                 );
             }
             let decided = ep.decision.decided_at;
-            if !ep.information.is_empty() && !decided.is_known() {
+            if !decided.is_known() {
                 self.err(
                     "future_leakage",
                     &at,
-                    "decision.decided_at is UNKNOWN: its information cannot be shown to precede it"
+                    "decision.decided_at is UNKNOWN: its context and information cannot be shown \
+                     to precede it"
                         .into(),
                 );
+            }
+            // The context is as of the decision or earlier; the action at it or later.
+            let as_of = ep.context.as_of;
+            match as_of.order(&decided) {
+                TimeOrder::After => self.err(
+                    "future_leakage",
+                    &at,
+                    format!("context.as_of {as_of} is after the decision at {decided}"),
+                ),
+                TimeOrder::Ambiguous if as_of != decided => self.warn(
+                    "future_leakage",
+                    &at,
+                    format!(
+                        "context.as_of {as_of} vs decision {decided}: not provably before — give instants"
+                    ),
+                ),
+                _ => {}
+            }
+            if let Some(executed) = ep.action.as_ref().and_then(|a| a.executed_at) {
+                match decided.order(&executed) {
+                    TimeOrder::After => self.err(
+                        "future_leakage",
+                        &at,
+                        format!(
+                            "action.executed_at {executed} is before the decision at {decided}"
+                        ),
+                    ),
+                    TimeOrder::Ambiguous if executed != decided => self.warn(
+                        "future_leakage",
+                        &at,
+                        format!(
+                            "action.executed_at {executed} vs decision {decided}: not provably \
+                             after — give instants"
+                        ),
+                    ),
+                    _ => {}
+                }
             }
             for (i, info) in ep.information.iter().enumerate() {
                 let what = format!("information[{i}] `{}`", info.item);
@@ -656,18 +787,19 @@ impl Checks<'_> {
         for g in reg.generations.values() {
             let gat = label(RecordKind::Generation, &g.id);
             let last = reg.locks.frozen.iter().rev().find(|f| f.generation == g.id);
-            let digest = reg.digests.get(&(RecordKind::Generation, g.id.clone()));
+            let digest = reg.frozen_digest(&g.id);
             match (last, digest) {
                 (None, _) if g.status == GenerationStatus::Frozen => self.err(
                     "frozen_manifest_changed",
                     &gat,
                     "FROZEN, but locks.toml has no [[frozen]] row for it".into(),
                 ),
-                (Some(row), Some(now)) if &row.manifest_sha256 != now => self.err(
+                (Some(row), Some(now)) if row.manifest_sha256 != now => self.err(
                     "frozen_manifest_changed",
                     &gat,
                     format!(
-                        "locks.toml freezes manifest {} (at {}); the file now hashes {now}",
+                        "locks.toml freezes {} (at {}); the manifest with its listed capability \
+                         records now hashes {now}",
                         row.manifest_sha256, row.frozen_at
                     ),
                 ),
@@ -709,8 +841,17 @@ impl Checks<'_> {
                 ),
                 _ => {}
             }
-            let outcome = reg.first_outcome(kind, &id);
+            let Some(outcome) = reg.first_outcome(kind, &id) else {
+                continue; // no experiment yet: nothing to precede
+            };
             match s.sealed_at.order(&outcome) {
+                TimeOrder::Unknown if !outcome.is_known() => self.warn(
+                    "seal_mismatch",
+                    &rat,
+                    "first outcome UNKNOWN (a FORWARD window without a known start, or an \
+                     experiment without ran_at): the seal cannot be shown to precede it"
+                        .into(),
+                ),
                 TimeOrder::After => self.err(
                     "seal_mismatch",
                     &rat,

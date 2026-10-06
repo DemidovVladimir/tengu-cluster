@@ -7,6 +7,7 @@
 //! | `config:<s>/<path>` · `spec:<s>/<strategy>` | `<repo>/sandboxes/<s>/config.toml` (`config/lineage.rs::sandbox_pin`) |
 //! | `skill:<name>` | `<repo>/skills/<name>/SKILL.md` |
 //! | `repo:<path>` | `<repo>/<path>` (a file) |
+//! | a sandbox's binding | `[generation]` of `<repo>/sandboxes/<s>/config.toml`; its `registry` resolved against that file, compared with the registry dir (canonical paths) |
 //!
 //! `<repo>` = the registry dir's parent.
 
@@ -15,11 +16,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::config::lineage::{repo_root, sandbox_pin};
+use crate::config::lineage::{declared_binding, repo_root, same_dir, sandbox_pin};
 use crate::domain::backtest::spec::KINDS;
 use crate::domain::lineage::pins::{bytes_sha256, schema_pin};
 use crate::domain::lineage::value::PinTarget;
-use crate::ports::lineage::ContractProbe;
+use crate::ports::lineage::{ContractProbe, SandboxBinding};
 
 /// Module table.
 pub(crate) struct RepoProbe {
@@ -81,6 +82,16 @@ impl ContractProbe for RepoProbe {
     fn strategy_kind_exists(&self, kind: &str) -> bool {
         KINDS.contains(&kind)
     }
+
+    fn sandbox_binding(&self, sandbox: &str) -> Result<Option<SandboxBinding>, String> {
+        Ok(
+            declared_binding(&self.registry_dir, sandbox)?.map(|(b, dir)| SandboxBinding {
+                generation: b.id,
+                registry: b.registry.display().to_string(),
+                same_registry: same_dir(&dir, &self.registry_dir),
+            }),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -116,5 +127,15 @@ mod tests {
         assert!(p.tool_exists("backtest") && p.tool_exists("paper_order"));
         assert!(!p.tool_exists("w2_news_probe"));
         assert!(p.strategy_kind_exists("event_window") && !p.strategy_kind_exists("news"));
+        let w1 = p.sandbox_binding("w1").unwrap().unwrap();
+        assert_eq!(
+            (
+                w1.generation.as_str(),
+                w1.registry.as_str(),
+                w1.same_registry
+            ),
+            ("W1", "../../registry", true)
+        );
+        assert!(p.sandbox_binding("nowhere").is_err());
     }
 }

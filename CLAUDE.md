@@ -314,11 +314,15 @@ These are not preferences. They're load-bearing.
   `lineage/generations/W1.toml` (an opt-in tool needs a capability — closed
   world) and recomputes its `config:` / `spec:` pins, so editing a pinned
   section (library specs, costs, splits, universes, `[risk]`, `[paper]`, rule W,
-  the Jev loop, agent models) fails the load (`pin_drift`). W2 work goes in new
-  sandboxes bound to a new generation; `lineage/locks.toml` is append-only.
-  Evidence: `tengu evidence snapshot` copies into a read-only vault
-  `<TENGU_HOME>/state/evidence/<id>/`; read old ledgers / day files there,
-  never through the store adapters (they migrate or purge on open). Phase 6+ of
+  the Jev loop, agent models) fails the load (`pin_drift`). The W1 lock covers
+  W1.toml and every capability record it lists — a binding added at the same
+  version fails the load too (`frozen_manifest_changed`); `verify --pins` wants
+  every listed sandbox to keep its `[generation]` (`sandbox_unbound`). W2 work
+  goes in new sandboxes bound to a new generation; `lineage/locks.toml` is
+  append-only. Evidence: `tengu evidence snapshot` copies into a read-only vault
+  `<TENGU_HOME>/state/evidence/<id>/` (a non-empty `-wal` is refused —
+  checkpoint first); read old ledgers / day files there, never through the
+  store adapters (they migrate or purge on open). Phase 6+ of
   `TENGU_ROADMAP.md` waits for the operator's APPROVE.
 - **History first (operator rule 2026-10-01)** — answer trading / strategy
   questions by backfilling public history and backtesting it (`tengu history

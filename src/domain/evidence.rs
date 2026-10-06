@@ -13,7 +13,7 @@
 //!
 //! | Rule | Value |
 //! |---|---|
-//! | Item path | relative, `/`-separated, no empty / `.` / `..` segment, unique; no item inside another |
+//! | Item path | relative, `/`-separated, no empty / `.` / `..` segment, unique — also ignoring ASCII case (APFS); no item inside another; never `MANIFEST.json` (any case) as its first segment |
 //! | File hash | sha256 of the bytes, 64 lowercase hex — never shortened |
 //! | Dir hash ([`tree_hash`]) | sha256 of the lines `"<sha256>  <relpath>\n"` of every regular file under the dir, sorted bytewise by relpath (`/`-separated) — what `shasum -a 256` prints, sorted |
 //! | Captured | `captured_at`, `manifest_sha256` and every item's `sha256` / `files` / `bytes` are all set, or none is (a plan) |
@@ -21,11 +21,14 @@
 // Consumers land with `tengu evidence` and `tengu lineage` (lineage P0–P5).
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::domain::canonical::sha256_hex;
+
+/// The vault's own manifest at its root: no item may take its name.
+pub const MANIFEST_NAME: &str = "MANIFEST.json";
 
 /// Where a figure's evidence sits in the development → forward ladder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -176,12 +179,30 @@ impl EvidenceRecord {
             errs.push("items: none".into());
         }
         let mut seen = BTreeSet::new();
+        let mut folded: BTreeMap<String, &str> = BTreeMap::new();
         for item in &self.items {
             if !valid_item_path(&item.path) {
                 errs.push(format!("item `{}`: not a vault-relative path", item.path));
             }
+            if item
+                .path
+                .split('/')
+                .next()
+                .is_some_and(|first| first.eq_ignore_ascii_case(MANIFEST_NAME))
+            {
+                errs.push(format!(
+                    "item `{}`: {MANIFEST_NAME} is the vault's own manifest",
+                    item.path
+                ));
+            }
             if !seen.insert(item.path.as_str()) {
                 errs.push(format!("item `{}`: listed twice", item.path));
+            } else if let Some(other) = folded.insert(item.path.to_lowercase(), &item.path) {
+                errs.push(format!(
+                    "item `{}` and item `{other}` differ only in case — one file on a \
+                     case-insensitive disk",
+                    item.path
+                ));
             }
             if item.source.is_empty() {
                 errs.push(format!("item `{}`: no source", item.path));
@@ -189,7 +210,8 @@ impl EvidenceRecord {
         }
         for a in &self.items {
             for b in &self.items {
-                if a.path != b.path && b.path.starts_with(&format!("{}/", a.path)) {
+                let (al, bl) = (a.path.to_lowercase(), b.path.to_lowercase());
+                if al != bl && bl.starts_with(&format!("{al}/")) {
                     errs.push(format!("item `{}` lies inside item `{}`", b.path, a.path));
                 }
             }
@@ -294,5 +316,55 @@ role = "ledger"
             "id = \"w\"\ntitle = \"t\"\nvault = \"w\"\nitems = []\nextra = 1\n",
         );
         assert!(unknown.is_err());
+    }
+
+    /// Review #19: an item named like the manifest, or two items one
+    /// case-insensitive disk folds together, would leave a half-made vault
+    /// that blocks every retry — refused before anything is copied.
+    #[test]
+    fn manifest_named_and_case_twin_items_are_refused() {
+        let plan: EvidenceRecord = toml::from_str(
+            r#"
+id = "w"
+title = "t"
+vault = "w"
+[[items]]
+path = "X/a.db"
+source = "/s/a.db"
+kind = "FILE"
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "ledger"
+"#,
+        )
+        .unwrap();
+        assert!(plan.validation_errors().is_empty());
+        for bad in ["MANIFEST.json", "manifest.JSON", "Manifest.json/x"] {
+            let mut r = plan.clone();
+            r.items[0].path = bad.into();
+            assert!(
+                r.validation_errors().iter().any(|e| e.contains("manifest")),
+                "{bad}: {:?}",
+                r.validation_errors()
+            );
+        }
+        let mut twins = plan.clone();
+        twins.items.push(EvidenceItem {
+            path: "x/a.db".into(),
+            ..plan.items[0].clone()
+        });
+        assert!(twins
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("differ only in case")));
+        let mut nested = plan.clone();
+        nested.items.push(EvidenceItem {
+            path: "x".into(),
+            ..plan.items[0].clone()
+        });
+        assert!(nested
+            .validation_errors()
+            .iter()
+            .any(|e| e.contains("lies inside")));
     }
 }

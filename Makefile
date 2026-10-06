@@ -5,7 +5,8 @@
 # With memory:    make up-memory          (+ Postgres/pgvector, image built with postgres_memory)
 #
 # SANDBOX=<name> mounts sandboxes/<name>/config.toml as the container's config
-# (TENGU_CONFIG) instead of ./config.toml. Pass the same SANDBOX to every
+# (TENGU_CONFIG = /opt/tengu/sandboxes/<name>/config.toml, TENGU_CONTAINER_CONFIG)
+# instead of ./config.toml (/opt/tengu/config.toml). Pass the same SANDBOX to every
 # make target of that stack (NETWORK is derived from it).
 # NETWORK defaults to that config's `[egress] network` (tor unless it says
 # "open"). tor uses docker-compose.tor.yml: tengu on an internal network whose
@@ -22,6 +23,9 @@
 SANDBOX ?=
 CONFIG_FILE := $(if $(SANDBOX),sandboxes/$(SANDBOX)/config.toml,config.toml)
 export TENGU_CONFIG_FILE := $(CONFIG_FILE)
+# Where the container sees it (TENGU_CONFIG): a sandbox at its own path, so its
+# name is detected and `[generation] registry = "../../lineage"` → /opt/tengu/lineage.
+export TENGU_CONTAINER_CONFIG := $(if $(SANDBOX),/opt/tengu/sandboxes/$(SANDBOX)/config.toml,/opt/tengu/config.toml)
 NETWORK ?= $(if $(shell grep -Eqs '^[[:space:]]*network[[:space:]]*=[[:space:]]*"open"' $(CONFIG_FILE) && echo y),open,tor)
 LYREBIRD_RS_DIR ?= ../lyrebird-rs
 # Compose resolves relative build contexts against deploy/tor/, so hand it an

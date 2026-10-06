@@ -7,7 +7,7 @@
 //!
 //! | Rule | Value |
 //! |---|---|
-//! | Source | `~/…` or absolute; a regular file, or a dir holding only dirs and regular files (a symlink, socket or fifo anywhere ⇒ refused before anything is created) |
+//! | Source | `~/…` or absolute; a regular file, or a dir holding only dirs and regular files (a symlink, socket or fifo anywhere ⇒ refused before anything is created); reported: its non-empty SQLite WALs (a FILE with the SQLite header → its `<db>-wal`; a DIR → every `*-wal` under it) — `snapshot` refuses them |
 //! | Copy | never over an existing vault file; the source is hashed before the copy, the copy after; different ⇒ `Err` (the source changed) |
 //! | Paths | vault-relative, `/`-separated, sorted bytewise |
 //! | `MANIFEST.json` | at the vault root, created new, not listed in itself |
@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 
+use super::live_wal;
 use crate::config::paths::expand_tilde;
 use crate::domain::evidence::{ItemKind, ManifestEntry};
 use crate::ports::evidence::{SourceInfo, Vault};
@@ -39,6 +40,14 @@ impl FsVault {
     pub(crate) fn at(root: PathBuf) -> Self {
         Self { root }
     }
+}
+
+/// The file starts with the SQLite header (`SQLite format 3\0`).
+fn is_sqlite(path: &Path) -> bool {
+    let mut head = [0u8; 16];
+    fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| &head == b"SQLite format 3\0")
 }
 
 /// sha256 hex + length of a file, streamed.
@@ -134,21 +143,42 @@ impl Vault for FsVault {
             fs::symlink_metadata(&path).with_context(|| format!("source {}", path.display()))?;
         let ft = meta.file_type();
         if ft.is_file() {
+            let live_wals = if is_sqlite(&path) {
+                live_wal(&path)
+                    .map(|w| w.display().to_string())
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             Ok(SourceInfo {
                 kind: ItemKind::File,
                 files: 1,
                 bytes: meta.len(),
+                path: path.display().to_string(),
+                live_wals,
             })
         } else if ft.is_dir() {
             let files = walk(&path)?;
+            let live_wals = files
+                .iter()
+                .filter(|(rel, len)| rel.ends_with("-wal") && *len > 0)
+                .map(|(rel, _)| path.join(rel).display().to_string())
+                .collect();
             Ok(SourceInfo {
                 kind: ItemKind::Dir,
                 files: files.len() as u64,
                 bytes: files.iter().map(|f| f.1).sum(),
+                path: path.display().to_string(),
+                live_wals,
             })
         } else {
             bail!("source {}: a symlink or special file", path.display())
         }
+    }
+
+    fn has_dir(&self, path: &str) -> bool {
+        fs::symlink_metadata(self.root.join(path)).is_ok_and(|m| m.is_dir())
     }
 
     fn create(&self) -> Result<()> {

@@ -14,7 +14,7 @@
 //! | `attempts [--state xlab]…` | every run dir → its variants or `UNREGISTERED`; holdout reads; unreadable dirs | — |
 //! | `report <family> --forward <experiment> [--state xlab]…` | the 21 Rule-W acceptance answers (handoff § 57) with their source fields | no such record |
 //! | `capabilities [--generation ID]` | every capability (class, version, permission, lifecycle, bindings, contract, generations) | no such generation |
-//! | `generation <ID>` | the generation, its lock and every pin OK / DRIFT / UNRESOLVED | no such generation |
+//! | `generation <ID>` | the generation, its frozen digest (manifest + listed capability records) against its lock, every pin OK / DRIFT / UNRESOLVED | no such generation |
 //! | `seal <variant:ID \| experiment:ID>` | appends `[[sealed]] record, sha256 (the file's digest), sealed_at (now)` to `locks.toml` | already sealed, not `preregistered = true`, its outcome already known, or the registry has errors on it |
 //!
 //! `--format text|json` on every view.
@@ -463,15 +463,17 @@ fn generation(dir: &Path, reg: &Registry, id: &str, format: Format) -> Result<()
     let probe = RepoProbe::new(dir);
     let pins = pin_status(reg, id, &probe).map_err(|e| anyhow!(e))?;
     let digest = reg.digests.get(&(RecordKind::Generation, id.to_string()));
+    let frozen = reg.frozen_digest(id);
     let lock = reg.locks.frozen.iter().rev().find(|f| f.generation == id);
-    let lock_status = match (lock, digest) {
+    let lock_status = match (lock, &frozen) {
         (None, _) => "NO_LOCK",
         (Some(l), Some(d)) if &l.manifest_sha256 == d => "OK",
         _ => "CHANGED",
     };
     if format == Format::Json {
         return print_json(&json!({
-            "generation": g, "digest": digest, "lock": lock, "lock_status": lock_status, "pins": pins,
+            "generation": g, "digest": digest, "frozen_digest": frozen, "lock": lock,
+            "lock_status": lock_status, "pins": pins,
         }));
     }
     println!(
@@ -492,8 +494,9 @@ fn generation(dir: &Path, reg: &Registry, id: &str, format: Format) -> Result<()
             .join(", ")
     );
     println!(
-        "manifest digest {} · lock {lock_status}{}",
+        "manifest digest {} · frozen digest (manifest + listed capabilities) {} · lock {lock_status}{}",
         digest.map_or("UNKNOWN", String::as_str),
+        frozen.as_deref().unwrap_or("UNKNOWN"),
         lock.map_or(String::new(), |l| format!(
             " ({} at {})",
             l.manifest_sha256, l.frozen_at
@@ -550,9 +553,17 @@ fn seal(dir: &Path, record: &str) -> Result<()> {
         );
     }
     let now = Time::At(chrono::Utc::now().timestamp_millis() / 1000 * 1000);
-    let outcome = reg.first_outcome(kind, &id);
-    if outcome.order(&now) == TimeOrder::NotAfter {
-        bail!("{mine}: its first outcome ({outcome}) is already past — a seal now is not a preregistration");
+    match reg.first_outcome(kind, &id) {
+        None => {}
+        Some(Time::Unknown) => bail!(
+            "{mine}: its first outcome is UNKNOWN (a FORWARD window start or a ran_at not \
+             given) — a seal cannot be shown to precede it; record the start first"
+        ),
+        Some(outcome) if outcome.order(&now) != TimeOrder::After => bail!(
+            "{mine}: its first outcome ({outcome}) is already past — a seal now is not a \
+             preregistration"
+        ),
+        Some(_) => {}
     }
     let digest = reg
         .digests

@@ -7,13 +7,14 @@
 //! | always | the `Registry::validate` table (`domain/lineage/mod.rs`) | fields, references, time, holdout, forward, locks |
 //! | `--pins` | `pin_drift` · `pin_unresolved` | every generation `[[pins]]` recomputes to its sha256; a library variant's `spec_sha256` = its `spec:<sandbox>/<strategy>` now; every `contract`, `cost_pin` and model `where` resolves |
 //! | `--pins` | `unknown_binding` | a `tool:` binding names a catalog tool, a `strategy_kind:` one a kind (`ContractProbe`) |
+//! | `--pins` | `sandbox_unbound` | every sandbox a FROZEN / ACTIVE generation lists has `[generation] id = <it>` in `<repo>/sandboxes/<s>/config.toml`, its `registry` resolving to the registry verified |
 //! | `--evidence` | `evidence_missing` · `evidence_mismatch` · `mutable_evidence` (Warn) · `evidence_planned` (Info) | every locator a record names resolves; its sha256 (the ref's, else the vault's record) equals the file's now; each captured evidence record's items and `MANIFEST.json` too (a record not captured yet: Info); a `state:` locator is live, mutable |
 //! | `--evidence` | `result_mismatch` · `extract_unsupported` (Warn) | a result with `extract` recomputes from its evidence through the first `ResultSource` that knows the kind: n exact, bps ± [`BPS_TOLERANCE`], USD ± [`USD_TOLERANCE`], t ± [`T_TOLERANCE`]; no source knows it → Warn |
 
 use serde::Serialize;
 
 use crate::domain::lineage::experiment::ResultRow;
-use crate::domain::lineage::generation::PinRole;
+use crate::domain::lineage::generation::{GenerationStatus, PinRole};
 use crate::domain::lineage::query::enum_name;
 use crate::domain::lineage::registry::label;
 use crate::domain::lineage::value::{Binding, Locator, PinTarget, RecordKind};
@@ -182,6 +183,41 @@ fn pin_findings(reg: &Registry, probe: &dyn ContractProbe) -> Vec<Finding> {
                 &at,
                 format!("spec `{target}` does not resolve: {e}"),
             )),
+        }
+    }
+    for g in reg.generations.values() {
+        if !matches!(
+            g.status,
+            GenerationStatus::Frozen | GenerationStatus::Active
+        ) {
+            continue;
+        }
+        let at = label(RecordKind::Generation, &g.id);
+        for s in &g.sandboxes {
+            let why = match probe.sandbox_binding(s) {
+                Err(e) => Some(e),
+                Ok(None) => Some("its config.toml has no [generation]".to_string()),
+                Ok(Some(b)) if b.generation != g.id => {
+                    Some(format!("its [generation] id is `{}`", b.generation))
+                }
+                Ok(Some(b)) if !b.same_registry => Some(format!(
+                    "its [generation] registry `{}` is not this registry",
+                    b.registry
+                )),
+                Ok(Some(_)) => None,
+            };
+            if let Some(why) = why {
+                out.push(Finding::error(
+                    "sandbox_unbound",
+                    &at,
+                    format!(
+                        "sandbox `{s}` is listed by {} generation `{}`, but {why} — it loads \
+                         without the generation's checks",
+                        enum_name(&g.status),
+                        g.id
+                    ),
+                ));
+            }
         }
     }
     for c in reg.capabilities.values() {

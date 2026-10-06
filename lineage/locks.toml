@@ -1,9 +1,11 @@
 # Lineage locks (docs/lineage-2026-10-06.md § 2): frozen generations and sealed
 # preregistrations. Append-only — a changed manifest needs a new generation (or a
 # new [[frozen]] row the operator approves), never an edited row.
+# [[frozen]] manifest_sha256 = the generation file with every capability record it
+# lists (Registry::frozen_digest; `tengu lineage generation <ID>` prints it).
 
 [[frozen]]
 generation = "W1"
-manifest_sha256 = "130930c58e06a6d4afd6a05406182a5ecb6a807e75ee7a81106f73239f3ffa84"
+manifest_sha256 = "a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43"
 frozen_at = "2026-10-06T10:44:23Z"
 commit = "2aa79717f5cfb1d8a8211672c50ecaed18b568a7"

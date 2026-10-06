@@ -2,7 +2,7 @@
 
 [[frozen]]
 generation = "W1"
-manifest_sha256 = "0272b3a042bed4dca49a17993cacf207fa0ef37d7190ddf637d5c0223baa21b8"
+manifest_sha256 = "db85f75c5e8c86681562797d3f9ba1bab78893f9e51d5f4021ae5aaba392ccf6"
 frozen_at = "2026-10-06T09:00:00Z"
 commit = "c80d5beb724ff7eaf2fc61a4928ff15aa9a7cd16"
 

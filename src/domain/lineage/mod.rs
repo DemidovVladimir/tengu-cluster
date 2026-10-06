@@ -22,15 +22,17 @@
 //! | `inconsistent_ref` | Error | a variant of another family than the record naming both |
 //! | `capability_version_missing` | Error | a generation names a capability version the registry does not hold |
 //! | `binding_conflict` | Error | one binding owned by two capabilities |
-//! | `future_leakage` | Error · Warn | an episode's information unknown-timed or after its decision (Warn: the same day, undecidable); a decision with information but an UNKNOWN time |
+//! | `future_leakage` | Error · Warn | an episode's information unknown-timed or after its decision; `decided_at` UNKNOWN; `context.as_of` after the decision; `action.executed_at` before it (Warn: the same day, undecidable) |
 //! | `holdout_missing` | Error | a HOLDOUT-class result, or a HOLDOUT_TEST experiment, without a HOLDOUT window |
 //! | `holdout_overlaps_development` | Error | DEVELOPMENT and HOLDOUT windows overlapping in time without `split_by = "INSTRUMENTS"` |
-//! | `forward_incomplete` | Error | a FORWARD_PAPER experiment without a FORWARD window, a `validity` or FORWARD_PAPER evidence |
-//! | `frozen_manifest_changed` | Error | a generation whose file digest differs from its last `[[frozen]]` row; a FROZEN one without a row |
-//! | `seal_mismatch` | Error · Warn | a sealed record changed since, or sealed after its first outcome (Warn: same day); a preregistered record neither sealed nor carrying a `prereg` evidence ref |
+//! | `holdout_seen_before` | Error · Warn | a CLEAN HOLDOUT overlapping a DEVELOPMENT window of another experiment of the family that ran not after it (Warn: `split_by = "INSTRUMENTS"`, or a same-day order) |
+//! | `window_unknown` | Warn | a CLEAN HOLDOUT / DEVELOPMENT window with an UNKNOWN bound |
+//! | `forward_incomplete` | Error | a FORWARD_PAPER experiment without a FORWARD window with known bounds, a `validity`, FORWARD_PAPER evidence, or with every FORWARD_PAPER result's evidence UNKNOWN |
+//! | `frozen_manifest_changed` | Error | a generation whose `Registry::frozen_digest` (its file + every capability record it lists) differs from its last `[[frozen]]` row; a FROZEN one without a row |
+//! | `seal_mismatch` | Error · Warn | a sealed record changed since, or sealed after its first outcome (a forward experiment's: its FORWARD window start; Warn: same day, or an UNKNOWN outcome time); a preregistered record neither sealed nor carrying a `prereg` evidence ref |
 //!
 //! Codes of `tengu lineage verify --pins / --evidence` (`application/lineage/verify.rs`):
-//! `pin_drift`, `pin_unresolved`, `unknown_binding`, `evidence_missing`,
+//! `pin_drift`, `pin_unresolved`, `unknown_binding`, `sandbox_unbound`, `evidence_missing`,
 //! `evidence_mismatch`, `mutable_evidence`, `evidence_planned`, `result_mismatch`,
 //! `extract_unsupported`; of the loader (`config/lineage.rs`): `load_error`.
 

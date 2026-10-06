@@ -8,8 +8,8 @@
 //! | `snapshot --record <file>` | copy the record's items into `<TENGU_HOME>/state/evidence/<vault>/` (refused when it exists or the record is captured), hash, `MANIFEST.json`, `chmod a-w`; rewrites the record with the captured fields |
 //! | `verify <record file>` | re-hash the vault: MATCH · MISMATCH · ABSENT · EXTRA; exit 1 unless all MATCH |
 //! | `coverage --history <dir>… --schema <s> --from --to --cadence-secs N [--bars <market.db> --interval 1m] [--instruments ids…]` | cadence slots, gaps, `LIVE_RECORDED` / `BACKFILLED` / `MISSING` intervals |
-//! | `grade --ledger <ledger.db> [--account A…]` | trades, totals, verdicts, 10 reconciliation checks per account; exit 1 when one fails |
-//! | `regrade --history <dir>… --anchor [--signal-at] --entry --exit --notional-usd N [--top-n N] [--min-abs-signal-bps X] [--direction fade\|follow] [--taker-fee-bps F \| --fees recorded] [--market-db <db>] [--instruments ids…] [--fill-book as-of\|next] [--compare-ledger <db> --compare-account A] [--expect-signals <file>]` | rule W or a variant from recorded rows (`domain/xm/regrade.rs`) |
+//! | `grade --ledger <ledger.db> [--account A…]` | trades, totals, verdicts, 12 reconciliation checks per account; exit 1 when one fails |
+//! | `regrade --history <dir>… --anchor [--signal-at [--allow-signal-after-entry]] --entry --exit --notional-usd N [--top-n N] [--min-abs-signal-bps X] [--direction fade\|follow] [--taker-fee-bps F \| --fees recorded] [--market-db <db>] [--instruments ids…] [--fill-book as-of\|next] [--compare-ledger <db> --compare-account A] [--expect-signals <file>]` | rule W or a variant from recorded rows (`domain/xm/regrade.rs`); universe default = every `mkt_ctx/1` key at the anchor or the signal; a signal after the entry refused unless allowed, then `LOOK-AHEAD: …` is line 1 (JSON `look_ahead`) |
 //!
 //! Every command takes `--format text|json`. Times: RFC 3339, epoch ms or a
 //! UTC date (`domain::marketdata::parse_time`); printed RFC 3339 UTC with
@@ -137,6 +137,9 @@ pub(super) struct RegradeArgs {
     /// Read the signal here instead of at --entry (a prereg that froze its signals at another sweep).
     #[arg(long)]
     signal_at: Option<String>,
+    /// Grade a --signal-at after --entry anyway (look-ahead: the output says LOOK-AHEAD).
+    #[arg(long)]
+    allow_signal_after_entry: bool,
     /// The N largest |s|; default every name.
     #[arg(long)]
     top_n: Option<usize>,
@@ -154,7 +157,7 @@ pub(super) struct RegradeArgs {
     /// market.db: backfilled funding when a recorded rate is missing.
     #[arg(long)]
     market_db: Option<PathBuf>,
-    /// Full ids; default every hl_book/1 key recorded around entry and exit.
+    /// Full ids; default every instrument with a mkt_ctx/1 row at the anchor or the signal.
     #[arg(long, num_args = 1..)]
     instruments: Vec<String>,
     #[arg(long, value_enum, default_value_t = FillBookArg::AsOf)]
@@ -618,12 +621,14 @@ fn regrade(a: RegradeArgs) -> Result<()> {
     let h = DayFiles::new(a.history.clone());
     let market = a.market_db.clone().map(MarketDb::open).transpose()?;
     let universe = if a.instruments.is_empty() {
-        uc::regrade_universe(&h, &inst)?
+        uc::regrade_universe(&h, &inst, &lim)?
     } else {
         a.instruments.clone()
     };
     if universe.is_empty() {
-        bail!("no instruments: none given and no hl_book/1 key recorded around entry and exit");
+        bail!(
+            "no instruments: none given and no mkt_ctx/1 row recorded at the anchor or the signal"
+        );
     }
     let r = uc::regrade(
         &h,
@@ -632,6 +637,7 @@ fn regrade(a: RegradeArgs) -> Result<()> {
         &rule,
         &inst,
         &lim,
+        a.allow_signal_after_entry,
     )?;
     let ledger = match (&a.compare_ledger, &a.compare_account) {
         (Some(path), Some(account)) => {
@@ -660,6 +666,7 @@ fn regrade(a: RegradeArgs) -> Result<()> {
         Format::Json => println!(
             "{}",
             serde_json::to_string_pretty(&json!({
+                "look_ahead": r.look_ahead,
                 "history": crate::ports::evidence::RecordedHistory::describe(&h),
                 "market_db": market.as_ref().map(|m| m.describe()),
                 "regrade": r,
@@ -744,7 +751,11 @@ fn regrade(a: RegradeArgs) -> Result<()> {
 fn regrade_text(r: &Regrade, h: &DayFiles, market: Option<&MarketDb>) -> String {
     use crate::ports::evidence::RecordedHistory;
     let s = &r.summary;
-    let mut out = format!(
+    let mut out = r
+        .look_ahead
+        .as_ref()
+        .map_or(String::new(), |l| format!("{l}\n"));
+    out.push_str(&format!(
         "history {}\nmarket.db {}\nanchor {}  signal {}  entry {}  exit {}\nrule {:?}  top_n {}  |s| ≥ {}  ${} per name  fees {:?}  fill book {:?}\n",
         h.describe(),
         market.map_or("none".into(), |m| m.describe()),
@@ -758,7 +769,7 @@ fn regrade_text(r: &Regrade, h: &DayFiles, market: Option<&MarketDb>) -> String 
         r.rule.notional_usd,
         r.rule.fees,
         r.limits.book_pick
-    );
+    ));
     out.push_str(&format!(
         "names {}  signals {}  selected {}  graded {}  MISSING {}\nmean net bps {}  mean gross bps {}  net USD {:.6}  gross {:.6}  fees {:.6}  funding received {:.6}  positive {} / {}\nmean slippage vs mid: entry {} bps, exit {} bps  partial entries {}\n",
         s.names,

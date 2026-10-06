@@ -3,8 +3,8 @@
 //!
 //! | Row | Fields | Rule (`Registry::validate`) |
 //! |---|---|---|
-//! | `[[frozen]]` | `generation`, `manifest_sha256`, `frozen_at`, `commit?` | the generation's last row equals the canonical sha256 of its file (TOML → JSON, `pins::toml_digest`), else `frozen_manifest_changed`; a `FROZEN` generation without a row too |
-//! | `[[sealed]]` | `record` (`variant:<id>` · `experiment:<id>`), `sha256`, `sealed_at` | the record's file digest now = `sha256`, and `sealed_at` ≤ its first outcome (experiment `ran_at`, a forward experiment's FORWARD window end; a variant: its experiments'), else `seal_mismatch` |
+//! | `[[frozen]]` | `generation`, `manifest_sha256`, `frozen_at`, `commit?` | the generation's last row equals `Registry::frozen_digest` — the canonical sha256 of its file's digest (TOML → JSON, `pins::toml_digest`) with the digest of every capability record it lists — else `frozen_manifest_changed`; a `FROZEN` generation without a row too |
+//! | `[[sealed]]` | `record` (`variant:<id>` · `experiment:<id>`), `sha256`, `sealed_at` | the record's file digest now = `sha256`, and `sealed_at` ≤ its first outcome (experiment `ran_at`, a forward experiment's FORWARD window **start** — outcomes accrue from the first entry; a variant: the earliest of its experiments'), else `seal_mismatch`; an outcome time UNKNOWN: `tengu lineage seal` refuses, a seal row warns |
 
 use serde::{Deserialize, Serialize};
 

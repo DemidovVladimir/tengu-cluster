@@ -16,11 +16,12 @@ Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568
 | P1 | inventory, gap analysis, 11 known defects; 1,514 unit tests + offline suites green; 8 of 10 recorded xlab runs + the Jev gate replay byte-identical; W1 manifest `lineage/generations/W1.toml` (37 pins) frozen in `lineage/locks.toml`; tags `w1-forward-2026-10-02` (`6fcb455bae5553e2d51390e4cedd334779ca0d9c`) + `w1-forward-config-2026-10-02` (local, not pushed) | `docs/w1-inventory-2026-10-06.md` |
 | P2–P4 | `lineage/` registry (14 families, 41 variants, 30 experiments, 3 episodes, 8 incidents) + `tengu lineage verify / show / trace / family / attempts / report / capabilities / generation / seal` | `docs/lineage-2026-10-06.md` |
 | P5 | 17 capabilities; `[generation] id = "W1"` in `sandboxes/xlab` + `xmarket-weekend` — refused at load: a non-W1 opt-in tool, an unlisted sandbox, a drifted pin; `backtest` refuses a kind outside the generation | same, § 4 |
+| Review fixes | branch `feature/w1-review-fixes`: the W1 lock now covers its capability records (row recomputed: `a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43`); `sandbox_unbound`; live `-wal` refused (readers + snapshot); forward seal = window start; `holdout_seen_before` / `window_unknown`; grade checks `funding_qty` / `funding_hours` (vault: 12 / 12 PASS both accounts); regrade look-ahead flag + `mkt_ctx/1` universe; Docker mounts `SANDBOX=<s>` at its own path; minors #11 #14 #16 #18 #19 #21–#23; #12 #13 #15 #17 #20 #24 = known limits | `docs/lineage-2026-10-06.md` § 6 |
 
 | Open | Note |
 |---|---|
 | PRs #25 / #26 | still open; neither touches a W1 pin (#26 adds unpinned specs of an available kind) |
-| Docker | a bound sandbox loads `lineage/` (`COPY lineage` added); a compose file that mounts only `config.toml` fails closed |
+| Docker | a bound sandbox loads `lineage/` (`COPY lineage` added); `make up SANDBOX=<s>` mounts at `/opt/tengu/sandboxes/<s>/config.toml` (`TENGU_CONTAINER_CONFIG`) so `../../lineage` resolves |
 | Known defects D1–D11 | `docs/w1-inventory-2026-10-06.md` § 5 — proposed for P6 |
 
 ---

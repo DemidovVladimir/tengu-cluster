@@ -6,7 +6,7 @@
 //!
 //! | Port | Does | Impl |
 //! |---|---|---|
-//! | [`Vault`] | the one write path: create `<TENGU_HOME>/state/evidence/<vault>/` once, copy items in (sha256 of the copy = of the source), list + hash vault files, `MANIFEST.json`, `chmod a-w` | `evidence/vault.rs` |
+//! | [`Vault`] | the one write path: create `<TENGU_HOME>/state/evidence/<vault>/` once, inspect each source (kind, files, non-empty SQLite WALs), copy items in (sha256 of the copy = of the source), list + hash vault files, `MANIFEST.json`, `chmod a-w` | `evidence/vault.rs` |
 //! | [`LedgerSource`] | every row of a paper `ledger.db` the grade reads (`domain::xm::grade::LedgerRows`), schema of binary 6fcb455 or later | `evidence/ledger_reader.rs` |
 //! | [`RecordedHistory`] | recorder day files (`obs_history`) over one or more dirs: instants per schema, rows per key and time range | `evidence/recorded.rs` |
 //! | [`BackfillSource`] | `market.db` bars and funding, read-only | `evidence/recorded.rs` |
@@ -20,11 +20,17 @@ use crate::domain::observation::{Features, ObsStatus};
 use crate::domain::xm::grade::LedgerRows;
 
 /// A source as found before the copy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceInfo {
     pub kind: ItemKind,
     pub files: u64,
     pub bytes: u64,
+    /// The source path, `~` expanded.
+    pub path: String,
+    /// Non-empty SQLite WALs: a FILE that is a SQLite database → its
+    /// `<db>-wal` sibling; a DIR → every `*-wal` file under it. Their rows
+    /// are invisible to the vault's immutable readers.
+    pub live_wals: Vec<String>,
 }
 
 pub(crate) trait Vault {
@@ -33,8 +39,11 @@ pub(crate) trait Vault {
     /// The vault dir exists (a snapshot refuses it).
     fn exists(&self) -> bool;
     /// What `source` (`~/…` or absolute) is: a regular file or a dir of
-    /// regular files only (a symlink or special file anywhere ⇒ `Err`).
+    /// regular files only (a symlink or special file anywhere ⇒ `Err`), and
+    /// the non-empty WALs it carries ([`SourceInfo::live_wals`]).
     fn inspect_source(&self, source: &str) -> anyhow::Result<SourceInfo>;
+    /// `<vault>/<path>` is a directory (an item dir with no files).
+    fn has_dir(&self, path: &str) -> bool;
     /// Create the vault dir; `Err` when it exists.
     fn create(&self) -> anyhow::Result<()>;
     /// Copy `source` to `<vault>/<path>`; one entry per copied file

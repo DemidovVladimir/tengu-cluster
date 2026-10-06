@@ -2,7 +2,7 @@
 #
 # Usage (prefer the Makefile — it picks the right file set):
 #   make up                     # ./config.toml; Tor unless its [egress] network = "open" (docs/egress-2026-09-16.md)
-#   make up SANDBOX=unlimited   # sandboxes/unlimited/config.toml instead (TENGU_CONFIG_FILE below)
+#   make up SANDBOX=unlimited   # sandboxes/unlimited/config.toml instead, mounted at its own path (TENGU_CONFIG_FILE / TENGU_CONTAINER_CONFIG below)
 #   make up-memory              # + Postgres/pgvector (image built with postgres_memory)
 #   docker compose --profile postgres-memory up -d postgres-memory   # DB only (native binary)
 #
@@ -30,13 +30,17 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - TENGU_CONFIG=/opt/tengu/config.toml   # honoured by the binary; skills/ + sandboxes/ are baked into the image
+      # honoured by the binary; skills/ + sandboxes/ + lineage/ are baked into the image.
+      # TENGU_CONTAINER_CONFIG (Makefile): /opt/tengu/config.toml, or with SANDBOX=<name>
+      # /opt/tengu/sandboxes/<name>/config.toml — the sandbox name is detected and its
+      # `[generation] registry = "../../lineage"` resolves to /opt/tengu/lineage
+      - TENGU_CONFIG=${TENGU_CONTAINER_CONFIG:-/opt/tengu/config.toml}
       - TENGU_HOME=/opt/tengu/data
       - TENGU_MEMORY_DATABASE_URL=${TENGU_MEMORY_DATABASE_URL:-postgres://tengu:tengu@postgres-memory:5432/tengu_memory}
       - RUST_LOG=${RUST_LOG:-info}
     volumes:
       # TENGU_CONFIG_FILE = config.toml or sandboxes/<name>/config.toml (Makefile SANDBOX=)
-      - ./${TENGU_CONFIG_FILE:-config.toml}:/opt/tengu/config.toml:ro
+      - ./${TENGU_CONFIG_FILE:-config.toml}:${TENGU_CONTAINER_CONFIG:-/opt/tengu/config.toml}:ro
       - tengu-data:/opt/tengu/data
     ports:
       - "${TENGU_WEBHOOK_PORT:-7080}:7080"

@@ -6,6 +6,7 @@
 //! |---|---|
 //! | `verify` on the fixture | exit 0, `0 error(s), 0 warning(s)` |
 //! | `verify` on a copy whose frozen W1 manifest changed | exit 1, `frozen_manifest_changed` naming `generation/W1` and both hashes in full |
+//! | `verify` on a copy where a capability W1 lists gained a binding (same version) | exit 1, `frozen_manifest_changed` on `generation/W1` |
 //! | a new preregistered variant in a copy | `verify` exit 1 (`seal_mismatch`); `seal variant:<id>` appends the row; `verify` exit 0; a second `seal` refused |
 //! | `report rule_w --forward rule_w.forward --format json` | 21 answers, none `UNKNOWN` |
 //! | `trace ep.recorder_gap` | the start marked, its family and incident shown |
@@ -15,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const W1_LOCK: &str = "0272b3a042bed4dca49a17993cacf207fa0ef37d7190ddf637d5c0223baa21b8";
+const W1_LOCK: &str = "db85f75c5e8c86681562797d3f9ba1bab78893f9e51d5f4021ae5aaba392ccf6";
 
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lineage/registry")
@@ -118,6 +119,34 @@ fn a_changed_frozen_manifest_fails_verify() {
     let findings: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(findings[0]["code"], "frozen_manifest_changed");
     assert_eq!(findings[0]["severity"], "ERROR");
+}
+
+/// Review #1: W1 lists `cap.backtest`; a strategy kind added to it at the
+/// same version widens W1 — the lock covers the capability records.
+#[test]
+fn a_listed_capability_widened_at_the_same_version_fails_verify() {
+    let (tmp, reg) = copy();
+    let cap = reg.join("capabilities/cap.backtest.toml");
+    let src = std::fs::read_to_string(&cap).unwrap();
+    std::fs::write(
+        &cap,
+        src.replace(
+            "bindings = [\"tool:backtest\"]",
+            "bindings = [\"tool:backtest\", \"strategy_kind:pair_spread\"]",
+        ),
+    )
+    .unwrap();
+    let o = tengu(
+        tmp.path(),
+        &["lineage", "verify", "--registry", reg.to_str().unwrap()],
+    );
+    let out = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.contains("frozen_manifest_changed") && l.contains("generation/W1")),
+        "{out}"
+    );
 }
 
 #[test]

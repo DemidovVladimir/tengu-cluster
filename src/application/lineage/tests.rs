@@ -20,6 +20,7 @@ use crate::domain::lineage::value::{Binding, Locator, PinTarget, RecordKind, Tim
 use crate::domain::lineage::{Finding, Registry, Severity};
 use crate::ports::lineage::{
     AttemptSource, ContractProbe, EvidenceResolver, Extracted, Resolution, ResultSource,
+    SandboxBinding,
 };
 
 fn fixture_dir() -> PathBuf {
@@ -175,9 +176,14 @@ struct Fake {
     tools: BTreeSet<String>,
     files: BTreeMap<String, Resolution>,
     extracted: Option<Extracted>,
+    /// Sandbox → its declared `[generation]` (absent = none declared).
+    bindings: BTreeMap<String, SandboxBinding>,
 }
 
 impl ContractProbe for Fake {
+    fn sandbox_binding(&self, sandbox: &str) -> Result<Option<SandboxBinding>, String> {
+        Ok(self.bindings.get(sandbox).cloned())
+    }
     fn pin_sha256(&self, target: &PinTarget) -> Result<String, String> {
         self.pins
             .get(&target.to_string())
@@ -218,6 +224,16 @@ fn honest_probe(r: &Registry) -> Fake {
     for g in r.generations.values() {
         for m in &g.models {
             f.pins.insert(m.location.to_string(), Ok("a".repeat(64)));
+        }
+        for s in &g.sandboxes {
+            f.bindings.insert(
+                s.clone(),
+                SandboxBinding {
+                    generation: g.id.clone(),
+                    registry: "../../registry".into(),
+                    same_registry: true,
+                },
+            );
         }
     }
     for c in r.capabilities.values() {
@@ -290,6 +306,63 @@ fn verify_pins_flags_drift_unresolved_and_unknown_bindings() {
     assert!(found
         .iter()
         .any(|f| f.code == "pin_drift" && f.record == "variant/overnight_follow.base"));
+}
+
+/// Review #2: W1 (FROZEN) lists `w1`; its config dropping `[generation]`,
+/// naming another generation or another registry loads unchecked —
+/// `verify --pins` says so. W2-SIM is a CANDIDATE: not required.
+#[test]
+fn a_listed_sandbox_without_its_binding_fails_verify_pins() {
+    let r = fixture();
+    let none = Fake::default();
+    let opts = VerifyOpts {
+        pins: true,
+        evidence: false,
+    };
+    let unbound = |probe: &Fake| -> Vec<Finding> {
+        verify(&r, opts, probe, &none, &[])
+            .into_iter()
+            .filter(|f| f.code == "sandbox_unbound")
+            .collect()
+    };
+    let mut probe = honest_probe(&r);
+    assert_eq!(unbound(&probe), vec![]);
+    probe.bindings.remove("w2sim");
+    assert_eq!(
+        unbound(&probe),
+        vec![],
+        "a CANDIDATE's sandbox may be unbound"
+    );
+    probe.bindings.remove("w1");
+    let found = unbound(&probe);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].severity, Severity::Error);
+    assert_eq!(found[0].record, "generation/W1");
+    assert!(
+        found[0].message.contains("sandbox `w1`") && found[0].message.contains("no [generation]")
+    );
+    for (generation, same_registry, says) in [
+        ("W2-SIM", true, "id is `W2-SIM`"),
+        (
+            "W1",
+            false,
+            "registry `../../lineage-copy` is not this registry",
+        ),
+    ] {
+        probe.bindings.insert(
+            "w1".into(),
+            SandboxBinding {
+                generation: generation.into(),
+                registry: "../../lineage-copy".into(),
+                same_registry,
+            },
+        );
+        let found = unbound(&probe);
+        assert!(
+            found.len() == 1 && found[0].message.contains(says),
+            "{found:#?}"
+        );
+    }
 }
 
 #[test]

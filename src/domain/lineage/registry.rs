@@ -6,12 +6,13 @@
 //! | Piece | Holds |
 //! |---|---|
 //! | records | one `BTreeMap<id, record>` per kind; evidence records are `domain/evidence.rs`'s |
-//! | `digests` | `(kind, id)` → `pins::toml_digest` of the record's file: what `[[frozen]]` and `[[sealed]]` rows pin |
+//! | `digests` | `(kind, id)` → `pins::toml_digest` of the record's file: what `[[sealed]]` rows pin |
+//! | [`Registry::frozen_digest`] | what a `[[frozen]]` row pins: the canonical sha256 of `{"manifest": <the generation file's digest>, "capabilities": {<id>: <its file's digest, null when absent>}}` over the capabilities it lists — a listed capability edited at the same version changes it |
 //! | [`Registry::locator_uses`] | every locator a record names (field path + recorded sha256): what `verify --evidence` resolves |
 
 use std::collections::BTreeMap;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::capability::Capability;
 use super::episode::Episode;
@@ -23,6 +24,7 @@ use super::locks::Locks;
 use super::value::{EvidenceRef, Locator, RecordKind, Time};
 use super::variant::Variant;
 use super::Finding;
+use crate::domain::canonical::canonical_sha256;
 use crate::domain::evidence::EvidenceRecord;
 
 /// `(kind, id)`.
@@ -121,23 +123,56 @@ impl Registry {
         out
     }
 
-    /// The first outcome a seal must precede: an experiment's
-    /// `outcome_at`, a variant's earliest over its experiments.
-    pub fn first_outcome(&self, kind: RecordKind, id: &str) -> Time {
+    /// Module table: the digest a generation's `[[frozen]]` row locks;
+    /// `None` without the generation's file digest.
+    pub fn frozen_digest(&self, generation: &str) -> Option<String> {
+        let manifest = self
+            .digests
+            .get(&(RecordKind::Generation, generation.to_string()))?;
+        let g = self.generations.get(generation)?;
+        let capabilities: serde_json::Map<String, Value> = g
+            .capabilities
+            .iter()
+            .map(|c| {
+                let digest = self
+                    .digests
+                    .get(&(RecordKind::Capability, c.id.clone()))
+                    .map_or(Value::Null, |d| Value::String(d.clone()));
+                (c.id.clone(), digest)
+            })
+            .collect();
+        Some(canonical_sha256(
+            &json!({"manifest": manifest, "capabilities": capabilities}),
+        ))
+    }
+
+    /// The first outcome a seal must precede: an experiment's `outcome_at`
+    /// (a forward one: its FORWARD window start); a variant's earliest over
+    /// its experiments, UNKNOWN when any of theirs is. `None` = a variant
+    /// with no experiment yet: no outcome exists.
+    pub fn first_outcome(&self, kind: RecordKind, id: &str) -> Option<Time> {
         match kind {
-            RecordKind::Experiment => self
-                .experiments
-                .get(id)
-                .map_or(Time::Unknown, Experiment::outcome_at),
-            RecordKind::Variant => self
-                .experiments
-                .values()
-                .filter(|e| e.variant == id)
-                .map(Experiment::outcome_at)
-                .filter(Time::is_known)
-                .min_by_key(|t| t.sort_key())
-                .unwrap_or(Time::Unknown),
-            _ => Time::Unknown,
+            RecordKind::Experiment => Some(
+                self.experiments
+                    .get(id)
+                    .map_or(Time::Unknown, Experiment::outcome_at),
+            ),
+            RecordKind::Variant => {
+                let times: Vec<Time> = self
+                    .experiments
+                    .values()
+                    .filter(|e| e.variant == id)
+                    .map(Experiment::outcome_at)
+                    .collect();
+                if times.is_empty() {
+                    None
+                } else if times.iter().any(|t| !t.is_known()) {
+                    Some(Time::Unknown)
+                } else {
+                    times.into_iter().min_by_key(Time::sort_key)
+                }
+            }
+            _ => Some(Time::Unknown),
         }
     }
 
@@ -247,7 +282,7 @@ pub(crate) mod tests {
     use crate::domain::lineage::experiment::{SplitBy, WindowRole};
     use crate::domain::lineage::locks::{Frozen, Sealed};
     use crate::domain::lineage::pins::toml_digest;
-    use crate::domain::lineage::value::UNKNOWN;
+    use crate::domain::lineage::value::{Integrity, UNKNOWN};
     use crate::domain::lineage::Severity;
 
     /// A minimal valid registry: one family, a root variant, a backtest with
@@ -419,8 +454,7 @@ strategy_impact_note = "outside the window"
         )
         .unwrap();
         r.incidents.insert(inc.id.clone(), inc);
-        let cap: Capability = toml::from_str(
-            r#"
+        let cap_text = r#"
 id = "cap"
 title = "weekend window"
 class = "CAPITAL"
@@ -429,10 +463,13 @@ permission = "RESEARCH"
 lifecycle = "FORWARD_PAPER"
 contract = "tool_schema:backtest"
 bindings = ["strategy_kind:weekend_window", "tool:backtest"]
-"#,
-        )
-        .unwrap();
+"#;
+        let cap: Capability = toml::from_str(cap_text).unwrap();
         r.capabilities.insert(cap.id.clone(), cap);
+        r.digests.insert(
+            (RecordKind::Capability, "cap".into()),
+            toml_digest(cap_text).unwrap(),
+        );
         let g_text = r#"
 id = "G1"
 title = "generation one"
@@ -446,12 +483,13 @@ version = 1
 "#;
         let g: Generation = toml::from_str(g_text).unwrap();
         r.generations.insert(g.id.clone(), g);
-        let digest = toml_digest(g_text).unwrap();
-        r.digests
-            .insert((RecordKind::Generation, "G1".into()), digest.clone());
+        r.digests.insert(
+            (RecordKind::Generation, "G1".into()),
+            toml_digest(g_text).unwrap(),
+        );
         r.locks.frozen.push(Frozen {
             generation: "G1".into(),
-            manifest_sha256: digest,
+            manifest_sha256: r.frozen_digest("G1").unwrap(),
             frozen_at: "2026-10-06".parse().unwrap(),
             commit: None,
         });
@@ -583,6 +621,90 @@ version = 1
         fires(&r, "forward_incomplete");
     }
 
+    /// Review #22: a forward result row with UNKNOWN evidence, or a FORWARD
+    /// window UNKNOWN → UNKNOWN, is not a complete forward record.
+    #[test]
+    fn a_forward_record_with_unknown_evidence_or_bounds_is_incomplete() {
+        let mut r = minimal();
+        r.experiments.get_mut("fw").unwrap().results[0].evidence = Locator::Unknown;
+        fires(&r, "forward_incomplete");
+        let mut r = minimal();
+        let w = &mut r.experiments.get_mut("fw").unwrap().windows[0];
+        w.from = Time::Unknown;
+        w.to = Time::Unknown;
+        fires(&r, "forward_incomplete");
+    }
+
+    /// Review #6: a second experiment of the family developed on months the
+    /// first one calls a CLEAN holdout, and ran before it.
+    #[test]
+    fn a_clean_holdout_another_experiment_developed_on_first_is_flagged() {
+        let with_dev = |ran_at: &str| {
+            let mut r = minimal();
+            let mut d = r.experiments["bt"].clone();
+            d.id = "bt.early".into();
+            d.ran_at = ran_at.parse().unwrap();
+            d.windows.retain(|w| w.role == WindowRole::Development);
+            d.windows[0].from = "2026-08-01".parse().unwrap();
+            d.windows[0].to = "2026-09-01".parse().unwrap();
+            d.results.clear();
+            r.experiments.insert(d.id.clone(), d);
+            r
+        };
+        let r = with_dev("2026-09-15T00:00:00Z");
+        let found = r.validate();
+        let hit: Vec<_> = found
+            .iter()
+            .filter(|f| f.code == "holdout_seen_before")
+            .collect();
+        assert!(
+            hit.len() == 1
+                && hit[0].severity == Severity::Error
+                && hit[0].record == "experiment/bt",
+            "{found:#?}"
+        );
+        assert!(hit[0].message.contains("bt.early"), "{}", hit[0].message);
+        // Developed after the holdout was read: no finding.
+        assert_eq!(codes(&with_dev("2026-10-02T00:00:00Z")), vec![]);
+        // Split by instruments: the scopes are text — a warning.
+        let mut r = with_dev("2026-09-15T00:00:00Z");
+        r.experiments.get_mut("bt").unwrap().split_by = Some(SplitBy::Instruments);
+        assert_eq!(
+            codes(&r),
+            vec![(Severity::Warn, "holdout_seen_before".into())]
+        );
+        // Marked CONTAMINATED: nothing to flag.
+        let mut r = with_dev("2026-09-15T00:00:00Z");
+        r.experiments.get_mut("bt").unwrap().windows[1].integrity = Integrity::Contaminated;
+        assert_eq!(codes(&r), vec![]);
+        // A CLEAN holdout with an UNKNOWN bound cannot be checked: a warning.
+        let mut r = minimal();
+        r.experiments.get_mut("bt").unwrap().windows[1].from = Time::Unknown;
+        assert_eq!(codes(&r), vec![(Severity::Warn, "window_unknown".into())]);
+    }
+
+    /// Review #21: the context is as of the decision or before; the action
+    /// at it or after; the decision time is known.
+    #[test]
+    fn an_episode_context_after_or_action_before_its_decision_leaks() {
+        let mut r = minimal();
+        r.episodes.get_mut("ep").unwrap().context.as_of = "2026-10-05T14:00:00Z".parse().unwrap();
+        r.episodes.get_mut("ep").unwrap().information.clear();
+        fires(&r, "future_leakage");
+        let mut r = minimal();
+        r.episodes.get_mut("ep").unwrap().action = Some(super::super::episode::ActionTaken {
+            executed: true,
+            executed_at: Some("2026-10-04T21:00:00Z".parse().unwrap()),
+            evidence: None,
+        });
+        fires(&r, "future_leakage");
+        let mut r = minimal();
+        let ep = r.episodes.get_mut("ep").unwrap();
+        ep.information.clear();
+        ep.decision.decided_at = Time::Unknown;
+        fires(&r, "future_leakage");
+    }
+
     #[test]
     fn locks_freeze_and_seal() {
         let mut r = minimal();
@@ -614,6 +736,76 @@ version = 1
         let mut late = r.clone();
         late.locks.sealed[0].sealed_at = "2026-10-06T00:00:00Z".parse().unwrap();
         fires(&late, "seal_mismatch");
+    }
+
+    /// Review #5: a forward experiment's outcomes accrue from its first
+    /// entry — a seal after the FORWARD window start (here: 16 h into the
+    /// weekend, before its end) is late; an unknown start cannot be sealed.
+    #[test]
+    fn a_forward_seal_after_the_window_start_is_late() {
+        let mut r = minimal();
+        r.experiments.get_mut("fw").unwrap().preregistered = true;
+        r.digests
+            .insert((RecordKind::Experiment, "fw".into()), "c".repeat(64));
+        r.locks.sealed.push(Sealed {
+            record: "experiment:fw".into(),
+            sha256: "c".repeat(64),
+            sealed_at: "2026-10-03T12:00:00Z".parse().unwrap(),
+        });
+        fires(&r, "seal_mismatch");
+        assert_eq!(
+            r.first_outcome(RecordKind::Experiment, "fw"),
+            Some("2026-10-02T20:00:00Z".parse().unwrap())
+        );
+        // The variant's first outcome is its forward experiment's start.
+        assert_eq!(
+            r.first_outcome(RecordKind::Variant, "var"),
+            Some("2026-10-01T10:00:00Z".parse().unwrap()),
+            "the backtest ran earlier"
+        );
+        r.experiments.get_mut("fw").unwrap().windows[0].from = Time::Unknown;
+        assert_eq!(
+            r.first_outcome(RecordKind::Experiment, "fw"),
+            Some(Time::Unknown)
+        );
+        assert_eq!(
+            r.first_outcome(RecordKind::Variant, "var"),
+            Some(Time::Unknown)
+        );
+        assert!(r.validate().iter().any(|f| f.code == "seal_mismatch"
+            && f.severity == Severity::Warn
+            && f.message.contains("UNKNOWN")));
+        // A variant with no experiment has no outcome yet.
+        assert_eq!(r.first_outcome(RecordKind::Variant, "none"), None);
+    }
+
+    /// Review #1: a capability a FROZEN generation lists gains a binding at
+    /// the same version — the lock covers its record, so the freeze breaks.
+    #[test]
+    fn a_listed_capability_widened_at_the_same_version_breaks_the_freeze() {
+        let mut r = minimal();
+        let widened = r#"
+id = "cap"
+title = "weekend window"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "FORWARD_PAPER"
+contract = "tool_schema:backtest"
+bindings = ["strategy_kind:weekend_window", "strategy_kind:event_window", "tool:backtest"]
+"#;
+        r.capabilities
+            .insert("cap".into(), toml::from_str(widened).unwrap());
+        r.digests.insert(
+            (RecordKind::Capability, "cap".into()),
+            toml_digest(widened).unwrap(),
+        );
+        fires(&r, "frozen_manifest_changed");
+        // A capability the generation does not list changes nothing.
+        let mut r = minimal();
+        r.digests
+            .insert((RecordKind::Capability, "other".into()), "e".repeat(64));
+        assert_eq!(codes(&r), vec![]);
     }
 
     #[test]

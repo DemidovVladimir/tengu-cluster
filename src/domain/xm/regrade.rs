@@ -9,7 +9,7 @@
 //! | Piece | Rule |
 //! |---|---|
 //! | Price at T ([`pick_ctx`]) | the latest `mkt_ctx/1` row observed ≤ T, at most its max age old (anchor: `anchor_max_age`, entry / exit: `ctx_max_age`); a row that is not `ok` / `partial` or has no `mid` / `mark` > 0 ⇒ MISSING with the reason (never 0) — as the live rule (`weekend_fade::price_point`) |
-//! | Signal | s = ln(P_signal / P_anchor) bps ([`signal_of`]); P_signal = the price at `signal_ms` (default: the entry instant; a prereg may freeze its signals at another sweep — [`Instants::signal_at`]); s = 0 ⇒ `flat` |
+//! | Signal | s = ln(P_signal / P_anchor) bps ([`signal_of`]); P_signal = the price at `signal_ms` (default: the entry instant; a prereg may freeze its signals at another sweep — [`Instants::signal_at`]); s = 0 ⇒ `flat`; a signal after the entry is look-ahead: the use case refuses it unless allowed, then [`Regrade::look_ahead`] flags it |
 //! | Selection | `top_n`: [`select_capped`] (largest \|s\| ≥ `min_abs_signal_bps`, ties by id); else every signal with \|s\| ≥ `min_abs_signal_bps` |
 //! | Side | fade = −sign(s), follow = sign(s) |
 //! | Book at T ([`pick_book`]) | `as_of`: the latest `hl_book/1` row observed ≤ T; `next`: the first observed ≥ T (the book an order sent at T meets — the paper engine's); within `book_max_age` either way; `ok` / `partial` with a valid book, else MISSING |
@@ -27,7 +27,7 @@ use serde_json::Value;
 
 use crate::domain::book::{L2Book, Side, Walk, WalkTarget};
 use crate::domain::observation::{Features, ObsStatus};
-use crate::domain::xm::grade::AccountGrade;
+use crate::domain::xm::grade::{AccountGrade, Trade};
 use crate::domain::xm::weekend_fade::{
     ctx_price, select_capped, signal_of, FadeRule, Signal, Skip,
 };
@@ -322,6 +322,11 @@ pub struct Summary {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Regrade {
+    /// `LOOK-AHEAD: signal <t> after entry <t>` when the signal is read
+    /// after the entry instant (the selection saw prices from after the
+    /// positions opened); `None` otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_ahead: Option<String>,
     pub rule: RegradeRule,
     pub instants: Instants,
     pub limits: Limits,
@@ -669,6 +674,7 @@ pub fn regrade(data: &[LegData], rule: &RegradeRule, inst: &Instants, lim: &Limi
             .count(),
     };
     Regrade {
+        look_ahead: look_ahead(inst),
         rule: *rule,
         instants: *inst,
         limits: *lim,
@@ -676,6 +682,22 @@ pub fn regrade(data: &[LegData], rule: &RegradeRule, inst: &Instants, lim: &Limi
         legs,
         summary,
     }
+}
+
+/// [`Regrade::look_ahead`].
+pub fn look_ahead(inst: &Instants) -> Option<String> {
+    let at = |ms: i64| {
+        chrono::DateTime::from_timestamp_millis(ms)
+            .map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string())
+            .unwrap_or_else(|| ms.to_string())
+    };
+    (inst.signal_at() > inst.entry_ms).then(|| {
+        format!(
+            "LOOK-AHEAD: signal {} after entry {}",
+            at(inst.signal_at()),
+            at(inst.entry_ms)
+        )
+    })
 }
 
 // ── Checks against other evidence ───────────────────────────────────
@@ -798,10 +820,18 @@ pub struct LegVsLedger {
     pub note: String,
 }
 
-/// Per name over the replay's selected legs and the ledger's trades.
+/// Per name over the replay's selected legs and the ledger's trades opened
+/// inside [entry, exit] (a dry-run or another weekend's trade is not this
+/// window's).
 pub fn compare_with_ledger(r: &Regrade, g: &AccountGrade) -> Vec<LegVsLedger> {
+    let (from, to) = (r.instants.entry_ms, r.instants.exit_ms);
+    let in_window: Vec<&Trade> = g
+        .trades
+        .iter()
+        .filter(|t| from <= t.opened_ms && t.opened_ms <= to)
+        .collect();
     let mut ids: Vec<String> = r.selected.clone();
-    for t in &g.trades {
+    for t in &in_window {
         if !ids.contains(&t.instrument) {
             ids.push(t.instrument.clone());
         }
@@ -810,7 +840,11 @@ pub fn compare_with_ledger(r: &Regrade, g: &AccountGrade) -> Vec<LegVsLedger> {
     ids.into_iter()
         .map(|id| {
             let leg = r.legs.iter().find(|l| l.instrument == id && l.selected);
-            let trades: Vec<_> = g.trades.iter().filter(|t| t.instrument == id).collect();
+            let trades: Vec<_> = in_window
+                .iter()
+                .copied()
+                .filter(|t| t.instrument == id)
+                .collect();
             let t = trades.first();
             let mut note = Vec::new();
             if leg.is_none() {
@@ -1065,6 +1099,88 @@ mod tests {
         );
         assert_eq!(inst.signal_at(), 11 * H);
         assert_eq!(INST.signal_at(), 10 * H);
+        // Review #8: read after the entry, the result says so.
+        assert_eq!(
+            r.look_ahead.as_deref(),
+            Some(
+                "LOOK-AHEAD: signal 1970-01-01T11:00:00.000Z after entry 1970-01-01T10:00:00.000Z"
+            )
+        );
+        let before = Instants {
+            signal_ms: Some(10 * H - 60_000),
+            ..INST
+        };
+        assert_eq!(look_ahead(&before), None);
+        assert_eq!(
+            regrade(&[up_name("x:UP")], &rule(None), &INST, &LIM).look_ahead,
+            None
+        );
+    }
+
+    fn trade(id: &str, opened_ms: i64, net_bps: f64) -> Trade {
+        Trade {
+            instrument: id.into(),
+            side: Side::Sell,
+            qty: 1.0,
+            opened_ms,
+            closed_ms: Some(opened_ms + H),
+            entry_vwap: 100.0,
+            exit_vwap: Some(99.0),
+            entry_notional_usd: 100.0,
+            exit_notional_usd: 99.0,
+            realized_usd: 1.0,
+            fees_usd: 0.0,
+            funding_paid_usd: 0.0,
+            funding_hours: 0,
+            net_usd: net_bps / 100.0,
+            net_bps: Some(net_bps),
+            hold_ms: Some(H),
+            entry_orders: vec![],
+            exit_orders: vec![],
+        }
+    }
+
+    /// Review #23: the ledger also holds an earlier weekend's (or a dry
+    /// run's) trade of the name — the leg is compared with the trade opened
+    /// inside [entry, exit], and the earlier one is not this window's.
+    #[test]
+    fn the_ledger_comparison_takes_the_trade_of_the_window() {
+        let r = regrade(&[up_name("x:UP")], &rule(Some(4)), &INST, &LIM);
+        let g = AccountGrade {
+            account: "a".into(),
+            initial_cash_usd: 100.0,
+            final_balance_usd: None,
+            pnl_usd: None,
+            orders: 0,
+            orders_by_status: BTreeMap::new(),
+            fills: 0,
+            funding_rows: 0,
+            trades: vec![
+                trade("x:UP", -5 * H, -999.0),
+                trade("x:OLD", -5 * H, 1.0),
+                trade("x:UP", 10 * H + 400, 123.0),
+            ],
+            totals: crate::domain::xm::grade::Totals {
+                trades: 3,
+                closed: 3,
+                open: 0,
+                gross_usd: 0.0,
+                fees_usd: 0.0,
+                funding_paid_usd: 0.0,
+                net_usd: 0.0,
+                entry_notional_usd: 0.0,
+                mean_net_bps: None,
+                positive: 0,
+                hit_rate: None,
+                unassigned_funding_rows: 0,
+            },
+            verdicts: vec![],
+            checks: vec![],
+        };
+        let c = compare_with_ledger(&r, &g);
+        assert_eq!(c.len(), 1, "x:OLD is another window's: {c:#?}");
+        assert_eq!(c[0].ledger_net_bps, Some(123.0));
+        assert!(!c[0].note.contains("ledger trades"), "{}", c[0].note);
     }
 
     #[test]

@@ -36,7 +36,7 @@ fn the_fixture_loads_with_a_digest_per_record() {
     assert_eq!(reg.digests.len(), records);
     assert_eq!(reg.locks.frozen.len(), 1);
     assert_eq!(
-        reg.digests[&(RecordKind::Generation, "W1".to_string())],
+        reg.frozen_digest("W1").unwrap(),
         reg.locks.frozen[0].manifest_sha256
     );
     assert_eq!(repo_root(&dir), paths::absolute_path(&fixture_root()));
@@ -257,6 +257,86 @@ fn a_frozen_generation_refuses_drift_at_load() {
     assert!(e.contains("frozen_manifest_changed generation/W1"), "{e}");
 }
 
+/// Review #11: a copy of the W1 sandbox elsewhere, pointing at the real
+/// registry, with an edited `[risk]` — the pins hash the text loaded, not
+/// the untouched repo file.
+#[test]
+fn the_load_time_drift_check_hashes_the_loaded_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("sandboxes/w1/config.toml");
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    let text = std::fs::read_to_string(w1())
+        .unwrap()
+        .replace(
+            "registry = \"../../registry\"",
+            &format!(
+                "registry = \"{}\"",
+                fixture_root().join("registry").display()
+            ),
+        )
+        .replace("max_order_notional_usd = 25", "max_order_notional_usd = 30");
+    std::fs::write(&copy, text).unwrap();
+    let e = load_err(&copy);
+    assert!(
+        e.contains("FROZEN generation `W1` pin `config:w1/risk` drifted"),
+        "{e}"
+    );
+}
+
+/// The Docker image (`Dockerfile`: `sandboxes/` + `lineage/` under
+/// /opt/tengu): `make up SANDBOX=<s>` mounts the sandbox at its own path
+/// (review #10) — its name is detected and `../../lineage` resolves; the old
+/// mount point `/opt/tengu/config.toml` finds no registry.
+#[test]
+fn docker_mounts_a_sandbox_where_its_generation_resolves() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let make = std::fs::read_to_string(root.join("Makefile")).unwrap();
+    assert!(
+        make.contains(
+            "export TENGU_CONTAINER_CONFIG := $(if $(SANDBOX),/opt/tengu/sandboxes/$(SANDBOX)/config.toml,/opt/tengu/config.toml)"
+        ),
+        "Makefile"
+    );
+    let compose = std::fs::read_to_string(root.join("docker-compose.yml")).unwrap();
+    for line in [
+        "- TENGU_CONFIG=${TENGU_CONTAINER_CONFIG:-/opt/tengu/config.toml}",
+        "- ./${TENGU_CONFIG_FILE:-config.toml}:${TENGU_CONTAINER_CONFIG:-/opt/tengu/config.toml}:ro",
+    ] {
+        assert!(compose.contains(line), "docker-compose.yml lacks {line}");
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let opt = tmp.path().join("opt/tengu");
+    copy_dir(&root.join("sandboxes"), &opt.join("sandboxes"));
+    copy_dir(&root.join("lineage"), &opt.join("lineage"));
+    let own = opt.join("sandboxes/xlab/config.toml");
+    let cfg = Config::load(&own).unwrap_or_else(|e| panic!("{e:#}"));
+    assert_eq!(
+        cfg.generation_scope.as_ref().map(|g| g.id.as_str()),
+        Some("W1")
+    );
+    std::fs::copy(&own, opt.join("config.toml")).unwrap();
+    assert!(load_err(&opt.join("config.toml")).contains("no registry directory"));
+}
+
+/// Review #1: a capability W1 lists gains a strategy kind at the same
+/// version — W1 would reach `pair_spread`; the freeze covers the record.
+#[test]
+fn a_listed_capability_widened_after_the_freeze_fails_the_load() {
+    let (tmp, cfg) = copy_with("w1", |t| t);
+    let cap = tmp.path().join("registry/capabilities/cap.backtest.toml");
+    let text = std::fs::read_to_string(&cap).unwrap();
+    std::fs::write(
+        &cap,
+        text.replace(
+            "bindings = [\"tool:backtest\"]",
+            "bindings = [\"tool:backtest\", \"strategy_kind:pair_spread\"]",
+        ),
+    )
+    .unwrap();
+    let e = load_err(&cfg);
+    assert!(e.contains("frozen_manifest_changed generation/W1"), "{e}");
+}
+
 /// Roadmap G5 / handoff § 59: loading the W2 candidate changes nothing in
 /// W1 — its manifest digest and lock, its pinned rule-W spec hash — and W1's
 /// rule W, taken from the W1 config, replays the 2026-09-26 golden exactly,
@@ -267,7 +347,10 @@ fn w2_leaves_w1_and_its_replay_unchanged() {
     let before = load_registry(&dir).unwrap();
     let key = (RecordKind::Generation, "W1".to_string());
     let digest = before.digests[&key].clone();
-    assert_eq!(before.locks.frozen[0].manifest_sha256, digest);
+    assert_eq!(
+        before.locks.frozen[0].manifest_sha256,
+        before.frozen_digest("W1").unwrap()
+    );
     let pinned = before.generations["W1"]
         .pins
         .iter()

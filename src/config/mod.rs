@@ -1155,12 +1155,13 @@ impl ValidationErrors {
 impl Config {
     /// Load config from path and apply `${ENV_VAR}` substitution.
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let content = Self::substitute_env_vars(&content)?;
+        let raw = std::fs::read_to_string(path)?;
+        let content = Self::substitute_env_vars(&raw)?;
         let mut config: Config = toml::from_str(&content)?;
         let mut errors = config.validation_errors();
         errors.extend(hardening::config_file_errors(&config, path));
-        let (generation_errors, scope) = lineage::binding_errors(&config, path);
+        // Pins hash the raw text (no `${VAR}` substitution), as `verify --pins`.
+        let (generation_errors, scope) = lineage::binding_errors(&config, path, &raw);
         errors.extend(generation_errors);
         Self::fail_on(errors)?;
         for warning in config.validation_warnings() {

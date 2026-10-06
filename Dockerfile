@@ -44,8 +44,9 @@ COPY --from=builder /usr/src/tengu/target/release/tengu /usr/local/bin/tengu
 COPY skills /opt/tengu/skills
 COPY sandboxes /opt/tengu/sandboxes
 # The lineage registry: a sandbox with `[generation]` loads it at every config
-# load (`registry = "../../lineage"` → /opt/tengu/lineage); without it the
-# load fails closed (docs/lineage-2026-10-06.md § 4)
+# load (`registry = "../../lineage"` → /opt/tengu/lineage — the sandbox's config
+# is mounted at /opt/tengu/sandboxes/<name>/config.toml, `make up SANDBOX=`);
+# without it the load fails closed (docs/lineage-2026-10-06.md § 4)
 COPY lineage /opt/tengu/lineage
 
 # Default working directory (planner registry + TENGU_PLAN.md are written here)

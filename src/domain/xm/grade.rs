@@ -27,6 +27,8 @@
 //! | 8 | `orders_vs_fills` | each order's `filled_qty`, `avg_px`, `fee_usd` = its fills'; every fill names an order of the account |
 //! | 9 | `positions_table` | each `positions` row's realized / fees / funding = Σ its fills / funding rows |
 //! | 10 | `chronology` | verdict ts ≤ order ts ≤ each fill ts (decisions never after their execution) |
+//! | 11 | `funding_qty` | every funding row's `qty` = the signed size the fills hold at its hour (`held_at`: after the fills before the hour — the ledger settles before a fill; flat then and opened on the hour: after the fills at it), relative 1e-9 |
+//! | 12 | `funding_hours` | every hour boundary a trade held — `opened ≤ h ≤ closed` (an open trade: up to its last settled hour), after the hours an earlier trade of the instrument settled (`ledger.rs::due_funding_hours`) — has a `funding` or `funding_owed` row; no hour booked twice |
 //!
 //! Tolerance: `|a − b| ≤ 1e-9 × max(1, |a|, |b|)` for USD sums, `≤ 1e-9 ×
 //! max(|a|, |b|)` (or 1e-15) for check 3.
@@ -926,6 +928,37 @@ pub fn grade_account(rows: &LedgerRows, account: &str) -> Result<AccountGrade, S
             "verdict ≤ order ≤ fill timestamps".to_string(),
         ));
     }
+    // 11 funding_qty.
+    {
+        let mut p = Vec::new();
+        for r in &funding {
+            let fs = by_instrument
+                .get(r.instrument.as_str())
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let held = held_at(fs, r.hour_ms);
+            let tol = REL_TOL * 1f64.max(held.abs()).max(r.qty.abs());
+            if (r.qty - held).abs() > tol {
+                p.push(format!(
+                    "{}@{}: qty {} ≠ {held} held at the hour (fills chain)",
+                    r.instrument, r.hour_ms, r.qty
+                ));
+            }
+        }
+        checks.push(Check::new(
+            "funding_qty",
+            p,
+            format!(
+                "{} funding rows against the size the fills hold at their hour",
+                funding.len()
+            ),
+        ));
+    }
+    // 12 funding_hours.
+    {
+        let (p, detail) = funding_hour_problems(&trades, &funding, &owed);
+        checks.push(Check::new("funding_hours", p, detail));
+    }
 
     let mut verdict_map: BTreeMap<(String, bool, String), usize> = BTreeMap::new();
     for r in &risk {
@@ -959,6 +992,107 @@ pub fn grade_account(rows: &LedgerRows, account: &str) -> Result<AccountGrade, S
             .collect(),
         checks,
     })
+}
+
+/// Funding settles on the hour (HL, `domain/xm/ledger.rs`).
+const HOUR_MS: i64 = 3_600_000;
+
+/// The signed size the fills (sorted) hold at hour boundary `hour_ms`, as the
+/// ledger settles it (`Position::settle_funding` runs before any fill): the
+/// size after every fill before the hour; flat then and opened exactly on
+/// the hour, the size after the fills at it (`due_funding_hours`: an hour
+/// on `opened_ms` is due).
+fn held_at(fills: &[&FillRow], hour_ms: i64) -> f64 {
+    let signed = |f: &&FillRow| Side::parse(&f.side).map_or(0.0, |s| s.sign()) * f.qty;
+    let before = sum(fills.iter().filter(|f| f.ts_ms < hour_ms).map(signed));
+    let eps = REL_TOL * fills.iter().map(|f| f.qty.abs()).fold(1.0, f64::max);
+    if before.abs() > eps {
+        before
+    } else {
+        sum(fills.iter().filter(|f| f.ts_ms <= hour_ms).map(signed))
+    }
+}
+
+/// Check 12 (module table): the hours each trade must have settled — every
+/// boundary `h` with `opened ≤ h ≤ closed` (an open trade: up to its last
+/// settled hour), after the hours an earlier trade of the instrument settled
+/// (`due_funding_hours`: `last_funding_hour_ms`) — each booked once
+/// (`funding`) or owed (`funding_owed`).
+fn funding_hour_problems(
+    trades: &[Trade],
+    funding: &[&FundingRow],
+    owed: &[&OwedRow],
+) -> (Vec<String>, String) {
+    let mut p = Vec::new();
+    let mut booked: BTreeMap<(&str, i64), usize> = BTreeMap::new();
+    for r in funding {
+        *booked
+            .entry((r.instrument.as_str(), r.hour_ms))
+            .or_default() += 1;
+    }
+    for ((inst, h), n) in &booked {
+        if *n > 1 {
+            p.push(format!("{inst}@{h}: booked {n} times"));
+        }
+    }
+    let owed_hours: BTreeSet<(&str, i64)> = owed
+        .iter()
+        .map(|r| (r.instrument.as_str(), r.hour_ms))
+        .collect();
+    let mut by_instrument: BTreeMap<&str, Vec<&Trade>> = BTreeMap::new();
+    for t in trades {
+        by_instrument
+            .entry(t.instrument.as_str())
+            .or_default()
+            .push(t);
+    }
+    let (mut expected, mut covered_owed) = (0usize, 0usize);
+    for (inst, mut ts) in by_instrument {
+        ts.sort_by_key(|t| t.opened_ms);
+        let settled_hours: Vec<i64> = booked
+            .keys()
+            .chain(owed_hours.iter())
+            .filter(|(i, _)| *i == inst)
+            .map(|(_, h)| *h)
+            .collect();
+        let mut next_free: Option<i64> = None;
+        for t in ts {
+            let ceil = t.opened_ms.div_euclid(HOUR_MS) * HOUR_MS
+                + if t.opened_ms.rem_euclid(HOUR_MS) == 0 {
+                    0
+                } else {
+                    HOUR_MS
+                };
+            let first = next_free.map_or(ceil, |n| ceil.max(n));
+            let last = match t.closed_ms {
+                Some(c) => c.div_euclid(HOUR_MS) * HOUR_MS,
+                None => match settled_hours.iter().filter(|h| **h >= first).max() {
+                    Some(h) => *h,
+                    None => continue,
+                },
+            };
+            let mut h = first;
+            while h <= last {
+                expected += 1;
+                if owed_hours.contains(&(inst, h)) {
+                    covered_owed += 1;
+                } else if !booked.contains_key(&(inst, h)) {
+                    p.push(format!(
+                        "{inst}@{h}: held from {} to {} but no funding or funding_owed row",
+                        t.opened_ms,
+                        t.closed_ms.map_or("OPEN".to_string(), |c| c.to_string())
+                    ));
+                }
+                next_free = Some(h + HOUR_MS);
+                h += HOUR_MS;
+            }
+        }
+    }
+    let detail = format!(
+        "{expected} settlement hours held, {covered_owed} owed, {} funding rows",
+        funding.len()
+    );
+    (p, detail)
 }
 
 fn fmt_opt(v: Option<f64>) -> String {
@@ -1102,7 +1236,7 @@ mod tests {
     fn a_tiny_ledger_grades_and_reconciles() {
         let g = grade_account(&tiny(), A).unwrap();
         assert!(g.reconciled(), "{:#?}", g.checks);
-        assert_eq!(g.checks.len(), 10);
+        assert_eq!(g.checks.len(), 12);
         assert_eq!(g.trades.len(), 1);
         let t = &g.trades[0];
         assert_eq!(t.side, Side::Sell);
@@ -1173,5 +1307,71 @@ mod tests {
                 .any(|c| c.check == n && c.status == CheckStatus::Fail)
         };
         assert!(fail("trades_vs_cash") && fail("flat_at_end"));
+    }
+
+    /// Review #7: a short booked as `qty > 0` (a received payment turned
+    /// paid) with its cash row following it — every self-consistency check
+    /// passes; only the fills chain shows the sign is wrong.
+    #[test]
+    fn a_funding_row_with_the_wrong_sign_fails_funding_qty() {
+        let mut rows = tiny();
+        rows.funding[0].qty = 2.0;
+        rows.funding[0].payment_usd = 0.002;
+        rows.cash[2].amount_usd = -0.002;
+        rows.cash[2].balance_usd = 99.988;
+        rows.cash[3].balance_usd = 101.979;
+        rows.positions[0].funding_usd = 0.002;
+        let g = grade_account(&rows, A).unwrap();
+        let failed: Vec<&str> = g
+            .checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .map(|c| c.check.as_str())
+            .collect();
+        assert_eq!(failed, vec!["funding_qty"], "{:#?}", g.checks);
+    }
+
+    /// Review #7: a ledger that skipped a held hour (its cash journal
+    /// consistent without it) fails `funding_hours`.
+    #[test]
+    fn a_skipped_funding_hour_fails_funding_hours() {
+        let mut rows = tiny();
+        // Hold across a second hour: cover at 2 h + 0.5 s instead.
+        rows.fills[1].ts_ms = 7_200_500;
+        rows.orders[1].ts_ms = 7_200_500;
+        rows.risk_decisions[1].ts_ms = 7_200_500;
+        rows.cash[3].ts_ms = 7_200_500;
+        let g = grade_account(&rows, A).unwrap();
+        let hours = g
+            .checks
+            .iter()
+            .find(|c| c.check == "funding_hours")
+            .unwrap();
+        assert_eq!(hours.status, CheckStatus::Fail, "{hours:#?}");
+        assert!(
+            hours.detail.contains(&format!("{X}@7200000")),
+            "{}",
+            hours.detail
+        );
+        let others_pass = g
+            .checks
+            .iter()
+            .filter(|c| c.check != "funding_hours")
+            .all(|c| c.status == CheckStatus::Pass);
+        assert!(others_pass, "{:#?}", g.checks);
+        // Owed instead of booked: covered.
+        rows.funding_owed = Some(vec![OwedRow {
+            account: A.into(),
+            instrument: X.into(),
+            hour_ms: 7_200_000,
+            qty: -2.0,
+        }]);
+        let g = grade_account(&rows, A).unwrap();
+        let hours = g
+            .checks
+            .iter()
+            .find(|c| c.check == "funding_hours")
+            .unwrap();
+        assert_eq!(hours.status, CheckStatus::Pass, "{hours:#?}");
     }
 }
