@@ -14,9 +14,9 @@ cost_pin = "config:xmarket-weekend/paper"
 capabilities = ["capital.weekend_fade_exec", "capital.exits", "risk.paper_gate", "infra.paper_ledger", "infra.recorder", "intel.hl_market_context", "intel.hl_order_book"]
 uncertainty = "One window: a weekend is one draw (sd ≈ 110–240 bps per weekend in the feasibility study); no CI; the M3 go needs ≥ 12 weekends, mean net ≥ +15 bps at executable prices, t ≥ 1.5, not carried by ≤ 2 weekends"
 split_by = "NONE"
-incidents = ["inc.2026-10-02.host-sleep", "inc.2026-10-03.hl-502", "inc.2026-10-05.network-loss-1", "inc.2026-10-05.network-loss-2"]
+incidents = ["inc.2026-10-02.host-sleep", "inc.2026-10-03.hl-502", "inc.2026-10-05.network-loss-1", "inc.2026-10-05.network-loss-2", "inc.2026-10-05.funding-booked-late"]
 validity = "VALID_WITH_LIMITATIONS"
-limitations = ["One window (capped n 4, shadow n 74): cannot validate rule W; the M3 go threshold needs ≥ 12 weekends.", "Per-name taker fees ~9 bps per side on hyperliquid:xyz:MSTR and hyperliquid:xyz:PURRDAT (capped; also hyperliquid:xyz:BMNR in the shadow) vs 0.9 bps modelled in xlab.", "Filled entry notional $98.43, not $100 (size rounding: hyperliquid:xyz:CBRS intent qty 0.13612109332462158 → filled 0.13).", "Data gaps outside the decision instants (4 incidents; ctx minutes backfilled by 1m bars, 4 hl_book slots lost); entry 2026-10-04T22:00:00–22:00:16Z and exit 2026-10-05T13:00:00–13:00:10Z had no WARN.", "Binary tengu-6fcb455 (commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c, not on main) lacks the later W1-gate fixes (money-safety batches: exit backoff, shadow PaperFills proof, KILL probed inside the transaction, funding accrual, one owner per ledger, …): W1 as run ≠ W1 as merged.", "The capped result is carried by one name: hyperliquid:xyz:CBRS +0.955818 of +1.370036 USD.", "xm_exits ran on stale marks 2026-10-05T07:44:45–09:41:00Z (TP / SL blind; no exit was due).", "Ledger accounts and deposits were created by the 2026-10-01T01:31:57Z dry run; no trade before 2026-10-04T22:00Z."]
+limitations = ["The 2026-10-05 08:00Z funding hour was booked 275 s late after the network gap, at the rate observed then (inc.2026-10-05.funding-booked-late): about +$0.015 on the capped account; the book-replay regrade (+140.34 bps) differs from the ledger (+141.82) by this.", "One window (capped n 4, shadow n 74): cannot validate rule W; the M3 go threshold needs ≥ 12 weekends.", "Per-name taker fees ~9 bps per side on hyperliquid:xyz:MSTR and hyperliquid:xyz:PURRDAT (capped; also hyperliquid:xyz:BMNR in the shadow) vs 0.9 bps modelled in xlab.", "Filled entry notional $98.43, not $100 (size rounding: hyperliquid:xyz:CBRS intent qty 0.13612109332462158 → filled 0.13).", "Data gaps outside the decision instants (4 incidents; ctx minutes backfilled by 1m bars, 4 hl_book slots lost); entry 2026-10-04T22:00:00–22:00:16Z and exit 2026-10-05T13:00:00–13:00:10Z had no WARN.", "Binary tengu-6fcb455 (commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c, not on main) lacks the later W1-gate fixes (money-safety batches: exit backoff, shadow PaperFills proof, KILL probed inside the transaction, funding accrual, one owner per ledger, …): W1 as run ≠ W1 as merged.", "The capped result is carried by one name: hyperliquid:xyz:CBRS +0.955818 of +1.370036 USD.", "xm_exits ran on stale marks 2026-10-05T07:44:45–09:41:00Z (TP / SL blind; no exit was due).", "Ledger accounts and deposits were created by the 2026-10-01T01:31:57Z dry run; no trade before 2026-10-04T22:00Z."]
 notes = "Frozen before the anchor: rule W in commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c (2026-10-01T06:22:10Z), binary sha256 e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72 (soaked 2026-10-01 06:34–07:04Z), config e5daae83febea00e549ce9b8cac83bddce12a0a2 (= main's sandbox except recorder schemas / keep_data \"*\"). Runner pid 31380, one start 2026-10-02T19:18:55Z, SIGINT stop 2026-10-05T14:00:44.844Z, rc 0. Capped picks (all short): hyperliquid:xyz:CBRS +400.5, hyperliquid:xyz:BIRD +211.8, hyperliquid:xyz:MSTR −23.3, hyperliquid:xyz:PURRDAT −21.7 bps net. Shadow: n_universe 75, n_eligible 74, 1 flat (hyperliquid:xyz:ASML); 57 shorts / 17 longs; 40 of 74 net > 0. All 156 risk verdicts allow (rule ok)."
 
 [[windows]]
@@ -55,6 +55,16 @@ net_usd = 6.213796012
 evidence = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
 extract = "ledger:xmarket-weekend-shadow"
 note = "net_usd = final cash 10006.213796012 − 10000 (cash id 1328, 2026-10-05T13:00:10Z): realized 6.849795 − fees 1.80911946 + funding received 1.1731204705; mean = fade row shadow_mean_net_bps."
+
+[[results]]
+label = "book-replay regrade of the capped picks (independent of the paper engine; first book at / after each instant, recorded fees)"
+arm = "capped_regrade"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 140.3425
+net_usd = 1.403425
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261004.db"
+note = "DERIVED (tengu evidence regrade, P0): every entry and exit price equals the ledger fill; the gap to +141.82 is the late 08:00 funding hour. All 74 names at $100: +8.0036 bps, $5.922647 vs the shadow ledger +8.4321, $6.213796 (sides agree 74 / 74)."
 
 [verdict]
 value = "PENDING"

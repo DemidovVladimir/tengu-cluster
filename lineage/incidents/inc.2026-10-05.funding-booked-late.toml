@@ -1,0 +1,31 @@
+id = "inc.2026-10-05.funding-booked-late"
+title = "Funding hour 2026-10-05 08:00Z booked 275 s late, after the network gap, at the rate seen then"
+class = "EXECUTION"
+started_at = "2026-10-05T08:00:00Z"
+ended_at = "2026-10-05T08:04:35Z"
+detected_by = "P0 regrade 2026-10-06 (tengu evidence regrade vs the ledger: hyperliquid:xyz:BIRD leg −6.77 bps apart)"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+strategy_impact = "NONE"
+strategy_impact_note = "Accounting only: the 08:00 hour was settled at 08:04:35Z with the mkt_ctx/1 funding rate observed then (hyperliquid:xyz:BIRD 0.0016430405) instead of HL's realized 0.0009616786 — about +$0.015 on the capped account; the ledger stays internally consistent (all reconciliation checks PASS). The ledger on main documents the same rule (funding booked at the rate known at booking time, HL per-hour history not read — domain/xm/ledger.rs), so a late booking takes a later observation of the rate (defect D11)."
+
+[[data_impact]]
+stream = "ledger funding rows, hour 2026-10-05T08:00Z (both accounts)"
+from = "2026-10-05T08:00:00Z"
+to = "2026-10-05T08:04:35Z"
+after = "LIVE_RECORDED"
+note = "Rows stored; their rate is the post-gap observation, not the realized rate."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+role = "funding rows"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xlab/market.db"
+role = "HL realized funding (fundingHistory, backfilled 2026-10-05T14:14–14:20Z)"
+class = "FORWARD_PAPER"
+provenance = "BACKFILLED"
+sha256 = "b5a0dc45e37660f8f66be0eb401b3adc67dcd4ef47758c71cafc1951dc503ac7"
