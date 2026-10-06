@@ -32,6 +32,18 @@
 //! requires = { price = 30 }   # legal only while `price` is usable and <= 30 s old
 //! slots    = { pool = { observation = "pools", items = "/data/pools/*", value = "address" } }
 //! ```
+//!
+//! Bindings carry one value into an argument without a question to Jev —
+//! from the event (what a higher-order agent hands the loop), an earlier
+//! action of this event, or a `world` row. Unresolved ⇒ the action is not
+//! legal, so a chain only advances on real values:
+//!
+//! ```toml
+//! slots = { target_sol = { event = "/target_sol" },
+//!           amount     = { from = "plan_swap", path = "/swaps/0/amount" },
+//!           wallet_sol = { observation = "snap", path = "/data/wallet_balances/native_sol/value" } }
+//! caps  = { target_sol = 2.0 }
+//! ```
 
 use std::collections::BTreeMap;
 
@@ -122,39 +134,70 @@ pub(crate) struct ActionConfig {
     pub requires: BTreeMap<String, u64>,
 }
 
-/// Where a slot's candidates come from.
+/// Where a slot's candidates come from. A source either offers a list
+/// (`items` + `value`: one candidate per item, Jev picks) or binds ONE value
+/// (`path`: a single candidate, filled without a question). A path that
+/// reads nothing (missing, `null`, a failed `Field`'s absent `value`) yields
+/// no candidate, so the action is not legal — a binding never invents a
+/// value. Typed results: bind exact amounts from `data` (features are
+/// rounded to 6 significant digits).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub(crate) enum SlotConfig {
     /// Fixed candidate values.
     Static(Vec<Value>),
-    /// Items from the latest successful `from` action's reduced result in
-    /// the CURRENT event. An earlier event's result is never offered (its
-    /// data may be hours old): until `from` succeeds in this event the
-    /// slot has no candidates and the action is not legal.
+    /// The latest successful `from` action's reduced result in the CURRENT
+    /// event. An earlier event's result is never offered (its data may be
+    /// hours old): until `from` succeeds in this event the slot has no
+    /// candidates and the action is not legal.
     FromHistory {
         /// Action name whose result to read.
         from: String,
-        /// Path to the item list inside that result, e.g. `/pools/*`.
-        items: String,
-        /// Field of each item used as the argument value, e.g. `address`.
-        value: String,
-        /// Offer at most this many items. Default 5.
+        /// List mode: path to the item list inside that result, e.g. `/pools/*`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        items: Option<String>,
+        /// List mode: field of each item used as the argument value, e.g. `address`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+        /// Binding mode: path to the one value, e.g. `/swaps/0/amount`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// List mode: offer at most this many items. Default 5.
         #[serde(default = "default_top")]
         top: usize,
     },
-    /// Items from a fresh `world` entry, read from its
-    /// `Observation::decision_root` (`{status, age_s, source, features,
-    /// data}`). Stale / missing / failed entries yield no candidates, so the
-    /// action is not legal.
+    /// A fresh `world` entry, read from its `Observation::decision_root`
+    /// (`{status, age_s, source, features, data}`). Stale / missing / failed
+    /// entries yield no candidates, so the action is not legal.
     FromObservation {
         /// `world` alias to read (distinct from `FromHistory`'s `from`).
         observation: String,
-        /// Path to the item list, e.g. `/data/pools/*`.
-        items: String,
-        /// Field of each item used as the argument value, e.g. `address`.
-        value: String,
-        /// Offer at most this many items. Default 5.
+        /// List mode: path to the item list, e.g. `/data/pools/*`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        items: Option<String>,
+        /// List mode: field of each item used as the argument value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+        /// Binding mode: path to the one value, e.g.
+        /// `/data/wallet_balances/native_sol/value`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// List mode: offer at most this many items. Default 5.
+        #[serde(default = "default_top")]
+        top: usize,
+    },
+    /// The incoming event (after `event_reduce`) — what a trigger or a
+    /// higher-order agent hands the loop (`tengu decide --event`, a webhook
+    /// body). `event` is the path: without `value` it binds the one value
+    /// there (`{ event = "/target_sol" }`); with `value` it is a list path
+    /// and each item's `value` field is a candidate. Event values are
+    /// untrusted input: `caps`, the tool's own checks and the agent's
+    /// scopes (wallet grants) still apply.
+    FromEvent {
+        event: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+        /// List mode: offer at most this many items. Default 5.
         #[serde(default = "default_top")]
         top: usize,
     },
@@ -199,23 +242,25 @@ impl DecisionLoopConfig {
                 ));
             }
             for (sn, slot) in &a.slots {
+                let at = format!("{p}.actions.{an}.slots.{sn}");
                 match slot {
                     SlotConfig::Static(v) if v.is_empty() => {
-                        errs.push(format!("{p}.actions.{an}.slots.{sn}: empty candidate list"))
+                        errs.push(format!("{at}: empty candidate list"))
                     }
                     SlotConfig::FromHistory { from, .. } if !self.actions.contains_key(from) => {
-                        errs.push(format!(
-                            "{p}.actions.{an}.slots.{sn}: `from = \"{from}\"` is not an action"
-                        ))
+                        errs.push(format!("{at}: `from = \"{from}\"` is not an action"))
                     }
                     SlotConfig::FromObservation { observation, .. }
                         if !self.world.contains_key(observation) =>
                     {
                         errs.push(format!(
-                            "{p}.actions.{an}.slots.{sn}: `observation = \"{observation}\"` is not a `world` alias"
+                            "{at}: `observation = \"{observation}\"` is not a `world` alias"
                         ))
                     }
                     _ => {}
+                }
+                if let Some(problem) = slot.mode_problem() {
+                    errs.push(format!("{at}: {problem}"));
                 }
             }
             for alias in a.requires.keys() {
@@ -234,6 +279,79 @@ impl DecisionLoopConfig {
             }
         }
         errs
+    }
+}
+
+/// How a bound slot reads its source (`SlotConfig::mode`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum SlotMode<'a> {
+    /// Every item at `items`; each item's `value` field is a candidate.
+    List {
+        items: &'a str,
+        value: &'a str,
+        top: usize,
+    },
+    /// The one value at `path`.
+    One { path: &'a str },
+}
+
+impl SlotConfig {
+    /// List or binding mode of a sourced slot; `None` for `Static` and for
+    /// a slot `mode_problem` refuses.
+    pub(crate) fn mode(&self) -> Option<SlotMode<'_>> {
+        fn sourced<'a>(
+            items: &'a Option<String>,
+            value: &'a Option<String>,
+            path: &'a Option<String>,
+            top: usize,
+        ) -> Option<SlotMode<'a>> {
+            match (items.as_deref(), value.as_deref(), path.as_deref()) {
+                (Some(items), Some(value), None) => Some(SlotMode::List { items, value, top }),
+                (None, None, Some(path)) => Some(SlotMode::One { path }),
+                _ => None,
+            }
+        }
+        match self {
+            SlotConfig::Static(_) => None,
+            SlotConfig::FromHistory {
+                items,
+                value,
+                path,
+                top,
+                ..
+            }
+            | SlotConfig::FromObservation {
+                items,
+                value,
+                path,
+                top,
+                ..
+            } => sourced(items, value, path, *top),
+            SlotConfig::FromEvent { event, value, top } => Some(match value.as_deref() {
+                Some(value) => SlotMode::List {
+                    items: event,
+                    value,
+                    top: *top,
+                },
+                None => SlotMode::One { path: event },
+            }),
+        }
+    }
+
+    /// Why a sourced slot is malformed: list mode needs `items` AND `value`,
+    /// binding mode `path` alone.
+    fn mode_problem(&self) -> Option<&'static str> {
+        match self {
+            SlotConfig::FromHistory { .. } | SlotConfig::FromObservation { .. }
+                if self.mode().is_none() =>
+            {
+                Some("set either `items` + `value` (a list Jev picks from) or `path` (one bound value)")
+            }
+            SlotConfig::FromEvent { event, .. } if !event.starts_with('/') => {
+                Some("`event` is a path into the event and starts with `/`")
+            }
+            _ => None,
+        }
     }
 }
 
@@ -397,5 +515,108 @@ slots = { pool = { observation = "pools", items = "/data/*", value = "a" } }
             "goal=\"g\"\nagent=\"a\"\nactions={}\ntypo=1"
         )
         .is_err());
+    }
+
+    const BOUND: &str = r#"
+goal = "g"
+agent = "a"
+world = { snap = "lp_snapshot/1:W:P" }
+[actions.hold]
+description = "nothing"
+[actions.plan]
+description = "plan"
+tool = "lp_swap_plan"
+slots = { target = { event = "/target_sol" }, sol = { observation = "snap", path = "/data/sol" } }
+caps = { target = 2.0 }
+[actions.swap]
+description = "swap"
+tool = "jupiter_swap"
+slots = { amount = { from = "plan", path = "/swaps/0/amount" }, pool = { event = "/pools/*", value = "address", top = 2 } }
+"#;
+
+    #[test]
+    fn parses_bindings_and_event_slots() {
+        let c = parse(BOUND);
+        assert!(
+            c.validation_errors("x").is_empty(),
+            "{:?}",
+            c.validation_errors("x")
+        );
+        let plan = &c.actions["plan"].slots;
+        assert_eq!(
+            plan["target"].mode(),
+            Some(SlotMode::One {
+                path: "/target_sol"
+            })
+        );
+        assert_eq!(
+            plan["sol"].mode(),
+            Some(SlotMode::One { path: "/data/sol" })
+        );
+        let swap = &c.actions["swap"].slots;
+        assert_eq!(
+            swap["amount"].mode(),
+            Some(SlotMode::One {
+                path: "/swaps/0/amount"
+            })
+        );
+        assert_eq!(
+            swap["pool"].mode(),
+            Some(SlotMode::List {
+                items: "/pools/*",
+                value: "address",
+                top: 2
+            })
+        );
+        // Old list slots keep their mode.
+        assert_eq!(
+            parse(MIN).actions["open"].slots["pool"].mode(),
+            Some(SlotMode::List {
+                items: "/pools/*",
+                value: "address",
+                top: 5
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_or_incomplete_slot_modes() {
+        let c = parse(
+            r#"
+goal = "g"
+agent = "a"
+[actions.hold]
+description = "nothing"
+[actions.fetch]
+description = "fetch"
+tool = "t"
+[actions.open]
+description = "open"
+tool = "t"
+slots = { both = { from = "fetch", items = "/a/*", value = "x", path = "/b" }, half = { from = "fetch", items = "/a/*" }, ev = { event = "target" } }
+"#,
+        );
+        let e = c.validation_errors("x").join("\n");
+        assert!(e.contains("slots.both: set either"), "{e}");
+        assert!(e.contains("slots.half: set either"), "{e}");
+        assert!(e.contains("slots.ev: `event` is a path"), "{e}");
+    }
+
+    #[test]
+    fn slot_with_two_sources_or_a_typo_is_rejected() {
+        for slot in [
+            r#"{ from = "fetch", observation = "snap", path = "/x" }"#,
+            r#"{ event = "/x", pth = "/y" }"#,
+            r#"{ from = "fetch", path = "/x", tpo = 3 }"#,
+        ] {
+            let toml = format!(
+                "goal=\"g\"\nagent=\"a\"\n[actions.hold]\ndescription=\"h\"\n\
+                 [actions.fetch]\ndescription=\"f\"\ntool=\"t\"\nslots = {{ s = {slot} }}\n"
+            );
+            assert!(
+                toml::from_str::<DecisionLoopConfig>(&toml).is_err(),
+                "accepted {slot}"
+            );
+        }
     }
 }

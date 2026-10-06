@@ -668,7 +668,12 @@ These are not preferences. They're load-bearing.
   the next action + its argument slots; existing tools execute it through the
   loop agent's executor (same scopes/egress as a `run-agent` child).
   Jev returns typed choices, never text or tool-call JSON — it cannot be an
-  `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
+  `engine`; slots also BIND one value (2026-10-06: `{ event = "/x" }`,
+  `{ from, path }`, `{ observation, path }` — no question, unresolved ⇒ the
+  action is illegal; exact amounts from `/data/…`), so a higher-order agent
+  hands values via the event and one tool's output feeds the next (lping
+  `hedge_exec` / `lp_exec`). `dry_run` defaults to true (a dry-run write no
+  longer ends the event); low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
   `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
   in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;

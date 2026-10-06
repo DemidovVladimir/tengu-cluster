@@ -6,12 +6,17 @@
 
 ---
 
-## lping `lp_swap_plan` (Tue 2026-10-06, branch `feature/lp-swap-plan`)
+## lping execution chains (Tue 2026-10-06) — PR #27 `feature/lp-swap-plan`, then `feature/jev-chains` (step A)
 
 | Change | Note |
 |---|---|
+| Step A: bound slots | `{event = "/x"}`, `{from, path}`, `{observation, path}` bind ONE value (no question to Jev; unresolved ⇒ action illegal); `{event = "/list/*", value}` lists from the event — `config/decision_loop.rs` (`SlotMode`), `application/decision_loop/slots.rs` |
+| Step A: dry-run goes on | a dry-run write no longer ends the event (`run_event`); xlab `xl_gate` (terminal-only) and jev-exec (all `read_only`) unaffected; lping `lp_watch` takes one more step (hold) |
+| Step A: `hedge_decide` `data.order` | `PerpsOrder` = the action as `jup_perps_order` args (close on an entire-position decrease; decrease / close cap ≥ the side's current notional) |
+| Step A: lping `hedge_exec` / `lp_exec` | simulate chains, every arg bound; verified live with Jev (keyless): hedge order simulated (1 tx, 93 733 CU, forced target in a scratch config — the real wallet has no LP, so BUG-011 grace holds), LP swap (1 tx) and open (1 tx, 210 003 CU) simulated |
+| Next (step B) | `ExecutionMap`: the Architect's chain as JSON data, validated as a narrowing of the sandbox TOML, `tengu decide --map`; then money rails (Solana `call_id` idempotency, cross-venue `[risk]`, approval) before any `send` |
 | `lp_swap_plan` | pure port of the bot's `planSwapForDeposit`: permanent + rent SOL reserve, refundable position rent, hedge-collateral USDC reserve; one `jupiter_swap` route (token units) or a typed block (`invalid_input`, `insufficient_total_value` / `_sol` / `_usdc`) |
-| lping | 11 observe/plan tools + 5 `simulate \| send` Solana writes on private `lp_executor`; loops stay `dry_run`; Raydium LP + Hyperliquid live writes remain explicit gaps |
+| lping | 11 observe/plan tools + 5 `simulate \| send` Solana writes on private `lp_executor`; `lp_watch` / `hedge_watch` stay `dry_run`, `hedge_exec` / `lp_exec` simulate; Raydium LP + Hyperliquid live writes remain explicit gaps |
 
 ---
 

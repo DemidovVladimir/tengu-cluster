@@ -1,17 +1,20 @@
 //! Argument slots: turn a `SlotConfig` into labelled candidates the decision
 //! model can choose from, and render the chosen values into tool arguments.
 //!
-//! History- and observation-sourced candidates get short labels (`pool_1`,
-//! `pool_2`) so the model never has to reproduce an address; the full value
-//! stays in code.
+//! History-, observation- and event-sourced list candidates get short labels
+//! (`pool_1`, `pool_2`) so the model never has to reproduce an address; the
+//! full value stays in code. A bound slot (`path`, or `event` without
+//! `value`) is one candidate — filled without a question — or none, which
+//! keeps the action illegal.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
 use super::reduce::select;
 use super::world::World;
-use crate::config::decision_loop::SlotConfig;
+use crate::config::decision_loop::{SlotConfig, SlotMode};
 use crate::domain::decision::HistoryEntry;
 
 /// Max chars of an item shown to the model as a candidate description.
@@ -27,73 +30,88 @@ pub(crate) struct Candidate {
 
 /// Candidates for one slot, capped by `cap` when set. Empty = the action is
 /// not legal right now (e.g. the `from` action has not succeeded yet in this
-/// event, or the `observation` world entry is not fresh). `history` = the
-/// current event's entries, oldest first: the loop never offers items from
-/// an earlier event's result (its data may be hours old).
+/// event, the `observation` world entry is not fresh, or a bound path reads
+/// nothing). `history` = the current event's entries, oldest first: the loop
+/// never offers items from an earlier event's result (its data may be hours
+/// old). `event` = the reduced incoming event.
 pub(crate) fn candidates<'h>(
     slot_name: &str,
     slot: &SlotConfig,
     cap: Option<f64>,
     history: impl DoubleEndedIterator<Item = &'h HistoryEntry>,
     world: &World,
+    event: &Value,
 ) -> Vec<Candidate> {
     let within_cap = |v: &Value| match (cap, as_f64(v)) {
         (Some(c), Some(x)) => x <= c,
         (Some(_), None) => false,
         (None, _) => true,
     };
-    let from_items = |root: &Value, items: &str, value: &str, top: usize| -> Vec<Candidate> {
-        let Value::Array(list) = select(root, items) else {
-            return Vec::new();
-        };
-        list.iter()
-            .filter_map(|item| item.get(value).cloned().map(|v| (item, v)))
-            .filter(|(_, v)| within_cap(v))
-            .take(top)
-            .enumerate()
-            .map(|(i, (item, v))| Candidate {
-                label: format!("{slot_name}_{}", i + 1),
-                value: v,
-                description: describe(item, value),
-            })
-            .collect()
-    };
-    match slot {
-        SlotConfig::Static(values) => values
-            .iter()
-            .filter(|v| within_cap(v))
-            .map(|v| {
-                let label = plain(v);
-                Candidate {
-                    label: label.clone(),
-                    value: v.clone(),
-                    description: label,
-                }
-            })
-            .collect(),
-        SlotConfig::FromHistory {
-            from,
-            items,
-            value,
-            top,
-        } => {
-            let Some(entry) = history
+    let root: Cow<'_, Value> = match slot {
+        SlotConfig::Static(values) => {
+            return values
+                .iter()
+                .filter(|v| within_cap(v))
+                .map(|v| {
+                    let label = plain(v);
+                    Candidate {
+                        label: label.clone(),
+                        value: v.clone(),
+                        description: label,
+                    }
+                })
+                .collect()
+        }
+        SlotConfig::FromHistory { from, .. } => {
+            match history
                 .rev()
                 .find(|h| h.action == *from && h.ok == Some(true))
-            else {
+            {
+                Some(entry) => Cow::Borrowed(&entry.result),
+                None => return Vec::new(),
+            }
+        }
+        SlotConfig::FromObservation { observation, .. } => match world.fresh_root(observation) {
+            Some(root) => Cow::Owned(root),
+            None => return Vec::new(),
+        },
+        SlotConfig::FromEvent { .. } => Cow::Borrowed(event),
+    };
+    match slot.mode() {
+        Some(SlotMode::List { items, value, top }) => {
+            let Value::Array(list) = select(&root, items) else {
                 return Vec::new();
             };
-            from_items(&entry.result, items, value, *top)
+            list.iter()
+                .filter_map(|item| item.get(value).cloned().map(|v| (item, v)))
+                .filter(|(_, v)| within_cap(v))
+                .take(top)
+                .enumerate()
+                .map(|(i, (item, v))| Candidate {
+                    label: format!("{slot_name}_{}", i + 1),
+                    value: v,
+                    description: describe(item, value),
+                })
+                .collect()
         }
-        SlotConfig::FromObservation {
-            observation,
-            items,
-            value,
-            top,
-        } => match world.fresh_root(observation) {
-            Some(root) => from_items(&root, items, value, *top),
-            None => Vec::new(),
-        },
+        // One bound value: a single candidate, filled without a question.
+        // Nothing there (`null`, an empty list) ⇒ no candidate — a binding
+        // never invents a value.
+        Some(SlotMode::One { path }) => {
+            let v = select(&root, path);
+            let empty = v.is_null() || v.as_array().is_some_and(Vec::is_empty);
+            if empty || !within_cap(&v) {
+                return Vec::new();
+            }
+            let label = plain(&v);
+            vec![Candidate {
+                label: label.clone(),
+                value: v,
+                description: label,
+            }]
+        }
+        // Malformed (config validation refuses it at load).
+        None => Vec::new(),
     }
 }
 
@@ -195,6 +213,7 @@ mod tests {
             Some(2.0),
             std::iter::empty(),
             &World::empty(),
+            &Value::Null,
         );
         let labels: Vec<_> = c.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["0.5", "1", "2"]);
@@ -204,8 +223,9 @@ mod tests {
     fn history_candidates_use_latest_success_and_short_labels() {
         let slot = SlotConfig::FromHistory {
             from: "fetch".into(),
-            items: "/pools/*".into(),
-            value: "address".into(),
+            items: Some("/pools/*".into()),
+            path: None,
+            value: Some("address".into()),
             top: 2,
         };
         let mut h = Vec::new();
@@ -216,7 +236,7 @@ mod tests {
             json!({"pools":[{"address":"A1","fees":5},{"address":"B2"},{"address":"C3"}]}),
         ));
         h.push(entry("fetch", false, json!("HTTP 500")));
-        let c = candidates("pool", &slot, None, h.iter(), &World::empty());
+        let c = candidates("pool", &slot, None, h.iter(), &World::empty(), &Value::Null);
         assert_eq!(c.len(), 2);
         assert_eq!(c[0].label, "pool_1");
         assert_eq!(c[0].value, json!("A1"));
@@ -240,12 +260,13 @@ mod tests {
         // `value = "name"` sorts late: it must still show.
         let slot = SlotConfig::FromHistory {
             from: "fetch".into(),
-            items: "/pools/*".into(),
-            value: "name".into(),
+            items: Some("/pools/*".into()),
+            path: None,
+            value: Some("name".into()),
             top: 1,
         };
         let h = vec![entry("fetch", true, json!({ "pools": [row.clone()] }))];
-        let c = candidates("pool", &slot, None, h.iter(), &World::empty());
+        let c = candidates("pool", &slot, None, h.iter(), &World::empty(), &Value::Null);
         let d = &c[0].description;
         assert!(d.chars().count() <= MAX_DESC_CHARS, "{d}");
         assert!(d.contains(r#""name":"SOL-USDC""#), "{d}");
@@ -267,6 +288,7 @@ mod tests {
             None,
             h.iter(),
             &World::empty(),
+            &Value::Null,
         );
         assert_eq!(c[0].description, short.to_string());
     }
@@ -274,8 +296,9 @@ mod tests {
     fn slot_value(value: &str) -> SlotConfig {
         SlotConfig::FromHistory {
             from: "fetch".into(),
-            items: "/pools/*".into(),
-            value: value.into(),
+            items: Some("/pools/*".into()),
+            path: None,
+            value: Some(value.into()),
             top: 5,
         }
     }
@@ -284,22 +307,130 @@ mod tests {
     fn history_slot_empty_before_source_ran() {
         let slot = SlotConfig::FromHistory {
             from: "fetch".into(),
-            items: "/pools/*".into(),
-            value: "address".into(),
+            items: Some("/pools/*".into()),
+            path: None,
+            value: Some("address".into()),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, std::iter::empty(), &World::empty()).is_empty());
+        assert!(candidates(
+            "pool",
+            &slot,
+            None,
+            std::iter::empty(),
+            &World::empty(),
+            &Value::Null
+        )
+        .is_empty());
     }
 
     #[test]
     fn observation_slot_empty_without_a_fresh_world_entry() {
         let slot = SlotConfig::FromObservation {
             observation: "pools".into(),
-            items: "/data/pools/*".into(),
-            value: "address".into(),
+            items: Some("/data/pools/*".into()),
+            path: None,
+            value: Some("address".into()),
             top: 5,
         };
-        assert!(candidates("pool", &slot, None, std::iter::empty(), &World::empty()).is_empty());
+        assert!(candidates(
+            "pool",
+            &slot,
+            None,
+            std::iter::empty(),
+            &World::empty(),
+            &Value::Null
+        )
+        .is_empty());
+    }
+
+    fn bound(path: &str) -> SlotConfig {
+        SlotConfig::FromHistory {
+            from: "plan".into(),
+            items: None,
+            value: None,
+            path: Some(path.into()),
+            top: 5,
+        }
+    }
+
+    #[test]
+    fn a_binding_is_one_candidate_or_none() {
+        let plan = json!({"swaps": [{"amount": 81.6, "input_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"}], "none": null, "empty": []});
+        let h = vec![entry("plan", true, plan)];
+        let one = |slot: &SlotConfig, cap| {
+            candidates("x", slot, cap, h.iter(), &World::empty(), &Value::Null)
+        };
+        let c = one(&bound("/swaps/0/input_mint"), None);
+        assert_eq!(c.len(), 1);
+        assert_eq!(
+            c[0].value,
+            json!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        );
+        assert_eq!(one(&bound("/swaps/0/amount"), None)[0].value, json!(81.6));
+        // Caps hold for bound numbers too.
+        assert!(one(&bound("/swaps/0/amount"), Some(50.0)).is_empty());
+        // Nothing there is no candidate: missing, null, an empty list.
+        for path in ["/swaps/1/amount", "/none", "/empty", "/nope"] {
+            assert!(one(&bound(path), None).is_empty(), "{path}");
+        }
+        // A failed source action binds nothing.
+        let failed = vec![entry("plan", false, json!({"swaps": [{"amount": 1}]}))];
+        let slot = bound("/swaps/0/amount");
+        assert!(candidates(
+            "x",
+            &slot,
+            None,
+            failed.iter(),
+            &World::empty(),
+            &Value::Null
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn event_slots_bind_one_value_or_list_items() {
+        let event = json!({"target_sol": 1.25, "pools": [{"address": "A1"}, {"address": "B2"}]});
+        let one = SlotConfig::FromEvent {
+            event: "/target_sol".into(),
+            value: None,
+            top: 5,
+        };
+        let c = candidates(
+            "t",
+            &one,
+            Some(2.0),
+            std::iter::empty(),
+            &World::empty(),
+            &event,
+        );
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].value, json!(1.25));
+        let list = SlotConfig::FromEvent {
+            event: "/pools/*".into(),
+            value: Some("address".into()),
+            top: 5,
+        };
+        let c = candidates(
+            "pool",
+            &list,
+            None,
+            std::iter::empty(),
+            &World::empty(),
+            &event,
+        );
+        let labels: Vec<_> = c.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["pool_1", "pool_2"]);
+        assert_eq!(c[1].value, json!("B2"));
+        // No event value ⇒ no candidate.
+        assert!(candidates(
+            "t",
+            &one,
+            None,
+            std::iter::empty(),
+            &World::empty(),
+            &json!({})
+        )
+        .is_empty());
     }
 
     #[test]

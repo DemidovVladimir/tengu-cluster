@@ -15,7 +15,9 @@
 //!    `state = {goal, event, world (omitted when empty), history, step}`.
 //! 3. Gate: min(confidence of action, its slots) < `act_at` → escalate
 //!    (orchestrator turn via `Escalator`) and stop.
-//! 4. Terminal → stop. Write action under `dry_run` → log and stop.
+//! 4. Terminal → stop. Write action under `dry_run` → log it (history
+//!    `result = "dry_run"`, `ok` unset) and continue: a slot bound to it
+//!    has no candidate, so what needs its output stays illegal.
 //!    Otherwise render args, re-check caps, run the tool through the
 //!    `ToolExecutor` port (`execute_typed`; same scopes / egress as an
 //!    agent) and append to `history`: a typed result contributes its
@@ -187,7 +189,8 @@ impl DecisionLoop {
     }
 
     /// Up to `max_steps` steps for one event, each with the decision it
-    /// acted on; stops after a step that did not run a tool.
+    /// acted on; stops after a terminal, escalated or rejected step (a
+    /// dry-run write goes on, so a chain can be walked without its writes).
     async fn run_event(
         &self,
         event: &Value,
@@ -201,7 +204,9 @@ impl DecisionLoop {
             let (outcome, decision) = self.step(&mut st, &event, step, session_id).await?;
             let stop = !matches!(
                 outcome,
-                StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
+                StepOutcome::Executed { .. }
+                    | StepOutcome::Refused { .. }
+                    | StepOutcome::DryRun { .. }
             );
             steps.push((outcome, decision));
             if stop {
@@ -234,8 +239,8 @@ impl DecisionLoop {
             let mut slots = BTreeMap::new();
             for (sn, slot) in &action.slots {
                 let this_event = st.history.iter().filter(|h| h.t > st.event_start);
-                let c =
-                    slots::candidates(sn, slot, action.caps.get(sn).copied(), this_event, &world);
+                let cap = action.caps.get(sn).copied();
+                let c = slots::candidates(sn, slot, cap, this_event, &world, event);
                 if c.is_empty() {
                     break;
                 }
@@ -1252,7 +1257,7 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
     }
 
     #[tokio::test]
-    async fn dry_run_blocks_write_actions() {
+    async fn dry_run_blocks_write_actions_and_goes_on() {
         let (l, _, tools, _) = build(
             true,
             vec![
@@ -1262,20 +1267,150 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
                     ("open__pool", "pool_2", 0.9),
                     ("open__size", "1", 0.9),
                 ]),
+                pick(&[("next_action", "hold", 0.99)]),
             ],
         );
         let out = l.handle_event(&json!({}), "s").await.unwrap();
         assert_eq!(
-            out.last(),
-            Some(&StepOutcome::DryRun {
-                action: "open".into()
-            })
+            out[1..],
+            [
+                StepOutcome::DryRun {
+                    action: "open".into()
+                },
+                StepOutcome::Stopped {
+                    action: "hold".into()
+                }
+            ]
         );
         assert_eq!(
             tools.0.lock().unwrap().len(),
             1,
             "only the read-only fetch ran"
         );
+    }
+
+    /// A chain bound end to end: the event (what a higher-order agent hands
+    /// the loop) fills `wallet` / `size`, the earlier `fetch` fills `pool` —
+    /// no slot question reaches Jev, and `open` is illegal until every
+    /// binding resolves.
+    fn chain(
+        dry_run: bool,
+        script: Vec<Decision>,
+    ) -> (DecisionLoop, Arc<Scripted>, Arc<FakeTools>) {
+        let cfg: DecisionLoopConfig = toml::from_str(&format!(
+            r#"
+goal = "fetch, then open what the event asks for"
+agent = "a"
+dry_run = {dry_run}
+[actions.hold]
+description = "nothing"
+[actions.fetch]
+description = "fetch pools"
+tool = "http_request"
+read_only = true
+args = {{ method = "GET", url = "https://x/pools" }}
+[actions.open]
+description = "open position"
+tool = "open_position"
+args = {{ wallet = "{{wallet}}", pool = "{{pool}}", size = "{{size}}", mode = "simulate" }}
+slots = {{ wallet = {{ event = "/wallet" }}, size = {{ event = "/size" }}, pool = {{ from = "fetch", path = "/pools/0/address" }} }}
+caps = {{ size = 2.0 }}
+"#
+        ))
+        .unwrap();
+        assert!(cfg.validation_errors("chain").is_empty());
+        let engine = Arc::new(Scripted::new(script));
+        let tools = Arc::new(FakeTools(StdMutex::new(vec![])));
+        let l = DecisionLoop::new(
+            "chain",
+            cfg,
+            engine.clone(),
+            tools.clone(),
+            None,
+            None,
+            None,
+        );
+        (l, engine, tools)
+    }
+
+    fn fetch_open_hold() -> Vec<Decision> {
+        vec![
+            pick(&[("next_action", "fetch", 0.95)]),
+            pick(&[("next_action", "open", 0.95)]),
+            pick(&[("next_action", "hold", 0.99)]),
+        ]
+    }
+
+    #[tokio::test]
+    async fn bound_slots_fill_args_from_event_and_history() {
+        let (l, engine, tools) = chain(false, fetch_open_hold());
+        let out = l
+            .handle_event(&json!({"wallet": "W1", "size": 1.5}), "s")
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(!legal_actions(&engine, 0).contains(&"open".to_string()));
+        assert!(legal_actions(&engine, 1).contains(&"open".to_string()));
+        let seen = engine.seen.lock().unwrap();
+        assert!(
+            seen[1].keys().all(|k| !k.starts_with("open__")),
+            "bound slots ask nothing: {:?}",
+            seen[1].keys()
+        );
+        let calls = tools.0.lock().unwrap();
+        assert_eq!(
+            calls[1].arguments,
+            json!({"wallet": "W1", "pool": "A1", "size": 1.5, "mode": "simulate"})
+        );
+    }
+
+    #[tokio::test]
+    async fn unresolved_or_capped_bindings_keep_the_action_illegal() {
+        for event in [
+            json!({"wallet": "W1", "size": 3}), // above the cap
+            json!({"size": 1}),                 // no wallet
+            json!({"wallet": null, "size": 1}), // null is nothing
+        ] {
+            let (l, engine, tools) = chain(
+                false,
+                vec![
+                    pick(&[("next_action", "fetch", 0.95)]),
+                    pick(&[("next_action", "hold", 0.99)]),
+                ],
+            );
+            l.handle_event(&event, "s").await.unwrap();
+            assert!(
+                !legal_actions(&engine, 1).contains(&"open".to_string()),
+                "{event}"
+            );
+            assert_eq!(tools.0.lock().unwrap().len(), 1, "{event}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dry_run_walks_the_chain_without_its_write() {
+        let (l, _, tools) = chain(true, fetch_open_hold());
+        let out = l
+            .handle_event(&json!({"wallet": "W1", "size": 1}), "s")
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            [
+                StepOutcome::Executed {
+                    action: "fetch".into()
+                },
+                StepOutcome::DryRun {
+                    action: "open".into()
+                },
+                StepOutcome::Stopped {
+                    action: "hold".into()
+                },
+            ]
+        );
+        assert_eq!(tools.0.lock().unwrap().len(), 1, "the write never ran");
+        let h = l.history().await;
+        assert_eq!(h[1].args["pool"], json!("A1"), "dry-run args are resolved");
     }
 
     #[tokio::test]
