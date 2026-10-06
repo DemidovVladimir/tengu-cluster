@@ -5,6 +5,7 @@ pub(crate) mod book;
 pub(crate) mod clock;
 pub(crate) mod decision;
 pub(crate) mod engine;
+pub(crate) mod evidence;
 pub(crate) mod history;
 pub(crate) mod market_data;
 pub(crate) mod memory;

@@ -10,6 +10,7 @@ pub(crate) mod canonical;
 pub(crate) mod decision;
 pub(crate) mod engine_smoke;
 pub(crate) mod evidence;
+pub(crate) mod evidence_coverage;
 pub(crate) mod hl;
 pub(crate) mod lp;
 pub(crate) mod market;

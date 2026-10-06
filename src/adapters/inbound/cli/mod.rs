@@ -4,6 +4,7 @@
 mod backtest;
 mod decide;
 mod doctor;
+mod evidence;
 mod history;
 mod risk;
 mod run_agent;
@@ -131,6 +132,14 @@ enum Commands {
         sandbox: Option<String>,
         #[command(flatten)]
         args: backtest::BacktestArgs,
+    },
+    /// Preserve and grade forward evidence (docs/lineage-2026-10-06.md § 3):
+    /// `snapshot` a record into a read-only vault, `verify` it, recorder
+    /// `coverage`, `grade` a paper ledger, `regrade` rule W from recorded
+    /// books. No config, no network; every reader is read-only.
+    Evidence {
+        #[command(subcommand)]
+        action: evidence::EvidenceAction,
     },
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
@@ -395,6 +404,20 @@ pub(crate) async fn run() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
         return tool::run_tool_command(cli.config, action).await;
+    }
+
+    if let Some(Commands::Evidence { action }) = cli.command {
+        // No config, secrets or egress: read-only files + the new vault.
+        // stdout carries the report; logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return tokio::task::block_in_place(|| evidence::run_evidence(action));
     }
 
     let tengu_home = resolve_tengu_home();
@@ -711,6 +734,9 @@ pub(crate) async fn run() -> Result<()> {
         }
         Commands::Tool { .. } => {
             unreachable!("Commands::Tool is dispatched earlier in main()")
+        }
+        Commands::Evidence { .. } => {
+            unreachable!("Commands::Evidence is dispatched earlier in main()")
         }
     }
 }
