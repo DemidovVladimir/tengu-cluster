@@ -9,7 +9,7 @@
 //! | Piece | Rule |
 //! |---|---|
 //! | Price at T ([`pick_ctx`]) | the latest `mkt_ctx/1` row observed ≤ T, at most its max age old (anchor: `anchor_max_age`, entry / exit: `ctx_max_age`); a row that is not `ok` / `partial` or has no `mid` / `mark` > 0 ⇒ MISSING with the reason (never 0) — as the live rule (`weekend_fade::price_point`) |
-//! | Signal | s = ln(P_entry / P_anchor) bps ([`signal_of`]); s = 0 ⇒ `flat` |
+//! | Signal | s = ln(P_signal / P_anchor) bps ([`signal_of`]); P_signal = the price at `signal_ms` (default: the entry instant; a prereg may freeze its signals at another sweep — [`Instants::signal_at`]); s = 0 ⇒ `flat` |
 //! | Selection | `top_n`: [`select_capped`] (largest \|s\| ≥ `min_abs_signal_bps`, ties by id); else every signal with \|s\| ≥ `min_abs_signal_bps` |
 //! | Side | fade = −sign(s), follow = sign(s) |
 //! | Book at T ([`pick_book`]) | `as_of`: the latest `hl_book/1` row observed ≤ T; `next`: the first observed ≥ T (the book an order sent at T meets — the paper engine's); within `book_max_age` either way; `ok` / `partial` with a valid book, else MISSING |
@@ -78,6 +78,16 @@ pub struct Instants {
     pub anchor_ms: i64,
     pub entry_ms: i64,
     pub exit_ms: i64,
+    /// When the signal is read; `None` = at the entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_ms: Option<i64>,
+}
+
+impl Instants {
+    /// The signal instant: `signal_ms`, else the entry.
+    pub fn signal_at(&self) -> i64 {
+        self.signal_ms.unwrap_or(self.entry_ms)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -522,7 +532,7 @@ pub fn regrade(data: &[LegData], rule: &RegradeRule, inst: &Instants, lim: &Limi
     sorted.sort_by(|a, b| a.instrument.cmp(&b.instrument));
     for d in &sorted {
         let anchor = pick_ctx(&d.ctx, inst.anchor_ms, lim.anchor_max_age_ms);
-        let entry = pick_ctx(&d.ctx, inst.entry_ms, lim.ctx_max_age_ms);
+        let entry = pick_ctx(&d.ctx, inst.signal_at(), lim.ctx_max_age_ms);
         let anchor_px = anchor
             .as_ref()
             .ok()
@@ -897,6 +907,7 @@ mod tests {
         anchor_ms: 0,
         entry_ms: 10 * H,
         exit_ms: 12 * H,
+        signal_ms: None,
     };
     const LIM: Limits = Limits {
         anchor_max_age_ms: 600_000,
@@ -1035,6 +1046,25 @@ mod tests {
         };
         let r = regrade(&[up_name("x:UP")], &follow, &INST, &LIM);
         assert_eq!(r.legs[0].side, Some(Side::Buy));
+    }
+
+    #[test]
+    fn a_later_signal_instant_moves_the_signal_not_the_fills() {
+        let inst = Instants {
+            signal_ms: Some(11 * H),
+            ..INST
+        };
+        let r = regrade(&[up_name("x:UP")], &rule(None), &inst, &LIM);
+        let leg = &r.legs[0];
+        let s = leg.signal.as_ref().unwrap();
+        assert_eq!(s.entry_at_ms, 11 * H - 30_000);
+        assert!((s.s_bps - (1.01f64).ln() * 1e4).abs() < 1e-9);
+        assert_eq!(
+            leg.entry.as_ref().unwrap().book_observed_at_ms,
+            10 * H + 400
+        );
+        assert_eq!(inst.signal_at(), 11 * H);
+        assert_eq!(INST.signal_at(), 10 * H);
     }
 
     #[test]

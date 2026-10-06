@@ -386,8 +386,12 @@ pub(crate) fn regrade(
     inst: &Instants,
     lim: &Limits,
 ) -> Result<Regrade> {
-    if !(inst.anchor_ms < inst.entry_ms && inst.entry_ms < inst.exit_ms) {
-        bail!("instants must satisfy anchor < entry < exit");
+    if !(inst.anchor_ms < inst.entry_ms
+        && inst.entry_ms < inst.exit_ms
+        && inst.anchor_ms < inst.signal_at()
+        && inst.signal_at() < inst.exit_ms)
+    {
+        bail!("instants must satisfy anchor < entry < exit and anchor < signal < exit");
     }
     if !(rule.notional_usd.is_finite() && rule.notional_usd > 0.0) {
         bail!("notional_usd {} is not > 0", rule.notional_usd);
@@ -395,6 +399,7 @@ pub(crate) fn regrade(
     let mut ctx_spans = vec![
         (inst.anchor_ms - lim.anchor_max_age_ms, inst.anchor_ms + 1),
         (inst.entry_ms - lim.ctx_max_age_ms, inst.entry_ms + 1),
+        (inst.signal_at() - lim.ctx_max_age_ms, inst.signal_at() + 1),
         (inst.exit_ms - lim.ctx_max_age_ms, inst.exit_ms + 1),
     ];
     let mut h = (inst.entry_ms.div_euclid(HOUR_MS) + 1) * HOUR_MS;

@@ -9,7 +9,7 @@
 //! | `verify <record file>` | re-hash the vault: MATCH · MISMATCH · ABSENT · EXTRA; exit 1 unless all MATCH |
 //! | `coverage --history <dir>… --schema <s> --from --to --cadence-secs N [--bars <market.db> --interval 1m] [--instruments ids…]` | cadence slots, gaps, `LIVE_RECORDED` / `BACKFILLED` / `MISSING` intervals |
 //! | `grade --ledger <ledger.db> [--account A…]` | trades, totals, verdicts, 10 reconciliation checks per account; exit 1 when one fails |
-//! | `regrade --history <dir>… --anchor --entry --exit --notional-usd N [--top-n N] [--min-abs-signal-bps X] [--direction fade\|follow] [--taker-fee-bps F \| --fees recorded] [--market-db <db>] [--instruments ids…] [--fill-book as-of\|next] [--compare-ledger <db> --compare-account A] [--expect-signals <file>]` | rule W or a variant from recorded rows (`domain/xm/regrade.rs`) |
+//! | `regrade --history <dir>… --anchor [--signal-at] --entry --exit --notional-usd N [--top-n N] [--min-abs-signal-bps X] [--direction fade\|follow] [--taker-fee-bps F \| --fees recorded] [--market-db <db>] [--instruments ids…] [--fill-book as-of\|next] [--compare-ledger <db> --compare-account A] [--expect-signals <file>]` | rule W or a variant from recorded rows (`domain/xm/regrade.rs`) |
 //!
 //! Every command takes `--format text|json`. Times: RFC 3339, epoch ms or a
 //! UTC date (`domain::marketdata::parse_time`); printed RFC 3339 UTC with
@@ -134,6 +134,9 @@ pub(super) struct RegradeArgs {
     entry: String,
     #[arg(long)]
     exit: String,
+    /// Read the signal here instead of at --entry (a prereg that froze its signals at another sweep).
+    #[arg(long)]
+    signal_at: Option<String>,
     /// The N largest |s|; default every name.
     #[arg(long)]
     top_n: Option<usize>,
@@ -353,8 +356,8 @@ fn verify(path: &Path, format: Format) -> Result<()> {
         Format::Text => {
             println!("vault {}", rep.vault);
             println!(
-                "MANIFEST.json {:?}  expected {}  actual {}",
-                rep.manifest.status,
+                "MANIFEST.json {}  expected {}  actual {}",
+                format!("{:?}", rep.manifest.status).to_uppercase(),
                 rep.manifest.expected.as_deref().unwrap_or("-"),
                 rep.manifest.actual.as_deref().unwrap_or("ABSENT")
             );
@@ -376,8 +379,8 @@ fn verify(path: &Path, format: Format) -> Result<()> {
             println!("files {} MATCH of {} listed", rep.files_match, rep.files);
             for p in &rep.problems {
                 println!(
-                    "{:?} {}  expected {}  actual {}",
-                    p.status,
+                    "{} {}  expected {}  actual {}",
+                    format!("{:?}", p.status).to_uppercase(),
                     p.path,
                     p.expected.as_deref().unwrap_or("-"),
                     p.actual.as_deref().unwrap_or("-")
@@ -585,6 +588,7 @@ fn regrade(a: RegradeArgs) -> Result<()> {
         anchor_ms: time(&a.anchor)?,
         entry_ms: time(&a.entry)?,
         exit_ms: time(&a.exit)?,
+        signal_ms: a.signal_at.as_deref().map(time).transpose()?,
     };
     let fees = match (a.taker_fee_bps, a.fees) {
         (Some(b), None) => FeeModel::Flat { taker_bps: b },
@@ -741,10 +745,11 @@ fn regrade_text(r: &Regrade, h: &DayFiles, market: Option<&MarketDb>) -> String 
     use crate::ports::evidence::RecordedHistory;
     let s = &r.summary;
     let mut out = format!(
-        "history {}\nmarket.db {}\nanchor {}  entry {}  exit {}\nrule {:?}  top_n {}  |s| ≥ {}  ${} per name  fees {:?}  fill book {:?}\n",
+        "history {}\nmarket.db {}\nanchor {}  signal {}  entry {}  exit {}\nrule {:?}  top_n {}  |s| ≥ {}  ${} per name  fees {:?}  fill book {:?}\n",
         h.describe(),
         market.map_or("none".into(), |m| m.describe()),
         ts(r.instants.anchor_ms),
+        ts(r.instants.signal_at()),
         ts(r.instants.entry_ms),
         ts(r.instants.exit_ms),
         r.rule.direction,
