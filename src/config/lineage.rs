@@ -1,6 +1,7 @@
-//! The lineage registry loader (`docs/lineage-2026-10-06.md` § 1): the
-//! records under `lineage/` read into the pure `Registry`, and the
-//! `config:` / `spec:` pins recomputed from the repo's sandbox configs.
+//! The lineage registry loader and `[generation]` — a sandbox bound to one
+//! generation (`docs/lineage-2026-10-06.md` § 1, § 4; roadmap P5). Hard
+//! enforcement: `Config::load` (every surface) refuses a config that could
+//! reach a capability outside its generation.
 //!
 //! | Loader ([`load_registry`]) | Rule |
 //! |---|---|
@@ -8,18 +9,65 @@
 //! | files | `<id>.toml` per record, the file stem = its `id`; `locks.toml` at the root; `*.md` and dotfiles skipped; another file refused |
 //! | parse | every table `deny_unknown_fields`; each error names the file |
 //! | digest | `pins::toml_digest` of each record file (what `locks.toml` pins) |
+//!
+//! ```toml
+//! [generation]               # in sandboxes/<name>/config.toml
+//! id = "W1"
+//! registry = "../../lineage" # relative to this file
+//! ```
+//!
+//! | Load rule ([`binding_errors`]; a violation fails `Config::load`) | The error names |
+//! |---|---|
+//! | the registry loads; `generations/<id>.toml` exists; it lists this sandbox (`paths::sandbox_of_config_file`) in `sandboxes` | generation, sandbox |
+//! | no Error finding of the registry on this generation (`frozen_manifest_changed`, `capability_version_missing`, its references) or any `binding_conflict` | the finding |
+//! | every tool an agent lists (`tools`, `workspace_tools`), every `[feeds.*]` tool and `[decision_loops.*]` action tool passes `GenerationScope::tool_refusal`: a tool some capability binds must be bound by one of the generation's; an opt-in tool (`WORKSPACE_TOOLS`) no capability binds is refused | sandbox, agent / feed / loop + action, tool, capability, generation |
+//! | every `[backtest.strategies.*]` kind passes `GenerationScope::kind_refusal` | sandbox, strategy, kind, capability, generation |
+//! | a `FROZEN` generation's `config:` / `spec:` pins recompute equal from `<repo>/sandboxes/<s>/config.toml` (repo = the registry's parent; `tool_schema:` pins: `tengu lineage verify --pins`) | generation, pin, both hashes |
+//!
+//! The resolved `GenerationScope` reaches tools as `SandboxSections::generation`
+//! (`Config::sandbox_sections`): the backtest use case refuses a spec kind
+//! outside it (`capability_unavailable`), `bootstrap/tools.rs` registers no
+//! tool outside it.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use super::paths;
+use super::sections::DEFAULT_SANDBOX;
+use super::Config;
+use crate::domain::lineage::generation::{GenerationScope, GenerationStatus};
 use crate::domain::lineage::pins::{config_pin, spec_pin, toml_digest};
+use crate::domain::lineage::registry::label;
 use crate::domain::lineage::value::{PinTarget, RecordKind};
-use crate::domain::lineage::Registry;
+use crate::domain::lineage::{Registry, Severity};
 
 /// The lock file at the registry root.
 pub const LOCKS_FILE: &str = "locks.toml";
+
+/// `[generation]` (module example).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenerationBinding {
+    pub id: String,
+    /// The registry dir, relative to the config file's dir.
+    pub registry: PathBuf,
+}
+
+impl GenerationBinding {
+    /// The registry dir for the config file at `config_file`.
+    pub fn registry_dir(&self, config_file: &Path) -> PathBuf {
+        if self.registry.is_absolute() {
+            return self.registry.clone();
+        }
+        config_file
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(&self.registry)
+    }
+}
 
 /// `<registry>/<kind dir>/<id>.toml`.
 pub fn record_path(dir: &Path, kind: RecordKind, id: &str) -> PathBuf {
@@ -196,6 +244,122 @@ pub fn sandbox_pin(registry_dir: &Path, target: &PinTarget) -> Option<Result<Str
         PinTarget::Spec { strategy, .. } => spec_pin(&text, strategy),
         _ => unreachable!("matched above"),
     })
+}
+
+/// The module's load rules for `cfg` read from `path`; the scope when the
+/// config binds a generation that exists.
+pub(crate) fn binding_errors(cfg: &Config, path: &Path) -> (Vec<String>, Option<GenerationScope>) {
+    let Some(binding) = &cfg.generation else {
+        return (Vec::new(), None);
+    };
+    let gid = &binding.id;
+    let at = format!("[generation] id = \"{gid}\"");
+    let dir = binding.registry_dir(path);
+    let reg = match load_registry(&dir) {
+        Ok(r) => r,
+        Err(es) => {
+            return (
+                es.into_iter()
+                    .map(|e| format!("{at}: registry {}: {e}", dir.display()))
+                    .collect(),
+                None,
+            )
+        }
+    };
+    let Some(g) = reg.generations.get(gid) else {
+        return (
+            vec![format!(
+                "{at}: no generations/{gid}.toml in the registry {}",
+                dir.display()
+            )],
+            None,
+        );
+    };
+    let mut errs = Vec::new();
+    let sandbox = paths::sandbox_of_config_file(path);
+    match &sandbox {
+        None => errs.push(format!(
+            "{at}: {} is no sandboxes/<name>/config.toml — a generation lists its sandboxes by name",
+            path.display()
+        )),
+        Some(s) if !g.sandboxes.contains(s) => errs.push(format!(
+            "{at}: generation `{gid}` does not list sandbox `{s}` (its sandboxes: {})",
+            if g.sandboxes.is_empty() {
+                "none".to_string()
+            } else {
+                g.sandboxes.join(", ")
+            }
+        )),
+        Some(_) => {}
+    }
+    let mine = label(RecordKind::Generation, gid);
+    for f in reg.validate() {
+        if f.severity == Severity::Error && (f.record == mine || f.code == "binding_conflict") {
+            errs.push(format!("{at}: {} {}: {}", f.code, f.record, f.message));
+        }
+    }
+    let scope = match GenerationScope::of(&reg, gid) {
+        Ok(s) => s,
+        Err(e) => return (vec![format!("{at}: {e}")], None),
+    };
+    let s = sandbox.as_deref().unwrap_or(DEFAULT_SANDBOX);
+    let mut agents: Vec<_> = cfg.agents.iter().collect();
+    agents.sort_by(|a, b| a.0.cmp(b.0));
+    for (aid, a) in agents {
+        let tools: BTreeSet<&str> = a
+            .tools
+            .iter()
+            .chain(&a.workspace_tools)
+            .map(String::as_str)
+            .collect();
+        for t in tools {
+            if let Some(why) = scope.tool_refusal(t) {
+                errs.push(format!("sandbox `{s}` agent `{aid}`: {why}"));
+            }
+        }
+    }
+    for (name, feed) in &cfg.feeds {
+        if let Some(why) = feed.tool.as_deref().and_then(|t| scope.tool_refusal(t)) {
+            errs.push(format!("sandbox `{s}` feed `{name}`: {why}"));
+        }
+    }
+    let mut loops: Vec<_> = cfg.decision_loops.iter().collect();
+    loops.sort_by(|a, b| a.0.cmp(b.0));
+    for (name, dl) in loops {
+        for (an, action) in &dl.actions {
+            if let Some(why) = action.tool.as_deref().and_then(|t| scope.tool_refusal(t)) {
+                errs.push(format!("sandbox `{s}` loop `{name}` action `{an}`: {why}"));
+            }
+        }
+    }
+    if let Some(bt) = &cfg.backtest {
+        for (name, spec) in &bt.strategies {
+            let kind = spec
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<none>");
+            if let Some(why) = scope.kind_refusal(kind) {
+                errs.push(format!("sandbox `{s}` strategy `{name}`: {why}"));
+            }
+        }
+    }
+    if g.status == GenerationStatus::Frozen {
+        for p in &g.pins {
+            match sandbox_pin(&dir, &p.target) {
+                None => {}
+                Some(Ok(now)) if now == p.sha256 => {}
+                Some(Ok(now)) => errs.push(format!(
+                    "{at}: FROZEN generation `{gid}` pin `{}` drifted: pinned {}, now {now}",
+                    p.target, p.sha256
+                )),
+                Some(Err(e)) => errs.push(format!(
+                    "{at}: FROZEN generation `{gid}` pin `{}` does not resolve: {e}",
+                    p.target
+                )),
+            }
+        }
+    }
+    (errs, Some(scope))
 }
 
 #[cfg(test)]

@@ -85,3 +85,212 @@ fn every_load_problem_names_its_file() {
     assert_eq!(errs.len(), 6, "{errs:#?}");
     assert!(load_registry(&tmp.path().join("none")).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// `[generation]` binding (roadmap G5: W1 cannot reach W2, W1 unchanged)
+// ---------------------------------------------------------------------------
+
+use crate::config::Config;
+use crate::domain::backtest::checks::assert_rule_w_golden;
+use crate::domain::backtest::spec::spec_sha256;
+use crate::domain::backtest::testkit::{run_params, utc};
+
+fn w1() -> PathBuf {
+    fixture_root().join("sandboxes/w1/config.toml")
+}
+
+fn w2() -> PathBuf {
+    fixture_root().join("sandboxes/w2sim/config.toml")
+}
+
+fn load_err(path: &Path) -> String {
+    match Config::load(path) {
+        Ok(_) => panic!("{} loaded", path.display()),
+        Err(e) => format!("{e:#}"),
+    }
+}
+
+/// A copy of the fixture repo (registry + sandboxes) with `sandbox`'s config
+/// text edited; returns the copy and that config's path.
+fn copy_with(sandbox: &str, edit: impl Fn(String) -> String) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    for d in ["registry", "sandboxes"] {
+        copy_dir(&fixture_root().join(d), &tmp.path().join(d));
+    }
+    let cfg = tmp
+        .path()
+        .join("sandboxes")
+        .join(sandbox)
+        .join("config.toml");
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    std::fs::write(&cfg, edit(text)).unwrap();
+    (tmp, cfg)
+}
+
+#[test]
+fn w1_loads_bound_to_its_generation() {
+    let cfg = Config::load(&w1()).unwrap_or_else(|e| panic!("{e:#}"));
+    let scope = cfg.generation_scope.clone().expect("bound");
+    assert_eq!(scope.id, "W1");
+    assert!(scope.available_kinds.contains("weekend_window"));
+    assert!(!scope.available_kinds.contains("event_window"));
+    assert!(scope.available_tools.contains("backtest"));
+    assert!(!scope.available_tools.contains("w2_news_probe"));
+    // Every agent's tools see the same scope (`SandboxSections`).
+    let agent = &cfg.agents["architect"];
+    assert_eq!(agent.sandbox.sandbox.as_deref(), Some("w1"));
+    assert_eq!(
+        agent.sandbox.generation.as_deref().map(|g| g.id.as_str()),
+        Some("W1")
+    );
+    let w2 = Config::load(&w2()).unwrap_or_else(|e| panic!("{e:#}"));
+    let s2 = w2.generation_scope.unwrap();
+    assert!(s2.available_kinds.contains("event_window"));
+    assert!(s2.available_tools.contains("w2_news_probe"));
+}
+
+#[test]
+fn w1_cannot_reach_a_w2_only_capability() {
+    let (_t, cfg) = copy_with("w1", |t| {
+        t.replace(
+            r#"tools = ["backtest", "market_history", "read_file"]"#,
+            r#"tools = ["backtest", "market_history", "read_file", "w2_news_probe", "hl_ctx"]"#,
+        )
+    });
+    let e = load_err(&cfg);
+    assert!(
+        e.contains(
+            "sandbox `w1` agent `architect`: tool `w2_news_probe` is bound by capability \
+             `cap.news_probe`, which generation `W1` does not include"
+        ),
+        "{e}"
+    );
+    assert!(
+        e.contains(
+            "sandbox `w1` agent `architect`: opt-in tool `hl_ctx` is bound by no capability"
+        ),
+        "closed world: {e}"
+    );
+    let (_t, cfg) = copy_with("w1", |t| {
+        t + "\n[backtest.strategies.news_event]\nkind = \"event_window\"\n\
+             events = [{ instrument = \"hyperliquid:xyz:TSLA\", t = \"2026-09-29T13:30:00Z\" }]\n\
+             interval = \"5m\"\ndirection = \"follow\"\nexit_after_mins = 60\n"
+    });
+    let e = load_err(&cfg);
+    assert!(
+        e.contains(
+            "sandbox `w1` strategy `news_event`: strategy kind `event_window` is bound by \
+             capability `cap.event_window`, which generation `W1` does not include"
+        ),
+        "{e}"
+    );
+    let (_t, cfg) = copy_with("w1", |t| {
+        t + "\n[decision_loops.probe]\ngoal = \"read the news\"\nagent = \"architect\"\n\
+             [decision_loops.probe.actions.ask]\ndescription = \"ask\"\ntool = \"w2_news_probe\"\n\
+             [decision_loops.probe.actions.hold]\ndescription = \"stop\"\n\
+             [feeds.probe]\nkind = \"tool\"\nevery_secs = 60\nagent = \"architect\"\ntool = \"w2_news_probe\"\n"
+    });
+    let e = load_err(&cfg);
+    for at in ["loop `probe` action `ask`", "feed `probe`"] {
+        assert!(
+            e.contains(&format!(
+                "sandbox `w1` {at}: tool `w2_news_probe` is bound by capability `cap.news_probe`"
+            )),
+            "{at}: {e}"
+        );
+    }
+}
+
+#[test]
+fn a_generation_binds_only_the_sandboxes_it_lists() {
+    let (_t, cfg) = copy_with("w2sim", |t| t.replace("id = \"W2-SIM\"", "id = \"W1\""));
+    let e = load_err(&cfg);
+    assert!(
+        e.contains("generation `W1` does not list sandbox `w2sim` (its sandboxes: w1)"),
+        "{e}"
+    );
+    let (_t, cfg) = copy_with("w1", |t| t.replace("id = \"W1\"", "id = \"W9\""));
+    assert!(load_err(&cfg).contains("no generations/W9.toml"));
+    let (_t, cfg) = copy_with("w1", |t| {
+        t.replace(
+            "registry = \"../../registry\"",
+            "registry = \"../../nowhere\"",
+        )
+    });
+    assert!(load_err(&cfg).contains("no registry directory"));
+    // Not a sandboxes/<name>/config.toml: no sandbox name to list.
+    let tmp = tempfile::tempdir().unwrap();
+    let loose = tmp.path().join("config.toml");
+    let text = std::fs::read_to_string(w1()).unwrap().replace(
+        "registry = \"../../registry\"",
+        &format!(
+            "registry = \"{}\"",
+            fixture_root().join("registry").display()
+        ),
+    );
+    std::fs::write(&loose, text).unwrap();
+    assert!(load_err(&loose).contains("is no sandboxes/<name>/config.toml"));
+}
+
+#[test]
+fn a_frozen_generation_refuses_drift_at_load() {
+    let (_t, cfg) = copy_with("w1", |t| {
+        t.replace("max_order_notional_usd = 25", "max_order_notional_usd = 30")
+    });
+    let e = load_err(&cfg);
+    assert!(
+        e.contains(
+            "FROZEN generation `W1` pin `config:w1/risk` drifted: pinned \
+             241b167a509e9e561b11424f877a61c0aa13d75189b11acfaaee000869d98eeb, now "
+        ),
+        "{e}"
+    );
+    let (tmp, cfg) = copy_with("w1", |t| t);
+    let manifest = tmp.path().join("registry/generations/W1.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        text.replace("status = \"BASELINE\"", "status = \"PROVEN\""),
+    )
+    .unwrap();
+    let e = load_err(&cfg);
+    assert!(e.contains("frozen_manifest_changed generation/W1"), "{e}");
+}
+
+/// Roadmap G5 / handoff § 59: loading the W2 candidate changes nothing in
+/// W1 — its manifest digest and lock, its pinned rule-W spec hash — and W1's
+/// rule W, taken from the W1 config, replays the 2026-09-26 golden exactly,
+/// before and after.
+#[test]
+fn w2_leaves_w1_and_its_replay_unchanged() {
+    let dir = fixture_root().join("registry");
+    let before = load_registry(&dir).unwrap();
+    let key = (RecordKind::Generation, "W1".to_string());
+    let digest = before.digests[&key].clone();
+    assert_eq!(before.locks.frozen[0].manifest_sha256, digest);
+    let pinned = before.generations["W1"]
+        .pins
+        .iter()
+        .find(|p| p.target.to_string() == "spec:w1/rule_w")
+        .map(|p| p.sha256.clone())
+        .unwrap();
+    let replay = || {
+        let cfg = Config::load(&w1()).unwrap_or_else(|e| panic!("{e:#}"));
+        let spec = cfg.backtest.as_ref().unwrap().strategy("rule_w").unwrap();
+        assert_eq!(spec_sha256(&spec.to_value()), pinned, "W1's pinned spec");
+        let mut p = run_params(utc("2026-09-25 00:00"), utc("2026-09-29 00:00"));
+        p.calendars = cfg.agents["architect"].sandbox.calendars.clone();
+        assert_rule_w_golden(&spec, &p);
+    };
+    replay();
+    Config::load(&w2()).unwrap_or_else(|e| panic!("{e:#}"));
+    let after = load_registry(&dir).unwrap();
+    assert_eq!(after.digests[&key], digest, "W1 manifest unchanged");
+    assert_eq!(after.locks.frozen, before.locks.frozen, "W1 lock unchanged");
+    let text = std::fs::read_to_string(w1()).unwrap();
+    assert_eq!(
+        crate::domain::lineage::pins::spec_pin(&text, "rule_w").unwrap(),
+        pinned
+    );
+    replay();
+}

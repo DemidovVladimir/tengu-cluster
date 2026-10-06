@@ -526,6 +526,17 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # min_interval_secs = { "hl_book/1" = 60 }   # at most one row per key per interval
 # retention_days = 30                        # older day files deleted (0 = keep all)
 
+# --- Generation binding (lineage registry; docs/lineage-2026-10-06.md § 4) ---
+# Binds this sandbox to one generation of the lineage registry: `Config::load`
+# refuses any agent / feed / loop tool, or [backtest.strategies] kind, outside
+# the generation's capabilities (an opt-in tool no capability binds too), and a
+# FROZEN generation whose manifest or config: / spec: pins changed. The
+# generation must list this sandbox (`sandboxes = ["<name>"]`). Check the
+# registry with `tengu lineage verify --pins`.
+# [generation]
+# id = "W1"
+# registry = "../../lineage"                # relative to this config file
+
 # --- Backtests (xlab; needs [xmarket]) ---
 # `tengu backtest --sandbox <s> --strategy <name>` (or `--spec <file.json>`) runs a
 # strategy spec on <TENGU_HOME>/state/<xmarket.state>/market.db (filled by `tengu

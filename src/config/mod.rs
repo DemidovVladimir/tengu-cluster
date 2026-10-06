@@ -244,6 +244,18 @@ pub struct Config {
     #[serde(default)]
     pub skill_lifecycle: Option<crate::config::skill_lifecycle::SkillLifecycleConfig>,
 
+    /// `[generation]` — the lineage generation this sandbox is bound to
+    /// (`config/lineage.rs`): `Config::load` refuses any tool or strategy
+    /// kind outside it. Absent = unbound.
+    #[serde(default)]
+    pub generation: Option<lineage::GenerationBinding>,
+
+    /// Runtime (never in TOML): the bound generation's resolved scope, set by
+    /// `Config::load` (`lineage::binding_errors`) → `SandboxSections::generation`.
+    #[serde(skip)]
+    pub generation_scope:
+        Option<std::sync::Arc<crate::domain::lineage::generation::GenerationScope>>,
+
     /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
     /// `None` for the default user config. Populated by `load_sandbox_or` in
     /// `main.rs`. Plumbed through `SubprocessRunner` and the IPC payload so
@@ -1148,10 +1160,13 @@ impl Config {
         let mut config: Config = toml::from_str(&content)?;
         let mut errors = config.validation_errors();
         errors.extend(hardening::config_file_errors(&config, path));
+        let (generation_errors, scope) = lineage::binding_errors(&config, path);
+        errors.extend(generation_errors);
         Self::fail_on(errors)?;
         for warning in config.validation_warnings() {
             tracing::warn!(path = %path.display(), "{warning}");
         }
+        config.generation_scope = scope.map(std::sync::Arc::new);
         config.loaded_from = Some(path.to_path_buf());
         config.fold_default_scopes();
         Ok(config)
@@ -1214,6 +1229,7 @@ impl Config {
                 .map(|x| x.history_dir(&home)),
             weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
             backtest: self.backtest.clone(),
+            generation: self.generation_scope.clone(),
         }
     }
 
@@ -1634,6 +1650,8 @@ impl Default for Config {
             backtest: None,
             feeds: Default::default(),
             skill_lifecycle: None,
+            generation: None,
+            generation_scope: None,
             sandbox_name: None,
             loaded_from: None,
         }

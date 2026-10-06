@@ -28,6 +28,10 @@ One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage
 2. A preregistration: `preregistered = true`, then `tengu lineage seal variant:<id>` (or `experiment:<id>`) **before** its outcome.
 3. Freezing a generation: set `status = "FROZEN"` + `frozen_at`, then append a `[[frozen]]` row with the digest `tengu lineage generation <id>` prints.
 
+## Bind a sandbox to a generation
+
+`[generation] id = "W1"`, `registry = "../../lineage"` in `sandboxes/<name>/config.toml`; the generation lists `<name>` in `sandboxes`. Every load then refuses a tool or strategy kind outside its capabilities, and a FROZEN generation whose lock or `config:` / `spec:` pins changed.
+
 ## Verify
 
 ```sh

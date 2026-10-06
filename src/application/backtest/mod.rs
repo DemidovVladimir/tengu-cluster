@@ -17,9 +17,10 @@
 //! | Rule | Value |
 //! |---|---|
 //! | Run id | `<YYYYMMDDTHHMMSSZ>-<strategy>` from now (UTC); a taken one ⇒ `-2`, `-3`, … — proposed by `prepare`, claimed by `write_run_dir` (`create_dir`: a run that took it meanwhile moves this one to the next free suffix) |
-//! | `spec_sha256` | sha256 hex (64 chars) of the canonical JSON of `StrategySpec::to_value` (defaults filled, keys sorted at every depth — `domain/canonical.rs`) |
+//! | `spec_sha256` | sha256 hex (64 chars) of the canonical JSON of `StrategySpec::to_value` (defaults filled, keys sorted at every depth — `domain/canonical.rs`; `spec::spec_sha256`, also a generation's `spec:` pin) |
 //! | `exclude` | never loaded; the engine still sees the whole universe and counts each excluded name as a skip (`excluded`) |
 //! | Store | read only: a run never writes `market.db` |
+//! | Generation | a `[generation]`-bound sandbox (`SandboxSections::generation`) runs only the kinds its capabilities bind: else `capability_unavailable: …` ([`capability_refusal`]) from `prepare`, before any read; the `backtest` tool lists it among the spec's problems |
 
 pub(crate) mod gate;
 pub(crate) mod run_dir;
@@ -226,6 +227,24 @@ pub(crate) fn resolve(bt: &BacktestConfig, src: &SpecSource) -> Result<Resolved>
     })
 }
 
+/// A sandbox bound to a generation (`[generation]`, `config/lineage.rs`)
+/// runs only the strategy kinds its capabilities bind: the refusal, starting
+/// `capability_unavailable:` and naming kind, capability and generation —
+/// for a named, inline (`backtest` tool) or `--spec` spec alike.
+pub(crate) fn capability_refusal(
+    sections: &SandboxSections,
+    spec: &StrategySpec,
+) -> Option<String> {
+    let why = sections
+        .generation
+        .as_ref()?
+        .kind_refusal(spec.kind_name())?;
+    Some(format!(
+        "capability_unavailable: strategy `{}`: {why}",
+        spec.name
+    ))
+}
+
 /// The earliest stored bar at `interval` among `ids` (store coverage).
 async fn earliest_bar(
     store: &dyn MarketDataStore,
@@ -300,6 +319,9 @@ fn risk_caps(sections: &SandboxSections) -> Option<RiskCaps> {
 pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepared> {
     let bt = backtest_config(&env.sections);
     let r = resolve(&bt, &job.spec)?;
+    if let Some(refusal) = capability_refusal(&env.sections, &r.spec) {
+        bail!("{refusal}");
+    }
     let iv = r.spec.interval;
     let to = job.to_ms.unwrap_or(env.now_ms);
     let from = match job.from_ms {
@@ -616,6 +638,53 @@ mod tests {
             let pin = crate::domain::lineage::pins::spec_pin(&text, name).unwrap();
             assert_eq!(run.spec_sha256, pin, "{name}");
         }
+    }
+
+    /// `[generation]`: a sandbox bound to W1 (the lineage fixture) refuses
+    /// an inline `event_window` spec — W2-SIM's capability — with
+    /// `capability_unavailable` before any read; bound to W2-SIM it runs.
+    #[tokio::test]
+    async fn a_bound_generation_refuses_a_kind_it_lacks() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/lineage/registry");
+        let reg = crate::config::lineage::load_registry(&dir).unwrap();
+        let bound = |g: &str| {
+            let mut s = sections();
+            s.generation = Some(Arc::new(
+                crate::domain::lineage::generation::GenerationScope::of(&reg, g).unwrap(),
+            ));
+            Arc::new(s)
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let mut e = env(store, &tmp.path().join("state/backtests"));
+        let event = SpecSource::Json {
+            value: json!({"name": "news", "kind": "event_window", "interval": "1h",
+                "events": [{"instrument": AAA, "t": "2026-09-10T14:00:00Z"}],
+                "direction": "follow", "exit_after_mins": 120}),
+            fallback_name: None,
+        };
+        e.sections = bound("W1");
+        let err = prepare(&e, job(event.clone()))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with(
+                "capability_unavailable: strategy `news`: strategy kind `event_window` is bound \
+                 by capability `cap.event_window`, which generation `W1` does not include"
+            ),
+            "{err}"
+        );
+        // W1's own kinds run.
+        prepare(&e, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap();
+        e.sections = bound("W2-SIM");
+        let p = prepare(&e, job(event)).await.unwrap();
+        assert_eq!(p.spec.kind_name(), "event_window");
+        let seen = p.set.candidates.len() + p.set.skip_counts().values().sum::<usize>();
+        assert_eq!(seen, 1, "the one event, decided or skipped");
     }
 
     /// The whole use case on a temp store: rule W and a funding carry →

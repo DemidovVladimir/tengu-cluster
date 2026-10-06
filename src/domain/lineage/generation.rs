@@ -1,6 +1,7 @@
 //! Generation — `lineage/generations/<id>.toml` (`docs/lineage-2026-10-06.md`
 //! § 2, § 4, handoff § 33–34; roadmap P1 / P5): a frozen, measurable
-//! configuration of Tengu (W1, W2-CANDIDATE …).
+//! configuration of Tengu (W1, W2-CANDIDATE …), and the scope a sandbox bound
+//! to it may use ([`GenerationScope`]).
 //!
 //! | Field | Value |
 //! |---|---|
@@ -11,10 +12,21 @@
 //! | `[decision_policy] primary, summary, [[arms]] name, status, summary?` | arm status `BASELINE` `UNPROVEN` `PROVEN` `REJECTED` |
 //! | `[research_policy] summary` · `[[models]] role, engine, model, where` | `where` = a pin target |
 //! | `[[pins]] target, role, sha256` | role `STRATEGY` `RISK_POLICY` `DECISION_POLICY` `COST_MODEL` `MODEL` `SCHEMA` `CONTRACT` `CONFIG` `RESEARCH_POLICY` |
+//!
+//! | [`GenerationScope`] rule | Refusal |
+//! |---|---|
+//! | a tool some capability binds (`tool:<name>`) | refused unless one of the generation's capabilities binds it |
+//! | an opt-in tool (`domain::tools::WORKSPACE_TOOLS`) no capability binds | refused (closed world) |
+//! | any other tool (base tools no capability binds) | allowed |
+//! | a strategy kind | allowed only when one of the generation's capabilities binds `strategy_kind:<kind>` |
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::value::{EvidenceRef, PinTarget, Time};
+use super::registry::Registry;
+use super::value::{Binding, EvidenceRef, PinTarget, Time};
+use crate::domain::tools::WORKSPACE_TOOLS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -138,4 +150,97 @@ pub struct Generation {
     pub pins: Vec<Pin>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<EvidenceRef>,
+}
+
+/// What a sandbox bound to a generation may use (module table), resolved
+/// once at `Config::load` (`config/lineage.rs`) and carried to tools in
+/// `SandboxSections::generation`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct GenerationScope {
+    pub id: String,
+    /// The capability ids the generation lists.
+    pub capabilities: BTreeSet<String>,
+    /// Every `tool:` binding of the registry → the capability owning it.
+    pub bound_tools: BTreeMap<String, String>,
+    /// Every `strategy_kind:` binding of the registry → its capability.
+    pub bound_kinds: BTreeMap<String, String>,
+    /// The tools the generation's capabilities bind.
+    pub available_tools: BTreeSet<String>,
+    /// The strategy kinds the generation's capabilities bind.
+    pub available_kinds: BTreeSet<String>,
+}
+
+impl GenerationScope {
+    /// The scope of generation `id` in `registry`; `Err` when it is absent.
+    pub fn of(registry: &Registry, id: &str) -> Result<Self, String> {
+        let g = registry
+            .generations
+            .get(id)
+            .ok_or_else(|| format!("generation `{id}` is not in the registry"))?;
+        let capabilities: BTreeSet<String> = g.capabilities.iter().map(|c| c.id.clone()).collect();
+        let mut scope = GenerationScope {
+            id: id.to_string(),
+            capabilities,
+            ..Default::default()
+        };
+        for cap in registry.capabilities.values() {
+            let mine = scope.capabilities.contains(&cap.id);
+            for b in &cap.bindings {
+                match b {
+                    Binding::Tool(t) => {
+                        scope
+                            .bound_tools
+                            .entry(t.clone())
+                            .or_insert_with(|| cap.id.clone());
+                        if mine {
+                            scope.available_tools.insert(t.clone());
+                        }
+                    }
+                    Binding::StrategyKind(k) => {
+                        scope
+                            .bound_kinds
+                            .entry(k.clone())
+                            .or_insert_with(|| cap.id.clone());
+                        if mine {
+                            scope.available_kinds.insert(k.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(scope)
+    }
+
+    /// Why `tool` may not be used under this generation (module table), or
+    /// `None`.
+    pub fn tool_refusal(&self, tool: &str) -> Option<String> {
+        let id = &self.id;
+        match self.bound_tools.get(tool) {
+            Some(_) if self.available_tools.contains(tool) => None,
+            Some(cap) => Some(format!(
+                "tool `{tool}` is bound by capability `{cap}`, which generation `{id}` does not include"
+            )),
+            None if WORKSPACE_TOOLS.contains(&tool) => Some(format!(
+                "opt-in tool `{tool}` is bound by no capability of the registry — generation `{id}` \
+                 admits no unregistered opt-in tool"
+            )),
+            None => None,
+        }
+    }
+
+    /// Why strategy kind `kind` may not run under this generation, or `None`.
+    pub fn kind_refusal(&self, kind: &str) -> Option<String> {
+        let id = &self.id;
+        match self.bound_kinds.get(kind) {
+            Some(_) if self.available_kinds.contains(kind) => None,
+            Some(cap) => Some(format!(
+                "strategy kind `{kind}` is bound by capability `{cap}`, which generation `{id}` \
+                 does not include"
+            )),
+            None => Some(format!(
+                "strategy kind `{kind}` is bound by no capability of the registry — generation \
+                 `{id}` runs only the kinds its capabilities bind"
+            )),
+        }
+    }
 }

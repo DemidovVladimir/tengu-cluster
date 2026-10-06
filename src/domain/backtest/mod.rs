@@ -19,7 +19,7 @@
 //! | `testkit.rs` · `checks.rs` | tests only: fixtures; time integrity (§ 39) + the rule W golden |
 
 #[cfg(test)]
-mod checks;
+pub(crate) mod checks;
 pub(crate) mod costs;
 pub(crate) mod engine;
 pub(crate) mod features;

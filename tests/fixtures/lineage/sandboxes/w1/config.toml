@@ -136,6 +136,7 @@ order_types = ["market", "ioc"]
 default = true
 engine = "openrouter"
 model = "anthropic/claude-opus-4.7"
+workspace = "~/lineage-fixture-ws"
 tools = ["backtest", "market_history", "read_file"]
 description = "The fixture's Architect: backtests rule W on history."
 
