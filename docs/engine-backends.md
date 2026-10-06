@@ -190,7 +190,7 @@ One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Ev
 | privy_off (open) | `sign_message`, `sign_and_send_transaction` — scopes without wallets | both refused before any request; the refusal quoted. Never signs |
 | privy (open) | `get_wallet_address` — only with `PRIVY_APP_ID` / `_SECRET` / `_WALLET_ID` (env or the repo's `.env`), else skipped | the address (`PRIVY_WALLET_ADDRESS`); the app secret (registered) nowhere in the output |
 | solana_read (open) | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx` — public mainnet RPC (`SOLANA_RPC_URL` cleared) | every tool stored a row; numbers of the `sol_price` and pool rows (within 1e-5) |
-| solana_decide (open) | `lp_snapshot`, `hedge_decide`, `lp_decide` (all knobs; `commit` off) | the snapshot's oracle price (`price_usd`, `cycle_price`) |
+| solana_decide (open) | `lp_swap_plan`, `lp_snapshot`, `hedge_decide`, `lp_decide` (all knobs; `commit` off) | reserve-aware swap route + the snapshot's oracle price (`price_usd`, `cycle_price`) |
 | solana_write (open) | `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position` (a live position of the LP owner), `jup_perps_order` — `simulate` only (no signer, no wallet grant) | `simulated` in the answer. Never sends |
 | agentic_memory (open) | `agentic_memory` `capture` → `recall` — only with `--features postgres_memory` + `TENGU_MEMORY_DATABASE_URL`, else skipped | the captured token |
 

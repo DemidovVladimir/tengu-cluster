@@ -133,7 +133,7 @@ config, channels) — it is the index into everything below.
 10. **`docs/typed-observations-2026-09-24.md`** — typed tool results
     (`Observation` envelope), the observation cache
     (`<workspace>/.tengu/observations.db`), decision-loop `world` /
-    `requires`, the 10 Solana LP read tools (args, keys, TTLs, hosts, knobs)
+    `requires`, the 11 Solana LP observe/plan tools (args, keys, TTLs, hosts, knobs)
     and the 5 write tools (§ Write tools: modes, signer, lease, fence).
     Read BEFORE touching `domain/observation.rs`, `application/observe.rs`,
     `application/decision_loop/`, `adapters/outbound/tools/solana/`,
@@ -695,9 +695,9 @@ These are not preferences. They're load-bearing.
   read. Failed reads are
   `Field::Error` / `ObsStatus`, never 0; `features` ≤ 32 scalars; line 1 of
   `render_text` ≤ 200 chars with full ids. Decision loops read rows via
-  `world` (never fetched) and gate actions with `requires`. The 10 Solana
-  tools (`tools/solana/`) are opt-in; each needs `[default_scopes.<tool>]`
-  with `fs_roots` = the workspace (store), its `net_hosts`, and
+  `world` (never fetched) and gate actions with `requires`. The 11 Solana
+  tools (`tools/solana/`) are opt-in; IO tools need
+  `[default_scopes.<tool>]` with `fs_roots` = the workspace (store), their `net_hosts`, and
   `env_reads = ["SOLANA_RPC_URL"]` — without it the public RPC is used
   silently; the RPC URL is never rendered (host only). `hedge_decide` /
   `lp_decide` knobs are all required (no defaults); `commit` defaults to

@@ -1,10 +1,12 @@
-//! `lp_snapshot` + `hedge_decide` + `lp_decide` — the composed wallet × DLMM
-//! pool snapshot and the pure hedge / LP decisions over it. Composition and
-//! policy live in `domain::lp::snapshot`; this file reads, caches, persists.
+//! `lp_snapshot` + `lp_swap_plan` + `hedge_decide` + `lp_decide` — the
+//! composed wallet × DLMM pool snapshot and pure swap / hedge / LP plans over
+//! it. Composition and policy live in `domain::lp`; this file exposes tools,
+//! reads, caches and persists.
 //!
 //! | Tool | Reads | Writes |
 //! |---|---|---|
 //! | `lp_snapshot` | `lp_state` row (pending keeper request) → `plan::discover_positions` → ONE `plan::read_pool` (read 1 = LbPair + positions + perps keys + wallet keys + the request; read 2 pinned = mints, reserves, bin arrays) → the `price_oracle/1:<base mint>` row | `lp_snapshot/1:<wallet>:<pool>` (10 s); the price row when fetched inline |
+//! | `lp_swap_plan` | arguments only | nothing; returns zero or one deterministic route to merge into `jupiter_swap` args |
 //! | `hedge_decide` | `lp_snapshot` + `lp_state` rows — no network | `lp_state/1:<wallet>:<pool>` (7 days) only with `commit = true` |
 //! | `lp_decide` | `lp_snapshot` + `lp_state` + `price_oracle` rows (5-minute samples) — no network | same |
 //!
@@ -29,6 +31,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use serde::Deserialize;
 use serde_json::Value;
 use tracing::warn;
 
@@ -45,7 +48,9 @@ use crate::application::observe::observe;
 use crate::domain::lp::dlmm::{
     build_dlmm_pool, build_positions, flag_unvalued, Discovery, DiscoverySource,
 };
-use crate::domain::lp::gates::PriceSample;
+use crate::domain::lp::gates::{
+    plan_swap_for_deposit, DepositSwapContext, DepositSwapInput, PriceSample,
+};
 use crate::domain::lp::market::{self, OraclePrice, PRICE_TTL_MS};
 use crate::domain::lp::perps::{build_perps, request_status};
 use crate::domain::lp::snapshot::{
@@ -70,6 +75,9 @@ pub(crate) fn tools(shared: &SolanaShared) -> Vec<Arc<dyn Tool>> {
         Arc::new(LpSnapshotTool {
             def: defs::def(names::LP_SNAPSHOT),
             shared: shared.clone(),
+        }),
+        Arc::new(LpSwapPlanTool {
+            def: defs::def(names::LP_SWAP_PLAN),
         }),
         Arc::new(HedgeDecideTool {
             def: defs::def(names::HEDGE_DECIDE),
@@ -908,6 +916,82 @@ pub(crate) async fn lp_decide_obs(
     with_commit(Observation::of(tool, &d, now_ms, 0, ObsSource::Live), note)
 }
 
+const WSOL: &str = "So11111111111111111111111111111111111111112";
+const USDC: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+fn default_wsol() -> String {
+    WSOL.into()
+}
+
+fn default_usdc() -> String {
+    USDC.into()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LpSwapPlanArgs {
+    wallet_sol: f64,
+    wallet_usdc: f64,
+    target_sol: f64,
+    target_usdc: f64,
+    permanent_minimum_sol: f64,
+    rent_reserve_sol: f64,
+    #[serde(default)]
+    position_rent_sol: f64,
+    #[serde(default)]
+    reserve_usdc: f64,
+    current_price: f64,
+    slippage_buffer_pct: f64,
+    context: DepositSwapContext,
+    #[serde(default = "default_wsol")]
+    base_mint: String,
+    #[serde(default = "default_usdc")]
+    quote_mint: String,
+}
+
+impl From<LpSwapPlanArgs> for DepositSwapInput {
+    fn from(a: LpSwapPlanArgs) -> Self {
+        Self {
+            wallet_sol: a.wallet_sol,
+            wallet_usdc: a.wallet_usdc,
+            target_sol: a.target_sol,
+            target_usdc: a.target_usdc,
+            permanent_minimum_sol: a.permanent_minimum_sol,
+            rent_reserve_sol: a.rent_reserve_sol,
+            position_rent_sol: a.position_rent_sol,
+            reserve_usdc: a.reserve_usdc,
+            current_price: a.current_price,
+            slippage_buffer_pct: a.slippage_buffer_pct,
+            context: a.context,
+            base_mint: a.base_mint,
+            quote_mint: a.quote_mint,
+        }
+    }
+}
+
+struct LpSwapPlanTool {
+    def: ToolDef,
+}
+
+#[async_trait]
+impl Tool for LpSwapPlanTool {
+    fn definition(&self) -> &ToolDef {
+        &self.def
+    }
+
+    async fn execute(&self, args: &Value, _ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
+        // scope: pure-compute — deterministic reserve and shortfall arithmetic.
+        let parsed: LpSwapPlanArgs = serde_json::from_value(args.clone())
+            .map_err(|e| anyhow!("{}: {e}", names::LP_SWAP_PLAN))?;
+        let plan = plan_swap_for_deposit(&parsed.into());
+        let now = now_ms();
+        Ok(ToolOutput::observed(
+            Observation::of(names::LP_SWAP_PLAN, &plan, now, 0, ObsSource::Live),
+            now,
+        ))
+    }
+}
+
 struct HedgeDecideTool {
     def: ToolDef,
     shared: SolanaShared,
@@ -1005,6 +1089,38 @@ mod tests {
     /// A live PositionRequest (not executed) from `perps/requests_gma.json`.
     const REQUEST: &str = "11q9teW5JiHhWeY8ak79i72C4qpDtppzVgH1ZeEUWp3";
     const SOL_USD: f64 = 116.6589164559586;
+
+    #[tokio::test]
+    async fn lp_swap_plan_is_a_typed_pure_tool() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let harness = TestHarness::new(tmp.path());
+        let tool = LpSwapPlanTool {
+            def: defs::def(names::LP_SWAP_PLAN),
+        };
+        let out = tool
+            .execute(
+                &json!({
+                    "wallet_sol": 0.5,
+                    "wallet_usdc": 1000,
+                    "target_sol": 1,
+                    "target_usdc": 100,
+                    "permanent_minimum_sol": 0.2,
+                    "rent_reserve_sol": 0.1,
+                    "current_price": 100,
+                    "slippage_buffer_pct": 0.02,
+                    "context": "rebalance"
+                }),
+                &harness.ctx(),
+            )
+            .await
+            .unwrap();
+        let obs = out.observation.unwrap();
+        assert_eq!(obs.schema, "lp_swap_plan/1");
+        assert_eq!(obs.features["direction"], "usdc_to_sol");
+        assert_eq!(obs.data["swaps"][0]["input_mint"], USDC);
+        assert_eq!(obs.data["swaps"][0]["output_mint"], WSOL);
+        assert!((obs.data["swaps"][0]["amount"].as_f64().unwrap() - 81.6).abs() < 1e-9);
+    }
 
     const WALLET_GMA: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

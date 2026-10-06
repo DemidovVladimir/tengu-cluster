@@ -107,7 +107,7 @@ Lint = `tools/schema_lint.rs`; conformance = `tests/bridge_conformance.rs` (57 c
 | `get_wallet_address` | ✓ | ✓ (+ egress, scope) | ✓ · ✓ · ✓ (`privy`, read only) | — | `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID` (the repo's `.env` has them) |
 | `sign_message`, `sign_and_send_transaction` | ✓ | ✓ (refused) | refusal ✓ · ✓ · ✓ (`privy_off`) | — | signing: never run (operator rule) |
 | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx` | ✓ | ✓ | ✓ · ✓ · ✓ (`solana_read`, public RPC) | — | — |
-| `lp_snapshot`, `hedge_decide`, `lp_decide` | ✓ | ✓ | ✓ · ✓ · ✓ (`solana_decide`) | — | — |
+| `lp_swap_plan`, `lp_snapshot`, `hedge_decide`, `lp_decide` | ✓ | ✓ | ✓ · ✓ · ✓ (`solana_decide`) | — | — |
 | `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` | ✓ | ✓ (`send` refused) | simulate ✓ · ✓ · ✓ (`solana_write`) | — | `send`: never run (operator rule) |
 | `hl_ctx`, `hl_book` | ✓ | ✓ | ✓ · ✓ · ✓ (`hyperliquid`) | — | — |
 | `risk_status`, `paper_order`, `paper_close`, `paper_positions`, `xm_exits`, `xm_weekend_fade` | ✓ | ✓ | ✓ · ✓ · ✓ (`xm`, `tool turn`) | offline: `risk_status`, `paper_positions` | — |

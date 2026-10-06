@@ -207,6 +207,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
         ToolEntry {
+            opt_in: Some(names::LP_SWAP_PLAN),
+            needs_memory: false,
+            defs: || solana::defs_named(names::LP_SWAP_PLAN),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
             opt_in: Some(names::HEDGE_DECIDE),
             needs_memory: false,
             defs: || solana::defs_named(names::HEDGE_DECIDE),

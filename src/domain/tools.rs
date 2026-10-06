@@ -21,6 +21,7 @@ pub(crate) const JUP_PERPS: &str = "jup_perps";
 pub(crate) const SOLANA_WALLET: &str = "solana_wallet";
 pub(crate) const SOLANA_TX: &str = "solana_tx";
 pub(crate) const LP_SNAPSHOT: &str = "lp_snapshot";
+pub(crate) const LP_SWAP_PLAN: &str = "lp_swap_plan";
 pub(crate) const HEDGE_DECIDE: &str = "hedge_decide";
 pub(crate) const LP_DECIDE: &str = "lp_decide";
 
@@ -94,6 +95,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     SOLANA_WALLET,
     SOLANA_TX,
     LP_SNAPSHOT,
+    LP_SWAP_PLAN,
     HEDGE_DECIDE,
     LP_DECIDE,
     SOLANA_CLOSE_TOKEN_ACCOUNTS,

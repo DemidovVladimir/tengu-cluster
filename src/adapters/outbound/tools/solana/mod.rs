@@ -3,7 +3,8 @@
 //!
 //! Provides (each opt-in via `workspace_tools`, one catalog row per name):
 //! `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`,
-//! `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide`,
+//! `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`,
+//! `hedge_decide`, `lp_decide`,
 //! and the write tools (`mode = simulate | send`, runner `write_common`):
 //! `solana_close_token_accounts`, `jupiter_swap`, `dlmm_close_position`,
 //! `dlmm_open_position`, `jup_perps_order`.
@@ -17,7 +18,7 @@
 //! | `dlmm.rs` | `dlmm_pool`, `dlmm_positions` |
 //! | `perps.rs` | `jup_perps` |
 //! | `wallet.rs` | `solana_wallet`, `solana_tx` |
-//! | `lp.rs` | `lp_snapshot`, `hedge_decide`, `lp_decide` |
+//! | `lp.rs` | `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide` |
 //! | `write_tokens.rs` | `solana_close_token_accounts` |
 //! | `write_swap.rs` | `jupiter_swap` (Jupiter Ultra) |
 //! | `write_dlmm.rs` | `dlmm_close_position`, `dlmm_open_position` |

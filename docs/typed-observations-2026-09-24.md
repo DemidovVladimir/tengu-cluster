@@ -1,6 +1,6 @@
 # Typed observations + Solana LP tools (2026-09-24)
 
-Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 10 Solana LP read tools and 5 write tools (§ Write tools). Branch `feature/decision-loop`. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
+Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 11 Solana LP observation/planning tools and 5 live-capable write tools (§ Write tools). Branch `feature/decision-loop`. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
 
 ## Envelope
 
@@ -68,6 +68,7 @@ RPC = `$SOLANA_RPC_URL` if the scope may read it, else `https://api.mainnet-beta
 | `solana_wallet` | `wallet`*, `mints` (wSOL + USDC, ≤ 32) | `solana_wallet/1:<wallet>` | 5 s | `getBalance`, `getTokenAccountsByOwner` × 2 programs, mints + ATAs | RPC |
 | `solana_tx` | `signature`* | `solana_tx/1:<signature>` | 2 s; 1 day once finalized | `getSignatureStatuses` (history), `getTransaction` | RPC |
 | `lp_snapshot` | `wallet`*, `pool`*, `positions`, `min_context_slot` | `lp_snapshot/1:<wallet>:<pool>` | 10 s (explicit `positions` ⇒ not stored) | ONE planned read (`plan::read_pool`: pool + positions + perps + wallet keys) + `price_oracle/1:<base mint>` row (≤ 10 s and ≤ the caller's max age, so snapshot + price age fits `max_snapshot_age_secs`; else Jupiter inline + row written) + pending keeper request from `lp_state` | RPC, `lite-api.jup.ag` |
+| `lp_swap_plan` | wallet / target SOL + USDC*, SOL floors*, position rent, hedge-collateral USDC reserve, current price*, input buffer*, context* | `lp_swap_plan/1:<context>:<base mint>:<quote mint>` | never cached | pure port of `delta_neutral_bot` `planSwapForDeposit`: no swap, one `data.swaps` route to merge with `wallet` / `oracle_gate_bps` / `mode` for `jupiter_swap`, or typed block (`invalid_input`, `insufficient_total_value`, `insufficient_sol`, `insufficient_usdc`) | none |
 | `hedge_decide` | `wallet`*, `pool`*, `knobs`*, `lp_knobs` (optional, = `lp_decide`'s knobs), `commit` (false) | `hedge_decide/1:<wallet>:<pool>` | never cached | store only: `lp_snapshot` + `lp_state` (+ price samples when `lp_knobs` given: storm latch / imbalance freeze computed this cycle); missing / stale / explicit-`positions` (`args`) snapshot ⇒ action `blocked`, guard `stale_input`; unreadable `lp_state`, any `positions` / `discovery` read error, or discovery count ≠ valued positions ⇒ guard `invalid_read` | none |
 | `lp_decide` | `wallet`*, `pool`*, `knobs`*, `commit` (false) | `lp_decide/1:<wallet>:<pool>` | never cached | store only: + `price_oracle` samples; missing / stale / `args` snapshot ⇒ verdict `blocked`; unreadable `lp_state` or position / discovery read errors ⇒ `paused` `invalid_read` | none |
 
@@ -271,4 +272,3 @@ Engine `domain/xm/paper.rs::simulate_fill` (pure) · latency `application/paper.
 | No-LP grace (bot BUG-011) | clock starts at the first no-LP read (`lp_state.no_lp_since_ms`); a fresh/missing state holds for `no_lp_grace_ms`; position observations are recorded before any gate and persisted with `commit = true` even on gated evaluations |
 | Decision-loop `FromHistory` slots | read only the CURRENT event's history entries; `state.history` still shows earlier events as context |
 | Slot candidate descriptions | never cut inside a value: whole trailing fields are dropped to fit 300 chars; the slot's `value` field is always kept |
-

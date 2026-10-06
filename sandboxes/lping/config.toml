@@ -1,5 +1,5 @@
 # Tengu Cluster — "lping" sandbox (2026-09-24)
-# Crypto research + read-only Solana LP / hedge monitoring. Run with:
+# Crypto research + guarded, live-capable Solana LP / hedge execution. Run with:
 #   tengu chat --sandbox lping
 #   tengu decide --sandbox lping --loop lp_watch      (or --loop hedge_watch)
 #
@@ -7,14 +7,15 @@
 #   1. research      — market / token / pool research over http_request      (done)
 #   2. typed reads   — sol_price, dlmm_pools, dlmm_pool, dlmm_positions,
 #                      jup_perps, solana_wallet, solana_tx, lp_snapshot,
-#                      hedge_decide, lp_decide (typed, cached observations)  (done)
+#                      lp_swap_plan, hedge_decide, lp_decide                 (done)
 #   3. data feed     — Yellowstone gRPC stream → acct/1 rows                  (phase 5)
 #   4. write tools   — solana_close_token_accounts, jupiter_swap,
 #                      dlmm_open_position, dlmm_close_position,
-#                      jup_perps_order; simulate by default                   (done, 6b)
+#                      jup_perps_order; each supports simulate | send         (done, 6b)
 #
 # Signing is OFF here: no [solana] signer_key_file and no wallet grant, so
-# every write tool only simulates (keyless). To let `lp_executor` send, see
+# every write tool refuses `send` but can simulate keylessly. To let
+# `lp_executor` send real transactions, see
 # "Signing" at the bottom of this file.
 
 runtime_profile = "auto"
@@ -168,8 +169,8 @@ granted it a wallet. Always show token mints, pool addresses and tx
 signatures in full, never shortened."""
 
 # Routable subagent (has a `description`) — runs as `tengu run-agent`, and is
-# the tool / scope / workspace owner of both decision loops below. The ten
-# Solana tool names are workspace-tool opt-ins.
+# the tool / scope / workspace owner of both decision loops below. The eleven
+# observe/plan tool names plus five write names are workspace-tool opt-ins.
 [agents.crypto_researcher]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
@@ -178,7 +179,7 @@ workspace = "~/lping-workspace"
 tools = [
     "http_request", "read_file", "list_directory",
     "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
-    "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+    "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide",
     # write tools: simulate only (no wallet grant on this routable agent)
     "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
     "dlmm_close_position", "jup_perps_order",
@@ -207,7 +208,7 @@ example_queries = [
 name = "Crypto Researcher"
 instructions = """You research crypto markets and Solana DeFi. Prefer the typed
 Solana tools (sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps,
-solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide) — they are
+solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide) — they are
 cached and never report a failed read as 0. Call lp_snapshot before
 hedge_decide / lp_decide; leave `commit` false unless asked. Write tools
 (solana_close_token_accounts, jupiter_swap, dlmm_open_position,
@@ -234,10 +235,22 @@ model = "anthropic/claude-sonnet-4-6"
 workspace = "~/lping-workspace"
 tools = [
     "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
-    "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+    "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide",
     "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
     "dlmm_close_position", "jup_perps_order",
 ]
+
+[agents.lp_executor.identity]
+name = "LP Executor"
+instructions = """You own atomic Solana execution tools. Paper is only a
+verification mode: each write tool supports mode = simulate | send. Never
+invent an amount. For LP funding, call lp_swap_plan and merge its one route
+with wallet, oracle_gate_bps and mode for jupiter_swap; then re-read balances
+before dlmm_open_position. For hedge mutation, call lp_snapshot then
+hedge_decide, and translate only its typed action into jup_perps_order. A
+blocked or stale plan means hold. Never route Raydium LP or Hyperliquid live
+orders through http_request: typed write adapters for those venues do not
+exist yet."""
 
 # --- Decision loops (Jev picks, tools execute) --------------------------------
 # Design: docs/decision-loop-plan-2026-09-24.md. Test one event:

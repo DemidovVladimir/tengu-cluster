@@ -714,7 +714,7 @@
     <text x="10" y="42" class="h3">Solana LP read (10)</text>
     <text x="10" y="56" class="small">sol_price, dlmm_pools, dlmm_pool,</text>
     <text x="10" y="68" class="small">dlmm_positions, jup_perps, solana_wallet,</text>
-    <text x="10" y="80" class="small">solana_tx, lp_snapshot, hedge_decide, lp_decide</text>
+    <text x="10" y="80" class="small">solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide</text>
     <text x="10" y="102" class="h3">Solana write (5): simulate by default</text>
     <text x="10" y="116" class="small">solana_close_token_accounts, jupiter_swap,</text>
     <text x="10" y="128" class="small">dlmm_open_position, dlmm_close_position,</text>

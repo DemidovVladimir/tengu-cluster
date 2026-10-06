@@ -6,6 +6,15 @@
 
 ---
 
+## lping `lp_swap_plan` (Tue 2026-10-06, branch `feature/lp-swap-plan`)
+
+| Change | Note |
+|---|---|
+| `lp_swap_plan` | pure port of the bot's `planSwapForDeposit`: permanent + rent SOL reserve, refundable position rent, hedge-collateral USDC reserve; one `jupiter_swap` route (token units) or a typed block (`invalid_input`, `insufficient_total_value` / `_sol` / `_usdc`) |
+| lping | 11 observe/plan tools + 5 `simulate \| send` Solana writes on private `lp_executor`; loops stay `dry_run`; Raydium LP + Hyperliquid live writes remain explicit gaps |
+
+---
+
 ## Merged to `main` (Fri 2026-10-02)
 
 | PR | Squash commit on `main` | Original branch (kept on origin) |
@@ -123,10 +132,10 @@ Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observ
 | Typed observations | `ToolOutput.observation` + `ToolExecutor::execute_typed` (default wraps `execute`); `domain/observation.rs` envelope (features ≤ 32 scalars, line 1 ≤ 200 with full ids, `Field<T>` / `ObsStatus` — failed reads never 0); `ports/observation.rs` + `outbound/observations.rs` (`<workspace>/.tengu/observations.db`, slot-monotonic, `Error` rows never stored, 7-day purge); `application/observe.rs::observe()` |
 | Decision loop | `world` + `world_max_age_secs`, action `requires`, `FromObservation` slots, typed results + `HistoryEntry.obs`; loop tools wrapped in `SanitizedToolExecutor` (`build_decision_loop(.., secrets)`) |
 | Review (2026-09-25) | 6-lens adversarial review: 31 findings, 11 refuted, 20 confirmed (5 medium, 15 low; none reachable with money — dry-run, no signer) and all fixed with regression tests: empty discovery bounded by caller max age (TTL 10 s), explicit-`positions` snapshots never stored under the canonical key, share > bin supply ⇒ incomplete, oracle reuse ≤ 10 s, `lp_state` compare-and-swap commits + unreadable ⇒ block, position/discovery read errors ⇒ `invalid_read`, grace clock per bot, in-cycle storm/freeze via `lp_knobs`, current-event `FromHistory`, JSON-RPC error text scrubbed, ids never cut in slot descriptions, base58 length pre-check. Open: cross-tool slot mixing of cached `acct/1` rows (share ≤ supply catches only part); architecture `.svg` has no decision-loop panel |
-| Solana tools | 10 opt-in tools (`tools/solana/`): `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide`. Pure: `domain/solana.rs` (hand-rolled base58 + PDA), `domain/lp/{dlmm,perps,wallet,market,gates,hedge,snapshot}.rs`. IO: `outbound/solana/{rpc,accounts,http_json,plan}.rs` |
+| Solana tools | 11 opt-in observe/plan tools (`tools/solana/`): `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide`; plus 5 live-capable writes (`simulate \| send`). `lp_swap_plan` ports the bot's reserve/rent/collateral-aware deposit swap planner. Pure: `domain/solana.rs`, `domain/lp/{dlmm,perps,wallet,market,gates,hedge,snapshot}.rs`. IO: `outbound/solana/{rpc,accounts,http_json,plan}.rs` |
 | Policy port | `domain/lp/hedge.rs` = bot hedge controller, 1027/1027 production vectors (`cargo test --bin tengu lp::hedge`); `gates.rs` = re-entry, storm, trend/regime confirm, composition, wallet 50/50, 70-bin range cap |
 | Crates | `base64 = "0.22"` direct; `curve25519-dalek ~4.1` dev-dependency only (off-curve cross-check). No bs58 / solana-sdk / anchor / borsh |
-| lping | `lp_watch` on typed tools (`sol_price`, `dlmm_pools`, `requires = { price = 30 }`); new `hedge_watch` (`lp_snapshot` → `hedge_decide` / `lp_decide`, `commit = true`, production knobs cited in TOML); both `dry_run` |
+| lping | 11 observe/plan + 5 live-capable atomic write tools on private `lp_executor`; `lp_watch` and `hedge_watch` remain `dry_run` until a dedicated signer/wallet grant exists. `lp_swap_plan` supplies the deterministic pre-deposit route. Raydium LP + Hyperliquid writes are still gaps. |
 | Egress | new hosts: `api.mainnet-beta.solana.com` (or `$SOLANA_RPC_URL`'s host), `lite-api.jup.ag`, `dlmm.datapi.meteora.ag`, `hermes.pyth.network`; RPC URL never rendered (host only) — `docs/egress-2026-09-16.md` |
 
 | Open | Detail |
