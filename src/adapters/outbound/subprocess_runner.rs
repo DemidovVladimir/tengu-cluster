@@ -376,12 +376,12 @@ mod tests {
     #[test]
     fn new_uses_explicit_session_id() {
         let runner = SubprocessRunner::new(
-            Some("aura".to_string()),
+            Some("lping".to_string()),
             "sess-from-planner".to_string(),
             Default::default(),
         );
         assert_eq!(runner.session_id, "sess-from-planner");
-        assert_eq!(runner.sandbox_name.as_deref(), Some("aura"));
+        assert_eq!(runner.sandbox_name.as_deref(), Some("lping"));
     }
 
     /// A step naming an agent with no `[agents.<name>]` block fails before

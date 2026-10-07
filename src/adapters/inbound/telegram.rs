@@ -1766,7 +1766,7 @@ impl TelegramSession {
         lines.push("Team:    /team <goal>     (explicit team planning command)".to_string());
         lines.push("Project: /project <name>  (new project subfolder)".to_string());
         lines.push("Example: @backend_engineer: add rate limiting".to_string());
-        lines.push("Example: register POI and mint the IP-NFT".to_string());
+        lines.push("Example: summarize this paper and save the notes".to_string());
         lines.push("Example: /team build a full stack Rust app".to_string());
         self.pipe
             .send_text(sender, &lines.join("\n"), &self.delivery_opts)
@@ -1881,7 +1881,7 @@ impl TelegramSession {
     }
 
     // -------------------------------------------------------------------
-    // Skill slash-commands (e.g. /beach_post, /mint)
+    // Skill slash-commands (e.g. /summarize, /translate)
     // -------------------------------------------------------------------
 
     async fn handle_skill_cmd(
@@ -2259,26 +2259,5 @@ mod tests {
         let private = agents("[agents.xm_weekend]\nengine = \"openrouter\"\nmodel = \"m\"\n");
         assert_eq!(telegram_default_agent(view(&private)), None);
         assert!(telegram_routes(view(&private)).is_empty());
-    }
-
-    /// sandboxes/aura keeps its allow-list and its three described agents;
-    /// its private tool agents (`skill-improver`, `fixture-runner`) drop out.
-    #[test]
-    fn aura_sandbox_keeps_its_telegram_surface() {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/aura/config.toml");
-        let cfg = Config::load(&path).expect("aura config");
-        let allowed = allowed_users(&cfg.telegram.allowed_users, None);
-        require_allowed_users(&allowed).unwrap();
-        assert!(is_authorized(&allowed, "848344935"));
-        let routes = telegram_routes(view(&cfg.agents));
-        assert_eq!(
-            sorted(routes.keys()),
-            ["aura", "learning-agent", "researcher"]
-        );
-        assert_eq!(
-            telegram_default_agent(view(&cfg.agents)).as_deref(),
-            Some("aura")
-        );
     }
 }

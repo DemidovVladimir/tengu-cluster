@@ -515,7 +515,7 @@ Use the exact rubric content from 2026-04-20 plan Task 21 Step 2.
 
 ### δ.3: skill-creator/evals/prompts.yaml
 
-Use the exact fixtures content from 2026-04-20 plan Task 21 Step 3 (f1 mint-ipnft distillation, f2 pipeline-ingest distillation).
+Use the exact fixtures content from 2026-04-20 plan Task 21 Step 3 (f1 summarize-paper distillation, f2 pipeline-ingest distillation).
 
 ### δ.4: skill-eval SKILL.md
 

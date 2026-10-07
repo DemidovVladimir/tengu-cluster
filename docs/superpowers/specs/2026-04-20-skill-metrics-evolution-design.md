@@ -219,20 +219,20 @@ skill_distill(
 ### 5.3 Fixture YAML example
 
 ```yaml
-# skills/mint-ipnft/evals/prompts.yaml
+# skills/summarize-paper/evals/prompts.yaml
 # Seeded from conversation <session-id>, messages [12..18].
 # Hand-edit as needed; tengu eval re-reads this file fresh each run.
 schema_version: 1
 fixtures:
   - id: f1
-    prompt: "Mint an IPNFT for the beach-science project on Sepolia"
+    prompt: "Fetch the paper at <url> and save a one-page summary"
     expected_tool_calls:
       - tool: http_request
-        args_schema: {url: "<elided>", method: "POST"}
-      - tool: sign_and_send_transaction
-        args_schema: {contract: "<elided>", function: "mint", args: ["<elided>", "<elided>"]}
-    expected_outcome: "IPNFT token ID returned, tx confirmed on Sepolia"
-    metrics: [mint_confirmed, plan_quality]
+        args_schema: {url: "<elided>", method: "GET"}
+      - tool: write_file
+        args_schema: {path: "<elided>", content: "<elided>"}
+    expected_outcome: "summary saved to the workspace, key findings listed"
+    metrics: [summary_saved, plan_quality]
 ```
 
 ### 5.4 Explicit non-behaviours
@@ -286,13 +286,13 @@ Read-only; cannot mutate history, cannot observe other agents' conversations. Mi
 
 ```yaml
 ---
-name: mint-ipnft
-description: Use when minting an IPNFT for a molecule project on testnet or mainnet.
+name: summarize-paper
+description: Use when fetching a research paper and summarizing it into the workspace.
 metrics:
-  - name: mint_confirmed                       # unique within the skill
+  - name: summary_saved                        # unique within the skill
     kind: shell_check
-    cmd: "cast call $CONTRACT ownerOf $TOKEN_ID --rpc-url $RPC_URL"
-    expect_stdout_matches: "^0x[0-9a-f]{40}$"
+    cmd: "test -s $WORKSPACE/summaries/$PAPER_ID.md && echo ok"
+    expect_stdout_matches: "^ok$"
     expect_exit_code: 0                        # optional; defaults to 0
     min_pass_rate: 0.8
 
@@ -302,18 +302,18 @@ metrics:
     judge_model: anthropic/claude-opus-4-7     # optional; defaults from [skill_lifecycle]
     min_pass_rate: 0.7
 
-  - name: tx_hash_recorded
+  - name: summary_indexed
     kind: tool_assertion
     tool: persistent_store
     action: get
-    key: "last_mint_tx_hash"
+    key: "last_summary_path"
     assert:
-      value_matches: "^0x[0-9a-f]{64}$"
+      value_matches: "^summaries/"
     min_pass_rate: 1.0
 
-  - name: custom_gas_budget
+  - name: custom_length_budget
     kind: script
-    path: metrics/custom_gas_budget.sh         # emits JSON: {"pass": bool, "score": float, "notes"?: str}
+    path: metrics/custom_length_budget.sh      # emits JSON: {"pass": bool, "score": float, "notes"?: str}
     min_pass_rate: 0.9
 ---
 ```
@@ -382,11 +382,11 @@ skills/<name>/
 ```json
 {
   "schema_version": 1,
-  "skill": "mint-ipnft",
+  "skill": "summarize-paper",
   "last_run": "2026-04-23T09:12:40Z",
   "last_run_ref": "metrics/runs/2026-04-23T09-12-40Z",
   "metrics": {
-    "mint_confirmed":  {"pass_rate": 0.75, "n": 4, "min_pass_rate": 0.8, "gated": true},
+    "summary_saved":   {"pass_rate": 0.75, "n": 4, "min_pass_rate": 0.8, "gated": true},
     "plan_quality":    {"pass_rate": 0.83, "n": 6, "min_pass_rate": 0.7, "gated": false}
   },
   "rolling_window": 10
@@ -398,9 +398,9 @@ skills/<name>/
 **`history.jsonl`** — one JSON line per (run, metric):
 
 ```jsonl
-{"ts":"2026-04-22T14-03-11Z","metric":"mint_confirmed","pass_rate":0.5,"n":4,"ref":"metrics/runs/2026-04-22T14-03-11Z"}
+{"ts":"2026-04-22T14-03-11Z","metric":"summary_saved","pass_rate":0.5,"n":4,"ref":"metrics/runs/2026-04-22T14-03-11Z"}
 {"ts":"2026-04-22T14-03-11Z","metric":"plan_quality","pass_rate":0.66,"n":6,"ref":"metrics/runs/2026-04-22T14-03-11Z"}
-{"ts":"2026-04-23T09-12-40Z","metric":"mint_confirmed","pass_rate":1.0,"n":4,"ref":"metrics/runs/2026-04-23T09-12-40Z"}
+{"ts":"2026-04-23T09-12-40Z","metric":"summary_saved","pass_rate":1.0,"n":4,"ref":"metrics/runs/2026-04-23T09-12-40Z"}
 ```
 
 Append-only, grep-friendly, diff-friendly for review. No database, no indexing.
@@ -410,10 +410,10 @@ Append-only, grep-friendly, diff-friendly for review. No database, no indexing.
 ### 6.5 `tengu eval <skill>` runner (orchestrator-driven)
 
 ```
-tengu eval mint-ipnft
+tengu eval summarize-paper
   ↓
- 1. Load skills/mint-ipnft/evals/prompts.yaml → N fixtures
- 2. Build synthetic user_msg: "Run fixtures f1..fN for skill mint-ipnft."
+ 1. Load skills/summarize-paper/evals/prompts.yaml → N fixtures
+ 2. Build synthetic user_msg: "Run fixtures f1..fN for skill summarize-paper."
  3. Orchestrator emits plan: one step per fixture → fixture-runner agent,
     + one terminal synthesizer step that aggregates outputs.
  4. Each fixture-runner step runs the fixture prompt against the configured worker,
@@ -434,7 +434,7 @@ Two consequences of composing the orchestrator:
 
 Two v1 mitigations:
 
-1. **Restricted `scopes` block on `fixture-runner`** — default denies `check_fs_write` outside workspace and `check_network` outside `testnet.*` / `localhost`. Overridable per-skill via optional `evals/scope_overrides.toml`. Concrete default allow-list picked in the implementation plan against real aura/molecule configs.
+1. **Restricted `scopes` block on `fixture-runner`** — default denies `check_fs_write` outside workspace and `check_network` outside `testnet.*` / `localhost`. Overridable per-skill via optional `evals/scope_overrides.toml`. Concrete default allow-list picked in the implementation plan against real sandbox configs.
 2. **`--dry-run` flag on `tengu eval`** — stubs side-effectful tools (`sign_and_send_transaction`, `http_request`) to return canned success responses. Metrics depending on real side effects are marked `skipped in dry-run` (not a pass, not a fail).
 
 ---
@@ -444,9 +444,9 @@ Two v1 mitigations:
 ### 7.1 Flow
 
 ```
-tengu skill evolve mint-ipnft [--max-cycles 3] [--target-metric <name>] [--base-branch <b>]
+tengu skill evolve summarize-paper [--max-cycles 3] [--target-metric <name>] [--base-branch <b>]
   ↓
- 1. BASELINE: run tengu eval mint-ipnft → baseline_report
+ 1. BASELINE: run tengu eval summarize-paper → baseline_report
     Identify target metric:
       - if --target-metric given: use it (error if not gated)
       - else: pick the gated metric with lowest pass_rate;
@@ -495,7 +495,7 @@ tengu skill evolve mint-ipnft [--max-cycles 3] [--target-metric <name>] [--base-
 ### 7.3 skill-improver user message (per invocation)
 
 ```
-Skill: mint-ipnft
+Skill: summarize-paper
 Current SKILL.md body:
 <<<
 {current_body}
@@ -518,8 +518,8 @@ Failing fixture transcripts (up to 3):
 {transcript_f7}
 
 Other metrics and their baseline pass rates (keep these >= baseline - 0.05):
-- mint_confirmed: 1.0
-- tx_hash_recorded: 1.0
+- summary_saved: 1.0
+- summary_indexed: 1.0
 
 Previous attempts in this session (empty on cycle 1):
 {previous_cycles_summary}
@@ -553,32 +553,32 @@ If rule 2 eliminates all cycles, no "best" — user sees `"evolve found N propos
 ### 7.6 Approval gate UX
 
 ```
-Skill: mint-ipnft
+Skill: summarize-paper
 Target metric: plan_quality (baseline 0.66 → proposed 0.83, delta +0.17)
 
 Non-target gated metrics (all must stay >= baseline - 0.05):
-  mint_confirmed:     1.00 → 1.00   ✓
-  tx_hash_recorded:   1.00 → 1.00   ✓
+  summary_saved:      1.00 → 1.00   ✓
+  summary_indexed:    1.00 → 1.00   ✓
 
 SKILL.md changes (unified diff):
   @@ -14,6 +14,10 @@
    ## When to Use
-  -- Use when minting a new IPNFT
-  -- Use after a project proposal is approved
-  +- Use when minting a new IPNFT on any supported chain
-  +- Use after a project proposal is approved AND funding address confirmed
-  +- Use only when the caller has a wallet with the agent scope
+  -- Use when summarizing a new paper
+  -- Use after a paper link is shared
+  +- Use when summarizing a new paper from any supported source
+  +- Use after a paper link is shared AND the PDF is reachable
+  +- Use only when the caller may write to the workspace
   +
   @@ -28,4 +32,6 @@
    ## Procedure
-  -1. Call http_request to fetch the current gas price.
-  +1. Call get_wallet_address to confirm scope.
-  +2. Call http_request to fetch the current gas price.
+  -1. Call http_request to fetch the paper.
+  +1. Call list_directory to confirm scope.
+  +2. Call http_request to fetch the paper.
   +3. ...
 
 Rationale:
-  Added an explicit scope-check step before sending. Failing fixtures f2, f5, f7
-  all tried to sign without first calling get_wallet_address; the judge penalized
+  Added an explicit scope-check step before writing. Failing fixtures f2, f5, f7
+  all tried to write without first calling list_directory; the judge penalized
   the missing check.
 
 [y] apply, [n] discard, [d] show details, [o] open worktree:
@@ -669,7 +669,7 @@ Project convention: cap individual test runs ≤30s; no blind full `cargo test`.
 ### 10.3 Eval suite (dogfood)
 
 - `skills/skill-creator/evals/prompts.yaml` — seeded fixtures exercising `skill_distill`. Metric: `llm_judge` scoring "does the distilled SKILL.md read like a coherent skill?"
-- `skills/mint-ipnft/evals/prompts.yaml` (hypothetical; seeded from a real aura-orchestrator run) — used for manual smoke, not CI.
+- `skills/summarize-paper/evals/prompts.yaml` (hypothetical; seeded from a real research run) — used for manual smoke, not CI.
 
 ### 10.4 Deliberately skipped
 

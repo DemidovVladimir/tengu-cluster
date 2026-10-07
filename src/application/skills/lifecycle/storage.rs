@@ -300,7 +300,7 @@ mod tests {
 
         finalize_run(
             skill_dir,
-            "mint-ipnft",
+            "summarize-paper",
             "2026-04-22T14-03-11Z",
             &specs,
             &samples,
@@ -311,7 +311,7 @@ mod tests {
 
         let mj: MetricsJson =
             serde_json::from_slice(&std::fs::read(metrics_json_path(skill_dir)).unwrap()).unwrap();
-        assert_eq!(mj.skill, "mint-ipnft");
+        assert_eq!(mj.skill, "summarize-paper");
         let r = mj.metrics.get("m1").unwrap();
         assert!((r.pass_rate - 0.5).abs() < 1e-4);
         assert_eq!(r.n, 2);

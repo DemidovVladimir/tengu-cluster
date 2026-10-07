@@ -946,7 +946,7 @@ Full procedural instructions here...</pre>
       </div>
     </div>
     <div style="margin-top:14px;font-size:12px;color:var(--text-muted);">
-      ↑ Later tiers shadow earlier ones. Skills selected per-agent via <code>skill_packages = ["aura-orchestrator"]</code> in config.toml
+      ↑ Later tiers shadow earlier ones. Skills selected per-agent via <code>skill_packages = ["xlab-research"]</code> in config.toml
     </div>
   </div>
 </div>
@@ -1071,7 +1071,7 @@ Full procedural instructions here...</pre>
     <div class="gap-icon">🟡</div>
     <div>
       <div class="gap-title">Skill Evolution Loop — no post-turn trigger <span class="tag partial">Built</span></div>
-      <div class="gap-desc">Spec: <code>docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md</code>. Landed: <code>skill_distill</code>, <code>tengu skill evolve</code> (<code>skill_lifecycle/evolve.rs</code>, scratch worktree, approval gate), <code>[agents.skill-improver]</code> in <code>sandboxes/aura</code>, <code>learning-agent</code> with <code>manage_skill</code>. Missing: anything that runs it after a successful task.</div>
+      <div class="gap-desc">Spec: <code>docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md</code>. Landed: <code>skill_distill</code>, <code>tengu skill evolve</code> (<code>skill_lifecycle/evolve.rs</code>, scratch worktree, approval gate), <code>[agents.skill-improver]</code> sample in <code>config.example.toml</code> (no sandbox ships one), <code>manage_skill</code>. Missing: anything that runs it after a successful task.</div>
       <div class="gap-fix">→ Post-turn hook (user-confirmed) that queues <code>skill_distill</code> / evolve for long successful sessions.</div>
     </div>
   </div>
@@ -1336,7 +1336,7 @@ Full procedural instructions here...</pre>
           <td><strong>Skill Evolve Loop</strong> <span class="tag partial">Built · manual</span></td>
           <td><code>tengu skill evolve</code> shipped; auto-trigger after tasks still open</td>
           <td>2–3 days (trigger)</td>
-          <td><code>skill_lifecycle/evolve.rs</code>, <code>[agents.skill-improver]</code> in <code>sandboxes/aura/config.toml</code></td>
+          <td><code>skill_lifecycle/evolve.rs</code>, <code>[agents.skill-improver]</code> sample in <code>config.example.toml</code></td>
         </tr>
         <tr>
           <td>5</td>

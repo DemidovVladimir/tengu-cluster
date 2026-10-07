@@ -577,13 +577,13 @@ Remove these. Their functionality is replaced or deferred.
 |--------|--------|
 | `src/application/orchestrator/roster.rs` | Replaced by Open Brain / Karpathy LLM Wiki |
 | `src/application/orchestrator/wiring.rs` | Replaced by Open Brain / Karpathy LLM Wiki + runner.rs |
-| `sandboxes/aura/config.toml`, `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 — **reversed 2026-09-18**: `agents/*.toml` removed, the sandbox config is the single agent source |
+| `sandboxes/storage-test/config.toml` | Migrated to `agents/*.toml` in Phase 2 — **reversed 2026-09-18**: `agents/*.toml` removed, the sandbox config is the single agent source |
 | `src/adapters/inbound/eval.rs` | Deferred → kept in-tree (`tengu eval`); ideas live in `docs/ideas/` |
 | `src/application/skills/lifecycle/evolve.rs` | Deferred → kept in-tree (`tengu skill evolve`); ideas live in `docs/ideas/` |
 
 > **Reconciled with repo, 2026-04-24 (revised):** verified against the actual
-> checkout. `sandboxes/` DOES exist (contains `aura/` and `storage-test/`) — those
-> two files ARE in scope for deletion in Phase 5 after migration. The paths
+> checkout. `sandboxes/` DOES exist (contains `storage-test/`) — that
+> file IS in scope for deletion in Phase 5 after migration. The paths
 > `src/adapters/agent_builder.rs` and `src/adapters/task_builder.rs` do NOT
 > exist — they were cleaned up before this document was written, so earlier
 > drafts of this table were stale.
@@ -792,7 +792,7 @@ Two-layer enforcement stays exactly as-is:
 On startup, if `TENGU_PLANNER_REGISTRY.md` returns zero results for any query:
 
 1. Log warning: `[tengu] Open Brain / Karpathy LLM Wiki registry empty — falling back to sandbox config`
-2. Load agent configs from `sandboxes/*/config.toml` (still present: `aura`,
+2. Load agent configs from `sandboxes/*/config.toml` (still present:
    `storage-test`) — parse their `[agents.*]` blocks and use them as the static
    roster for this session only.
 3. Background-index from `skills/` and `agents/` anyway; next session uses Open Brain / Karpathy LLM Wiki.
@@ -931,7 +931,7 @@ Before beginning implementation, confirm:
 2. Is the default embedding model (`openai/text-embedding-3-small` — see `[memory]`
    block in §17) the right choice, or should it be a local Ollama model?
 3. Are the two example agent specs for Phase 2 (`agents/*.toml`) derived from the
-   existing `sandboxes/aura/` and `sandboxes/storage-test/`, or drafted from scratch?
+   existing `sandboxes/storage-test/`, or drafted from scratch?
 4. Is the minimum-viable `skills/orchestrator/SKILL.md` template in §10 acceptable as
    the initial landing, or do you want to author one yourself before Phase 4 lands?
 

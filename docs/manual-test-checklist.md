@@ -21,12 +21,12 @@ Launch with `cargo run -- chat` (config: `-c/--config` > `$TENGU_CONFIG` > `~/.t
 - [ ] `> research what LLMs were released in April 2026 and summarise the top 3` produces a visible plan (`orch: plan created (N steps)` system bubble), `orch: ▶ <step> [<agent>]` / `orch: ✓ <step>` events as each `tengu run-agent` child runs, and a final synthesised response
 - [ ] Ctrl+Q (or Ctrl+C) exits the TUI cleanly with no panic and no dangling `tengu run-agent` processes
 
-## TUI smoke (aura sandbox)
+## TUI smoke (lping sandbox)
 
-Launch with `cargo run --features claude_code -- chat --sandbox aura` (aura's agents use `engine = "claude_code"`; the sandbox sets `[egress] network = "open"`, so no Tor proxy is needed). The multi-agent DeSci roster defined in `sandboxes/aura/config.toml` (`aura`, `researcher`, `learning-agent`, …) must load.
+Launch with `cargo run -- chat --sandbox lping` (the sandbox sets `[egress] network = "open"`, so no Tor proxy is needed). The multi-agent roster defined in `sandboxes/lping/config.toml` (`lping`, `crypto_researcher`, …) must load.
 
-- [ ] TUI starts without panic and the aura roster is visible (agent list or startup log)
-- [ ] `> summarize what this sandbox is for` returns a coherent response grounded in the aura sandbox context
+- [ ] TUI starts without panic and the lping roster is visible (agent list or startup log)
+- [ ] `> summarize what this sandbox is for` returns a coherent response grounded in the lping sandbox context
 - [ ] Ctrl+Q exits cleanly
 
 ## Telegram smoke (default)
@@ -38,12 +38,12 @@ Launch with `cargo run -- telegram` (`TELEGRAM_BOT_TOKEN` env var required; `[te
 - [ ] `research what LLMs were released in April 2026` streams status updates during planning and execution, then delivers a final plan response
 - [ ] Bot shuts down cleanly on Ctrl-C with no panic
 
-## Telegram smoke (aura)
+## Telegram smoke (storage-test)
 
-Launch with `cargo run --features claude_code -- telegram --sandbox aura`. The sandbox flag must take effect for the Telegram channel too.
+Launch with `cargo run --features claude_code -- telegram --sandbox storage-test`. The sandbox flag must take effect for the Telegram channel too.
 
-- [ ] Bot starts against the aura roster without panic
-- [ ] A short message from the phone gets a coherent reply grounded in the aura sandbox context
+- [ ] Bot starts against the storage-test roster without panic
+- [ ] A short message from the phone gets a coherent reply grounded in the storage-test sandbox context
 - [ ] Ctrl-C shuts down cleanly
 
 ## Debug probes

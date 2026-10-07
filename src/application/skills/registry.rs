@@ -191,7 +191,7 @@ fn is_env_var_safe(name: &str) -> bool {
 /// that (a) appear in the skill's frontmatter `env_vars:` list and (b) do not
 /// match a secret-name heuristic. Everything else is left as literal text.
 ///
-/// This lets a skill say `$MOLECULE_LABS_URL` in its documentation and have it
+/// This lets a skill say `$API_BASE_URL` in its documentation and have it
 /// rendered to the live env value when the system prompt is assembled — so the
 /// same skill works under staging and production configs. Secret values never
 /// enter the system prompt.
@@ -388,7 +388,7 @@ fn api_skill_preamble(name: &str) -> String {
         "# {} — API reference\n\n\
          CRITICAL: Follow the documented examples EXACTLY. The platform expands \
          `$ENV_VAR` references automatically at runtime — pass them as literal strings \
-         (e.g. pass `$MOLECULE_LABS_URL` as the url value, do NOT guess what it resolves to). \
+         (e.g. pass `$API_BASE_URL` as the url value, do NOT guess what it resolves to). \
          Use ONLY the URLs and env var names shown below. \
          Do NOT invent, modify, or construct your own URLs or variable names.\n\n\
          Parameters: `url`, `method`, `headers` (JSON object, values support $ENV_VAR), \
@@ -1330,11 +1330,11 @@ mod tests {
 
     #[test]
     fn is_env_var_safe_filters_secret_patterns() {
-        assert!(is_env_var_safe("MOLECULE_LABS_URL"));
-        assert!(is_env_var_safe("IPNFT_CONTRACT_ADDRESS"));
+        assert!(is_env_var_safe("API_BASE_URL"));
+        assert!(is_env_var_safe("CONTRACT_ADDRESS"));
         assert!(is_env_var_safe("PRIVY_WALLET_ID"));
         assert!(!is_env_var_safe("PRIVY_APP_SECRET"));
-        assert!(!is_env_var_safe("MOLECULE_API_KEY"));
+        assert!(!is_env_var_safe("EXAMPLE_API_KEY"));
         assert!(!is_env_var_safe("HF_TOKEN"));
         assert!(!is_env_var_safe("SOME_PASSWORD"));
     }

@@ -285,7 +285,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/plan.rs` | 276 | Plan types and topology helpers. |
 | `src/domain/runtime.rs` | 933 | `tengu run` pure data — the single-runner leases (`runtime:<sandbox>`: one runner per sandbox; `state:<dir>`: one owner per `[xmarket]` state dir); `now_ms` always an input. |
 | `src/domain/schedule.rs` | 804 | Feed fire times — `next_fire`: UTC-grid interval, local-time windows (own interval), at-ticks in a zone (DST-safe), jitter, late grace; missed slots skipped. |
-| `src/domain/scope.rs` | 407 | `ToolScope` — default-deny, per-tool access control. Pure policy logic; `shell_command_binary` — the first command word `shell_bins` gates (leading `NAME=value` skipped). |
+| `src/domain/scope.rs` |  | `ToolScope` — default-deny, per-tool access control. Pure policy logic; `shell_command_binary` — the first command word `shell_bins` gates (leading `NAME=value` skipped). |
 | `src/domain/secrets.rs` | 123 | `SecretRegistry` — secret values to redact from tool output, transcripts, typed observations (`redact_value`, `redact_observation`); `is_env_secret` — which env credentials (`*_API_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD`, `*_PRIVATE_KEY`) register, never a public on-chain id |
 | `src/domain/session.rs` | 58 | Chat/flow session state — per-session prompt assembly and loop state. |
 | `src/domain/solana.rs` | 876 | Solana primitives — `Pubkey` / `Signature` (hand-rolled base58), PDA derivation, program ids, account reads. |
@@ -338,7 +338,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/execution_map.rs` | 340 | Execution map — an Architect's JSON run of one loop (`loop`, `event`, `goal`, `sequence`, `actions`, `caps`, `max_steps`, `act_at`, `dry_run`) that can only narrow it; `apply` lists every refusal; identity = canonical sha256. |
 | `src/config/feeds.rs` | 743 | `[feeds.<name>]` — `tool` / `tick` feeds: schedule (`every_secs`, `windows`, `at`, `tz`, `jitter_pct`, `run_on_start`), fan-out `each`, health; validated against agents' tools and loops. |
 | `src/config/hardening.rs` | 586 | Hardened sandboxes (`[solana]` signer or `[risk]`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"` (that CLI runs without settings files, hooks, plugins, skills, CLAUDE.md), no `[[mcp_servers]]`, no shell scope, the signer key / `<TENGU_HOME>/state` / kill-switch file / the config file outside every fs root and workspace; no-shell fallback; a plan step's `compose` only narrows. |
-| `src/config/mod.rs` | 2016 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
+| `src/config/mod.rs` |  | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
 | `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default config file, `~` expansion; `sandbox_of_config_file` (`sandboxes/<name>/config.toml` → `<name>`, the ledger owner) |
 | `src/config/rate_limits.rs` | 166 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`; a test keeps xlab's HL bucket inside HL's per-IP 1200 / min next to the xmarket runs. |
 | `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
@@ -404,7 +404,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/skills/lifecycle/scratch_worktree.rs` | 219 | Scratch git worktree for evolve cycles. Falls back to a plain directory |
 | `src/application/skills/lifecycle/storage.rs` | 504 | Metric storage: rolling `metrics.json`, append-only `history.jsonl`, per-run reports. |
 | `src/application/skills/mod.rs` | 5 | Skills — registry + system-prompt assembly (`registry`) and the |
-| `src/application/skills/registry.rs` | 1313 | Skill subsystem — types, parsing, registry, filesystem discovery, |
+| `src/application/skills/registry.rs` |  | Skill subsystem — types, parsing, registry, filesystem discovery, |
 | `src/application/tools/mod.rs` | 4 | Tool dispatch — `ToolRegistry` + `PluginToolExecutor` (the `ToolExecutor` |
 | `src/application/tools/registry.rs` | 292 | Tool registry + `PluginToolExecutor` — dispatches a model's tool call to |
 
@@ -471,7 +471,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/solana/signer.rs` | 374 | `LocalKeypair` (ed25519-dalek) — `[solana] signer_key_file` loader (0600, no-echo errors), one-shot position keys, `sign_transaction`. |
 | `src/adapters/outbound/solana/test_chain.rs` | 157 | Test-only fake cluster for the write path (simulate, send modes, statuses, block height, routed / fixed reads). |
 | `src/adapters/outbound/solana/writes_store.rs` | 269 | `SqliteWriteStore` — `<TENGU_HOME>/state/solana-writes.db` (leases, pending_sends, fences); one statement per mutation. |
-| `src/adapters/outbound/subprocess_runner.rs` | 530 | Subprocess runner — the `WorkerHandle` that runs each plan step. |
+| `src/adapters/outbound/subprocess_runner.rs` |  | Subprocess runner — the `WorkerHandle` that runs each plan step. |
 | `src/adapters/outbound/tools/agentic_memory/mod.rs` | 1423 | `agentic_memory` — Postgres-backed Open Brain + LLM Wiki memory surface. |
 | `src/adapters/outbound/tools/args.rs` | 118 | Shared helpers for `Tool::execute`: JSON argument extraction and |
 | `src/adapters/outbound/tools/cache/mod.rs` | 81 | Cache plugin — SQLite-backed shared workspace cache for agent coordination. |
@@ -484,7 +484,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/crypto/sign_tx.rs` | 165 | `sign_and_send_transaction` tool — submit an EVM transaction via Privy. |
 | `src/adapters/outbound/tools/crypto/wallet_address.rs` | 67 | `get_wallet_address` tool — return the Privy-managed wallet address. |
 | `src/adapters/outbound/tools/http/mod.rs` | 37 | HTTP plugin — generic outbound HTTP client for skill-driven API calls. |
-| `src/adapters/outbound/tools/http/request.rs` | 818 | `http_request` tool — generic HTTP client for skill-driven API calls. |
+| `src/adapters/outbound/tools/http/request.rs` |  | `http_request` tool — generic HTTP client for skill-driven API calls. |
 | `src/adapters/outbound/tools/hyperliquid/book.rs` | 777 | `hl_book` — one coin's L2 book through the cache (re-walked per call's notionals), optional last trade; `fresh_book` / `HlBookSource` = the exec tools' live `BookSource` (never cached). |
 | `src/adapters/outbound/tools/hyperliquid/ctx.rs` | 1217 | `hl_ctx` — a perp dex sweep or ≤ 64 coins through the cache: one ctx read per dex (+ at-cap, perp meta), `mkt_ctx/1` + `mkt_instrument/1` for every coin, `hl_sweep/1` summary. |
 | `src/adapters/outbound/tools/hyperliquid/defs.rs` | 99 | The Hyperliquid family's interface — names, descriptions, JSON input schemas. |
@@ -513,7 +513,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/skill/shell_tool.rs` | 171 | Reusable `SkillShellTool` — executes a shell skill template. |
 | `src/adapters/outbound/tools/skill_lifecycle/apply_improver_proposal.rs` | 262 | `apply_improver_proposal` — LLM-callable tool used by `skill-improver-inline` |
 | `src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs` | 56 | `compress_and_store` — the harness-enforced "step is done" signal. |
-| `src/adapters/outbound/tools/skill_lifecycle/distill.rs` | 740 | `skill_distill` LLM-callable tool — writes a new skill directory from |
+| `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |  | `skill_distill` LLM-callable tool — writes a new skill directory from |
 | `src/adapters/outbound/tools/skill_lifecycle/mod.rs` | 48 | Skill-lifecycle plugin — registers the `skill_distill` LLM-callable tool. |
 | `src/adapters/outbound/tools/skill_resource/mod.rs` | 391 | Skill-resource plugin — `skill_resource` tool. |
 | `src/adapters/outbound/tools/solana/defs.rs` | 687 | The Solana LP family's interface — names, descriptions and JSON input schemas, including reserve-aware `lp_swap_plan`. |
@@ -554,11 +554,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/cli/tool.rs` | 394 | Hidden `tengu tool list|call|turn` — catalog names; one or a `--batch` of tool calls through the executor a `run-agent` child builds, `--transcript` the conversation (bridge conformance harness); one engine turn as any agent, private ones included (engine matrix xm set). |
 | `src/adapters/inbound/eval.rs` | 2673 | Skill eval runner — `tengu eval <skill>`. |
 | `src/adapters/inbound/evolve.rs` | 444 | `tengu skill evolve` — the evolve loop driver: baseline eval, improver |
-| `src/adapters/inbound/mcp_bridge.rs` | 555 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol; each call gets the run's conversation (`call_conversation`), `[[mcp_servers]]` by name from the loaded config. |
+| `src/adapters/inbound/mcp_bridge.rs` |  | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol; each call gets the run's conversation (`call_conversation`), `[[mcp_servers]]` by name from the loaded config. |
 | `src/adapters/inbound/run.rs` | 178 | `tengu run [--sandbox <s>]` — the long-running process: loops, feeds, webhook routes (feature `webhooks`), lease, graceful shutdown; file + stderr logs. |
 | `src/adapters/inbound/mod.rs` | 15 | Inbound (driving) adapters — what turns outside input into use-case calls |
-| `src/adapters/inbound/telegram.rs` | 2079 | Telegram adapter — pipe, commands, and runtime in one module. |
+| `src/adapters/inbound/telegram.rs` |  | Telegram adapter — pipe, commands, and runtime in one module. |
 | `src/adapters/inbound/tui/app.rs` | 40 | TUI application state model — pure data, no widget state. |
 | `src/adapters/inbound/tui/mod.rs` | 943 | Full-screen TUI runtime for interactive chat using cursive. |
 | `src/adapters/inbound/tui/view.rs` | 399 | Cursive view builders and UI update helpers. |
-| `src/adapters/inbound/webhooks.rs` | 1027 | Inbound webhook listener — `tengu webhooks --sandbox <name>`: the leases `tengu run` takes, graceful SIGINT / SIGTERM. |
+| `src/adapters/inbound/webhooks.rs` |  | Inbound webhook listener — `tengu webhooks --sandbox <name>`: the leases `tengu run` takes, graceful SIGINT / SIGTERM. |

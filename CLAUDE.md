@@ -345,9 +345,8 @@ These are not preferences. They're load-bearing.
   bridge (the agent's folded scopes loaded from `TENGU_CONFIG`;
   `TENGU_BRIDGE_SCOPES` only as its fallback) use the configured scope for
   each tool and `permissive_scope` only for tools with no entry. A configured scope is deny-by-default per field: an
-  `http_request` scope with empty `fs_roots` denies multipart file uploads —
-  `sandboxes/aura/config.toml` sets `fs_roots = ["~/aura-workspace"]` for that
-  reason. Subprocess children get their own workspace added to every inherited
+  `http_request` scope with empty `fs_roots` denies multipart file uploads.
+  Subprocess children get their own workspace added to every inherited
   scope's `fs_roots` (`grant_workspace_root`) — except a deny-all scope (every
   field empty, e.g. xmarket's `[default_scopes.write_file]`), which stays a
   deny (`tengu doctor --engines` skips an agent whose own scopes deny the
@@ -472,8 +471,7 @@ These are not preferences. They're load-bearing.
   to the store key), one that fits arrives whole
   (`Engine::tool_result_char_cap`, `Observation::compact_text`);
   `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
-- **Open-network sandboxes** — `aura` (Molecule / Privy / Beach block Tor
-  exits), `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
+- **Open-network sandboxes** — `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
   `network = "open"`; `xmarket` (M0 stage) and `xmarket-weekend` run `open`
   with `allow_hosts = ["api.hyperliquid.xyz"]`, `xlab` with
   `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, and must stay switchable to Tor
@@ -630,7 +628,7 @@ These are not preferences. They're load-bearing.
   `@<role>:`-routable, never the default and not listed in `/agents` or the
   team block (`telegram.rs::telegram_reachable`). `[telegram] tool_approvals`
   / `approve_only` are NOT implemented — no tool call waits for an approval,
-  on any engine or surface; they still load (aura sets `approve_only`) and
+  on any engine or surface; they still load and
   `Config::load` warns naming them (`TelegramConfig::approvals_warning`).
 - **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
   `config/sections.rs::SandboxSections` (one `Arc` per config, set by
@@ -758,7 +756,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 ## What to do when you're stuck
 
 1. **Trace one turn end-to-end before changing anything.** Run
-   `cargo run --release -- chat --sandbox aura` (add `--features
+   `cargo run --release -- chat --sandbox lping` (add `--features
    postgres_memory` to exercise Open Brain recall), type "what is the BTC
    price?", and follow the logs. The flow is in §1 of
    `docs/architecture-2026-04-27.md`.

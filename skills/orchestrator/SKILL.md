@@ -95,7 +95,7 @@ One agent handled this; no need to split into find-then-summarise.
 
 ## C → B fallback (composed agents)
 
-When NO listed agent's description plausibly fits the request (rare, but real — e.g. "draft a haiku about kombucha" against a roster of researcher / storage / aura), do this two-turn dance:
+When NO listed agent's description plausibly fits the request (rare, but real — e.g. "draft a haiku about kombucha" against a roster of researcher / storage / crypto_researcher), do this two-turn dance:
 
 **Turn 1 — Direct (the C step).** Ask the user to confirm or describe what they need:
 

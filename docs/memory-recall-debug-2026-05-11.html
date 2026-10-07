@@ -186,7 +186,7 @@
   <ol>
     <li><strong>Defaults are OFF.</strong> <code>memory.enabled=false</code>, <code>within_session_output_top_k=0</code>, <code>cross_session_msg_top_k=0</code>. Out of the box the planner gets <em>only</em> the in-process user-message ring buffer (10 msgs, user side only, lost on restart).</li>
     <li><strong>The planner is amnesic about its own replies.</strong> When the verdict is <code>Direct</code> (no subagent dispatched), the response is never written to <code>agentic_memory step outputs</code> on the TUI/chat path — only the webhook path persists Direct verdicts (Fix H). Ring buffer pushes <em>user</em> messages only. So turn N+1 sees [M1, M2] but never sees R1.</li>
-    <li><strong>Open Brain / Karpathy LLM Wiki is the wrong primitive for dialog continuity.</strong> Cosine similarity ≠ recency; short utterances ("yes", "do it") embed near-randomly; "the molecule project" is coreference, not similarity; current message self-matches its own paraphrase from 3 turns ago. Vector recall is fine for cross-session search-my-history; it is a poor substitute for a verbatim last-N window.</li>
+    <li><strong>Open Brain / Karpathy LLM Wiki is the wrong primitive for dialog continuity.</strong> Cosine similarity ≠ recency; short utterances ("yes", "do it") embed near-randomly; "the research project" is coreference, not similarity; current message self-matches its own paraphrase from 3 turns ago. Vector recall is fine for cross-session search-my-history; it is a poor substitute for a verbatim last-N window.</li>
   </ol>
   <p class="small">Five-line repro of the bug: enable nothing, type "remember pi is 3.14", on the next turn type "what's pi?" — the planner has no record of the first turn (no subagent, no <code>compress_and_store</code>, no Fix C backstop, no Fix H), no within-session output knob to read it back, and ring-buffer history shows only your user messages. <code>SELECT count(*) FROM memory_events WHERE session_id = '$TENGU_SESSION_ID'</code> against <code>TENGU_MEMORY_DATABASE_URL</code> confirms zero rows (the <code>tengu memory inspect</code> CLI was removed with the Qdrant path, 2026-05-14).</p>
 </div>
@@ -431,7 +431,7 @@
     </tr>
     <tr>
       <td>Coreference</td>
-      <td>"the molecule project" has no shared tokens with the prior step's actual content.</td>
+      <td>"the research project" has no shared tokens with the prior step's actual content.</td>
       <td>Vector search misses pronoun/alias-style references entirely. This is the most common dialog-continuity failure mode.</td>
       <td>—</td>
     </tr>
@@ -470,7 +470,7 @@
     <tr><td>Window-not-snippet</td><td>continuity needs the whole last N pairs verbatim; top-K gives 1–2 chunks and loses the thread</td></tr>
     <tr><td>Short-utterance noise</td><td>"yes" / "do it" embed near-random</td></tr>
     <tr><td>Self-similarity</td><td>current message ≈ paraphrase of recent ones; model gets its own words echoed back as "context"</td></tr>
-    <tr><td>Coreference miss</td><td>"the molecule project" can't be resolved by token overlap</td></tr>
+    <tr><td>Coreference miss</td><td>"the research project" can't be resolved by token overlap</td></tr>
     <tr><td>Threshold theater</td><td>0.15 floor is "not random," not "relevant"</td></tr>
     <tr><td>Embedding cost / quota</td><td>every turn re-embeds; one blip kills recall</td></tr>
   </tbody>
@@ -549,7 +549,7 @@
       <td><span class="priority-2">6</span></td>
       <td><strong>Structured per-session working-memory record</strong>: <code>.tengu/sessions/&lt;id&gt;.json</code> with fields {entities, decisions, open_questions, last_action}. Updated by extraction inside <code>compress_and_store</code>.</td>
       <td>new module · hook in <code>adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary</code></td>
-      <td>Replaces ad-hoc coref ("the molecule project") with a deterministic lookup. The OpenSearch-style long-term + SUMMARY shape, but per-session.</td>
+      <td>Replaces ad-hoc coref ("the research project") with a deterministic lookup. The OpenSearch-style long-term + SUMMARY shape, but per-session.</td>
       <td>Medium. Extraction is one extra LLM call per step.</td>
     </tr>
     <tr>
@@ -790,7 +790,7 @@ grep "session_id=$TENGU_SESSION_ID" &lt;your-log-file&gt; | head -20
     let p = "";
 
     p += block("[ system prompt ]", `<span class="block-mute">skills/orchestrator/SKILL.md body (~2 000 chars) — planner instructions</span>\n`);
-    p += block("# Tengu Planner Registry (file-backed, no scores)", `<span class="block-mute">## Agents\n### researcher\n- engine / model / tools / skills + description\n## Skills\n- \`molecule-x402\`: …\n## Tools\n...</span>\n`);
+    p += block("# Tengu Planner Registry (file-backed, no scores)", `<span class="block-mute">## Agents\n### researcher\n- engine / model / tools / skills + description\n## Skills\n- \`xlab-research\`: …\n## Tools\n...</span>\n`);
 
     if (state.verbatim_window) {
       p += `<span class="block-header">${knobs.verbatim_window.block.header}</span>\n${knobs.verbatim_window.block.body}\n`;

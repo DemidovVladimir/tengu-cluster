@@ -261,14 +261,14 @@ mod tests {
     #[test]
     fn aggregator_sums_overall_and_per_agent() {
         let mut s = AggregatorState::default();
-        s.absorb(record_for(MetricsKind::Planner, "aura", 100, 50));
+        s.absorb(record_for(MetricsKind::Planner, "planner", 100, 50));
         s.absorb(record_for(MetricsKind::Subagent, "researcher", 200, 100));
         s.absorb(record_for(MetricsKind::Subagent, "researcher", 300, 150));
         assert_eq!(s.overall.prompt_tokens, 600);
         assert_eq!(s.overall.completion_tokens, 300);
         assert_eq!(s.overall.total_tokens, 900);
         assert_eq!(s.by_agent["researcher"].total_tokens, 750);
-        assert_eq!(s.by_agent["aura"].total_tokens, 150);
+        assert_eq!(s.by_agent["planner"].total_tokens, 150);
         assert_eq!(s.by_kind["subagent"].call_count, 2);
     }
 
@@ -289,10 +289,10 @@ mod tests {
 
     #[test]
     fn record_round_trips_through_serde() {
-        let rec = record_for(MetricsKind::Planner, "aura", 100, 50);
+        let rec = record_for(MetricsKind::Planner, "planner", 100, 50);
         let json = serde_json::to_string(&rec).unwrap();
         let back: MetricsRecord = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.agent, "aura");
+        assert_eq!(back.agent, "planner");
         assert_eq!(back.total_tokens, 150);
     }
 }

@@ -1527,97 +1527,16 @@ net_hosts = ["api.hyperliquid.xyz"]
         (config, tools)
     }
 
-    /// W1-gate review (chat honours `tools`): the claude_code agents of aura
-    /// and storage-test get, through the bridge, the tools their skills call
-    /// — and their scopes no wider than before.
+    /// W1-gate review (chat honours `tools`): the claude_code agent of
+    /// storage-test gets, through the bridge, the tools its skill calls — and
+    /// its scopes no wider than before.
     ///
     /// | Sandbox | Skill needs | Scope |
     /// |---|---|---|
-    /// | aura | `run_command` (aura-orchestrator / molecule-x402: x402 curl flow, Phase 4 node encrypt) | `shell_bins` = the skills' first command words, not the old `"*"` fallback |
     /// | storage-test | `http_request`, `write_file` (telegram-rag-ingest URL / pasted-text ingest) | http: any host, no `$VAR`, no upload; write: the workspace |
     #[tokio::test]
     async fn sandbox_skills_get_their_tools_through_the_bridge() {
-        // aura: run_command joins the listed tools; signing stays off the list.
-        let (aura, tools) = sandbox_agent("aura", "aura");
-        let mut sorted = tools.clone();
-        sorted.sort();
-        assert_eq!(
-            sorted,
-            [
-                "http_request",
-                "list_directory",
-                "read_file",
-                "run_command",
-                "shared_cache"
-            ]
-        );
         let ws = TempDir::new().unwrap();
-        let names: Vec<&str> = tools.iter().map(String::as_str).collect();
-        let exec = build_bridge_executor(
-            &setup(ws.path(), &names, Some(aura), Some("aura")),
-            &no_secrets(),
-        )
-        .await
-        .unwrap();
-        let registered = exec.registry.tool_names();
-        for tool in &tools {
-            assert!(
-                registered.contains(tool),
-                "{tool} not served: {registered:?}"
-            );
-        }
-        for absent in ["write_file", "sign_and_send_transaction", "memory_ingest"] {
-            assert!(!registered.iter().any(|t| t == absent), "{absent}");
-        }
-
-        // Every command line the skills give run_command passes the scope;
-        // python / pip / pdftotext / a shell do not.
-        let shell = &exec.scopes["run_command"];
-        let gate = |c: &str| shell.check_shell_bin(crate::domain::scope::shell_command_binary(c));
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut commands = vec!["date -u +%Y-%m-%dT%H:%M:%SZ".to_string()];
-        for skill in ["aura-orchestrator", "molecule-x402"] {
-            let body =
-                std::fs::read_to_string(root.join(format!("skills/{skill}/SKILL.md"))).unwrap();
-            commands.extend(
-                body.lines()
-                    .filter_map(|l| l.trim_start().strip_prefix("command: "))
-                    .map(str::to_string),
-            );
-        }
-        assert!(commands.len() >= 15, "{commands:?}");
-        for command in &commands {
-            assert!(gate(command).is_ok(), "{command}: {:?}", gate(command));
-        }
-        for command in [
-            "python3 -c 'print(1)'",
-            "pip install pdfplumber",
-            "pdftotext paper.pdf -",
-            "DEK=x bash -c 'node -e 1'",
-        ] {
-            assert!(gate(command).is_err(), "{command}");
-        }
-        let exec = sanitized(exec, &no_secrets());
-        let r = call(
-            exec.as_ref(),
-            json!(1),
-            "run_command",
-            json!({"command": "MSG='bridged run' echo ok"}),
-        )
-        .await;
-        assert!(r["isError"] == false && text(&r).contains("ok"), "{r}");
-        let r = call(
-            exec.as_ref(),
-            json!(2),
-            "run_command",
-            json!({"command": "python3 -c 'print(1)'"}),
-        )
-        .await;
-        assert!(
-            r["isError"] == true && text(&r).contains("binary 'python3' not in allowed shell_bins"),
-            "{r}"
-        );
-
         // storage-test: the ingest path's http_request and write_file.
         let (storage, tools) = sandbox_agent("storage-test", "storage");
         let mut sorted = tools.clone();

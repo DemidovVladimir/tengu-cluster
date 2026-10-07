@@ -47,7 +47,7 @@ The active config (`sandboxes/<name>/config.toml` via `--sandbox`, else `~/.teng
 1. A default agent with `skill_distill` in `workspace_tools` (lets that agent author skills mid-conversation).
 2. The `[skill_lifecycle]` block naming the improver agent + an `[agents.skill-improver]` entry. `fixture_runner_agent` is accepted but unused — `tengu eval` runs rows on the eval config's default agent.
 
-`sandboxes/aura/config.toml` already has all of this — pass `--sandbox aura` to `eval` / `skill evolve`.
+No sandbox ships one — start from the commented `[skill_lifecycle]` sample in `config.example.toml`.
 
 Minimum example:
 
@@ -177,7 +177,7 @@ All should return without error.
 ## 3. `tengu doctor` (no API key needed, no cost)
 
 ```bash
-./target/debug/tengu doctor            # or: tengu doctor --sandbox aura
+./target/debug/tengu doctor            # or: tengu doctor --sandbox lping
 ```
 
 Expected output includes:

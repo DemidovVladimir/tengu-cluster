@@ -136,7 +136,7 @@ sequenceDiagram
     participant F as fixtures.rs<br/>extract_fixtures
     participant FS as Filesystem
 
-    U->>A: "let's save this as a skill called mint-ipnft"
+    U->>A: "let's save this as a skill called summarize-paper"
     A->>A: Synthesize body_markdown<br/>+ metrics spec from context
     A->>E: tool_call: skill_distill(name, description,<br/>body_markdown, metrics, from_message_index)
     E->>T: execute(&call, &messages)
@@ -154,7 +154,7 @@ sequenceDiagram
     T->>FS: rename(tmp, skills/<name>/) — atomic
     T-->>E: {path, tier, fixtures_created, metrics_declared,<br/>loaded_in_current_conversation: false}
     E-->>A: tool result
-    A-->>U: "Saved as skills/mint-ipnft/. Available next session."
+    A-->>U: "Saved as skills/summarize-paper/. Available next session."
 ```
 
 **Cache-discipline invariant:** the new skill does NOT activate in the current conversation — `loaded_in_current_conversation: false` is returned explicitly. This is enforced by not modifying the runtime's `ToolRegistry` post-skill-distill. The skill becomes available when the next session starts.

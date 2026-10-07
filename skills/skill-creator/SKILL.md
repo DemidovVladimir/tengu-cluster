@@ -119,7 +119,7 @@ When the user says "let's save this as a skill", "distill this", "turn this into
 
 ### Required inputs (you are the author)
 
-- **`name`** -- kebab-case, verb-first (e.g. `mint-ipnft`, `deploy-contract`).
+- **`name`** -- kebab-case, verb-first (e.g. `summarize-paper`, `deploy-contract`).
 - **`description`** -- starts with "Use when...", third person, triggering conditions only. Never summarize the workflow.
 - **`body_markdown`** -- the skill body you compose from your in-context understanding. Required structure:
   - **Overview** (1-2 sentences: what this skill does)
