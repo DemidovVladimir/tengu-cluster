@@ -6,7 +6,29 @@
 
 ---
 
-## lping execution chains (Tue 2026-10-06) — PR #27 `feature/lp-swap-plan`, then `feature/jev-chains` (step A)
+## Local data to clean up later (operator, 2026-10-07)
+
+Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kept on purpose for now. **An agent deletes a group only after the operator says that group is done** — never on its own initiative, never as "cleanup while here". Back up first if the operator asks. When a row is deleted, remove it here in the same commit.
+
+| # | Path | Size (2026-10-07) | What | Delete when | How |
+|---|---|---|---|---|---|
+| A1 | `~/.tengu/state/evidence/w1-2026-10-06/` | 2.2 GB | W1 weekend evidence vault (read-only); its tree hash is pinned by `lineage/evidence/w1-2026-10-06.toml` (branch `feature/w1-lineage`) | W1 retired after Operator Review #1 | `chmod -R u+w` then `rm -rf`; `tengu evidence verify` then fails for that record — expected |
+| A2 | `~/.tengu/state/xmarket-weekend/` | 1.2 GB | weekend paper run: `ledger.db`, `history/` day files, `run-logs/`, `runtime.db` (the vault's source) | with A1 | `rm -rf` |
+| A3 | `~/.cache/tengu-xm.noindex/weekend/` | 61 MB | frozen weekend binaries `tengu-6fcb455`, `tengu-desk-2026-10-02` (commit = tag `w1-forward-2026-10-02`, on origin) | with A1 | `rm -rf` |
+| B1 | `~/.tengu/state/xlab/` | 499 MB | xlab warehouse `market.db` (+ `-wal` / `-shm`), `backtests/` run dirs, `holdout-reads.jsonl` | xlab research finished | `rm -rf` (backfill can rebuild `market.db`; run dirs and holdout reads cannot) |
+| B2 | `~/.tengu/state/xmarket/` | 646 MB | xmarket paper ledger + recorder history | xmarket work finished | `rm -rf` |
+| B3 | `~/.tengu/state/research/` | 8.3 GB | `market-scan-2026-10-05/`, `qnt/`, `sliding/` research data | research finished | `rm -rf` |
+| B4 | `~/.cache/tengu-xm.noindex/tengu-xlab-f554db0/` | 107 MB | xlab binary build | with B1 | `rm -rf` |
+| C1 | main checkout `docs/crypto-opportunity-research-2026-10-05.md`, `docs/crypto-opportunity-deep-dive-2026-10-06.{md,html}`, `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` | ~150 KB | weekend research docs, untracked (never committed — public repo) | operator decides: move somewhere private, or drop | `rm` the six files |
+| D1 | `~/.tengu/logs/` | 74 MB | `decisions.jsonl`, `egress.jsonl`, `risk.jsonl`, `maps/` (execution maps by sha256) | no longer needed for audit | truncate or `rm` the files (the dir is recreated) |
+| D2 | `~/lping-workspace/.tengu/`, `~/.tengu/state/solana-writes.db` | 128 KB, 28 KB | lping observation cache, Solana write lease store | lping work finished | `rm -rf` / `rm` |
+| E1 | repo `target/` | 79 GB | build cache | any time (rebuildable); disk was 94 % full | `cargo clean` |
+| E2 | `~/.cache/tengu-xm.noindex/{main,seed}/` | 37 GB, 3.3 GB | build caches (seed = clone source for agent target dirs) | any time | `rm -rf` |
+| E3 | `~/.cache/tengu-xm.noindex/agents/jev-chains/` + worktree `.claude/worktrees/jev-chains` | 8.6 GB | step A/B build dir + worktree (`feature/execution-map`) | after PR #29 merges | `git worktree remove .claude/worktrees/jev-chains`, `rm -rf` the dir |
+
+---
+
+## lping execution chains (Tue 2026-10-06) — PR #27 (`lp_swap_plan` + step A), then `feature/execution-map` (step B)
 
 | Change | Note |
 |---|---|
@@ -14,7 +36,8 @@
 | Step A: dry-run goes on | a dry-run write no longer ends the event (`run_event`); xlab `xl_gate` (terminal-only) and jev-exec (all `read_only`) unaffected; lping `lp_watch` takes one more step (hold) |
 | Step A: `hedge_decide` `data.order` | `PerpsOrder` = the action as `jup_perps_order` args (close on an entire-position decrease; decrease / close cap ≥ the side's current notional) |
 | Step A: lping `hedge_exec` / `lp_exec` | simulate chains, every arg bound; verified live with Jev (keyless): hedge order simulated (1 tx, 93 733 CU, forced target in a scratch config — the real wallet has no LP, so BUG-011 grace holds), LP swap (1 tx) and open (1 tx, 210 003 CU) simulated |
-| Next (step B) | `ExecutionMap`: the Architect's chain as JSON data, validated as a narrowing of the sandbox TOML, `tengu decide --map`; then money rails (Solana `call_id` idempotency, cross-venue `[risk]`, approval) before any `send` |
+| Step B: `sequence` + execution maps (`feature/execution-map`) | loops offer one step at a time (`sequence`, `?` optional, failure halts); `tengu decide --map` runs an Architect's JSON map that only narrows a loop (`config/execution_map.rs`, skill `execution-map`, audit `trigger = "map:<sha256>"`); `lp_swap_plan` `data.deposit` (feasible only) feeds `dlmm_open_position`; lping exec loops sequenced. Verified live (Jev, keyless simulations) |
+| Next (step C) | money rails before any `send`: Solana `call_id` idempotency, cross-venue `[risk]` on Solana writes, approval gate; a private map tool for hardened sandboxes (no shell there); dedicated wallet |
 | `lp_swap_plan` | pure port of the bot's `planSwapForDeposit`: permanent + rent SOL reserve, refundable position rent, hedge-collateral USDC reserve; one `jupiter_swap` route (token units) or a typed block (`invalid_input`, `insufficient_total_value` / `_sol` / `_usdc`) |
 | lping | 11 observe/plan tools + 5 `simulate \| send` Solana writes on private `lp_executor`; `lp_watch` / `hedge_watch` stay `dry_run`, `hedge_exec` / `lp_exec` simulate; Raydium LP + Hyperliquid live writes remain explicit gaps |
 

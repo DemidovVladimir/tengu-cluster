@@ -33,6 +33,7 @@ use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::backtest::gate::{Gate, GateWorker};
 use crate::application::decision_loop::{AuditLog, DecisionLoop};
+use crate::config::decision_loop::DecisionLoopConfig;
 use crate::config::{AgentConfig, Config};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::clock::{Clock, SimClock};
@@ -94,6 +95,32 @@ pub(crate) fn build_decision_loop(
         .decision_loops
         .get(name)
         .ok_or_else(|| anyhow!("no [decision_loops.{name}] block in this config"))?;
+    build_loop(config, name, dl.clone(), escalator, secrets, None)
+}
+
+/// `[decision_loops.<name>]` narrowed by an execution map
+/// (`config::execution_map`): `dl` = `ExecutionMap::apply` of that block —
+/// same agent, tools, scopes and store; every audit line carries `trigger`
+/// (`map:<sha256>`). No escalator (`tengu decide`).
+pub(crate) fn build_mapped_loop(
+    config: &Config,
+    name: &str,
+    dl: DecisionLoopConfig,
+    trigger: String,
+    secrets: Arc<SecretRegistry>,
+) -> Result<Arc<DecisionLoop>> {
+    build_loop(config, name, dl, None, secrets, Some(trigger))
+}
+
+fn build_loop(
+    config: &Config,
+    name: &str,
+    dl: DecisionLoopConfig,
+    escalator: Option<Arc<dyn Escalator>>,
+    secrets: Arc<SecretRegistry>,
+    trigger: Option<String>,
+) -> Result<Arc<DecisionLoop>> {
+    let dl = &dl;
     let agent = config.agents.get(&dl.agent).ok_or_else(|| {
         anyhow!(
             "decision_loops.{name}.agent: no [agents.{}] block",
@@ -139,7 +166,7 @@ pub(crate) fn build_decision_loop(
         Some(AuditLog {
             path: audit_path(),
             sandbox: config.sandbox_name.clone(),
-            trigger: None,
+            trigger,
         }),
     )))
 }

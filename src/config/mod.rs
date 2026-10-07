@@ -5,6 +5,7 @@
 pub(crate) mod backtest;
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
+pub(crate) mod execution_map;
 pub(crate) mod feeds;
 pub(crate) mod hardening;
 pub(crate) mod paths;

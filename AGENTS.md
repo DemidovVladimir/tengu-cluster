@@ -672,8 +672,12 @@ These are not preferences. They're load-bearing.
   `{ from, path }`, `{ observation, path }` — no question, unresolved ⇒ the
   action is illegal; exact amounts from `/data/…`), so a higher-order agent
   hands values via the event and one tool's output feeds the next (lping
-  `hedge_exec` / `lp_exec`). `dry_run` defaults to true (a dry-run write no
-  longer ends the event); low confidence (`act_at`) escalates to
+  `hedge_exec` / `lp_exec`). A `sequence = ["a", "b?"]` makes the loop offer
+  one step at a time (`?` skipped when it cannot run; a failed / refused step
+  halts), and `tengu decide --map <file|->` runs an Architect's JSON execution
+  map that can only NARROW a loop (`config/execution_map.rs`, skill
+  `execution-map`; audit `trigger = "map:<sha256>"`). `dry_run` defaults to
+  true (a dry-run write no longer ends the event); low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
   `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
   in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;
@@ -729,7 +733,7 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. State 2026-10-02: xmarket W1 +
+See `docs/SESSION_HANDOFF.md` for the running list. **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later. State 2026-10-02: xmarket W1 +
 its gate done, `xlab` built. Next, in order: the operator decisions
 (`docs/xmarket-tracker-2026-09-29.md` § 0 + W1 notes) → W2
 (`docs/xmarket-build-plan-2026-09-30.md`: status, waves, W2 kickoff prompt at its
