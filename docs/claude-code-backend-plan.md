@@ -48,7 +48,6 @@ This is a config-only backend switch. The same agent definition can run on eithe
 | MCP bridge | `src/adapters/inbound/mcp_bridge.rs` + `tengu mcp-bridge` subcommand |
 | Engine dispatch | `src/adapters/outbound/engines/mod.rs` — `build_engine()`, `build_planner_engine()` |
 | Safety policy | `src/adapters/outbound/engines/claude_code.rs` — `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`; `src/adapters/inbound/mcp_bridge.rs` — `TENGU_BRIDGE_SCOPES`; `src/adapters/outbound/egress.rs` — `claude_code_profile()` (no `build_safety_policy()` / `can_use_tool` exists) |
-| Sandbox | `sandboxes/aura/config.toml` (`[agents.aura]`, `researcher`, `skill-improver`, `fixture-runner` on `engine = "claude_code"`; `sandboxes/aura-claude/` no longer exists) |
 
 ## Safety Policy
 - Explicit `can_use_tool` callback for every Claude-backed request

@@ -550,7 +550,7 @@ impl Planner for RagPlanner {
 
         // Fix A (2026-05-09) — within-session output recall on the normal
         // plan() path. Without this, prior step outputs are only readable
-        // on replan; follow-up questions like "was the molecule project
+        // on replan; follow-up questions like "was the report
         // created?" return "I have no record of that step." Off by default
         // (`within_session_output_top_k = 0`) so existing users see no
         // behaviour change.

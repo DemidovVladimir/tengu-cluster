@@ -967,7 +967,7 @@ pub struct MemoryConfig {
     /// summaries captured by `run-agent` in this session are
     /// retrievable on the next user turn. Without this, step outputs
     /// are only read on `replan()` (`cross_plan_top_k`) — which is why
-    /// follow-up questions like "was the molecule project created?"
+    /// follow-up questions like "was the report saved?"
     /// previously got "I have no record of that step" answers.
     /// Recommended `3–5` once your sandbox config opts in.
     #[serde(default = "default_within_session_output_top_k")]
@@ -1678,7 +1678,7 @@ secret_env = "GITHUB_WEBHOOK_SECRET"
 goal_template = "GitHub PR webhook arrived."
 
 [webhooks.endpoints.local_test]
-agent = "aura"
+agent = "main"
 secret = "literal-dev-secret"
 "#;
         let parsed: toml::Value = toml::from_str(toml_str).unwrap();
@@ -2220,16 +2220,21 @@ ttl_days = 7
         );
     }
 
-    /// `[telegram] tool_approvals` / `approve_only` gate nothing: the load
-    /// still succeeds (aura sets them) and one warning names the keys that
-    /// are set; `false` / empty / absent warn nothing.
+    /// `[telegram] tool_approvals` / `approve_only` gate nothing: a config
+    /// that sets them still loads and one warning names the keys that are
+    /// set; `false` / empty / absent warn nothing.
     #[test]
     fn telegram_approval_keys_load_with_one_warning() {
-        let aura = Config::load(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/aura/config.toml"),
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[telegram]\ntool_approvals = true\napprove_only = [\"sign_and_send_transaction\"]\n\n\
+             [agents.m]\nengine = \"openrouter\"\nmodel = \"m\"\n",
         )
-        .expect("aura loads");
-        let warnings: Vec<String> = aura
+        .unwrap();
+        let cfg = Config::load(&path).expect("loads");
+        let warnings: Vec<String> = cfg
             .validation_warnings()
             .into_iter()
             .filter(|w| w.starts_with("[telegram]"))

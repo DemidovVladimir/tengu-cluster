@@ -20,9 +20,9 @@ queries:
     should_trigger: true
   - query: "the deploy-contract skill is broken — let's update it"
     should_trigger: true
-  - query: "package the steps we just figured out into a skill called mint-ipnft"
+  - query: "package the steps we just figured out into a skill called summarize-paper"
     should_trigger: true
-  - query: "edit the mint-ipnft skill to add a new step"
+  - query: "edit the summarize-paper skill to add a new step"
     should_trigger: true
 
   # --- should_trigger: false (10) — near-misses --------------------------
@@ -38,7 +38,7 @@ queries:
     should_trigger: false
   - query: "what skills are loaded right now?"
     should_trigger: false
-  - query: "delete the old mint-ipnft skill"
+  - query: "delete the old summarize-paper skill"
     should_trigger: false
   - query: "show me the description of the skill-creator skill"
     should_trigger: false

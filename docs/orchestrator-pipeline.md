@@ -617,8 +617,8 @@ So even if retention fires AFTER a run (pruning last time), nothing between runs
 
 ### Interactive (TUI, orchestrated sandbox)
 ```bash
-# aura sets [egress] network = "open"; any other sandbox needs `make tor` first (Tor is the default)
-cargo run --features claude_code -- chat --sandbox aura
+# lping sets [egress] network = "open"; any other sandbox needs `make tor` first (Tor is the default)
+cargo run -- chat --sandbox lping
 # researcher/writer scenarios: sandboxes/<name>/config.toml = config.example.toml + [orchestrator]
 # + one [agents.<name>] block per worker with a `description` (only those are routable)
 cargo run -- chat --sandbox <name>

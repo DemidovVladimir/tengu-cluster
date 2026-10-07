@@ -72,7 +72,7 @@ All `manage_skill` writes:
 Replace `skill-author / skill-evaluator / resource-finder / skill-improver-inline` with ONE `learning-agent`:
 
 ```toml
-# sandboxes/aura/config.toml
+# sandboxes/<name>/config.toml
 [agents.learning-agent]
 engine = "openrouter"
 model = "anthropic/claude-opus-4-7"

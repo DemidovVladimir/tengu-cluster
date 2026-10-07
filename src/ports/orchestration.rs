@@ -137,7 +137,7 @@ pub trait ChatServiceFactory: Send + Sync {
     ///
     /// Phase 4c of the redesign: the RAG planner loads
     /// `skills/orchestrator/SKILL.md` and uses it as the planner system
-    /// prompt, so the orchestrator agent's "run the DeSci pipeline"-style
+    /// prompt, so the orchestrator agent's "run the whole pipeline"-style
     /// identity does not leak into the planning turn.
     ///
     /// Default impl delegates to `run_turn`, ignoring the override — so

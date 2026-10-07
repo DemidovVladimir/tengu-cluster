@@ -429,19 +429,19 @@ mod tests {
                 serde_json::json!({}),
             ),
             ToolDef {
-                name: "beach__search_posts".into(),
-                description: "Search Beach.science posts.\nSecond line ignored.".into(),
+                name: "notes__search_posts".into(),
+                description: "Search notes posts.\nSecond line ignored.".into(),
                 parameters: serde_json::json!({"type": "object"}),
             },
         ];
         let snapshot = ensure_planner_registry(dir.path(), &[], &tools).unwrap();
         assert!(snapshot
             .prompt_block
-            .contains("- `beach__search_posts`: Search Beach.science posts."));
+            .contains("- `notes__search_posts`: Search notes posts."));
         assert!(snapshot
             .entries
             .iter()
-            .any(|e| e.kind == "tool" && e.name == "beach__search_posts"));
+            .any(|e| e.kind == "tool" && e.name == "notes__search_posts"));
         assert!(snapshot
             .entries
             .iter()

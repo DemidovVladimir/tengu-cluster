@@ -907,7 +907,7 @@ const SUBSYSTEMS = [
     files: [
       ["config/mod.rs::AgentConfig", "one struct (deny_unknown_fields) for in-process agents, subagents and loop / feed agents — engine, model, description, example_queries, tools, skill_packages (skills alias), workspace, scopes, limits.max_tool_rounds / step_timeout_secs, identity, claude_code"],
       ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest] on every surface"],
-      ["sandboxes/<name>/config.toml", "one config per sandbox: aura, lping, jev-exec, xmarket, xmarket-weekend, xlab, tor-check, storage-test, unlimited"],
+      ["sandboxes/<name>/config.toml", "one config per sandbox: lping, jev-exec, xmarket, xmarket-weekend, xlab, tor-check, storage-test, unlimited"],
       ["application/orchestrator/shared_files.rs::routable_agents", "blocks with a description → TENGU_PLANNER_REGISTRY.md"],
       ["bootstrap/tools.rs::subagent_config", "merges workspace-tool names listed in tools into workspace_tools"],
       ["adapters/inbound/cli/run_agent.rs::run_agent_subprocess", "loads the parent config first, then config.agents.get(name)"],
@@ -975,7 +975,7 @@ const SUBSYSTEMS = [
       ["AttributedExecutor / CallScope", "a tengu run feed's or loop's calls carry their own agent / session / call id on the audit"],
       ["warn_if_proxy_unreachable", "one startup warning from the parent CLI; tengu doctor prints the resolved network"],
     ],
-    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: aura, lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab (the last three under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
+    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab (the last three under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
   },
   {
     key: "runtime", title: "tengu run — runtime supervisor (2026-09-30)",

@@ -35,7 +35,7 @@ mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
 make tor                                               # Tor proxy on 127.0.0.1:9050 (waits until IsTor=true)
 cargo run -- doctor --tor                              # policy + live Tor-exit check
 cargo run -- chat                                      # single-agent TUI, over Tor
-cargo run -- chat --sandbox aura                       # orchestrated sandbox (planner + subagents; aura is network = "open")
+cargo run -- chat --sandbox lping                      # orchestrated sandbox (planner + subagents; lping is network = "open")
 ```
 
 | Fact | Detail |
@@ -60,7 +60,7 @@ cargo run -- doctor --sandbox <name> --tor # → proxy reachable · IsTor=true �
 | proxy port unreachable | `make tor` not running / still bootstrapping (~30s obfs4) | `make tor` then `make tor-logs` |
 | LLM call returns `403 "Just a moment…"` (`cZone: openrouter.ai`) | **Transport works** — the request reached the provider; its Cloudflare is challenging the Tor exit IP | see below |
 
-**Cloudflare-fronted providers block Tor exits.** OpenRouter (and Molecule / Privy / Beach) sit behind Cloudflare, which serves a managed challenge to Tor exit IPs — the `403` is an application-layer block on the exit node, not a lyrebird/Arti/tengu fault (`curl --socks5-hostname 127.0.0.1:9050 https://api.ipify.org` still returns `200` + the exit IP). For those, set `[egress] network = "open"` on the sandbox (as `sandboxes/aura` does). Tools and non-Cloudflare traffic still route over Tor cleanly; only the challenged provider needs the opt-out.
+**Cloudflare-fronted providers block Tor exits.** OpenRouter (and Privy) sit behind Cloudflare, which serves a managed challenge to Tor exit IPs — the `403` is an application-layer block on the exit node, not a lyrebird/Arti/tengu fault (`curl --socks5-hostname 127.0.0.1:9050 https://api.ipify.org` still returns `200` + the exit IP). For those, set `[egress] network = "open"` on the sandbox (as `sandboxes/lping` does). Tools and non-Cloudflare traffic still route over Tor cleanly; only the challenged provider needs the opt-out.
 
 ## CLI
 
@@ -155,9 +155,9 @@ Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper-2026-09-30.md`. Plan
 | Done signal | `compress_and_store` is appended implicitly to every subagent — never list it in `tools` |
 
 ```bash
-cargo run -- chat --sandbox aura
-cargo run --features claude_code -- chat --sandbox aura     # sandbox agents use engine = "claude_code"
-cargo run -- telegram --sandbox aura
+cargo run -- chat --sandbox lping
+cargo run --features claude_code -- chat --sandbox xlab     # sandbox agents use engine = "claude_code"
+cargo run -- telegram --sandbox storage-test
 ```
 
 Adding an agent = add an `[agents.<name>]` block with a `description` and restart. Adding a skill = drop `skills/<name>/SKILL.md` and restart.
@@ -171,7 +171,7 @@ Planner on OpenRouter, subagents on Claude Code. In the agent block set `engine 
 ```bash
 docker compose --profile postgres-memory up -d postgres-memory
 export TENGU_MEMORY_DATABASE_URL=postgres://tengu:tengu@localhost:5432/tengu_memory
-cargo run --features postgres_memory -- chat --sandbox aura
+cargo run --features postgres_memory -- chat --sandbox lping
 ```
 
 Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embedding-3-small`); the `compile_wiki` operation builds the Karpathy LLM Wiki. To check a write landed, query Postgres directly via `TENGU_MEMORY_DATABASE_URL`. Spec: `docs/agentic-memory-prd-2026-05-13.md`, `-implementation-`, `-examples-`.
@@ -180,7 +180,7 @@ Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embeddin
 
 ```bash
 cargo build --features webhooks
-cargo run --features webhooks -- webhooks --sandbox aura
+cargo run --features webhooks -- webhooks --sandbox lping
 ```
 
 `[webhooks.endpoints.<name>]` blocks bind `/webhooks/<name>` to the planner (`agent` is informational) or a decision loop (`loop = "<name>"`). Operator doc: `docs/webhooks-2026-05-11.md`.
@@ -239,7 +239,6 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 
 | Sandbox | Network | Purpose |
 |---|---|---|
-| `aura` | `open` (Molecule / Privy / Beach block Tor exits) | DeSci pipeline: PDF research → IP-NFT mint → Molecule project → Beach.science; planner + pipeline `aura`, `researcher`, `skill-improver`, `fixture-runner` on `claude_code`, `learning-agent` on OpenRouter; webhook `test` |
 | `jev-exec` | `open` | Experiment: a Claude Code architect (built-ins off, only `run_command` → `tengu`) drives Jev through `tengu decide --loop executor` |
 | `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch` over 10 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
 | `storage-test` | tor | `persistent_store` file storage + vector indexing; agent `storage` (`claude_code`, skill `telegram-rag-ingest`) |
@@ -256,7 +255,7 @@ The `open` market sandboxes stay switchable to Tor: every transport goes through
 ```bash
 cargo run -- secret set TELEGRAM_BOT_TOKEN "123456:ABC-..."
 # ~/.tengu/config.toml:  [telegram] enabled = true  allowed_users = ["YOUR_USER_ID"]
-cargo run -- telegram --sandbox aura
+cargo run -- telegram --sandbox storage-test
 ```
 
 `allowed_users` (or `TENGU_TELEGRAM_ALLOWED_USERS`) is required: without it `tengu telegram` refuses to start. `@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`); private agents (no `description`, not `default`) are never reachable from Telegram. `[telegram] tool_approvals` / `approve_only` are not implemented (load warns).
@@ -282,7 +281,7 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 | Baked into the image | `skills/`, `sandboxes/` under `/opt/tengu` |
 | Config | `./config.toml` (or `sandboxes/<name>/config.toml` with `SANDBOX=<name>`) mounted read-only at `/opt/tengu/config.toml` = `TENGU_CONFIG`; TOML edits apply on container restart |
 | Container command | `tengu telegram` (image `CMD`); `tengu run` is not wired into compose yet |
-| `engine = "claude_code"` sandboxes (`aura`) | Not runnable in the image: it has no Claude Code CLI. `doctor` fails → container unhealthy |
+| `engine = "claude_code"` sandboxes (`jev-exec`, `storage-test`, `xlab`, `xmarket`) | Not runnable in the image: it has no Claude Code CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
 | Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
 | Features | `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build` |
@@ -297,7 +296,7 @@ VPS one-liner: `curl -fsSL https://raw.githubusercontent.com/DemidovVladimir/ten
 WorkingDirectory=/opt/tengu-cluster
 Environment=TENGU_MASTER_PASSWORD=your-password
 Environment=RUST_LOG=tengu=info
-ExecStart=/opt/tengu-cluster/target/release/tengu telegram --sandbox aura
+ExecStart=/opt/tengu-cluster/target/release/tengu telegram --sandbox storage-test
 Restart=on-failure
 ```
 

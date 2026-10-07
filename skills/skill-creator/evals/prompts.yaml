@@ -1,8 +1,8 @@
 - id: f1
   prompt: |
-    The user has just successfully minted an IPNFT by calling http_request (gas price),
-    sign_and_send_transaction (mint call), and persistent_store (save tx hash).
-    They ask: "Let's save this as a skill called mint-ipnft."
+    The user has just successfully fetched and summarized a paper by calling http_request (fetch the PDF),
+    write_file (save the summary), and persistent_store (index the summary).
+    They ask: "Let's save this as a skill called summarize-paper."
     Produce a skill_distill call and show its body_markdown.
   expected: "skill_distill invoked with coherent body and at least one metric"
 

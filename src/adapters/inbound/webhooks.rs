@@ -798,7 +798,7 @@ impl Escalator for OrchestratorEscalator {
 /// no pre-built per-agent state to read from (unlike chat/telegram, which
 /// keep `OrchestratorSnapshots`).
 ///
-/// The orchestrator agent (`Config.orchestrator.agent`, typically `aura`)
+/// The orchestrator agent (`Config.orchestrator.agent`, e.g. `crypto_researcher`)
 /// gets NO tools so the planner LLM emits plan JSON, not direct tool calls.
 /// Every other dispatched agent gets its full tool surface — the same one
 /// it has in chat/telegram.
@@ -1019,7 +1019,7 @@ mod tests {
         endpoints.insert(
             "test".to_string(),
             WebhookEndpointConfig {
-                agent: "aura".to_string(),
+                agent: "main".to_string(),
                 secret_env: None,
                 secret: None,
                 goal_template: "x".to_string(),
@@ -1037,7 +1037,7 @@ mod tests {
         endpoints.insert(
             "test".to_string(),
             WebhookEndpointConfig {
-                agent: "aura".to_string(),
+                agent: "main".to_string(),
                 secret_env: Some("X".to_string()),
                 secret: Some("y".to_string()),
                 goal_template: "x".to_string(),
