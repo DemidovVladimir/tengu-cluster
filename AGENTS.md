@@ -133,7 +133,7 @@ config, channels) — it is the index into everything below.
 10. **`docs/typed-observations-2026-09-24.md`** — typed tool results
     (`Observation` envelope), the observation cache
     (`<workspace>/.tengu/observations.db`), decision-loop `world` /
-    `requires`, the 10 Solana LP read tools (args, keys, TTLs, hosts, knobs)
+    `requires`, the 11 Solana LP observe/plan tools (args, keys, TTLs, hosts, knobs)
     and the 5 write tools (§ Write tools: modes, signer, lease, fence).
     Read BEFORE touching `domain/observation.rs`, `application/observe.rs`,
     `application/decision_loop/`, `adapters/outbound/tools/solana/`,
@@ -668,7 +668,12 @@ These are not preferences. They're load-bearing.
   the next action + its argument slots; existing tools execute it through the
   loop agent's executor (same scopes/egress as a `run-agent` child).
   Jev returns typed choices, never text or tool-call JSON — it cannot be an
-  `engine`. `dry_run` defaults to true; low confidence (`act_at`) escalates to
+  `engine`; slots also BIND one value (2026-10-06: `{ event = "/x" }`,
+  `{ from, path }`, `{ observation, path }` — no question, unresolved ⇒ the
+  action is illegal; exact amounts from `/data/…`), so a higher-order agent
+  hands values via the event and one tool's output feeds the next (lping
+  `hedge_exec` / `lp_exec`). `dry_run` defaults to true (a dry-run write no
+  longer ends the event); low confidence (`act_at`) escalates to
   the orchestrator. Triggers: webhook endpoint `loop = "<name>"` (Helius uses
   `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
   in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;
@@ -695,9 +700,9 @@ These are not preferences. They're load-bearing.
   read. Failed reads are
   `Field::Error` / `ObsStatus`, never 0; `features` ≤ 32 scalars; line 1 of
   `render_text` ≤ 200 chars with full ids. Decision loops read rows via
-  `world` (never fetched) and gate actions with `requires`. The 10 Solana
-  tools (`tools/solana/`) are opt-in; each needs `[default_scopes.<tool>]`
-  with `fs_roots` = the workspace (store), its `net_hosts`, and
+  `world` (never fetched) and gate actions with `requires`. The 11 Solana
+  tools (`tools/solana/`) are opt-in; IO tools need
+  `[default_scopes.<tool>]` with `fs_roots` = the workspace (store), their `net_hosts`, and
   `env_reads = ["SOLANA_RPC_URL"]` — without it the public RPC is used
   silently; the RPC URL is never rendered (host only). `hedge_decide` /
   `lp_decide` knobs are all required (no defaults); `commit` defaults to

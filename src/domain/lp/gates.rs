@@ -10,6 +10,7 @@
 //! | [`regime_confirm`] (clamp-regime выдержка + freeze) | `autoTuneOrchestrator.ts:1117-1173` |
 //! | [`token_percentages`], [`check_position_imbalance`] | `src/utils/meteoraUtils.ts:121-152,305-339` |
 //! | [`wallet_balanced_for_5050`] | `meteoraUtils.ts:369-402` |
+//! | [`plan_swap_for_deposit`] | `src/modules/swapPlanner.ts:147-286` |
 //! | [`price_from_bin`], [`bin_from_price`], [`bin_array_index`], [`centered_range`] | `meteoraUtils.ts:70-79,418-436`; SDK `getBinIdFromPrice`, `binIdToBinArrayIndex`; `meteoraAdapter.ts:594-596` (71-bin bug, fixed) |
 //! | [`dlmm_fee_rates`], [`dynamic_volatility_accumulator`] | `@meteora-ag/dlmm` `getBaseFee` / `getVariableFee` / `getTotalFee` / `calculateFeeInfo` / `updateReference` / `updateVolatilityAccumulator` |
 //! | [`check_swap_oracle_gate`] (fail-closed) | `src/modules/swapPlanner.ts:325-337` |
@@ -26,6 +27,8 @@
 #![allow(dead_code, clippy::neg_cmp_op_on_partial_ord)]
 
 use serde::{Deserialize, Serialize};
+
+use crate::domain::observation::{set_bool, set_num, set_str, Features, Observed};
 
 use super::hedge::{js_to_fixed, LpRegime};
 
@@ -480,6 +483,356 @@ pub(crate) fn wallet_balanced_for_5050(
         balanced: (wallet_sol_ratio - 0.5).abs() <= tolerance_fraction + FP_EPSILON,
         wallet_sol_ratio,
         wallet_total_usd: total_usd,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deposit / recenter swap planner (BUG-020 + position-rent regression)
+// ---------------------------------------------------------------------------
+
+/// Why the reserve-aware deposit plan cannot be funded. These are decisions,
+/// not read failures: callers may wait, reduce the target or add funds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DepositSwapBlockCode {
+    InvalidInput,
+    InsufficientTotalValue,
+    InsufficientSol,
+    InsufficientUsdc,
+}
+
+impl DepositSwapBlockCode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DepositSwapBlockCode::InvalidInput => "invalid_input",
+            DepositSwapBlockCode::InsufficientTotalValue => "insufficient_total_value",
+            DepositSwapBlockCode::InsufficientSol => "insufficient_sol",
+            DepositSwapBlockCode::InsufficientUsdc => "insufficient_usdc",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DepositSwapContext {
+    InitialPosition,
+    Rebalance,
+}
+
+impl DepositSwapContext {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DepositSwapContext::InitialPosition => "initial_position",
+            DepositSwapContext::Rebalance => "rebalance",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DepositSwapDirection {
+    SolToUsdc,
+    UsdcToSol,
+}
+
+impl DepositSwapDirection {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DepositSwapDirection::SolToUsdc => "sol_to_usdc",
+            DepositSwapDirection::UsdcToSol => "usdc_to_sol",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DepositSwapInput {
+    pub wallet_sol: f64,
+    pub wallet_usdc: f64,
+    pub target_sol: f64,
+    pub target_usdc: f64,
+    pub permanent_minimum_sol: f64,
+    pub rent_reserve_sol: f64,
+    pub position_rent_sol: f64,
+    pub reserve_usdc: f64,
+    pub current_price: f64,
+    pub slippage_buffer_pct: f64,
+    pub context: DepositSwapContext,
+    pub base_mint: String,
+    pub quote_mint: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DepositSwapShortfall {
+    pub sol: f64,
+    pub usdc: f64,
+}
+
+/// At most one swap is emitted. It is a vector so a decision-loop slot can
+/// consume `/data/swaps/*/{input_mint,output_mint,amount}` directly; an empty
+/// vector makes the live `jupiter_swap` action illegal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DepositSwap {
+    pub direction: DepositSwapDirection,
+    pub input_mint: String,
+    pub output_mint: String,
+    pub amount: f64,
+    pub expected_output: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DepositSwapBlock {
+    pub code: DepositSwapBlockCode,
+    pub reason: String,
+}
+
+/// Pure, reserve-aware funding plan for one LP deposit/recenter. A blocked
+/// plan is returned as data (not an exception), so JEV can choose hold or
+/// escalation without losing the deterministic reason.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DepositSwapPlan {
+    pub context: DepositSwapContext,
+    pub base_mint: String,
+    pub quote_mint: String,
+    pub feasible: bool,
+    pub needed: bool,
+    pub available_sol_for_swap: f64,
+    pub spendable_usdc: f64,
+    pub wallet_value_usd: Option<f64>,
+    pub required_value_usd: Option<f64>,
+    pub shortfall: DepositSwapShortfall,
+    pub swaps: Vec<DepositSwap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<DepositSwapBlock>,
+}
+
+impl DepositSwapPlan {
+    fn blocked(
+        input: &DepositSwapInput,
+        code: DepositSwapBlockCode,
+        reason: impl Into<String>,
+        available_sol_for_swap: f64,
+        spendable_usdc: f64,
+        wallet_value_usd: Option<f64>,
+        required_value_usd: Option<f64>,
+        shortfall: DepositSwapShortfall,
+    ) -> Self {
+        Self {
+            context: input.context,
+            base_mint: input.base_mint.clone(),
+            quote_mint: input.quote_mint.clone(),
+            feasible: false,
+            needed: false,
+            available_sol_for_swap,
+            spendable_usdc,
+            wallet_value_usd,
+            required_value_usd,
+            shortfall,
+            swaps: Vec::new(),
+            block: Some(DepositSwapBlock {
+                code,
+                reason: reason.into(),
+            }),
+        }
+    }
+}
+
+/// Port of `delta_neutral_bot::planSwapForDeposit`. Reserve SOL, refundable
+/// position rent and hedge-collateral USDC are unavailable to the deposit.
+/// The buffer increases swap input only; Jupiter's live tool independently
+/// gates the resulting quote against the oracle before it may send.
+pub(crate) fn plan_swap_for_deposit(input: &DepositSwapInput) -> DepositSwapPlan {
+    let non_negative = [
+        input.wallet_sol,
+        input.wallet_usdc,
+        input.target_sol,
+        input.target_usdc,
+        input.permanent_minimum_sol,
+        input.rent_reserve_sol,
+        input.position_rent_sol,
+        input.reserve_usdc,
+        input.slippage_buffer_pct,
+    ]
+    .into_iter()
+    .all(|x| x.is_finite() && x >= 0.0);
+    if !non_negative || !input.current_price.is_finite() || input.current_price <= 0.0 {
+        return DepositSwapPlan::blocked(
+            input,
+            DepositSwapBlockCode::InvalidInput,
+            "amounts and reserves must be finite and non-negative; current_price must be finite and > 0",
+            0.0,
+            0.0,
+            None,
+            None,
+            DepositSwapShortfall {
+                sol: 0.0,
+                usdc: 0.0,
+            },
+        );
+    }
+
+    let total_sol_reserve = input.permanent_minimum_sol + input.rent_reserve_sol;
+    let available_sol_for_swap = (input.wallet_sol - total_sol_reserve).max(0.0);
+    let spendable_usdc = (input.wallet_usdc - input.reserve_usdc).max(0.0);
+    let required_sol = input.target_sol + input.position_rent_sol;
+    let shortfall = DepositSwapShortfall {
+        sol: (required_sol - available_sol_for_swap).max(0.0),
+        usdc: (input.target_usdc - spendable_usdc).max(0.0),
+    };
+    let wallet_value_usd = available_sol_for_swap * input.current_price + spendable_usdc;
+    let required_value_usd = required_sol * input.current_price + input.target_usdc;
+
+    if shortfall.sol == 0.0 && shortfall.usdc == 0.0 {
+        return DepositSwapPlan {
+            context: input.context,
+            base_mint: input.base_mint.clone(),
+            quote_mint: input.quote_mint.clone(),
+            feasible: true,
+            needed: false,
+            available_sol_for_swap,
+            spendable_usdc,
+            wallet_value_usd: Some(wallet_value_usd),
+            required_value_usd: Some(required_value_usd),
+            shortfall,
+            swaps: Vec::new(),
+            block: None,
+        };
+    }
+
+    if wallet_value_usd < required_value_usd {
+        return DepositSwapPlan::blocked(
+            input,
+            DepositSwapBlockCode::InsufficientTotalValue,
+            format!(
+                "wallet value ${wallet_value_usd:.2} after reserves is below required ${required_value_usd:.2} for {}",
+                input.context.as_str()
+            ),
+            available_sol_for_swap,
+            spendable_usdc,
+            Some(wallet_value_usd),
+            Some(required_value_usd),
+            shortfall,
+        );
+    }
+
+    let buffer = 1.0 + input.slippage_buffer_pct;
+    let sol_shortfall_usd = shortfall.sol * input.current_price;
+    let swap = if shortfall.usdc >= sol_shortfall_usd {
+        let amount = shortfall.usdc / input.current_price * buffer;
+        if available_sol_for_swap < amount {
+            return DepositSwapPlan::blocked(
+                input,
+                DepositSwapBlockCode::InsufficientSol,
+                format!(
+                    "need {amount:.8} SOL swap input but only {available_sol_for_swap:.8} SOL is available after reserves"
+                ),
+                available_sol_for_swap,
+                spendable_usdc,
+                Some(wallet_value_usd),
+                Some(required_value_usd),
+                shortfall,
+            );
+        }
+        DepositSwap {
+            direction: DepositSwapDirection::SolToUsdc,
+            input_mint: input.base_mint.clone(),
+            output_mint: input.quote_mint.clone(),
+            amount,
+            expected_output: shortfall.usdc,
+        }
+    } else {
+        let amount = shortfall.sol * input.current_price * buffer;
+        if spendable_usdc < amount {
+            return DepositSwapPlan::blocked(
+                input,
+                DepositSwapBlockCode::InsufficientUsdc,
+                format!(
+                    "need {amount:.6} USDC swap input but only {spendable_usdc:.6} USDC is spendable after hedge reserve"
+                ),
+                available_sol_for_swap,
+                spendable_usdc,
+                Some(wallet_value_usd),
+                Some(required_value_usd),
+                shortfall,
+            );
+        }
+        DepositSwap {
+            direction: DepositSwapDirection::UsdcToSol,
+            input_mint: input.quote_mint.clone(),
+            output_mint: input.base_mint.clone(),
+            amount,
+            expected_output: shortfall.sol,
+        }
+    };
+
+    DepositSwapPlan {
+        context: input.context,
+        base_mint: input.base_mint.clone(),
+        quote_mint: input.quote_mint.clone(),
+        feasible: true,
+        needed: true,
+        available_sol_for_swap,
+        spendable_usdc,
+        wallet_value_usd: Some(wallet_value_usd),
+        required_value_usd: Some(required_value_usd),
+        shortfall,
+        swaps: vec![swap],
+        block: None,
+    }
+}
+
+impl Observed for DepositSwapPlan {
+    const SCHEMA: &'static str = "lp_swap_plan/1";
+
+    fn subject(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            self.context.as_str(),
+            self.base_mint,
+            self.quote_mint
+        )
+    }
+
+    fn headline(&self) -> String {
+        if let Some(block) = &self.block {
+            return format!(
+                "lp_swap_plan {} blocked={}",
+                self.context.as_str(),
+                block.code.as_str()
+            );
+        }
+        match self.swaps.first() {
+            Some(s) => format!(
+                "lp_swap_plan {} direction={} amount={:.8}",
+                self.context.as_str(),
+                s.direction.as_str(),
+                s.amount
+            ),
+            None => format!("lp_swap_plan {} no_swap", self.context.as_str()),
+        }
+    }
+
+    fn features(&self) -> Features {
+        let mut f = Features::new();
+        set_str(&mut f, "context", Some(self.context.as_str()));
+        set_bool(&mut f, "feasible", Some(self.feasible));
+        set_bool(&mut f, "needed", Some(self.needed));
+        set_num(&mut f, "available_sol", Some(self.available_sol_for_swap));
+        set_num(&mut f, "spendable_usdc", Some(self.spendable_usdc));
+        set_num(&mut f, "wallet_value_usd", self.wallet_value_usd);
+        set_num(&mut f, "required_value_usd", self.required_value_usd);
+        set_num(&mut f, "shortfall_sol", Some(self.shortfall.sol));
+        set_num(&mut f, "shortfall_usdc", Some(self.shortfall.usdc));
+        set_str(
+            &mut f,
+            "blocked",
+            self.block.as_ref().map(|b| b.code.as_str()),
+        );
+        if let Some(s) = self.swaps.first() {
+            set_str(&mut f, "direction", Some(s.direction.as_str()));
+            set_num(&mut f, "amount", Some(s.amount));
+            set_num(&mut f, "expected_output", Some(s.expected_output));
+        }
+        f
     }
 }
 
@@ -1271,6 +1624,109 @@ mod tests {
             assert!(r.balanced);
             assert_eq!(r.wallet_sol_ratio, 0.5);
             assert_eq!(r.wallet_total_usd, 0.0);
+        }
+    }
+
+    // --- deposit swap planner (swapPlanner.test.ts) ------------------------
+
+    fn deposit(overrides: impl FnOnce(&mut DepositSwapInput)) -> DepositSwapPlan {
+        let mut input = DepositSwapInput {
+            wallet_sol: 10.0,
+            wallet_usdc: 1_000.0,
+            target_sol: 1.0,
+            target_usdc: 100.0,
+            permanent_minimum_sol: 0.2,
+            rent_reserve_sol: 0.1,
+            position_rent_sol: 0.0,
+            reserve_usdc: 0.0,
+            current_price: 100.0,
+            slippage_buffer_pct: 0.02,
+            context: DepositSwapContext::Rebalance,
+            base_mint: "SOL".into(),
+            quote_mint: "USDC".into(),
+        };
+        overrides(&mut input);
+        plan_swap_for_deposit(&input)
+    }
+
+    #[test]
+    fn deposit_swap_noop_and_both_directions_match_bot() {
+        let noop = deposit(|i| {
+            i.wallet_sol = 5.0;
+            i.wallet_usdc = 500.0;
+        });
+        assert!(noop.feasible && !noop.needed && noop.swaps.is_empty());
+        assert!(close_to(noop.available_sol_for_swap, 4.7, 8));
+
+        let to_usdc = deposit(|i| {
+            i.wallet_sol = 5.0;
+            i.wallet_usdc = 50.0;
+        });
+        let swap = &to_usdc.swaps[0];
+        assert_eq!(swap.direction, DepositSwapDirection::SolToUsdc);
+        assert!(close_to(swap.amount, 0.51, 8));
+        assert!(close_to(swap.expected_output, 50.0, 8));
+
+        let to_sol = deposit(|i| {
+            i.wallet_sol = 0.5;
+        });
+        let swap = &to_sol.swaps[0];
+        assert_eq!(swap.direction, DepositSwapDirection::UsdcToSol);
+        assert!(close_to(swap.amount, 81.6, 8));
+        assert!(close_to(swap.expected_output, 0.8, 8));
+    }
+
+    #[test]
+    fn deposit_swap_blocks_the_production_underfunded_case() {
+        let p = deposit(|i| {
+            i.wallet_sol = 0.258;
+            i.wallet_usdc = 9.43;
+            i.target_sol = 4.0;
+            i.target_usdc = 400.0;
+        });
+        assert!(!p.feasible && p.swaps.is_empty());
+        assert_eq!(
+            p.block.unwrap().code,
+            DepositSwapBlockCode::InsufficientTotalValue
+        );
+    }
+
+    #[test]
+    fn deposit_swap_budgets_position_rent_and_hedge_usdc() {
+        let rent = deposit(|i| {
+            i.wallet_sol = 0.47394;
+            i.wallet_usdc = 145.0;
+            i.target_sol = 0.611809;
+            i.target_usdc = 48.703757;
+            i.position_rent_sol = 0.0575;
+            i.current_price = 79.29;
+            i.slippage_buffer_pct = 0.03;
+        });
+        assert!(close_to(rent.shortfall.sol, 0.495369, 6));
+        assert_eq!(rent.swaps[0].direction, DepositSwapDirection::UsdcToSol);
+
+        let collateral = deposit(|i| {
+            i.wallet_sol = 3.4;
+            i.wallet_usdc = 54.05;
+            i.target_sol = 0.668;
+            i.target_usdc = 46.54;
+            i.permanent_minimum_sol = 0.3;
+            i.position_rent_sol = 0.0575;
+            i.reserve_usdc = 16.1;
+            i.current_price = 76.2;
+        });
+        assert_eq!(
+            collateral.swaps[0].direction,
+            DepositSwapDirection::SolToUsdc
+        );
+        assert!(close_to(collateral.shortfall.usdc, 8.59, 6));
+    }
+
+    #[test]
+    fn deposit_swap_invalid_input_fails_closed() {
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let p = deposit(|i| i.current_price = bad);
+            assert_eq!(p.block.unwrap().code, DepositSwapBlockCode::InvalidInput);
         }
     }
 

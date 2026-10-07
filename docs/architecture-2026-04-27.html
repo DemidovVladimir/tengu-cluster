@@ -1026,7 +1026,7 @@ const SUBSYSTEMS = [
     key: "tools", title: "tool families (opt-in, WORKSPACE_TOOLS)",
     subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research — each a plugin, one catalog row per tool.",
     files: [
-      ["adapters/outbound/tools/solana/", "10 read tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
+      ["adapters/outbound/tools/solana/", "11 observe/plan tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
       ["adapters/outbound/solana/", "SolanaRpc, cache-through account reads, JSON fetch, read planning, send pipeline, signer, writes store"],
       ["adapters/outbound/tools/hyperliquid/", "hl_ctx (dex sweep or ≤ 64 coins → mkt_ctx/1 + mkt_instrument/1), hl_book (hl_book/1)"],
       ["adapters/outbound/hyperliquid/info.rs", "HlInfo — POST /info over the scoped egress client, [rate_limits.hyperliquid] weights"],
@@ -1197,7 +1197,7 @@ const FILE_MAP = [
   ["src/adapters/outbound/tools/crypto/mod.rs", "tools", "Privy crypto tools — sign_and_send_transaction, sign_message, get_wallet_address, abi_encode, hex_to_uint256 (the two signing ones off in a [risk] sandbox)"],
   ["src/adapters/outbound/tools/skill_lifecycle/mod.rs", "tools", "skill_lifecycle plugin — skill_distill, apply_improver_proposal, compress_and_store (definition)"],
   ["src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs", "tools", "the implicit-on-every-subagent compress_and_store tool"],
-  ["src/adapters/outbound/tools/solana/", "tools", "Solana LP family: 10 read tools + 5 write tools (defs.rs = interfaces)"],
+  ["src/adapters/outbound/tools/solana/", "tools", "Solana LP family: 11 observe/plan tools + 5 live-capable write tools (defs.rs = interfaces)"],
   ["src/adapters/outbound/solana/", "tools", "SolanaRpc (error classes), fetch_accounts (acct/1 cache-through), fetch_json, read planning, send pipeline, LocalKeypair signer, writes store"],
   ["src/domain/lp/", "domain", "pure DLMM / Jupiter decoders + math, hedge controller port, LP gates, snapshot + decisions"],
   ["src/domain/solana.rs · solana_tx.rs · solana_write.rs", "domain", "base58 + PDAs · transaction wire format · write results + send policy"],

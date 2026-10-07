@@ -129,7 +129,8 @@ pub(crate) enum StepOutcome {
     /// Counted apart from `Executed` (no output parsing); the loop goes on
     /// as after a failed tool (the history entry has `ok = false`).
     Refused { action: String, rule: String },
-    /// Write action chosen while `dry_run = true`; logged, not run.
+    /// Write action chosen while `dry_run = true`; logged, not run. The
+    /// loop goes on (a chain is walked without its writes).
     DryRun { action: String },
     /// Terminal action (no tool): loop stops for this event.
     Stopped { action: String },

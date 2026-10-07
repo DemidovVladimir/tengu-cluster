@@ -132,7 +132,7 @@ env_reads = ["SOLANA_RPC_URL"]
 engine = "claude_code"
 model = "claude-haiku-4-5"
 description = "Engine-matrix open fixture: Claude CLI (subscription) claude-haiku-4-5, built-ins off."
-tools = ["run_command", "matrix__token", "memory_ingest", "memory_search", "persistent_store", "view_skill", "skill_resource", "manage_skill", "skill_distill", "apply_improver_proposal", "shared_cache", "http_request", "abi_encode", "hex_to_uint256", "sign_message", "sign_and_send_transaction", "get_wallet_address", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order", "agentic_memory"]
+tools = ["run_command", "matrix__token", "memory_ingest", "memory_search", "persistent_store", "view_skill", "skill_resource", "manage_skill", "skill_distill", "apply_improver_proposal", "shared_cache", "http_request", "abi_encode", "hex_to_uint256", "sign_message", "sign_and_send_transaction", "get_wallet_address", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_swap_plan", "lp_snapshot", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order", "agentic_memory"]
 skill_packages = ["matrix_cat"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
