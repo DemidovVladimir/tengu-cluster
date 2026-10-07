@@ -733,7 +733,7 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. State 2026-10-02: xmarket W1 +
+See `docs/SESSION_HANDOFF.md` for the running list. **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later. State 2026-10-02: xmarket W1 +
 its gate done, `xlab` built. Next, in order: the operator decisions
 (`docs/xmarket-tracker-2026-09-29.md` § 0 + W1 notes) → W2
 (`docs/xmarket-build-plan-2026-09-30.md`: status, waves, W2 kickoff prompt at its
