@@ -1,0 +1,329 @@
+# Synthetic cycle case: invented example values and test sources
+# (`domain::source::testkit`, example.org urls) — no real firm, person or
+# figure. Expectations hold for the profile `synthetic-operator`
+# (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.cycle_case/1"
+id = "weekly_rerun_w41"
+version = 1
+synthetic = true
+profile = "synthetic-operator"
+note = "PRD § 12 #5, week 1 of 2: a fact-backed automation passes (cheap test), a demand-backed one holds on one post (cheap test), a rebuild is rejected at its price (REPRICE). The Critic widens the passing one's churn. `weekly_rerun_w42` reruns the week after."
+week = "2026-W41"
+decided_at = "2026-10-05T12:00:00Z"
+
+[[records]]
+src = "SEC"
+native = "0000000001-26-000701"
+published = "2026-10-01T12:00:00Z"
+
+[[records]]
+src = "FORUM"
+native = "p-70"
+published = "2026-10-02T12:00:00Z"
+
+[expected]
+hold = false
+allocation = { owner_hours = 10, cash = "0.00" }
+ranked = [{ id = "steady-automation", action = { kind = "CHEAP_TEST", max_cash = "0.00", max_hours = 5 } }]
+held = [{ id = "demand-automation", action = { kind = "CHEAP_TEST", max_cash = "0.00", max_hours = 5 }, gates = ["SINGLE_DEMAND_SIGNAL"] }]
+rejected = [{ id = "rebuild-12k", action = { kind = "REPRICE", min_price = "14200.00" }, gates = ["CONTRIBUTION_BELOW_TARGET"] }]
+
+[[proposals]]
+novelty = "MEDIUM"
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "steady-automation"
+version = 1
+as_of = "2026-10-04"
+customer = "small accounting firms (synthetic example)"
+pain = "a changed filing format, re-keyed by hand"
+mechanism = "AUTOMATE"
+alternatives = ["PRODUCTIZE", "HOLD"]
+requires_skills = ["automation"]
+signals = ["@0000000001-26-000701"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "30.00", base = "40.00", high = "60.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 13 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 1, base = 2, high = 3 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "RECURRING"
+leads_per_month = { value = { low = 7, base = 10, high = 14 }, evidence = ["url:https://example.org/sec_edgar/0000000001-26-000701"], as_of = "2026-10-01" }
+conversion = { value = { low = 1500, base = 2000, high = 2500 }, evidence = [], as_of = "2026-10-01" }
+churn_per_month = { value = { low = 300, base = 500, high = 900 }, evidence = [], as_of = "2026-10-01" }
+price_per_month = { value = { low = "450.00", base = "600.00", high = "750.00" }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "700.00", base = "900.00", high = "1400.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "200.00", base = "300.00", high = "450.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the filing portal", share = 7500 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "900.00", base = "1300.00", high = "2100.00" }
+owner_hours = { low = 25, base = 40, high = 70 }
+reputation = "a missed delivery for one pilot client"
+dependency = "the filing portal's format"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "firms pay to stop re-keying filings"
+metric = "paid pilots"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-15"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "750.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[proposals.bases]]
+field = "economics.revenue.leads_per_month"
+basis = { kind = "FACT", evidence = ["@0000000001-26-000701"] }
+
+[[proposals.forecast]]
+observable = { kind = "OPERATOR_RESOLVES", question = "do three firms book an interview" }
+probability = 4000
+resolve_by = "2026-11-02"
+
+[[proposals]]
+novelty = "HIGH"
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "demand-automation"
+version = 1
+as_of = "2026-10-04"
+customer = "small accounting firms (synthetic example)"
+pain = "a changed filing format, re-keyed by hand"
+mechanism = "AUTOMATE"
+alternatives = ["PRODUCTIZE", "HOLD"]
+requires_skills = ["automation"]
+signals = ["@p-70"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "30.00", base = "40.00", high = "60.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 13 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 1, base = 2, high = 3 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "RECURRING"
+leads_per_month = { value = { low = 7, base = 10, high = 14 }, evidence = ["url:https://example.org/buyer_forum/p-70"], as_of = "2026-10-01" }
+conversion = { value = { low = 1500, base = 2000, high = 2500 }, evidence = [], as_of = "2026-10-01" }
+churn_per_month = { value = { low = 300, base = 500, high = 900 }, evidence = [], as_of = "2026-10-01" }
+price_per_month = { value = { low = "450.00", base = "600.00", high = "750.00" }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "700.00", base = "900.00", high = "1400.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "200.00", base = "300.00", high = "450.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the filing portal", share = 7500 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "900.00", base = "1300.00", high = "2100.00" }
+owner_hours = { low = 25, base = 40, high = 70 }
+reputation = "a missed delivery for one pilot client"
+dependency = "the filing portal's format"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "firms pay to stop re-keying filings"
+metric = "paid pilots"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-15"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "750.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[proposals.bases]]
+field = "economics.revenue.leads_per_month"
+basis = { kind = "FACT", evidence = ["@p-70"] }
+
+[[proposals.forecast]]
+observable = { kind = "EVIDENCE_APPEARS", event_key = "forum:post:p-71" }
+probability = 3000
+resolve_by = "2026-10-26"
+
+[[proposals]]
+novelty = "LOW"
+forecast = []
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "rebuild-12k"
+version = 1
+as_of = "2026-10-04"
+customer = "a regional wholesaler (synthetic example)"
+pain = "a warehouse system rebuilt by hand"
+mechanism = "HIGH_TICKET_DELIVERY"
+alternatives = ["REJECT"]
+requires_skills = ["integration"]
+signals = ["@0000000001-26-000701"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "ONE_OFF"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "ONE_OFF"
+contract_value = { value = { low = "12000.00", base = "12000.00", high = "12000.00" }, evidence = ["url:https://example.org/sec_edgar/0000000001-26-000701"], as_of = "2026-10-01" }
+win_probability = { value = { low = 10000, base = 10000, high = 10000 }, evidence = [], as_of = "2026-10-01" }
+delivery_weeks = { value = { low = 4, base = 4, high = 4 }, evidence = [], as_of = "2026-10-01" }
+owner_hours_total = { value = { low = 160, base = 160, high = 160 }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "300.00", base = "300.00", high = "300.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the vendor API", share = 7500 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "300.00", base = "300.00", high = "2500.00" }
+owner_hours = { low = 160, base = 160, high = 220 }
+reputation = "a late go-live"
+dependency = "the wholesaler's IT staff"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "the wholesaler signs the rebuild"
+metric = "signed statements of work"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-15"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "300.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[proposals.bases]]
+field = "economics.revenue.contract_value"
+basis = { kind = "FACT", evidence = ["@0000000001-26-000701"] }
+
+[[challenges]]
+target = "steady-automation"
+kind = "BASE_RATE"
+claim = "small-firm tools of this kind lose up to 12 % of clients a month"
+evidence = []
+effect = { kind = "WIDEN", field = "economics.revenue.churn_per_month", high = "1200" }

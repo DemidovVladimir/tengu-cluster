@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command and the O3 weekly allocation, memo and forecast log as pure code.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command, the O3 weekly allocation, memo and forecast log as pure code, and the weekly cycle that runs them.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -386,6 +386,43 @@
   </div>
 </section>
 
+<section class="sec" aria-labelledby="s-cycle">
+  <div class="sec-head">
+    <span class="kicker">O3, over ports</span>
+    <h2 id="s-cycle">One weekly cycle, end to end</h2>
+    <p><code>run_cycle</code> runs one week in its own run dir of the private SOE state: <code>cycles/&lt;week&gt;/</code> for a live cycle, <code>replays/&lt;run id&gt;/</code> for a replay. The Architect and the Critic run as agents; their tools hand drafts to <code>submit_proposal</code> / <code>submit_challenge</code>. The store, the stage runner and the command come next; the tests run on in-memory fakes.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Writes</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>Refuse</td><td>nothing</td><td>a frozen week (<code>cycle_already_frozen</code>), a claimed week never frozen (<code>cycle_unfinished</code>), an unsigned profile, a broken forecast log</td></tr>
+        <tr><td>Observe</td><td><code>head.json</code>, <code>packet.json</code>, <code>profile.toml</code></td><td>the O2 packet at the decision: what was read by then (live) or what was knowable (replay)</td></tr>
+        <tr><td>Carry</td><td><code>carried.json</code></td><td>last week's candidates outside its rejected list, with their challenges, copied as they were and checked again</td></tr>
+        <tr><td>Architect · Critic</td><td><code>proposals.jsonl</code>, <code>challenges.jsonl</code></td><td>each in its own phase; the goal holds ids and the packet's sha256, never source text; a failed stage is recorded and the week goes on</td></tr>
+        <tr><td>Decide · report</td><td><code>decided.json</code>, <code>portfolio.json</code>, <code>memo.md</code>, <code>forecast.json</code>, <code>inputs.json</code>, <code>stages.json</code>, <code>ops.json</code></td><td><code>decide_week</code>; forecasts frozen at the decision time; the inputs, policy and generation hashed</td></tr>
+        <tr><td>Freeze · learn</td><td><code>MANIFEST.json</code>; <code>candidates.jsonl</code>, <code>episodes.jsonl</code></td><td>the dir becomes read-only; a live week appends its events, one episode per candidate and a chained forecast line to the state logs</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">OK</span><span><b>stage ran</b>Its drafts were checked against the packet when its tools wrote them.</span></li>
+    <li><span class="chip warn">SKIPPED</span><span><b>no stage</b>No runner, or no candidate for the Critic.</span></li>
+    <li><span class="chip bad">FAILED</span><span><b>stage failed</b>What its tools wrote stays; with nothing written the week is a valid empty <code>HOLD</code>.</span></li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Synthetic cycle case (<code>tests/fixtures/soe/cycles/</code>)</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td><code>platform_rule_change</code>: one API sunset notice, two mechanisms</td><td>the automation's unbounded support rejects it (the Critic also widens its hours); the migration gets the cheap test</td></tr>
+        <tr><td><code>digital_asset</code>: two tools to buy</td><td>the Critic's transfer block gives <code>DILIGENCE</code>; a refused escrow is a red flag: <code>REJECT</code></td></tr>
+        <tr><td><code>high_ticket_integration</code>: a one-off, 50 owner hours, 65 % win chance</td><td>passes on two buyer posts; no recurring revenue claimed</td></tr>
+        <tr><td><code>weekly_rerun_w41</code> → <code>weekly_rerun_w42</code></td><td>week 2 ranks the carried and the new candidates once each; week 1's files and log lines stay as they were</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="sec" aria-labelledby="s-eval">
   <div class="sec-head">
     <span class="kicker">Dated, synthetic, replayable</span>
@@ -510,6 +547,11 @@
     <li><span><b>A Critic only makes things worse.</b> Each end of a challenged input moves only against the candidate; an unknown stays unknown; a block holds, never passes.</span></li>
     <li><span><b>The week never overspends.</b> Tests fit the profile's weekly hours and validation tranche; a diligence tranche is capped at the tranche and spends nothing.</span></li>
     <li><span><b>A forecast cannot be fixed later.</b> An edited, dropped or reordered log line breaks the chain; evidence from before the freeze resolves nothing.</span></li>
+    <li><span><b>A week runs once.</b> A frozen run dir is refused, and a frozen dir refuses every write; a replay writes under <code>replays/</code>, never <code>cycles/</code>, and no state log.</span></li>
+    <li><span><b>Same inputs, same cycle.</b> The same packet, profile, generation and stage records give the same bytes in every file but <code>ops.json</code>.</span></li>
+    <li><span><b>Nothing after the decision reaches a week.</b> A record read or published later changes no byte of the run, the stage goals included.</span></li>
+    <li><span><b>The models see the packet only.</b> A stage goal holds ids and the packet's sha256; a tool refuses a draft citing a record outside the packet.</span></li>
+    <li><span><b>Old candidates are never rewritten.</b> A rerun carries last week's records as they were; a new version replaces one only in the new week.</span></li>
   </ul>
 </section>
 
@@ -540,7 +582,7 @@
 <span class="ln cmd"><span class="p">$ </span>cargo test --test soe_cli</span>
 <span class="ln o"># 9 tests: eval, init, refusals, a byte-identical portfolio rerun, check JSON, the tornado, the week fixture</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu soe</span>
-<span class="ln o"># 117 unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init, the O3 stages and the six roadmap cases</span></pre>
+<span class="ln o"># 131 unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init, the O3 stages, the six roadmap cases and the cycle on its 11 synthetic cycle cases</span></pre>
   </div>
 </section>
 
@@ -571,10 +613,13 @@
         <tr><td><code>src/domain/soe/allocate.rs</code></td><td><code>allocate</code>, <code>decide_week</code>, <code>min_price</code>, <code>Budget</code>, <code>Track</code></td></tr>
         <tr><td><code>src/domain/soe/memo.rs</code></td><td><code>render_memo</code></td></tr>
         <tr><td><code>src/domain/soe/forecast.rs</code> · <code>review.rs</code> · <code>ops.rs</code></td><td><code>Forecast</code>, <code>LogLine</code>, <code>verify_chain</code>, <code>resolve</code>, <code>calibration</code> · <code>CycleGrade</code>, <code>ReviewPacket</code>, <code>stop_flags</code> · <code>CycleOps</code></td></tr>
+        <tr><td><code>src/ports/soe.rs</code></td><td><code>StageRunner</code>, <code>CycleStore</code>, <code>RunDir</code>, <code>StateLog</code></td></tr>
+        <tr><td><code>src/application/soe/cycle.rs</code> · <code>submit.rs</code> · <code>freeze.rs</code></td><td><code>run_cycle</code>, carry-forward, stage goals, episodes · <code>submit_proposal</code>, <code>submit_challenge</code>, phases · <code>freeze</code>, <code>verify</code>, <code>decision_sha256</code></td></tr>
+        <tr><td><code>src/application/soe/tests.rs</code></td><td>the cycle on in-memory fakes and the synthetic cycle cases</td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
-        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases and the example week (<code>week/</code>)</td></tr>
+        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases, the example week (<code>week/</code>) and the 11 cycle cases (<code>cycles/</code>)</td></tr>
         <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set, the command</td></tr>
       </tbody>
     </table>
