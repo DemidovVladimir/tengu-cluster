@@ -25,12 +25,13 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Strategy ranking</div>
   <h1>Strategy ranking</h1>
-  <p class="lede">A ranking orders a sandbox's strategies weakest to strongest on the same data, under rules sealed in the lineage registry first. Built: the contract, its checks, the run identity, the ranker and the publisher (<code>tengu ranking</code>). Next: the tool and the feeds.</p>
+  <p class="lede">A ranking orders a sandbox's strategies weakest to strongest on the same data, under rules sealed in the lineage registry first. Built: the contract, its checks, the run identity, the ranker, the publisher (<code>tengu ranking</code>), the <code>strategy_ranking</code> tool and xlab-w2's feeds. Next: the operator seals a contract; until then every run is refused.</p>
   <ul class="facts">
     <li><b>2</b> draft contracts, both unsealed</li>
     <li><b>15</b> daily · <b>8</b> weekend strategies</li>
     <li><b>9</b> cohort fields a run must share</li>
     <li>cutoff <b>00:00</b> / Mon <b>12:00</b> New York</li>
+    <li><b>3</b> xlab-w2 feeds: refresh, daily, weekend</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip data">data</span> records and run dirs</li>
@@ -198,6 +199,35 @@
   <p class="note"><b>Resume.</b> The manifest is rewritten after each strategy. A <code>RUNNING</code> or <code>FAILED</code> date resumes: a <code>DONE</code> strategy whose <code>report.json</code> still hashes the same is reused, the rest run again.</p>
 </section>
 
+<section class="sec" aria-labelledby="s-callers">
+  <div class="sec-head">
+    <span class="kicker">Callers</span>
+    <h2 id="s-callers">One coordinator, three ways in</h2>
+    <p>Every caller runs the same <code>run_ranking</code>. The lease holder is the caller: <code>cli:&lt;pid&gt;</code>, or the tool call's id (<code>feed:…</code>, <code>mcp:…</code>, <code>chat:…</code>).</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Caller</th><th>How</th><th>INCOMPLETE</th></tr></thead>
+      <tbody>
+        <tr><td><code>tengu ranking run</code></td><td>the operator or an external cron; <code>show</code> prints <code>latest.md</code></td><td>exit 1</td></tr>
+        <tr><td><code>strategy_ranking</code> tool</td><td><code>action</code> <code>run</code> or <code>latest</code>, optional <code>contract</code> and <code>date</code>; on every engine (in-process, the MCP bridge for Claude Code); the backtests run on a thread of their own; no observation row</td><td>an error, <code>ranking_incomplete: …</code>, with the rows</td></tr>
+        <tr><td>xlab-w2 feeds (<code>tengu run --sandbox xlab-w2</code>)</td><td>the private agent <code>xl_ranker</code> calls the tool on a clock</td><td>the feed shows <code>down</code>; <code>doctor --live</code> names it</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Feed</th><th>When (New York)</th><th>Calls</th></tr></thead>
+      <tbody>
+        <tr><td><code>history_refresh</code></td><td>daily 05:00 · Mon 12:05</td><td><code>market_history</code> <code>fetch = true</code>, 1h, for each of the 79 ranked names (= the <code>xyz_stocks</code> and <code>crypto</code> universes; a test keeps the lists equal)</td></tr>
+        <tr><td><code>strategy_ranking_daily</code></td><td>daily 06:00</td><td><code>run</code> <code>rank.xlab-w2.daily.v1</code>: yesterday's date, cutoff 00:00</td></tr>
+        <tr><td><code>strategy_ranking_weekend</code></td><td>Mon 13:00</td><td><code>run</code> <code>rank.xlab-w2.weekend.v1</code>: Monday, cutoff 12:00</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note"><b>Text, not paths.</b> The tool's text is one summary line, the compact ranking (ids and run locators whole), how to read a row's run (<code>backtest</code> <code>run_id</code>) and the files relative to the state dir. It never shows the state dir's path: it is outside every agent's fs roots. Fifteen strategies fit in about 2.7 KB, 3.6 KB if each is its own cohort.</p>
+</section>
+
 <section class="sec" aria-labelledby="s-states">
   <div class="sec-head">
     <span class="kicker">Outcomes</span>
@@ -205,7 +235,7 @@
   </div>
   <ul class="states">
     <li><span class="chip ok">ok</span><span><b>COMPLETE</b>Every listed strategy has a run, ranked or listed as ineligible. Under <code>on_missing = "EXCLUDE"</code>, failed strategies are listed and the rest is ranked. <code>latest</code> moves to it.</span></li>
-    <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run. The dated files are written, <code>latest</code> is kept, the CLI exits 1.</span></li>
+    <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run. The dated files are written, <code>latest</code> is kept, the CLI exits 1 and the tool returns an error. A later run of that date is a no-op: only deleting its date dir reruns it.</span></li>
     <li><span class="chip warn">warn</span><span><b>RUNNING · FAILED</b>A manifest that stopped mid-run, or a publish that failed. The next run resumes it.</span></li>
     <li><span class="chip bad">error</span><span><b>contract_unsealed · contract_changed</b>The publisher refuses before writing anything.</span></li>
     <li><span class="chip bad">error</span><span><b>ranking_busy</b>Another run holds the contract's lease.</span></li>
@@ -237,6 +267,8 @@
     <li><span><b>Published is final.</b> A published date reruns as a no-op and its files are never rewritten. A later forward grade lifts the evidence tier only in later dates.</span></li>
     <li><span><b>Latest moves last.</b> Both dated files are written before <code>latest.md</code>, then <code>latest.json</code>. An older date never replaces a newer one.</span></li>
     <li><span><b>No holdout read.</b> A ranking run has no split, so it never writes <code>holdout-reads.jsonl</code>.</span></li>
+    <li><span><b>Same answer on every engine.</b> The tool's conformance case runs it in-process and through the MCP bridge on the same data; an engine-matrix set (<code>xlab_rank</code>) calls it from each engine.</span></li>
+    <li><span><b>Tested on the binary.</b> <code>tests/strategy_ranking.rs</code>: a rerun is byte-identical, a restart reruns only the unfinished strategy to the same <code>content_sha256</code>, an INCOMPLETE date keeps <code>latest</code>, an unsealed or edited contract writes nothing.</span></li>
   </ul>
 </section>
 
@@ -252,7 +284,8 @@
 <span class="ln cmd"><span class="p">$ </span>tengu lineage trace rank.xlab-w2.weekend.v1</span>
 <span class="ln cmd"><span class="p">$ </span>tengu ranking run --sandbox &lt;sandbox&gt; --date 2026-10-09</span>
 <span class="ln">Error: contract_unsealed: `rank.xlab-w2.daily.v1` has no [[sealed]] row in locks.toml — …</span>
-<span class="ln cmd"><span class="p">$ </span>tengu ranking show --sandbox &lt;sandbox&gt;</span></pre></div>
+<span class="ln cmd"><span class="p">$ </span>tengu ranking show --sandbox &lt;sandbox&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xlab-w2 --agent xl_ranker --tool strategy_ranking --args '{"action": "latest"}'</span></pre></div>
 </section>
 
 <section class="sec" aria-labelledby="s-where">
@@ -272,6 +305,9 @@
         <tr><td><code>src/application/ranking/mod.rs</code></td><td><code>run_ranking</code>: seal check, date and cutoff, lease, resume, freshness, backtests, rank, publish</td></tr>
         <tr><td><code>src/application/ranking/store.rs</code></td><td>the manifest, the dated files, <code>latest</code>, atomic writes</td></tr>
         <tr><td><code>src/adapters/inbound/cli/ranking.rs</code></td><td><code>tengu ranking run</code> and <code>show</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/xlab/rank.rs</code></td><td>the <code>strategy_ranking</code> tool: arguments, the blocking run, <code>latest</code>, its text</td></tr>
+        <tr><td><code>sandboxes/xlab-w2/config.toml</code></td><td><code>[strategy_ranking]</code>, <code>xl_ranker</code>, the three feeds</td></tr>
+        <tr><td><code>tests/strategy_ranking.rs</code></td><td>the binary acceptance tests (fixture <code>tests/fixtures/strategy_ranking/</code>)</td></tr>
         <tr><td><code>lineage/rankings/</code></td><td>the two draft contracts</td></tr>
       </tbody>
     </table>
