@@ -2,8 +2,9 @@
 //! portfolio is the week's allocation decision — ranked, held and rejected
 //! candidates, each with an action; an empty ranked list is a valid `HOLD`
 //! week. The public brief is the only shape that may leave the private state:
-//! allow-listed keys, `url:` facts only. Types only: the builders are O1 W5 /
-//! O3 `allocate`, the brief's sanitizer O7.
+//! allow-listed keys, `url:` facts only. Types only: the rows, the `HOLD` week
+//! and the next information come from `rank.rs`; the allocated week is O3
+//! `allocate`, the brief's sanitizer O7.
 //!
 //! | `WeeklyPortfolio` | Value |
 //! |---|---|

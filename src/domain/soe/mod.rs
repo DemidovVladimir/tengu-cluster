@@ -1,8 +1,9 @@
 //! Software Opportunity Engine (SOE) — pure domain: no IO, clock, network or
 //! LLM (`docs/soe-2026-10-08.md`). Grows per phase: O1 holds the values,
-//! records, economics and gates (ranking next). The operator's parameters
-//! never live in the repo; they come from the signed private profile at run
-//! time (loaded by `config/soe.rs`).
+//! records, economics, gates, capability fit and the ranking primitives; O0
+//! the eval-case format. The operator's parameters never live in the repo;
+//! they come from the signed private profile at run time (loaded by
+//! `config/soe.rs`).
 //!
 //! | File | Holds |
 //! |---|---|
@@ -15,6 +16,9 @@
 //! | `portfolio.rs` | `WeeklyPortfolio` (`soe.weekly_portfolio/1`, `PortfolioAction`, `IsoWeek`) · `PublicBrief` (`soe.public_brief/1`, allow-listed keys) |
 //! | `economics.rs` | `scenarios`: downside / base / upside `ScenarioMetrics` (`Metric` known or the fields it lacks, `Payback`), `expected_loss`, `inputs_sha256`, `ECONOMICS_VERSION` |
 //! | `gates.rs` | `gates`: PRD § 7.2 hard gates → `GateVerdict` (`PASS` / `HOLD` / `REJECT`, `GateFailure` codes), `CitedRecord` (what a cited source record shows at `as_of`), `next_information` |
+//! | `matching.rs` | `fit`: how the profile's capabilities cover `requires_skills` at the decision (`active_at`, `FitLevel` `PROVEN` `CLAIMED` `STALE` `MISSING` · `UNSTATED`) |
+//! | `rank.rs` | `assess` (verdict, figures, fit, the eight `RankKey` values), `rank` by the profile's `rank_order`, `explain_order`, `rank_moves`, `perturb` / `sensitivity`; week blocks: `current_versions`, `ranked_row`, `gated_rows`, `week_next_information`, `hold_week` |
+//! | `eval.rs` | `EvalCase` (`soe.eval_case/1`: dated, synthetic, profile-bound) + `run_case` (expected vs answered, no look-ahead, a valid `HOLD` week) |
 //!
 //! | Rule | Why |
 //! |---|---|
@@ -28,11 +32,14 @@
 
 pub(crate) mod economics;
 pub(crate) mod episode;
+pub(crate) mod eval;
 pub(crate) mod experiment;
 pub(crate) mod gates;
+pub(crate) mod matching;
 pub(crate) mod opportunity;
 pub(crate) mod portfolio;
 pub(crate) mod profile;
+pub(crate) mod rank;
 pub(crate) mod record;
 pub(crate) mod risk;
 pub(crate) mod value;

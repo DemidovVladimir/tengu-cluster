@@ -65,6 +65,8 @@ pub mod codes {
     pub const PRIVATE_LOCATOR: &str = "private_locator";
     // Gates (`gates.rs`).
     pub const OPERATOR_PROFILE_UNSIGNED: &str = "operator_profile_unsigned";
+    // Eval set (`eval.rs`).
+    pub const PROFILE_MISMATCH: &str = "profile_mismatch";
 }
 
 /// A refused value: a [`codes`] entry + what was wrong.

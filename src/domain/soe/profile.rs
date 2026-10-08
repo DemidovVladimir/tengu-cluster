@@ -273,52 +273,11 @@ pub(crate) mod tests {
     use crate::domain::soe::record::{from_toml, validate};
     use crate::domain::soe::value::ValueError;
 
-    /// A synthetic profile: round values that are not the operator's.
-    pub(crate) const SYNTHETIC: &str = r#"
-schema = "soe.operator_profile/1"
-id = "synthetic-operator"
-version = 1
-valid_from = "2026-10-01"
-signed_by = "fixture"
-signed_at = "2026-10-01T09:00:00Z"
-synthetic = true
-currency = "EUR"
-profit_basis = "PRE_TAX"
-contribution_basis = "TIME_ADJUSTED"
-max_cash_exposure = "20000.00"
-min_monthly_contribution = "3000.00"
-shadow_hourly_rate = "70.00"
-max_payback_months = 9
-weekly_owner_hours = 10
-max_validation_tranche = "1500.00"
-max_one_off_delivery_weeks = 4
-jurisdictions_allow = ["DE", "EU"]
-channels_allow = ["direct", "partner"]
-languages = ["en", "de"]
-exclusions = ["local-services"]
-public_cadence = "ON_EVIDENCE"
-rank_order = [
-  "EVIDENCE_CONFIDENCE",
-  "TIME_ADJUSTED_BASE",
-  "PAYBACK_BASE",
-  "DAYS_TO_DECISIVE_EVIDENCE",
-  "REVERSIBILITY",
-  "CAPABILITY_FIT",
-  "CONCENTRATION_MAX",
-  "DEFENSIBILITY",
-]
-
-[[capabilities]]
-id = "rust-integration"
-skill = "integration"
-level = "PROVEN"
-proof = ["url:https://example.org/case-study"]
-capacity_hours_per_week = { low = 3, base = 5, high = 9 }
-delivery_cost_per_hour = "UNKNOWN: no cost study"
-dependencies = []
-as_of = "2026-09-01"
-valid_until = "2027-09-01"
-"#;
+    /// The synthetic profile fixture: round values that are not the operator's
+    /// (three capabilities: `integration` PROVEN, `automation` CLAIMED,
+    /// `migration` PROVEN but expired 2026-06-30).
+    pub(crate) const SYNTHETIC: &str =
+        include_str!("../../../tests/fixtures/soe/profile.synthetic.toml");
 
     /// The top-level knobs, each required (no serde default).
     const KNOBS: [&str; 21] = [

@@ -235,11 +235,13 @@ pub struct CitedRecord {
 }
 
 impl CitedRecord {
-    fn knowable(&self, as_of: &Time) -> bool {
+    /// Surely knowable at `as_of` (evidence rule table).
+    pub fn knowable(&self, as_of: &Time) -> bool {
         self.knowable_at.order(as_of) == TimeOrder::NotAfter
     }
 
-    fn fresh(&self, as_of: &Time) -> bool {
+    /// Not expired at `as_of`.
+    pub fn fresh(&self, as_of: &Time) -> bool {
         match &self.valid_until {
             None => true,
             Some(until) => matches!(
@@ -249,10 +251,29 @@ impl CitedRecord {
         }
     }
 
-    fn contradicted(&self, as_of: &Time) -> bool {
+    /// Contradicted at `as_of` (unless the contradiction is surely later).
+    pub fn contradicted(&self, as_of: &Time) -> bool {
         self.contradicted_at
             .is_some_and(|t| t.order(as_of) != TimeOrder::After)
     }
+
+    /// Supports a candidate at `as_of`: knowable, fresh, uncontradicted and
+    /// not `TRIGGER`.
+    pub fn supports(&self, as_of: &Time) -> bool {
+        self.knowable(as_of)
+            && self.fresh(as_of)
+            && !self.contradicted(as_of)
+            && self.kind != CitedKind::Trigger
+    }
+}
+
+/// The view of each record `opp` cites (the first given per id), in
+/// `signals` order; records it does not cite are left out.
+pub fn cited_views<'a>(opp: &Opportunity, cited: &'a [CitedRecord]) -> Vec<&'a CitedRecord> {
+    opp.signals
+        .iter()
+        .filter_map(|id| cited.iter().find(|c| &c.record_id == id))
+        .collect()
 }
 
 /// The failures found so far.
@@ -577,13 +598,10 @@ fn bounds(opp: &Opportunity, r: &mut Run) {
 }
 
 fn evidence(opp: &Opportunity, cited: &[CitedRecord], as_of: &Time, r: &mut Run) {
-    // One view per cited id (the first given); records not cited are ignored.
-    let views: Vec<&CitedRecord> = opp
-        .signals
-        .iter()
-        .filter_map(|id| cited.iter().find(|c| &c.record_id == id))
+    let knowable: Vec<&CitedRecord> = cited_views(opp, cited)
+        .into_iter()
+        .filter(|c| c.knowable(as_of))
         .collect();
-    let knowable: Vec<&CitedRecord> = views.into_iter().filter(|c| c.knowable(as_of)).collect();
     let contradicted: Vec<&str> = knowable
         .iter()
         .filter(|c| c.contradicted(as_of))
@@ -599,7 +617,7 @@ fn evidence(opp: &Opportunity, cited: &[CitedRecord], as_of: &Time, r: &mut Run)
     let support: Vec<&CitedRecord> = knowable
         .iter()
         .copied()
-        .filter(|c| c.fresh(as_of) && !c.contradicted(as_of) && c.kind != CitedKind::Trigger)
+        .filter(|c| c.supports(as_of))
         .collect();
     let facts = support.iter().filter(|c| c.kind == CitedKind::Fact).count();
     let demand: BTreeSet<&str> = support
@@ -763,7 +781,7 @@ pub(crate) mod tests {
     use crate::domain::soe::value::{Bps, Currency, Est, FxRate};
 
     /// The signal `RECURRING` cites, in full.
-    const SIGNAL: &str =
+    pub(crate) const SIGNAL: &str =
         "sec_edgar:0000320193-26-000006:0000000000000000000000000000000000000000000000000000000000000001";
 
     /// A staged experiment: the first spend (750.00) under a stop rule.
@@ -791,16 +809,16 @@ owner_hours = 14
 stop_rule = "fewer than 3 seats sold"
 "#;
 
-    fn t(s: &str) -> Time {
+    pub(crate) fn t(s: &str) -> Time {
         s.parse().unwrap()
     }
 
     /// The decision time of every test.
-    fn at() -> Time {
+    pub(crate) fn at() -> Time {
         t("2026-10-05T12:00:00Z")
     }
 
-    fn view(id: &str, event: &str, kind: CitedKind, knowable: &str) -> CitedRecord {
+    pub(crate) fn view(id: &str, event: &str, kind: CitedKind, knowable: &str) -> CitedRecord {
         CitedRecord {
             record_id: id.into(),
             event_key: event.into(),
@@ -812,7 +830,7 @@ stop_rule = "fewer than 3 seats sold"
     }
 
     /// The one fact `SIGNAL` names, knowable before the decision.
-    fn cited() -> Vec<CitedRecord> {
+    pub(crate) fn cited() -> Vec<CitedRecord> {
         vec![view(
             SIGNAL,
             "sec:filing:0000320193-26-000006",
@@ -822,7 +840,7 @@ stop_rule = "fewer than 3 seats sold"
     }
 
     /// Jurisdictions all stated and allowed, a staged experiment.
-    fn complete(mut o: Opportunity) -> Opportunity {
+    pub(crate) fn complete(mut o: Opportunity) -> Opportunity {
         o.jurisdictions.entity = "DE".into();
         o.jurisdictions.tax = "DE".into();
         o.experiment = Some(toml::from_str(EXPERIMENT).unwrap());
@@ -833,11 +851,11 @@ stop_rule = "fewer than 3 seats sold"
     /// 9350.00 × 40 % = 3740.00 − fixed 40.00 − 10 h × 70.00 = 3000.00 —
     /// exactly `min_monthly_contribution`. Initial 900.00 pays back in
     /// month 2; the downside exposure is 900.00 (max loss 1600.00).
-    fn passing() -> Opportunity {
+    pub(crate) fn passing() -> Opportunity {
         revenue_share("\"9350.00\"", "4000", "10")
     }
 
-    fn revenue_share(partner: &str, share: &str, hours: &str) -> Opportunity {
+    pub(crate) fn revenue_share(partner: &str, share: &str, hours: &str) -> Opportunity {
         complete(with_economics(
             "PARTNER_REVSHARE",
             &economics(
@@ -861,7 +879,7 @@ stop_rule = "fewer than 3 seats sold"
 
     /// An acquisition that passes the economics: 6000.00 a month churned
     /// 1.5 %, variable 9 %, fixed 200.00, 9 h; 15000.00 to buy it.
-    fn acquisition(deal: &str) -> Opportunity {
+    pub(crate) fn acquisition(deal: &str) -> Opportunity {
         complete(with_economics(
             "ACQUIRE_TRANSFORM",
             &economics(

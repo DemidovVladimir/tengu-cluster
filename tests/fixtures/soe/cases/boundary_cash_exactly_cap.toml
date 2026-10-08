@@ -1,0 +1,193 @@
+# Synthetic eval case: invented example values, `synthetic:` record ids — no
+# real firm, person or figure. Expectations hold for the profile
+# `synthetic-operator` (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.eval_case/1"
+id = "boundary_cash_exactly_cap"
+version = 1
+as_of = "2026-09-21T18:00:00Z"
+class = "BOUNDARY"
+synthetic = true
+profile = "synthetic-operator"
+note = "Downside capital 900.00 + 19100.00 = exactly max_cash_exposure passes; 19100.01 (one cent above) rejects."
+
+[[cited]]
+record_id = "synthetic:reseller-terms-2026:7bd8e451efdcf4a94c49b19f24a7ecbb19c53c5d63e4f5627b73d3fb0df65a37"
+event_key = "synthetic:filing:reseller-terms"
+kind = "FACT"
+knowable_at = "2026-09-15"
+
+[expected]
+verdicts = { reseller-at-cap = "PASS", reseller-over-cap = "REJECT" }
+ranked = ["reseller-at-cap"]
+next_information = []
+gates = { reseller-over-cap = ["CASH_EXPOSURE_ABOVE_CAP"] }
+
+[[candidates]]
+schema = "soe.opportunity/1"
+id = "reseller-at-cap"
+version = 1
+as_of = "2026-09-21"
+customer = "a hosting reseller's small-business clients (synthetic example)"
+pain = "the reseller has no backup add-on to sell"
+mechanism = "PARTNER_REVSHARE"
+alternatives = ["WHITE_LABEL", "HOLD"]
+requires_skills = ["integration"]
+signals = ["synthetic:reseller-terms-2026:7bd8e451efdcf4a94c49b19f24a7ecbb19c53c5d63e4f5627b73d3fb0df65a37"]
+
+[candidates.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[candidates.economics]
+currency = "EUR"
+revenue_quality = "CONTRACTED"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-18" }
+fixed_costs_per_month = { value = { low = "40.00", base = "40.00", high = "40.00" }, evidence = [], as_of = "2026-09-18" }
+owner_hours_per_month = { value = { low = 10, base = 10, high = 10 }, evidence = [], as_of = "2026-09-18" }
+ramp_months = { value = { low = 1, base = 1, high = 1 }, evidence = [], as_of = "2026-09-18" }
+
+[candidates.economics.revenue]
+kind = "REVENUE_SHARE"
+partner_monthly_revenue = { value = { low = "10000.00", base = "10000.00", high = "10000.00" }, evidence = ["url:https://example.org/synthetic-evidence"], as_of = "2026-09-18" }
+share = { value = { low = 4500, base = 4500, high = 4500 }, evidence = [], as_of = "2026-09-18" }
+collection_loss = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-18" }
+
+[candidates.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+setup = { value = { low = "900.00", base = "900.00", high = "900.00" }, evidence = [], as_of = "2026-09-18" }
+validation = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "19100.00" }, evidence = [], as_of = "2026-09-18" }
+
+[candidates.risk]
+risks = []
+concentration = [{ dimension = "CHANNEL", name = "the reseller", share = 10000 }]
+
+[candidates.risk.max_loss]
+cash = { low = "0.00", base = "900.00", high = "20000.00" }
+owner_hours = { low = 10, base = 20, high = 40 }
+reputation = "a lost partner relationship"
+dependency = "the reseller's billing system"
+
+[candidates.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[candidates.experiment]
+hypothesis = "the reseller's clients buy the add-on"
+metric = "paying add-on seats"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-20"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[candidates.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[candidates.experiment.stages]]
+name = "pilot"
+cash = "500.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[candidates.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[candidates]]
+schema = "soe.opportunity/1"
+id = "reseller-over-cap"
+version = 1
+as_of = "2026-09-21"
+customer = "a hosting reseller's small-business clients (synthetic example)"
+pain = "the reseller has no backup add-on to sell"
+mechanism = "PARTNER_REVSHARE"
+alternatives = ["WHITE_LABEL", "HOLD"]
+requires_skills = ["integration"]
+signals = ["synthetic:reseller-terms-2026:7bd8e451efdcf4a94c49b19f24a7ecbb19c53c5d63e4f5627b73d3fb0df65a37"]
+
+[candidates.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[candidates.economics]
+currency = "EUR"
+revenue_quality = "CONTRACTED"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-18" }
+fixed_costs_per_month = { value = { low = "40.00", base = "40.00", high = "40.00" }, evidence = [], as_of = "2026-09-18" }
+owner_hours_per_month = { value = { low = 10, base = 10, high = 10 }, evidence = [], as_of = "2026-09-18" }
+ramp_months = { value = { low = 1, base = 1, high = 1 }, evidence = [], as_of = "2026-09-18" }
+
+[candidates.economics.revenue]
+kind = "REVENUE_SHARE"
+partner_monthly_revenue = { value = { low = "10000.00", base = "10000.00", high = "10000.00" }, evidence = ["url:https://example.org/synthetic-evidence"], as_of = "2026-09-18" }
+share = { value = { low = 4500, base = 4500, high = 4500 }, evidence = [], as_of = "2026-09-18" }
+collection_loss = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-18" }
+
+[candidates.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+setup = { value = { low = "900.00", base = "900.00", high = "900.00" }, evidence = [], as_of = "2026-09-18" }
+validation = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "19100.01" }, evidence = [], as_of = "2026-09-18" }
+
+[candidates.risk]
+risks = []
+concentration = [{ dimension = "CHANNEL", name = "the reseller", share = 10000 }]
+
+[candidates.risk.max_loss]
+cash = { low = "0.00", base = "900.00", high = "20000.01" }
+owner_hours = { low = 10, base = 20, high = 40 }
+reputation = "a lost partner relationship"
+dependency = "the reseller's billing system"
+
+[candidates.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[candidates.experiment]
+hypothesis = "the reseller's clients buy the add-on"
+metric = "paying add-on seats"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-20"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[candidates.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[candidates.experiment.stages]]
+name = "pilot"
+cash = "500.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[candidates.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"

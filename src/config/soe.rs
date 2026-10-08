@@ -178,7 +178,10 @@ pub fn load_record_dir<R: SoeRecord + DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+    use crate::domain::soe::eval::{run_case, CaseClass, EvalCase};
     use crate::domain::soe::opportunity::tests::RECURRING;
     use crate::domain::soe::profile::tests::SYNTHETIC;
 
@@ -323,5 +326,30 @@ mod tests {
         assert_eq!((one.record.id.as_str(), one.sha256.len()), ("c", 64));
         let e = load_opportunity(&dir.join("d.toml")).unwrap_err();
         assert!(e.contains("fake_recurring"), "{e}");
+    }
+
+    /// The O0 eval set: every case under `tests/fixtures/soe/cases/` loads and
+    /// answers as expected under the synthetic profile.
+    #[test]
+    fn fixture_eval_cases_pass() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/soe");
+        let profile = load_profile(&root.join("profile.synthetic.toml"), true)
+            .unwrap()
+            .record;
+        let cases = load_record_dir::<EvalCase>(&root.join("cases"))
+            .unwrap_or_else(|e| panic!("{}", e.join("\n")));
+        assert!(cases.len() >= 14, "{} cases", cases.len());
+        let classes: BTreeSet<CaseClass> = cases.iter().map(|c| c.record.class).collect();
+        assert_eq!(classes, CaseClass::ALL.into_iter().collect());
+        assert!(cases.iter().all(|c| c.record.synthetic));
+        let failed: Vec<String> = cases
+            .iter()
+            .map(|c| {
+                run_case(&c.record, &profile).unwrap_or_else(|e| panic!("{}: {e}", c.record.id))
+            })
+            .filter(|r| !r.ok)
+            .map(|r| format!("{}: {:#?}\n{:#?}", r.id, r.diffs, r.answer))
+            .collect();
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 }

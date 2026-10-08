@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics and the hard gates that return PASS, HOLD or REJECT. Offline today.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes and a dated eval set. Offline today.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,12 +22,12 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
   <h1>Software opportunities</h1>
-  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Built so far: exact money, estimates that stay unknown, typed records, a private signed profile, three-scenario economics and the hard gates. Nothing here reads the network or acts.</p>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Built so far: exact money, typed records, a private signed profile, three-scenario economics, the hard gates, the ranking and a dated eval set. Nothing here reads the network or acts.</p>
   <ul class="facts">
     <li>money in <b>2</b> minor digits, never a float</li>
-    <li><b>7</b> currencies, a closed set</li>
-    <li><b>5</b> record schemas, version <b>1</b></li>
+    <li><b>6</b> record schemas, version <b>1</b></li>
     <li><b>22</b> gate codes, <b>3</b> verdicts</li>
+    <li><b>8</b> rank keys, <b>16</b> dated eval cases</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, rounding</li>
@@ -142,6 +142,83 @@
   </ul>
 </section>
 
+<section class="sec" aria-labelledby="s-rank">
+  <div class="sec-head">
+    <span class="kicker">After the gates</span>
+    <h2 id="s-rank">Ranking what passes</h2>
+    <p>Only <code>PASS</code> candidates rank. The order of the keys comes from the signed profile's <code>rank_order</code>; there is no built-in order. Ties go by id. An unknown value ranks after every known one.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Key</th><th>Value</th><th>Ranks first</th></tr></thead>
+      <tbody>
+        <tr><td><code>EVIDENCE_CONFIDENCE</code></td><td><code>HIGH</code>: a supporting fact, nothing contested · <code>MEDIUM</code>: two or more supporting events · <code>LOW</code></td><td>higher</td></tr>
+        <tr><td><code>TIME_ADJUSTED_BASE</code></td><td>base time-adjusted contribution</td><td>higher</td></tr>
+        <tr><td><code>PAYBACK_BASE</code></td><td>base cash payback</td><td>lower</td></tr>
+        <tr><td><code>DAYS_TO_DECISIVE_EVIDENCE</code></td><td>whole days to the end of the experiment deadline</td><td>lower</td></tr>
+        <tr><td><code>REVERSIBILITY</code> · <code>DEFENSIBILITY</code></td><td>the opportunity's tier</td><td>higher</td></tr>
+        <tr><td><code>CAPABILITY_FIT</code></td><td>the weakest required skill: <code>PROVEN</code> &gt; <code>CLAIMED</code> &gt; <code>STALE</code> &gt; <code>MISSING</code></td><td>higher</td></tr>
+        <tr><td><code>CONCENTRATION_MAX</code></td><td>the largest concentration share</td><td>lower</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Example (a test, synthetic profile)</th><th>Rank</th></tr></thead>
+      <tbody>
+        <tr><td><code>a</code>: price 600.00, time-adjusted 5917.49 · <code>b</code>: price 500.00, time-adjusted 4819.57</td><td><code>a</code>, <code>b</code></td></tr>
+        <tr><td>cut <code>a</code>'s price by 25 %: time-adjusted 4270.61</td><td><code>b</code>, <code>a</code></td></tr>
+        <tr><td>why <code>a</code> moved</td><td><code>CROSSED</code> <code>b</code> on <code>TIME_ADJUSTED_BASE</code>: 5917.49 → 4270.61 EUR</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ENTERED</span><span><b>ranked now</b>It passes the gates now; its old verdict and gates are listed.</span></li>
+    <li><span class="chip bad">LEFT</span><span><b>not ranked now</b>It fails a gate now; the new verdict and gates are listed.</span></li>
+    <li><span class="chip warn">CROSSED</span><span><b>swapped places</b>The key that decides between the two, both values before and after.</span></li>
+    <li><span class="chip warn">SHIFTED</span><span><b>pushed along</b>Another candidate entered or left above it.</span></li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Sensitivity input</th><th>Scales</th></tr></thead>
+      <tbody>
+        <tr><td><code>OWNER_HOURS</code></td><td>owner hours a month (one-off: also the total)</td></tr>
+        <tr><td><code>CONVERSION</code></td><td>conversion · one-off win probability</td></tr>
+        <tr><td><code>CHURN</code></td><td>churn (recurring, acquired)</td></tr>
+        <tr><td><code>PRICE</code></td><td>price a month · contract value · revenue share</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-eval">
+  <div class="sec-head">
+    <span class="kicker">Dated, synthetic, replayable</span>
+    <h2 id="s-eval">The eval set</h2>
+    <p>Each case is one dated decision: the record views, the candidates and what the gates and the ranking must answer. Every case is synthetic and names the profile its expectations hold for.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Class</th><th>Cases</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><code>GOOD</code></td><td>3</td><td>a fact-backed revenue share ranks above a larger demand-backed one</td></tr>
+        <tr><td><code>BAD</code></td><td>3</td><td>12000.00 a month collected with 160 owner hours is rejected</td></tr>
+        <tr><td><code>BOUNDARY</code></td><td>2</td><td>at the cap passes, one cent above rejects</td></tr>
+        <tr><td><code>HOLD</code></td><td>4</td><td>nothing passes: a valid <code>HOLD</code> week with the next information</td></tr>
+        <tr><td><code>STALE</code></td><td>1</td><td>an expired listing supports nothing</td></tr>
+        <tr><td><code>CONTRADICTORY</code></td><td>1</td><td>a known contradiction holds; a later one changes nothing yet</td></tr>
+        <tr><td><code>LOOKAHEAD</code></td><td>2</td><td>a later version or a later record is ignored</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="checks">
+    <li><span><b>Expected vs answered.</b> Verdicts, gates, ranking, next information and versions are compared; each difference is listed.</span></li>
+    <li><span><b>No look-ahead.</b> Dropping every record not knowable at the decision must change nothing.</span></li>
+    <li><span><b>A HOLD week is valid.</b> When nothing ranks, the week is built and validated as a <code>WeeklyPortfolio</code>.</span></li>
+    <li><span><b>Wrong profile, no run.</b> A case run under another profile is refused (<code>profile_mismatch</code>).</span></li>
+  </ul>
+</section>
+
 <section class="sec" aria-labelledby="s-records">
   <div class="sec-head">
     <span class="kicker">Typed, versioned, strict</span>
@@ -157,6 +234,7 @@
         <tr><td><code>OpportunityEpisode</code></td><td><code>soe.opportunity_episode/1</code></td><td>verdict, actions, spend, hours, forecast vs actual, lineage quality and lesson</td><td>private</td></tr>
         <tr><td><code>WeeklyPortfolio</code></td><td><code>soe.weekly_portfolio/1</code></td><td>ranked, held and rejected rows with an action; allocation; <code>HOLD</code> rationale</td><td>private</td></tr>
         <tr><td><code>PublicBrief</code></td><td><code>soe.public_brief/1</code></td><td>facts with <code>url:</code> links, thesis, disclosed assumptions</td><td>the only public one</td></tr>
+        <tr><td><code>EvalCase</code></td><td><code>soe.eval_case/1</code></td><td>a dated decision: record views, candidates, expected verdicts, gates, ranking, next information</td><td>public, synthetic</td></tr>
       </tbody>
     </table>
   </div>
@@ -222,6 +300,9 @@
     <li><span><b>Owner time is priced.</b> The time-adjusted contribution subtracts owner hours × the shadow hourly rate.</span></li>
     <li><span><b>No look-ahead in the gates.</b> A record knowable only after the decision time — or later the same day — changes nothing then, not even the explanation.</span></li>
     <li><span><b>One post is not demand.</b> A single customer-demand event holds; news and social posts support nothing.</span></li>
+    <li><span><b>Only what passes ranks.</b> A held or rejected candidate never gets a rank, and the order comes only from the signed profile.</span></li>
+    <li><span><b>Copies count once.</b> Records sharing an event key are one confirmation.</span></li>
+    <li><span><b>One row per opportunity.</b> A weekly rerun takes each id at its latest version known at the decision; a later version is ignored.</span></li>
     <li><span><b>A public brief cites public links only.</b> A <code>repo:</code>, <code>state:</code>, <code>vault:</code> or <code>run:</code> locator is refused (<code>private_locator</code>).</span></li>
   </ul>
 </section>
@@ -234,11 +315,13 @@
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe</span>
-<span class="ln o"># 59 tests: values, records, profile knobs, economics goldens, gates</span>
+<span class="ln o"># 75 tests: values, records, profile knobs, economics goldens, gates, ranking, eval</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe::gates</span>
 <span class="ln o"># 18 tests: exact boundaries, unknown holds, evidence timing, deal diligence</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe::rank</span>
+<span class="ln o"># 11 tests: rank order, rank moves, sensitivity, the HOLD week, reruns</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu config::soe</span>
-<span class="ln o"># 4 tests: missing, synthetic, in-repo and loose-mode profiles; record dirs</span></pre>
+<span class="ln o"># 5 tests: missing, synthetic, in-repo and loose-mode profiles; record dirs; the 16 eval cases</span></pre>
   </div>
 </section>
 
@@ -261,8 +344,12 @@
         <tr><td><code>src/domain/soe/portfolio.rs</code></td><td><code>WeeklyPortfolio</code>, <code>PortfolioAction</code>, <code>IsoWeek</code>, <code>PublicBrief</code></td></tr>
         <tr><td><code>src/domain/soe/economics.rs</code></td><td><code>scenarios</code>, <code>ScenarioMetrics</code>, <code>Metric</code>, <code>Payback</code>, <code>expected_loss</code></td></tr>
         <tr><td><code>src/domain/soe/gates.rs</code></td><td><code>gates</code>, <code>GateVerdict</code>, <code>GateCode</code>, <code>CitedRecord</code>, <code>next_information</code></td></tr>
+        <tr><td><code>src/domain/soe/matching.rs</code></td><td><code>fit</code>, <code>active_at</code>, <code>FitLevel</code></td></tr>
+        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code></td></tr>
+        <tr><td><code>src/domain/soe/eval.rs</code></td><td><code>EvalCase</code>, <code>run_case</code></td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code></td></tr>
-        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics and hard-gate rules</td></tr>
+        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile and the 16 eval cases</td></tr>
+        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set</td></tr>
       </tbody>
     </table>
   </div>
