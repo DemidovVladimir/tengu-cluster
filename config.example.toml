@@ -537,6 +537,17 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # id = "W1"
 # registry = "../../lineage"                # relative to this config file
 
+# --- Strategy ranking (lineage contracts; docs/strategy-ranking-automation-2026-10-08.md) ---
+# The ranking contracts this sandbox runs (`lineage/rankings/<id>.toml`, sealed
+# with `tengu lineage seal ranking:<id>` before any ranking). `Config::load`
+# refuses an unknown contract, one of another sandbox, a contract strategy
+# missing from [backtest.strategies] and a contract shape error; an unsealed or
+# changed contract loads (the publisher refuses it). Run-dir retention keeps
+# every run this registry cites, bound to a generation or not.
+# [strategy_ranking]
+# registry = "../../lineage"                # relative to this config file
+# contracts = ["rank.xlab-w2.daily.v1"]
+
 # --- Backtests (xlab; needs [xmarket]) ---
 # `tengu backtest --sandbox <s> --strategy <name>` (or `--spec <file.json>`) runs a
 # strategy spec on <TENGU_HOME>/state/<xmarket.state>/market.db (filled by `tengu
@@ -550,7 +561,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # seed = 7                                  # bootstrap seed: a rerun prints the same numbers
 # gate = "xl_gate"                          # the [decision_loops.<name>] the Jev gate arm runs
 # max_candidates = 50000                    # a run past it stops before any arm or file (1–1000000)
-# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache or a run the lineage registry cites)
+# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache, a run the [generation] or [strategy_ranking] registry cites, or one a published ranking's latest.json cites)
 #
 # [backtest.costs."hyperliquid:xyz:"]       # per side; the longest id prefix wins
 # taker_fee_bps = 0.9

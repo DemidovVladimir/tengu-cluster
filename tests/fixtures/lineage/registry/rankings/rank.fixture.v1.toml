@@ -1,0 +1,29 @@
+# Lineage fixture — a strategy-ranking contract (record kind `ranking`),
+# sealed in ../locks.toml. Strategies of the fixture state's run dirs.
+id = "rank.fixture.v1"
+title = "Fixture daily ranking — rule W and its top-4 cut, weakest first"
+preregistered = true
+registered_at = "2026-10-08T12:00:00Z"
+sandbox = "ranked"
+evidence_class = "DEVELOPMENT"
+arm = "research"
+tz = "America/New_York"
+cutoff = "00:00"
+from = "2026-03-01"
+strategies = ["rule_w", "rule_w_top4"]
+cohort = ["generation", "evidence_class", "arm", "instruments_sha256", "costs_sha256", "interval", "from_ms", "to_ms", "data_through_ms"]
+on_missing = "INCOMPLETE"
+
+[freshness]
+max_lag_bars = 2
+
+[eligibility]
+min_trades = 20
+min_periods = 8
+max_funding_incomplete = 0
+exclude_status = ["SUPERSEDED"]
+
+[rating]
+order = ["evidence_tier", "verdict", "ci95_lo_bps", "mean_net_bps", "-best2_periods_share", "-max_drawdown_bps"]
+quantum = 0.01
+tie_break = "strategy_asc"

@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::backtest::BacktestConfig;
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
+use super::strategy_ranking::RankingSection;
 use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
@@ -62,6 +63,11 @@ pub struct SandboxSections {
     /// unbound. The backtest use case refuses a kind outside it
     /// (`capability_unavailable`), the executor build a tool.
     pub generation: Option<Arc<GenerationScope>>,
+    /// `[strategy_ranking]` resolved (`config/strategy_ranking.rs`): the
+    /// contracts, their registry and the run dirs it cites — kept by
+    /// run-dir retention bound or not (`application/backtest/mod.rs`);
+    /// `None` = no ranking.
+    pub ranking: Option<Arc<RankingSection>>,
 }
 
 impl SandboxSections {

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Strategy ranking · Tengu</title>
+<meta name="description" content="Strategy ranking: a preregistered ranking contract in the lineage registry, sealed before any ranking; the [strategy_ranking] sandbox section; the cohort identity every backtest report records; run-dir retention that keeps every cited run.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: none yet */
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Strategy ranking</div>
+  <h1>Strategy ranking</h1>
+  <p class="lede">A ranking orders a sandbox's strategies from weakest to strongest on the same data. Its rules sit in a lineage record, sealed before any ranking exists. Today the contract, its load checks, the run identity and retention are built; the ranker and publisher come next.</p>
+  <ul class="facts">
+    <li><b>2</b> draft contracts, both unsealed</li>
+    <li><b>15</b> daily · <b>8</b> weekend strategies</li>
+    <li><b>9</b> cohort fields a run must share</li>
+    <li>cutoff <b>00:00</b> / Mon <b>12:00</b> New York</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip data">data</span> records and run dirs</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> seal, load checks</li>
+    <li><span class="chip warn">warn</span> unsealed draft</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Contract first</span>
+    <h2 id="s-flow">From a draft contract to kept evidence</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3800">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 300" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A ranking contract is a TOML record under lineage/rankings. tengu lineage verify warns while it is unsealed; the operator seals it. A sandbox lists it in [strategy_ranking] and every load checks it. Each backtest report records its cohort identity, and run-dir retention keeps every run the registry or a published ranking cites.</title>
+        <rect class="zone" x="14" y="12" width="400" height="276" rx="12"/>
+        <text x="30" y="30" class="zone-label">lineage/ · the registry</text>
+        <rect class="zone" x="428" y="12" width="418" height="276" rx="12"/>
+        <text x="444" y="30" class="zone-label">sandbox · state dir</text>
+
+        <path class="e" id="p-draft-verify" d="M214 92 L214 116" data-at="2"/>
+        <path class="e" id="p-verify-seal" d="M214 168 L214 192" data-at="3"/>
+        <path class="e" id="p-seal-load" d="M394 220 C418 220 420 72 448 72" data-at="4"/>
+        <path class="e" id="p-load-run" d="M636 98 L636 124" data-at="5"/>
+        <path class="e" id="p-run-keep" d="M636 176 L636 202" data-at="6"/>
+
+        <g class="n data" data-at="1">
+          <rect x="34" y="44" width="360" height="48" rx="8"/>
+          <text x="214" y="64" text-anchor="middle" class="t-title">Ranking contract</text>
+          <text x="214" y="81" text-anchor="middle" class="t-small t-mono">rankings/rank.xlab-w2.daily.v1.toml</text>
+        </g>
+        <g class="n guard" data-at="2">
+          <rect x="34" y="120" width="360" height="48" rx="8"/>
+          <text x="214" y="140" text-anchor="middle" class="t-title">tengu lineage verify</text>
+          <text x="214" y="157" text-anchor="middle" class="t-small t-mono">WARN ranking_unsealed</text>
+        </g>
+        <g class="n guard" data-at="3">
+          <rect x="34" y="196" width="360" height="48" rx="8"/>
+          <text x="214" y="216" text-anchor="middle" class="t-title">tengu lineage seal</text>
+          <text x="214" y="233" text-anchor="middle" class="t-small t-mono">ranking:&lt;id&gt; → locks.toml</text>
+        </g>
+        <g class="n guard" data-at="4">
+          <rect x="448" y="46" width="376" height="52" rx="8"/>
+          <text x="636" y="67" text-anchor="middle" class="t-title">[strategy_ranking]</text>
+          <text x="636" y="85" text-anchor="middle" class="t-small">checked in Config::load</text>
+        </g>
+        <g class="n data" data-at="5">
+          <rect x="448" y="128" width="376" height="48" rx="8"/>
+          <text x="636" y="148" text-anchor="middle" class="t-title">report.json</text>
+          <text x="636" y="165" text-anchor="middle" class="t-small t-mono">instruments_sha256 · costs_sha256</text>
+        </g>
+        <g class="n data" data-at="6">
+          <rect x="448" y="206" width="376" height="48" rx="8"/>
+          <text x="636" y="226" text-anchor="middle" class="t-title">backtests/ retention</text>
+          <text x="636" y="243" text-anchor="middle" class="t-small">cited runs never pruned</text>
+        </g>
+
+        <circle class="tok guard" r="5" data-path="p-draft-verify" data-at="2" data-dur="600"/>
+        <circle class="tok guard" r="5" data-path="p-verify-seal" data-at="3" data-dur="600"/>
+        <circle class="tok guard" r="6" data-path="p-seal-load" data-at="4" data-dur="1100"/>
+        <circle class="tok" r="5" data-path="p-load-run" data-at="5" data-dur="600"/>
+        <circle class="tok" r="5" data-path="p-run-keep" data-at="6" data-dur="600"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A <b>ranking contract</b> fixes the strategies, the cohort fields, eligibility minimums, the rating order, cutoff and time zone. One TOML file under <code>lineage/rankings/</code>.</li>
+        <li><code>tengu lineage verify</code> checks its shape (an Error names the field) and warns <code>ranking_unsealed</code> until it is sealed. A Warn never fails verify.</li>
+        <li>After review, <code>tengu lineage seal ranking:&lt;id&gt;</code> appends its digest. A later edit is <code>seal_mismatch</code>; a comment is not.</li>
+        <li>A sandbox lists the contract in <code>[strategy_ranking]</code>. Every load refuses an unknown contract, one of another sandbox, or a strategy missing from <code>[backtest.strategies]</code>.</li>
+        <li>Every backtest report records its cohort identity: the bound generation, the ids read and each id's resolved cost, as sha256.</li>
+        <li>Retention past <code>keep_runs</code> keeps every run the registry cites and every run a published ranking's <code>latest.json</code> names.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-contract">
+  <div class="sec-head">
+    <span class="kicker">The draft, as committed</span>
+    <h2 id="s-contract">What a contract fixes</h2>
+    <p>From <code>lineage/rankings/rank.xlab-w2.daily.v1.toml</code>, the strategy list and the <code>[freshness]</code> table left out. Ascending means rank 1 is the weakest; a leading <code>-</code> negates a key.</p>
+  </div>
+  <div class="term-wrap"><pre class="term"><span class="ln">sandbox = "xlab-w2"</span>
+<span class="ln">evidence_class = "DEVELOPMENT"</span>
+<span class="ln">arm = "research"</span>
+<span class="ln">tz = "America/New_York"</span>
+<span class="ln">cutoff = "00:00"   # data_through = local midnight starting the ranking date</span>
+<span class="ln">from = "2026-03-01" # decisions [from, cutoff)</span>
+<span class="ln"># strategies = [ the 15 names ]</span>
+<span class="ln">cohort = ["generation", "evidence_class", "arm", "instruments_sha256", "costs_sha256", "interval", "from_ms", "to_ms", "data_through_ms"]</span>
+<span class="ln">on_missing = "INCOMPLETE"</span>
+<span class="ln"></span>
+<span class="ln">[eligibility]</span>
+<span class="ln">min_trades = 20</span>
+<span class="ln">min_periods = 8</span>
+<span class="ln">max_funding_incomplete = 0</span>
+<span class="ln">exclude_status = ["SUPERSEDED"]</span>
+<span class="ln"></span>
+<span class="ln">[rating]</span>
+<span class="ln">order = ["evidence_tier", "verdict", "ci95_lo_bps", "mean_net_bps", "-best2_periods_share", "-max_drawdown_bps"]</span>
+<span class="ln">quantum = 0.01</span>
+<span class="ln">tie_break = "strategy_asc"</span></pre></div>
+  <p class="note">The weekend contract <code>rank.xlab-w2.weekend.v1</code> ranks the eight weekend-window strategies on Mondays only (<code>days = ["Mon"]</code>), cutoff 12:00 New York, after the weekend's exits close.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-states">
+  <div class="sec-head">
+    <span class="kicker">Outcomes</span>
+    <h2 id="s-states">What verify and load say</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip warn">warn</span><span><b>ranking_unsealed</b>No <code>[[sealed]]</code> row: a draft. Both repo contracts are here.</span></li>
+    <li><span class="chip bad">error</span><span><b>invalid_field</b>A shape rule: empty or repeated strategies, cohort fields or rating keys, an unknown zone, a bad cutoff, <code>from</code> not a UTC day, an arm other than research or capped.</span></li>
+    <li><span class="chip bad">error</span><span><b>seal_mismatch</b>A sealed contract whose values changed since.</span></li>
+    <li><span class="chip bad">error</span><span><b>load error</b><code>[strategy_ranking]</code> names an unknown contract, one of another sandbox, or a strategy outside the library.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Strict records.</b> Every table of a contract denies unknown fields; a rating key outside the list fails the parse.</span></li>
+    <li><span><b>Development only.</b> A contract with an evidence class other than DEVELOPMENT is an Error.</span></li>
+    <li><span><b>A seal is never redone.</b> <code>seal</code> refuses a contract already sealed or not <code>preregistered = true</code>.</span></li>
+    <li><span><b>Costs count.</b> <code>costs_sha256</code> moves when a resolved cost moves; <code>spec_sha256</code> does not.</span></li>
+    <li><span><b>Cited runs stay.</b> In a sandbox bound to no generation too, retention keeps the <code>[strategy_ranking]</code> registry's cited runs.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Check and trace the drafts</h2>
+  </div>
+  <div class="term-wrap"><pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu lineage verify</span>
+<span class="ln">WARN   ranking_unsealed   ranking/rank.xlab-w2.daily.v1     not sealed: …</span>
+<span class="ln">WARN   ranking_unsealed   ranking/rank.xlab-w2.weekend.v1   not sealed: …</span>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage trace rank.xlab-w2.weekend.v1</span></pre></div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/lineage/ranking.rs</code></td><td><code>RankingContract</code>, cohort fields, rating keys, shape rules</td></tr>
+        <tr><td><code>src/domain/lineage/validate.rs</code></td><td><code>ranking_unsealed</code>, the shape findings</td></tr>
+        <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code> and its load rules</td></tr>
+        <tr><td><code>src/application/backtest/mod.rs</code></td><td>the cohort identity, the cited runs retention keeps</td></tr>
+        <tr><td><code>lineage/rankings/</code></td><td>the two draft contracts</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+</article>
+</main>
+</div>
+</body>
+</html>

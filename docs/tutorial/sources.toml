@@ -266,6 +266,15 @@ sources = [
   "lineage/locks.toml",
 ]
 
+[pages.strategy-ranking]
+sources = [
+  "src/domain/lineage/ranking.rs",
+  "src/domain/lineage/validate.rs",
+  "src/config/strategy_ranking.rs",
+  "src/application/backtest/mod.rs",
+  "lineage/rankings/",
+]
+
 # ── Runtime ───────────────────────────────────────────────────────────────
 
 [pages.decision-loop]

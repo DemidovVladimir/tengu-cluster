@@ -9,8 +9,9 @@
 //! | `digests` | `(kind, id)` → `pins::toml_digest` of the record's file: what `[[sealed]]` rows pin |
 //! | [`Registry::frozen_digest`] | what a `[[frozen]]` row pins: the canonical sha256 of `{"manifest": <the generation file's digest>, "capabilities": {<id>: <its file's digest, null when absent>}}` over the capabilities it lists — a listed capability edited at the same version changes it |
 //! | [`Registry::locator_uses`] | every locator a record names (field path + recorded sha256): what `verify --evidence` resolves |
+//! | [`Registry::cited_runs`] | every backtest run dir a record cites (`run:<state>/<run id>`), by state: run-dir retention never prunes one (lineage D3: a bound generation's scope, an unbound sandbox's `[strategy_ranking]` registry) |
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 
@@ -21,6 +22,7 @@ use super::family::Family;
 use super::generation::Generation;
 use super::incident::Incident;
 use super::locks::Locks;
+use super::ranking::RankingContract;
 use super::value::{EvidenceRef, Locator, RecordKind, Time};
 use super::variant::Variant;
 use super::Finding;
@@ -41,6 +43,7 @@ pub struct Registry {
     pub capabilities: BTreeMap<String, Capability>,
     pub generations: BTreeMap<String, Generation>,
     pub evidence: BTreeMap<String, EvidenceRecord>,
+    pub rankings: BTreeMap<String, RankingContract>,
     pub locks: Locks,
     /// `pins::toml_digest` of each record's file.
     pub digests: BTreeMap<RecordKey, String>,
@@ -82,6 +85,7 @@ impl Registry {
             RecordKind::Capability => self.capabilities.contains_key(id),
             RecordKind::Generation => self.generations.contains_key(id),
             RecordKind::Evidence => self.evidence.contains_key(id),
+            RecordKind::Ranking => self.rankings.contains_key(id),
         }
     }
 
@@ -99,6 +103,7 @@ impl Registry {
             RecordKind::Capability => j(&self.capabilities, id),
             RecordKind::Generation => j(&self.generations, id),
             RecordKind::Evidence => j(&self.evidence, id),
+            RecordKind::Ranking => j(&self.rankings, id),
         }
     }
 
@@ -120,6 +125,7 @@ impl Registry {
         push!(self.capabilities, RecordKind::Capability);
         push!(self.generations, RecordKind::Generation);
         push!(self.evidence, RecordKind::Evidence);
+        push!(self.rankings, RecordKind::Ranking);
         out
     }
 
@@ -149,7 +155,9 @@ impl Registry {
     /// The first outcome a seal must precede: an experiment's `outcome_at`
     /// (a forward one: its FORWARD window start); a variant's earliest over
     /// its experiments, UNKNOWN when any of theirs is. `None` = a variant
-    /// with no experiment yet: no outcome exists.
+    /// with no experiment yet, and a ranking contract (its outcomes are the
+    /// rankings published after the seal, outside the registry): no outcome
+    /// exists.
     pub fn first_outcome(&self, kind: RecordKind, id: &str) -> Option<Time> {
         match kind {
             RecordKind::Experiment => Some(
@@ -172,6 +180,7 @@ impl Registry {
                     times.into_iter().min_by_key(Time::sort_key)
                 }
             }
+            RecordKind::Ranking => None,
             _ => Some(Time::Unknown),
         }
     }
@@ -263,6 +272,20 @@ impl Registry {
         }
         for g in self.generations.values() {
             refs(&mut out, &label(RecordKind::Generation, &g.id), &g.evidence);
+        }
+        for c in self.rankings.values() {
+            refs(&mut out, &label(RecordKind::Ranking, &c.id), &c.evidence);
+        }
+        out
+    }
+
+    /// Module table: every run dir a record cites, by state name.
+    pub fn cited_runs(&self) -> BTreeMap<String, BTreeSet<String>> {
+        let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for u in self.locator_uses() {
+            if let Locator::Run { state, run_id, .. } = u.locator {
+                out.entry(state.clone()).or_default().insert(run_id.clone());
+            }
         }
         out
     }
@@ -516,6 +539,35 @@ version = 1
     #[test]
     fn the_minimal_registry_is_clean() {
         assert_eq!(codes(&minimal()), vec![]);
+    }
+
+    /// Lineage D3: every `run:` locator of any record, by state.
+    #[test]
+    fn cited_runs_are_every_run_locator_by_state() {
+        let mut r = minimal();
+        r.variants
+            .get_mut("var")
+            .unwrap()
+            .evidence
+            .push(EvidenceRef {
+                locator: "run:xlab/20261002T100000Z-fade/trades-research.jsonl"
+                    .parse()
+                    .unwrap(),
+                role: "report".into(),
+                class: EvidenceClass::Development,
+                provenance: crate::domain::evidence::Provenance::Derived,
+                sha256: None,
+                note: None,
+            });
+        let cited = r.cited_runs();
+        assert_eq!(cited.len(), 1);
+        assert_eq!(
+            cited["xlab"],
+            BTreeSet::from([
+                "20261001T100000Z-fade".to_string(),
+                "20261002T100000Z-fade".to_string()
+            ])
+        );
     }
 
     #[test]

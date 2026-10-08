@@ -21,15 +21,16 @@
 //! | a strategy kind | allowed only when one of the generation's capabilities binds `strategy_kind:<kind>` |
 //!
 //! [`GenerationScope::cited_runs`]: every backtest run dir the registry cites
-//! (`run:<state>/<run id>` in any record), by state — run-dir retention never
-//! prunes one (`application/backtest/run_dir.rs::prune_runs`, lineage D3).
+//! (`Registry::cited_runs`: `run:<state>/<run id>` in any record), by state —
+//! run-dir retention never prunes one (`application/backtest/run_dir.rs::prune_runs`,
+//! lineage D3).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::registry::Registry;
-use super::value::{Binding, EvidenceRef, Locator, PinTarget, Time};
+use super::value::{Binding, EvidenceRef, PinTarget, Time};
 use crate::domain::tools::WORKSPACE_TOOLS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,15 +216,7 @@ impl GenerationScope {
                 }
             }
         }
-        for u in registry.locator_uses() {
-            if let Locator::Run { state, run_id, .. } = u.locator {
-                scope
-                    .cited_runs
-                    .entry(state.clone())
-                    .or_default()
-                    .insert(run_id.clone());
-            }
-        }
+        scope.cited_runs = registry.cited_runs();
         Ok(scope)
     }
 

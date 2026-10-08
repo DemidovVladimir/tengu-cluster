@@ -12,6 +12,7 @@ One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage
 | `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` |
 | `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` |
 | `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 |
+| `rankings/<id>.toml` | strategy-ranking contract (`domain/lineage/ranking.rs`) | `sandbox`, `strategies`, `tz`, `cutoff`, `days`, `from`, `cohort`, `on_missing`, `[freshness]`, `[eligibility]`, `[rating]` |
 | `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only |
 
 | Rule | Value |
@@ -25,7 +26,7 @@ One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage
 ## Add a record
 
 1. Copy a record of the same kind (examples: `tests/fixtures/lineage/registry/`), set `id` = the new file stem.
-2. A preregistration: `preregistered = true`, then `tengu lineage seal variant:<id>` (or `experiment:<id>`) **before** its outcome.
+2. A preregistration: `preregistered = true`, then `tengu lineage seal variant:<id>` (or `experiment:<id>`, `ranking:<id>`) **before** its outcome. A ranking contract unsealed = Warn `ranking_unsealed` (a draft for the operator's review); the publisher runs only a sealed one.
 3. Freezing a generation: set `status = "FROZEN"` + `frozen_at`, then append a `[[frozen]]` row with the digest `tengu lineage generation <id>` prints.
 
 ## Bind a sandbox to a generation

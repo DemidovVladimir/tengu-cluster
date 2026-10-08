@@ -11,6 +11,7 @@
 //! | [`Locator`] | `repo:` · `run:` · `vault:` · `state:` · `git:` · `record:` · `url:` · `"UNKNOWN"` | segments relative, never `..`; `git:` 40 lowercase hex; `record:<kind>/<id>`; `url:https://…` |
 //! | [`PinTarget`] | `config:<sandbox>/<dotted path>` · `spec:<sandbox>/<strategy>` · `tool_schema:<tool>` · `skill:<name>` · `repo:<path>` | a dotted path segment is bare (`[A-Za-z0-9_-]+`) or quoted (`"hyperliquid:xyz:"`, `\"` and `\\` escaped) |
 //! | [`Binding`] | `tool:<name>` · `strategy_kind:<kind>` | what a capability makes available |
+//! | [`RecordKind`] | `family` `variant` `experiment` `episode` `incident` `capability` `generation` `evidence` `ranking` | one dir each under `lineage/`; a seal names `variant:` · `experiment:` · `ranking:<id>` ([`parse_seal_record`]) |
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -314,10 +315,11 @@ pub enum RecordKind {
     Capability,
     Generation,
     Evidence,
+    Ranking,
 }
 
 impl RecordKind {
-    pub const ALL: [RecordKind; 8] = [
+    pub const ALL: [RecordKind; 9] = [
         RecordKind::Family,
         RecordKind::Variant,
         RecordKind::Experiment,
@@ -326,6 +328,7 @@ impl RecordKind {
         RecordKind::Capability,
         RecordKind::Generation,
         RecordKind::Evidence,
+        RecordKind::Ranking,
     ];
 
     /// `family`, `variant`, …
@@ -339,6 +342,7 @@ impl RecordKind {
             RecordKind::Capability => "capability",
             RecordKind::Generation => "generation",
             RecordKind::Evidence => "evidence",
+            RecordKind::Ranking => "ranking",
         }
     }
 
@@ -353,6 +357,7 @@ impl RecordKind {
             RecordKind::Capability => "capabilities",
             RecordKind::Generation => "generations",
             RecordKind::Evidence => "evidence",
+            RecordKind::Ranking => "rankings",
         }
     }
 
@@ -684,12 +689,15 @@ impl fmt::Display for Binding {
 
 string_serde!(Binding, "a binding: tool:<name> or strategy_kind:<kind>");
 
-/// A sealed record name: `variant:<id>` or `experiment:<id>`.
+/// A sealed record name: `variant:<id>`, `experiment:<id>` or `ranking:<id>`.
 pub fn parse_seal_record(s: &str) -> Result<(RecordKind, String), String> {
     match s.split_once(':') {
         Some(("variant", id)) if valid_id(id) => Ok((RecordKind::Variant, id.to_string())),
         Some(("experiment", id)) if valid_id(id) => Ok((RecordKind::Experiment, id.to_string())),
-        _ => Err(format!("`{s}`: `variant:<id>` or `experiment:<id>`")),
+        Some(("ranking", id)) if valid_id(id) => Ok((RecordKind::Ranking, id.to_string())),
+        _ => Err(format!(
+            "`{s}`: `variant:<id>`, `experiment:<id>` or `ranking:<id>`"
+        )),
     }
 }
 
@@ -849,5 +857,26 @@ mod tests {
             (RecordKind::Variant, "rule_w.sat".to_string())
         );
         assert!(parse_seal_record("family:x").is_err());
+    }
+
+    #[test]
+    fn seal_records_parse_ranking() {
+        assert_eq!(
+            parse_seal_record("ranking:rank.xlab-w2.daily.v1").unwrap(),
+            (RecordKind::Ranking, "rank.xlab-w2.daily.v1".to_string())
+        );
+        assert!(parse_seal_record("ranking:").is_err());
+        assert!(parse_seal_record("rankings:rank.x").is_err());
+        let e = parse_seal_record("generation:W1").unwrap_err();
+        assert!(e.contains("`ranking:<id>`"), "{e}");
+        assert_eq!(RecordKind::parse("ranking"), Some(RecordKind::Ranking));
+        assert_eq!(RecordKind::Ranking.dir(), "rankings");
+        assert_eq!(
+            "record:ranking/rank.t".parse::<Locator>().unwrap(),
+            Locator::Record {
+                kind: RecordKind::Ranking,
+                id: "rank.t".into()
+            }
+        );
     }
 }

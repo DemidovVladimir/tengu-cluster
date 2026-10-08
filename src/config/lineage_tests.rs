@@ -32,7 +32,8 @@ fn the_fixture_loads_with_a_digest_per_record() {
         + reg.incidents.len()
         + reg.capabilities.len()
         + reg.generations.len()
-        + reg.evidence.len();
+        + reg.evidence.len()
+        + reg.rankings.len();
     assert_eq!(reg.digests.len(), records);
     assert_eq!(reg.locks.frozen.len(), 1);
     assert_eq!(
@@ -50,6 +51,49 @@ fn the_fixture_loads_with_a_digest_per_record() {
         "cba7a380444a5e6648f0d1421837ce5504c0a1e55e6b3126a8de6596ea343a7f"
     );
     assert!(sandbox_pin(&dir, &"tool_schema:backtest".parse().unwrap()).is_none());
+}
+
+/// `rankings/<id>.toml` loads as a `RankingContract` with its digest; a
+/// field outside the schema is a load error naming the file.
+#[test]
+fn the_loader_reads_rankings() {
+    use crate::domain::lineage::ranking::{CohortField, MissingPolicy};
+    let dir = fixture_root().join("registry");
+    let reg = load_registry(&dir).unwrap_or_else(|e| panic!("{e:#?}"));
+    let c = &reg.rankings["rank.fixture.v1"];
+    assert_eq!(c.sandbox, "ranked");
+    assert_eq!(c.strategies, ["rule_w", "rule_w_top4"]);
+    assert_eq!(c.cohort.len(), 9);
+    assert_eq!(c.cohort[0], CohortField::Generation);
+    assert_eq!(c.on_missing, MissingPolicy::Incomplete);
+    assert_eq!(c.rating.order[5].to_string(), "-max_drawdown_bps");
+    let key = (RecordKind::Ranking, "rank.fixture.v1".to_string());
+    let sealed = reg
+        .locks
+        .sealed
+        .iter()
+        .find(|s| s.record == "ranking:rank.fixture.v1")
+        .expect("the fixture seals it");
+    assert_eq!(reg.digests[&key], sealed.sha256);
+    assert_eq!(
+        record_path(&dir, RecordKind::Ranking, "rank.fixture.v1"),
+        dir.join("rankings/rank.fixture.v1.toml")
+    );
+    assert!(reg.kinds_of("rank.fixture.v1") == [RecordKind::Ranking]);
+    // An unknown field fails the load, naming the file.
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("lineage");
+    copy_dir(&dir, &copy);
+    let f = copy.join("rankings/rank.fixture.v1.toml");
+    let text = std::fs::read_to_string(&f).unwrap();
+    std::fs::write(&f, text.replace("on_missing", "weight = 1\non_missing")).unwrap();
+    let errs = load_registry(&copy).unwrap_err();
+    assert!(
+        errs.len() == 1
+            && errs[0].contains("rankings/rank.fixture.v1.toml")
+            && errs[0].contains("weight"),
+        "{errs:#?}"
+    );
 }
 
 #[test]

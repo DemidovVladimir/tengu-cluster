@@ -12,12 +12,13 @@
 //! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; with `data_through_ms` (`--data-through`) the rows after it cut (`MarketData::cut_after`, a data note), else the newest row loaded recorded as the run's `data_through_ms` (lineage D1); `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); a spec with `labels` (`weekend_window`, Phase 7) also loads [`InfoData`] (`load_info`: each instrument's events over the window − `lookback_mins`, its event coverage, its earliest stored bar at any interval, its `[backtest.splits]`) before the cut — `--data-through` cuts events like rows and clips coverage — and a data note names the instruments no source covers (ids in full); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
 //! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: `run_gate` reads [`Prepared::set`] (candidates in decision order, features as-of) and decides them |
 //! | 3 | [`evaluate`] · `gate::evaluate_gated` | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split. With the gate: `evaluate_gated` = `evaluate` + the gate's `rules` / `jev` arms (research + capped) over the decided candidates, comparisons, calibration, summary, `decisions.jsonl` |
-//! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache or a run the bound generation's registry cites — `keep_cited`) |
+//! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache or a cited run — `keep_cited`: [`cited_runs`]) |
 //!
 //! | Rule | Value |
 //! |---|---|
 //! | Run id | `<YYYYMMDDTHHMMSSZ>-<strategy>` from now (UTC); a taken one ⇒ `-2`, `-3`, … — proposed by `prepare`, claimed by `write_run_dir` (`create_dir`: a run that took it meanwhile moves this one to the next free suffix) |
 //! | `spec_sha256` | sha256 hex (64 chars) of the canonical JSON of `StrategySpec::to_value` (defaults filled, keys sorted at every depth — `domain/canonical.rs`; `spec::spec_sha256`, also a generation's `spec:` pin) |
+//! | Cohort identity ([`RunIdentity`], in `report.json`) | `generation` = the bound `[generation]` id (none when unbound); `instruments_sha256` = canonical sha256 of the sorted ids read ([`Resolved::instruments`]); `costs_sha256` = canonical sha256 of `{id: its resolved cost (the spec's, else the longest [backtest.costs] prefix) or null}` — costs sit outside `spec_sha256`; what a strategy ranking's cohort compares |
 //! | `exclude` | never loaded; the engine still sees the whole universe and counts each excluded name as a skip (`excluded`) |
 //! | Store | read only: a run never writes `market.db` |
 //! | Generation | a `[generation]`-bound sandbox (`SandboxSections::generation`) runs only the kinds its capabilities bind: else `capability_unavailable: …` ([`capability_refusal`]) from `prepare`, before any read; the `backtest` tool lists it among the spec's problems |
@@ -26,7 +27,7 @@ pub(crate) mod gate;
 pub(crate) mod run_dir;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Result};
@@ -35,6 +36,7 @@ use serde_json::Value;
 pub(crate) use self::run_dir::write_run_dir;
 use crate::config::backtest::BacktestConfig;
 use crate::config::sections::SandboxSections;
+use crate::config::xmarket::rankings_dir;
 use crate::domain::backtest::costs::{cost_for, CostSpec, HalfSpread};
 use crate::domain::backtest::engine::{
     candidates, simulate, Arm, ArmResult, Candidate, CandidateSet, MarketData, RiskCaps, RunParams,
@@ -44,6 +46,8 @@ use crate::domain::backtest::report::{BacktestReport, CAPPED_ARM, PRIMARY_ARM};
 use crate::domain::backtest::spec::{
     spec_sha256, valid_name, SplitSpec, StrategyKind, StrategySpec,
 };
+use crate::domain::canonical::canonical_sha256;
+use crate::domain::lineage::value::Locator;
 use crate::domain::marketdata::{fmt_time, Interval, StockSplit};
 use crate::ports::market_data::MarketDataStore;
 
@@ -115,6 +119,30 @@ impl Resolved {
     /// `StrategySpec::data_range`, reaching further back for the longest
     /// `abdi_ranaldo` window among the `[backtest.costs]` its instruments
     /// resolve to.
+    /// The run's cohort identity (module table) under `sections`.
+    pub(crate) fn identity(
+        &self,
+        sections: &SandboxSections,
+        costs: &BTreeMap<String, CostSpec>,
+    ) -> RunIdentity {
+        let resolved: serde_json::Map<String, Value> = self
+            .instruments
+            .iter()
+            .map(|id| {
+                let cost = self
+                    .cost(costs, id)
+                    .and_then(|c| serde_json::to_value(c).ok())
+                    .unwrap_or(Value::Null);
+                (id.clone(), cost)
+            })
+            .collect();
+        RunIdentity {
+            generation: sections.generation.as_ref().map(|g| g.id.clone()),
+            instruments_sha256: canonical_sha256(&serde_json::json!(self.instruments)),
+            costs_sha256: canonical_sha256(&Value::Object(resolved)),
+        }
+    }
+
     pub(crate) fn data_window(
         &self,
         costs: &BTreeMap<String, CostSpec>,
@@ -135,6 +163,15 @@ impl Resolved {
     }
 }
 
+/// What a strategy ranking compares two runs on, beside the spec, window and
+/// data bound (module table): recorded in `report.json`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RunIdentity {
+    pub generation: Option<String>,
+    pub instruments_sha256: String,
+    pub costs_sha256: String,
+}
+
 /// What [`prepare`] built: everything a run needs before its arms — the
 /// gate arm chooses from `set.candidates` in between.
 #[derive(Debug, Clone)]
@@ -149,6 +186,8 @@ pub(crate) struct Prepared {
     pub split: Option<SplitSpec>,
     /// The ids loaded ([`Resolved::instruments`]).
     pub instruments: Vec<String>,
+    /// [`Resolved::identity`]: recorded in the report.
+    pub identity: RunIdentity,
     pub md: MarketData,
     pub params: RunParams,
     pub set: CandidateSet,
@@ -158,9 +197,8 @@ pub(crate) struct Prepared {
     /// `[backtest] keep_runs`: [`write_run_dir`] prunes the oldest run dirs
     /// beyond it (0 = keep all).
     pub keep_runs: usize,
-    /// Run ids of this state dir the bound generation's registry cites
-    /// (`GenerationScope::cited_runs`): never pruned, not counted in
-    /// `keep_runs` (lineage D3).
+    /// Run ids of this state dir a registry or a published ranking cites
+    /// ([`cited_runs`]): never pruned, not counted in `keep_runs` (lineage D3).
     pub keep_cited: BTreeSet<String>,
     /// [`BacktestReport::data_through_ms`]: the `--data-through` bound, else
     /// the newest row loaded.
@@ -464,6 +502,7 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         .splice(0..0, through_notes.into_iter().chain(split_notes));
     let run_id_base = run_dir::run_id_base(env.now_ms, &r.spec.name);
     let run_id = run_dir::propose_run_id(&env.backtests_dir, &run_id_base);
+    let identity = r.identity(&env.sections, &bt.costs);
     Ok(Prepared {
         run_id,
         run_id_base,
@@ -472,6 +511,7 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         spec_sha256: r.spec_sha256,
         split: job.split,
         instruments: r.instruments,
+        identity,
         md,
         params,
         set,
@@ -483,17 +523,77 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
     })
 }
 
-/// The runs of `backtests_dir` (`<state dir>/backtests`) the bound
-/// generation's registry cites; empty when unbound.
-fn cited_runs(s: &SandboxSections, backtests_dir: &std::path::Path) -> BTreeSet<String> {
-    let state = backtests_dir
-        .parent()
-        .and_then(std::path::Path::file_name)
-        .and_then(|n| n.to_str());
-    match (state, s.generation.as_deref()) {
-        (Some(state), Some(g)) => g.cited_runs.get(state).cloned().unwrap_or_default(),
-        _ => BTreeSet::new(),
+/// The runs of `backtests_dir` (`<state dir>/backtests`) retention never
+/// prunes (lineage D3): those the bound generation's registry cites
+/// (`GenerationScope::cited_runs`), those the `[strategy_ranking]` registry
+/// cites (`RankingSection::cited_runs` — an unbound sandbox sharing the state
+/// dir too), and those a published ranking of the state dir cites
+/// ([`published_ranking_runs`]).
+fn cited_runs(s: &SandboxSections, backtests_dir: &Path) -> BTreeSet<String> {
+    let Some(state_dir) = backtests_dir.parent() else {
+        return BTreeSet::new();
+    };
+    let Some(state) = state_dir.file_name().and_then(|n| n.to_str()) else {
+        return BTreeSet::new();
+    };
+    let registries = [
+        s.generation.as_ref().map(|g| &g.cited_runs),
+        s.ranking.as_ref().map(|r| &r.cited_runs),
+    ];
+    let mut out: BTreeSet<String> = registries
+        .into_iter()
+        .flatten()
+        .filter_map(|by_state| by_state.get(state))
+        .flatten()
+        .cloned()
+        .collect();
+    out.extend(published_ranking_runs(state_dir, state));
+    out
+}
+
+/// Every run of `state` a published ranking cites: each
+/// `run:<state>/<run id>` string anywhere in `<state dir>/strategy-rankings/
+/// <contract id>/latest.json`. An unreadable file is a warning (its runs are
+/// then not kept by it).
+fn published_ranking_runs(state_dir: &Path, state: &str) -> BTreeSet<String> {
+    fn walk(v: &Value, state: &str, out: &mut BTreeSet<String>) {
+        match v {
+            Value::String(s) if s.starts_with("run:") => {
+                if let Ok(Locator::Run {
+                    state: st, run_id, ..
+                }) = s.parse::<Locator>()
+                {
+                    if st == state {
+                        out.insert(run_id);
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|x| walk(x, state, out)),
+            Value::Object(o) => o.values().for_each(|x| walk(x, state, out)),
+            _ => {}
+        }
     }
+    let mut out = BTreeSet::new();
+    let Ok(entries) = std::fs::read_dir(rankings_dir(state_dir)) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let latest = entry.path().join("latest.json");
+        if !latest.is_file() {
+            continue;
+        }
+        let parsed = std::fs::read_to_string(&latest)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()));
+        match parsed {
+            Ok(v) => walk(&v, state, &mut out),
+            Err(e) => tracing::warn!(
+                file = %latest.display(),
+                "run-dir retention: a published ranking does not read ({e}) — its runs are not kept by it"
+            ),
+        }
+    }
+    out
 }
 
 /// Step 3 (module table): the base arms, then each extra arm
@@ -515,6 +615,9 @@ pub(crate) fn evaluate(
         &p.set,
     );
     report.data_through_ms = p.data_through_ms;
+    report.generation = p.identity.generation.clone();
+    report.instruments_sha256 = Some(p.identity.instruments_sha256.clone());
+    report.costs_sha256 = Some(p.identity.costs_sha256.clone());
     let mut arms: BTreeMap<String, ArmResult> = BTreeMap::new();
     let mut base: Vec<(&[Candidate], Arm)> = vec![(&p.set.candidates, Arm::Research)];
     if let Some(caps) = &p.caps {
@@ -1683,6 +1786,172 @@ mod tests {
         want.push(run.report.run_id.clone());
         want.sort();
         assert_eq!(left, want);
+    }
+
+    /// Strategy ranking (SR-2): `report.json` records the cohort identity —
+    /// the bound generation, the sorted ids read and every id's resolved
+    /// cost; `[backtest.costs]` moves `costs_sha256` and never
+    /// `spec_sha256`, an `exclude` moves `instruments_sha256`.
+    /// 13 old run dirs of the state `state`, `keep_runs = 10`, `sections`
+    /// edited by `with`; one run written. The run dirs left, sorted, and the
+    /// new run's id.
+    async fn retained(
+        with: impl FnOnce(&mut SandboxSections, &std::path::Path, &[String]),
+    ) -> (Vec<String>, Vec<String>, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let backtests = tmp.path().join("state/backtests");
+        std::fs::create_dir_all(&backtests).unwrap();
+        let old: Vec<String> = (1..=13)
+            .map(|d| format!("202609{d:02}T120000Z-old_run"))
+            .collect();
+        for id in &old {
+            std::fs::create_dir(backtests.join(id)).unwrap();
+        }
+        let mut e = env(store, &backtests);
+        let mut s = sections_with("keep_runs = 10");
+        with(&mut s, &tmp.path().join("state"), &old);
+        e.sections = Arc::new(s);
+        let p = prepare(&e, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap();
+        let mut run = evaluate(&p, Vec::new()).unwrap();
+        write_run_dir(&p, &mut run).unwrap();
+        let mut left: Vec<String> = std::fs::read_dir(&backtests)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        (left, old, run.report.run_id)
+    }
+
+    /// Lineage D3 for an unbound sandbox (xlab-w2 shares the state dir
+    /// holding W1's cited runs): the `[strategy_ranking]` registry's cited
+    /// runs are kept and not counted, as a bound generation's are.
+    #[tokio::test]
+    async fn retention_keeps_runs_an_unbound_sandbox_registry_cites() {
+        let (left, old, new) = retained(|s, _, old| {
+            assert!(s.generation.is_none());
+            s.ranking = Some(Arc::new(crate::config::strategy_ranking::RankingSection {
+                cited_runs: BTreeMap::from([
+                    (
+                        "state".into(),
+                        BTreeSet::from([old[0].clone(), old[1].clone()]),
+                    ),
+                    ("other".into(), BTreeSet::from([old[2].clone()])),
+                ]),
+                ..Default::default()
+            }));
+        })
+        .await;
+        // Kept: the 2 cited of this state, the new run, the 9 newest uncited.
+        let mut want: Vec<String> = old[..2].iter().chain(&old[4..]).cloned().collect();
+        want.push(new);
+        want.sort();
+        assert_eq!(left, want);
+    }
+
+    /// A published ranking's `latest.json` keeps every run of this state it
+    /// cites (`run:<state>/<run id>` at any depth), unbound and without a
+    /// `[strategy_ranking]` section — another state's runs and a dated
+    /// ranking keep nothing; an unreadable `latest.json` keeps nothing.
+    #[tokio::test]
+    async fn retention_keeps_runs_the_latest_ranking_cites() {
+        let (left, old, new) = retained(|s, state_dir, old| {
+            assert!(s.generation.is_none() && s.ranking.is_none());
+            let contract = state_dir.join("strategy-rankings/rank.t");
+            std::fs::create_dir_all(contract.join("2026-10-08")).unwrap();
+            let latest = json!({
+                "contract": "rank.t",
+                "cohorts": [{"rows": [
+                    {"strategy": "a", "run": format!("run:state/{}", old[0])},
+                    {"strategy": "b", "run": format!("run:other/{}", old[2])},
+                ]}],
+                "failed": [{"run": format!("run:state/{}/report.json", old[1])}],
+            });
+            std::fs::write(contract.join("latest.json"), latest.to_string()).unwrap();
+            let dated = json!({"run": format!("run:state/{}", old[3])});
+            std::fs::write(contract.join("2026-10-08/ranking.json"), dated.to_string()).unwrap();
+            let broken = state_dir.join("strategy-rankings/rank.broken");
+            std::fs::create_dir_all(&broken).unwrap();
+            std::fs::write(broken.join("latest.json"), "{ not json").unwrap();
+        })
+        .await;
+        let mut want: Vec<String> = old[..2].iter().chain(&old[4..]).cloned().collect();
+        want.push(new);
+        want.sort();
+        assert_eq!(left, want);
+    }
+
+    #[tokio::test]
+    async fn report_records_its_cohort_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let backtests = tmp.path().join("state/backtests");
+        let mut e = env(store, &backtests);
+        let run = |e: BacktestEnv, spec: SpecSource| async move {
+            let p = prepare(&e, job(spec)).await.unwrap();
+            let mut run = evaluate(&p, Vec::new()).unwrap();
+            let dir = write_run_dir(&p, &mut run).unwrap();
+            let on_disk: BacktestReport =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("report.json")).unwrap())
+                    .unwrap();
+            assert_eq!(on_disk.instruments_sha256, run.report.instruments_sha256);
+            assert_eq!(on_disk.costs_sha256, run.report.costs_sha256);
+            assert_eq!(on_disk.generation, run.report.generation);
+            run.report
+        };
+        let fade = || SpecSource::Strategy("weekend_fade".into());
+        let base = run(e.clone(), fade()).await;
+        let xyz = sections().backtest.unwrap().costs["hyperliquid:xyz:"].clone();
+        let cost = serde_json::to_value(&xyz).unwrap();
+        assert_eq!(base.generation, None, "unbound");
+        assert_eq!(
+            base.instruments_sha256.as_deref(),
+            Some(canonical_sha256(&json!([AAA, BBB, CCC])).as_str())
+        );
+        assert_eq!(
+            base.costs_sha256.as_deref(),
+            Some(canonical_sha256(&json!({AAA: cost, BBB: cost, CCC: cost})).as_str())
+        );
+        // A cost for one name: the costs hash moves, the spec hash does not.
+        let mut s = sections();
+        let bt = s.backtest.as_mut().unwrap();
+        let mut dearer = xyz.clone();
+        dearer.taker_fee_bps = 4.5;
+        bt.costs.insert(AAA.into(), dearer);
+        e.sections = Arc::new(s);
+        let costly = run(e.clone(), fade()).await;
+        assert_eq!(costly.spec_sha256, base.spec_sha256);
+        assert_eq!(costly.instruments_sha256, base.instruments_sha256);
+        assert_ne!(costly.costs_sha256, base.costs_sha256);
+        // An excluded name: the instruments hash moves.
+        let narrow = run(
+            e.clone(),
+            SpecSource::Json {
+                value: json!({"name": "wf", "kind": "weekend_window", "universe": "@xyz",
+                    "interval": "1h", "calendar": "us_equity", "direction": "fade",
+                    "exclude": [CCC]}),
+                fallback_name: None,
+            },
+        )
+        .await;
+        assert_eq!(
+            narrow.instruments_sha256.as_deref(),
+            Some(canonical_sha256(&json!([AAA, BBB])).as_str())
+        );
+        // Bound: the generation id.
+        let mut s = sections();
+        s.generation = Some(Arc::new(GenerationScope {
+            id: "W1".into(),
+            bound_kinds: BTreeMap::from([("weekend_window".into(), "cap".into())]),
+            available_kinds: BTreeSet::from(["weekend_window".into()]),
+            ..Default::default()
+        }));
+        e.sections = Arc::new(s);
+        let bound = run(e, fade()).await;
+        assert_eq!(bound.generation.as_deref(), Some("W1"));
+        assert_eq!(bound.costs_sha256, base.costs_sha256);
     }
 
     #[tokio::test]
