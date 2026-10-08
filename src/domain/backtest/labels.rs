@@ -154,7 +154,7 @@ impl LabelSpec {
             "filing" => self
                 .forms
                 .as_ref()
-                .is_none_or(|forms| forms.iter().any(|f| *f == e.form)),
+                .map_or(true, |forms| forms.contains(&e.form)),
             _ => true,
         }
     }
@@ -192,7 +192,7 @@ impl LabelSpec {
             (a, b) => a.or(b),
         };
         let since = t_ms.saturating_sub(i64::from(self.new_listing_days) * DAY_MS);
-        let new_listing = self.new_listing_days > 0 && listed.is_none_or(|l| l > since);
+        let new_listing = self.new_listing_days > 0 && listed.map_or(true, |l| l > since);
         if !covered || new_listing {
             InfoLabel::Uncertain
         } else {

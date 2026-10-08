@@ -779,8 +779,9 @@ These are not preferences. They're load-bearing.
 
 See `docs/SESSION_HANDOFF.md` for the running list. **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later. State 2026-10-08: `TENGU_ROADMAP.md` P0–P5 done (evidence vault +
 forward grading, the lineage registry, W1 frozen + generation binding);
-Operator Review #1 = APPROVE (`docs/w1-review-2026-10-06.md` § Verdict) → next
-Phase 6, decision evaluation (review § 16). Before that, 2026-10-02: xmarket W1 +
+Operator Review #1 = APPROVE (`docs/w1-review-2026-10-06.md` § Verdict); Phases 6–11
+done 2026-10-08 (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1
+kept — next: forward evidence every weekend (Review #2 not reached). Before that, 2026-10-02: xmarket W1 +
 its gate done, `xlab` built. Next, in order: the operator decisions
 (`docs/xmarket-tracker-2026-09-29.md` § 0 + W1 notes) → W2
 (`docs/xmarket-build-plan-2026-09-30.md`: status, waves, W2 kickoff prompt at its

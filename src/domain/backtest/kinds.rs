@@ -23,20 +23,21 @@ use crate::domain::backtest::engine::{
 };
 use crate::domain::backtest::features::{features_traced, HOURS_PER_YEAR};
 use crate::domain::backtest::fills::{
-    apr_pct, ceil_grid, floor_grid, half_spread_bps, ln_bps, spread_points, walk_funding_exit,
-    walk_spread_exit, HOUR_MS,
+    apr_pct, ceil_grid, floor_grid, half_spread_bps, ln_bps, side_cost, spread_points,
+    walk_funding_exit, walk_spread_exit, HOUR_MS,
 };
 use crate::domain::backtest::labels::{count_note, InfoLabel, LabelSpec};
 use crate::domain::backtest::spec::{
     parse_rfc3339, DailyWindowParams, Days, Direction, EventWindowParams, FundingCarryParams,
-    MoveTriggerParams, PairSpreadParams, StrategyKind, StrategySpec, Universe, WeekendWindowParams,
+    MoveTriggerParams, PairSpreadParams, RankBy, StrategyKind, StrategySpec, Universe,
+    WeekendWindowParams,
 };
 use crate::domain::book::Side;
 use crate::domain::calendar::{parse_hm, Calendar, ExchangeCalendar};
 use crate::domain::marketdata::{fmt_time, Bar, BarSeries};
 use crate::domain::tz::Zone;
 use crate::domain::xm::weekend_fade::{
-    anchor_date, fade_window, select_capped, signal_of, FadeRule,
+    anchor_date, fade_window, select_capped, signal_of, FadeRule, Signal,
 };
 
 const MIN_MS: i64 = 60_000;
@@ -78,6 +79,10 @@ struct WindowRule<'r> {
     top_n: Option<usize>,
     /// `weekend_window`'s `labels` (module table).
     labels: Option<&'r LabelSpec>,
+    /// `weekend_window`'s `stop_loss_bps`: the exit becomes a bar-close stop walk.
+    stop_loss_bps: Option<f64>,
+    /// `weekend_window`'s `rank_by = "net_of_cost"`.
+    net_of_cost: bool,
 }
 
 struct Builder<'a> {
@@ -97,6 +102,44 @@ impl<'a> Builder<'a> {
             .costs
             .as_ref()
             .or_else(|| cost_for(&self.p.costs, id))
+    }
+
+    /// `rank_by = "net_of_cost"` (module table): the `top_n` names with
+    /// \|s\| ≥ `min_abs` by \|s\| − 2 × the side cost at `t` (ties by id); a
+    /// name without a cost or bars ranks last.
+    fn net_of_cost_top(
+        &self,
+        signals: &[Signal],
+        n: usize,
+        min_abs: f64,
+        t: i64,
+    ) -> BTreeSet<String> {
+        let key = |s: &Signal| {
+            let cost = self
+                .cost(&s.instrument)
+                .zip(self.md.bars.get(&s.instrument));
+            match cost {
+                Some((c, bars)) => {
+                    let ctx = self.md.ctx.get(&s.instrument);
+                    s.s_bps.abs() - 2.0 * side_cost(c, bars, ctx, t).total_bps()
+                }
+                None => f64::NEG_INFINITY,
+            }
+        };
+        let mut picks: Vec<(&Signal, f64)> = signals
+            .iter()
+            .filter(|s| s.s_bps.abs() >= min_abs)
+            .map(|s| (s, key(s)))
+            .collect();
+        picks.sort_by(|a, b| {
+            b.1.total_cmp(&a.1)
+                .then_with(|| a.0.instrument.cmp(&b.0.instrument))
+        });
+        picks
+            .into_iter()
+            .take(n)
+            .map(|(s, _)| s.instrument.clone())
+            .collect()
     }
 
     fn is_excluded(&self, id: &str) -> bool {
@@ -301,6 +344,9 @@ impl<'a> Builder<'a> {
             }
         }
         let chosen: BTreeSet<String> = match rule.top_n {
+            Some(n) if rule.net_of_cost => {
+                self.net_of_cost_top(&signals, n, rule.min_abs_bps, entry)
+            }
             Some(n) => select_capped(
                 &signals,
                 &FadeRule {
@@ -342,7 +388,14 @@ impl<'a> Builder<'a> {
                 t: entry,
                 period: period.to_string(),
                 anchor_px: Some(s.anchor_px),
-                exit: ExitPlan::At { exit_ms: exit },
+                exit: match rule.stop_loss_bps {
+                    Some(sl) => ExitPlan::Bars {
+                        max_exit_ms: exit,
+                        take_profit_bps: None,
+                        stop_loss_bps: Some(sl),
+                    },
+                    None => ExitPlan::At { exit_ms: exit },
+                },
                 label: None,
                 info_label: labels.get(&s.instrument).copied(),
                 // Both reads: the anchor's close and the entry's (a label
@@ -362,6 +415,8 @@ impl<'a> Builder<'a> {
             min_abs_bps: p.min_abs_signal_bps,
             top_n: p.top_n,
             labels: p.labels.as_ref(),
+            stop_loss_bps: p.stop_loss_bps,
+            net_of_cost: p.rank_by == Some(RankBy::NetOfCost),
         };
         let mut t = from;
         for _ in 0..MAX_STEPS {
@@ -415,6 +470,8 @@ impl<'a> Builder<'a> {
             min_abs_bps: p.min_abs_signal_bps,
             top_n: p.top_n,
             labels: None,
+            stop_loss_bps: None,
+            net_of_cost: false,
         };
         let (from, to) = (self.p.from_ms, self.p.to_ms);
         let (Some(mut d), Some(last)) = (
@@ -895,6 +952,107 @@ mod tests {
             md,
             run_params(utc("2026-09-21 00:00"), utc("2026-09-29 00:00")),
         )
+    }
+
+    /// Phase 9: `stop_loss_bps` turns the window exit into the bar-close
+    /// stop walk — the fade short leaves at the first close 50 bps against
+    /// it; without the knob the same trade waits for the window exit.
+    #[test]
+    fn weekend_window_stop_leaves_at_the_first_adverse_close() {
+        let (anchor, entry, exit) = (
+            utc("2026-09-26 00:00"),
+            utc("2026-09-27 22:00"),
+            utc("2026-09-28 13:00"),
+        );
+        let md = market(vec![sparse(
+            A,
+            Interval::H1,
+            &[
+                (anchor - H, 100.0),
+                (entry - H, 102.0),
+                (entry, 102.2),
+                (entry + H, 103.0),
+                (exit - H, 101.0),
+            ],
+        )]);
+        let p = run_params(utc("2026-09-21 00:00"), utc("2026-09-29 00:00"));
+        let run = |extra: serde_json::Value| {
+            let mut v = json!({"kind": "weekend_window", "universe": [A], "interval": "1h",
+                "calendar": "us_equity", "direction": "fade"});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            let s = spec(v);
+            let set = candidates(&s, &md, &p).unwrap();
+            let r = simulate(&s, &md, &p, &set.candidates, Arm::Research);
+            (set.candidates[0].exit.clone(), r.trades[0].clone())
+        };
+        let (plan, t) = run(json!({"stop_loss_bps": 50}));
+        assert_eq!(
+            plan,
+            ExitPlan::Bars {
+                max_exit_ms: exit,
+                take_profit_bps: None,
+                stop_loss_bps: Some(50.0)
+            }
+        );
+        // 102.2 at entry + 1 h is −19.6 bps for the short; 103.0 at + 2 h is −98.
+        assert_eq!(
+            (t.exit_ms, t.exit_reason, t.legs[0].exit_px),
+            (entry + 2 * H, ExitReason::StopLoss, 103.0)
+        );
+        let (plan, t) = run(json!({}));
+        assert_eq!(plan, ExitPlan::At { exit_ms: exit });
+        assert_eq!((t.exit_ms, t.exit_reason), (exit, ExitReason::Window));
+    }
+
+    /// Phase 9: `rank_by = "net_of_cost"` ranks `top_n` by |s| − 2 × the side
+    /// cost at the decision: A's larger move (+198 bps) loses its one slot to
+    /// B (−100 bps) once A's half-spread is 150 bps.
+    #[test]
+    fn net_of_cost_ranking_gives_the_slot_to_the_cheaper_name() {
+        let (anchor, entry, exit) = (
+            utc("2026-09-26 00:00"),
+            utc("2026-09-27 22:00"),
+            utc("2026-09-28 13:00"),
+        );
+        let px = |a: f64, e: f64, x: f64| [(anchor - H, a), (entry - H, e), (exit - H, x)];
+        let md = market(vec![
+            sparse(A, Interval::H1, &px(100.0, 102.0, 101.0)),
+            sparse(B, Interval::H1, &px(50.0, 49.5, 50.0)),
+        ]);
+        let mut p = run_params(utc("2026-09-21 00:00"), utc("2026-09-29 00:00"));
+        p.costs.insert(
+            A.to_string(),
+            serde_json::from_value(
+                json!({"taker_fee_bps": 0, "half_spread": {"model": "fixed", "bps": 150}}),
+            )
+            .unwrap(),
+        );
+        let pick = |rank: Option<&str>| {
+            let mut v = json!({"kind": "weekend_window", "universe": [A, B], "interval": "1h",
+                "calendar": "us_equity", "direction": "fade", "top_n": 1});
+            if let Some(r) = rank {
+                v["rank_by"] = json!(r);
+            }
+            let set = candidates(&spec(v), &md, &p).unwrap();
+            assert_eq!(set.candidates.len(), 1);
+            set.candidates[0].instrument.clone()
+        };
+        assert_eq!(pick(None), A);
+        assert_eq!(pick(Some("signal")), A);
+        assert_eq!(pick(Some("net_of_cost")), B);
+        // A ranking with nothing to rank, and a stop of 0, are refused.
+        let bad = |extra: serde_json::Value| {
+            let mut v = json!({"kind": "weekend_window", "universe": [A], "interval": "1h",
+                "calendar": "us_equity", "direction": "fade"});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            format!("{:?}", StrategySpec::from_value("t", &v).unwrap_err())
+        };
+        assert!(bad(json!({"rank_by": "net_of_cost"})).contains("set top_n"));
+        assert!(bad(json!({"stop_loss_bps": 0})).contains("stop_loss_bps"));
     }
 
     #[test]

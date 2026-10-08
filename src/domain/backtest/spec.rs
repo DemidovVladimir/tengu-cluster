@@ -18,7 +18,7 @@
 //!
 //! | Kind | Params — default | Bounds |
 //! |---|---|---|
-//! | `weekend_window` | `calendar` (an exchange `[xmarket.calendars]` id), `direction`, `min_abs_signal_bps` — 0, `top_n` — all, `anchor_offset_mins` / `entry_offset_mins` / `exit_offset_mins` — 0, `labels` — off (`{skip, lookback_mins, new_listing_days, forms}`: `labels.rs`) | offsets ±1440, whole bars; `labels` bounds in `labels.rs`; absent ⇒ the canonical JSON and `spec_sha256` are unchanged |
+//! | `weekend_window` | `calendar` (an exchange `[xmarket.calendars]` id), `direction`, `min_abs_signal_bps` — 0, `top_n` — all, `anchor_offset_mins` / `entry_offset_mins` / `exit_offset_mins` — 0, `labels` — off (`{skip, lookback_mins, new_listing_days, forms}`: `labels.rs`), `stop_loss_bps` — off (exit at the first 1h close that far against the trade: `ExitPlan::Bars`), `rank_by` — `signal` (`net_of_cost`: `top_n` by \|s\| − 2 × the side cost; needs `top_n`) | offsets ±1440, whole bars; `labels` bounds in `labels.rs`; absent ⇒ the canonical JSON and `spec_sha256` are unchanged |
 //! | `daily_window` | `days` (`all` · `weekdays` · `trading` + `calendar`), `tz`, `anchor` / `entry` / `exit` (`HH:MM`), `direction`, `min_abs_signal_bps` — 0, `top_n` — all | `tz` a `domain::tz` zone; times whole bars |
 //! | `move_trigger` | `lookback_bars`, `threshold_bps`, `min_volume_ratio` + `volume_baseline_bars` — off, `direction`, `hold_bars`, `cooldown_bars` — `hold_bars`, `take_profit_bps` / `stop_loss_bps` — off | bars 1..=10000 (cooldown 0..=10000), bps 0 < x ≤ 10000, ratio 0 < x ≤ 1000 |
 //! | `funding_carry` | `min_apr_pct`, `exit_apr_pct` — off, `hold_hours` | 0 < min ≤ 10000, 0 ≤ exit < min, hours 1..=8760 |
@@ -206,6 +206,27 @@ pub struct WeekendWindowParams {
     /// canonical JSON (`spec_sha256`) is the one before Phase 7.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<LabelSpec>,
+    /// Phase 9: leave early at the first bar close `stop_loss_bps` against
+    /// the entry (the `move_trigger` stop walk, `ExitPlan::Bars`); absent ⇒
+    /// the window exit only, and the spec hash before Phase 9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_loss_bps: Option<f64>,
+    /// Phase 9: what `top_n` ranks by ([`RankBy`]); absent ⇒ \|s\|, and the
+    /// spec hash before Phase 9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank_by: Option<RankBy>,
+}
+
+/// `weekend_window`'s `top_n` ranking (Phase 9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RankBy {
+    /// \|s\| (W1).
+    Signal,
+    /// \|s\| − the round trip at the decision (2 × the side cost of the
+    /// instrument's cost model then: fee + half-spread + slippage); a name
+    /// without a cost ranks last.
+    NetOfCost,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -673,6 +694,12 @@ impl StrategySpec {
                 check_top_n(&mut e, p.top_n);
                 if let Some(labels) = &p.labels {
                     e.extend(labels.validation_errors());
+                }
+                if let Some(sl) = p.stop_loss_bps {
+                    check_bps(&mut e, "stop_loss_bps", sl, false);
+                }
+                if p.rank_by == Some(RankBy::NetOfCost) && p.top_n.is_none() {
+                    e.push("rank_by = \"net_of_cost\" ranks top_n: set top_n".to_string());
                 }
                 for (field, mins) in [
                     ("anchor_offset_mins", p.anchor_offset_mins),

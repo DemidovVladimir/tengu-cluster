@@ -479,6 +479,51 @@ direction = "fade"
 min_abs_signal_bps = 50
 top_n = 4
 
+# W2 / Phase 9 (2026-10-08): rule W top 4 with a bar-close stop (the hand-rolled
+# 2026-10-03 sweep read 500 best, 300 next — now on the engine), ranked by the
+# move net of the round-trip cost (cost model v2 above), and both.
+[backtest.strategies.weekend_fade_top4_stop300]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+stop_loss_bps = 300
+
+[backtest.strategies.weekend_fade_top4_stop500]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+stop_loss_bps = 500
+
+[backtest.strategies.weekend_fade_top4_net_of_cost]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+rank_by = "net_of_cost"
+
+[backtest.strategies.weekend_fade_top4_stop500_net_of_cost]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+stop_loss_bps = 500
+rank_by = "net_of_cost"
+
+
 # W2 (Phase 7): rule W with point-in-time information labels (docs/xlab-2026-10-01.md
 # § 5, domain/backtest/labels.rs). A name is NEWS when a material event of it (an SEC
 # filing, a split) was published in [Fri 20:00 New York − 240 min, the Sun 18:00

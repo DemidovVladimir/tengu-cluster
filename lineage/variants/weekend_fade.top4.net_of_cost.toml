@@ -1,0 +1,20 @@
+id = "weekend_fade.top4.net_of_cost"
+family = "weekend_overshoot_fade"
+title = "Rule W top 4 ranked by |s| minus the round-trip cost"
+parent = "weekend_fade.top4"
+reason = "Phase 9 (cost / liquidity and exits): rank by expected edge after cost (cost model v2) instead of raw |s|."
+registered_at = "2026-10-08"
+order = 31
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "On the engine (weekend_window knob, bar-close walk / cost model v2 of xlab-w2), unlike the hand-rolled 2026-10-03 sweep (intrabar high / low + 10 bps slippage). Experiment xlab.weekend_fade_top4.exits_costs.2026-10-08. docs/p9-cost-liquidity-2026-10-08.md."
+
+[spec]
+sandbox = "xlab-w2"
+strategy = "weekend_fade_top4_net_of_cost"
+spec_sha256 = "ac5518c8595b1a59fd5b1749fbed50a4f78dd2d24b9a72ae5afa88d0cb42f114"
+
+[[changed]]
+dim = "rank_by"
+from = "signal"
+to = "net_of_cost"

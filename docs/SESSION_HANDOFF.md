@@ -19,7 +19,10 @@
 | D11 → Phase 9 (operator 2026-10-08) | late funding from HL `fundingHistory` needs a new opt-in tool (`hl_ctx` schema is W1-pinned, exec tools have no network); ≈ $0.015 a weekend — built with the P9 cost model |
 | P6 core (done 2026-10-08) | `tengu evidence evaluate <run dir>` (`domain/backtest/evaluation.rs`): rules · Jev · HOLD on the same candidates, per candidate + per trade, calibration, latency, cost, verdict. W1 gate run: per trade +28.93 [−23.5, +81.6] (reproduced), per candidate −35.79 [−61.9, −6.6], jev − hold +14.66 [+3.0, +27.5] ⇒ Jev UNPROVEN; G6 PASS — `docs/p6-decision-evaluation-2026-10-08.md` |
 | P8 oracle / microstructure (2026-10-08) | closed-session oracle = EMA to impact prices, measured τ ≈ 27 min (docs 30); the Sun 20:00 ET snap undoes ~nothing (8.5 vs 60.4 bps); rule W holds after the 2026-04-30 τ change (+44.60, CI [+7.4, +79.7]) ⇒ no STOP; G8 PASS — `docs/p8-hip3-oracle-2026-10-08.md` |
-| Next | Phase 7 news / information (review § 16); open: the capped lens in `evaluate` |
+| P7 news labels (2026-10-08) | `tengu history events` (SEC EDGAR, 844 filings, 63 / 75 names; publication = the index page's acceptance time — the JSON clock is off by the NY offset for some filers) + `weekend_window` `labels` knob; NEWS 62 · UNCERTAIN 273 · NOISE 1165; skip NEWS +45.60, NOISE only +50.59 vs +45.84 ⇒ INCONCLUSIVE, no W2 change — `docs/p7-news-labels-2026-10-08.md` |
+| P9 cost / liquidity (2026-10-08) | cost model v2 in `xlab-w2` (observed fees: 9.0 for BMNR / MSTR / PURRDAT; measured $100 spread, mean 4.13 bps / side); knobs `stop_loss_bps`, `rank_by = "net_of_cost"`; top 4 close stop 300 +163.14 vs +142.65 (CIs overlap) ⇒ INCONCLUSIVE, the stop is W2's one capital candidate — `docs/p9-cost-liquidity-2026-10-08.md` |
+| P10 / P11 (2026-10-08) | no W2 candidate: nothing beats rule W; the close stop 300 (development +163.14 vs +142.65) failed the forward weekend (−40.57 vs +131.04) ⇒ G11 FAIL, keep W1, no P12 run — `docs/p10-w2-candidate-2026-10-08.md` |
+| Next | forward evidence: the W1 desk + recorder every weekend (operator: `tengu run --sandbox xmarket-weekend` Fri ≤ 19:30 ET; M3 go needs 12 weekends, 1 so far), counterfactual grading of stops / labels / net-of-cost each Monday; D11 open |
 
 ## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
 
