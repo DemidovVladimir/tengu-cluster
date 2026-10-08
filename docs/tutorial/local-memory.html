@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Workspace memory · Tengu</title>
+<meta name="description" content="Memory without a database server: profile files in the system prompt, a disk vector file the agent writes and searches, and two opt-in stores for files and shared keys.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: prompt stack, grounding check, chunker, store cards */
+  .stack { display: grid; gap: 4px; counter-reset: s; }
+  .stack div { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--panel); font-size: 0.86rem; }
+  .stack div::before { counter-increment: s; content: counter(s); font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
+  .stack b { font-weight: 600; color: var(--ink); }
+  .stack small { color: var(--muted); font-size: 0.8rem; display: block; }
+  .stack em { font-style: normal; font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); white-space: nowrap; }
+  .stack .brain { border-left-color: var(--brain); background: var(--brain-soft); }
+  .stack .heart { border-left-color: var(--heart); }
+  .stack .hands { border-left-color: var(--hands); }
+  .stack.in-view div { animation: lit .45s ease both; }
+  .stack.in-view div:nth-child(2) { animation-delay: .08s } .stack.in-view div:nth-child(3) { animation-delay: .16s }
+  .stack.in-view div:nth-child(4) { animation-delay: .24s } .stack.in-view div:nth-child(5) { animation-delay: .32s }
+  .stack.in-view div:nth-child(6) { animation-delay: .4s } .stack.in-view div:nth-child(7) { animation-delay: .48s }
+  .stack.in-view div:nth-child(8) { animation-delay: .56s }
+  @keyframes lit { from { transform: translateX(-6px); opacity: .3 } to { transform: none; opacity: 1 } }
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: .86rem; color: var(--muted); }
+  .ctrls input[type="range"] { width: min(220px, 52vw); accent-color: var(--accent); }
+  .ctrls select { font: inherit; font-size: .84rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  #gq { font: inherit; font-size: .9rem; color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; width: min(460px, 100%); }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .marks { display: flex; flex-wrap: wrap; gap: 6px; }
+  .marks span { font-family: var(--font-mono); font-size: 0.78rem; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: var(--sunk); color: var(--muted); }
+  .marks span.hit { border-color: var(--bad); color: var(--bad); background: var(--heart-soft); }
+  .echo { font-size: .95rem; overflow-wrap: anywhere; }
+  .echo mark { background: var(--heart-soft); color: var(--bad); border-radius: 3px; padding: 0 2px; }
+  .card .verdict { justify-self: start; }
+  .file { position: relative; height: 74px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunk); overflow: hidden; }
+  .file .ck { position: absolute; height: 16px; border-radius: 4px; background: var(--hands-soft); border: 1px solid var(--hands); opacity: .9; }
+  .file .ck.first { background: var(--brain-soft); border-color: var(--brain); }
+  .file .axis { position: absolute; left: 6px; bottom: 4px; font-family: var(--font-mono); font-size: .7rem; color: var(--faint); }
+  .entries { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-family: var(--font-mono); font-size: .76rem; color: var(--muted); }
+  .entries li { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--panel); overflow-wrap: anywhere; }
+  .entries li b { color: var(--ink); font-weight: 500; }
+  .grid.stores { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+  .stores .card h3 { font-family: var(--font-mono); font-size: .9rem; overflow-wrap: anywhere; }
+  .kv { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; font-size: .84rem; }
+  .kv dt { color: var(--faint); font-family: var(--font-mono); font-size: .74rem; padding-top: 2px; }
+  .kv dd { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">脳</span> Memory · per workspace</div>
+  <h1>Workspace memory</h1>
+  <p class="lede">Memory with no database server. Profile files shape the system prompt, one vector file holds what agents store and recalls it each chat turn, and two opt-in tools keep files and shared keys.</p>
+  <ul class="facts">
+    <li><code>[memory] enabled</code> default <b>false</b></li>
+    <li>recall <b>5</b> entries per turn</li>
+    <li>profile file ≤ <b>2000</b> tokens</li>
+    <li><code>persistent_store</code> chunks <b>1000</b> / overlap <b>200</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> the chat LLM</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> embeddings, vectors</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> memory tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> the recall check</li>
+    <li><span class="chip data">data</span> files on disk</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One chat turn, one workspace</span>
+    <h2 id="s-flow">Recall in, tools out</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 380" role="img" aria-labelledby="lm-t">
+        <title id="lm-t">A chat turn loads profile files into the system prompt, checks whether to recall, embeds the message and searches the vector file, then the model calls memory tools that write to the vector file, the storage folder or the cache database.</title>
+        <rect class="zone" x="610" y="14" width="238" height="276" rx="12"/>
+        <text x="622" y="31" class="zone-label">Memory tools</text>
+
+        <path class="e" id="p-u-g" d="M170 52 L208 52" data-at="3-4"/>
+        <path class="e" id="p-g-e" d="M360 52 L408 52" data-at="4"/>
+        <path class="e" id="p-e-v" d="M495 80 L495 138" data-at="4"/>
+        <path class="e flow" id="p-v-l" d="M408 172 L362 172" data-at="4"/>
+        <path class="e dash" id="p-g-l" d="M285 80 L285 138" data-at="3"/>
+        <path class="e" id="p-p-l" d="M170 172 L208 172" data-at="2"/>
+        <path class="e" id="p-l-z" d="M362 226 C470 250 580 240 608 222" data-at="5-8"/>
+        <path class="e" id="p-t1-v" d="M622 67 C596 67 600 152 582 152" data-at="5"/>
+        <path class="e flow" id="p-t2-v" d="M622 129 C600 129 600 170 582 170" data-at="6"/>
+        <path class="e" id="p-t3-v" d="M622 191 L582 190" data-at="7"/>
+        <path class="e" id="p-t4-d" d="M730 278 L730 312" data-at="8"/>
+        <path class="e dash bad" id="p-pt-v" d="M495 262 L495 206" data-at="9"/>
+
+        <g class="n" data-at="3-4">
+          <rect x="20" y="24" width="150" height="56" rx="8"/>
+          <text x="95" y="47" text-anchor="middle" class="t-title">User message</text>
+          <text x="95" y="66" text-anchor="middle" class="t-small">TUI · Telegram · webhook</text>
+        </g>
+        <g class="n guard" data-at="3-4">
+          <rect x="210" y="24" width="150" height="56" rx="8"/>
+          <text x="285" y="47" text-anchor="middle" class="t-title">Grounding check</text>
+          <text x="285" y="66" text-anchor="middle" class="t-small">no recall on "latest"</text>
+        </g>
+        <g class="n brain" data-at="1,4">
+          <rect x="410" y="24" width="170" height="56" rx="8"/>
+          <text x="495" y="47" text-anchor="middle" class="t-title">Embedder</text>
+          <text x="495" y="66" text-anchor="middle" class="t-small">text-embedding-3-small</text>
+        </g>
+        <g class="n data" data-at="2">
+          <rect x="20" y="140" width="150" height="64" rx="8"/>
+          <text x="95" y="164" text-anchor="middle" class="t-title">Profile files</text>
+          <text x="95" y="182" text-anchor="middle" class="t-small">IDENTITY · PROFILE</text>
+          <text x="95" y="196" text-anchor="middle" class="t-small">CONTEXT (.md)</text>
+        </g>
+        <g class="n heart" data-at="2-8">
+          <rect x="210" y="140" width="150" height="100" rx="10"/>
+          <text x="285" y="167" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="285" y="189" text-anchor="middle" class="t-title">Chat turn</text>
+          <text x="285" y="207" text-anchor="middle" class="t-small">[Relevant memories]</text>
+          <text x="285" y="222" text-anchor="middle" class="t-small">+ recent history</text>
+        </g>
+        <g class="n brain" data-at="1,4-7,9">
+          <rect x="410" y="140" width="170" height="66" rx="8"/>
+          <text x="495" y="164" text-anchor="middle" class="t-title t-mono">memory/vectors.bin</text>
+          <text x="495" y="183" text-anchor="middle" class="t-small">bincode, cosine scan</text>
+          <text x="495" y="197" text-anchor="middle" class="t-small">locked write, full rewrite</text>
+        </g>
+        <g class="n heart" data-at="9">
+          <rect x="410" y="262" width="170" height="56" rx="8"/>
+          <text x="495" y="285" text-anchor="middle" class="t-title">Planner turn</text>
+          <text x="495" y="304" text-anchor="middle" class="t-small">not written here</text>
+        </g>
+        <g class="n hands" data-at="5">
+          <rect x="624" y="42" width="212" height="50" rx="8"/>
+          <text x="730" y="63" text-anchor="middle" class="t-title t-mono">memory_ingest</text>
+          <text x="730" y="81" text-anchor="middle" class="t-small">redact, embed, append</text>
+        </g>
+        <g class="n hands" data-at="6">
+          <rect x="624" y="104" width="212" height="50" rx="8"/>
+          <text x="730" y="125" text-anchor="middle" class="t-title t-mono">memory_search</text>
+          <text x="730" y="143" text-anchor="middle" class="t-small">top_k 5 · agent / source / kind</text>
+        </g>
+        <g class="n hands" data-at="7">
+          <rect x="624" y="166" width="212" height="50" rx="8"/>
+          <text x="730" y="187" text-anchor="middle" class="t-title t-mono">persistent_store</text>
+          <text x="730" y="205" text-anchor="middle" class="t-small">opt-in · files + chunks</text>
+        </g>
+        <g class="n hands" data-at="8">
+          <rect x="624" y="228" width="212" height="50" rx="8"/>
+          <text x="730" y="249" text-anchor="middle" class="t-title t-mono">shared_cache</text>
+          <text x="730" y="267" text-anchor="middle" class="t-small">opt-in · namespace + key</text>
+        </g>
+        <g class="n data" data-at="8">
+          <rect x="624" y="314" width="212" height="50" rx="8"/>
+          <text x="730" y="335" text-anchor="middle" class="t-title t-mono">.tengu/cache.db</text>
+          <text x="730" y="353" text-anchor="middle" class="t-small">SQLite, WAL</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">no OPENROUTER_API_KEY = memory off</text></g>
+        <g class="pop badge" data-at="2"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">chat agents only, not plan steps</text></g>
+        <g class="pop badge" data-at="3"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">a verify note instead of memories</text></g>
+        <g class="pop badge" data-at="4"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">top 5 by cosine, no score floor</text></g>
+        <g class="pop badge" data-at="5"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">several chunks = one embedding call</text></g>
+        <g class="pop badge" data-at="6"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">filters match exactly</text></g>
+        <g class="pop badge" data-at="7"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">.tengu/storage/&lt;file_id&gt;/ + manifest</text></g>
+        <g class="pop badge" data-at="8"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">one row per namespace + key</text></g>
+        <g class="pop badge" data-at="9"><rect x="20" y="290" width="340" height="22" rx="11"/><text x="190" y="305" text-anchor="middle">cross-plan recall reads Postgres instead</text></g>
+
+        <circle class="tok" r="6" data-path="p-u-g" data-at="3-4"/>
+        <circle class="tok guard" r="6" data-path="p-g-l" data-at="3" data-delay="600"/>
+        <circle class="tok guard" r="6" data-path="p-g-e" data-at="4" data-delay="500"/>
+        <circle class="tok brain" r="6" data-path="p-e-v" data-at="4" data-delay="1000"/>
+        <circle class="tok brain" r="6" data-path="p-v-l" data-at="4" data-delay="1500"/>
+        <circle class="tok" r="6" data-path="p-p-l" data-at="2"/>
+        <circle class="tok heart" r="6" data-path="p-l-z" data-at="5-8"/>
+        <circle class="tok hands" r="6" data-path="p-t1-v" data-at="5" data-delay="900"/>
+        <circle class="tok hands" r="6" data-path="p-t2-v" data-at="6" data-delay="900"/>
+        <circle class="tok brain" r="5" data-path="p-t2-v" data-at="6" data-delay="1500" data-reverse/>
+        <circle class="tok hands" r="6" data-path="p-t3-v" data-at="7" data-delay="900"/>
+        <circle class="tok hands" r="6" data-path="p-t4-d" data-at="8" data-delay="900"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>~/.tengu/memory/</code>. No key: memory stays off, with a warning.</li>
+        <li>The system prompt loads <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code> from the agent's workspace: up to 2000 tokens each, 32000 in total.</li>
+        <li>A message about the last, latest, newest, previous or most recent thing skips recall. A system note tells the model to verify instead.</li>
+        <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>) join the prompt as <code>[Relevant memories]</code>.</li>
+        <li><code>memory_ingest</code>: secrets are redacted, the text embedded, one entry appended. Under a lock file the store re-reads the file, applies the change and rewrites it through a temp file and a rename, so two processes keep each other's rows.</li>
+        <li><code>memory_search</code>: a query plus optional <code>agent</code>, <code>source</code> or <code>kind</code> filters. Returns JSON hits with text, score and metadata.</li>
+        <li><code>persistent_store</code> (opt-in): the source path must pass the tool's read scope; the file is copied under <code>.tengu/storage/</code>, its text extracted (PDF, docx, xlsx or UTF-8), chunked, one entry per chunk.</li>
+        <li><code>shared_cache</code> (opt-in): <code>get</code>, <code>put</code>, <code>delete</code>, <code>list</code> by namespace and key in <code>.tengu/cache.db</code>. Non-JSON values are stored as JSON strings.</li>
+        <li>Planner calls are not saved here: their prompt is the whole assembled planner context, which recall would hand back as a memory. Cross-plan recall reads Postgres <code>agentic_memory</code> (<a href="memory.html">memory</a>).</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-prompt">
+  <div class="sec-head">
+    <span class="kicker">What the system prompt holds</span>
+    <h2 id="s-prompt">Profile files, in order and capped</h2>
+    <p>Built for chat agents (TUI, Telegram, webhooks). Parts are joined with <code>---</code>; a profile file that would pass the total stops the list.</p>
+  </div>
+  <div class="stack" data-inview>
+    <div class="heart"><span><b>Preamble</b><small>"You are &lt;name&gt;. Use tools to execute actions. Never fabricate data." Name defaults to Tengu.</small></span><em>always</em></div>
+    <div class="heart"><span><b>Role</b><small>"Your role: &lt;role&gt;." when <code>role</code> is set.</small></span><em>optional</em></div>
+    <div class="heart"><span><b>identity.instructions</b><small>From the agent's TOML block.</small></span><em>≤ 2000 tok</em></div>
+    <div class="brain"><span><b>IDENTITY.md</b><small>Workspace root, under a <code># IDENTITY.md</code> heading.</small></span><em>≤ 2000 tok</em></div>
+    <div class="brain"><span><b>PROFILE.md</b><small>Same rule. Empty files are skipped.</small></span><em>≤ 2000 tok</em></div>
+    <div class="brain"><span><b>CONTEXT.md</b><small>Same rule. Over 32000 in total: this and later files are left out.</small></span><em>≤ 2000 tok</em></div>
+    <div class="hands"><span><b>Skill contexts</b><small>Each skill's text; one over the total is dropped with a warning.</small></span><em>≤ 16000 tok</em></div>
+    <div><span><b># Tools</b><small>A name(required args) list, when tools are advertised and the agent has a workspace.</small></span><em>+10% slack</em></div>
+  </div>
+  <p class="note">Plan steps (<code>tengu run-agent</code>) build their own prompt from skills and the plan; they do not load profile files. In a hardened sandbox, file writers refuse <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code>.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-ground">
+  <div class="sec-head">
+    <span class="kicker">Try it: type a message</span>
+    <h2 id="s-ground">Will this turn recall?</h2>
+    <p>The check looks for seven markers as whole words, case ignored. It runs on every in-process chat turn; the planner turns it off.</p>
+  </div>
+  <div class="widget">
+    <label for="gq">message <input id="gq" type="text" value="Summarize my LP notes" spellcheck="false" autocomplete="off"></label>
+    <div class="presets" aria-label="Example messages">
+      <button type="button" class="btn" data-q="Summarize my LP notes">Summarize my LP notes</button>
+      <button type="button" class="btn" data-q="What was the last pool you checked?">What was the last pool you checked?</button>
+      <button type="button" class="btn" data-q="Set up Elasticsearch for logs">Set up Elasticsearch for logs</button>
+      <button type="button" class="btn" data-q="Show the newest positions">Show the newest positions</button>
+    </div>
+    <div class="marks" id="gm" aria-label="Markers"></div>
+    <div class="grid two">
+      <div class="card guard"><h3>Verdict</h3><span class="verdict ok" id="gv">recall runs</span><p id="gd"></p></div>
+      <div class="card"><h3>Message</h3><p class="echo" id="ge"></p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-chunk">
+  <div class="sec-head">
+    <span class="kicker">Try it: store a file</span>
+    <h2 id="s-chunk">How <code>persistent_store</code> chunks a file</h2>
+    <p>Chunk size and overlap come from <code>[memory]</code>. Each chunk is embedded on its own and becomes one vector entry; the first carries the description.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="cl">text length <input type="range" id="cl" min="0" max="20000" step="250" value="4000"> <span class="readout" id="cl-out">4000</span> chars</label>
+      <label for="cs"><code>persistent_store_chunk_size</code>
+        <select id="cs"><option value="1000" selected>1000 (default)</option><option value="5000">5000 (storage-test)</option></select>
+      </label>
+      <label for="co"><code>persistent_store_chunk_overlap</code> <input type="range" id="co" min="0" max="600" step="50" value="200"> <span class="readout" id="co-out">200</span></label>
+    </div>
+    <div class="file" id="cf" aria-hidden="true"></div>
+    <div class="grid two">
+      <div class="card hands"><h3 id="cn">5 chunks</h3><p id="cdesc"></p></div>
+      <ul class="entries" id="ce" aria-label="Stored entries"></ul>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-stores">
+  <div class="sec-head">
+    <span class="kicker">Three files per workspace</span>
+    <h2 id="s-stores">Where it is kept, how it goes</h2>
+  </div>
+  <div class="grid stores">
+    <div class="card brain">
+      <h3>memory/vectors.bin</h3>
+      <dl class="kv"><dt>holds</dt><dd>every entry: id, text, 1536 floats, metadata</dd>
+      <dt>writers</dt><dd><code>memory_ingest</code>, <code>persistent_store</code></dd>
+      <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>~/.tengu/memory/</code></dd>
+      <dt>cleared by</dt><dd><code>/purge</code>, <code>tengu prune</code></dd></dl>
+    </div>
+    <div class="card data">
+      <h3>.tengu/storage/&lt;file_id&gt;/</h3>
+      <dl class="kv"><dt>holds</dt><dd>the raw file + <code>manifest.json</code> with its chunk ids</dd>
+      <dt>writer</dt><dd><code>persistent_store</code> <code>store</code></dd>
+      <dt>search</dt><dd>kind <code>persistent_store</code> only, one hit per file</dd>
+      <dt>cleared by</dt><dd><code>delete</code> (its vectors too), <code>tengu prune</code></dd></dl>
+    </div>
+    <div class="card data">
+      <h3>.tengu/cache.db</h3>
+      <dl class="kv"><dt>holds</dt><dd>table <code>cache_entries</code>: namespace, key, value_json</dd>
+      <dt>writer</dt><dd><code>shared_cache</code> <code>put</code></dd>
+      <dt>sqlite</dt><dd>WAL, busy timeout 5 s, one connection per tool executor</dd>
+      <dt>cleared by</dt><dd><code>delete</code> per key, <code>tengu prune --hard</code></dd></dl>
+    </div>
+  </div>
+  <p class="note warn"><b>Present in code, not wired.</b> The builtin provider can also load <code>AGENTS.md</code>, <code>MEMORY.md</code>, <code>USER.md</code> and daily logs (<code>.tengu/memory/&lt;date&gt;.md</code>), and a <code>&lt;memory-context&gt;</code> fence exists. No live path calls either, and nothing writes daily logs.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No secrets in memory.</b> <code>memory_ingest</code> runs every chunk through the secret registry before it is embedded.</span></li>
+    <li><span><b>No torn files, no lost rows.</b> The vector file is written to a temp file and renamed, under a lock file and after a fresh read; a file that cannot be read loads as empty, with a warning.</span></li>
+    <li><span><b>Tools only with a store.</b> Without a vector backend, <code>memory_ingest</code>, <code>memory_search</code> and <code>persistent_store</code> are not registered.</span></li>
+    <li><span><b>Opt-in stays opt-in.</b> <code>persistent_store</code> and <code>shared_cache</code> exist only for agents that name them.</span></li>
+    <li><span><b>Workspace-gated.</b> Both opt-in tools check workspace write permission on every call; <code>persistent_store store</code> also checks read permission on the source file.</span></li>
+    <li><span><b>Budgeted prompt.</b> Each profile file is cut to 2000 tokens; files past the 32000 total are left out.</span></li>
+    <li><span><b>Clean deletes.</b> <code>persistent_store delete</code> removes the file's vector entries by their recorded ids.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Store, list, purge</h2>
+    <p><code>storage-test</code> turns memory on with 5000-char chunks; its agent runs on Claude Code (build with <code>--features claude_code</code>). Durable cross-session memory is <a href="memory.html">Open Brain</a>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>export OPENROUTER_API_KEY=&lt;your key&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox storage-test</span>
+<span class="ln o">  /purge        # inside the chat: clears the conversation and vectors.bin</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox storage-test --agent storage --tool persistent_store --args '{"operation":"list"}'</span>
+<span class="ln o">  # one JSON object: text = {"files": [...], "count": n}, is_error = false</span>
+<span class="ln cmd"><span class="p">$ </span>tengu prune --sandbox storage-test</span>
+<span class="ln o">  # soft: removes &lt;workspace&gt;/memory and .tengu/storage; --hard empties the workspace</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/bootstrap/memory.rs</code></td><td>store path, <code>MemoryManager</code> build, key check</td></tr>
+        <tr><td><code>src/application/memory/manager.rs</code></td><td>one builtin + one external provider; ingest, search, delete, purge</td></tr>
+        <tr><td><code>src/application/memory/injector.rs</code>, <code>writer.rs</code>, <code>fencing.rs</code></td><td>pre-turn fence, post-turn Q/A write</td></tr>
+        <tr><td><code>src/adapters/outbound/memory/disk_vector.rs</code></td><td><code>vectors.bin</code>, cosine scan, metadata filters</td></tr>
+        <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>OpenRouter embeddings client (<code>{OPENROUTER_BASE_URL}/v1/embeddings</code>)</td></tr>
+        <tr><td><code>src/adapters/outbound/memory/builtin.rs</code></td><td>the builtin provider: prefetch, Q/A sync, file loader</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/memory/</code></td><td><code>memory_ingest</code>, <code>memory_search</code>, <code>persistent_store</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/cache/</code></td><td><code>shared_cache</code> and <code>cache.db</code></td></tr>
+        <tr><td><code>src/ports/memory.rs</code></td><td><code>MemoryProvider</code>, <code>VectorStore</code>, <code>Embedding</code>, <code>MemoryService</code></td></tr>
+        <tr><td><code>src/application/chat/service.rs</code></td><td><code>[Relevant memories]</code> recall, grounding check</td></tr>
+        <tr><td><code>src/application/skills/registry.rs</code></td><td>system prompt with profile files</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: grounding check, chunker */
+(function () {
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  /* --- grounding: chat/service.rs::needs_fresh_history_grounding --- */
+  var MARKERS = ["last", "latest", "most recent", "newest", "previous", "recently", "before that"];
+  var gq = document.getElementById("gq"), gm = document.getElementById("gm"), gv = document.getElementById("gv");
+  var gd = document.getElementById("gd"), ge = document.getElementById("ge");
+  function ground() {
+    var text = gq.value, lower = text.toLowerCase();
+    var words = lower.split(/[^\p{L}\p{N}]+/u).filter(function (w) { return w; });
+    function has(m) {
+      var p = m.split(" ");
+      for (var i = 0; i + p.length <= words.length; i++) {
+        if (p.every(function (w, j) { return words[i + j] === w; })) return true;
+      }
+      return false;
+    }
+    var hits = MARKERS.filter(has);
+    gm.innerHTML = MARKERS.map(function (m) { return '<span class="' + (hits.indexOf(m) >= 0 ? "hit" : "") + '">' + esc(m) + "</span>"; }).join("");
+    var html = esc(text);
+    hits.forEach(function (m) {
+      var re = new RegExp("(^|[^\\p{L}\\p{N}])(" + m.replace(/ /g, "[^\\p{L}\\p{N}]+") + ")(?=[^\\p{L}\\p{N}]|$)", "igu");
+      html = html.replace(re, function (x, pre, word) { return pre + "<mark>" + word + "</mark>"; });
+    });
+    ge.innerHTML = html || "<em>(empty)</em>";
+    var inside = !hits.length && MARKERS.some(function (m) { return lower.indexOf(m) >= 0; });
+    if (hits.length) {
+      gv.className = "verdict bad"; gv.textContent = "recall skipped";
+      gd.innerHTML = "Marker <code>" + esc(hits[0]) + "</code> found as a whole word. No memory search; a system note asks the model to verify against the conversation and tools.";
+    } else {
+      gv.className = "verdict ok"; gv.textContent = "recall runs";
+      gd.innerHTML = "The last message is embedded; the 5 nearest entries (<code>max_recall_entries</code>) join as <code>[Relevant memories]</code>." + (inside ? " A marker sits inside a longer word only, which does not count." : "");
+    }
+  }
+  gq.addEventListener("input", ground);
+  Array.prototype.forEach.call(document.querySelectorAll("[data-q]"), function (b) {
+    b.addEventListener("click", function () { gq.value = b.getAttribute("data-q"); ground(); });
+  });
+  ground();
+
+  /* --- chunker: tools/memory/persistent_store.rs::chunk_text + execute_store --- */
+  var cl = document.getElementById("cl"), cs = document.getElementById("cs"), co = document.getElementById("co");
+  var clOut = document.getElementById("cl-out"), coOut = document.getElementById("co-out");
+  var cf = document.getElementById("cf"), cn = document.getElementById("cn"), cdesc = document.getElementById("cdesc"), ce = document.getElementById("ce");
+  function chunks(len, size, overlap) {
+    if (len === 0) return [];
+    size = Math.max(1, size);
+    overlap = Math.min(overlap, size - 1);
+    var step = Math.max(1, size - overlap), out = [], start = 0;
+    while (start < len) {
+      var end = Math.min(start + size, len);
+      out.push([start, end]);
+      start += step;
+      if (end === len) break;
+    }
+    return out;
+  }
+  function chunker() {
+    var len = +cl.value, size = +cs.value, ov = +co.value;
+    clOut.textContent = len; coOut.textContent = ov;
+    var list = chunks(len, size, ov), n = list.length;
+    cf.innerHTML = "";
+    var lanes = 3;
+    list.forEach(function (c, i) {
+      var d = document.createElement("div");
+      d.className = "ck" + (i === 0 ? " first" : "");
+      d.style.left = (c[0] / Math.max(len, 1) * 100) + "%";
+      d.style.width = Math.max(0.6, (c[1] - c[0]) / Math.max(len, 1) * 100) + "%";
+      d.style.top = (6 + (i % lanes) * 19) + "px";
+      cf.appendChild(d);
+    });
+    var ax = document.createElement("span"); ax.className = "axis"; ax.textContent = len ? "0 → " + len + " chars" : "no text";
+    cf.appendChild(ax);
+    if (!n) {
+      cn.textContent = "0 chunks";
+      cdesc.innerHTML = "No text (empty, binary or extraction failed): only <code>manifest.json</code> is written. A <code>description</code>, if given, is still embedded as one entry.";
+      ce.innerHTML = '<li><b>[file:scan.png]</b> &lt;description&gt;</li>';
+      return;
+    }
+    cn.textContent = n + (n === 1 ? " chunk" : " chunks") + " → " + n + " entries";
+    var step = Math.max(1, size - Math.min(ov, size - 1));
+    cdesc.innerHTML = "Step " + step + " chars (size − overlap). " + n + " embedding call" + (n === 1 ? "" : "s") + ", one per chunk. Search fetches 3 × <code>top_k</code> hits and keeps the best one per file.";
+    var rows = [];
+    list.slice(0, 3).forEach(function (c, i) {
+      var head = i === 0 ? "[file:report.pdf | Q3 pool notes]" : "[file:report.pdf chunk " + (i + 1) + "/" + n + "]";
+      rows.push("<li><b>" + esc(head) + "</b> chars " + c[0] + "–" + c[1] + "</li>");
+    });
+    if (n > 3) rows.push("<li>… " + (n - 3) + " more, last: chars " + list[n - 1][0] + "–" + list[n - 1][1] + "</li>");
+    ce.innerHTML = rows.join("");
+  }
+  [cl, co].forEach(function (e) { e.addEventListener("input", chunker); });
+  cs.addEventListener("change", chunker);
+  chunker();
+})();
+</script>
+</body>
+</html>

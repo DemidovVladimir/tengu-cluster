@@ -22,7 +22,9 @@
 SANDBOX ?=
 CONFIG_FILE := $(if $(SANDBOX),sandboxes/$(SANDBOX)/config.toml,config.toml)
 export TENGU_CONFIG_FILE := $(CONFIG_FILE)
-NETWORK ?= $(if $(shell grep -Eqs '^[[:space:]]*network[[:space:]]*=[[:space:]]*"open"' $(CONFIG_FILE) && echo y),open,tor)
+# `network = "open"` counts only inside the config's [egress] table (a grep
+# matched that line in any section).
+NETWORK ?= $(if $(shell awk '/^[[:space:]]*\[/ {s = $$0} s ~ /^[[:space:]]*\[egress\]/ && /^[[:space:]]*network[[:space:]]*=[[:space:]]*"open"/ {f = 1} END {exit !f}' $(CONFIG_FILE) 2>/dev/null && echo y),open,tor)
 LYREBIRD_RS_DIR ?= ../lyrebird-rs
 # Compose resolves relative build contexts against deploy/tor/, so hand it an
 # absolute path (git URLs pass through).

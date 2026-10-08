@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Planner · Tengu</title>
+<meta name="description" content="What the planner LLM sees (the generated registry, recall lanes, recent messages), why it cannot call tools, the plan JSON it must emit, and how its reply is parsed.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: prompt builder, parse ladder */
+  svg .t-band { font-family: var(--font-mono); font-size: 12px; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg label { display: block; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+  .seg label:last-child span { border-right: 0; }
+  .seg input:checked + span { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .knobs { display: grid; gap: 10px 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .knobs label { font-size: 0.82rem; }
+  .knobs code { font-size: 0.78rem; }
+  .layers { display: grid; gap: 6px; }
+  .layer { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); transition: opacity .3s, border-color .3s; }
+  .layer i { width: 10px; align-self: stretch; border-radius: 3px; background: var(--data); }
+  .layer.heart i { background: var(--heart); } .layer.brain i { background: var(--brain); } .layer.bad i { background: var(--bad); } .layer.you i { background: var(--accent); }
+  .layer b { font-family: var(--font-mono); font-size: 0.8rem; font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
+  .layer small { display: block; color: var(--muted); font-size: 0.78rem; }
+  .layer em { font-style: normal; font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); white-space: nowrap; }
+  .layer.off { opacity: .45; border-style: dashed; }
+  .layer.off b { text-decoration: line-through; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .parse-row { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+  #raw { width: 100%; min-height: 128px; font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; resize: vertical; }
+  .ladder { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .ladder li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 0.85rem; color: var(--muted); background: var(--panel); transition: all .25s; }
+  .ladder li .no { font-family: var(--font-mono); font-size: 0.75rem; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; }
+  .ladder li .st { font-family: var(--font-mono); font-size: 0.74rem; }
+  .ladder li.miss { opacity: .55; }
+  .ladder li.miss .st { color: var(--bad); }
+  .ladder li.hit { border-color: var(--ok); background: var(--hands-soft); color: var(--ink); }
+  .ladder li.hit .no { background: var(--ok); border-color: var(--ok); color: var(--panel); }
+  .ladder li.hit .st { color: var(--ok); }
+  .ladder li.fail { border-color: var(--bad); background: var(--heart-soft); color: var(--ink); }
+  .ladder li.skip { opacity: .35; }
+  #verdict-out { font-size: 0.78rem; max-height: 220px; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · plan JSON</div>
+  <h1>Planner</h1>
+  <p class="lede">One LLM call per turn, with tools, memory and grounding stripped. It reads a generated roster of agents, skills and tools, and must answer JSON: a direct reply, or a plan of steps for subagents.</p>
+  <ul class="facts">
+    <li>engine <b>rag</b>, the only value</li>
+    <li>last <b>10</b> user messages in the prompt</li>
+    <li>replan recall top <b>5</b> step outputs</li>
+    <li><b>0</b> retries of the planner call</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> LLM and its prompt</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> recall</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools, plans</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> parser</li>
+    <li><span class="chip data">data</span> files, records</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One planner call, step by step</span>
+    <h2 id="s-flow">Roster in, JSON out</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 490" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Planner: agents, skills and tools render the registry; recall lanes and recent messages join it in the prompt with the orchestrator skill as system prompt; one stripped LLM call; parse_verdict; direct reply or plan; plan stored per session.</title>
+        <!-- prompt zone -->
+        <rect class="zone" x="395" y="16" width="180" height="294" rx="10"/>
+        <text x="405" y="36" class="zone-label">prompt · one call</text>
+
+        <!-- edges -->
+        <path class="e" id="p-ag-reg" d="M170 52 C188 52 186 112 203 112" data-at="1"/>
+        <path class="e" id="p-sk-reg" d="M170 132 L203 126" data-at="1"/>
+        <path class="e" id="p-tl-reg" d="M170 212 C188 212 186 140 203 140" data-at="1"/>
+        <path class="e" id="p-reg-b1" d="M365 122 C384 122 384 107 403 107" data-at="2"/>
+        <path class="e" id="p-rec-b2" d="M365 246 C386 246 384 149 403 149" data-at="3"/>
+        <path class="e" id="p-rec-b4" d="M365 266 C386 266 384 233 403 233" data-at="3"/>
+        <path class="e" id="p-hist-b3" d="M365 340 C392 340 382 191 403 191" data-at="3"/>
+        <path class="e" id="p-you-hist" d="M405 380 C386 380 386 356 367 356" data-at="3"/>
+        <path class="e" id="p-sys-b0" d="M365 46 C384 46 384 65 403 65" data-at="4"/>
+        <path class="e" id="p-you-b5" d="M485 352 L485 296" data-at="4"/>
+        <path class="e" id="p-stack-llm" d="M575 165 L608 165" data-at="5"/>
+        <path class="e dash" id="p-llm-met" d="M685 120 L685 88" data-at="6"/>
+        <path class="e" id="p-llm-parse" d="M685 210 L685 246" data-at="7"/>
+        <path class="e" id="p-parse-direct" d="M660 304 C660 328 645 328 645 348" data-at="8"/>
+        <path class="e" id="p-parse-plan" d="M710 304 C710 328 785 328 785 348" data-at="8-9"/>
+        <path class="e" id="p-plan-state" d="M785 406 L785 424" data-at="9"/>
+
+        <!-- sources -->
+        <g class="n data" data-at="1">
+          <rect x="20" y="24" width="150" height="56" rx="8"/>
+          <text x="95" y="48" text-anchor="middle" class="t-title t-mono">[agents.*]</text>
+          <text x="95" y="67" text-anchor="middle" class="t-small">with a description</text>
+        </g>
+        <g class="n data" data-at="1">
+          <rect x="20" y="104" width="150" height="56" rx="8"/>
+          <text x="95" y="128" text-anchor="middle" class="t-title">Skills</text>
+          <text x="95" y="147" text-anchor="middle" class="t-small">SKILL.md frontmatter</text>
+        </g>
+        <g class="n hands" data-at="1">
+          <rect x="20" y="184" width="150" height="56" rx="8"/>
+          <text x="95" y="208" text-anchor="middle" class="t-title">Tool catalog</text>
+          <text x="95" y="227" text-anchor="middle" class="t-small">+ MCP server tools</text>
+        </g>
+        <g class="n heart" data-at="4">
+          <rect x="205" y="20" width="160" height="52" rx="8"/>
+          <text x="285" y="42" text-anchor="middle" class="t-title">Orchestrator skill</text>
+          <text x="285" y="60" text-anchor="middle" class="t-small">skills/orchestrator/</text>
+        </g>
+        <g class="n data" data-at="1-2">
+          <rect x="205" y="92" width="160" height="60" rx="8"/>
+          <text x="285" y="117" text-anchor="middle" class="t-title">Planner registry</text>
+          <text x="285" y="137" text-anchor="middle" class="t-small">written to the cwd</text>
+        </g>
+        <g class="n brain" data-at="3">
+          <rect x="205" y="226" width="160" height="60" rx="8"/>
+          <text x="285" y="251" text-anchor="middle" class="t-title">Recall lanes</text>
+          <text x="285" y="271" text-anchor="middle" class="t-small">Postgres · opt-in</text>
+        </g>
+        <g class="n data" data-at="3">
+          <rect x="205" y="320" width="160" height="56" rx="8"/>
+          <text x="285" y="344" text-anchor="middle" class="t-title">Recent messages</text>
+          <text x="285" y="363" text-anchor="middle" class="t-small">in memory · last 10</text>
+        </g>
+        <g class="n" data-at="3-4">
+          <rect x="405" y="352" width="160" height="56" rx="8"/>
+          <text x="485" y="376" text-anchor="middle" class="t-title">You</text>
+          <text x="485" y="395" text-anchor="middle" class="t-small">this turn's message</text>
+        </g>
+
+        <!-- prompt bands, in code order -->
+        <g class="n heart" data-at="4-5"><rect x="405" y="48" width="160" height="34" rx="6"/><text x="485" y="69" text-anchor="middle" class="t-band">system: SKILL.md</text></g>
+        <g class="n data" data-at="2,4-5"><rect x="405" y="90" width="160" height="34" rx="6"/><text x="485" y="111" text-anchor="middle" class="t-band">registry</text></g>
+        <g class="n brain" data-at="3-5"><rect x="405" y="132" width="160" height="34" rx="6"/><text x="485" y="153" text-anchor="middle" class="t-band">cross-session msgs</text></g>
+        <g class="n data" data-at="3-5"><rect x="405" y="174" width="160" height="34" rx="6"/><text x="485" y="195" text-anchor="middle" class="t-band">recent user msgs</text></g>
+        <g class="n brain" data-at="3-5"><rect x="405" y="216" width="160" height="34" rx="6"/><text x="485" y="237" text-anchor="middle" class="t-band">session outputs</text></g>
+        <g class="n" data-at="4-5"><rect x="405" y="258" width="160" height="34" rx="6"/><text x="485" y="279" text-anchor="middle" class="t-band">user message</text></g>
+
+        <!-- right side -->
+        <g class="n data" data-at="6">
+          <rect x="610" y="30" width="150" height="56" rx="8"/>
+          <text x="685" y="53" text-anchor="middle" class="t-title">Metrics record</text>
+          <text x="685" y="72" text-anchor="middle" class="t-small">kind=planner · layers</text>
+        </g>
+        <g class="n heart" data-at="5-7">
+          <rect x="610" y="120" width="150" height="90" rx="10"/>
+          <text x="685" y="142" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="685" y="163" text-anchor="middle" class="t-title">Planner LLM</text>
+          <text x="685" y="181" text-anchor="middle" class="t-small">[orchestrator] agent</text>
+          <text x="685" y="198" text-anchor="middle" class="t-small">tools [] · no memory</text>
+        </g>
+        <g class="n guard" data-at="7-8">
+          <rect x="610" y="248" width="150" height="56" rx="8"/>
+          <text x="685" y="272" text-anchor="middle" class="t-title t-mono">parse_verdict</text>
+          <text x="685" y="291" text-anchor="middle" class="t-small">4 paths, then error</text>
+        </g>
+        <g class="n" data-at="8">
+          <rect x="590" y="350" width="110" height="56" rx="8"/>
+          <text x="645" y="374" text-anchor="middle" class="t-title t-mono">direct</text>
+          <text x="645" y="393" text-anchor="middle" class="t-small">reply · turn ends</text>
+        </g>
+        <g class="n hands" data-at="8-9">
+          <rect x="720" y="350" width="130" height="56" rx="8"/>
+          <text x="785" y="374" text-anchor="middle" class="t-title t-mono">plan</text>
+          <text x="785" y="393" text-anchor="middle" class="t-small">steps → executor</text>
+        </g>
+        <g class="n data" data-at="9">
+          <rect x="720" y="426" width="130" height="52" rx="8"/>
+          <text x="785" y="448" text-anchor="middle" class="t-title t-mono">plan_state</text>
+          <text x="785" y="466" text-anchor="middle" class="t-small">per session + .md</text>
+        </g>
+
+        <!-- per-step badges (one slot) -->
+        <g class="pop badge" data-at="1"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">described [agents.*] only</text></g>
+        <g class="pop badge" data-at="2"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">rewritten every planner turn</text></g>
+        <g class="pop badge" data-at="3"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">top_k 0 = lane off (default)</text></g>
+        <g class="pop badge" data-at="4"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">SKILL.md body = system prompt</text></g>
+        <g class="pop badge" data-at="5"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">tools [] · memory off</text></g>
+        <g class="pop badge" data-at="6"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">agent planner/&lt;agent&gt;</text></g>
+        <g class="pop badge" data-at="7"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">raw → fenced → {…} → prose</text></g>
+        <g class="pop badge" data-at="8"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">direct ends the turn</text></g>
+        <g class="pop badge" data-at="9"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">set_active_plan(session_id)</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok" r="5" data-path="p-ag-reg" data-at="1"/>
+        <circle class="tok" r="5" data-path="p-sk-reg" data-at="1" data-delay="300"/>
+        <circle class="tok hands" r="5" data-path="p-tl-reg" data-at="1" data-delay="600"/>
+        <circle class="tok" r="6" data-path="p-reg-b1" data-at="2"/>
+        <circle class="tok brain" r="5" data-path="p-rec-b2" data-at="3"/>
+        <circle class="tok" r="5" data-path="p-you-hist" data-at="3" data-dur="700"/>
+        <circle class="tok" r="5" data-path="p-hist-b3" data-at="3" data-delay="700"/>
+        <circle class="tok brain" r="5" data-path="p-rec-b4" data-at="3" data-delay="1000"/>
+        <circle class="tok heart" r="6" data-path="p-sys-b0" data-at="4"/>
+        <circle class="tok" r="6" data-path="p-you-b5" data-at="4" data-delay="500"/>
+        <circle class="tok heart" r="6" data-path="p-stack-llm" data-at="5" data-dur="900"/>
+        <circle class="tok" r="5" data-path="p-llm-met" data-at="6" data-dur="900"/>
+        <circle class="tok heart" r="6" data-path="p-llm-parse" data-at="7" data-dur="900"/>
+        <circle class="tok" r="6" data-path="p-parse-direct" data-at="8"/>
+        <circle class="tok hands" r="6" data-path="p-parse-plan" data-at="8" data-delay="600"/>
+        <circle class="tok hands" r="6" data-path="p-plan-state" data-at="9" data-dur="700"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>Roster sources: every <code>[agents.*]</code> block with a <code>description</code>, sorted by name; skills with a <code>name</code> and <code>description</code>; every catalog and MCP tool.</li>
+        <li><code>TENGU_PLANNER_REGISTRY.md</code> is rendered and written to the working directory every planner turn. A failed write is only logged.</li>
+        <li>With <code>postgres_memory</code>: earlier messages and this session's step outputs, by vector search, both off by default. Recent messages come from an in-memory ring.</li>
+        <li>The system prompt is the body of <code>skills/orchestrator/SKILL.md</code>; a short built-in prompt if it is missing. Your message goes last.</li>
+        <li>One call on the <code>[orchestrator] agent</code>'s engine and model: tool list empty, no executor, no memory recall, no grounding nudge. In <code>tengu chat</code> that agent may differ from the default chat agent.</li>
+        <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer) and a <code>RagQueried</code> event naming the registry entries.</li>
+        <li><code>parse_verdict</code> tries raw JSON, fenced JSON, the first balanced object, then wraps prose as <code>direct</code>. Only empty output is an error.</li>
+        <li><code>direct</code> ends the turn with its text. <code>plan</code> goes to the DAG executor.</li>
+        <li>The accepted plan is stored for this session, sent to every step over IPC, and mirrored to <code>TENGU_PLAN.md</code>. Cleared when the turn ends.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-prompt">
+  <div class="sec-head">
+    <span class="kicker">Try it: flip the knobs, watch the prompt change</span>
+    <h2 id="s-prompt">What goes into the prompt</h2>
+    <p>Blocks in code order, with their real headings. Knobs live in <code>[memory]</code>; recall needs a build with <code>postgres_memory</code>.</p>
+  </div>
+  <div class="widget" id="pb">
+    <div class="widget-row">
+      <div class="seg" role="radiogroup" aria-label="Planner call">
+        <label><input type="radio" name="call" value="plan" checked><span>plan()</span></label>
+        <label><input type="radio" name="call" value="replan"><span>replan()</span></label>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="pg"> built with <code>postgres_memory</code></label>
+    </div>
+    <div class="knobs">
+      <label for="turn">Turn in this session <span class="readout" id="turn-out">3</span><input type="range" id="turn" min="1" max="15" value="3"></label>
+      <label for="recent"><code>session_recent_n</code> <span class="readout" id="recent-out">10</span><input type="range" id="recent" min="1" max="20" value="10"></label>
+      <label for="xs"><code>cross_session_msg_top_k</code> <span class="readout" id="xs-out">0</span><input type="range" id="xs" min="0" max="5" value="0"></label>
+      <label for="ws"><code>within_session_output_top_k</code> <span class="readout" id="ws-out">0</span><input type="range" id="ws" min="0" max="5" value="0"></label>
+      <label for="xp"><code>cross_plan_top_k</code> <span class="readout" id="xp-out">5</span><input type="range" id="xp" min="0" max="10" value="5"></label>
+    </div>
+    <div class="layers" id="layers" aria-live="polite"></div>
+    <p class="note" id="pb-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-parse">
+  <div class="sec-head">
+    <span class="kicker">Try it: paste a model reply</span>
+    <h2 id="s-parse">How the reply is parsed</h2>
+    <p>This runs the same four paths as <code>parse_verdict</code>. Pick a sample or type your own.</p>
+  </div>
+  <div class="widget">
+    <div class="presets" role="group" aria-label="Sample replies">
+      <button type="button" class="btn" data-p="raw">raw JSON</button>
+      <button type="button" class="btn" data-p="fenced">fenced</button>
+      <button type="button" class="btn" data-p="prose">prose + JSON</button>
+      <button type="button" class="btn" data-p="chat">prose only</button>
+      <button type="button" class="btn" data-p="broken">broken JSON</button>
+      <button type="button" class="btn" data-p="empty">empty</button>
+    </div>
+    <div class="parse-row">
+      <label for="raw" style="display:grid;gap:6px;font-size:.85rem;color:var(--muted)">Planner LLM output
+        <textarea id="raw" spellcheck="false"></textarea>
+      </label>
+      <ol class="ladder" id="ladder">
+        <li data-k="1"><span class="no">1</span><span>raw JSON</span><span class="st"></span></li>
+        <li data-k="2"><span class="no">2</span><span>strip <code>```json</code> fences</span><span class="st"></span></li>
+        <li data-k="3"><span class="no">3</span><span>first balanced <code>{ }</code> in the text</span><span class="st"></span></li>
+        <li data-k="4"><span class="no">4</span><span>any other text → <code>direct</code></span><span class="st"></span></li>
+        <li data-k="5"><span class="no">✗</span><span>empty → the turn fails</span><span class="st"></span></li>
+      </ol>
+    </div>
+    <pre id="verdict-out" aria-live="polite"></pre>
+    <p class="note">One parse, no retry: <code>SKILL.md</code> says so, and <code>plan_schema.json</code> only documents the shape. A plan step with an unknown agent fails later, at the runner; one whose <code>depends_on</code> names a missing step replans.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-files">
+  <div class="sec-head">
+    <span class="kicker">Files the planner leaves</span>
+    <h2 id="s-files">Registry and plan, as written</h2>
+    <p>Rendered for <code>sandboxes/lping</code>: <code>crypto_researcher</code> is its only agent with a description. The plan is an example.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-reg" aria-selected="true">TENGU_PLANNER_REGISTRY.md</button>
+      <button type="button" aria-controls="tab-plan">TENGU_PLAN.md</button>
+      <button type="button" aria-controls="tab-json">Plan JSON shape</button>
+    </div>
+    <div class="tabpanel" id="tab-reg"><pre><span class="k"># Tengu Planner Registry</span>
+
+This file is generated from the `[agents.*]` blocks of the active config that carry a `description`, skills, core tool definitions, and the tools of every configured MCP server (`&lt;server&gt;__&lt;tool&gt;`). The planner loads it into every planner turn.
+
+<span class="k">## Agents</span>
+
+<span class="k">### crypto_researcher</span>
+
+- engine: `openrouter`
+- model: `anthropic/claude-sonnet-4-6`
+- tools: `http_request, read_file, list_directory, sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide, solana_close_token_accounts, jupiter_swap, dlmm_open_position, dlmm_close_position, jup_perps_order`
+- skills: `-`
+
+Researches crypto assets and Solana DeFi: token prices, market caps, volume, <span class="c">(description continues)</span>
+
+Example queries:
+- what is the SOL price and 24h volume?
+- find the highest-fee SOL/USDC pools on Meteora and Raydium
+- research this token mint and its top liquidity pools
+- compare DLMM bin step options for a volatile pair
+- snapshot the operator wallet's SOL/USDC LP and hedge
+- simulate a 0.5 SOL spot position in the best SOL/USDC pool
+
+<span class="k">## Skills</span>
+
+- `orchestrator`: Plans and dispatches multi-agent work from the planner registry roster. <span class="c">(…)</span> _(source: `&lt;cwd&gt;/skills/orchestrator/SKILL.md`)_
+<span class="c">(one line per skill in ~/.tengu/skills/, .tengu/skills/, skills/: the first tier with a name wins, as for agents)</span>
+
+<span class="k">## Tools</span>
+
+- `http_request`: Make an HTTP request.
+- `read_file`: Read a file.
+- `list_directory`: List directory contents.
+<span class="c">(every catalog tool, opt-ins included, then every MCP server tool)</span></pre></div>
+    <div class="tabpanel" id="tab-plan" hidden><pre><span class="k"># Tengu Current Plan</span>
+
+- phase: `active`
+
+<span class="k">## Steps</span>
+
+- `s1` agent=`crypto_researcher` depends_on=`-` goal: Get the SOL price and 24h volume from two sources.
+
+<span class="k">## JSON</span>
+
+```json
+{
+  <span class="k">"steps"</span>: [
+    {
+      <span class="k">"id"</span>: <span class="s">"s1"</span>,
+      <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>,
+      <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
+      <span class="k">"depends_on"</span>: []
+    }
+  ]
+}
+```
+<span class="c"># a step sees this text under "## Current execution plan (loaded from IPC `plan_state`)"</span></pre></div>
+    <div class="tabpanel" id="tab-json" hidden><pre><span class="c"># the two shapes serde accepts (PlannerVerdict, tag "kind")</span>
+{ <span class="k">"kind"</span>: <span class="s">"direct"</span>, <span class="k">"response"</span>: <span class="s">"&lt;text for the user&gt;"</span> }
+
+{ <span class="k">"kind"</span>: <span class="s">"plan"</span>,
+  <span class="k">"steps"</span>: [
+    { <span class="k">"id"</span>: <span class="s">"s1"</span>, <span class="k">"agent"</span>: <span class="s">"&lt;[agents.*] name&gt;"</span>, <span class="k">"goal"</span>: <span class="s">"&lt;one sentence&gt;"</span>,
+      <span class="k">"depends_on"</span>: [],                      <span class="c"># optional, default []</span>
+      <span class="k">"compose"</span>: {                            <span class="c"># optional: transient agent</span>
+        <span class="k">"base_agent"</span>: <span class="s">"&lt;[agents.*] name&gt;"</span>,
+        <span class="k">"skills"</span>: [],                          <span class="c"># replaces the base's skills</span>
+        <span class="k">"tools"</span>: [] } }                        <span class="c"># replaces the base's tools</span>
+  ] }</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-events">
+  <div class="sec-head">
+    <span class="kicker">Event bus</span>
+    <h2 id="s-events">What the TUI shows during a turn</h2>
+    <p>One broadcast channel (capacity 256) per orchestrator. The TUI prints the first seven as <code>orch:</code> system bubbles.</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip hands">plan</span><span><b>PlanCreated</b>orch: plan created (1 step). Also after every replan.</span></li>
+    <li><span class="chip hands">start</span><span><b>StepStarted</b>orch: ▶ s1 [crypto_researcher]</span></li>
+    <li><span class="chip ok">ok</span><span><b>StepSucceeded</b>orch: ✓ s1</span></li>
+    <li><span class="chip warn">fail</span><span><b>StepFailed</b>orch: ✗ s1 (attempt 1): the error. One per failed attempt.</span></li>
+    <li><span class="chip bad">out</span><span><b>StepExhausted</b>orch: ⊘ s1 exhausted: the last error.</span></li>
+    <li><span class="chip heart">again</span><span><b>ReplanTriggered</b>orch: ↻ replan — the error.</span></li>
+    <li><span class="chip data">end</span><span><b>PlanCompleted</b>orch: plan completed. Every path ends with one.</span></li>
+    <li><span class="chip data">opt-in</span><span><b>RagQueried · MetricsRecorded</b>Shown with <code>TENGU_TUI_RAG_DEBUG=1</code> / <code>TENGU_TUI_METRICS=1</code>.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>The planner cannot call tools.</b> With a system-prompt override the turn gets an empty tool list, no executor and no memory recall.</span></li>
+    <li><span><b>Only one engine.</b> <code>[orchestrator] engine</code> other than <code>"rag"</code> fails the config load.</span></li>
+    <li><span><b>Private agents stay private.</b> A block without a <code>description</code> never appears in the registry.</span></li>
+    <li><span><b>Memory trouble never blocks a turn.</b> A Postgres or embedding error leaves its block empty and the call goes on.</span></li>
+    <li><span><b>No self-recall.</b> Earlier messages are read before this message is stored.</span></li>
+    <li><span><b>Plans stay per session.</b> Each plan is keyed by its session id; clearing removes only the copy that turn stored.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">See what the planner saw</h2>
+    <p>Both files land in the directory you start <code>tengu</code> from. Per-layer sizes are debug log lines.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_RAG_DEBUG=1 tengu chat --sandbox lping</span>
+<span class="ln cmd"><span class="p">$ </span>rg '^### ' TENGU_PLANNER_REGISTRY.md</span>
+<span class="ln"><span class="hl">### crypto_researcher</span></span>
+<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md</span>
+<span class="ln cmd"><span class="p">$ </span>RUST_LOG=tengu=debug tengu chat --sandbox lping</span>
+<span class="ln cmd"><span class="p">$ </span>rg 'metrics.layer' ~/.tengu/logs/tengu.log</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>RagPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
+        <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, plan state, <code>TENGU_PLAN.md</code></td></tr>
+        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop; per-session plan guard</td></tr>
+        <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus</td></tr>
+        <tr><td><code>src/application/orchestrator/wiring.rs</code></td><td>the planner's chat port</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>wiring; the stripped planner turn</td></tr>
+        <tr><td><code>src/ports/orchestration.rs</code></td><td><code>Planner</code>, <code>PlannerVerdict</code></td></tr>
+        <tr><td><code>src/domain/plan.rs</code></td><td><code>Plan</code>, <code>Step</code>, <code>AgentCompose</code></td></tr>
+        <tr><td><code>skills/orchestrator/SKILL.md</code></td><td>the planner's system prompt</td></tr>
+        <tr><td><code>skills/orchestrator/plan_schema.json</code></td><td>the documented plan shape (not loaded by code)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: prompt builder + parse_verdict playground */
+(function () {
+  /* ---- prompt builder ---- */
+  function $(id) { return document.getElementById(id); }
+  var calls = Array.prototype.slice.call(document.querySelectorAll('input[name="call"]'));
+  var pg = $("pg"), layers = $("layers"), note = $("pb-note");
+  var knobs = ["turn", "recent", "xs", "ws", "xp"];
+  function val(id) { return +$(id).value; }
+  function row(cls, title, sub, on, tag) {
+    return '<div class="layer ' + cls + (on ? "" : " off") + '"><i></i><span><b>' + title + "</b><small>" + sub + "</small></span><em>" + tag + "</em></div>";
+  }
+  function render() {
+    knobs.forEach(function (k) { $(k + "-out").textContent = $(k).value; });
+    var replan = calls.filter(function (c) { return c.checked; })[0].value === "replan";
+    var mem = pg.checked, turn = val("turn"), n = val("recent"), xs = val("xs"), ws = val("ws"), xp = val("xp");
+    var prior = Math.min(turn - 1, n);
+    var h = [];
+    h.push(row("heart", "system: skills/orchestrator/SKILL.md", "body after the frontmatter", true, "always"));
+    h.push(row("", "## Planner registry (loaded from `TENGU_PLANNER_REGISTRY.md`)", "agents with a description, skills, tools", true, "always"));
+    var xsOn = mem && xs > 0;
+    h.push(row("brain", "## Cross-session message recall", xsOn ? "top " + xs + " earlier user messages, any session, ≤ 400 chars each" : (mem ? "off: cross_session_msg_top_k = 0" : "off: no postgres_memory"), xsOn, xsOn ? "if hits" : "off"));
+    h.push(row("", "## Recent user messages this session", prior > 0 ? prior + " earlier message" + (prior === 1 ? "" : "s") + " (cap " + n + "), ≤ 400 chars each" : "empty on the first turn", prior > 0, prior > 0 ? prior + " lines" : "off"));
+    if (!replan) {
+      var wsOn = mem && ws > 0;
+      h.push(row("brain", "## Recent step outputs (this session)", wsOn ? "top " + ws + " step summaries with this session_id" : (mem ? "off: within_session_output_top_k = 0" : "off: no postgres_memory"), wsOn, wsOn ? "if hits" : "off"));
+      h.push(row("you", "## User message (current turn)", "your message, verbatim", true, "always"));
+    } else {
+      var xpOn = mem && xp > 0;
+      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs, any session; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
+      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries, prior plan JSON", true, "always"));
+      h.push(row("you", "## Original user message", "the same message as plan()", true, "always"));
+    }
+    layers.innerHTML = h.join("");
+    note.innerHTML = replan
+      ? "<b>replan()</b> does not store the message again and has no session-outputs block."
+      : (mem ? "<b>plan()</b> embeds the message once, reads the recall lanes, then stores the message in <code>agentic_memory</code>." : "<b>plan()</b> without <code>postgres_memory</code>: no recall store, so only the in-memory ring adds context.");
+  }
+  calls.forEach(function (c) { c.addEventListener("change", render); });
+  pg.addEventListener("change", render);
+  knobs.forEach(function (k) { $(k).addEventListener("input", render); });
+  render();
+
+  /* ---- parse_verdict playground ---- */
+  var PRESETS = {
+    raw: '{"kind":"plan","steps":[{"id":"s1","agent":"crypto_researcher","goal":"Get the SOL price.","depends_on":[]}]}',
+    fenced: '```json\n{"kind":"direct","response":"Hi. Ask me about pools."}\n```',
+    prose: 'Here\'s my plan: {"kind": "direct", "response": "hi there"}. Let me know if that works!',
+    chat: "Sure, I'll do that.",
+    broken: '{"kind":"plan","steps":[',
+    empty: ""
+  };
+  var raw = $("raw"), out = $("verdict-out");
+  var rungs = Array.prototype.slice.call(document.querySelectorAll("#ladder li"));
+  function isStr(x) { return typeof x === "string"; }
+  function asVerdict(text) {
+    var v;
+    try { v = JSON.parse(text); } catch (e) { return null; }
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    if (v.kind === "direct") return isStr(v.response) ? { kind: "direct", response: v.response } : null;
+    if (v.kind === "plan" && Array.isArray(v.steps)) {
+      var steps = [];
+      for (var i = 0; i < v.steps.length; i++) {
+        var s = v.steps[i];
+        if (!s || typeof s !== "object" || !isStr(s.id) || !isStr(s.agent) || !isStr(s.goal)) return null;
+        var deps = s.depends_on === undefined ? [] : s.depends_on;
+        if (!Array.isArray(deps) || !deps.every(isStr)) return null;
+        var st = { id: s.id, agent: s.agent, goal: s.goal, depends_on: deps };
+        if (s.compose !== undefined && s.compose !== null) {
+          var c = s.compose;
+          if (typeof c !== "object" || !isStr(c.base_agent)) return null;
+          st.compose = { base_agent: c.base_agent, skills: c.skills || [], tools: c.tools || [] };
+        }
+        steps.push(st);
+      }
+      return { kind: "plan", steps: steps };
+    }
+    return null;
+  }
+  function firstBalanced(s) {
+    var start = -1, depth = 0, inStr = false, esc = false;
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i];
+      if (inStr) { if (esc) esc = false; else if (ch === "\\") esc = true; else if (ch === '"') inStr = false; continue; }
+      if (ch === "{") { if (depth === 0) start = i; depth++; }
+      else if (ch === "}") { depth--; if (depth === 0 && start >= 0) return s.slice(start, i + 1); }
+      else if (ch === '"') inStr = true;
+    }
+    return null;
+  }
+  function strip(t, p) { return t.indexOf(p) === 0 ? t.slice(p.length) : t; }
+  function parse(text) {
+    var t = text.trim(), tried = [], v;
+    v = asVerdict(t); tried.push(!!v); if (v) return { hit: 1, v: v };
+    var s = strip(strip(t, "```json"), "```");
+    if (s.slice(-3) === "```") s = s.slice(0, -3);
+    v = asVerdict(s.trim()); if (v) return { hit: 2, v: v };
+    var j = firstBalanced(t);
+    v = j ? asVerdict(j) : null; if (v) return { hit: 3, v: v };
+    if (t.length) return { hit: 4, v: { kind: "direct", response: t } };
+    return { hit: 5, v: null };
+  }
+  function show() {
+    var r = parse(raw.value);
+    rungs.forEach(function (li) {
+      var k = +li.getAttribute("data-k"), st = li.querySelector(".st");
+      li.className = "";
+      if (k < r.hit) { li.className = k === 5 ? "" : "miss"; st.textContent = "no"; }
+      else if (k === r.hit) { li.className = k === 5 ? "fail" : "hit"; st.textContent = k === 5 ? "error" : "match"; }
+      else { li.className = "skip"; st.textContent = ""; }
+    });
+    if (r.v) {
+      out.textContent = "PlannerVerdict:\n" + JSON.stringify(r.v, null, 2) + (r.hit === 4 ? "\n\n(warn: planner LLM returned non-JSON text; wrapping as Direct verdict)" : "");
+    } else {
+      out.textContent = "Err: planner LLM returned empty/unparseable output: EOF while parsing a value at line 1 column 0 (raw: \"" + raw.value.replace(/\n/g, "\\n") + "\")\n→ reply: System error: orchestrator initial call failed: …";
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".presets .btn"), function (b) {
+    b.addEventListener("click", function () {
+      raw.value = PRESETS[b.getAttribute("data-p")];
+      Array.prototype.forEach.call(document.querySelectorAll(".presets .btn"), function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      show();
+    });
+  });
+  raw.addEventListener("input", show);
+  raw.value = PRESETS.prose;
+  document.querySelector('.presets .btn[data-p="prose"]').setAttribute("aria-pressed", "true");
+  show();
+})();
+</script>
+</body>
+</html>

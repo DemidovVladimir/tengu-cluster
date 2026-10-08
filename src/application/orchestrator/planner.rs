@@ -39,7 +39,7 @@ pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
         return Ok(v);
     }
 
-    // Path 3: JSON embedded in prose. Find the largest balanced {...}
+    // Path 3: JSON embedded in prose. Take the first balanced {...}
     // substring (considers brace nesting + string literals with escapes
     // so "{" inside a string doesn't unbalance the tracker).
     if let Some(json) = extract_balanced_json_object(trimmed) {

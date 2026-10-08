@@ -523,8 +523,14 @@ struct TelegramSession {
     // looks up agent inputs by name through the same `Arc<RwLock<...>>`.
     //
     // `_memory_manager` is held so it stays alive for the lifetime of the
-    // orchestrator (which holds an `Arc<MemoryManager>` internally).
-    orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>>,
+    // orchestrators (each holds an `Arc<MemoryManager>` internally).
+    //
+    // `orchestrator_factory` is `Some` when `[orchestrator]` is configured;
+    // `orchestrators` holds one orchestrator per sender id, each with its
+    // own session id (`orchestrator_for`), dropped with the sender's idle
+    // state (`evict_idle_users`).
+    orchestrator_factory: Option<Arc<dyn crate::ports::orchestration::ChatServiceFactory>>,
+    orchestrators: HashMap<String, Arc<crate::application::orchestrator::Orchestrator>>,
     orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots,
     _memory_manager: Arc<crate::application::memory::manager::MemoryManager>,
 
@@ -781,22 +787,19 @@ impl TelegramSession {
         let memory_manager = memory_manager_early;
         let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
             Arc::new(std::sync::RwLock::new(HashMap::new()));
-        let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
-            let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
-                &orchestrator_snapshots,
-            ));
-            let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
-                Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn));
-            crate::bootstrap::orchestrator::build_orchestrator(
-                &config,
-                factory,
-                Arc::clone(&memory_manager),
-                crate::bootstrap::orchestrator::resolve_session_id(),
-            )
-            .map(Arc::new)
-        };
-        if orchestrator.is_some() {
-            info!("Telegram orchestrator constructed with per-message snapshot factory");
+        // One orchestrator per sender, built on first use (`orchestrator_for`):
+        // each has its own session id, so one sender's planner messages and
+        // recall never reach another's prompt.
+        let orchestrator_factory: Option<Arc<dyn crate::ports::orchestration::ChatServiceFactory>> =
+            config.orchestrator.is_some().then(|| {
+                let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
+                    &orchestrator_snapshots,
+                ));
+                Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn))
+                    as Arc<dyn crate::ports::orchestration::ChatServiceFactory>
+            });
+        if orchestrator_factory.is_some() {
+            info!("Telegram orchestration on: one orchestrator per sender, built on first message");
         }
 
         let session = TelegramSession {
@@ -818,7 +821,8 @@ impl TelegramSession {
                 None
             },
             secret_registry,
-            orchestrator,
+            orchestrator_factory,
+            orchestrators: HashMap::new(),
             orchestrator_snapshots,
             _memory_manager: memory_manager,
             user_states: HashMap::new(),
@@ -842,39 +846,6 @@ impl TelegramSession {
         mut inbound_rx: tokio::sync::mpsc::Receiver<InboundMessage>,
     ) -> Result<()> {
         rt.block_on(async {
-            // Task 5.3 — quiet event rendering. Subscribe to the orchestrator
-            // bus (if configured) and log progress events at `info!` level so
-            // operators can observe harness-owned orchestration while the
-            // actual per-message dispatch wiring is pending. When the
-            // factory-closure refactor lands, replace this with a per-turn
-            // subscription that edits a "Thinking..." message in place (or a
-            // single-response fallback if teloxide edit-in-place is not wired
-            // into `TelegramPipe`).
-            if let Some(orch) = self.orchestrator.as_ref() {
-                let mut rx = orch.subscribe();
-                tokio::spawn(async move {
-                    use crate::application::orchestrator::OrchestratorEvent;
-                    loop {
-                        match rx.recv().await {
-                            Ok(OrchestratorEvent::StepStarted { step_id, agent }) => {
-                                info!(step = %step_id.0, agent = %agent, "orch StepStarted");
-                            }
-                            Ok(OrchestratorEvent::ReplanTriggered { reason }) => {
-                                info!(reason = %reason, "orch ReplanTriggered");
-                            }
-                            Ok(OrchestratorEvent::PlanCompleted { cancelled, .. }) => {
-                                info!(cancelled, "orch PlanCompleted");
-                            }
-                            Ok(_) => {}
-                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                warn!(dropped = n, "orch event subscriber lagged");
-                            }
-                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                        }
-                    }
-                });
-            }
-
             let ctrl_c = tokio::signal::ctrl_c();
             tokio::pin!(ctrl_c);
 
@@ -938,6 +909,13 @@ impl TelegramSession {
             self.user_states.remove(key);
             self.user_state_last_active.remove(key);
         }
+        // A sender with no live state left loses its orchestrator too (state
+        // keys are `<sender>:<agent>`).
+        let live = &self.user_state_last_active;
+        self.orchestrators.retain(|sender, _| {
+            let prefix = format!("{sender}:");
+            live.keys().any(|k| k.starts_with(&prefix))
+        });
         if !idle_keys.is_empty() {
             info!(
                 evicted = idle_keys.len(),
@@ -1197,7 +1175,7 @@ impl TelegramSession {
         //     directly"), UNLESS `orchestrator.route_explicit_agents = true`
         //     which flips the toggle so the planner sees everything.
         let explicit_route = target_agent_id != self.default_agent_id;
-        let route_through_orchestrator = self.orchestrator.is_some()
+        let route_through_orchestrator = self.orchestrator_factory.is_some()
             && (!explicit_route
                 || self
                     .config
@@ -1452,8 +1430,34 @@ impl TelegramSession {
     /// dispatch `user_content` through `Orchestrator::handle`. Hot-reload is
     /// performed for every agent here so the planner can delegate to agents
     /// other than the initial target without stale skill/tool state.
+    /// `sender`'s orchestrator, built on first use; `None` when no
+    /// `[orchestrator]` is configured. Each sender gets its own session id
+    /// (`telegram_session_id`), so planner messages and recall stay per
+    /// sender. Its bus events are logged at `info`.
+    fn orchestrator_for(
+        &mut self,
+        sender: &str,
+    ) -> Option<Arc<crate::application::orchestrator::Orchestrator>> {
+        if let Some(o) = self.orchestrators.get(sender) {
+            return Some(Arc::clone(o));
+        }
+        let factory = Arc::clone(self.orchestrator_factory.as_ref()?);
+        let session_id = telegram_session_id(sender);
+        let orch = Arc::new(crate::bootstrap::orchestrator::build_orchestrator(
+            &self.config,
+            factory,
+            Arc::clone(&self._memory_manager),
+            session_id.clone(),
+        )?);
+        info!(sender, session_id = %session_id, "Telegram orchestrator built for sender");
+        log_orchestrator_events(&orch);
+        self.orchestrators
+            .insert(sender.to_string(), Arc::clone(&orch));
+        Some(orch)
+    }
+
     async fn execute_orchestrator_turn(&mut self, sender: &Recipient, user_content: &str) {
-        let orchestrator = match self.orchestrator.clone() {
+        let orchestrator = match self.orchestrator_for(&sender.peer_id) {
             Some(o) => o,
             None => return,
         };
@@ -2109,10 +2113,53 @@ fn telegram_routes<'a>(
             routes.insert(role, id.to_string());
         }
     }
+    // Keyed the way `parse_agent_routing` normalises what the user types
+    // (lowercase, `-` → `_`), so `@lp-exec:` reaches agent `lp-exec`.
     for (id, _) in &reachable {
-        routes.insert(id.to_string(), id.to_string());
+        routes.insert(id.to_lowercase().replace('-', "_"), id.to_string());
     }
     routes
+}
+
+/// One sender's planner / runner session id: `TENGU_SESSION_ID` + `-` +
+/// sender when that override is set (so two senders never share one),
+/// else a fresh UUID.
+fn telegram_session_id(sender: &str) -> String {
+    session_id_for_sender(std::env::var("TENGU_SESSION_ID").ok(), sender)
+}
+
+fn session_id_for_sender(base: Option<String>, sender: &str) -> String {
+    match base.filter(|s| !s.trim().is_empty()) {
+        Some(base) => format!("{base}-{sender}"),
+        None => uuid::Uuid::new_v4().to_string(),
+    }
+}
+
+/// Log an orchestrator's progress events at `info` so operators can follow
+/// planner-driven turns from the bot's log.
+fn log_orchestrator_events(orch: &crate::application::orchestrator::Orchestrator) {
+    let mut rx = orch.subscribe();
+    tokio::spawn(async move {
+        use crate::application::orchestrator::OrchestratorEvent;
+        loop {
+            match rx.recv().await {
+                Ok(OrchestratorEvent::StepStarted { step_id, agent }) => {
+                    info!(step = %step_id.0, agent = %agent, "orch StepStarted");
+                }
+                Ok(OrchestratorEvent::ReplanTriggered { reason }) => {
+                    info!(reason = %reason, "orch ReplanTriggered");
+                }
+                Ok(OrchestratorEvent::PlanCompleted { cancelled, .. }) => {
+                    info!(cancelled, "orch PlanCompleted");
+                }
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!(dropped = n, "orch event subscriber lagged");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }
 
 /// Where plain messages go: the `default = true` agent, else the first
@@ -2259,5 +2306,38 @@ mod tests {
         let private = agents("[agents.xm_weekend]\nengine = \"openrouter\"\nmodel = \"m\"\n");
         assert_eq!(telegram_default_agent(view(&private)), None);
         assert!(telegram_routes(view(&private)).is_empty());
+
+        // Ids with `-` or capitals: reached by what the user types, which
+        // `parse_agent_routing` lowercases and turns `-` into `_`.
+        let dashed = agents(
+            "[agents.Lp-exec]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"lp\"\n",
+        );
+        let routes = telegram_routes(view(&dashed));
+        let (role, msg) = crate::adapters::inbound::channel::parse_agent_routing(
+            "@Lp-exec: open 0.5 SOL",
+            Some(&routes),
+        );
+        assert_eq!(routes[role.as_deref().unwrap()], "Lp-exec");
+        assert_eq!(msg, "open 0.5 SOL");
+        let (implicit, _) =
+            crate::adapters::inbound::channel::parse_agent_routing("lp-exec: hi", Some(&routes));
+        assert_eq!(implicit.as_deref(), Some("lp_exec"));
+    }
+
+    /// Two senders never share a planner session: an override gets the sender
+    /// appended, no override gives each sender its own UUID.
+    #[test]
+    fn each_sender_gets_its_own_session_id() {
+        assert_eq!(session_id_for_sender(Some("ops".into()), "111"), "ops-111");
+        assert_ne!(
+            session_id_for_sender(Some("ops".into()), "111"),
+            session_id_for_sender(Some("ops".into()), "222")
+        );
+        let (a, b) = (
+            session_id_for_sender(None, "111"),
+            session_id_for_sender(Some("  ".into()), "222"),
+        );
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 36, "a UUID: {a}");
     }
 }

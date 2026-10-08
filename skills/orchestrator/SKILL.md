@@ -28,7 +28,7 @@ The CORRECT shape for "I don't have memory information" is:
 
 If you would normally write a sentence, wrap it in `{"kind":"direct","response":"..."}` instead.
 
-Decide between two JSON outputs. Your response MUST validate against `plan_schema.json` in this directory. Anything else is retried up to 3 times with the validator error appended.
+Decide between two JSON outputs. Your response MUST match `plan_schema.json` in this directory: it is parsed once (raw JSON, a fenced block, or the first JSON object in the text) and not retried. Prose with no JSON becomes a direct reply; an empty reply fails the turn.
 
 ### Direct response (for simple questions, acknowledgements, clarifications)
 
@@ -52,7 +52,7 @@ Decide between two JSON outputs. Your response MUST validate against `plan_schem
 }
 ```
 
-Set `depends_on` to the ids of prior steps whose output this step needs. Parallel steps (no unmet dependencies) execute concurrently, so keep `depends_on` minimal.
+Set `depends_on` to the ids of prior steps whose output this step needs. Parallel steps (no unmet dependencies) execute concurrently, so keep `depends_on` minimal. The reply is the last step's output; when several steps end the plan (nothing depends on them), their outputs are joined in plan order, one section per step — add a final step that depends on them when the reply should be one synthesised answer.
 
 ## Rules
 

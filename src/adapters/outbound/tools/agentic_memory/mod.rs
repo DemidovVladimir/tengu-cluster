@@ -305,16 +305,22 @@ impl AgenticMemoryTool {
             .or_else(|| ctx.agent_config.map(|a| a.model.clone()));
         let role = opt_str(args, "role").unwrap_or(kind);
 
+        // Embedded like every other event write (step summaries, planner
+        // messages): captures used to be stored text-only, so vector recall
+        // (`embedding IS NOT NULL`) never found them. Fail-soft: no key or an
+        // embed error stores text-only.
+        let embedding = embed_query(content).await;
         let store = Self::store().await?;
         store.ensure_schema().await?;
         let id = store
-            .insert_event(
+            .insert_event_with_embedding(
                 session_id.as_deref(),
                 agent.as_deref(),
                 role,
                 kind,
                 content,
                 &metadata,
+                embedding.as_deref(),
             )
             .await?;
         Ok(format!(
@@ -607,6 +613,9 @@ impl PostgresMemoryStore {
         Ok(())
     }
 
+    // Text-only insert: the live smoke test's; every runtime write embeds
+    // (`insert_event_with_embedding`).
+    #[cfg(test)]
     async fn insert_event(
         &self,
         session_id: Option<&str>,

@@ -201,6 +201,14 @@ impl Tool for ManageSkillTool {
         let workspace = ctx.workspace.to_path_buf();
         let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
 
+        // The directory this action writes may be outside the workspace (the
+        // managed tier, `~/.tengu/skills`): it needs its own write grant.
+        // Only the workspace was checked, so any agent could rewrite a
+        // managed skill every sandbox loads.
+        if let Some(dir) = target_skill_dir(&args, &workspace)? {
+            ctx.scope.check_fs_write(&dir)?;
+        }
+
         match args.action.as_str() {
             "create" => do_create(&args, &workspace),
             "edit_body" => do_edit_body(&args, &workspace),
@@ -963,6 +971,22 @@ fn tier_root(workspace: &Path, tier: &str) -> Result<PathBuf> {
     }
 }
 
+/// The skill directory `args` writes: `create` and a tiered `delete` name
+/// their tier (default project); the other actions edit the skill where the
+/// three-tier walk finds it. `None` when nothing is there to write yet (the
+/// action itself then reports it).
+fn target_skill_dir(args: &Args, workspace: &Path) -> Result<Option<PathBuf>> {
+    let tiered = |tier: &str| tier_root(workspace, tier).map(|r| Some(r.join(&args.name)));
+    match args.action.as_str() {
+        "create" => tiered(args.tier.as_deref().unwrap_or("project")),
+        "delete" => match args.tier.as_deref() {
+            Some(tier) => tiered(tier),
+            None => Ok(Some(workspace.join("skills").join(&args.name))),
+        },
+        _ => Ok(locate_skill_dir(&args.name, workspace)),
+    }
+}
+
 fn collision_candidates(workspace: &Path, name: &str) -> Vec<PathBuf> {
     let mut out = vec![
         workspace.join("skills").join(name),
@@ -1051,6 +1075,46 @@ impl Drop for TmpDirGuard {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// Writing the managed tier needs a write grant for `~/.tengu/skills`:
+    /// a scope that grants only the workspace is refused before anything is
+    /// written (it used to pass on the workspace check alone).
+    #[tokio::test]
+    async fn managed_tier_needs_its_own_write_grant() {
+        use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
+        let ws = TempDir::new().unwrap();
+        let scope = crate::domain::scope::ToolScope {
+            fs_roots: vec![ws.path().to_path_buf()],
+            ..Default::default()
+        };
+        let harness = TestHarness::with_scope(ws.path(), scope);
+        let name = format!("scope-probe-{}", uuid::Uuid::new_v4().simple());
+        let managed = tier_root(ws.path(), "managed").unwrap().join(&name);
+        let tool = ManageSkillTool::new();
+        let out = tool
+            .execute(
+                &serde_json::json!({
+                    "action": "create", "name": name, "tier": "managed",
+                    "description": "probe", "body": "probe body"
+                }),
+                &harness.ctx(),
+            )
+            .await;
+        let created = managed.exists();
+        let _ = std::fs::remove_dir_all(&managed);
+        assert!(out.is_err(), "managed create without a grant: {out:?}");
+        assert!(!created, "nothing written to the managed tier");
+        // The project tier is inside the workspace grant.
+        tool.execute(
+            &serde_json::json!({
+                "action": "create", "name": name,
+                "description": "probe", "body": "probe body"
+            }),
+            &harness.ctx(),
+        )
+        .await
+        .expect("project tier");
+    }
 
     fn write_skill(workspace: &Path, name: &str, editable: Option<bool>, body: &str) -> PathBuf {
         let skill_dir = workspace.join("skills").join(name);

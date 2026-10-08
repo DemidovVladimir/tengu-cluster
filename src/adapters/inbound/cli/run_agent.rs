@@ -11,7 +11,6 @@ use crate::config::Config;
 
 #[cfg(feature = "postgres_memory")]
 async fn try_persist_agentic_step_summary(
-    parent_config: &crate::config::Config,
     session_id: &str,
     step_id: &str,
     summary: &str,
@@ -20,7 +19,9 @@ async fn try_persist_agentic_step_summary(
         Ok(api_key) => {
             let embedder = crate::adapters::outbound::memory::embedder::Embedder::new(
                 api_key,
-                parent_config.memory.embedding_model.clone(),
+                // Open Brain is `vector(1536)`: always the pinned model, as
+                // the planner and the `agentic_memory` tool embed with.
+                crate::domain::memory::DEFAULT_EMBEDDING_MODEL.to_string(),
             );
             match embedder.embed(summary).await {
                 Ok(v) => Some(v),
@@ -70,7 +71,8 @@ async fn try_persist_agentic_step_summary(
 ///      bridged `compress_and_store` summary is read from the summary file,
 ///      and the engine ends the CLI run right after that call)
 ///    - `compress_and_store` invoked (capture summary, exit clean)
-///    - the agent's `limits.max_tool_rounds` exceeded (return Failed status)
+///    - the agent's `limits.max_tool_rounds` exceeded (Ok when the model wrote
+///      any text — it becomes the summary — else Failed)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
 ///    per-turn `metrics` and the tool activity `tools` (every call and its
 ///    outcome, bridged Claude Code calls included).
@@ -226,10 +228,15 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         input.model.clone()
     };
 
-    // ----- Compose system prompt: base + skill bodies + suffix -----
+    // ----- Compose system prompt: base + identity + skill bodies + suffix -----
     let mut system_prompt = String::from(BASE_AGENT_TEMPLATE);
+    let identity = identity_block(&spec);
+    if !identity.is_empty() {
+        system_prompt.push_str("\n\n---\n\n");
+        system_prompt.push_str(&identity);
+    }
     for skill_name in &spec.skill_packages {
-        match load_skill_body_three_tier(skill_name) {
+        match load_skill_body_three_tier(skill_name, &workspace) {
             Some(body) => {
                 system_prompt.push_str("\n\n---\n\n");
                 system_prompt.push_str(&body);
@@ -501,7 +508,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 #[cfg(feature = "postgres_memory")]
                 {
                     let _ = try_persist_agentic_step_summary(
-                        &parent_config,
                         &input.session_id,
                         &input.step_id,
                         &extracted_summary,
@@ -587,13 +593,8 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             compress_called = true;
             #[cfg(feature = "postgres_memory")]
             {
-                let _ = try_persist_agentic_step_summary(
-                    &parent_config,
-                    &input.session_id,
-                    &input.step_id,
-                    &text,
-                )
-                .await;
+                let _ = try_persist_agentic_step_summary(&input.session_id, &input.step_id, &text)
+                    .await;
             }
             summary = Some(text);
         }
@@ -609,14 +610,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // unchanged — recall is best-effort, not a barrier to step completion.
     #[cfg(feature = "postgres_memory")]
     if !compress_called && !summary.trim().is_empty() {
-        match try_persist_agentic_step_summary(
-            &parent_config,
-            &input.session_id,
-            &input.step_id,
-            &summary,
-        )
-        .await
-        {
+        match try_persist_agentic_step_summary(&input.session_id, &input.step_id, &summary).await {
             Ok(id) => tracing::info!(
                 entry_id = %id,
                 session_id = %input.session_id,
@@ -650,7 +644,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // Pass:    no compress_and_store but text produced → Ok (model answered usefully)
     // Fail:    no compress_and_store AND no text       → Failed (DagExecutor retries)
     //
-    // The strict-doctrine version of REDESIGN §7 would flip the second row
+    // The strict-doctrine version of the original compress_and_store spec would flip the second row
     // to Failed too; we deliberately stay pragmatic — many models produce
     // good answers in pure-text turns without calling the protocol tool.
     if !compress_called {
@@ -742,27 +736,18 @@ When you have completed your task, your FINAL action MUST be to call the \
 `compress_and_store` tool with a concise `summary` of what you accomplished. \
 Failure to call it will be treated as task failure.";
 
-/// Three-tier skill loader: workspace root → workspace dotdir → managed
-/// (~/.tengu/skills). Returns the SKILL.md body with frontmatter stripped,
-/// from the FIRST tier that has the file (highest precedence wins).
-fn load_skill_body_three_tier(name: &str) -> Option<String> {
-    let mut candidates: Vec<std::path::PathBuf> = vec![
-        std::path::PathBuf::from("skills")
-            .join(name)
-            .join("SKILL.md"),
-        std::path::PathBuf::from(".tengu")
-            .join("skills")
-            .join(name)
-            .join("SKILL.md"),
-    ];
-    if let Some(home) = dirs_next::home_dir() {
-        candidates.push(
-            home.join(".tengu")
-                .join("skills")
-                .join(name)
-                .join("SKILL.md"),
-        );
-    }
+/// A skill's SKILL.md body (frontmatter stripped) from the first of the
+/// skill loader's directories that has it (`skills::registry::skill_directories`:
+/// managed, workspace dotdir, workspace `skills/`, the repo's `skills/`).
+fn load_skill_body_three_tier(name: &str, workspace: &std::path::Path) -> Option<String> {
+    // The skill loader's directories and order (managed first): a step used
+    // to read the repo's `skills/` first, so it could load another body than
+    // the chat agent and the planner registry.
+    let candidates: Vec<std::path::PathBuf> =
+        crate::application::skills::registry::skill_directories(workspace)
+            .into_iter()
+            .map(|dir| dir.join(name).join("SKILL.md"))
+            .collect();
 
     for path in &candidates {
         if !path.is_file() {
@@ -792,9 +777,70 @@ fn load_skill_body_three_tier(name: &str) -> Option<String> {
     None
 }
 
+/// The agent's own name, `role` and `[agents.<a>.identity] instructions`,
+/// as a chat turn shows them (`skills::registry::build_system_prompt`) — a
+/// plan step used to run without them. Empty when none is set.
+fn identity_block(spec: &crate::config::AgentConfig) -> String {
+    let mut parts = Vec::new();
+    if let Some(name) = spec
+        .identity
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        parts.push(format!("You are {name}."));
+    }
+    if let Some(role) = spec
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+    {
+        parts.push(format!(
+            "Your role: {}.",
+            role.to_lowercase().replace('-', "_")
+        ));
+    }
+    if let Some(text) = spec
+        .identity
+        .instructions
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+    {
+        parts.push(
+            crate::application::chat::prompt_budget::truncate_to_token_budget(
+                text,
+                spec.prompt_budget.max_file_tokens,
+            ),
+        );
+    }
+    parts.join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A step's prompt carries the agent's identity (name, role,
+    /// instructions); nothing when none is set.
+    #[test]
+    fn identity_reaches_the_step_prompt() {
+        let spec: crate::config::AgentConfig = toml::from_str(
+            "engine = \"local\"\nmodel = \"m\"\nrole = \"Crypto-Researcher\"\n[identity]\nname = \"Kai\"\ninstructions = \"Always cite the pool address in full.\"\n",
+        )
+        .unwrap();
+        let block = identity_block(&spec);
+        assert!(block.contains("You are Kai."), "{block}");
+        assert!(block.contains("Your role: crypto_researcher."), "{block}");
+        assert!(
+            block.contains("Always cite the pool address in full."),
+            "{block}"
+        );
+        let bare: crate::config::AgentConfig =
+            toml::from_str("engine = \"local\"\nmodel = \"m\"\n").unwrap();
+        assert_eq!(identity_block(&bare), "");
+    }
 
     /// The step summary a Claude Code bridge leaves: none until
     /// `compress_and_store` wrote one; whitespace is none.

@@ -22,7 +22,7 @@ impl StepId {
 /// agent for THIS run only. The override is not persisted; the config on
 /// disk is unchanged.
 ///
-/// Use case (REDESIGN §11): user asks a question no listed agent fits.
+/// Use case (the C → B fallback): user asks a question no listed agent fits.
 /// Planner emits a Direct asking the user to confirm the closest match
 /// or describe what they need. On the next turn, when the user confirms,
 /// the planner emits a Plan whose single step has `compose: Some(...)`
@@ -174,6 +174,17 @@ impl Plan {
         }
     }
 
+    /// Steps no other step depends on, in plan order: the outputs that make
+    /// the reply (one leaf, or parallel leaves with no join step).
+    pub fn leaves(&self) -> Vec<&Step> {
+        let has_dep_on: HashSet<&StepId> = self.steps.iter().flat_map(|s| &s.depends_on).collect();
+        self.steps
+            .iter()
+            .filter(|s| !has_dep_on.contains(&s.id))
+            .collect()
+    }
+
+    #[cfg(test)]
     pub fn single_leaf(&self) -> Option<&Step> {
         let has_dep_on: HashSet<&StepId> = self.steps.iter().flat_map(|s| &s.depends_on).collect();
         let mut leaves = self.steps.iter().filter(|s| !has_dep_on.contains(&s.id));

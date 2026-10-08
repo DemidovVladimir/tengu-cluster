@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tor egress · Tengu</title>
+<meta name="description" content="How every request Tengu makes leaves through one egress policy: Tor through a local Arti proxy by default, gated per hop, audited as JSONL.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: request router, sandbox shelf, deploy tabs, error classes */
+  .ctl { display: grid; gap: 12px 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); align-items: start; }
+  .ctl select, .ctl input[type="text"] { font: inherit; font-size: 0.84rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); width: 100%; }
+  .ctl input[type="text"] { font-family: var(--font-mono); font-size: 0.8rem; }
+  .tick { display: flex !important; gap: 8px; align-items: center; }
+  .grp { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 12px; background: var(--sunk); }
+  .grp > b { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  .ex { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ex button { font-family: var(--font-mono); font-size: 0.74rem; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 2px 8px; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+  .ex button:hover { border-color: var(--accent); }
+  .route { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .route .hop { font-family: var(--font-mono); font-size: 0.78rem; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; background: var(--panel); color: var(--ink); animation: pop .35s ease both; overflow-wrap: anywhere; }
+  .route .hop.guard { border-color: var(--guard); background: var(--guard-soft); color: var(--guard); }
+  .route .hop.hands { border-color: var(--hands); background: var(--hands-soft); color: var(--hands); }
+  .route .hop.heart { border-color: var(--heart); background: var(--heart-soft); color: var(--heart); }
+  .route .hop.bad { border-color: var(--bad); color: var(--bad); }
+  .route .hop.warn { border-color: var(--warn); color: var(--warn); border-style: dashed; }
+  .route .arr { color: var(--faint); font-family: var(--font-mono); }
+  .route .hop:nth-child(3) { animation-delay: .1s } .route .hop:nth-child(5) { animation-delay: .2s } .route .hop:nth-child(7) { animation-delay: .3s } .route .hop:nth-child(9) { animation-delay: .4s }
+  @keyframes pop { from { transform: translateY(5px); opacity: 0 } to { transform: none; opacity: 1 } }
+  .why { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--muted); font-size: 0.86rem; }
+  .why code { overflow-wrap: anywhere; }
+  .out-json { font-size: 0.74rem; max-height: 340px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+  .shelf { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+  .sbx { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 6px; align-content: start; }
+  .sbx h3 { font-family: var(--font-mono); font-size: 0.9rem; font-weight: 500; }
+  .sbx.tor { border-top: 3px solid var(--guard); } .sbx.open { border-top: 3px solid var(--warn); }
+  .sbx .chip { justify-self: start; }
+  .ctl.one { grid-template-columns: minmax(0, 1fr); }
+  .sbx small { color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+  .sbx .hosts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .sbx .hosts span { font-family: var(--font-mono); font-size: 0.72rem; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; background: var(--sunk); overflow-wrap: anywhere; }
+  .shelf.in-view .sbx { animation: pop .45s ease both; }
+  .shelf.in-view .sbx:nth-child(2) { animation-delay: .07s } .shelf.in-view .sbx:nth-child(3) { animation-delay: .14s }
+  .shelf.in-view .sbx:nth-child(4) { animation-delay: .21s } .shelf.in-view .sbx:nth-child(5) { animation-delay: .28s }
+  .shelf.in-view .sbx:nth-child(6) { animation-delay: .35s } .shelf.in-view .sbx:nth-child(7) { animation-delay: .42s }
+  .shelf.in-view .sbx:nth-child(8) { animation-delay: .49s } .shelf.in-view .sbx:nth-child(9) { animation-delay: .56s }
+
+  .tp { padding: 14px 16px; display: grid; gap: 10px; }
+  .tp .mini { overflow-x: auto; }
+  .tp svg { display: block; width: 100%; min-width: 560px; height: auto; }
+  .tp p { color: var(--muted); font-size: 0.88rem; }
+
+  .cls { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); }
+  .cls div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); display: grid; gap: 3px; font-size: 0.82rem; color: var(--muted); }
+  .cls b { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); font-weight: 500; }
+  .cls i { font-style: normal; font-family: var(--font-mono); font-size: 0.74rem; color: var(--guard); }
+  .cls .re { border-left: 4px solid var(--ok); }
+  .cls .re i { color: var(--ok); }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">守</span> Safety · Egress</div>
+  <h1>Tor egress</h1>
+  <p class="lede">Every request Tengu makes leaves through one <b>egress policy</b>. By default that is Tor, through a local Arti proxy, with no direct fallback. A sandbox opts out with <code>network = "open"</code>.</p>
+  <ul class="facts">
+    <li>default <b>network = "tor"</b></li>
+    <li>proxy <b>socks5h://127.0.0.1:9050</b></li>
+    <li>≤ <b>10</b> redirect hops, each re-checked</li>
+    <li>audit <b>&lt;TENGU_HOME&gt;/logs/egress.jsonl</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> LLM traffic</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tool traffic</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> gates and the proxy</li>
+    <li><span class="chip data">data</span> config and audit</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One policy per process</span>
+    <h2 id="s-flow">How a request leaves</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 510" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">The sandbox [egress] section is resolved and installed as one policy, handed to child processes as TENGU_EGRESS. Tool and shell traffic passes a URL and host gate; LLM, Claude CLI, MCP and Telegram traffic is only proxied. With a proxy, traffic goes through Arti, lyrebird-rs and Tor; without one it goes direct. Tool hops and shell commands are audited.</title>
+        <path class="e" id="p-cfg-inst" d="M190 47 L240 47" data-at="2"/>
+        <path class="e" id="p-inst-child" d="M410 47 L460 47" data-at="3"/>
+        <path class="e" id="p-s1-gate" d="M190 134 C230 134 240 174 265 174" data-at="4-5"/>
+        <path class="e" id="p-s5-gate" d="M190 214 C230 214 240 174 265 174" data-at="6"/>
+        <path class="e bad" id="p-gate-no" d="M330 224 L330 250" data-at="5"/>
+        <path class="e" id="p-gate-route" d="M395 174 C450 174 500 200 500 250" data-at="8-9"/>
+        <path class="e" id="p-s2-route" d="M190 314 C300 314 380 300 440 300" data-at="7"/>
+        <path class="e" id="p-s3-route" d="M190 378 C320 378 380 300 440 300" data-at="7"/>
+        <path class="e" id="p-s4-route" d="M190 442 C330 442 390 300 440 300" data-at="7"/>
+        <path class="e flow" id="p-route-arti" d="M530 275 C560 230 580 125 620 125" data-at="8"/>
+        <path class="e flow" id="p-arti-lyre" d="M705 150 L705 180" data-at="8"/>
+        <path class="e flow" id="p-lyre-tor" d="M705 230 L705 260" data-at="8"/>
+        <path class="e flow" id="p-tor-host" d="M705 310 L705 380" data-at="8"/>
+        <path class="e dash" id="p-route-direct" d="M530 325 C560 380 580 405 620 405" data-at="9"/>
+        <path class="e dash" id="p-no-audit" d="M330 292 C330 420 380 474 420 474" data-at="9"/>
+        <path class="e dash" id="p-host-audit" d="M705 430 C705 474 640 474 590 474" data-at="9"/>
+
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="20" width="170" height="54" rx="8"/>
+          <text x="105" y="43" text-anchor="middle" class="t-title">Sandbox [egress]</text>
+          <text x="105" y="61" text-anchor="middle" class="t-small">missing = network tor</text>
+        </g>
+        <g class="n guard" data-at="2">
+          <rect x="240" y="20" width="170" height="54" rx="8"/>
+          <text x="325" y="43" text-anchor="middle" class="t-title">Install policy</text>
+          <text x="325" y="61" text-anchor="middle" class="t-small">resolve · validate</text>
+        </g>
+        <g class="n data" data-at="3">
+          <rect x="460" y="20" width="200" height="54" rx="8"/>
+          <text x="560" y="43" text-anchor="middle" class="t-title t-mono">TENGU_EGRESS</text>
+          <text x="560" y="61" text-anchor="middle" class="t-small">→ run-agent, mcp-bridge</text>
+        </g>
+        <g class="n hands" data-at="4">
+          <rect x="20" y="110" width="170" height="48" rx="8"/>
+          <text x="105" y="131" text-anchor="middle" class="t-title">Tool request</text>
+          <text x="105" y="148" text-anchor="middle" class="t-small">http_request · HL · RPC</text>
+        </g>
+        <g class="n hands" data-at="6">
+          <rect x="20" y="190" width="170" height="48" rx="8"/>
+          <text x="105" y="211" text-anchor="middle" class="t-title">Shell command</text>
+          <text x="105" y="228" text-anchor="middle" class="t-small">run_command · skills</text>
+        </g>
+        <g class="n heart" data-at="7">
+          <rect x="20" y="290" width="170" height="48" rx="8"/>
+          <text x="105" y="311" text-anchor="middle" class="t-title">LLM API</text>
+          <text x="105" y="328" text-anchor="middle" class="t-small">OpenRouter · Jev · embed</text>
+        </g>
+        <g class="n heart" data-at="7">
+          <rect x="20" y="354" width="170" height="48" rx="8"/>
+          <text x="105" y="375" text-anchor="middle" class="t-title">Claude CLI</text>
+          <text x="105" y="392" text-anchor="middle" class="t-small">HTTPS_PROXY = CONNECT</text>
+        </g>
+        <g class="n hands" data-at="7">
+          <rect x="20" y="418" width="170" height="48" rx="8"/>
+          <text x="105" y="439" text-anchor="middle" class="t-title">MCP · Telegram</text>
+          <text x="105" y="456" text-anchor="middle" class="t-small">proxy, no host check</text>
+        </g>
+        <g class="n guard" data-at="5-6">
+          <polygon points="330,124 395,174 330,224 265,174"/>
+          <text x="330" y="170" text-anchor="middle" class="t-title">Gate</text>
+          <text x="330" y="186" text-anchor="middle" class="t-small">url · hosts</text>
+        </g>
+        <g class="n bad" data-at="5">
+          <rect x="272" y="250" width="116" height="42" rx="8"/>
+          <text x="330" y="268" text-anchor="middle" class="t-title">Refused</text>
+          <text x="330" y="284" text-anchor="middle" class="t-small">never sent</text>
+        </g>
+        <g class="n guard" data-at="7-9">
+          <polygon points="500,250 560,300 500,350 440,300"/>
+          <text x="500" y="296" text-anchor="middle" class="t-title">Proxy?</text>
+          <text x="500" y="312" text-anchor="middle" class="t-small">tor: always</text>
+        </g>
+        <text x="556" y="168" text-anchor="end" class="t-small" data-at="8">via proxy</text>
+        <text x="560" y="425" text-anchor="middle" class="t-small" data-at="9">direct</text>
+        <g class="n guard" data-at="8">
+          <rect x="620" y="100" width="170" height="50" rx="8"/>
+          <text x="705" y="121" text-anchor="middle" class="t-title">Arti :9050</text>
+          <text x="705" y="139" text-anchor="middle" class="t-small">SOCKS5 + HTTP CONNECT</text>
+        </g>
+        <g class="n guard" data-at="8">
+          <rect x="620" y="180" width="170" height="50" rx="8"/>
+          <text x="705" y="201" text-anchor="middle" class="t-title">lyrebird-rs</text>
+          <text x="705" y="219" text-anchor="middle" class="t-small">obfs4 · snowflake</text>
+        </g>
+        <g class="n" data-at="8">
+          <rect x="620" y="260" width="170" height="50" rx="8"/>
+          <text x="705" y="281" text-anchor="middle" class="t-title">Tor network</text>
+          <text x="705" y="299" text-anchor="middle" class="t-small">bridge → relay → exit</text>
+        </g>
+        <g class="n" data-at="8-9">
+          <rect x="620" y="380" width="170" height="50" rx="8"/>
+          <text x="705" y="401" text-anchor="middle" class="t-title">Host</text>
+          <text x="705" y="419" text-anchor="middle" class="t-small">the API asked for</text>
+        </g>
+        <g class="n data" data-at="9">
+          <rect x="420" y="450" width="170" height="48" rx="8"/>
+          <text x="505" y="471" text-anchor="middle" class="t-title t-mono">egress.jsonl</text>
+          <text x="505" y="488" text-anchor="middle" class="t-small">one line per hop</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">missing [egress] = Tor</text></g>
+        <g class="pop badge" data-at="2"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">socks5:// = DNS leak</text></g>
+        <g class="pop badge" data-at="3"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">parent policy wins</text></g>
+        <g class="pop badge" data-at="4"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">≤ 10 redirect hops</text></g>
+        <g class="pop badge" data-at="5"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">deny_hosts first</text></g>
+        <g class="pop badge" data-at="6"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">proxy env: advisory</text></g>
+        <g class="pop badge" data-at="7"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">no host check here</text></g>
+        <g class="pop badge" data-at="8"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">fail closed</text></g>
+        <g class="pop badge" data-at="9"><rect x="676" y="36" width="176" height="22" rx="11"/><text x="764" y="51" text-anchor="middle">agent · session · call_id</text></g>
+
+        <circle class="tok" r="6" data-path="p-cfg-inst" data-at="2" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-inst-child" data-at="3" data-dur="800"/>
+        <circle class="tok hands" r="6" data-path="p-s1-gate" data-at="4"/>
+        <circle class="tok bad" r="6" data-path="p-gate-no" data-at="5" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-s5-gate" data-at="6"/>
+        <circle class="tok heart" r="6" data-path="p-s2-route" data-at="7"/>
+        <circle class="tok heart" r="6" data-path="p-s3-route" data-at="7" data-delay="250"/>
+        <circle class="tok hands" r="6" data-path="p-s4-route" data-at="7" data-delay="500"/>
+        <circle class="tok hands" r="6" data-path="p-gate-route" data-at="8" data-dur="900"/>
+        <circle class="tok guard" r="6" data-path="p-route-arti" data-at="8" data-delay="700" data-dur="900"/>
+        <circle class="tok guard" r="5" data-path="p-tor-host" data-at="8" data-delay="1400" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-route-direct" data-at="9"/>
+        <circle class="tok" r="5" data-path="p-host-audit" data-at="9" data-delay="900"/>
+        <circle class="tok bad" r="5" data-path="p-no-audit" data-at="9" data-delay="300"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>[egress]</code> sits in the sandbox TOML. No section means <code>network = "tor"</code>: proxy <code>TENGU_TOR_PROXY</code>, else <code>socks5h://127.0.0.1:9050</code>, and <code>route_llm_api = true</code>.</li>
+        <li><code>install</code> validates and sets one policy per process. A bad <code>[egress]</code> fails the load. A dead proxy port only warns; requests then fail.</li>
+        <li><code>run-agent</code> children and the MCP bridge get the resolved policy as <code>TENGU_EGRESS</code> JSON. It wins over their own config, so parent and child cannot drift.</li>
+        <li>Tool traffic (<code>http_request</code>, Hyperliquid, Solana RPC, GeckoTerminal) uses <code>tool_client</code> with redirects off. <code>http_request</code> follows up to 10 redirects itself.</li>
+        <li>Every hop is gated before it is sent: scheme (<code>https_only</code>), <code>deny_hosts</code> first, the <code>allow_hosts</code> ceiling, then the tool's own <code>net_hosts</code>.</li>
+        <li>Shell commands: each <code>http(s)://</code> literal passes the same URL gate. Built or encoded URLs slip by; on macOS <code>shell_network = "isolated"</code> is the hard stop.</li>
+        <li>LLM calls (OpenRouter, embeddings, Jev) use the proxy only with <code>route_llm_api</code>. The Claude CLI gets <code>HTTPS_PROXY</code>; MCP and Telegram follow the proxy. No host check here.</li>
+        <li>With a proxy, traffic goes to Arti on <code>:9050</code>, then lyrebird-rs, an obfs4 or snowflake bridge, and Tor. No direct fallback: proxy down, request fails.</li>
+        <li><code>network = "open"</code> goes direct. Either way, every tool hop and every network shell command appends one JSONL line to <code>egress.jsonl</code>.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-router">
+  <div class="sec-head">
+    <span class="kicker">Try it: the request router</span>
+    <h2 id="s-router">Where does this request go?</h2>
+    <p>Set the policy, pick a caller and a target. Routes, refusals and the audit line follow <code>config/egress.rs</code>, <code>outbound/egress.rs</code> and <code>tools/http/request.rs</code>.</p>
+  </div>
+  <div class="widget">
+    <div class="grid two">
+      <div class="grp">
+        <b>[egress]</b>
+        <div class="ctl">
+          <label for="r-sbx">start from a sandbox
+            <select id="r-sbx">
+              <option value="tor-check">tor-check</option>
+              <option value="storage-test">storage-test (no section)</option>
+              <option value="xmarket">xmarket</option>
+              <option value="xlab">xlab</option>
+              <option value="lping">lping</option>
+            </select>
+          </label>
+          <label for="r-net"><code>network</code>
+            <select id="r-net"><option>tor</option><option>open</option></select>
+          </label>
+          <label for="r-proxy"><code>proxy</code>
+            <select id="r-proxy">
+              <option value="">(unset)</option>
+              <option value="socks5h://10.0.0.5:9050">socks5h://10.0.0.5:9050 (example)</option>
+              <option value="http://proxy.corp:3128">http://proxy.corp:3128 (example)</option>
+              <option value="socks5://127.0.0.1:9050">socks5://127.0.0.1:9050</option>
+            </select>
+          </label>
+          <label for="r-llm"><code>route_llm_api</code>
+            <select id="r-llm"><option value="">(unset)</option><option value="true">true</option><option value="false">false</option></select>
+          </label>
+          <label for="r-allow"><code>allow_hosts</code>
+            <select id="r-allow">
+              <option value="[]">[]</option>
+              <option value='["api.hyperliquid.xyz"]'>["api.hyperliquid.xyz"]</option>
+              <option value='["api.hyperliquid.xyz","api.geckoterminal.com"]'>["api.hyperliquid.xyz", "api.geckoterminal.com"]</option>
+              <option value='["*.wikipedia.org","api.coingecko.com"]'>["*.wikipedia.org", "api.coingecko.com"]</option>
+            </select>
+          </label>
+          <label for="r-deny"><code>deny_hosts</code>
+            <select id="r-deny"><option value="[]">[]</option><option value='["evil.wikipedia.org"]'>["evil.wikipedia.org"]</option></select>
+          </label>
+          <label for="r-shell"><code>shell_network</code>
+            <select id="r-shell"><option>proxy_env</option><option>isolated</option></select>
+          </label>
+          <label class="tick" for="r-https"><input type="checkbox" id="r-https"> <span><code>https_only</code></span></label>
+          <label class="tick" for="r-env"><input type="checkbox" id="r-env"> <span><code>TENGU_TOR_PROXY=socks5h://tor:9050</code> (Docker)</span></label>
+        </div>
+      </div>
+      <div class="grp">
+        <b>Request</b>
+        <div class="ctl one">
+          <label for="r-kind">caller
+            <select id="r-kind">
+              <option value="tool">tool: http_request</option>
+              <option value="shell">shell: run_command</option>
+              <option value="llm">LLM API (OpenRouter, embeddings, Jev)</option>
+              <option value="claude">Claude Code CLI</option>
+              <option value="mcp_http">MCP server over http</option>
+              <option value="mcp_stdio">MCP server over stdio</option>
+              <option value="telegram">Telegram bot</option>
+              <option value="local">engine = "local"</option>
+            </select>
+          </label>
+          <label for="r-scope"><span>tool <code>net_hosts</code> scope</span>
+            <select id="r-scope">
+              <option value='["*"]'>["*"] (fallback)</option>
+              <option value='["api.hyperliquid.xyz"]'>["api.hyperliquid.xyz"] (xmarket hl_ctx)</option>
+            </select>
+          </label>
+          <label for="r-in" id="r-in-wrap"><span id="r-in-lbl">URL</span>
+            <input type="text" id="r-in" spellcheck="false" autocomplete="off">
+          </label>
+        </div>
+        <div class="ex" id="r-ex" aria-label="Example inputs"></div>
+      </div>
+    </div>
+    <div class="route" id="r-route" aria-live="polite"></div>
+    <ul class="why" id="r-why"></ul>
+    <div class="grid two">
+      <div class="card data"><h3>Audit line</h3><pre class="out-json" id="r-audit"></pre></div>
+      <div class="card data"><h3><code>TENGU_EGRESS</code> for children</h3><pre class="out-json" id="r-child"></pre></div>
+    </div>
+    <p class="note">Example values: <code>ts</code>, <code>pid</code>, <code>ms</code>, <code>status</code>, home <code>/Users/op</code>. Keys print sorted, as <code>serde_json</code> writes them.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-sbx">
+  <div class="sec-head">
+    <span class="kicker">sandboxes/*/config.toml on main</span>
+    <h2 id="s-sbx">Who runs Tor, who runs open</h2>
+    <p>Open sandboxes reach blocked APIs or need low latency. The trading ones still keep a host ceiling and <code>https_only</code>.</p>
+  </div>
+  <div class="shelf" data-inview>
+    <div class="sbx tor"><h3>tor-check</h3><span class="chip guard">tor</span><small>Explicit <code>network = "tor"</code>: the egress probe.</small></div>
+    <div class="sbx tor"><h3>storage-test</h3><span class="chip guard">tor</span><small>No <code>[egress]</code>: the default.</small></div>
+    <div class="sbx tor"><h3>base config</h3><span class="chip guard">tor</span><small><code>config.example.toml</code>: the section is commented out.</small></div>
+    <div class="sbx open"><h3>xmarket</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>https_only</span></div></div>
+    <div class="sbx open"><h3>xmarket-weekend</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>https_only</span></div></div>
+    <div class="sbx open"><h3>xlab</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>api.geckoterminal.com</span><span>https_only</span></div></div>
+    <div class="sbx open"><h3>lping</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
+    <div class="sbx open"><h3>jev-exec</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
+    <div class="sbx open"><h3>unlimited</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-deploy">
+  <div class="sec-head">
+    <span class="kicker">deploy/tor · docker-compose.tor.yml · Makefile</span>
+    <h2 id="s-deploy">Where the proxy runs</h2>
+    <p>One image: Arti built with HTTP CONNECT, lyrebird-rs as its managed transport. Bridges are mandatory; Arti never dials a relay directly.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-native" aria-selected="true">Native: make tor</button>
+      <button type="button" aria-controls="tab-docker">Docker: NETWORK=tor</button>
+      <button type="button" aria-controls="tab-open">Docker: NETWORK=open</button>
+    </div>
+    <div class="tabpanel" id="tab-native"><div class="tp">
+      <div class="mini"><svg viewBox="0 0 760 120" role="img" aria-label="Native tengu connects to the Tor container on 127.0.0.1:9050">
+        <path class="e" d="M160 60 L220 60"/><path class="e" d="M400 60 L440 60"/><path class="e" d="M590 60 L625 60"/>
+        <g class="n"><rect x="10" y="32" width="150" height="56" rx="8"/><text x="85" y="56" text-anchor="middle" class="t-title">tengu</text><text x="85" y="74" text-anchor="middle" class="t-small">cargo run -- chat</text></g>
+        <g class="n guard"><rect x="220" y="32" width="180" height="56" rx="8"/><text x="310" y="56" text-anchor="middle" class="t-title">Arti</text><text x="310" y="74" text-anchor="middle" class="t-small">127.0.0.1:9050 only</text></g>
+        <g class="n guard"><rect x="440" y="32" width="150" height="56" rx="8"/><text x="515" y="56" text-anchor="middle" class="t-title">lyrebird-rs</text><text x="515" y="74" text-anchor="middle" class="t-small">obfs4 · snowflake</text></g>
+        <g class="n"><rect x="625" y="32" width="125" height="56" rx="8"/><text x="687" y="56" text-anchor="middle" class="t-title">Tor</text><text x="687" y="74" text-anchor="middle" class="t-small">bridge → exit</text></g>
+      </svg></div>
+      <p><code>make tor</code> starts <code>deploy/tor/compose.yml</code>; the port is published on loopback only. Healthy once <code>check.torproject.org</code> reports <code>"IsTor":true</code>.</p>
+    </div></div>
+    <div class="tabpanel" id="tab-docker" hidden><div class="tp">
+      <div class="mini"><svg viewBox="0 0 760 180" role="img" aria-label="Docker tengu and Postgres sit on an internal network whose only exit is the tor container">
+        <rect class="zone" x="10" y="10" width="420" height="160" rx="10"/><text class="zone-label" x="22" y="28">tor-front · internal, no gateway</text>
+        <rect class="zone" x="455" y="10" width="295" height="160" rx="10"/><text class="zone-label" x="467" y="28">tor-out</text>
+        <path class="e" d="M180 65 C230 65 230 98 270 98"/><path class="e" d="M440 98 L480 98"/><path class="e" d="M600 98 L630 98"/>
+        <g class="n hands"><rect x="30" y="40" width="150" height="50" rx="8"/><text x="105" y="61" text-anchor="middle" class="t-title">tengu</text><text x="105" y="78" text-anchor="middle" class="t-small">socks5h://tor:9050</text></g>
+        <g class="n data"><rect x="30" y="108" width="150" height="50" rx="8"/><text x="105" y="129" text-anchor="middle" class="t-title">postgres-memory</text><text x="105" y="146" text-anchor="middle" class="t-small">no ports published</text></g>
+        <g class="n guard"><rect x="270" y="70" width="170" height="56" rx="8"/><text x="355" y="94" text-anchor="middle" class="t-title">tor container</text><text x="355" y="112" text-anchor="middle" class="t-small">Arti + lyrebird-rs</text></g>
+        <g class="n"><rect x="480" y="70" width="120" height="56" rx="8"/><text x="540" y="94" text-anchor="middle" class="t-title">bridges</text><text x="540" y="112" text-anchor="middle" class="t-small">obfs4 · snowflake</text></g>
+        <g class="n"><rect x="630" y="70" width="110" height="56" rx="8"/><text x="685" y="94" text-anchor="middle" class="t-title">Tor</text><text x="685" y="112" text-anchor="middle" class="t-small">exit</text></g>
+      </svg></div>
+      <p><code>make up</code> picks <code>NETWORK=tor</code> unless the config's <code>[egress]</code> section says <code>network = "open"</code>. tengu has no route out but the tor container, so even a program that ignores proxy env cannot leave. The webhook port is not reachable in this mode.</p>
+    </div></div>
+    <div class="tabpanel" id="tab-open" hidden><div class="tp">
+      <div class="mini"><svg viewBox="0 0 760 110" role="img" aria-label="Docker tengu on the default network connects directly">
+        <path class="e dash" d="M200 55 L540 55"/>
+        <text x="370" y="46" text-anchor="middle" class="t-small">direct</text>
+        <g class="n hands"><rect x="50" y="28" width="150" height="54" rx="8"/><text x="125" y="51" text-anchor="middle" class="t-title">tengu</text><text x="125" y="69" text-anchor="middle" class="t-small">default network</text></g>
+        <g class="n"><rect x="540" y="28" width="170" height="54" rx="8"/><text x="625" y="51" text-anchor="middle" class="t-title">Host</text><text x="625" y="69" text-anchor="middle" class="t-small">allow_hosts still apply</text></g>
+      </svg></div>
+      <p>Only <code>docker-compose.yml</code>; no proxy, no internal network. The in-process gate (<code>allow_hosts</code>, <code>net_hosts</code>, <code>https_only</code>) still runs.</p>
+    </div></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-cls">
+  <div class="sec-head">
+    <span class="kicker">src/adapters/outbound/http_class.rs</span>
+    <h2 id="s-cls">When a request fails</h2>
+    <p>Venue clients (Solana RPC, Hyperliquid, GeckoTerminal, Jev) sort failures into one class. Only the two green ones are worth a retry.</p>
+  </div>
+  <div class="cls">
+    <div><b>"max usage reached" · -32429</b><i>quota_exhausted</i>quota text wins over the status</div>
+    <div class="re"><b>HTTP 429</b><i>rate_limited</i>Retry-After seconds kept as ms</div>
+    <div><b>HTTP 401 · 403</b><i>auth_required</i></div>
+    <div><b>HTTP 408 · timeout</b><i>timeout</i></div>
+    <div class="re"><b>HTTP 5xx · connect error</b><i>transient</i></div>
+    <div><b>body won't decode</b><i>decode</i></div>
+    <div><b>other 4xx · egress or scope denial</b><i>fatal</i>nothing was sent for a denial</div>
+  </div>
+  <p class="note">Error text never carries a secret: an RPC URL renders as its host, and values of <code>key</code>, <code>token</code>, <code>secret</code>, <code>auth</code>, <code>sig</code>, <code>password</code> query params become <code>&lt;redacted&gt;</code>. Bodies are quoted to 160 chars.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Six routes</span>
+    <h2 id="s-out">How a request can end</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip guard">tor</span><span><b>via Arti</b>Proxied to Arti on <code>:9050</code>, out through a bridge and a Tor exit.</span></li>
+    <li><span class="chip guard">proxy</span><span><b>via a set proxy</b>An explicit <code>proxy</code>, e.g. a corporate one under <code>open</code>.</span></li>
+    <li><span class="chip warn">direct</span><span><b>direct</b>No proxy, or an LLM call with <code>route_llm_api = false</code>, or a <code>local</code> engine.</span></li>
+    <li><span class="chip bad">no</span><span><b>refused</b>The gate said no: audited as <code>"verdict":"denied"</code>, nothing sent.</span></li>
+    <li><span class="chip warn">env</span><span><b>advisory</b>Shell or MCP stdio got proxy env vars; the program may ignore them.</span></li>
+    <li><span class="chip bad">load</span><span><b>never started</b>A bad <code>[egress]</code>: the config load fails before any request.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Tor unless opted out.</b> No <code>[egress]</code> resolves to <code>network = "tor"</code>, proxy <code>socks5h://127.0.0.1:9050</code> (or <code>TENGU_TOR_PROXY</code>), LLM API proxied.</span></li>
+    <li><span><b>A bad policy never runs.</b> An unknown <code>network</code> or field, <code>socks5://</code> (DNS leak), a proxy without a port, or <code>route_llm_api</code> without a proxy fails the config load.</span></li>
+    <li><span><b>One route, fail closed.</b> A proxied client uses only the configured proxy (env proxy detection off). If Arti is down the request fails; it never goes direct.</span></li>
+    <li><span><b>Every tool hop is gated.</b> <code>http_request</code> checks scheme, <code>deny_hosts</code>, <code>allow_hosts</code> and <code>net_hosts</code> on the first hop and each redirect, up to 10; env-expanded headers are dropped on a cross-origin redirect.</span></li>
+    <li><span><b>Children inherit the parent's policy.</b> <code>run-agent</code> and <code>mcp-bridge</code> apply <code>TENGU_EGRESS</code> over their own config, same audit file.</span></li>
+    <li><span><b>No ungated Bash under a proxy.</b> Claude Code profile <code>editor_shell</code> launches as <code>editor</code> while a proxy is set.</span></li>
+    <li><span><b>Isolated shells are kernel-fenced.</b> With <code>shell_network = "isolated"</code> (macOS <code>sandbox-exec</code>) every outbound connection but the proxy port is refused, DNS included.</span></li>
+    <li><span><b>Audit lines keep secrets out.</b> The URL is logged as the model wrote it (<code>$VAR</code> unexpanded), headers by name only, body and reason redacted.</span></li>
+  </ul>
+  <p class="note warn"><b>Advisory paths.</b> <code>proxy_env</code> shells and MCP stdio servers only get proxy env vars. LLM, Claude CLI, MCP and Telegram traffic is proxied but not host-checked. A <code>local</code> engine always connects directly. The shell URL check misses built or encoded URLs.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Start the proxy, prove the exit</h2>
+    <p><code>--tor</code> sends one live request to <code>check.torproject.org</code> through the tool client. Output is an example.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>make tor</span>
+<span class="ln o">… tengu-tor  Healthy   (Arti + lyrebird-rs on 127.0.0.1:9050)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox tor-check --tor</span>
+<span class="ln o">  Egress:</span>
+<span class="ln o">    network: tor</span>
+<span class="ln o">    proxy: socks5h://127.0.0.1:9050</span>
+<span class="ln o">    llm api: via proxy</span>
+<span class="ln o">    hosts: allow=[] deny=[] https_only=false</span>
+<span class="ln o">    shell: proxy_env (advisory — programs may ignore it)</span>
+<span class="ln o">    audit: /Users/op/.tengu/logs/egress.jsonl</span>
+<span class="ln o">    proxy port: 127.0.0.1:9050 reachable</span>
+<span class="ln">    tor: <span class="hl">IsTor=true</span> exit=&lt;exit IP&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tail -n 1 ~/.tengu/logs/egress.jsonl</span>
+<span class="ln o">{"agent":"probe", … ,"verdict":"allowed","via":"proxy"}</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/config/egress.rs</code></td><td><code>EgressConfig</code>, defaults, <code>resolved()</code>, validation, proxy parsing</td></tr>
+        <tr><td><code>src/adapters/outbound/egress.rs</code></td><td>the policy: <code>install</code>, <code>check_url</code>, client builders, shell guard, audit, <code>TENGU_EGRESS</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/http/request.rs</code></td><td>per-hop gate, redirects, the <code>http_request</code> audit record</td></tr>
+        <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing</td></tr>
+        <tr><td><code>src/bootstrap/sandbox.rs</code></td><td>installs the sandbox's policy, warns on a dead proxy</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>hands <code>TENGU_EGRESS</code> to <code>run-agent</code></td></tr>
+        <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI <code>HTTPS_PROXY</code>, bridge <code>TENGU_EGRESS</code></td></tr>
+        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>the bot's proxied client, 30 s / 60 s timeouts</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor</code> egress block and <code>--tor</code></td></tr>
+        <tr><td><code>deploy/tor/</code></td><td>Arti + lyrebird-rs image, <code>arti.toml</code>, standalone compose</td></tr>
+        <tr><td><code>docker-compose.tor.yml</code></td><td>internal <code>tor-front</code> network for Docker tengu</td></tr>
+        <tr><td><code>Makefile</code></td><td><code>make tor</code>, <code>NETWORK</code> derived from the config</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: request router — rules ported from src/config/egress.rs
+   (resolved, validation_errors, parse_proxy), src/adapters/outbound/egress.rs
+   (check_url, check_host, client builders, guard_shell, audit stamp) and
+   src/adapters/outbound/tools/http/request.rs (hop gate, audit record). */
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function dbg(list) { return "[" + list.map(function (x) { return JSON.stringify(x); }).join(", ") + "]"; }
+  function sorted(o) {
+    if (Array.isArray(o)) return o.map(sorted);
+    if (o && typeof o === "object") { var r = {}; Object.keys(o).sort().forEach(function (k) { r[k] = sorted(o[k]); }); return r; }
+    return o;
+  }
+  function hostMatches(pat, host) {
+    if (pat === "*" || pat === host) return true;
+    if (pat.indexOf("*.") !== 0) return false;
+    var suf = pat.slice(2);
+    if (host.length < suf.length || host.slice(host.length - suf.length) !== suf) return false;
+    var pre = host.slice(0, host.length - suf.length);
+    return pre.length > 1 && pre.charAt(pre.length - 1) === ".";
+  }
+  var SBX = {
+    "tor-check": { net: "tor", allow: "[]", https: false },
+    "storage-test": { net: "tor", allow: "[]", https: false },
+    "xmarket": { net: "open", allow: '["api.hyperliquid.xyz"]', https: true },
+    "xlab": { net: "open", allow: '["api.hyperliquid.xyz","api.geckoterminal.com"]', https: true },
+    "lping": { net: "open", allow: "[]", https: false }
+  };
+  var EX = {
+    tool: ["https://api.hyperliquid.xyz/info", "http://api.hyperliquid.xyz/info", "https://en.wikipedia.org/wiki/Tor", "https://evil.wikipedia.org/", "https://api.coingecko.com/api/v3/ping", "ftp://example.com/f"],
+    shell: ["curl -s https://api.hyperliquid.xyz/info", "ls -la", "echo hi; curl 'https://evil.example/x?a=1'", "git clone https://example.com/r.git", "nc example.org 80"],
+    mcp_http: ["http://127.0.0.1:8080/mcp", "https://mcp.example.com/mcp"]
+  };
+  var NETWORK_BINS = ["curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "rsync", "ftp", "git", "http", "https", "aria2c", "lynx", "w3m", "dig", "nslookup", "host", "ping", "traceroute", "nmap"];
+  var LOOP = ["127.0.0.1", "localhost", "::1", "[::1]"];
+
+  function cfg() {
+    return {
+      network: $("r-net").value, proxy: $("r-proxy").value || null,
+      route_llm_api: $("r-llm").value === "" ? null : $("r-llm").value === "true",
+      allow_hosts: JSON.parse($("r-allow").value), deny_hosts: JSON.parse($("r-deny").value),
+      https_only: $("r-https").checked, shell_network: $("r-shell").value, audit: true, audit_log: null
+    };
+  }
+  /* EgressConfig::resolved */
+  function resolved(c) {
+    var r = JSON.parse(JSON.stringify(c));
+    if (r.network === "tor") {
+      if (!r.proxy) r.proxy = $("r-env").checked ? "socks5h://tor:9050" : "socks5h://127.0.0.1:9050";
+      if (r.route_llm_api === null) r.route_llm_api = true;
+    } else if (r.route_llm_api === null) r.route_llm_api = false;
+    return r;
+  }
+  function parseUrl(s) { try { return new URL(s); } catch (e) { return null; } }
+  /* EgressConfig::validation_errors */
+  function errors(r) {
+    var e = [], purl = null;
+    if (r.proxy) {
+      var u = parseUrl(r.proxy), sch = u ? u.protocol.replace(":", "") : "";
+      if (sch === "socks5") e.push("egress.proxy: '" + r.proxy + "' resolves DNS locally (DNS leak) — use socks5h://");
+      else purl = u;
+    }
+    if (r.route_llm_api === true && !r.proxy) e.push("egress.route_llm_api needs egress.proxy");
+    if (r.shell_network === "isolated" && purl && LOOP.indexOf(purl.hostname) < 0)
+      e.push("egress.shell_network = \"isolated\" needs a loopback proxy (127.0.0.1 / localhost / ::1)");
+    return e;
+  }
+  /* EgressPolicy::check_url */
+  function checkUrl(r, u, raw) {
+    var sch = u.protocol.replace(":", ""), shown = u.href;
+    if (sch === "http" && r.https_only) return "egress: plain http:// refused (https_only) for '" + shown + "'";
+    if (sch !== "http" && sch !== "https") return "egress: scheme '" + sch + "' refused for '" + shown + "' (http/https only)";
+    var host = u.hostname;
+    if (!host) return "egress: url '" + shown + "' has no host";
+    var d = r.deny_hosts.filter(function (p) { return hostMatches(p, host); })[0];
+    if (d) return "egress: host '" + host + "' matches deny_hosts pattern '" + d + "'";
+    if (r.allow_hosts.length && !r.allow_hosts.some(function (p) { return hostMatches(p, host); }))
+      return "egress: host '" + host + "' not in allow_hosts " + dbg(r.allow_hosts);
+    return null;
+  }
+  function connectForm(p) { var u = parseUrl(p); if (!u) return null; var s = u.protocol.replace(":", ""); return (s === "http" || s === "https") ? p : "http://" + u.host; }
+  function stamp(ev, r) {
+    ev.ts = "2026-10-07T12:00:00.000000+00:00"; ev.pid = 41237;
+    if (!("agent" in ev)) ev.agent = "<agent>";
+    ev.session = "<session id>"; ev.call_id = "<call id>";
+    ev.via = r.proxy ? "proxy" : "direct"; ev.proxy = r.proxy;
+    return ev;
+  }
+  function viaHops(r) {
+    if (!r.proxy) return [["direct", "warn"]];
+    if (r.network === "tor" && !$("r-proxy").value) return [["Arti " + (r.proxy.indexOf("tor:") >= 0 ? "tor:9050" : ":9050"), "guard"], ["lyrebird-rs", "guard"], ["Tor", "guard"]];
+    return [["proxy " + r.proxy, "guard"]];
+  }
+  function draw(hops) {
+    $("r-route").innerHTML = hops.map(function (h, i) { return (i ? '<span class="arr">→</span>' : "") + '<span class="hop ' + (h[1] || "") + '">' + esc(h[0]) + "</span>"; }).join("");
+  }
+  function kindUi() {
+    var k = $("r-kind").value, ex = EX[k];
+    $("r-in-wrap").style.display = ex ? "" : "none";
+    $("r-scope").parentNode.style.display = k === "tool" ? "" : "none";
+    $("r-in-lbl").textContent = k === "shell" ? "command" : "URL";
+    var box = $("r-ex"); box.innerHTML = "";
+    (ex || []).forEach(function (v) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = v;
+      b.addEventListener("click", function () { $("r-in").value = v; route(); });
+      box.appendChild(b);
+    });
+    if (ex) $("r-in").value = ex[0];
+  }
+  function route() {
+    var c = cfg(), r = resolved(c), errs = errors(r), k = $("r-kind").value, v = $("r-in").value.trim();
+    var why = [], hops = [], audit = null;
+    var child = JSON.parse(JSON.stringify(r)); child.audit_log = "/Users/op/.tengu/logs/egress.jsonl";
+    $("r-child").textContent = JSON.stringify({ network: child.network, proxy: child.proxy, route_llm_api: child.route_llm_api, allow_hosts: child.allow_hosts, deny_hosts: child.deny_hosts, https_only: child.https_only, shell_network: child.shell_network, audit: true, audit_log: child.audit_log }, null, 2);
+    if (errs.length) {
+      draw([["config load fails", "bad"]]);
+      $("r-why").innerHTML = "<li>Config validation failed (" + errs.length + " issue" + (errs.length > 1 ? "s" : "") + "):</li>" + errs.map(function (e) { return "<li><code>" + esc(e) + "</code></li>"; }).join("") + "<li>Nothing starts, so nothing is sent.</li>";
+      $("r-audit").textContent = "(no process, no audit line)";
+      $("r-child").textContent = "(never installed)";
+      return;
+    }
+    if (r.shell_network === "isolated") why.push("<code>isolated</code> needs macOS <code>sandbox-exec</code>; on Linux the load fails (use the Docker tor profile).");
+    if (k === "tool") {
+      var scope = JSON.parse($("r-scope").value);
+      hops.push(["http_request", "hands"]);
+      var ev = { tool: "http_request", hop: 0, method: "GET", url: v, host: null, headers: [], auth_env: null, body: null, file_path: null, ms: null };
+      var u = parseUrl(v);
+      if (u) ev.host = u.hostname || null;
+      var fail = null;
+      if (!/^https?:\/\//.test(v)) fail = "http_request: url must start with http:// or https://";
+      else if (!u) fail = "http_request: invalid url '" + v + "'";
+      else fail = checkUrl(r, u, v);
+      if (!fail && !scope.some(function (p) { return hostMatches(p, u.hostname); })) fail = "host '" + u.hostname + "' not in allowed net_hosts " + dbg(scope);
+      if (fail) {
+        hops.push(["gate: refused", "bad"]);
+        why.push("Refused before sending: <code>" + esc(fail) + "</code>");
+        ev.verdict = "denied"; ev.reason = fail;
+      } else {
+        hops.push(["gate: ok", "guard"]); hops = hops.concat(viaHops(r)); hops.push([u.hostname, ""]);
+        why.push("<code>tool_client</code>: redirects off; each redirect hop repeats the gate (up to 10).");
+        if (!r.allow_hosts.length) why.push("No <code>allow_hosts</code> ceiling: only the tool's <code>net_hosts</code> limits hosts.");
+        ev.verdict = "allowed"; ev.status = 200; ev.ms = 640;
+      }
+      audit = stamp(ev, r);
+    } else if (k === "shell") {
+      hops.push(["run_command", "hands"]);
+      var urls = (v.match(/\bhttps?:\/\/[^\s'"<>`]+/gi) || []).map(function (x) { return x.replace(/[)\],;.\\]+$/, ""); });
+      var netbin = v.split(/[\s;|&()`]+/).some(function (t) { return NETWORK_BINS.indexOf(t.split("/").pop()) >= 0; });
+      var sfail = null;
+      urls.forEach(function (x) { if (sfail) return; var uu = parseUrl(x); sfail = uu ? checkUrl(r, uu, x) : "egress: bad url '" + x + "'"; });
+      if (sfail) {
+        hops.push(["guard_shell: refused", "bad"]);
+        why.push("A URL literal failed the gate: <code>" + esc(sfail) + "</code>. The command does not run.");
+      } else {
+        if (urls.length) hops.push(["guard_shell: ok", "guard"]);
+        if (r.shell_network === "isolated") { hops.push([r.proxy ? "sandbox-exec: only localhost:" + (parseUrl(r.proxy).port) : "sandbox-exec: no network", "guard"]); why.push("Kernel-enforced: every other outbound connection is refused, DNS included."); }
+        else if (r.proxy) { hops.push(["proxy env vars", "warn"]); why.push("<code>ALL_PROXY</code>, <code>HTTPS_PROXY</code>, <code>HTTP_PROXY</code> = <code>" + esc(r.proxy) + "</code>; loopback exempt. Advisory: a program may ignore them."); }
+        else hops.push(["direct", "warn"]);
+      }
+      if (urls.length || netbin) {
+        var sev = { tool: "run_command", command: v, urls: urls, shell_network: r.shell_network };
+        if (sfail) { sev.verdict = "denied"; sev.reason = sfail; } else sev.verdict = "allowed";
+        audit = stamp(sev, r);
+      } else why.push("No URL and no network binary: no gate, no audit line.");
+    } else if (k === "llm") {
+      hops.push(["llm_api_client", "heart"]);
+      hops = hops.concat(r.route_llm_api && r.proxy ? viaHops(r) : [["direct", "warn"]]); hops.push(["openrouter.ai", ""]);
+      why.push("Proxied only when <code>route_llm_api</code> is true (now " + r.route_llm_api + "). No host check, no audit line.");
+    } else if (k === "claude") {
+      hops.push(["claude CLI", "heart"]);
+      if (r.route_llm_api && r.proxy) {
+        var cf = connectForm(r.proxy);
+        hops = hops.concat([["HTTPS_PROXY " + cf, "guard"]]).concat(viaHops(r).slice(1));
+        why.push("<code>HTTPS_PROXY</code> = <code>HTTP_PROXY</code> = <code>" + esc(cf) + "</code> (HTTP CONNECT on the same port), <code>NO_PROXY</code> = <code>localhost,127.0.0.1,::1</code>. Advisory: the CLI honours the env.");
+      } else hops.push(["direct", "warn"]);
+      if (r.proxy) why.push("While a proxy is set, profile <code>editor_shell</code> launches as <code>editor</code>: the built-in Bash is dropped.");
+    } else if (k === "mcp_http") {
+      hops.push(["mcp_client", "hands"]);
+      var mu = parseUrl(v), loop = mu && LOOP.indexOf(mu.hostname) >= 0;
+      if (r.proxy && !loop) hops = hops.concat(viaHops(r)); else hops.push(["direct", "warn"]);
+      if (mu) hops.push([mu.hostname, ""]);
+      why.push(loop ? "Loopback servers stay direct (<code>localhost,127.0.0.1,::1</code>)." : "Proxied when a proxy is set. No host check, no audit line.");
+    } else if (k === "mcp_stdio") {
+      hops.push(["stdio server", "hands"]);
+      hops.push(r.proxy ? ["proxy env vars", "warn"] : ["direct", "warn"]);
+      why.push(r.proxy ? "The child gets the proxy env vars (loopback exempt). Advisory." : "No proxy: nothing set.");
+    } else if (k === "telegram") {
+      hops.push(["teloxide client", "hands"]);
+      if (r.proxy) { hops = hops.concat([["CONNECT " + connectForm(r.proxy), "guard"]]); why.push("Through the proxy's HTTP CONNECT form with 30 s connect / 60 s total timeouts (Tor-sized)."); }
+      else hops.push(["direct", "warn"]);
+      hops.push(["api.telegram.org", ""]);
+    } else {
+      hops.push(["LocalEngine", "heart"], ["direct", "warn"], ["your OpenAI-compatible server", ""]);
+      why.push("<code>engine = \"local\"</code> always connects directly: the server is on this host, never via the proxy.");
+    }
+    draw(hops);
+    $("r-why").innerHTML = why.map(function (w) { return "<li>" + w + "</li>"; }).join("");
+    $("r-audit").textContent = audit ? JSON.stringify(sorted(audit)) : "(no audit line for this path)";
+  }
+  $("r-sbx").addEventListener("change", function () {
+    var s = SBX[$("r-sbx").value];
+    $("r-net").value = s.net; $("r-allow").value = s.allow; $("r-https").checked = s.https;
+    $("r-proxy").value = ""; $("r-llm").value = ""; $("r-deny").value = "[]"; $("r-shell").value = "proxy_env";
+    route();
+  });
+  $("r-kind").addEventListener("change", function () { kindUi(); route(); });
+  ["r-net", "r-proxy", "r-llm", "r-allow", "r-deny", "r-shell", "r-https", "r-env", "r-scope"].forEach(function (id) { $(id).addEventListener("change", route); });
+  $("r-in").addEventListener("input", route);
+  kindUi(); route();
+})();
+</script>
+</body>
+</html>

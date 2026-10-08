@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backtests · Tengu</title>
+<meta name="description" content="A pure backtest engine: strategy specs as data, decisions as of each instant, fills at bar closes after costs and funding, a research arm and a risk-capped arm, holdout discipline and a cached Jev gate.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: time scrubber, split widget, P&L calculator */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 12px 26px; align-items: end; }
+  .ctrls label.tick { display: flex; gap: 8px; align-items: center; }
+  .lblrow { display: flex; justify-content: space-between; gap: 10px; width: 100%; }
+  .widget select { font: inherit; font-size: .85rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
+  .scrub-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--sunk); }
+  #scrub { display: block; width: 100%; min-width: 560px; height: auto; }
+  #scrub .ax { font-family: var(--font-mono); font-size: 11px; fill: var(--muted); }
+  #scrub .tlab { font-family: var(--font-mono); font-size: 12px; fill: var(--accent); font-weight: 500; }
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; font-size: .88rem; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--font-mono); font-size: .82rem; color: var(--ink); overflow-wrap: anywhere; }
+  .dots { display: grid; grid-template-columns: repeat(30, minmax(0, 1fr)); gap: 3px; }
+  .dots span { aspect-ratio: 1; border-radius: 50%; border: 1.5px solid var(--accent); background: var(--accent-soft); }
+  .dots span.ho { border-color: var(--guard); background: var(--guard-soft); }
+  .dots span.hid { border-color: var(--faint); border-style: dashed; background: transparent; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button { font: inherit; font-size: .8rem; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .ledger { font-family: var(--font-mono); font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; margin: 0; }
+  .pnl { display: grid; gap: 6px; }
+  .pnl .bar { grid-template-columns: minmax(90px, 150px) minmax(0, 1fr) 84px; }
+  .pnl .fill.neg { background: var(--bad); }
+  .pnl .fill.pos { background: var(--ok); }
+  .pnl .fill.cost { background: var(--warn); }
+  .kind code { font-size: .8rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Backtests</div>
+  <h1>Backtests</h1>
+  <p class="lede">A pure engine replays a strategy spec over <code>market.db</code>: decisions as of each instant, fills at bar closes, then fees, spread and funding. Spec in, run dir out. Tests prove no later bar changes an earlier decision.</p>
+  <ul class="facts">
+    <li>research arm <b>$100</b> a trade</li>
+    <li>bootstrap <b>2 000</b> · seed <b>7</b></li>
+    <li>stop past <b>50 000</b> candidates</li>
+    <li>keep <b>100</b> run dirs</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip hands"><span class="k">手</span> hands</span> engine steps, arms</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks, caps</li>
+    <li><span class="chip jev"><span class="k">決</span> Jev</span> gate arm</li>
+    <li><span class="chip data">data</span> specs, stores, files</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One run</span>
+    <h2 id="s-flow">Spec, candidates, arms, run dir</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 470" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A strategy spec is resolved and hashed, series are read from market.db, candidates are listed, each checked as of its instant, optionally decided by the Jev gate, simulated in the research and capped arms, filled at bar closes after costs, summarised and written to a run dir.</title>
+        <path class="e" id="p-spec-res" d="M180 61 L218 61" data-at="1-2"/>
+        <path class="e" id="p-res-db" d="M380 61 L418 61" data-at="3"/>
+        <path class="e" id="p-db-prep" d="M580 61 L618 61" data-at="3"/>
+        <path class="e" id="p-prep-cand" d="M730 92 L730 148" data-at="3"/>
+        <path class="e" id="p-cand-asof" d="M620 185 L572 185" data-at="4"/>
+        <path class="e dash" id="p-asof-jev" d="M380 185 L332 185" data-at="5"/>
+        <path class="e dash" id="p-jev-res" d="M200 220 L200 278" data-at="5"/>
+        <path class="e" id="p-asof-res" d="M440 220 C440 250 135 250 135 278" data-at="6"/>
+        <path class="e" id="p-asof-cap" d="M500 220 C500 255 355 250 355 278" data-at="7"/>
+        <path class="e" id="p-res-fill" d="M135 342 L135 388" data-at="8"/>
+        <path class="e" id="p-cap-fill" d="M330 342 C330 375 260 405 232 412" data-at="8"/>
+        <path class="e" id="p-fill-stats" d="M230 419 L308 419" data-at="9"/>
+        <path class="e flow" id="p-stats-run" d="M480 419 L558 419" data-at="9"/>
+
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="30" width="160" height="62" rx="8"/>
+          <text x="100" y="56" text-anchor="middle" class="t-title">Strategy spec</text>
+          <text x="100" y="75" text-anchor="middle" class="t-small">kind + params, no code</text>
+        </g>
+        <g class="n guard" data-at="2-3">
+          <rect x="220" y="30" width="160" height="62" rx="8"/>
+          <text x="300" y="56" text-anchor="middle" class="t-title">Resolve + check</text>
+          <text x="300" y="75" text-anchor="middle" class="t-small t-mono">spec_sha256</text>
+        </g>
+        <g class="n data" data-at="3">
+          <rect x="420" y="30" width="160" height="62" rx="8"/>
+          <text x="500" y="56" text-anchor="middle" class="t-title t-mono">market.db</text>
+          <text x="500" y="75" text-anchor="middle" class="t-small">read only</text>
+        </g>
+        <g class="n hands" data-at="3-4">
+          <rect x="620" y="30" width="220" height="62" rx="8"/>
+          <text x="730" y="56" text-anchor="middle" class="t-title">Series + splits</text>
+          <text x="730" y="75" text-anchor="middle" class="t-small">bars · funding · ctx</text>
+        </g>
+        <g class="n hands" data-at="3-4">
+          <rect x="620" y="150" width="220" height="70" rx="8"/>
+          <text x="730" y="178" text-anchor="middle" class="t-title t-mono">candidates()</text>
+          <text x="730" y="198" text-anchor="middle" class="t-small">every decision in [from, to)</text>
+        </g>
+        <g class="n guard" data-at="4-7">
+          <rect x="380" y="150" width="190" height="70" rx="10"/>
+          <text x="475" y="175" text-anchor="middle" class="t-kanji k">守</text>
+          <text x="475" y="195" text-anchor="middle" class="t-title">As-of check</text>
+          <text x="475" y="212" text-anchor="middle" class="t-small">data_asof ≤ decided_at</text>
+        </g>
+        <g class="n jev" data-at="5">
+          <rect x="130" y="150" width="200" height="70" rx="10"/>
+          <text x="230" y="175" text-anchor="middle" class="t-kanji k">決</text>
+          <text x="230" y="195" text-anchor="middle" class="t-title">Jev gate arm</text>
+          <text x="230" y="212" text-anchor="middle" class="t-small">optional · cached · SimClock</text>
+        </g>
+        <g class="n hands" data-at="6,8">
+          <rect x="40" y="280" width="190" height="62" rx="8"/>
+          <text x="135" y="305" text-anchor="middle" class="t-title">research arm</text>
+          <text x="135" y="324" text-anchor="middle" class="t-small">every candidate, no caps</text>
+        </g>
+        <g class="n guard" data-at="7-8">
+          <rect x="260" y="280" width="190" height="62" rx="8"/>
+          <text x="355" y="305" text-anchor="middle" class="t-title">capped arm</text>
+          <text x="355" y="324" text-anchor="middle" class="t-small">[risk] caps, $100 cash</text>
+        </g>
+        <g class="n hands" data-at="8-9">
+          <rect x="40" y="390" width="190" height="58" rx="8"/>
+          <text x="135" y="414" text-anchor="middle" class="t-title">Fill at close</text>
+          <text x="135" y="433" text-anchor="middle" class="t-small">simple return − costs</text>
+        </g>
+        <g class="n data" data-at="9">
+          <rect x="310" y="390" width="170" height="58" rx="8"/>
+          <text x="395" y="414" text-anchor="middle" class="t-title">Summary</text>
+          <text x="395" y="433" text-anchor="middle" class="t-small">mean · CI · Sharpe</text>
+        </g>
+        <g class="n data" data-at="9">
+          <rect x="560" y="390" width="280" height="58" rx="8"/>
+          <text x="700" y="414" text-anchor="middle" class="t-title">Run dir</text>
+          <text x="700" y="433" text-anchor="middle" class="t-small t-mono">backtests/&lt;run id&gt;/</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">unknown field ⇒ refused, field named</text></g>
+        <g class="pop badge" data-at="2"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">sha256 of canonical JSON, 64 hex</text></g>
+        <g class="pop badge" data-at="3"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">a run never writes market.db</text></g>
+        <g class="pop badge" data-at="4"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">later data ⇒ dropped, future_data</text></g>
+        <g class="pop badge" data-at="5"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">history = 0 · take / skip / ask</text></g>
+        <g class="pop badge" data-at="6"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">every candidate at notional_usd</text></g>
+        <g class="pop badge" data-at="7"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">largest |signal| admitted first</text></g>
+        <g class="pop badge" data-at="8"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">side × (exit / entry − 1) × 10⁴</text></g>
+        <g class="pop badge" data-at="9"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">oldest run dirs pruned past 100</text></g>
+
+        <circle class="tok" r="6" data-path="p-spec-res" data-at="1-2"/>
+        <circle class="tok guard" r="6" data-path="p-res-db" data-at="3" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-db-prep" data-at="3" data-delay="700" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-prep-cand" data-at="3" data-delay="1400" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-cand-asof" data-at="4" data-dur="700"/>
+        <circle class="tok jev" r="6" data-path="p-asof-jev" data-at="5" data-dur="700"/>
+        <circle class="tok jev" r="6" data-path="p-jev-res" data-at="5" data-delay="800" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-asof-res" data-at="6"/>
+        <circle class="tok guard" r="6" data-path="p-asof-cap" data-at="7"/>
+        <circle class="tok hands" r="6" data-path="p-res-fill" data-at="8" data-dur="700"/>
+        <circle class="tok guard" r="6" data-path="p-cap-fill" data-at="8" data-delay="300" data-dur="900"/>
+        <circle class="tok hands" r="6" data-path="p-fill-stats" data-at="9" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-stats-run" data-at="9" data-delay="800" data-dur="700"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A spec is data: one of six kinds and its parameters, from <code>[backtest.strategies.&lt;name&gt;]</code> or a JSON object. An unknown field fails, naming the field.</li>
+        <li>Resolve: <code>@&lt;universe&gt;</code> expanded, <code>exclude</code> removed, <code>spec_sha256</code> = sha256 of the canonical JSON, keys sorted at every depth.</li>
+        <li>Prepare: bars, funding and ctx read from <code>market.db</code>, read only; <code>[backtest.splits]</code> applied. <code>candidates()</code> lists every decision in <code>[from, to)</code>.</li>
+        <li>A candidate reads only rows observable at its instant. <code>data_asof_ms &gt; decided_at_ms</code> ⇒ dropped as <code>future_data</code>. Prices only at a bar close.</li>
+        <li>Optional <code>--gate</code>: Jev decides each candidate on a <code>SimClock</code>, terminal actions only, no history, through the decision cache.</li>
+        <li>Research arm: every candidate at the spec's notional (default $100), no caps, no cash book.</li>
+        <li>Capped arm: a ledger from <code>[risk]</code> + <code>[paper]</code>. Largest |signal| first, notional clamped to the order cap; gross / net caps and loss limits refuse the rest.</li>
+        <li>Entry and exit at bar closes: simple return, minus fee + half-spread + slippage per side, plus funding. No exit price ⇒ <code>missing_exit</code>, not a trade.</li>
+        <li>Summary: n, mean, clustered t, bootstrap 95 % CI over periods, Sharpe, drawdown. Written to <code>&lt;state dir&gt;/backtests/&lt;run id&gt;/</code>.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-time">
+  <div class="sec-head">
+    <span class="kicker">Try it: move the decision time</span>
+    <h2 id="s-time">A bar exists only once it closes</h2>
+    <p>Example 1h bars. Drag <code>t</code>: solid bars are observable (close ≤ t), dashed ones are not. Then move every later bar ×1.5, as <code>checks.rs</code> does: the decision does not change.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="t"><span class="lblrow"><span>decision time <code>t</code></span><span class="readout" id="t-out">07:00</span></span>
+        <input type="range" id="t" min="0" max="48" step="1" value="28">
+      </label>
+      <label class="tick" for="mv"><input type="checkbox" id="mv"> move every bar after t ×1.5</label>
+    </div>
+    <div class="scrub-wrap"><svg id="scrub" viewBox="0 0 760 220" role="img" aria-label="Twelve hourly bars with the decision time marked"></svg></div>
+    <div class="grid two">
+      <dl class="kv" id="t-kv" aria-live="polite"></dl>
+      <div class="card guard">
+        <h3>Same decision?</h3>
+        <span class="verdict ok" id="t-verdict">unchanged</span>
+        <p id="t-note">The decision is a function of observable rows only.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-pnl">
+  <div class="sec-head">
+    <span class="kicker">Try it: one trade's numbers</span>
+    <h2 id="s-pnl">Simple return, then costs, then funding</h2>
+    <p>Costs come from xlab's <code>[backtest.costs."&lt;prefix&gt;"]</code>; the longest prefix wins. Entry 100.00 and the rest are example values.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="p-pre">instrument prefix
+        <select id="p-pre">
+          <option value="xyz">hyperliquid:xyz:</option>
+          <option value="hl">hyperliquid:</option>
+          <option value="sol">solana:</option>
+          <option value="rh">robinhood:</option>
+        </select>
+      </label>
+      <label for="p-side">side
+        <select id="p-side"><option value="1">long</option><option value="-1">short</option></select>
+      </label>
+      <label for="p-exit"><span class="lblrow"><span>exit price</span><span class="readout" id="p-exit-out">102.00</span></span>
+        <input type="range" id="p-exit" min="90" max="110" step="0.1" value="102">
+      </label>
+      <label for="p-rate"><span class="lblrow"><span>funding, bps / h</span><span class="readout" id="p-rate-out">0.10</span></span>
+        <input type="range" id="p-rate" min="-1" max="1" step="0.05" value="0.1">
+      </label>
+      <label for="p-hours"><span class="lblrow"><span>hours held</span><span class="readout" id="p-hours-out">15</span></span>
+        <input type="range" id="p-hours" min="1" max="72" step="1" value="15">
+      </label>
+    </div>
+    <div class="pnl" id="p-bars"></div>
+    <dl class="kv" id="p-kv"></dl>
+    <p class="note">Not ln: a log return overstates a short and understates a long by about r² / 2. Signals stay log moves; P&amp;L is a linear perp's simple return.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-split">
+  <div class="sec-head">
+    <span class="kicker">Try it: tune in-sample, read the holdout once</span>
+    <h2 id="s-split">In-sample, holdout, and who sees what</h2>
+    <p>Thirty example weekends, <code>--split time:&lt;t&gt;</code>: decisions at or after t are the holdout. The Architect's <code>backtest</code> tool hides it unless asked, and counts every read.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <div class="seg" role="group" aria-label="Who runs it" id="mode">
+        <button type="button" data-m="cli">tengu backtest --split</button>
+        <button type="button" data-m="tool">tool: split</button>
+        <button type="button" data-m="read">tool: split + holdout: true</button>
+      </div>
+      <label for="cut"><span class="lblrow"><span>split at weekend</span><span class="readout" id="cut-out">22</span></span>
+        <input type="range" id="cut" min="5" max="28" step="1" value="22">
+      </label>
+    </div>
+    <div class="dots" id="dots" aria-hidden="true"></div>
+    <div class="widget-row">
+      <span class="verdict ok" id="s-verdict" aria-live="polite"></span>
+      <button type="button" class="btn" id="s-run">Run again</button>
+    </div>
+    <p class="ledger" id="s-ledger"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-kinds">
+  <div class="sec-head">
+    <span class="kicker">Six kinds, never code</span>
+    <h2 id="s-kinds">What a spec can say</h2>
+    <p>Each kind has its own fields and bounds. Names below are xlab's library (<code>sandboxes/xlab</code>).</p>
+  </div>
+  <div class="grid">
+    <div class="card hands kind"><h3><code>weekend_window</code></h3><p>Rule W on any calendar: s = ln(entry / anchor), <code>fade</code> or <code>follow</code>, optional <code>top_n</code>. <code>weekend_fade</code>, <code>weekend_fade_top4</code>.</p></div>
+    <div class="card hands kind"><h3><code>daily_window</code></h3><p>Anchor, entry, exit as local <code>HH:MM</code>. <code>xyz_overnight_follow</code>: 16:00 → 20:00 → 09:00 New York.</p></div>
+    <div class="card hands kind"><h3><code>move_trigger</code></h3><p>|move over a lookback| ≥ threshold, optional volume ratio, hold / TP / SL. <code>crypto_move_fade</code>: 4 bars, 300 bps.</p></div>
+    <div class="card hands kind"><h3><code>funding_carry</code></h3><p>Take the side funding pays when APR ≥ min; exit below <code>exit_apr_pct</code> or after <code>hold_hours</code>. <code>xyz_funding_carry</code>.</p></div>
+    <div class="card hands kind"><h3><code>pair_spread</code></h3><p>z of ln(a / b) over a lookback: enter at |z| ≥ <code>entry_z</code>, leave at ≤ <code>exit_z</code>. <code>sol_eth_spread</code>.</p></div>
+    <div class="card hands kind"><h3><code>event_window</code></h3><p>Listed events (<code>instrument</code>, <code>t</code>): enter after a delay, exit after N minutes or at a local time.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-gate">
+  <div class="sec-head">
+    <span class="kicker">Jev replayed</span>
+    <h2 id="s-gate">The gate arm and its cache</h2>
+    <p>The real decision loop (see <a href="decision-loop.html">Decision loop</a>), replayed. Same history in, same verdicts out.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-gate" aria-selected="true">Gate arm</button>
+      <button type="button" aria-controls="tab-run">Run dir</button>
+      <button type="button" aria-controls="tab-spec">Spec JSON</button>
+    </div>
+    <div class="tabpanel" id="tab-gate"><pre><span class="c"># tengu backtest --gate [&lt;loop&gt;]   (no value = [backtest] gate; xlab: xl_gate)</span>
+clock      <span class="s">SimClock</span> set to each candidate's decided_at_ms
+loop       terminal actions only: <span class="j">take</span> · <span class="j">skip</span> · <span class="j">ask_architect</span>   <span class="c"># a tool action is refused</span>
+history    <span class="n">0</span>   <span class="c"># forced: a request is a function of its candidate alone</span>
+cache      &lt;state dir&gt;/backtests/<span class="s">decision-cache.db</span>
+key        sha256 of canonical {"model","state","questions"}   <span class="c"># 64 hex chars, never cut</span>
+arms       rules (every decided candidate) · jev (the taken ones), + capped twins
+limits     --max-decisions <span class="n">500</span> (rest counted as cut) · --concurrency <span class="n">4</span> (1–16)
+--offline  cache only: a miss is a class-error decision, est. cost 0
+cost       misses × <span class="n">$0.00004</span> a decision</pre></div>
+    <div class="tabpanel" id="tab-run" hidden><pre><span class="c"># &lt;state dir&gt;/backtests/&lt;run id&gt;/    run id = &lt;YYYYMMDDTHHMMSSZ&gt;-&lt;strategy&gt;, taken ⇒ -2, -3 …</span>
+report.json          <span class="c"># the report = row backtest/1:&lt;run id&gt;</span>
+report.md            <span class="c"># the same, readable</span>
+trades-&lt;arm&gt;.jsonl   <span class="c"># one trade per line: legs, fills, costs, funding, exit reason</span>
+candidates.jsonl     <span class="c"># side, signal, decided / data-as-of, exit plan, features</span>
+skips.json           <span class="c"># every skip, drop and [risk] refusal</span>
+decisions.jsonl      <span class="c"># with --gate: one audit line per decision, by seq</span>
+<span class="c"># beside the run dirs:</span>
+decision-cache.db    <span class="c"># never pruned</span>
+holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads</span></pre></div>
+    <div class="tabpanel" id="tab-spec" hidden><pre><span class="c">// example spec file: tengu backtest --sandbox xlab --spec ./big_move_fade.json</span>
+{
+  <span class="k">"name"</span>: <span class="s">"big_move_fade"</span>,
+  <span class="k">"kind"</span>: <span class="s">"move_trigger"</span>,
+  <span class="k">"universe"</span>: <span class="s">"@crypto"</span>,
+  <span class="k">"interval"</span>: <span class="s">"1h"</span>,
+  <span class="k">"lookback_bars"</span>: <span class="n">4</span>,
+  <span class="k">"threshold_bps"</span>: <span class="n">300</span>,
+  <span class="k">"direction"</span>: <span class="s">"fade"</span>,
+  <span class="k">"hold_bars"</span>: <span class="n">12</span>,
+  <span class="k">"stop_loss_bps"</span>: <span class="n">200</span>
+}</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No look-ahead.</b> A candidate with <code>data_asof_ms &gt; decided_at_ms</code> is dropped (<code>future_data</code>). Tests scale, delete or cut every bar after t; nothing decided, admitted or closed by t changes.</span></li>
+    <li><span><b>Prices only at a close.</b> The bar ending exactly at the instant; missing ⇒ a skip, never interpolated.</span></li>
+    <li><span><b>Simple return.</b> Gross = side × (exit / entry − 1) × 10⁴, never ln.</span></li>
+    <li><span><b>No peeking at exits.</b> Capped admissions read the book as of the decision, never whether a later bar exists.</span></li>
+    <li><span><b>Read-only warehouse.</b> A run never writes <code>market.db</code>.</span></li>
+    <li><span><b>Reruns match.</b> The bootstrap is seeded; replay loops keep no history and the cache answers by full sha256, whatever <code>--concurrency</code>.</span></li>
+    <li><span><b>The holdout is never shown unrecorded.</b> The tool refuses its text if the ledger line cannot be written.</span></li>
+    <li><span><b>Runaway specs stop early.</b> Past <code>max_candidates</code> a run stops before any arm or file.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Run the library</h2>
+    <p>From the repo root. <code>--gate</code> online needs <code>OPENROUTER_API_KEY</code>; <code>--offline</code> needs none.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01</span>
+<span class="ln o"># arms research + capped, in-sample vs holdout side by side, then the run dir</span>
+<span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade_top4 --fetch</span>
+<span class="ln o"># backfills bars + funding first (as tengu history backfill), then runs</span>
+<span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --gate --max-decisions 200</span>
+<span class="ln o"># gate lines: take / skip counts, cache hits / misses, <span class="hl">jev − rules</span></span>
+<span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --gate --max-decisions 200 --offline</span>
+<span class="ln o"># same verdicts from decision-cache.db, est. cost 0</span>
+<span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --spec ./big_move_fade.json --format json &gt; report.json</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/backtest/spec.rs</code></td><td>the six kinds, fields, bounds, <code>SplitSpec</code></td></tr>
+        <tr><td><code>src/domain/backtest/kinds.rs</code></td><td>each kind's decisions as of t, skips, data notes</td></tr>
+        <tr><td><code>src/domain/backtest/engine.rs</code></td><td><code>candidates</code>, <code>simulate</code>, research and capped arms</td></tr>
+        <tr><td><code>src/domain/backtest/fills.rs</code> · <code>costs.rs</code></td><td>cost per side, half-spread models, funding, exits</td></tr>
+        <tr><td><code>src/domain/backtest/features.rs</code></td><td>features as of t for the gate</td></tr>
+        <tr><td><code>src/domain/backtest/stats.rs</code></td><td>summary, clustered t, bootstrap CI, calibration</td></tr>
+        <tr><td><code>src/domain/backtest/gate.rs</code> · <code>report.rs</code></td><td>gate event and summary; <code>report.json</code>, <code>report.md</code></td></tr>
+        <tr><td><code>src/domain/backtest/checks.rs</code></td><td>time-integrity proofs and the rule W golden (tests)</td></tr>
+        <tr><td><code>src/application/backtest/</code></td><td>resolve, prepare, evaluate, the gate arm, the run dir</td></tr>
+        <tr><td><code>src/adapters/outbound/decision_cache.rs</code></td><td>the sha256-keyed decision cache</td></tr>
+        <tr><td><code>src/bootstrap/decision.rs</code></td><td>replay loops and the gate's wiring</td></tr>
+        <tr><td><code>src/config/backtest.rs</code></td><td><code>[backtest]</code> knobs and load rules</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/backtest.rs</code></td><td><code>tengu backtest</code> flags</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/xlab/</code></td><td>the <code>backtest</code> tool: run, holdout ledger, rows by run id</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: time scrubber (marketdata.rs close_at / observable_at,
+   features.rs ret_1h_bps), P&L (fills.rs gross_bps, side_cost, funding_over),
+   holdout discipline (tools/xlab/holdout.rs) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  var NS = "http://www.w3.org/2000/svg";
+  function mk(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function hh(q) { var m = q * 15; return ("0" + Math.floor(m / 60)).slice(-2) + ":" + ("0" + (m % 60)).slice(-2); }
+
+  /* --- time scrubber: 12 example 1h bars, t in quarter hours --- */
+  var C = [100, 101.2, 100.6, 102.0, 103.1, 102.4, 101.8, 102.9, 104.0, 103.5, 105.2, 104.6];
+  var BARS = C.map(function (c, i) {
+    var o = i ? C[i - 1] : 99.6;
+    return { open: i, o: o, c: c, h: Math.max(o, c) + 0.4, l: Math.min(o, c) - 0.4 };
+  });
+  function view(tq, moved) {
+    var t = tq / 4;
+    return BARS.map(function (b) {
+      var later = b.open + 1 > t, k = moved && later ? 1.5 : 1;
+      return { open: b.open, o: b.o * k, c: b.c * k, h: b.h * k, l: b.l * k, seen: !later, moved: moved && later };
+    });
+  }
+  function decide(bars, tq) {
+    var seen = bars.filter(function (b) { return b.seen; });
+    var t = tq / 4, at = null;
+    if (tq % 4 === 0 && t >= 1) at = bars[t - 1].c;
+    var last = seen.length ? seen[seen.length - 1] : null;
+    var ret = seen.length >= 2 ? Math.log(last.c / seen[seen.length - 2].c) * 1e4 : null;
+    return { n: seen.length, at: at, asof: last ? last.open + 1 : null, ret: ret, last: last ? last.c : null };
+  }
+  function scrub() {
+    var tq = +$("t").value, moved = $("mv").checked;
+    $("t-out").textContent = hh(tq);
+    var bars = view(tq, moved), d = decide(bars, tq), d0 = decide(view(tq, false), tq);
+    var svg = $("scrub");
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var x0 = 50, slot = 56, top = 26, bot = 170;
+    var hi = Math.max.apply(null, bars.map(function (b) { return b.h; })), lo = Math.min.apply(null, bars.map(function (b) { return b.l; }));
+    var pad = (hi - lo) * 0.08;
+    function y(p) { return top + (hi + pad - p) / (hi - lo + 2 * pad) * (bot - top); }
+    mk("line", { x1: x0, y1: bot + 4, x2: x0 + slot * 12, y2: bot + 4, stroke: "var(--line)" }, svg);
+    for (var i = 0; i <= 12; i += 2) {
+      var tx = mk("text", { x: x0 + slot * i, y: bot + 22, "text-anchor": "middle", "class": "ax" }, svg);
+      tx.textContent = ("0" + i).slice(-2) + ":00";
+    }
+    bars.forEach(function (b, i) {
+      var cx = x0 + slot * i + slot / 2, entry = d.at != null && i === tq / 4 - 1;
+      var stroke = b.moved ? "var(--bad)" : b.seen ? "var(--hands)" : "var(--faint)";
+      var dash = b.seen ? "" : "4 3";
+      mk("line", { x1: cx, y1: y(b.h), x2: cx, y2: y(b.l), stroke: stroke, "stroke-width": 1.4, "stroke-dasharray": dash }, svg);
+      var yt = y(Math.max(b.o, b.c)), yb = y(Math.min(b.o, b.c));
+      mk("rect", { x: cx - 16, y: yt, width: 32, height: Math.max(2, yb - yt), rx: 3,
+        fill: b.seen ? "var(--hands-soft)" : "none", stroke: entry ? "var(--accent)" : stroke,
+        "stroke-width": entry ? 3 : 1.4, "stroke-dasharray": dash }, svg);
+    });
+    var tx2 = x0 + slot * (tq / 4);
+    mk("line", { x1: tx2, y1: 14, x2: tx2, y2: bot + 6, stroke: "var(--accent)", "stroke-width": 2 }, svg);
+    var lab = mk("text", { x: Math.min(Math.max(tx2, 60), 700), y: 12, "text-anchor": "middle", "class": "tlab" }, svg);
+    lab.textContent = "t = " + hh(tq);
+    $("t-kv").innerHTML =
+      "<dt>observable bars</dt><dd>" + d.n + " of 12 (close ≤ t)</dd>" +
+      "<dt>close_at(t)</dt><dd>" + (d.at != null ? d.at.toFixed(2) + " (bar " + hh(tq - 4) + "–" + hh(tq) + ")" : "none: no bar ends at t ⇒ skip") + "</dd>" +
+      "<dt>ret_1h_bps</dt><dd>" + (d.ret != null ? d.ret.toFixed(1) : "left out (needs 2 bars)") + "</dd>" +
+      "<dt>data_asof_ms</dt><dd>" + (d.asof != null ? hh(d.asof * 4) + " ≤ t ✓" : "nothing observable yet") + "</dd>";
+    var same = d.n === d0.n && d.at === d0.at && d.ret === d0.ret && d.asof === d0.asof;
+    var v = $("t-verdict");
+    v.className = same ? "verdict ok" : "verdict bad";
+    v.textContent = moved ? (same ? "unchanged after ×1.5" : "changed") : "unchanged";
+    $("t-note").textContent = moved
+      ? "Bars after t moved ×1.5 (red). Every number the decision read is the same: it never saw them."
+      : "The decision is a function of observable rows only. Tick the box to move the future.";
+  }
+  ["t", "mv"].forEach(function (i) { $(i).addEventListener("input", scrub); $(i).addEventListener("change", scrub); });
+  scrub();
+
+  /* --- P&L: xlab [backtest.costs] --- */
+  var COST = {
+    xyz: { fee: 0.9, hs: 1.0, hsWhat: "fixed 1.0", funding: true },
+    hl:  { fee: 4.5, hs: 1.0, hsWhat: "ctx (archive), else fallback 1.0", funding: true },
+    sol: { fee: 5.0, hs: 2.0, hsWhat: "Abdi–Ranaldo, floor 2.0 (floor shown)", funding: false },
+    rh:  { fee: 25.0, hs: 10.0, hsWhat: "Abdi–Ranaldo, floor 10.0 (floor shown)", funding: false }
+  };
+  function pnl() {
+    var c = COST[$("p-pre").value], side = +$("p-side").value, exit = +$("p-exit").value;
+    var rate = +$("p-rate").value, hours = +$("p-hours").value, entry = 100;
+    $("p-exit-out").textContent = exit.toFixed(2); $("p-rate-out").textContent = rate.toFixed(2); $("p-hours-out").textContent = hours;
+    var gross = side * (exit / entry - 1) * 1e4;
+    var lnb = side * Math.log(exit / entry) * 1e4;
+    var perSide = c.fee + c.hs, cost = 2 * perSide;
+    var fund = c.funding ? -side * rate * hours : 0;
+    var net = gross - cost + fund, usd = net * 100 / 1e4;
+    var scale = Math.max(Math.abs(gross), Math.abs(net), cost, Math.abs(fund), 1);
+    function bar(lbl, v, cls) {
+      return '<div class="bar"><span class="lbl">' + lbl + '</span><span class="track"><span class="fill ' + cls + '" style="--w:' +
+        (Math.abs(v) / scale * 100).toFixed(1) + '%"></span></span><span class="val">' + (v >= 0 ? "+" : "") + v.toFixed(1) + "</span></div>";
+    }
+    $("p-bars").innerHTML = bar("gross bps", gross, gross >= 0 ? "pos" : "neg") + bar("costs bps", -cost, "cost") +
+      bar("funding bps", fund, fund >= 0 ? "pos" : "neg") + bar("net bps", net, net >= 0 ? "pos" : "neg");
+    $("p-kv").innerHTML =
+      "<dt>per side</dt><dd>fee " + c.fee + " + half-spread " + c.hs + " (" + c.hsWhat + ") = " + perSide.toFixed(1) + " bps</dd>" +
+      "<dt>funding</dt><dd>" + (c.funding ? "Σ −side × rate_1h over " + hours + " h = " + fund.toFixed(2) + " bps" : "off for this prefix (funding = false)") + "</dd>" +
+      "<dt>net, $100</dt><dd>" + (usd >= 0 ? "+" : "") + usd.toFixed(4) + " USD</dd>" +
+      "<dt>if it were ln</dt><dd>" + lnb.toFixed(1) + " bps gross (off by " + (lnb - gross).toFixed(1) + ")</dd>";
+  }
+  ["p-pre", "p-side", "p-exit", "p-rate", "p-hours"].forEach(function (i) { $(i).addEventListener("input", pnl); $(i).addEventListener("change", pnl); });
+  pnl();
+
+  /* --- holdout discipline --- */
+  var mode = "tool", reads = 0;
+  var dots = $("dots");
+  for (var i = 0; i < 30; i++) dots.appendChild(document.createElement("span"));
+  Array.prototype.forEach.call($("mode").children, function (b) {
+    b.addEventListener("click", function () { mode = b.getAttribute("data-m"); split(true); });
+  });
+  function split(run) {
+    var cut = +$("cut").value;
+    $("cut-out").textContent = cut;
+    Array.prototype.forEach.call($("mode").children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-m") === mode ? "true" : "false"); });
+    var hidden = mode === "tool";
+    Array.prototype.forEach.call(dots.children, function (s, i) {
+      s.className = i + 1 < cut ? "" : hidden ? "hid" : "ho";
+    });
+    var ins = cut - 1, ho = 30 - ins, v = $("s-verdict"), led = $("s-ledger");
+    if (mode === "read" && run) reads++;
+    if (mode === "cli") {
+      v.className = "verdict ok"; v.textContent = "in-sample " + ins + " · holdout " + ho + ", side by side";
+      led.textContent = "The operator's CLI keeps both halves and records nothing.";
+    } else if (hidden) {
+      v.className = "verdict warn"; v.textContent = "runs the " + ins + " in-sample weekends · holdout hidden";
+      led.textContent = "The time split ends the decisions at weekend " + cut + ": no holdout trade is simulated or written.";
+    } else {
+      v.className = "verdict bad"; v.textContent = "holdout read #" + reads + " for this spec";
+      led.textContent = "+1 line in <state dir>/backtests/holdout-reads.jsonl: ts_ms, time, via, run_id, spec_sha256, strategy, split, call_id (demo counter).";
+    }
+  }
+  $("cut").addEventListener("input", function () { split(false); });
+  $("s-run").addEventListener("click", function () { split(true); });
+  split(false);
+})();
+</script>
+</body>
+</html>

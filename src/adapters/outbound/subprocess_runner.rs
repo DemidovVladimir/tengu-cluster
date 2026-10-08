@@ -208,15 +208,17 @@ impl SubprocessRunner {
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Forward subprocess stderr (tracing logs) to the parent's
-            // stderr so users running with RUST_LOG=debug can see what the
-            // subagent did — tool calls, engine spawn, etc. Previously
-            // piped, which hid all subprocess detail unless the child
-            // exited non-zero. Phase 7.5 diagnostic.
-            .stderr(Stdio::inherit())
+            // The child's log lines go through the parent's own log
+            // (`forward_child_log`): to the log file in the TUI, not over
+            // its screen; the last lines explain a failed exit.
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
 
         let mut child = cmd.spawn().context("spawn tengu run-agent")?;
+        let stderr_tail = forward_child_log(
+            child.stderr.take().context("child stderr missing")?,
+            input.agent_name.clone(),
+        );
 
         // Write stdin JSON.
         let stdin_payload = serde_json::to_vec(&input).context("serialise IPC input")?;
@@ -239,11 +241,12 @@ impl SubprocessRunner {
         .context("wait_with_output failed")?;
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            // EOF on the pipe ends the reader: the tail is complete.
+            let tail = stderr_tail.await.unwrap_or_default();
             bail!(
                 "run-agent exited with non-zero status ({}): {}",
                 output.status,
-                stderr.trim()
+                tail.trim()
             );
         }
 
@@ -252,6 +255,54 @@ impl SubprocessRunner {
             .with_context(|| format!("parse IPC output: {}", stdout_str.trim()))?;
         Ok(parsed)
     }
+}
+
+/// Lines of a failed child's log kept for the error message.
+const STDERR_TAIL_LINES: usize = 40;
+
+/// Read the child's stderr (its tracing log) line by line into the parent's
+/// log at `info` (target `tengu::run_agent`, ANSI colours stripped); the task
+/// returns the last `STDERR_TAIL_LINES` lines once the pipe closes.
+fn forward_child_log(
+    stderr: tokio::process::ChildStderr,
+    agent: String,
+) -> tokio::task::JoinHandle<String> {
+    use tokio::io::AsyncBufReadExt;
+    tokio::spawn(async move {
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        let mut tail = std::collections::VecDeque::with_capacity(STDERR_TAIL_LINES);
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = strip_ansi(&line);
+            if line.trim().is_empty() {
+                continue;
+            }
+            tracing::info!(target: "tengu::run_agent", agent = %agent, "{line}");
+            if tail.len() == STDERR_TAIL_LINES {
+                tail.pop_front();
+            }
+            tail.push_back(line);
+        }
+        Vec::from(tail).join("\n")
+    })
+}
+
+/// `line` without ANSI escape sequences (`ESC [ … letter`).
+fn strip_ansi(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for d in chars.by_ref() {
+                if d.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // =====================================================================
@@ -268,8 +319,8 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
         step_inputs: &str,
     ) -> anyhow::Result<String> {
         // Fail fast when the planner picked a name with no `[agents.<name>]`
-        // block. Without this we burn 3 retry attempts × subprocess spawn cost
-        // before the orchestrator gives up and replans. The most common cause is
+        // block: no subprocess is spawned. (The retry policy still runs its
+        // attempts and waits around this error before the replan.) The most common cause is
         // the planner LLM putting a SKILL or TOOL name in the `agent` field
         // (the orchestrator SKILL.md forbids it but enforcement is still useful).
         // Composed plans (C→B B-half) resolve `compose.base_agent` instead.
@@ -345,8 +396,9 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
                 // Re-emit per-turn subagent telemetry on the parent's global
                 // metrics sink. The IPC boundary is the only path these
                 // records can take from the child to the TUI / aggregator.
+                // The child logged each one already (`forward_child_log`).
                 for rec in metrics {
-                    crate::application::metrics::record(rec);
+                    crate::application::metrics::forward(rec);
                 }
                 Ok(output)
             }
@@ -357,7 +409,7 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
                 ..
             } => {
                 for rec in metrics {
-                    crate::application::metrics::record(rec);
+                    crate::application::metrics::forward(rec);
                 }
                 anyhow::bail!("subagent failed: {}\npartial output:\n{}", error, output)
             }
@@ -368,6 +420,35 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ansi_colours_are_stripped() {
+        assert_eq!(
+            strip_ansi("\x1b[2m2026\x1b[0m \x1b[32m INFO\x1b[0m tengu: hi"),
+            "2026  INFO tengu: hi"
+        );
+        assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    /// A child's stderr reaches the parent log, and its last lines come back
+    /// for the error of a failed exit (they used to be empty: stderr was
+    /// inherited).
+    #[tokio::test]
+    async fn child_stderr_tail_explains_a_failed_exit() {
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("for i in $(seq 0 44); do echo \"line $i\" >&2; done; printf '\\033[31mERROR\\033[0m boom\\n' >&2; exit 3")
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let tail = forward_child_log(child.stderr.take().unwrap(), "a".into());
+        assert!(!child.wait().await.unwrap().success());
+        let tail = tail.await.unwrap();
+        let lines: Vec<&str> = tail.lines().collect();
+        assert_eq!(lines.len(), STDERR_TAIL_LINES);
+        assert_eq!(lines.last(), Some(&"ERROR boom"));
+        assert!(!tail.contains("line 0\n"), "older lines dropped: {tail}");
+    }
 
     /// Fix B (2026-05-09) — confirm `SubprocessRunner::new` plumbs the
     /// explicit session_id through instead of minting a fresh UUID.

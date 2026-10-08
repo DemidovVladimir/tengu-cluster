@@ -1608,6 +1608,7 @@ pub(crate) mod tests {
                     position: &position,
                     fees: &fees,
                     max_book_age_ms: 5_000,
+                    stale_book_ok: false,
                 };
                 let age = (now - book.venue_ts_ms) as u64;
                 Outcome::Sent {

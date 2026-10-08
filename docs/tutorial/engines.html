@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Engines · Tengu</title>
+<meta name="description" content="The Engine port and its three adapters: OpenRouter over HTTPS, any OpenAI-compatible local server, and the Claude Code CLI with the MCP bridge.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: the argv builder, env chips, the window calculator */
+  .seg-group { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg-group .btn[aria-pressed="true"] { font-weight: 600; }
+  .toggles { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  .toggles label { display: flex !important; gap: 8px; align-items: center; font-size: 0.85rem; color: var(--muted); }
+  .argv { font-size: 0.78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .argv .add { color: var(--hands); }
+  .argv .drop { color: var(--bad); }
+  .env-row { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 6px 10px; align-items: start; font-size: 0.82rem; color: var(--muted); }
+  .env-row > b { font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding-top: 4px; font-weight: 500; }
+  .envs { display: flex; flex-wrap: wrap; gap: 5px; }
+  .envs code { font-size: 0.74rem; border: 1px solid var(--line); background: var(--panel) !important; padding: 2px 7px !important; border-radius: 6px; }
+  .envs.rm code { text-decoration: line-through; color: var(--bad); }
+  .envs.keep code { color: var(--hands); }
+  .envs.add code { color: var(--accent); }
+  .envs.off { opacity: .4; }
+
+  .win-bar { position: relative; height: 28px; border-radius: 7px; overflow: hidden; background: var(--sunk); border: 1px solid var(--line); }
+  .win-bar span { position: absolute; top: 0; bottom: 0; transition: width .45s cubic-bezier(.2,.8,.2,1), left .45s; }
+  .win-bar .w-res { right: 0; background: repeating-linear-gradient(-45deg, var(--heart) 0 2px, transparent 2px 7px); border-left: 2px solid var(--heart); }
+  .win-bar .w-one { left: 0; background: var(--hands); }
+  .wkey { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.8rem; color: var(--muted); padding: 0; margin: 0; list-style: none; }
+  .wkey i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+  .wkey .k-one { background: var(--hands); }
+  .wkey .k-res { background: repeating-linear-gradient(-45deg, var(--heart) 0 2px, transparent 2px 6px); border: 1px solid var(--heart); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--paper); display: grid; gap: 2px; }
+  .stat small { color: var(--muted); font-size: 0.76rem; }
+  .stat b { font-family: var(--font-mono); font-weight: 500; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+
+  .cmp { min-width: 680px; }
+  .cmp td:first-child { font-weight: 600; color: var(--ink); white-space: nowrap; }
+  .cmp td { font-size: 0.84rem; }
+  .cmp th:nth-child(2), .cmp td:nth-child(2) { border-left: 3px solid var(--heart-soft); }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · Engines</div>
+  <h1>Engines</h1>
+  <p class="lede">Each agent names one engine. OpenRouter and local servers answer over HTTP and Tengu runs the tools; Claude Code runs as a CLI subprocess and reaches Tengu's tools through the MCP bridge.</p>
+  <ul class="facts">
+    <li><b>engine</b> = openrouter · local · claude_code</li>
+    <li>window <b>1 000 000</b> by default; claude_code <b>200 000</b></li>
+    <li>local result ≤ <b>1/8</b> of the window</li>
+    <li>HTTP call <b>600 s</b> · CLI idle <b>120 s</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> engine</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> limits</li>
+    <li><span class="chip data">data</span> endpoints</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One port, three adapters</span>
+    <h2 id="s-flow">From config to model</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 515" role="img" aria-labelledby="eng-t">
+        <title id="eng-t">An agent block names an engine; the factory builds OpenRouter, local or Claude Code. OpenRouter posts to openrouter.ai through egress, local posts to a server on this host, Claude Code spawns the CLI which reaches Tengu tools through the MCP bridge. All three feed the same tool loop.</title>
+        <!-- edges -->
+        <path class="e" id="p-toml-build" d="M95 120 L95 213" data-at="1"/>
+        <path class="e" id="p-build-or" d="M170 236 C230 236 230 80 288 80" data-at="2-3"/>
+        <path class="e" id="p-build-loc" d="M170 250 L288 245" data-at="2,5"/>
+        <path class="e" id="p-build-cc" d="M170 264 C230 264 230 410 288 410" data-at="2,7"/>
+        <path class="e" id="p-or-net" d="M470 80 L598 80" data-at="3-4"/>
+        <path class="e" id="p-loc-srv" d="M470 245 L598 245" data-at="5-6"/>
+        <path class="e" id="p-cc-cli" d="M470 400 C530 400 540 371 598 371" data-at="7-8"/>
+        <path class="e" id="p-cli-bridge" d="M720 402 L720 434" data-at="8"/>
+        <path class="e dash" id="p-bridge-cc" d="M600 467 C548 467 520 446 472 436" data-at="8"/>
+        <path class="e dash flow" id="p-or-loop" d="M300 120 C262 175 236 372 172 398" data-at="9"/>
+        <path class="e dash flow" id="p-loc-loop" d="M290 272 C252 300 238 405 172 412" data-at="9"/>
+        <path class="e dash flow" id="p-cc-loop" d="M288 428 L172 428" data-at="9"/>
+
+        <!-- nodes -->
+        <g class="n" data-at="1">
+          <rect x="20" y="50" width="150" height="70" rx="8"/>
+          <text x="95" y="76" text-anchor="middle" class="t-title">Agent block</text>
+          <text x="95" y="95" text-anchor="middle" class="t-small t-mono">engine · model</text>
+          <text x="95" y="110" text-anchor="middle" class="t-small t-mono">[limits]</text>
+        </g>
+        <g class="n" data-at="2">
+          <rect x="20" y="215" width="150" height="70" rx="8"/>
+          <text x="95" y="242" text-anchor="middle" class="t-title">Engine factory</text>
+          <text x="95" y="262" text-anchor="middle" class="t-small">build_step_engine</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="20" y="380" width="150" height="70" rx="8"/>
+          <text x="95" y="408" text-anchor="middle" class="t-title">Tool loop</text>
+          <text x="95" y="428" text-anchor="middle" class="t-small">same StreamEvents</text>
+        </g>
+        <g class="n heart" data-at="2-4,9">
+          <rect x="290" y="40" width="180" height="80" rx="10"/>
+          <text x="380" y="68" text-anchor="middle" class="t-title t-mono">openrouter</text>
+          <text x="380" y="88" text-anchor="middle" class="t-small">one POST per round</text>
+          <text x="380" y="105" text-anchor="middle" class="t-small">no streaming</text>
+        </g>
+        <g class="n heart" data-at="2,5-6,9">
+          <rect x="290" y="205" width="180" height="80" rx="10"/>
+          <text x="380" y="233" text-anchor="middle" class="t-title t-mono">local</text>
+          <text x="380" y="253" text-anchor="middle" class="t-small">OpenAI-compatible</text>
+          <text x="380" y="270" text-anchor="middle" class="t-small">result ≤ window ÷ 8</text>
+        </g>
+        <g class="n heart" data-at="2,7-9">
+          <rect x="290" y="370" width="180" height="80" rx="10"/>
+          <text x="380" y="398" text-anchor="middle" class="t-title t-mono">claude_code</text>
+          <text x="380" y="418" text-anchor="middle" class="t-small">CLI subprocess</text>
+          <text x="380" y="435" text-anchor="middle" class="t-small">stream-json NDJSON</text>
+        </g>
+        <g class="n data" data-at="3-4">
+          <rect x="600" y="40" width="240" height="80" rx="8"/>
+          <text x="720" y="68" text-anchor="middle" class="t-title">openrouter.ai/api</text>
+          <text x="720" y="88" text-anchor="middle" class="t-small t-mono">/v1/chat/completions</text>
+          <text x="720" y="105" text-anchor="middle" class="t-small">via egress · Tor by default</text>
+        </g>
+        <g class="n data" data-at="5-6">
+          <rect x="600" y="205" width="240" height="80" rx="8"/>
+          <text x="720" y="233" text-anchor="middle" class="t-title">Server on this host</text>
+          <text x="720" y="253" text-anchor="middle" class="t-small t-mono">http://127.0.0.1:8888</text>
+          <text x="720" y="270" text-anchor="middle" class="t-small">direct, never proxied</text>
+        </g>
+        <g class="n" data-at="7-8">
+          <rect x="600" y="340" width="240" height="62" rx="8"/>
+          <text x="720" y="366" text-anchor="middle" class="t-title t-mono">claude -p</text>
+          <text x="720" y="386" text-anchor="middle" class="t-small">cwd = agent workspace</text>
+        </g>
+        <g class="n hands" data-at="8">
+          <rect x="600" y="436" width="240" height="62" rx="8"/>
+          <text x="720" y="462" text-anchor="middle" class="t-title">tengu mcp-bridge</text>
+          <text x="720" y="482" text-anchor="middle" class="t-small">runs Tengu tools as the agent</text>
+        </g>
+
+        <!-- per-step badges -->
+        <g class="pop badge" data-at="1"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">openrouter | local | claude_code</text></g>
+        <g class="pop badge" data-at="2"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">StepOpts: grant · summary file</text></g>
+        <g class="pop badge" data-at="3"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">max_tokens only when set</text></g>
+        <g class="pop badge" data-at="4"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">failed turn → one retry</text></g>
+        <g class="pop badge" data-at="5"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">Bearer only if the env is set</text></g>
+        <g class="pop badge" data-at="6"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">16 384 window → 8 192 chars</text></g>
+        <g class="pop badge" data-at="7"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">--strict-mcp-config always</text></g>
+        <g class="pop badge" data-at="8"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">71st tool call → CLI killed</text></g>
+        <g class="pop badge" data-at="9"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">text · calls · runs · usage</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok" r="6" data-path="p-toml-build" data-at="1"/>
+        <circle class="tok heart" r="6" data-path="p-build-or" data-at="2"/>
+        <circle class="tok heart" r="6" data-path="p-build-loc" data-at="2" data-delay="250"/>
+        <circle class="tok heart" r="6" data-path="p-build-cc" data-at="2" data-delay="500"/>
+        <circle class="tok heart" r="6" data-path="p-or-net" data-at="3-4"/>
+        <circle class="tok" r="5" data-path="p-or-net" data-at="3-4" data-delay="800" data-reverse/>
+        <circle class="tok heart" r="6" data-path="p-loc-srv" data-at="5-6"/>
+        <circle class="tok" r="5" data-path="p-loc-srv" data-at="5-6" data-delay="800" data-reverse/>
+        <circle class="tok heart" r="6" data-path="p-cc-cli" data-at="7"/>
+        <circle class="tok hands" r="6" data-path="p-cli-bridge" data-at="8" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-bridge-cc" data-at="8" data-delay="800"/>
+        <circle class="tok heart" r="6" data-path="p-or-loop" data-at="9"/>
+        <circle class="tok heart" r="6" data-path="p-loc-loop" data-at="9" data-delay="250"/>
+        <circle class="tok heart" r="6" data-path="p-cc-loop" data-at="9" data-delay="500"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>An agent block names its <code>engine</code> and <code>model</code>. Config load refuses any engine but <code>openrouter</code>, <code>local</code>, <code>claude_code</code>, and refuses an empty model.</li>
+        <li><code>build_engine</code> matches on the name. <code>run-agent</code> steps and the doctor call <code>build_step_engine</code> with options: workspace grant, summary file.</li>
+        <li>openrouter: one non-streaming POST per round to <code>{OPENROUTER_BASE_URL}/v1/chat/completions</code> with <code>OPENROUTER_API_KEY</code>, through the egress client.</li>
+        <li>A turn with no tool call and no text, or an error finish, is retried once. Cut-off or filtered output is never retried.</li>
+        <li>local: the same API shape to <code>base_url</code> on this machine, never through the proxy. A trailing <code>/v1</code> is dropped; the model id is sent verbatim.</li>
+        <li>Small windows: each tool result is capped at window ÷ 8 × 4 chars, and a system message equal to the prompt is sent once.</li>
+        <li>claude_code: spawns <code>claude -p --output-format stream-json</code> with <code>--strict-mcp-config</code>. Parent-session env and <code>ANTHROPIC_API_KEY</code> are stripped.</li>
+        <li>The CLI runs its own loop. Tengu tools go through <code>tengu mcp-bridge</code> and return as <code>ToolRan</code>, never re-run. Past <code>max_tool_rounds</code> calls the CLI is killed.</li>
+        <li>Every engine yields the same <code>StreamEvent</code>s: text, tool calls, tool runs, usage. One tool loop consumes them, so history and metrics look alike.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-cmp">
+  <div class="sec-head">
+    <span class="kicker">Side by side</span>
+    <h2 id="s-cmp">What differs, what stays the same</h2>
+    <p>Same port, same tool loop, same scopes and redaction. The differences are transport, who runs the tools, and how limits count.</p>
+  </div>
+  <div class="table-wrap">
+    <table class="cmp">
+      <thead><tr><th></th><th>openrouter</th><th>local</th><th>claude_code</th></tr></thead>
+      <tbody>
+        <tr><td>Talks to</td><td class="wrap"><code>https://openrouter.ai/api</code> (<code>OPENROUTER_BASE_URL</code>)</td><td class="wrap"><code>base_url</code>, default <code>http://127.0.0.1:8888</code></td><td class="wrap"><code>[claude_code] cli_path</code>, default <code>claude</code></td></tr>
+        <tr><td>Auth</td><td class="wrap"><code>OPENROUTER_API_KEY</code>, required</td><td class="wrap"><code>$UNSLOTH_API_KEY</code> if set (<code>api_key_env</code>)</td><td>the CLI's own login</td></tr>
+        <tr><td>Network</td><td>egress client: Tor unless open</td><td>direct, no proxy</td><td class="wrap">CLI gets <code>HTTPS_PROXY</code> under Tor</td></tr>
+        <tr><td>Window</td><td class="wrap"><code>limits.context_window</code></td><td class="wrap">same: set the real one</td><td>fixed 200 000</td></tr>
+        <tr><td>Runs the tools</td><td>Tengu tool loop</td><td>Tengu tool loop</td><td>the CLI, via the bridge</td></tr>
+        <tr><td><code>max_tool_rounds</code></td><td>engine rounds</td><td>engine rounds</td><td>tool calls; CLI killed past it</td></tr>
+        <tr><td>Result cap</td><td>300 000 chars</td><td>min(window ÷ 8 × 4, 300 000)</td><td>50 000 chars per bridge result</td></tr>
+        <tr><td>Retry</td><td>failed turn, once</td><td>none</td><td>none</td></tr>
+        <tr><td>Model slug</td><td class="wrap"><code>anthropic/claude-haiku-4-5</code></td><td class="wrap"><code>unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></td><td class="wrap"><code>claude-opus-5-5</code> (bare)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-argv">
+  <div class="sec-head">
+    <span class="kicker">Try it: pick a profile, toggle the sandbox</span>
+    <h2 id="s-argv">The Claude Code command line</h2>
+    <p>Built by <code>cli_args</code> in <code>claude_code.rs</code>. The prompt goes in on stdin; the agent's workspace is the working directory. A chat agent with no <code>workspace</code> and Tengu tools gets a <code>tengu-claude-*</code> temp dir for the run, so the bridge still starts.</p>
+  </div>
+  <div class="widget" id="argvw">
+    <div class="widget-row">
+      <div class="seg-group" role="group" aria-label="builtin_tools_profile">
+        <button type="button" class="btn" data-prof="none" aria-pressed="true">none</button>
+        <button type="button" class="btn" data-prof="read_only" aria-pressed="false">read_only</button>
+        <button type="button" class="btn" data-prof="editor" aria-pressed="false">editor</button>
+        <button type="button" class="btn" data-prof="editor_shell" aria-pressed="false">editor_shell</button>
+      </div>
+    </div>
+    <div class="toggles">
+      <label><input type="checkbox" id="a-proxy" checked> <span>Tor egress (default)</span></label>
+      <label><input type="checkbox" id="a-bridge" checked> <span>Tengu tools for this run</span></label>
+      <label><input type="checkbox" id="a-hard"> <span>hardened sandbox (<code>[risk]</code> or Solana signer)</span></label>
+    </div>
+    <pre class="argv" id="argv"></pre>
+    <span class="verdict ok" id="argv-verdict" aria-live="polite">-</span>
+    <div class="env-row"><b>removed</b><div class="envs rm"><code>ANTHROPIC_API_KEY</code><code>CLAUDECODE</code><code>CLAUDE_PID</code><code>CLAUDE_EFFORT</code><code>CLAUDE_CODE_*</code></div></div>
+    <div class="env-row"><b>kept</b><div class="envs keep"><code>CLAUDE_CODE_OAUTH_TOKEN</code><code>CLAUDE_CODE_USE_*</code><code>CLAUDE_CODE_SKIP_*_AUTH</code><code>CLAUDE_CODE_CLIENT_CERT</code><code>CLAUDE_CODE_CLIENT_KEY</code><code>CLAUDE_CODE_CLIENT_KEY_PASSPHRASE</code><code>CLAUDE_CODE_API_KEY_HELPER_TTL_MS</code></div></div>
+    <div class="env-row"><b>added</b><div class="envs add" id="env-add"><code>HTTPS_PROXY=http://127.0.0.1:9050</code><code>HTTP_PROXY=http://127.0.0.1:9050</code><code>NO_PROXY=localhost,127.0.0.1,::1</code></div></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-win">
+  <div class="sec-head">
+    <span class="kicker">Try it: size a window</span>
+    <h2 id="s-win">One number drives the budgets</h2>
+    <p><code>limits.context_window</code> sets the answer reserve, the history budget and, for <code>local</code>, the per-result cap. Formulas from <code>engine.rs</code>, <code>prompt_budget.rs</code> and <code>token.rs</code>.</p>
+  </div>
+  <div class="widget" id="winw">
+    <div class="widget-row">
+      <div class="seg-group" role="group" aria-label="Engine">
+        <button type="button" class="btn" data-weng="local" aria-pressed="true">local</button>
+        <button type="button" class="btn" data-weng="openrouter" aria-pressed="false">openrouter</button>
+      </div>
+      <label for="win">context_window: <span class="readout" id="win-out">32 000</span>
+        <input type="range" id="win" min="0" max="7" step="1" value="2">
+      </label>
+    </div>
+    <div class="win-bar" aria-hidden="true"><span class="w-one"></span><span class="w-res"></span></div>
+    <ul class="wkey">
+      <li><i class="k-one"></i>one full tool result</li>
+      <li><i class="k-res"></i>answer reserve</li>
+    </ul>
+    <div class="stats">
+      <div class="stat"><small>output cap (no max_output set)</small><b id="w-cap">-</b></div>
+      <div class="stat"><small>answer reserve</small><b id="w-res">-</b></div>
+      <div class="stat"><small>one tool result, max</small><b id="w-one">-</b></div>
+      <div class="stat"><small>input budget (flow 100 000)</small><b id="w-in">-</b></div>
+    </div>
+    <span class="verdict ok" id="win-verdict" aria-live="polite">-</span>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-toml">
+  <div class="sec-head">
+    <span class="kicker">Real blocks from the repo</span>
+    <h2 id="s-toml">One agent per engine</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-or" aria-selected="true">openrouter</button>
+      <button type="button" aria-controls="tab-lo">local</button>
+      <button type="button" aria-controls="tab-cc">claude_code</button>
+    </div>
+    <div class="tabpanel" id="tab-or"><pre><span class="c"># sandboxes/jev-exec/config.toml</span>
+<span class="k">[agents.executor]</span>
+engine    = <span class="s">"openrouter"</span>
+model     = <span class="s">"anthropic/claude-haiku-4-5"</span>   <span class="c"># provider/model slug</span>
+role      = <span class="s">"executor"</span>
+workspace = <span class="s">"~/jev-exec-workspace"</span>
+tools     = [<span class="s">"http_request"</span>, <span class="s">"list_directory"</span>]</pre></div>
+    <div class="tabpanel" id="tab-lo" hidden><pre><span class="c"># config.example.toml (commented out there)</span>
+<span class="k">[agents.local]</span>
+engine      = <span class="s">"local"</span>
+model       = <span class="s">"unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL"</span>   <span class="c"># the server's own id, verbatim</span>
+description = <span class="s">"Private/offline work on the local model."</span>
+<span class="k">[agents.local.limits]</span>
+context_window       = <span class="n">32000</span>   <span class="c"># the served window; the 1_000_000 default warns</span>
+request_timeout_secs = <span class="n">900</span>
+<span class="k">[agents.local.local]</span>
+base_url    = <span class="s">"http://127.0.0.1:8888"</span>   <span class="c"># Unsloth; Ollama :11434, llama-server :8080</span>
+api_key_env = <span class="s">"UNSLOTH_API_KEY"</span>         <span class="c"># unset env = no Authorization header</span></pre></div>
+    <div class="tabpanel" id="tab-cc" hidden><pre><span class="c"># sandboxes/xmarket/config.toml (a [risk] sandbox: hardened)</span>
+<span class="k">[agents.xm_architect]</span>
+default   = <span class="n">true</span>
+engine    = <span class="s">"claude_code"</span>
+model     = <span class="s">"claude-opus-5-5"</span>        <span class="c"># bare slug for claude_code</span>
+workspace = <span class="s">"~/xmarket-workspace"</span>
+tools     = [<span class="s">"read_file"</span>, <span class="s">"list_directory"</span>, <span class="s">"hl_ctx"</span>, <span class="s">"hl_book"</span>, <span class="s">"risk_status"</span>, <span class="s">"paper_positions"</span>]
+
+<span class="k">[agents.xm_architect.limits]</span>
+max_tool_rounds   = <span class="n">30</span>    <span class="c"># claude_code counts tool calls, not engine turns</span>
+step_timeout_secs = <span class="n">600</span>
+
+<span class="k">[agents.xm_architect.claude_code]</span>
+builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># required in a [risk] sandbox</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-end">
+  <div class="sec-head">
+    <span class="kicker">Seven outcomes</span>
+    <h2 id="s-end">How an engine call ends</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip hands">ok</span><span><b>events</b>Text, tool calls, usage, then <code>Done</code>. The tool loop goes on.</span></li>
+    <li><span class="chip bad">http</span><span><b>status error</b><code>OpenRouter error 429: …</code> or <code>Local LLM error …</code>: the body is shown.</span></li>
+    <li><span class="chip bad">down</span><span><b>unreachable</b><code>Local LLM at … unreachable (is the server running?)</code></span></li>
+    <li><span class="chip warn">empty</span><span><b>empty twice</b>OpenRouter retried once and still got nothing: chat shows nothing, a <code>run-agent</code> step fails.</span></li>
+    <li><span class="chip bad">idle</span><span><b>CLI idle</b>No CLI output for 120 s: <code>Claude CLI idle timeout</code>, process killed.</span></li>
+    <li><span class="chip guard">cap</span><span><b>tool cap</b><code>Max tool rounds exceeded (71 calls, limit 70)</code>, process killed.</span></li>
+    <li><span class="chip data">done</span><span><b>step stored</b><code>compress_and_store</code> succeeded in a step: the CLI is stopped on purpose, usage kept.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No silent default engine.</b> <code>engine</code> must be one of three; an empty <code>model</code> or unknown <code>builtin_tools_profile</code> fails the load.</span></li>
+    <li><span><b>Hardened sandboxes run Claude Code bare.</b> With <code>[risk]</code> or a Solana signer, every claude_code agent needs <code>builtin_tools_profile = "none"</code>, or load fails.</span></li>
+    <li><span><b>The CLI sees only the Tengu bridge.</b> <code>--strict-mcp-config</code> on every run: the operator's own MCP servers never load.</span></li>
+    <li><span><b>Built-in Bash never bypasses the proxy.</b> Under an egress proxy, <code>editor_shell</code> launches as <code>editor</code>.</span></li>
+    <li><span><b>No secret in the temp MCP config.</b> It holds names and paths; the bridge inherits values from the env.</span></li>
+    <li><span><b>Local stays local.</b> The local client ignores every proxy, env ones included.</span></li>
+    <li><span><b>Claude Code's tool count is capped.</b> One call past <code>max_tool_rounds</code> kills the CLI with an error.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Smoke-test every engine</h2>
+    <p><code>--engines</code> runs <code>list_directory</code> → <code>read_file</code> → answer in a temp workspace, on each agent's own engine and model. It calls the models. On macOS a loopback <code>local</code> agent is skipped.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox jev-exec --engines</span>
+<span class="ln o">  Backend diagnostics:</span>
+<span class="ln">    architect: engine=claude_code model=claude-opus-5-5 endpoint=claude transport=subprocess/stream-json context=200000 output_cap=16384 streaming=true</span>
+<span class="ln">    executor: engine=openrouter model=anthropic/claude-haiku-4-5 endpoint=https://openrouter.ai/api transport=http-json context=1000000 output_cap=16384 streaming=false</span>
+<span class="ln o">  …</span>
+<span class="ln o">  Engines (smoke turn: list_directory + read_file in a temp workspace):</span>
+<span class="ln o">    agent      engine       model                       ok    tools called                 secs</span>
+<span class="ln">    architect  claude_code  claude-opus-5-5             skipped (list_directory, read_file denied by its own scopes)</span>
+<span class="ln">    executor   openrouter   anthropic/claude-haiku-4-5  <span class="hl">ok</span>    list_directory, read_file     4.2</span></pre>
+  </div>
+  <p class="note">The architect's own scopes deny both smoke tools (<code>read_file = {}</code>), so it is skipped, not failed. The time is an example. A failed row makes <code>doctor</code> exit non-zero.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/ports/engine.rs</code></td><td><code>Engine</code>, <code>EngineContext</code>, <code>ToolExecutor</code>; default output cap</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/mod.rs</code></td><td><code>build_engine</code>, <code>build_step_engine</code>, <code>StepOpts</code></td></tr>
+        <tr><td><code>src/adapters/outbound/engines/openrouter.rs</code></td><td>HTTP JSON, retry once, truncation marker</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/local.rs</code></td><td>OpenAI-compatible server, no proxy, result cap</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI args, env strip, NDJSON, transcript, tool cap</td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, validation</td></tr>
+        <tr><td><code>src/config/hardening.rs</code></td><td>profile <code>none</code> in hardened sandboxes</td></tr>
+        <tr><td><code>src/domain/engine_smoke.rs</code></td><td>smoke prompt and verdict</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor --engines</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: the argv builder (cli_args) and the window calculator */
+(function () {
+  var TOOLS = { none: "", read_only: "Read,Glob,Grep", editor: "Read,Glob,Grep,Edit,Write,MultiEdit", editor_shell: "Read,Glob,Grep,Edit,Write,MultiEdit,Bash" };
+  var prof = "none";
+  var proxy = document.getElementById("a-proxy"), bridge = document.getElementById("a-bridge"), hard = document.getElementById("a-hard");
+  var out = document.getElementById("argv"), verdict = document.getElementById("argv-verdict"), envAdd = document.getElementById("env-add");
+  function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function render() {
+    var eff = proxy.checked && prof === "editor_shell" ? "editor" : prof;
+    envAdd.classList.toggle("off", !proxy.checked);
+    if (hard.checked && prof !== "none") {
+      out.innerHTML = '<span class="drop">' + esc('Config validation failed (1 issue):\n- agents.xm_architect: engine = "claude_code" in a hardened sandbox (Solana signer or [risk]) needs [agents.xm_architect.claude_code] builtin_tools_profile = "none" — got builtin_tools_profile = "' + prof + '"; built-in tools run outside tengu scopes') + "</span>";
+      verdict.className = "verdict bad";
+      verdict.textContent = "Config::load refuses: no CLI is ever started";
+      return;
+    }
+    var L = [
+      ["claude -p --output-format stream-json --verbose", ""],
+      ["  --dangerously-skip-permissions --no-session-persistence", ""],
+      ["  --strict-mcp-config", "add"],
+      ["  --model claude-opus-5-5", ""],
+      ['  --system-prompt "<system prompt>"', ""],
+      ['  --tools "' + TOOLS[eff] + '"', eff !== prof ? "drop" : ""]
+    ];
+    if (eff === "none") {
+      L.push(['  --setting-sources "" --disable-slash-commands', "add"]);
+      L.push(["  --settings '{\"autoMemoryEnabled\":false,\"disableAllHooks\":true}'", "add"]);
+    }
+    if (bridge.checked) {
+      L.push(["  --mcp-config <temp file: tengu-tools → tengu mcp-bridge>", "add"]);
+      L.push(["  --allowedTools mcp__tengu-tools__read_file mcp__tengu-tools__list_directory", "add"]);
+    }
+    L.push(["  < stdin: User: <message>", ""]);
+    out.innerHTML = L.map(function (l) { return l[1] ? '<span class="' + l[1] + '">' + esc(l[0]) + "</span>" : esc(l[0]); }).join("\n");
+    if (eff !== prof) {
+      verdict.className = "verdict warn";
+      verdict.textContent = "editor_shell launched as editor: built-in Bash would bypass the proxy";
+    } else if (eff === "none") {
+      verdict.className = "verdict ok";
+      verdict.textContent = "No built-ins, no settings files, hooks, plugins, skills or CLAUDE.md";
+    } else {
+      verdict.className = "verdict warn";
+      verdict.textContent = "Built-ins (" + TOOLS[eff] + ") act outside Tengu scopes";
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#argvw [data-prof]"), function (b) {
+    b.addEventListener("click", function () {
+      prof = b.getAttribute("data-prof");
+      Array.prototype.forEach.call(document.querySelectorAll("#argvw [data-prof]"), function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      render();
+    });
+  });
+  [proxy, bridge, hard].forEach(function (x) { x.addEventListener("change", render); });
+  render();
+
+  /* window calculator: Engine::max_output_tokens_per_turn, reserved_output_tokens, tool_result_char_budget */
+  var WINS = [8192, 16384, 32000, 65536, 131072, 262144, 1000000, 2000000];
+  var weng = "local", win = document.getElementById("win"), winOut = document.getElementById("win-out");
+  var one = document.querySelector("#winw .w-one"), resEl = document.querySelector("#winw .w-res"), wv = document.getElementById("win-verdict");
+  function fmt(n) { return Math.round(n).toLocaleString("en-US").replace(/,/g, " "); }
+  function outCap(w) { return Math.min(16384, Math.max(256, Math.floor(w / 8))); }
+  function reserved(w) {
+    var c = Math.min(outCap(w), w);
+    var floor = Math.min(2048, Math.max(64, Math.floor(w / 50)));
+    return Math.min(Math.max(c + Math.max(Math.floor(c / 4), 64), floor), w);
+  }
+  function calc() {
+    var w = WINS[+win.value];
+    winOut.textContent = fmt(w) + (w === 1000000 ? " (default)" : "");
+    var cap = outCap(w), res = reserved(w);
+    var chars = weng === "local" ? Math.min(Math.floor(w / 8) * 4, 300000) : 300000;
+    var tok = Math.floor(chars / 4);
+    var input = Math.max(0, Math.min(w - res, 100000));
+    one.style.width = Math.min(100, tok / w * 100) + "%";
+    resEl.style.width = Math.min(100, res / w * 100) + "%";
+    document.getElementById("w-cap").textContent = fmt(cap) + " tok";
+    document.getElementById("w-res").textContent = fmt(res) + " tok";
+    document.getElementById("w-one").textContent = fmt(chars) + " chars · " + (tok / w * 100).toFixed(1) + "%";
+    document.getElementById("w-in").textContent = fmt(input) + " tok − system";
+    if (weng === "local" && w === 1000000) {
+      wv.className = "verdict warn"; wv.textContent = "Config load warns: set the server's real window (Ollama: num_ctx)";
+    } else if (weng === "openrouter" && tok > w) {
+      wv.className = "verdict bad"; wv.textContent = "One result alone (75 000 tok) can exceed this window";
+    } else if (weng === "openrouter" && tok / w > 0.25) {
+      wv.className = "verdict warn"; wv.textContent = "One capped result can fill " + (tok / w * 100).toFixed(0) + "% of the window: lower max_tool_result_chars";
+    } else {
+      wv.className = "verdict ok"; wv.textContent = "A capped result leaves room for prompt, history and answer";
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#winw [data-weng]"), function (b) {
+    b.addEventListener("click", function () {
+      weng = b.getAttribute("data-weng");
+      Array.prototype.forEach.call(document.querySelectorAll("#winw [data-weng]"), function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      calc();
+    });
+  });
+  win.addEventListener("input", calc);
+  calc();
+})();
+</script>
+</body>
+</html>

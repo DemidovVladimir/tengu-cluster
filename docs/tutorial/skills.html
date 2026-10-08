@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Skills · Tengu</title>
+<meta name="description" content="How Tengu finds SKILL.md folders in three tiers, keeps the ones an agent lists, puts documentation into the prompt and turns shell skills into tools.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: tier race, env expansion, prompt budget, manage_skill actions */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg button { font: inherit; font-size: .82rem; border: 0; background: var(--panel); color: var(--muted); padding: 5px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .tiers { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+  .tier { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 4px; transition: border-color .3s, opacity .3s, transform .3s; }
+  .tier .ord { font-family: var(--font-mono); font-size: .72rem; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+  .tier b { font-family: var(--font-mono); font-size: .84rem; overflow-wrap: anywhere; }
+  .tier .st { font-family: var(--font-mono); font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; }
+  .tier.win { border-color: var(--hands); border-width: 2px; transform: translateY(-2px); } .tier.win .st { color: var(--hands); }
+  .tier.shadow { opacity: .65; border-style: dashed; } .tier.shadow .st { color: var(--warn); }
+  .tier.none { opacity: .45; } .tier.none .st { color: var(--faint); }
+  .envbox { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 700px) { .envbox { grid-template-columns: minmax(0, 1fr); } }
+  .envin { font: inherit; font-family: var(--font-mono); font-size: .85rem; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); width: 100%; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .presets button { font: inherit; font-family: var(--font-mono); font-size: .74rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--muted); padding: 2px 8px; cursor: pointer; }
+  .presets button:hover { border-color: var(--accent); color: var(--ink); }
+  .envout { font-family: var(--font-mono); font-size: .8rem; background: var(--sunk); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-wrap: anywhere; }
+  .envout .hit { color: var(--hands); font-weight: 500; } .envout .lit { color: var(--warn); }
+  .why { margin: 0; padding-left: 18px; font-size: .85rem; color: var(--muted); display: grid; gap: 2px; }
+  .budget { display: grid; gap: 4px; }
+  .brow { display: grid; grid-template-columns: 22px minmax(110px, 190px) minmax(0, 1fr) 92px; gap: 8px; align-items: center; font-size: .84rem; }
+  .brow input { margin: 0; }
+  .brow .nm { font-family: var(--font-mono); font-size: .8rem; overflow-wrap: anywhere; color: var(--ink); }
+  .brow .tk { font-family: var(--font-mono); font-size: .76rem; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .brow .tag { font-family: var(--font-mono); font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; }
+  .brow .tag.in { color: var(--hands); } .brow .tag.cut { color: var(--warn); } .brow .tag.drop { color: var(--bad); } .brow .tag.off { color: var(--faint); }
+  .stack { position: relative; height: 22px; border-radius: 6px; background: var(--sunk); overflow: hidden; display: flex; border: 1px solid var(--line); }
+  .stack span { height: 100%; transition: width .5s cubic-bezier(.2,.8,.2,1); border-right: 1px solid var(--panel); }
+  .stack .s-id { background: var(--heart); opacity: .55; }
+  .stack .s-sk { background: var(--brain); opacity: .75; }
+  .stack .s-cut { background: var(--warn); }
+  .stack-cap { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: .74rem; color: var(--faint); }
+  .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .acts span { font-family: var(--font-mono); font-size: .76rem; border: 1px solid var(--hands); color: var(--hands); background: var(--hands-soft); border-radius: 6px; padding: 1px 8px; }
+  .kv { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: .86rem; color: var(--muted); }
+  .kv code { color: var(--ink); }
+  .readout { white-space: nowrap; }
+  .brow .tag { white-space: nowrap; }
+  .card h3 { flex-wrap: wrap; }
+  .card h3 code { overflow-wrap: normal; }
+  @media (max-width: 560px) { .brow { grid-template-columns: 22px minmax(0, 1fr) auto; } .brow .tk { display: none; } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · know-how</div>
+  <h1>Skills</h1>
+  <p class="lede">A skill is a folder with a <code>SKILL.md</code>. Tengu finds it in fixed tiers, keeps only the names an agent lists in <code>skill_packages</code>, puts documentation into the prompt and turns shell skills into tools.</p>
+  <ul class="facts">
+    <li>first folder name <b>wins</b></li>
+    <li>one body ≤ <b>16 000</b> tokens</li>
+    <li>all bodies ≤ <b>32 000</b> tokens</li>
+    <li>resource read ≤ <b>1 MB</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> the agent's LLM</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> shell skill tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> filters and checks</li>
+    <li><span class="chip data">data</span> folders, prompt, files</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Folder → prompt or tool</span>
+    <h2 id="s-flow">How a skill reaches an agent</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 400" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Four folders are scanned in order; the first folder name wins; each SKILL.md is parsed, filtered by skill_packages, and becomes either prompt text or a shell tool; the agent reads resources on demand; every message rescans.</title>
+        <path class="e" id="p-t1" d="M185 50 C 206 50, 208 60, 228 60" data-at="1-2"/>
+        <path class="e" id="p-t2" d="M185 118 C 206 118, 208 74, 228 74" data-at="1-2"/>
+        <path class="e" id="p-t3" d="M185 186 C 208 186, 206 88, 228 88" data-at="1"/>
+        <path class="e" id="p-t4" d="M185 254 C 210 254, 204 102, 228 102" data-at="1"/>
+        <path class="e" id="p-scan-parse" d="M308 112 L308 150" data-at="3"/>
+        <path class="e" id="p-parse-filter" d="M308 226 L308 264" data-at="4"/>
+        <path class="e" id="p-filter-prompt" d="M388 290 C 412 290, 410 176, 432 176" data-at="5"/>
+        <path class="e" id="p-filter-tool" d="M388 316 L432 316" data-at="6"/>
+        <path class="e" id="p-prompt-agent" d="M604 176 L662 176" data-at="7"/>
+        <path class="e" id="p-tool-agent" d="M604 300 C 632 300, 636 214, 662 214" data-at="7"/>
+        <path class="e dash" id="p-agent-res" d="M752 120 L752 82" data-at="7"/>
+        <path class="e" id="p-agent-run" d="M752 230 L752 276" data-at="8"/>
+        <path class="e flow" id="p-next-scan" d="M432 54 L388 54" data-at="9"/>
+
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="24" width="165" height="52" rx="8"/>
+          <text x="102" y="46" text-anchor="middle" class="t-title">managed</text>
+          <text x="102" y="64" text-anchor="middle" class="t-small t-mono">~/.tengu/skills</text>
+        </g>
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="92" width="165" height="52" rx="8"/>
+          <text x="102" y="114" text-anchor="middle" class="t-title">workspace</text>
+          <text x="102" y="132" text-anchor="middle" class="t-small t-mono">&lt;ws&gt;/.tengu/skills</text>
+        </g>
+        <g class="n data" data-at="1">
+          <rect x="20" y="160" width="165" height="52" rx="8"/>
+          <text x="102" y="182" text-anchor="middle" class="t-title">project</text>
+          <text x="102" y="200" text-anchor="middle" class="t-small t-mono">&lt;ws&gt;/skills</text>
+        </g>
+        <g class="n data" data-at="1">
+          <rect x="20" y="228" width="165" height="52" rx="8"/>
+          <text x="102" y="250" text-anchor="middle" class="t-title">run folder</text>
+          <text x="102" y="268" text-anchor="middle" class="t-small t-mono">&lt;cwd&gt;/skills</text>
+        </g>
+        <g class="n" data-at="1-3,9">
+          <rect x="228" y="36" width="160" height="76" rx="8"/>
+          <text x="308" y="62" text-anchor="middle" class="t-title">Scan</text>
+          <text x="308" y="81" text-anchor="middle" class="t-small">folders with SKILL.md</text>
+          <text x="308" y="98" text-anchor="middle" class="t-small">first name wins</text>
+        </g>
+        <g class="n" data-at="3-4">
+          <rect x="228" y="150" width="160" height="76" rx="8"/>
+          <text x="308" y="176" text-anchor="middle" class="t-title">Parse SKILL.md</text>
+          <text x="308" y="195" text-anchor="middle" class="t-small">--- frontmatter → doc</text>
+          <text x="308" y="212" text-anchor="middle" class="t-small">## Execution → shell</text>
+        </g>
+        <g class="n guard" data-at="4-6">
+          <rect x="228" y="264" width="160" height="76" rx="8"/>
+          <text x="308" y="290" text-anchor="middle" class="t-title">Filter</text>
+          <text x="308" y="309" text-anchor="middle" class="t-small">skill_packages only</text>
+          <text x="308" y="326" text-anchor="middle" class="t-small">no shell → no shell skill</text>
+        </g>
+        <g class="n" data-at="9">
+          <rect x="432" y="24" width="172" height="60" rx="8"/>
+          <text x="518" y="49" text-anchor="middle" class="t-title">Next message</text>
+          <text x="518" y="68" text-anchor="middle" class="t-small">rescan · hash diff</text>
+        </g>
+        <g class="n data" data-at="5,7">
+          <rect x="432" y="138" width="172" height="76" rx="8"/>
+          <text x="518" y="164" text-anchor="middle" class="t-title">System prompt</text>
+          <text x="518" y="183" text-anchor="middle" class="t-small">doc + API bodies</text>
+          <text x="518" y="200" text-anchor="middle" class="t-small">≤ 16 000 tokens each</text>
+        </g>
+        <g class="n hands" data-at="6-7">
+          <rect x="432" y="264" width="172" height="76" rx="8"/>
+          <text x="518" y="290" text-anchor="middle" class="t-title">Shell tool</text>
+          <text x="518" y="309" text-anchor="middle" class="t-small">one per shell skill</text>
+          <text x="518" y="326" text-anchor="middle" class="t-small">params → JSON schema</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="662" y="24" width="180" height="58" rx="8"/>
+          <text x="752" y="48" text-anchor="middle" class="t-title t-mono">resources/</text>
+          <text x="752" y="67" text-anchor="middle" class="t-small">read on demand</text>
+        </g>
+        <g class="n heart" data-at="7-8">
+          <rect x="662" y="120" width="180" height="110" rx="10"/>
+          <text x="752" y="154" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="752" y="177" text-anchor="middle" class="t-title">Agent</text>
+          <text x="752" y="197" text-anchor="middle" class="t-small">reads the prompt</text>
+          <text x="752" y="214" text-anchor="middle" class="t-small">calls its tools</text>
+        </g>
+        <g class="n guard" data-at="8">
+          <rect x="662" y="276" width="180" height="64" rx="8"/>
+          <text x="752" y="301" text-anchor="middle" class="t-title">Run in workspace</text>
+          <text x="752" y="320" text-anchor="middle" class="t-small">shell_bins · egress</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">4 folders, fixed order</text></g>
+        <g class="pop badge" data-at="2"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">same name later: skipped</text></g>
+        <g class="pop badge" data-at="3"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">name: lowercase, - → _</text></g>
+        <g class="pop badge" data-at="4"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">empty list = no skills</text></g>
+        <g class="pop badge" data-at="5"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">total cap 32 000 tokens</text></g>
+        <g class="pop badge" data-at="6"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">{{word}} → 'quoted arg'</text></g>
+        <g class="pop badge" data-at="7"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">view_skill · ≤ 1 MB</text></g>
+        <g class="pop badge" data-at="8"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">first word vs shell_bins</text></g>
+        <g class="pop badge" data-at="9"><rect x="432" y="362" width="208" height="22" rx="11"/><text x="536" y="377" text-anchor="middle">/reload forces it now</text></g>
+
+        <circle class="tok" r="6" data-path="p-t1" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-t2" data-at="1" data-delay="250"/>
+        <circle class="tok" r="6" data-path="p-t3" data-at="1" data-delay="500"/>
+        <circle class="tok" r="6" data-path="p-t4" data-at="1" data-delay="750"/>
+        <circle class="tok" r="6" data-path="p-t1" data-at="2"/>
+        <circle class="tok bad" r="5" data-path="p-t2" data-at="2" data-delay="500"/>
+        <circle class="tok" r="6" data-path="p-scan-parse" data-at="3"/>
+        <circle class="tok guard" r="6" data-path="p-parse-filter" data-at="4"/>
+        <circle class="tok" r="6" data-path="p-filter-prompt" data-at="5"/>
+        <circle class="tok hands" r="6" data-path="p-filter-tool" data-at="6"/>
+        <circle class="tok" r="6" data-path="p-prompt-agent" data-at="7"/>
+        <circle class="tok hands" r="6" data-path="p-tool-agent" data-at="7" data-delay="300"/>
+        <circle class="tok heart" r="5" data-path="p-agent-res" data-at="7" data-delay="900"/>
+        <circle class="tok hands" r="6" data-path="p-agent-run" data-at="8"/>
+        <circle class="tok" r="6" data-path="p-next-scan" data-at="9"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>Tengu looks in four folders, always in this order: <code>~/.tengu/skills</code>, the workspace's <code>.tengu/skills</code> and <code>skills/</code>, then <code>skills/</code> in the folder tengu runs from.</li>
+        <li>Every sub-folder holding a <code>SKILL.md</code> is a skill. A folder name already seen in an earlier tier wins; later copies are skipped.</li>
+        <li><code>---</code> frontmatter with a <code>name</code> makes a documentation skill, or an API skill with <code>base_url</code>. A <code># name</code> heading plus an <code>## Execution</code> code block makes a shell skill.</li>
+        <li>Only names in the agent's <code>skill_packages</code> stay; an empty list loads none. A name equal to a built-in tool is skipped. An agent that runs no shell drops shell skills.</li>
+        <li>Documentation and API bodies join the system prompt. Each is cut at 16 000 tokens; a body that would push the total past 32 000 is dropped with a warning.</li>
+        <li>Each shell skill becomes one tool. Its <code>## Parameters</code> list becomes the JSON schema the model sees.</li>
+        <li>The agent reads the prompt and calls tools. Files under a skill's <code>resources/</code> stay out of the prompt; it reads them with <code>view_skill</code> or <code>skill_resource</code>.</li>
+        <li>When a shell skill runs, each string argument is single-quoted into the template, the first command word is checked against <code>shell_bins</code>, and egress rules apply.</li>
+        <li>Before each message in the TUI and Telegram, tengu rescans. Only a changed file (new content hash) rebuilds the prompt and the tool list.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-tier">
+  <div class="sec-head">
+    <span class="kicker">Try it: three copies of one skill</span>
+    <h2 id="s-tier">Which copy wins?</h2>
+    <p>Say the agent's workspace is the folder tengu runs in. Tick where a <code>research</code> folder exists. Chat, plan steps, the planner roster and the skill tools all use this one order.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="has-m"><input type="checkbox" id="has-m"> <code>~/.tengu/skills/research</code></label>
+      <label for="has-w"><input type="checkbox" id="has-w" checked> <code>.tengu/skills/research</code></label>
+      <label for="has-p"><input type="checkbox" id="has-p" checked> <code>skills/research</code></label>
+    </div>
+    <div class="tiers" id="tiers" aria-live="polite"></div>
+    <p class="note" id="tier-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-kinds">
+  <div class="sec-head">
+    <span class="kicker">One file, three shapes</span>
+    <h2 id="s-kinds">Documentation, API and shell skills</h2>
+    <p>The parser tries frontmatter first, then the classic shell format. Every skill in <code>skills/</code> today is frontmatter; none is a shell skill.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-doc" aria-selected="true">Documentation</button>
+      <button type="button" aria-controls="tab-api">API</button>
+      <button type="button" aria-controls="tab-shell">Shell</button>
+      <button type="button" aria-controls="tab-sees">What the model gets</button>
+    </div>
+    <div class="tabpanel" id="tab-doc"><pre><span class="c"># skills/execution-map/SKILL.md (first lines; description shortened)</span>
+<span class="k">---</span>
+name: <span class="s">execution-map</span>              <span class="c"># loaded as execution_map</span>
+description: <span class="s">"Hand a decision loop (Jev) an execution map: …"</span>
+editable_by_learner: <span class="n">false</span>         <span class="c"># read by the skill writers, not the loader</span>
+<span class="k">---</span>
+
+# Execution map
+
+You plan; Jev executes. An execution map is JSON you hand to one …
+<span class="c"># the whole body becomes one prompt fragment</span></pre></div>
+    <div class="tabpanel" id="tab-api" hidden><pre><span class="c"># skills/privy-agentic-wallets/SKILL.md (frontmatter)</span>
+<span class="k">---</span>
+name: <span class="s">privy-agentic-wallets</span>
+description: <span class="s">Create and manage agentic wallets with Privy. …</span>
+base_url: <span class="s">https://api.privy.io</span>    <span class="c"># this key makes it an API skill</span>
+auth_mode: basic                  <span class="c"># keys below: not read by the loader</span>
+auth_basic_user_env: PRIVY_APP_ID
+auth_basic_pass_env: PRIVY_APP_SECRET
+env_vars:
+  - PRIVY_APP_ID                  <span class="c"># safe name: $PRIVY_APP_ID expands in the body</span>
+  - PRIVY_APP_SECRET              <span class="c"># secret name: stays literal</span>
+<span class="k">---</span>
+<span class="c"># prompt = "# privy_agentic_wallets — API reference" + a fixed preamble
+#          (use http_request, copy URLs and $VARS exactly) + the body.
+# No tool is created: the agent calls http_request itself.</span></pre></div>
+    <div class="tabpanel" id="tab-shell" hidden><pre><span class="c"># the classic shell format (example from the parser's own test)</span>
+# echo_word
+
+Echo.
+
+## Parameters
+
+- `word` (string, required): The word
+
+## Execution
+
+```sh
+echo {{word}}
+```
+<span class="c"># every {{placeholder}} must match a declared parameter,
+# or the skill is skipped at load</span></pre></div>
+    <div class="tabpanel" id="tab-sees" hidden><pre><span class="c"># shell skill → one tool definition</span>
+{ <span class="k">"name"</span>: <span class="s">"echo_word"</span>, <span class="k">"description"</span>: <span class="s">"Echo."</span>,
+  <span class="k">"parameters"</span>: { <span class="k">"type"</span>: <span class="s">"object"</span>,
+    <span class="k">"properties"</span>: { <span class="k">"word"</span>: { <span class="k">"type"</span>: <span class="s">"string"</span>, <span class="k">"description"</span>: <span class="s">"The word"</span> } },
+    <span class="k">"required"</span>: [<span class="s">"word"</span>] } }
+
+<span class="c"># the model calls echo_word {"word": "it's done"} → tengu runs, in the workspace:</span>
+echo <span class="s">'it'\''s done'</span>
+
+<span class="c"># doc / API skill → system prompt text, after the identity block:</span>
+You are Tengu. Use tools to execute actions. Never fabricate data.
+<span class="j">---</span>
+# Execution map …</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-fm">
+  <div class="sec-head">
+    <span class="kicker">Frontmatter the loader reads</span>
+    <h2 id="s-fm">Five keys, nothing else</h2>
+  </div>
+  <div class="grid">
+    <div class="card data"><h3><code>name</code></h3><p>Required. Lowercased, <code>-</code> becomes <code>_</code>; letters, digits and <code>_</code> only. Must not equal a built-in tool.</p></div>
+    <div class="card data"><h3><code>description</code></h3><p>One line. The planner and <code>view_skill list</code> show it.</p></div>
+    <div class="card hands"><h3><code>base_url</code></h3><p>Alias <code>homepage</code>. Makes an API skill. Must start with <code>http://</code> or <code>https://</code> and hold no <code>; | &amp; ` $ ( )</code>.</p></div>
+    <div class="card guard"><h3><code>env_vars</code></h3><p>A list; <code>NAME?</code> is optional. A missing required one shows as <code>(missing: NAME)</code> in <code>/skills</code>. It does not block loading.</p></div>
+    <div class="card heart"><h3><code>commands</code></h3><p>Slash commands. <code>/cmd args</code> in the TUI or Telegram becomes a turn that follows the skill's <code>## Commands</code>.</p></div>
+  </div>
+  <p class="note warn"><b>Not read by the loader:</b> <code>editable_by_learner</code> and <code>metrics</code> (used by the writers and <a href="skill-lifecycle.html">evals</a>), and <code>requires_bins</code> / <code>requires_env</code> / <code>os</code>, which only <code>skills/skill-creator</code> describes. No code gates on them.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-env">
+  <div class="sec-head">
+    <span class="kicker">Try it: <code>$VAR</code> in a skill body</span>
+    <h2 id="s-env">Which variables reach the prompt?</h2>
+    <p>A body's <code>$NAME</code> or <code>${NAME}</code> is replaced only when the name is declared, set, and not secret-shaped. Secret names stay literal; <code>http_request</code> expands them at call time.</p>
+  </div>
+  <div class="widget">
+    <div class="envbox">
+      <div style="display:grid;gap:10px">
+        <label for="env-name">variable name</label>
+        <input class="envin" id="env-name" value="API_BASE_URL" spellcheck="false" autocomplete="off">
+        <div class="presets" aria-label="Examples">
+          <button type="button" data-v="API_BASE_URL">API_BASE_URL</button>
+          <button type="button" data-v="PRIVY_APP_ID">PRIVY_APP_ID</button>
+          <button type="button" data-v="PRIVY_APP_SECRET">PRIVY_APP_SECRET</button>
+          <button type="button" data-v="HF_TOKEN">HF_TOKEN</button>
+          <button type="button" data-v="PASSPORT_URL">PASSPORT_URL</button>
+          <button type="button" data-v="api_url">api_url</button>
+        </div>
+        <div class="ctrls">
+          <label for="env-decl"><input type="checkbox" id="env-decl" checked> listed in <code>env_vars</code></label>
+          <label for="env-set"><input type="checkbox" id="env-set" checked> set in the environment</label>
+        </div>
+      </div>
+      <div style="display:grid;gap:10px">
+        <div class="envout" id="env-out" aria-live="polite"></div>
+        <ul class="why" id="env-why"></ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-budget">
+  <div class="sec-head">
+    <span class="kicker">Try it: the prompt budget</span>
+    <h2 id="s-budget">Do my skills fit?</h2>
+    <p>Real body sizes from <code>skills/</code>, at 4 bytes per token. Tick skills as if they were in <code>skill_packages</code>, then grow your own.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="id-tok">identity + instructions <input type="range" id="id-tok" min="0" max="8000" step="250" value="1000"> <span class="readout" id="id-out">1 000</span></label>
+      <label for="my-kb">your skill body <input type="range" id="my-kb" min="0" max="200" step="2" value="0"> <span class="readout" id="my-out">0 KB</span></label>
+    </div>
+    <div class="budget" id="budget"></div>
+    <div>
+      <div class="stack" id="stack" aria-hidden="true"></div>
+      <div class="stack-cap"><span>0</span><span id="stack-sum"></span><span>32 000 tokens</span></div>
+    </div>
+    <p class="note">Each body is cut at 64 000 characters (16 000 tokens) plus <code>[truncated]</code>. A body that would cross 32 000 is dropped with a warning; smaller later ones may still fit. Fragments are added in name order, so the same skills drop every turn.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-tools">
+  <div class="sec-head">
+    <span class="kicker">Read and write</span>
+    <h2 id="s-tools">Skill tools an agent can call</h2>
+    <p>Reads are default tools. Writes are opt-in: list <code>manage_skill</code> in the agent's <code>tools</code> or <code>workspace_tools</code>.</p>
+  </div>
+  <div class="grid">
+    <div class="card data">
+      <h3><code>view_skill</code> <span class="chip ok">default</span></h3>
+      <div class="acts"><span>list</span><span>read</span><span>read_resource</span></div>
+      <p>Lists every tier of the agent's workspace with shadowing, counts fixtures, resources and metrics; reads one <code>SKILL.md</code> or one resource file.</p>
+    </div>
+    <div class="card data">
+      <h3><code>skill_resource</code> <span class="chip ok">default</span></h3>
+      <div class="acts"><span>list</span><span>read</span></div>
+      <p>The older resource reader. Same tiers, same 1 MB cap, no <code>..</code> or absolute paths.</p>
+    </div>
+    <div class="card hands">
+      <h3><code>manage_skill</code> <span class="chip warn">opt-in</span></h3>
+      <div class="acts"><span>create</span><span>edit_body</span><span>patch</span><span>add_resource</span><span>remove_resource</span><span>delete</span></div>
+      <p>Atomic writes, one audit line each in <code>skills/.audit.jsonl</code>. The target skill dir must pass the write scope: the managed tier needs its own grant. Changes load in the next session, not this one.</p>
+    </div>
+  </div>
+  <p class="note"><code>skill_distill</code> and <code>apply_improver_proposal</code> also write skills; they belong to <a href="skill-lifecycle.html">Skill evals and evolution</a>.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">At load time</span>
+    <h2 id="s-out">What can happen to a skill</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip data">doc</span><span><b>in the prompt</b>A documentation or API body, whole.</span></li>
+    <li><span class="chip warn">cut</span><span><b>truncated</b>Longer than 16 000 tokens: the rest is replaced by <code>[truncated]</code>.</span></li>
+    <li><span class="chip hands">tool</span><span><b>a tool</b>A shell skill, for an agent that runs a shell.</span></li>
+    <li><span class="chip">skip</span><span><b>not listed</b>Its name is not in <code>skill_packages</code>.</span></li>
+    <li><span class="chip">skip</span><span><b>shadowed</b>An earlier tier has a folder with the same name.</span></li>
+    <li><span class="chip bad">bad</span><span><b>invalid</b>Bad name, a built-in tool's name, or a <code>{{x}}</code> with no parameter. Warned and skipped.</span></li>
+    <li><span class="chip guard">no</span><span><b>no shell</b>A shell skill in a <code>[risk]</code> or signer sandbox. Warned once, never a tool.</span></li>
+    <li><span class="chip bad">drop</span><span><b>over budget</b>Would push the prompt past 32 000 tokens. Warned, left out.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Listed or nothing.</b> Every surface loads only names in <code>skill_packages</code> (alias <code>skills</code>); an empty list loads no skill.</span></li>
+    <li><span><b>No shell, no shell skill.</b> An agent with <code>no_shell_fallback</code> (every agent in a <code>[risk]</code> or signer sandbox) never gets a shell skill as a tool.</span></li>
+    <li><span><b>Secrets stay out of the prompt.</b> A variable whose name contains <code>KEY</code>, <code>SECRET</code>, <code>TOKEN</code>, <code>PASSWORD</code> or <code>PASS</code> is never expanded into a skill body.</span></li>
+    <li><span><b>Arguments are quoted.</b> Each string argument is single-quoted into the shell template; the first command word must pass <code>shell_bins</code>.</span></li>
+    <li><span><b>Loading only reads.</b> <code>write_file</code> refuses any path under a <code>skills</code> folder or <code>.tengu/</code>.</span></li>
+    <li><span><b>Locked skills stay locked.</b> <code>manage_skill</code> refuses every write but <code>create</code> on a skill with <code>editable_by_learner: false</code>.</span></li>
+    <li><span><b>No escape from <code>resources/</code>.</b> Reads and writes refuse <code>..</code> and absolute paths; reads stop at 1 MB; writes refuse <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.mcp.json</code>.</span></li>
+    <li><span><b>Hardened prompt files.</b> In a <code>[risk]</code> or signer sandbox a resource named <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code> or <code>CONTEXT.md</code> is refused too.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">List, check and seed skills</h2>
+    <p>The <code>tengu skill</code> verbs read the tiers from the current folder; output below is an excerpt from this repo. In the TUI, <code>/skills</code>, <code>/enable</code>, <code>/disable</code> and <code>/reload</code> act on the live registry; Telegram has <code>/reload</code>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu skill list --tier project</span>
+<span class="ln o">name                         tier       fixtures  gated metrics             last_run</span>
+<span class="ln o">execution-map                project           0                            -</span>
+<span class="ln o">skill-creator                project           1  distill_quality           <span class="hl">&lt;rfc3339&gt;</span></span>
+<span class="ln o">xlab-research                project           0                            -</span>
+<span class="ln cmd"><span class="p">$ </span>tengu skill doctor --sandbox xlab --no-fail</span>
+<span class="ln o"># tengu skill doctor</span>
+<span class="ln o">phantoms (0): agent refs with no skill on disk</span>
+<span class="ln o">orphans (8): installed skills with no agent ref</span>
+<span class="ln cmd"><span class="p">$ </span>tengu skill seed my-notes ./notes --yes</span>
+<span class="ln o">seeded skill 'my-notes' (tier=project)   <span class="hl"># example name</span></span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/application/skills/registry.rs</code></td><td>parse, validate, tiers, shadowing, allow-list, no-shell drop, hot reload, prompt budget</td></tr>
+        <tr><td><code>src/ports/skill_source.rs</code></td><td>the port that lists skill files</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/skill/</code></td><td>shell skills as tools: template quoting, <code>shell_bins</code>, egress guard</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/view_skill/</code></td><td><code>view_skill</code>: list, read, read_resource</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/skill_resource/</code></td><td><code>skill_resource</code>: list, read</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/manage_skill/</code></td><td><code>manage_skill</code>: the six write actions</td></tr>
+        <tr><td><code>src/domain/scope.rs</code></td><td>protected write names (<code>protected_write_in</code>)</td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td>prompt rebuild, <code>agent_skill_registry</code>, compose rules</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>skill bodies in a plan step's prompt</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/skill.rs</code></td><td><code>tengu skill list | doctor | seed | remove | export | install</code></td></tr>
+        <tr><td><code>skills/</code></td><td>the project tier: nine skills</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: tier race, env expansion, prompt budget */
+(function () {
+  /* --- tier race: registry::skill_directories (managed first), every surface --- */
+  var hm = document.getElementById("has-m"), hw = document.getElementById("has-w"), hp = document.getElementById("has-p");
+  var tiers = document.getElementById("tiers"), tnote = document.getElementById("tier-note");
+  var T = {
+    m: { path: "~/.tengu/skills/research", label: "managed" },
+    w: { path: ".tengu/skills/research", label: "workspace" },
+    p: { path: "skills/research", label: "project" }
+  };
+  function race() {
+    var has = { m: hm.checked, w: hw.checked, p: hp.checked };
+    var won = null;
+    tiers.innerHTML = "";
+    ["m", "w", "p"].forEach(function (k, i) {
+      var st, cls;
+      if (!has[k]) { st = "not there"; cls = "none"; }
+      else if (!won) { won = k; st = "wins"; cls = "win"; }
+      else { st = "shadowed"; cls = "shadow"; }
+      var d = document.createElement("div");
+      d.className = "tier " + cls;
+      d.innerHTML = '<span class="ord">' + (i + 1) + " · " + T[k].label + '</span><b>' + T[k].path + '</b><span class="st">' + st + "</span>";
+      tiers.appendChild(d);
+    });
+    if (!won) tnote.innerHTML = "<b>No copy.</b> A name in <code>skill_packages</code> with no folder: chat loads nothing, a plan step logs <code>skill body not found in any tier</code>, and <code>tengu skill doctor</code> reports a phantom.";
+    else tnote.innerHTML = "<b>Every surface</b> (chat, shell tools, plan steps, the planner roster, <code>view_skill</code>, <code>skill_resource</code>) uses <code>" + T[won].path + "</code>.";
+  }
+  [hm, hw, hp].forEach(function (e) { e.addEventListener("change", race); });
+  race();
+
+  /* --- env expansion: registry.rs expand_safe_env_in_body + is_env_var_safe --- */
+  var en = document.getElementById("env-name"), ed = document.getElementById("env-decl"), es = document.getElementById("env-set");
+  var eo = document.getElementById("env-out"), ew = document.getElementById("env-why");
+  var SECRET = ["KEY", "SECRET", "TOKEN", "PASSWORD", "PASS"];
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function envCheck() {
+    var name = en.value.trim();
+    var why = [], ok = true;
+    var ident = /^[A-Z][A-Z0-9_]*$/.test(name);
+    if (!ident) { ok = false; why.push("the pattern matches only UPPER_CASE names starting with a letter"); }
+    var hit = SECRET.filter(function (p) { return name.toUpperCase().indexOf(p) >= 0; });
+    if (hit.length) { ok = false; why.push("name contains " + hit.join(", ") + ": treated as a secret"); }
+    if (!ed.checked) { ok = false; why.push("not listed in the skill's env_vars"); }
+    if (!es.checked) { ok = false; why.push("not set in the environment"); }
+    var shown = name || "NAME";
+    eo.innerHTML = "body: <span>call $" + esc(shown) + "/v1</span><br>prompt: " +
+      (ok ? '<span class="hit">call https://example.test/v1</span> <span style="color:var(--faint)">(example value)</span>'
+          : '<span class="lit">call $' + esc(shown) + "/v1</span>");
+    ew.innerHTML = ok ? "<li>declared, set, not secret-shaped: expanded</li>" : why.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("");
+  }
+  [en, ed, es].forEach(function (e) { e.addEventListener("input", envCheck); e.addEventListener("change", envCheck); });
+  Array.prototype.forEach.call(document.querySelectorAll(".presets button"), function (b) {
+    b.addEventListener("click", function () { en.value = b.getAttribute("data-v"); envCheck(); });
+  });
+  envCheck();
+
+  /* --- prompt budget: build_system_prompt_with_tools, 4 bytes per token --- */
+  var SK = [
+    ["execution-map", 2700], ["german-teacher", 887], ["orchestrator", 9726],
+    ["privy-agentic-wallets", 6931], ["skill-creator", 7143], ["skill-eval", 2077],
+    ["spanish-teacher", 2312], ["telegram-rag-ingest", 6679], ["xlab-research", 6576]
+  ];
+  var on = { "xlab-research": true };
+  var idr = document.getElementById("id-tok"), ido = document.getElementById("id-out");
+  var myr = document.getElementById("my-kb"), myo = document.getElementById("my-out");
+  var host = document.getElementById("budget"), stack = document.getElementById("stack"), sum = document.getElementById("stack-sum");
+  var MAXC = 16000 * 4, TOTAL = 32000;
+  function fmt(n) { return n.toLocaleString("en-US").replace(/,/g, " "); }
+  function budget() {
+    var idTok = +idr.value, myBytes = (+myr.value) * 1024;
+    ido.textContent = fmt(idTok);
+    myo.textContent = myr.value + " KB";
+    var total = 16 + idTok;
+    var rows = SK.map(function (s) { return { name: s[0], bytes: s[1], mine: false }; });
+    if (myBytes > 0) rows.push({ name: "your skill", bytes: myBytes, mine: true });
+    var segs = [{ cls: "s-id", tok: total }];
+    rows.forEach(function (r) {
+      r.active = r.mine || !!on[r.name];
+      if (!r.active) { r.tag = "off"; r.txt = "not listed"; r.tok = Math.floor(r.bytes / 4); return; }
+      var cut = r.bytes > MAXC;
+      r.tok = Math.floor((cut ? MAXC + 13 : r.bytes) / 4);
+      if (total + r.tok > TOTAL) { r.tag = "drop"; r.txt = "dropped"; return; }
+      total += r.tok;
+      r.tag = cut ? "cut" : "in"; r.txt = cut ? "cut to 16 000" : "in";
+      segs.push({ cls: cut ? "s-cut" : "s-sk", tok: r.tok });
+    });
+    host.innerHTML = "";
+    rows.forEach(function (r) {
+      var d = document.createElement("div");
+      d.className = "brow";
+      var box = r.mine ? '<span></span>' : '<input type="checkbox" aria-label="' + r.name + '"' + (r.active ? " checked" : "") + ">";
+      d.innerHTML = box + '<span class="nm">' + r.name + '</span><span class="tk">≈ ' + fmt(Math.floor(r.bytes / 4)) + ' tok</span><span class="tag ' + r.tag + '">' + r.txt + "</span>";
+      if (!r.mine) d.querySelector("input").addEventListener("change", function (e) { on[r.name] = e.target.checked; budget(); });
+      host.appendChild(d);
+    });
+    stack.innerHTML = segs.map(function (s) { return '<span class="' + s.cls + '" style="width:' + (100 * s.tok / TOTAL).toFixed(2) + '%"></span>'; }).join("");
+    sum.textContent = fmt(total) + " used";
+  }
+  idr.addEventListener("input", budget);
+  myr.addEventListener("input", budget);
+  budget();
+})();
+</script>
+</body>
+</html>

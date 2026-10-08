@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scopes and hardening · Tengu</title>
+<meta name="description" content="How every tool call checks a ToolScope before it touches a file, host, env var, binary or wallet, and how a hardened sandbox closes the gaps.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: field cards, scope tester, fold + grant, hardening check */
+  .fields { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+  .fld { border: 1px solid var(--line); border-top: 3px solid var(--guard); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 6px; align-content: start; }
+  .fld b { font-family: var(--font-mono); font-size: 0.9rem; color: var(--ink); }
+  .fld code.fn { font-size: 0.74rem; color: var(--guard); background: var(--guard-soft); }
+  .fld small { color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+  .fld .wild { font-family: var(--font-mono); font-size: 0.72rem; color: var(--faint); }
+  .fields.in-view .fld { animation: rise .5s ease both; }
+  .fields.in-view .fld:nth-child(2) { animation-delay: .12s } .fields.in-view .fld:nth-child(3) { animation-delay: .24s }
+  .fields.in-view .fld:nth-child(4) { animation-delay: .36s } .fields.in-view .fld:nth-child(5) { animation-delay: .48s }
+  @keyframes rise { from { transform: translateY(8px); opacity: .2 } to { transform: none; opacity: 1 } }
+
+  .ctl { display: grid; gap: 12px 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); align-items: start; }
+  .ctl.wide { grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+  .ctl select, .ctl input[type="text"] { font: inherit; font-size: 0.84rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); width: 100%; }
+  .ctl input[type="text"] { font-family: var(--font-mono); font-size: 0.8rem; }
+  .tick { display: flex !important; gap: 8px; align-items: center; }
+  .ex { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ex button { font-family: var(--font-mono); font-size: 0.74rem; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); border-radius: 6px; padding: 2px 8px; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+  .ex button:hover { border-color: var(--accent); }
+  .scope-toml { font-size: 0.76rem; padding: 10px 12px; }
+  .trace { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .trace li { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--panel); font-size: 0.84rem; color: var(--muted); animation: rise .35s ease both; }
+  .trace li .st { font-family: var(--font-mono); font-size: 0.7rem; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+  .trace li.ok .st { color: var(--ok); } .trace li.ok { border-left: 4px solid var(--ok); }
+  .trace li.no .st { color: var(--bad); } .trace li.no { border-left: 4px solid var(--bad); }
+  .trace li.skip { opacity: .55; border-style: dashed; } .trace li.skip .st { color: var(--faint); }
+  .trace li b { color: var(--ink); font-weight: 600; }
+  .trace code { overflow-wrap: anywhere; }
+  .msg { font-family: var(--font-mono); font-size: 0.78rem; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .words { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .words span { font-family: var(--font-mono); font-size: 0.76rem; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; background: var(--sunk); color: var(--faint); overflow-wrap: anywhere; }
+  .words span.asg { text-decoration: line-through; }
+  .words span.gate { color: var(--guard); border-color: var(--guard); background: var(--guard-soft); font-weight: 500; }
+  .words span.free { color: var(--warn); border-color: var(--warn); }
+
+  .fold-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+  .sc { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 6px; align-content: start; transition: border-color .3s; }
+  .sc h4 { margin: 0; font-family: var(--font-mono); font-size: 0.86rem; font-weight: 500; display: flex; justify-content: space-between; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .sc ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted); }
+  .sc li { overflow-wrap: anywhere; }
+  .sc li.add { color: var(--hands); font-weight: 500; animation: rise .4s ease both; }
+  .sc li.none { color: var(--faint); font-style: italic; font-family: var(--font-body); }
+  .sc.deny { border-color: var(--bad); }
+  .sc.fall { border-style: dashed; border-color: var(--hands); }
+  .errs { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-family: var(--font-mono); font-size: .76rem; color: var(--bad); overflow-wrap: anywhere; }
+  .errs.ok { color: var(--ok); list-style: none; padding-left: 0; font-family: var(--font-body); font-size: .88rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">守</span> Safety · Scopes</div>
+  <h1>Scopes and hardening</h1>
+  <p class="lede">Before a tool touches a file, host, env var, binary or wallet, it checks its <b>scope</b>. A configured scope grants only what it lists. A <code>[risk]</code> section or a Solana signer hardens the whole sandbox.</p>
+  <ul class="facts">
+    <li><b>5</b> fields per scope</li>
+    <li>empty field = <b>deny</b></li>
+    <li>no entry = <b>permissive fallback</b></li>
+    <li>check within <b>30</b> lines of <code>execute</code></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> the model</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks</li>
+    <li><span class="chip data">data</span> config and scope maps</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">From TOML to one call</span>
+    <h2 id="s-flow">Where a scope is decided</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 500" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">The sandbox TOML is checked by the hardened rules, folded into each agent's scope map, granted the step workspace, resolved per tool with a fallback; at call time a writer resolves the path, then check_* allows the tool to run or refuses it.</title>
+        <rect class="zone" x="8" y="8" width="844" height="196" rx="10"/>
+        <text class="zone-label" x="20" y="26">Load · Config::load</text>
+        <rect class="zone" x="8" y="214" width="844" height="96" rx="10"/>
+        <text class="zone-label" x="20" y="234">Executor · per agent</text>
+        <rect class="zone" x="8" y="318" width="844" height="176" rx="10"/>
+        <text class="zone-label" x="20" y="338">Each tool call</text>
+
+        <path class="e" id="p-toml-hard" d="M180 69 L225 69" data-at="1"/>
+        <path class="e bad" id="p-hard-fail" d="M310 98 L310 140" data-at="2"/>
+        <path class="e" id="p-hard-fold" d="M395 69 L440 69" data-at="3"/>
+        <path class="e" id="p-fold-map" d="M620 69 L665 69" data-at="3"/>
+        <path class="e" id="p-map-grant" d="M753 98 L753 244" data-at="4"/>
+        <path class="e" id="p-grant-res" d="M665 272 L620 272" data-at="5"/>
+        <path class="e dash" id="p-fb-res" d="M220 272 L440 272" data-at="5"/>
+        <path class="e" id="p-model-path" d="M180 380 L225 380" data-at="6"/>
+        <path class="e" id="p-res-check" d="M530 300 L530 338" data-at="7"/>
+        <path class="e" id="p-path-check" d="M395 380 L470 380" data-at="7"/>
+        <path class="e" id="p-check-run" d="M590 380 L665 380" data-at="8"/>
+        <path class="e bad" id="p-check-no" d="M530 422 L530 440" data-at="9"/>
+        <path class="e bad" id="p-path-no" d="M310 408 C310 450 400 463 455 463" data-at="9"/>
+
+        <g class="n data" data-at="1,3">
+          <rect x="20" y="40" width="160" height="58" rx="8"/>
+          <text x="100" y="64" text-anchor="middle" class="t-title">Sandbox TOML</text>
+          <text x="100" y="83" text-anchor="middle" class="t-small">[default_scopes.&lt;tool&gt;]</text>
+        </g>
+        <g class="n guard" data-at="2">
+          <rect x="225" y="40" width="170" height="58" rx="8"/>
+          <text x="310" y="64" text-anchor="middle" class="t-title">Hardened rules</text>
+          <text x="310" y="83" text-anchor="middle" class="t-small">[risk] or Solana signer</text>
+        </g>
+        <g class="n bad" data-at="2">
+          <rect x="235" y="140" width="150" height="46" rx="8"/>
+          <text x="310" y="160" text-anchor="middle" class="t-title">Load fails</text>
+          <text x="310" y="177" text-anchor="middle" class="t-small">every reason listed</text>
+        </g>
+        <g class="n guard" data-at="3">
+          <rect x="440" y="40" width="180" height="58" rx="8"/>
+          <text x="530" y="64" text-anchor="middle" class="t-title">Fold defaults</text>
+          <text x="530" y="83" text-anchor="middle" class="t-small">agent entry wins whole</text>
+        </g>
+        <g class="n data" data-at="3-5">
+          <rect x="665" y="40" width="176" height="58" rx="8"/>
+          <text x="753" y="64" text-anchor="middle" class="t-title">Agent scope map</text>
+          <text x="753" y="83" text-anchor="middle" class="t-small">tool → ToolScope</text>
+        </g>
+        <g class="n guard" data-at="4">
+          <rect x="665" y="244" width="176" height="56" rx="8"/>
+          <text x="753" y="267" text-anchor="middle" class="t-title">Grant workspace</text>
+          <text x="753" y="285" text-anchor="middle" class="t-small">run-agent step · bridge</text>
+        </g>
+        <g class="n guard" data-at="5,7">
+          <rect x="440" y="244" width="180" height="56" rx="8"/>
+          <text x="530" y="267" text-anchor="middle" class="t-title">Resolve per tool</text>
+          <text x="530" y="285" text-anchor="middle" class="t-small">configured or fallback</text>
+        </g>
+        <g class="n hands" data-at="5">
+          <rect x="20" y="244" width="200" height="56" rx="8"/>
+          <text x="120" y="267" text-anchor="middle" class="t-title">Fallback scope</text>
+          <text x="120" y="285" text-anchor="middle" class="t-small">workspace · * · default</text>
+        </g>
+        <g class="n heart" data-at="6">
+          <rect x="20" y="352" width="160" height="56" rx="8"/>
+          <text x="100" y="375" text-anchor="middle" class="t-title">Model asks</text>
+          <text x="100" y="393" text-anchor="middle" class="t-small t-mono">write_file {path}</text>
+        </g>
+        <g class="n guard" data-at="6,9">
+          <rect x="225" y="352" width="170" height="56" rx="8"/>
+          <text x="310" y="375" text-anchor="middle" class="t-title">Resolve path</text>
+          <text x="310" y="393" text-anchor="middle" class="t-small">symlinks · .. · names</text>
+        </g>
+        <g class="n guard" data-at="7-9">
+          <polygon points="530,338 590,380 530,422 470,380"/>
+          <text x="530" y="377" text-anchor="middle" class="t-title t-mono">check_*</text>
+          <text x="530" y="393" text-anchor="middle" class="t-small">scope field</text>
+        </g>
+        <g class="n hands" data-at="8">
+          <rect x="665" y="352" width="176" height="56" rx="8"/>
+          <text x="753" y="375" text-anchor="middle" class="t-title">Tool runs</text>
+          <text x="753" y="393" text-anchor="middle" class="t-small">inside its scope</text>
+        </g>
+        <g class="n bad" data-at="9">
+          <rect x="455" y="440" width="150" height="46" rx="8"/>
+          <text x="530" y="460" text-anchor="middle" class="t-title">Refused</text>
+          <text x="530" y="477" text-anchor="middle" class="t-small">reason → model</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">5 fields · empty = deny</text></g>
+        <g class="pop badge" data-at="2"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">shell_bins → load error</text></g>
+        <g class="pop badge" data-at="3"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">no field-merge</text></g>
+        <g class="pop badge" data-at="4"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">deny-all stays deny</text></g>
+        <g class="pop badge" data-at="5"><rect x="430" y="150" width="200" height="22" rx="11"/><text x="530" y="165" text-anchor="middle">hardened: no shell</text></g>
+        <g class="pop badge" data-at="6"><rect x="20" y="452" width="196" height="22" rx="11"/><text x="118" y="467" text-anchor="middle">new/../../x → outside</text></g>
+        <g class="pop badge" data-at="7"><rect x="650" y="452" width="196" height="22" rx="11"/><text x="748" y="467" text-anchor="middle">lint: check in 30 lines</text></g>
+        <g class="pop badge" data-at="8"><rect x="650" y="452" width="196" height="22" rx="11"/><text x="748" y="467" text-anchor="middle">same map in the bridge</text></g>
+        <g class="pop badge" data-at="9"><rect x="20" y="452" width="196" height="22" rx="11"/><text x="118" y="467" text-anchor="middle">nothing ran</text></g>
+
+        <circle class="tok" r="6" data-path="p-toml-hard" data-at="1"/>
+        <circle class="tok bad" r="6" data-path="p-hard-fail" data-at="2" data-dur="900"/>
+        <circle class="tok guard" r="6" data-path="p-hard-fold" data-at="3" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-fold-map" data-at="3" data-delay="700" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-map-grant" data-at="4"/>
+        <circle class="tok guard" r="6" data-path="p-grant-res" data-at="5" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-fb-res" data-at="5" data-delay="300"/>
+        <circle class="tok heart" r="6" data-path="p-model-path" data-at="6" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-path-check" data-at="7" data-dur="900"/>
+        <circle class="tok guard" r="5" data-path="p-res-check" data-at="7" data-delay="300" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-check-run" data-at="8" data-dur="900"/>
+        <circle class="tok bad" r="6" data-path="p-check-no" data-at="9" data-dur="600"/>
+        <circle class="tok bad" r="6" data-path="p-path-no" data-at="9" data-delay="300"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>The sandbox TOML grants each tool what it may touch: <code>[default_scopes.&lt;tool&gt;]</code> for every agent, <code>[agents.&lt;a&gt;.scopes.&lt;tool&gt;]</code> for one. An empty field grants nothing.</li>
+        <li>A <code>[risk]</code> section or a Solana signer hardens the sandbox: Claude Code built-ins off, no <code>[[mcp_servers]]</code>, no <code>shell_bins</code>, key and state out of reach. Any break fails the load.</li>
+        <li><code>fold_default_scopes</code> copies each default into every agent with no entry for that tool. An agent's own entry wins whole, never field-merged. <code>~</code> in <code>fs_roots</code> expands.</li>
+        <li>A <code>run-agent</code> step, and its Claude Code bridge, adds the step workspace to every configured scope. A deny-all scope (every field empty) stays a deny.</li>
+        <li>Each tool gets its configured scope. A tool with none gets the fallback: the workspace, any host, env var and binary, the <code>default</code> wallet. Hardened: no shell.</li>
+        <li>A writer resolves the path first: symlinks followed, <code>..</code> applied. It must stay in the workspace; <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code> are refused.</li>
+        <li>Then the tool calls <code>ctx.scope.check_*</code>: path under <code>fs_roots</code>, host in <code>net_hosts</code>, var in <code>env_reads</code>, first word in <code>shell_bins</code>, label in <code>wallets</code>.</li>
+        <li>Allowed: the tool runs. The MCP bridge builds the same scope map, so Claude Code agents meet the same fences.</li>
+        <li>Refused: the reason becomes the tool's error. It goes back to the model, redacted, and nothing ran.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-fields">
+  <div class="sec-head">
+    <span class="kicker">ToolScope · src/domain/scope.rs</span>
+    <h2 id="s-fields">Five fields, one check each</h2>
+    <p>Every field is an allow-list. <code>ToolScope::default()</code> denies everything.</p>
+  </div>
+  <div class="fields" data-inview>
+    <div class="fld"><b>fs_roots</b><code class="fn">check_fs_read · check_fs_write</code><small>The resolved path (symlinks, <code>..</code>) must sit under a root.</small><span class="wild">no wildcard</span></div>
+    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>.</small><span class="wild">"*" = any host</span></div>
+    <div class="fld"><b>env_reads</b><code class="fn">check_env_read</code><small>Exact var name. Gates <code>$VAR</code> in <code>http_request</code>, <code>SOLANA_RPC_URL</code>, <code>HL_API_URL</code>.</small><span class="wild">"*" = any var</span></div>
+    <div class="fld"><b>shell_bins</b><code class="fn">check_shell_bin</code><small>Basename of the command's first word. <code>run_command</code> and shell skills.</small><span class="wild">"*" = any binary</span></div>
+    <div class="fld"><b>wallets</b><code class="fn">check_wallet</code><small>Exact label. Privy tools; Solana writes use the full pubkey.</small><span class="wild">no wildcard</span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-test">
+  <div class="sec-head">
+    <span class="kicker">Try it: the scope tester</span>
+    <h2 id="s-test">Allowed or refused?</h2>
+    <p>Pick a real scope and a request. The checks and messages follow <code>domain/scope.rs</code> and <code>tools/args.rs</code>, on an example workspace with two symlinks.</p>
+  </div>
+  <div class="widget">
+    <div class="ctl">
+      <label for="t-scope">scope
+        <select id="t-scope"></select>
+      </label>
+      <label for="t-kind">request
+        <select id="t-kind">
+          <option value="write">write a file (write_file)</option>
+          <option value="read">read a file (read_file)</option>
+          <option value="host">reach a host</option>
+          <option value="env">read an env var</option>
+          <option value="cmd">run a command</option>
+          <option value="wallet">use a wallet</option>
+        </select>
+      </label>
+      <label for="t-in"><span id="t-in-lbl">path</span>
+        <input type="text" id="t-in" spellcheck="false" autocomplete="off">
+      </label>
+      <label class="tick" for="t-hard"><input type="checkbox" id="t-hard"> <span>hardened sandbox</span></label>
+    </div>
+    <div class="ex" id="t-ex" aria-label="Example inputs"></div>
+    <div class="grid two">
+      <div class="card guard"><h3>Scope</h3><pre class="scope-toml" id="t-toml"></pre><p id="t-ws"></p></div>
+      <div class="card"><h3>Checks</h3><ol class="trace" id="t-trace" aria-live="polite"></ol></div>
+    </div>
+    <div class="widget-row"><span class="verdict ok" id="t-verdict">…</span></div>
+    <pre class="msg" id="t-msg"></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-fold">
+  <div class="sec-head">
+    <span class="kicker">Try it: fold, then grant</span>
+    <h2 id="s-fold">What each tool ends up with</h2>
+    <p>An example sandbox. Toggle the agent's own entry, a <code>run-agent</code> step and hardening; the cards recompute <code>fold_default_scopes</code>, <code>grant_workspace_root</code> and <code>resolve_tool_scopes</code>.</p>
+  </div>
+  <div class="widget">
+    <div class="grid two">
+      <pre class="scope-toml" id="f-toml"></pre>
+      <div class="ctl" style="grid-template-columns: minmax(0,1fr)">
+        <label class="tick" for="f-own"><input type="checkbox" id="f-own" checked> <span>agent has its own <code>write_file</code> entry</span></label>
+        <label class="tick" for="f-step"><input type="checkbox" id="f-step"> <span>run as a <code>run-agent</code> step</span></label>
+        <label class="tick" for="f-hard"><input type="checkbox" id="f-hard"> <span>hardened sandbox</span></label>
+        <p class="note" id="f-note"></p>
+      </div>
+    </div>
+    <div class="fold-grid" id="f-out" aria-live="polite"></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-hard">
+  <div class="sec-head">
+    <span class="kicker">Try it: load a hardened sandbox</span>
+    <h2 id="s-hard">Hardening fails the load, not the call</h2>
+    <p>Rules from <code>config/hardening.rs</code>, messages as the code writes them. Paths use an example home, <code>/Users/op</code>.</p>
+  </div>
+  <div class="widget">
+    <div class="ctl wide">
+      <label class="tick" for="h-risk"><input type="checkbox" id="h-risk" checked> <span><code>[risk]</code> with <code>kill_switch_file = "~/.tengu/state/xmarket/KILL"</code></span></label>
+      <label class="tick" for="h-sign"><input type="checkbox" id="h-sign"> <span><code>[solana] signer_key_file = "~/.tengu/keys/lping-signer.json"</code></span></label>
+      <label for="h-prof"><span>claude_code agent <code>exec</code>: <code>builtin_tools_profile</code></span>
+        <select id="h-prof">
+          <option value="">(no claude_code block)</option>
+          <option value="none" selected>"none"</option>
+          <option value="read_only">"read_only"</option>
+          <option value="editor">"editor"</option>
+          <option value="editor_shell">"editor_shell"</option>
+        </select>
+      </label>
+      <label for="h-root"><span><code>[default_scopes.read_file] fs_roots</code></span>
+        <select id="h-root">
+          <option value="~/xmarket-workspace" selected>["~/xmarket-workspace"]</option>
+          <option value="~">["~"]</option>
+          <option value="~/.tengu/state/xmarket">["~/.tengu/state/xmarket"]</option>
+        </select>
+      </label>
+      <label class="tick" for="h-mcp"><input type="checkbox" id="h-mcp"> <span>one <code>[[mcp_servers]]</code> entry</span></label>
+      <label class="tick" for="h-sh"><input type="checkbox" id="h-sh"> <span><code>[default_scopes.run_command] shell_bins = ["ls"]</code></span></label>
+    </div>
+    <div class="card guard"><h3 id="h-head">Result</h3><ul class="errs" id="h-out"></ul></div>
+    <p class="note">Only the <code>hardening.rs</code> rules are shown. <code>[risk]</code> and <code>[solana]</code> add their own load rules (<code>config/risk.rs</code>, <code>config/solana.rs</code>).</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Six outcomes</span>
+    <h2 id="s-out">How a scope check can end</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip hands">run</span><span><b>allowed</b>Every check passed; the tool runs with its resolved path.</span></li>
+    <li><span class="chip bad">no</span><span><b>scope denied</b><code>… not in allowed net_hosts [...]</code>, or <code>no fs_roots configured (default-deny)</code>.</span></li>
+    <li><span class="chip bad">out</span><span><b>escapes workspace</b>The resolved path is not under the workspace: <code>Path escapes workspace</code>.</span></li>
+    <li><span class="chip guard">name</span><span><b>protected</b><code>Writing '…' is not allowed</code>, or <code>Writing to skill directories is not allowed</code>.</span></li>
+    <li><span class="chip bad">link</span><span><b>cannot resolve</b>A dangling symlink: writing through it would create its target.</span></li>
+    <li><span class="chip guard">load</span><span><b>load refused</b>A hardened rule broke: <code>Config validation failed (n issues)</code>; nothing starts.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Empty means no.</b> Each <code>check_*</code> refuses when its list has no match; a scope with every field empty denies everything.</span></li>
+    <li><span><b>No field-merge.</b> An agent's entry for a tool replaces the default for that tool whole.</span></li>
+    <li><span><b>Every tool checks.</b> <code>tests/scope_lint.rs</code> fails when an <code>execute</code> in <code>tools/</code> or <code>mcp_client/</code> has no <code>scope.check_</code> (or <code>// scope: pure-compute</code>) within 30 lines.</span></li>
+    <li><span><b>Both ends checked.</b> <code>persistent_store store</code> checks read access on the source file as well as write access on the workspace; <code>manage_skill</code> and <code>apply_improver_proposal</code> check write access on the skill dir they change, so the managed tier <code>~/.tengu/skills</code> needs its own grant.</span></li>
+    <li><span><b>Paths are resolved first.</b> File tools follow symlinks and apply <code>..</code> before comparing, so <code>new/../../x</code> cannot land outside; a dangling symlink is refused.</span></li>
+    <li><span><b>Agent state is off-limits to writers.</b> <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>CLAUDE.local.md</code>, <code>AGENTS.md</code>, <code>.mcp.json</code>: any depth, any case. Hardened: also <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code>, <code>CONTEXT.md</code>.</span></li>
+    <li><span><b>A deny stays a deny.</b> The <code>run-agent</code> workspace grant skips deny-all scopes.</span></li>
+    <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches the signer key, <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file.</span></li>
+    <li><span><b>Hardened fallback has no shell.</b> Tools without a scope get no <code>shell_bins</code>, and no shell skill loads.</span></li>
+  </ul>
+  <p class="note warn"><b>Not a sandbox.</b> <code>shell_bins</code> gates only the first command word: what runs after <code>;</code>, <code>|</code> or <code>&amp;&amp;</code>, inside <code>$( )</code>, or in <code>node -e</code> is not checked. Write-path protection does not cover <code>run_command</code> or Claude Code built-ins (profiles other than <code>"none"</code>).</p>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Call one tool as an agent</h2>
+    <p><code>tengu tool call</code> (internal, used by the bridge tests) runs a tool with the agent's real scopes. Output is an example; it needs <code>~/xlab-ws</code> to exist.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xlab --agent xl_architect --tool read_file --args '{"path":"../notes.txt"}'</span>
+<span class="ln o">{"is_error":true,"observation":null,"text":"<span class="er">ERROR: Path escapes workspace: ../notes.txt</span>"}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xlab --agent xl_architect --tool read_file --args '{"path":".tengu/observations.db"}'</span>
+<span class="ln o">… reads are allowed: protected names stop writers only</span>
+<span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox xmarket</span>
+<span class="ln o">… a broken hardened rule fails here with <span class="hl">Config validation failed (n issues)</span></span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/scope.rs</code></td><td><code>ToolScope</code>, every <code>check_*</code>, <code>host_matches</code>, <code>resolve_path</code>, protected names, <code>shell_command_binary</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td><code>validate_path</code>, <code>validate_write_path</code> (workspace, names, <code>skills/</code>)</td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>default_scopes</code>, <code>fold_default_scopes</code>, <code>AgentConfig::hardened</code></td></tr>
+        <tr><td><code>src/config/hardening.rs</code></td><td>hardened-sandbox load rules and path reach checks</td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code></td></tr>
+        <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>the same scope map for Claude Code agents</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/workspace/</code></td><td><code>read_file</code>, <code>write_file</code>, <code>list_directory</code>, <code>run_command</code>: the checks in use</td></tr>
+        <tr><td><code>tests/scope_lint.rs</code></td><td>fails a tool whose <code>execute</code> skips the scope check</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: scope tester, fold + grant, hardening check — rules ported from
+   src/domain/scope.rs, src/adapters/outbound/tools/args.rs,
+   src/config/mod.rs (fold_default_scopes), src/bootstrap/tools.rs,
+   src/config/hardening.rs. Example home: /Users/op. */
+(function () {
+  var HOME = "/Users/op";
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function dbg(list) { return "[" + list.map(function (x) { return JSON.stringify(x); }).join(", ") + "]"; }
+  function tilde(p) { return p === "~" ? HOME : p.indexOf("~/") === 0 ? HOME + p.slice(1) : p; }
+  function under(p, root) { return p === root || root === "/" || p.indexOf(root + "/") === 0; }
+
+  /* ---------- example filesystem (with symlinks) ---------- */
+  var WS = HOME + "/xmarket-workspace";
+  var FS = {};
+  function d(p) { FS[p] = { t: "d" }; } function f(p) { FS[p] = { t: "f" }; } function l(p, to) { FS[p] = { t: "l", to: to }; }
+  ["/Users", HOME, WS, WS + "/notes", WS + "/.tengu", WS + "/out", HOME + "/Downloads"].forEach(d);
+  [WS + "/notes/today.md", WS + "/.tengu/observations.db", WS + "/MEMORY.md", HOME + "/Downloads/report.pdf"].forEach(f);
+  l(WS + "/state", WS + "/.tengu");
+  l(WS + "/inbox", HOME + "/Downloads");
+  l(WS + "/dangling", HOME + "/gone/target");
+  function split(p) { return p.split("/").filter(Boolean); }
+  function real(p, depth) {
+    depth = depth || 0; if (depth > 20) return null;
+    var parts = split(p), cur = [];
+    for (var i = 0; i < parts.length; i++) {
+      var c = parts[i];
+      if (c === ".") continue;
+      if (c === "..") { cur.pop(); continue; }
+      var next = "/" + cur.concat(c).join("/"), e = FS[next];
+      if (!e) return null;
+      if (e.t === "l") { var r = real(e.to, depth + 1); if (r === null) return null; cur = split(r); }
+      else cur.push(c);
+    }
+    return "/" + cur.join("/");
+  }
+  function lexists(p) {
+    var parts = split(p); if (!parts.length) return true;
+    var last = parts[parts.length - 1];
+    if (last === "." || last === "..") return real(p) !== null;
+    var rp = real("/" + parts.slice(0, -1).join("/"));
+    if (rp === null) return false;
+    return !!FS[(rp === "/" ? "" : rp) + "/" + last];
+  }
+  /* domain::scope::resolve_path */
+  function resolvePath(p) {
+    var head = split(p), tail = [];
+    while (head.length && !lexists("/" + head.join("/"))) tail.unshift(head.pop());
+    var hp = "/" + head.join("/"), r = real(hp);
+    if (r === null) return { err: "cannot resolve '" + hp + "': No such file or directory (os error 2)" };
+    var cur = split(r);
+    tail.forEach(function (c) { if (c === "..") cur.pop(); else if (c !== ".") cur.push(c); });
+    return { path: "/" + cur.join("/") };
+  }
+
+  /* ---------- protected names (domain::scope::protected_write_in) ---------- */
+  var DIRS = [[".tengu", "`.tengu/` holds tengu's own state"], [".claude", "`.claude/` configures Claude Code (hooks, commands, skills)"], [".git", "`.git/` holds git hooks"]];
+  var FILES = [["CLAUDE.md", "a CLI agent loads `CLAUDE.md` as instructions"], ["CLAUDE.local.md", "a CLI agent loads `CLAUDE.local.md` as instructions"], ["AGENTS.md", "agents load `AGENTS.md` as instructions"], [".mcp.json", "a CLI agent starts the servers in `.mcp.json`"]];
+  var PROMPT = ["MEMORY.md", "USER.md", "IDENTITY.md", "PROFILE.md", "CONTEXT.md"];
+  var HARD_WHY = "a hardened sandbox ([risk] or a Solana signer) keeps the workspace prompt files (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — tengu loads them into the system prompt";
+  function named(name, list) { var lo = name.toLowerCase(); for (var i = 0; i < list.length; i++) if (list[i][0].toLowerCase() === lo) return list[i][1]; return null; }
+  function protectedWrite(rel, hardened) {
+    var comps = split(rel);
+    for (var i = 0; i < comps.length; i++) { var w = named(comps[i], DIRS); if (w) return w; }
+    var file = comps[comps.length - 1] || "";
+    if (file) { var w2 = named(file, FILES); if (w2) return w2; }
+    if (hardened && file && PROMPT.some(function (x) { return x.toLowerCase() === file.toLowerCase(); })) return HARD_WHY;
+    return null;
+  }
+
+  /* ---------- shell_command_binary ---------- */
+  function shellWords(cmd) {
+    var words = [], start = -1, quote = null, depth = 0, i = 0, n = cmd.length;
+    while (i < n) {
+      var c = cmd[i];
+      if (quote) {
+        if (c === "\\" && quote !== "'") { i += 2; continue; }
+        if (c === quote) quote = null;
+        i++; continue;
+      }
+      if (depth === 0 && (/\s/.test(c) || c === ";" || c === "&" || c === "|")) {
+        if (start >= 0) { words.push(cmd.slice(start, i)); start = -1; }
+        i++; continue;
+      }
+      if (start < 0) start = i;
+      if (c === "\\") { i += 2; continue; }
+      if (c === "'" || c === "\"" || c === "`") quote = c;
+      else if (c === "$" && cmd[i + 1] === "(") { depth++; i += 2; continue; }
+      else if (c === "(" && depth > 0) depth++;
+      else if (c === ")" && depth > 0) depth--;
+      i++;
+    }
+    if (start >= 0) words.push(cmd.slice(start));
+    return words;
+  }
+  function isAssignment(w) { var k = w.indexOf("="); return k > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(w.slice(0, k)); }
+  function hostMatches(pat, host) {
+    if (pat === "*" || pat === host) return true;
+    if (pat.indexOf("*.") !== 0) return false;
+    var suf = pat.slice(2);
+    if (host.length < suf.length || host.slice(host.length - suf.length) !== suf) return false;
+    var pre = host.slice(0, host.length - suf.length);
+    return pre.length > 1 && pre.charAt(pre.length - 1) === ".";
+  }
+
+  /* ---------- the scope tester ---------- */
+  function empty() { return { fs_roots: [], net_hosts: [], env_reads: [], shell_bins: [], wallets: [] }; }
+  function sc(o) { var s = empty(); for (var k in o) s[k] = o[k]; return s; }
+  var PRESETS = [
+    { id: "xm-write", label: "xmarket · [default_scopes.write_file] (empty)", toml: "[default_scopes.write_file]\n# no keys: deny-all", s: empty() },
+    { id: "xm-read", label: "xmarket · [default_scopes.read_file]", toml: "[default_scopes.read_file]\nfs_roots = [\"~/xmarket-workspace\"]", s: sc({ fs_roots: [WS] }) },
+    { id: "xm-hl", label: "xmarket · [default_scopes.hl_ctx]", toml: "[default_scopes.hl_ctx]\nfs_roots  = [\"~/xmarket-workspace\"]\nnet_hosts = [\"api.hyperliquid.xyz\"]\nenv_reads = [\"HL_API_URL\"]", s: sc({ fs_roots: [WS], net_hosts: ["api.hyperliquid.xyz"], env_reads: ["HL_API_URL"] }) },
+    { id: "st-http", label: "storage-test · [default_scopes.http_request]", toml: "[default_scopes.http_request]\nnet_hosts = [\"*\"]", s: sc({ net_hosts: ["*"] }) },
+    { id: "fallback", label: "no entry → permissive fallback", toml: "", s: null },
+    { id: "ex-shell", label: "example · run_command shell_bins", toml: "[agents.dev.scopes.run_command]   # example\nshell_bins = [\"git\", \"node\", \"echo\"]", s: sc({ shell_bins: ["git", "node", "echo"] }) },
+    { id: "ex-wild", label: "example · wildcard host", toml: "[agents.dev.scopes.http_request]  # example\nnet_hosts = [\"*.anthropic.com\"]", s: sc({ net_hosts: ["*.anthropic.com"] }) }
+  ];
+  var EX = {
+    write: ["out/report.md", "new/../../outside.txt", "notes/../.tengu/cache.db", "state/observations.db", "Skills/evil/SKILL.md", "docs/claude.md", "MEMORY.md", "inbox/x.txt", "dangling"],
+    read: ["notes/today.md", "../secrets.txt", "inbox/report.pdf", "state/observations.db", "dangling"],
+    host: ["api.hyperliquid.xyz", "api.anthropic.com", "anthropic.com", "evil.example"],
+    env: ["HL_API_URL", "OPENROUTER_API_KEY", "SOLANA_RPC_URL"],
+    cmd: ["git status", "/usr/bin/git log", "DEK='k' node -e 1", "NOW=$(date +%s) && echo $NOW", "PY=1 python3 -c 1", "echo hi; rm -rf x", "'node' -e 1"],
+    wallet: ["default", "research-wallet"]
+  };
+  var LBL = { write: "path (relative to the workspace)", read: "path (relative to the workspace)", host: "host", env: "env var name", cmd: "command", wallet: "wallet label" };
+  var selS = document.getElementById("t-scope"), selK = document.getElementById("t-kind"), inp = document.getElementById("t-in");
+  var hard = document.getElementById("t-hard"), exBox = document.getElementById("t-ex");
+  PRESETS.forEach(function (p) { var o = document.createElement("option"); o.value = p.id; o.textContent = p.label; selS.appendChild(o); });
+  function preset() {
+    var p = PRESETS.filter(function (x) { return x.id === selS.value; })[0];
+    if (p.id !== "fallback") return p;
+    var s = sc({ fs_roots: [WS], net_hosts: ["*"], env_reads: ["*"], shell_bins: hard.checked ? [] : ["*"], wallets: ["default"] });
+    return { id: p.id, s: s, toml: "# permissive_scope(workspace), bootstrap/tools.rs\nfs_roots   = [\"" + WS + "\"]\nnet_hosts  = [\"*\"]\nenv_reads  = [\"*\"]\nshell_bins = [" + (hard.checked ? "" : "\"*\"") + "]" + (hard.checked ? "   # hardened: cleared" : "") + "\nwallets    = [\"default\"]" };
+  }
+  function examples() {
+    exBox.innerHTML = "";
+    EX[selK.value].forEach(function (v) {
+      var b = document.createElement("button"); b.type = "button"; b.textContent = v;
+      b.addEventListener("click", function () { inp.value = v; run(); });
+      exBox.appendChild(b);
+    });
+    document.getElementById("t-in-lbl").textContent = LBL[selK.value];
+  }
+  function checkFs(s, target, op) {
+    if (!s.fs_roots.length) return { ok: false, msg: "fs " + op + " denied for '" + target + "': no fs_roots configured (default-deny)" };
+    var r = resolvePath(target);
+    if (r.err) return { ok: false, msg: r.err };
+    for (var i = 0; i < s.fs_roots.length; i++) {
+      var root = s.fs_roots[i], cr = real(root) || root;
+      if (under(r.path, cr)) return { ok: true, msg: "under fs_roots entry " + JSON.stringify(root) };
+    }
+    return { ok: false, msg: "fs " + op + " denied for '" + target + "' (resolved: '" + r.path + "'): not under any allowed fs_roots " + dbg(s.fs_roots) };
+  }
+  function run() {
+    var p = preset(), s = p.s, kind = selK.value, v = inp.value;
+    document.getElementById("t-toml").textContent = p.toml;
+    document.getElementById("t-ws").innerHTML = "Workspace (example): <code>" + WS + "</code>. Symlinks: <code>state → .tengu</code>, <code>inbox → ~/Downloads</code>, <code>dangling</code> → a missing file.";
+    var rows = [], fail = null, note = "";
+    function row(cls, st, html) { rows.push('<li class="' + cls + '"><span class="st">' + st + "</span><span>" + html + "</span></li>"); }
+    if (kind === "read" || kind === "write") {
+      var target = v.charAt(0) === "/" ? v : WS + "/" + v;
+      var r = resolvePath(target);
+      if (r.err) {
+        fail = "Cannot resolve path '" + v + "': " + r.err;
+        row("no", "resolve", "<b>resolve_path</b> stops: the entry exists but does not resolve (dangling symlink).");
+      } else {
+        row(under(r.path, WS) ? "ok" : "no", "resolve", "<b>resolve_path</b> → <code>" + esc(r.path) + "</code>");
+        if (!under(r.path, WS)) { fail = "Path escapes workspace: " + v; row("no", "workspace", "not under <code>" + WS + "</code>"); }
+        else row("ok", "workspace", "inside the workspace");
+      }
+      if (!fail && kind === "write") {
+        var rel = r.path.slice(WS.length + 1), why = protectedWrite(rel, hard.checked);
+        if (why) { fail = "Writing '" + v + "' is not allowed: " + why; row("no", "names", "<b>protected_write_in</b>: <code>" + esc(rel) + "</code>"); }
+        else {
+          var dirs = split(rel).slice(0, -1);
+          if (dirs.some(function (x) { return x.toLowerCase() === "skills"; })) { fail = "Writing to skill directories is not allowed"; row("no", "names", "a <code>skills/</code> directory in <code>" + esc(rel) + "</code>"); }
+          else row("ok", "names", "no protected name in <code>" + esc(rel || ".") + "</code>");
+        }
+      } else if (kind === "write") row("skip", "names", "not reached");
+      if (!fail) {
+        var c = checkFs(s, r.path, kind);
+        row(c.ok ? "ok" : "no", "scope", "<b>check_fs_" + kind + "</b>: " + esc(c.ok ? c.msg : "refused"));
+        if (!c.ok) fail = c.msg;
+        else if (kind === "read" && !(FS[real(r.path) || ""] && FS[real(r.path)].t === "f")) {
+          var e = FS[real(r.path) || ""];
+          fail = e && e.t === "d" ? "'" + v + "' is a directory, not a file. Use list_directory instead." : "Cannot read file '" + v + "': No such file or directory (os error 2)";
+          row("no", "open", "the scope allows it, but there is no such file");
+        }
+      } else row("skip", "scope", "not reached");
+    } else if (kind === "host") {
+      var host = v.trim(); try { if (/^[a-z]+:\/\//i.test(host)) host = new URL(host).hostname; } catch (x) {}
+      var hit = s.net_hosts.filter(function (pt) { return hostMatches(pt, host); })[0];
+      if (hit !== undefined) row("ok", "scope", "<b>check_net_host</b>: matches <code>" + esc(JSON.stringify(hit)) + "</code>");
+      else { fail = "host '" + host + "' not in allowed net_hosts " + dbg(s.net_hosts); row("no", "scope", "<b>check_net_host</b>: no pattern matches <code>" + esc(host) + "</code>"); }
+      note = "http_request also checks [egress] first, on every redirect hop: see egress.";
+    } else if (kind === "env") {
+      var name = v.trim();
+      if (s.env_reads.some(function (x) { return x === "*" || x === name; })) row("ok", "scope", "<b>check_env_read</b>: <code>" + esc(name) + "</code> allowed");
+      else { fail = "env var '" + name + "' not in allowed env_reads " + dbg(s.env_reads); row("no", "scope", "<b>check_env_read</b>: not listed"); }
+    } else if (kind === "cmd") {
+      var words = shellWords(v), bin = "";
+      for (var i = 0; i < words.length; i++) if (!isAssignment(words[i])) { bin = words[i]; break; }
+      if (!bin && words.length) bin = words[0];
+      var gi = words.indexOf(bin);
+      var chips = words.map(function (w, j) { var cls = j === gi ? "gate" : (j < gi && isAssignment(w)) ? "asg" : "free"; return '<span class="' + cls + '">' + esc(w) + "</span>"; }).join("");
+      row(bin ? "ok" : "no", "word", "<b>shell_command_binary</b> → <code>" + esc(bin || "(empty)") + "</code><div class=\"words\">" + chips + "</div>");
+      if (!bin) fail = "run_command: empty command";
+      else {
+        var base = bin.split("/").pop() || bin;
+        if (s.shell_bins.some(function (b) { return b === "*" || b === base; })) row("ok", "scope", "<b>check_shell_bin</b>: <code>" + esc(base) + "</code> allowed");
+        else { fail = "binary '" + bin + "' not in allowed shell_bins " + dbg(s.shell_bins); row("no", "scope", "<b>check_shell_bin</b>: <code>" + esc(base) + "</code> not listed"); }
+      }
+      note = "Only the highlighted word is gated. Amber words run unchecked: a guard rail, not a sandbox.";
+    } else {
+      var lab = v.trim();
+      if (s.wallets.indexOf(lab) >= 0) row("ok", "scope", "<b>check_wallet</b>: exact match");
+      else { fail = "wallet '" + lab + "' not in allowed wallets " + dbg(s.wallets); row("no", "scope", "<b>check_wallet</b>: no exact match (no wildcard)"); }
+    }
+    document.getElementById("t-trace").innerHTML = rows.join("");
+    var vd = document.getElementById("t-verdict");
+    vd.className = "verdict " + (fail ? "bad" : "ok");
+    vd.textContent = fail ? "Refused: the tool returns this error" : "Allowed: the tool runs";
+    document.getElementById("t-msg").textContent = (fail || "Ok") + (note ? "\n\n" + note : "");
+  }
+  selK.addEventListener("change", function () { examples(); inp.value = EX[selK.value][0]; run(); });
+  [selS, hard].forEach(function (e) { e.addEventListener("change", run); });
+  inp.addEventListener("input", run);
+  selS.value = "xm-read"; selK.value = "write"; examples(); inp.value = "notes/../.tengu/cache.db"; run();
+
+  /* ---------- fold + grant ---------- */
+  var fOwn = document.getElementById("f-own"), fStep = document.getElementById("f-step"), fHard = document.getElementById("f-hard");
+  var AWS = HOME + "/analyst-ws";
+  function fold() {
+    document.getElementById("f-toml").textContent =
+      "# example sandbox\n[default_scopes.read_file]\nfs_roots = [\"~/research\"]\n\n[default_scopes.write_file]        # no keys: deny-all\n\n[default_scopes.http_request]\nnet_hosts = [\"api.hyperliquid.xyz\"]\n\n[agents.analyst]\nworkspace = \"~/analyst-ws\"" +
+      (fOwn.checked ? "\n\n[agents.analyst.scopes.write_file]\nfs_roots = [\"~/research/out\"]" : "");
+    var defaults = { read_file: sc({ fs_roots: ["~/research"] }), write_file: empty(), http_request: sc({ net_hosts: ["api.hyperliquid.xyz"] }) };
+    var agent = {};
+    if (fOwn.checked) agent.write_file = sc({ fs_roots: ["~/research/out"] });
+    var src = {};
+    Object.keys(defaults).forEach(function (t) { if (!agent[t]) { agent[t] = JSON.parse(JSON.stringify(defaults[t])); src[t] = "default"; } else src[t] = "agent entry"; });
+    Object.keys(agent).forEach(function (t) { agent[t].fs_roots = agent[t].fs_roots.map(tilde); });
+    var added = {};
+    if (fStep.checked) Object.keys(agent).forEach(function (t) {
+      var s = agent[t], deny = !s.fs_roots.length && !s.net_hosts.length && !s.env_reads.length && !s.shell_bins.length && !s.wallets.length;
+      if (!deny && s.fs_roots.indexOf(AWS) < 0) { s.fs_roots.push(AWS); added[t] = true; }
+    });
+    var tools = ["read_file", "write_file", "http_request", "run_command"];
+    var out = tools.map(function (t) {
+      var s = agent[t], tag, cls = "";
+      if (!s) { s = sc({ fs_roots: [AWS], net_hosts: ["*"], env_reads: ["*"], shell_bins: fHard.checked ? [] : ["*"], wallets: ["default"] }); tag = '<span class="chip hands">fallback</span>'; cls = " fall"; }
+      else tag = '<span class="chip ' + (src[t] === "agent entry" ? "jev" : "data") + '">' + src[t] + "</span>";
+      var deny = ["fs_roots", "net_hosts", "env_reads", "shell_bins", "wallets"].every(function (k) { return !s[k].length; });
+      if (deny) { cls = " deny"; tag += ' <span class="chip bad">deny-all</span>'; }
+      var lines = ["fs_roots", "net_hosts", "env_reads", "shell_bins", "wallets"].filter(function (k) { return s[k].length; }).map(function (k) {
+        return s[k].map(function (val, i) { var isAdd = k === "fs_roots" && added[t] && val === AWS; return '<li class="' + (isAdd ? "add" : "") + '">' + (i ? "&nbsp;".repeat(k.length + 3) : k + " = ") + esc(JSON.stringify(val)) + (isAdd ? "  ← step workspace" : "") + "</li>"; }).join("");
+      }).join("");
+      if (!lines) lines = '<li class="none">every field empty: every check refuses</li>';
+      return '<div class="sc' + cls + '"><h4>' + t + " " + tag + "</h4><ul>" + lines + "</ul></div>";
+    });
+    document.getElementById("f-out").innerHTML = out.join("");
+    document.getElementById("f-note").innerHTML = fStep.checked
+      ? "Step workspace (example) <code>" + AWS + "</code> joins every configured scope that is not deny-all."
+      : "In-process chat: no grant. The fallback is still rooted in the agent's workspace.";
+  }
+  [fOwn, fStep, fHard].forEach(function (e) { e.addEventListener("change", fold); });
+  fold();
+
+  /* ---------- hardening load check ---------- */
+  var H = { risk: document.getElementById("h-risk"), sign: document.getElementById("h-sign"), prof: document.getElementById("h-prof"), root: document.getElementById("h-root"), mcp: document.getElementById("h-mcp"), sh: document.getElementById("h-sh") };
+  var WHY = "hardened sandbox: Solana signer or [risk]";
+  function hardCheck() {
+    var out = document.getElementById("h-out"), head = document.getElementById("h-head");
+    var hardened = H.risk.checked || H.sign.checked, errs = [];
+    if (!hardened) {
+      head.textContent = "Not hardened";
+      out.className = "errs ok";
+      out.innerHTML = "<li>None of these rules apply: the sandbox loads. Tools without a scope keep a shell in their fallback.</li>";
+      return;
+    }
+    var prof = H.prof.value;
+    if (prof !== "none") {
+      var got = prof ? 'builtin_tools_profile = "' + prof + '"' : 'no [agents.exec.claude_code] block (= "editor_shell")';
+      errs.push('agents.exec: engine = "claude_code" in a hardened sandbox (Solana signer or [risk]) needs [agents.exec.claude_code] builtin_tools_profile = "none" — got ' + got + "; built-in tools run outside tengu scopes");
+    }
+    if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer or [risk]): foreign processes with this filesystem");
+    if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer or [risk]) runs no shell");
+    var prot = [];
+    if (H.sign.checked) prot.push({ what: "solana.signer_key_file", path: HOME + "/.tengu/keys/lping-signer.json", dir: false });
+    prot.push({ what: "<TENGU_HOME>/state", path: HOME + "/.tengu/state", dir: true });
+    if (H.risk.checked) prot.push({ what: "risk.kill_switch_file", path: HOME + "/.tengu/state/xmarket/KILL", dir: false });
+    var roots = [["agents.exec.workspace", HOME + "/xmarket-workspace"], ["default_scopes.read_file.fs_roots", tilde(H.root.value)]];
+    roots.forEach(function (r) {
+      prot.forEach(function (p) {
+        var how = under(p.path, r[1]) ? "inside" : (p.dir && under(r[1], p.path)) ? "around" : null;
+        if (how) errs.push(p.what + " `" + p.path + "` is " + how + " " + r[0] + " `" + r[1] + "` — keep it outside every fs root and workspace (" + WHY + ")");
+      });
+    });
+    if (!errs.length) {
+      head.textContent = "Loads (hardened)";
+      out.className = "errs ok";
+      out.innerHTML = "<li>✓ Every agent gets <code>no_shell_fallback</code>: tools without a scope run no shell, no shell skill loads, and writers also refuse the five prompt files.</li>";
+      return;
+    }
+    head.textContent = "Config validation failed (" + errs.length + " issue" + (errs.length === 1 ? "" : "s") + ")";
+    out.className = "errs";
+    out.innerHTML = errs.map(function (e) { return "<li>" + esc(e) + "</li>"; }).join("");
+  }
+  Object.keys(H).forEach(function (k) { H[k].addEventListener("change", hardCheck); });
+  hardCheck();
+})();
+</script>
+</body>
+</html>

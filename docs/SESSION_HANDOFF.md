@@ -6,6 +6,15 @@
 
 ---
 
+## Visual tutorial `docs/tutorial/` (2026-10-07, on `main` @ `9f0e98f`)
+
+| What | State |
+|---|---|
+| Site | `docs/tutorial/index.html` + 25 feature pages, one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
+| Sync rule | every code change updates the pages whose `sources` cover it (`docs/tutorial/sources.toml`) — CLAUDE.md / AGENTS.md "REQUIRED updates"; `cargo test --test tutorial_map`; Claude Code `PostToolUse` hook in `.claude/settings.json` (`.gitignore` now `/.claude/*` + `!/.claude/settings.json`) |
+| Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` |
+| Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (uncommitted on `main`, each with a test; pages re-checked), 4 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) |
+
 ## Local data to clean up later (operator, 2026-10-07)
 
 Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kept on purpose for now. **An agent deletes a group only after the operator says that group is done** — never on its own initiative, never as "cleanup while here". Back up first if the operator asks. When a row is deleted, remove it here in the same commit.

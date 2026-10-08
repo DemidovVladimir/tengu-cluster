@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chat turn and tool loop · Tengu</title>
+<meta name="description" content="How one chat turn assembles its prompt, runs engine rounds, executes tool calls inside their scopes, caps and compacts results, and ends.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: message rows in the stage, the context widget, the call-id strip, result cards */
+  svg .row-cut { fill: var(--sunk); stroke: var(--line); stroke-dasharray: 3 3; stroke-width: 1.2; }
+  svg .row-full { fill: var(--hands-soft); stroke: var(--hands); stroke-width: 1.4; }
+
+  .seg-group { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg-group .btn[aria-pressed="true"] { font-weight: 600; }
+  .ctx { display: grid; gap: 8px; }
+  .ctx-bar { position: relative; height: 30px; border-radius: 7px; overflow: hidden; background: var(--sunk); border: 1px solid var(--line); display: flex; }
+  .ctx-bar > span { height: 100%; transition: width .45s cubic-bezier(.2,.8,.2,1); flex: none; }
+  .ctx-bar .s-sys { background: var(--data); }
+  .ctx-bar .s-hist { background: var(--data-soft); box-shadow: inset -1px 0 0 var(--data); }
+  .ctx-bar .s-old { background: repeating-linear-gradient(45deg, var(--hands) 0 3px, var(--hands-soft) 3px 7px); }
+  .ctx-bar .s-new { background: var(--hands); }
+  .ctx-bar .s-res { position: absolute; right: 0; top: 0; bottom: 0; background: repeating-linear-gradient(-45deg, var(--heart) 0 2px, transparent 2px 7px); border-left: 2px solid var(--heart); opacity: .75; }
+  .ctx-bar .ghost { position: absolute; top: -2px; bottom: -2px; width: 0; border-left: 2px dashed var(--bad); transition: left .45s; }
+  .ctx-key { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.8rem; color: var(--muted); padding: 0; margin: 0; list-style: none; }
+  .ctx-key i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--line); }
+  .ctx-key .k-sys { background: var(--data); } .ctx-key .k-hist { background: var(--data-soft); }
+  .ctx-key .k-old { background: repeating-linear-gradient(45deg, var(--hands) 0 3px, var(--hands-soft) 3px 7px); }
+  .ctx-key .k-new { background: var(--hands); }
+  .ctx-key .k-res { background: repeating-linear-gradient(-45deg, var(--heart) 0 2px, transparent 2px 6px); }
+  .ctx-key .k-ghost { border: 0; border-left: 2px dashed var(--bad); border-radius: 0; width: 2px; }
+  .rounds { display: grid; gap: 4px; }
+  .rounds .r { display: grid; grid-template-columns: 74px minmax(0, 1fr) minmax(92px, auto); gap: 8px; align-items: center; font-size: 0.8rem; }
+  .rounds .r b { font-family: var(--font-mono); font-weight: 500; color: var(--ink); }
+  .rounds .r .t { height: 10px; background: var(--sunk); border-radius: 5px; overflow: hidden; }
+  .rounds .r .t span { display: block; height: 100%; border-radius: 5px; background: var(--hands); transition: width .45s; }
+  .rounds .r.old .t span { background: repeating-linear-gradient(45deg, var(--hands) 0 3px, var(--hands-soft) 3px 7px); }
+  .rounds .r em { font-style: normal; font-family: var(--font-mono); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--paper); display: grid; gap: 2px; }
+  .stat small { color: var(--muted); font-size: 0.76rem; }
+  .stat b { font-family: var(--font-mono); font-weight: 500; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+
+  .cid { display: flex; flex-wrap: wrap; gap: 6px; align-items: stretch; }
+  .cid > span { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); display: grid; gap: 2px; font-family: var(--font-mono); font-size: 0.86rem; color: var(--ink); }
+  .cid > span small { font-family: var(--font-body); font-size: 0.74rem; color: var(--muted); }
+  .cid > .sep { border: 0; background: none; padding: 6px 0; color: var(--faint); }
+  .cid.in-view > span:not(.sep) { animation: lit .5s ease both; }
+  .cid.in-view > span:nth-child(3) { animation-delay: .35s } .cid.in-view > span:nth-child(5) { animation-delay: .7s }
+  .cid.in-view > span:nth-child(7) { animation-delay: 1.05s } .cid.in-view > span:nth-child(9) { animation-delay: 1.4s }
+  @keyframes lit { from { transform: translateY(6px); opacity: .25 } to { transform: none; opacity: 1 } }
+
+  .fate pre { font-size: 0.74rem; max-height: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .fate .arrow { color: var(--faint); font-family: var(--font-mono); font-size: 0.8rem; }
+  .capbars .bar { grid-template-columns: minmax(96px, 140px) minmax(0, 1fr) 72px; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · One turn</div>
+  <h1>Chat turn and tool loop</h1>
+  <p class="lede">One message, one or many engine rounds. The model asks for tools, Tengu runs each inside its scope, feeds the result back, and repeats until the model answers or the round cap hits.</p>
+  <ul class="facts">
+    <li><b>70</b> rounds per turn</li>
+    <li>a result enters at most <b>300 000</b> chars</li>
+    <li>older rounds keep <b>line 1, ≤ 200</b> chars</li>
+    <li>flow budget <b>100 000</b> tokens</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> engine</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> memory</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> scope, caps</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip data">data</span> history, prompt</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One turn, step by step</span>
+    <h2 id="s-flow">From message to answer</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 410" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A chat turn: message, flow history, memory recall and system prompt build the prompt; the engine runs rounds; tool calls go through the scope check, run, get capped and join the messages; older rounds are compacted; the turn ends with an answer.</title>
+        <!-- edges -->
+        <path class="e" id="p-user-flow" d="M100 88 L100 128" data-at="1"/>
+        <path class="e" id="p-flow-prompt" d="M180 159 C200 159 198 190 218 190" data-at="3"/>
+        <path class="e" id="p-mem-prompt" d="M180 259 C200 259 198 226 218 226" data-at="2-3"/>
+        <path class="e" id="p-sys-prompt" d="M180 359 C204 359 198 264 218 264" data-at="3"/>
+        <path class="e" id="p-prompt-eng" d="M390 200 C414 200 406 74 428 74" data-at="4"/>
+        <path class="e" id="p-eng-ans" d="M600 61 L658 61" data-at="9"/>
+        <path class="e" id="p-eng-scope" d="M515 116 L515 198" data-at="5"/>
+        <path class="e" id="p-scope-run" d="M515 262 L515 328" data-at="6"/>
+        <path class="e" id="p-run-cap" d="M600 359 L658 359" data-at="7"/>
+        <path class="e" id="p-cap-msgs" d="M750 330 L750 304" data-at="8"/>
+        <path class="e flow" id="p-msgs-eng" d="M660 196 C628 196 632 100 602 96" data-at="8"/>
+
+        <!-- nodes -->
+        <g class="n" data-at="1">
+          <rect x="20" y="30" width="160" height="58" rx="8"/>
+          <text x="100" y="54" text-anchor="middle" class="t-title">User message</text>
+          <text x="100" y="73" text-anchor="middle" class="t-small">TUI · Telegram · webhook</text>
+        </g>
+        <g class="n data" data-at="1,3">
+          <rect x="20" y="130" width="160" height="58" rx="8"/>
+          <text x="100" y="154" text-anchor="middle" class="t-title">Flow history</text>
+          <text x="100" y="173" text-anchor="middle" class="t-small">user + assistant text</text>
+        </g>
+        <g class="n brain" data-at="2-3">
+          <rect x="20" y="230" width="160" height="58" rx="8"/>
+          <text x="100" y="254" text-anchor="middle" class="t-title">Memory recall</text>
+          <text x="100" y="273" text-anchor="middle" class="t-small">top 5 hits, fail-soft</text>
+        </g>
+        <g class="n data" data-at="3">
+          <rect x="20" y="330" width="160" height="58" rx="8"/>
+          <text x="100" y="354" text-anchor="middle" class="t-title">System prompt</text>
+          <text x="100" y="373" text-anchor="middle" class="t-small">identity · skills · tools</text>
+        </g>
+        <g class="n data" data-at="3-4">
+          <rect x="220" y="150" width="170" height="150" rx="8"/>
+          <text x="305" y="172" text-anchor="middle" class="zone-label">Prompt</text>
+          <text x="305" y="196" text-anchor="middle" class="t-title">assembled</text>
+          <text x="305" y="222" text-anchor="middle" class="t-small">system prompt</text>
+          <text x="305" y="242" text-anchor="middle" class="t-small">[Relevant memories]</text>
+          <text x="305" y="262" text-anchor="middle" class="t-small">newest history that fits</text>
+          <text x="305" y="282" text-anchor="middle" class="t-small">≤ 20 messages</text>
+        </g>
+        <g class="n heart" data-at="4-5,8-9">
+          <rect x="430" y="30" width="170" height="86" rx="10"/>
+          <text x="515" y="58" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="515" y="80" text-anchor="middle" class="t-title">Engine call</text>
+          <text x="515" y="99" text-anchor="middle" class="t-small">one round · tools listed</text>
+        </g>
+        <g class="n guard" data-at="5-6">
+          <rect x="430" y="200" width="170" height="62" rx="8"/>
+          <text x="515" y="226" text-anchor="middle" class="t-title">Scope check</text>
+          <text x="515" y="245" text-anchor="middle" class="t-small">that tool's ToolScope</text>
+        </g>
+        <g class="n hands" data-at="6-7">
+          <rect x="430" y="330" width="170" height="58" rx="8"/>
+          <text x="515" y="354" text-anchor="middle" class="t-title">Run tool</text>
+          <text x="515" y="373" text-anchor="middle" class="t-small">text, or ERROR: text</text>
+        </g>
+        <g class="n" data-at="9">
+          <rect x="660" y="30" width="180" height="62" rx="8"/>
+          <text x="750" y="56" text-anchor="middle" class="t-title">Answer</text>
+          <text x="750" y="76" text-anchor="middle" class="t-small">text joins the flow</text>
+        </g>
+        <g class="n data" data-at="8">
+          <rect x="660" y="150" width="180" height="152" rx="8"/>
+          <text x="750" y="170" text-anchor="middle" class="zone-label">Messages</text>
+          <g>
+            <rect class="row-cut" x="672" y="182" width="156" height="30" rx="6"/>
+            <text x="750" y="201" text-anchor="middle" class="t-small">round 1 · line 1 only</text>
+            <rect class="row-cut" x="672" y="220" width="156" height="30" rx="6"/>
+            <text x="750" y="239" text-anchor="middle" class="t-small">round 2 · line 1 only</text>
+            <rect class="row-full" x="672" y="258" width="156" height="30" rx="6"/>
+            <text x="750" y="277" text-anchor="middle" class="t-small">round 3 · full result</text>
+          </g>
+        </g>
+        <g class="n guard" data-at="7-8">
+          <rect x="660" y="330" width="180" height="58" rx="8"/>
+          <text x="750" y="354" text-anchor="middle" class="t-title">Cap the result</text>
+          <text x="750" y="373" text-anchor="middle" class="t-small">≤ max_tool_result_chars</text>
+        </g>
+
+        <!-- per-step badges -->
+        <g class="pop badge" data-at="1"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">keeps the last 20 user turns</text></g>
+        <g class="pop badge" data-at="2"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">skipped for "latest" asks</text></g>
+        <g class="pop badge" data-at="3"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">input budget, newest first</text></g>
+        <g class="pop badge" data-at="4"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">stream idle 120 s → error</text></g>
+        <g class="pop badge" data-at="5"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">id chat:&lt;nonce&gt;:&lt;r&gt;:&lt;i&gt;</text></g>
+        <g class="pop badge" data-at="6"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">secrets → [REDACTED]</text></g>
+        <g class="pop badge" data-at="7"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">cut at 300 000 + footer</text></g>
+        <g class="pop badge" data-at="8"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">older rounds → line 1</text></g>
+        <g class="pop badge" data-at="9"><rect x="205" y="318" width="200" height="22" rx="11"/><text x="305" y="333" text-anchor="middle">cap hit → answer, no tools</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok" r="6" data-path="p-user-flow" data-at="1"/>
+        <circle class="tok brain" r="6" data-path="p-mem-prompt" data-at="2"/>
+        <circle class="tok" r="6" data-path="p-flow-prompt" data-at="3"/>
+        <circle class="tok brain" r="6" data-path="p-mem-prompt" data-at="3" data-delay="250"/>
+        <circle class="tok" r="6" data-path="p-sys-prompt" data-at="3" data-delay="500"/>
+        <circle class="tok heart" r="6" data-path="p-prompt-eng" data-at="4"/>
+        <circle class="tok heart" r="6" data-path="p-eng-scope" data-at="5" data-dur="1100"/>
+        <circle class="tok hands" r="6" data-path="p-scope-run" data-at="6" data-dur="1100"/>
+        <circle class="tok hands" r="6" data-path="p-run-cap" data-at="7" data-dur="900"/>
+        <circle class="tok hands" r="6" data-path="p-cap-msgs" data-at="8" data-dur="600"/>
+        <circle class="tok" r="6" data-path="p-msgs-eng" data-at="8" data-delay="700"/>
+        <circle class="tok heart" r="6" data-path="p-eng-ans" data-at="9" data-dur="900"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A message arrives from the TUI, Telegram or a webhook. It joins the flow; turns beyond the history limit drop out (20 user turns by default).</li>
+        <li>With a memory manager, the top 5 hits for the message become a <code>[Relevant memories]</code> system block. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
+        <li>The prompt: system prompt, memories, then the newest history that fits the input budget, at most 20 messages. Nothing fits: "Context budget exhausted".</li>
+        <li>One engine round gets every message plus the tool definitions. No stream event for <code>stream_event_timeout_secs</code> (120 s) fails the turn.</li>
+        <li>Each tool call goes to the executor with its own call id. The tool gets the scope configured for it and checks it before it acts.</li>
+        <li>The tool runs. Success returns text; failure returns <code>ERROR: &lt;message&gt;</code> to the model. Secrets are redacted in both.</li>
+        <li>The result is capped before it enters the context: 300 000 chars by default; a local engine also ≤ 1/8 of its window.</li>
+        <li>Results join the messages. From the second round on, every older round's results shrink to line 1, at most 200 chars. The engine runs again.</li>
+        <li>No tool calls: that text is the answer. At the round cap (70) the engine gets one last call with no tools, so it must answer.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-ctx">
+  <div class="sec-head">
+    <span class="kicker">Try it: add rounds, grow the results</span>
+    <h2 id="s-ctx">Watch the context fill</h2>
+    <p>The real caps and compaction rule from <code>tool_loop.rs</code>, one tool call per round. Example prompt: 3 000 tokens of system prompt, 2 000 of history.</p>
+  </div>
+  <div class="widget" id="ctxw">
+    <div class="widget-row">
+      <div class="seg-group" role="group" aria-label="Engine and window">
+        <button type="button" class="btn" data-eng="or" aria-pressed="false">openrouter · 1 000 000</button>
+        <button type="button" class="btn" data-eng="l32" aria-pressed="true">local · 32 000</button>
+        <button type="button" class="btn" data-eng="l16" aria-pressed="false">local · 16 384</button>
+      </div>
+    </div>
+    <div class="widget-row">
+      <label for="rsize">Each tool result: <span class="readout" id="rsize-out">12 000 chars</span>
+        <input type="range" id="rsize" min="1" max="100" step="1" value="48">
+      </label>
+      <label for="rounds">Tool rounds so far: <span class="readout" id="rounds-out">3</span>
+        <input type="range" id="rounds" min="1" max="10" step="1" value="3">
+      </label>
+    </div>
+    <div class="ctx">
+      <div class="ctx-bar" id="ctx-bar" aria-hidden="true">
+        <span class="s-sys"></span><span class="s-hist"></span><span class="s-old"></span><span class="s-new"></span>
+        <span class="s-res"></span><span class="ghost"></span>
+      </div>
+      <ul class="ctx-key">
+        <li><i class="k-sys"></i>system prompt</li>
+        <li><i class="k-hist"></i>history</li>
+        <li><i class="k-old"></i>older rounds, line 1</li>
+        <li><i class="k-new"></i>latest result</li>
+        <li><i class="k-res"></i>answer reserve</li>
+        <li><i class="k-ghost"></i>without compaction</li>
+      </ul>
+    </div>
+    <div class="rounds" id="ctx-rounds" aria-label="What each round's result costs now"></div>
+    <div class="stats">
+      <div class="stat"><small>one result enters as</small><b id="st-enter">-</b></div>
+      <div class="stat"><small>prompt for the next round</small><b id="st-total">-</b></div>
+      <div class="stat"><small>without line-1 compaction</small><b id="st-raw">-</b></div>
+      <div class="stat"><small>answer reserve</small><b id="st-res">-</b></div>
+    </div>
+    <span class="verdict ok" id="ctx-verdict" aria-live="polite">-</span>
+    <p class="note">Tokens are estimated as bytes / 4, as in <code>domain/token.rs</code>. The loop itself never checks the window: caps and line-1 compaction are its only trims.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-budget">
+  <div class="sec-head">
+    <span class="kicker">Before the first round</span>
+    <h2 id="s-budget">Budgets, knobs, and what <code>/context</code> shows</h2>
+    <p>The prompt is sized once per turn. The flow budget counts only user and assistant text, never tool results.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-f" aria-selected="true">Formulas</button>
+      <button type="button" aria-controls="tab-t">Knobs (defaults)</button>
+      <button type="button" aria-controls="tab-c">/context and /engine</button>
+    </div>
+    <div class="tabpanel" id="tab-f"><pre><span class="c"># prompt_budget.rs — window = limits.context_window (engine's own for claude_code)</span>
+output_cap   = max_output_tokens_per_turn               <span class="c"># when set</span>
+             | clamp(window / 8, <span class="n">256</span>, <span class="n">16 384</span>)          <span class="c"># else</span>
+reserved     = max(output_cap + max(output_cap / 4, <span class="n">64</span>),
+                   clamp(window / 50, <span class="n">64</span>, <span class="n">2 048</span>))     <span class="c"># never above window</span>
+input_budget = min(window − reserved, flow_tokens_left) − tokens(system_prompt)
+history      = input_budget − tokens(memories)          <span class="c"># newest first, ≤ 20 messages</span>
+tokens(text) = max(bytes / <span class="n">4</span>, <span class="n">1</span>)
+
+<span class="c"># default openrouter agent: window 1 000 000, flow 100 000</span>
+output_cap <span class="n">16 384</span> · reserved <span class="n">20 480</span> · input_budget = min(<span class="n">979 520</span>, <span class="n">100 000</span>) − system</pre></div>
+    <div class="tabpanel" id="tab-t" hidden><pre><span class="k">[agents.main.limits]</span>
+max_tokens_per_flow       = <span class="n">100_000</span>    <span class="c"># notice at 80 %, blocks at 100 % until /reset</span>
+context_window            = <span class="n">1_000_000</span>  <span class="c"># set the real window for local models</span>
+<span class="c"># max_output_tokens_per_turn = 4096 # unset: the request omits max_tokens</span>
+max_tool_rounds           = <span class="n">70</span>         <span class="c"># rounds here; tool calls on claude_code</span>
+max_tool_result_chars     = <span class="n">300_000</span>    <span class="c"># per result, every engine</span>
+compact_result_limit      = <span class="n">200</span>        <span class="c"># line 1 of older rounds</span>
+stream_event_timeout_secs = <span class="n">120</span>        <span class="c"># idle stream → error</span>
+request_timeout_secs      = <span class="n">600</span>        <span class="c"># one HTTP call, body included</span>
+
+<span class="k">[agents.main.flow]</span>
+scope = <span class="s">"per-sender"</span>                    <span class="c"># history limit 20 · main 40 · per-group 30 · per-pipe-sender 25</span>
+
+<span class="k">[agents.main.prompt_budget]</span>
+max_file_tokens          = <span class="n">2000</span>          <span class="c"># per identity file / instructions</span>
+max_skill_context_tokens = <span class="n">16000</span>         <span class="c"># per skill fragment</span>
+max_total_tokens         = <span class="n">32000</span>         <span class="c"># whole system prompt; extra skills dropped with a warn</span>
+
+<span class="k">[memory]</span>
+max_recall_entries = <span class="n">5</span></pre></div>
+    <div class="tabpanel" id="tab-c" hidden><pre><span class="c"># tengu chat, no config file: the built-in main agent (numbers after "~" are example values)</span>
+<span class="k">&gt; /context</span>
+Context: ~<span class="n">1840</span> / 1000000 tokens (0%)
+Lens: eco
+History turn limit: 20
+Compaction: threshold=82000 keep_turns=10 summary_max_tokens=4096
+<span class="k">&gt; /engine</span>
+Current: openrouter/anthropic/claude-sonnet-4.6
+Engine id: openrouter
+Configured model: anthropic/claude-sonnet-4.6
+Endpoint: https://openrouter.ai/api
+Transport: http-json
+Context window: 1000000
+Output cap: 16384
+Capabilities: streaming=false</pre></div>
+  </div>
+  <p class="note"><b>Flow compaction keeps half the history.</b> Past the threshold it folds older turns into one summary and keeps the newest <code>keep_turns</code> user turns: half the history limit by default (10 of 20), and always below it, so there are turns old enough to fold.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-fate">
+  <div class="sec-head">
+    <span class="kicker">Caps, per engine</span>
+    <h2 id="s-fate">What a big result becomes</h2>
+    <p>Observers and the turn's outcomes keep the raw text. Only the copy that enters the context is cut. Example values.</p>
+  </div>
+  <div class="grid fate">
+    <div class="card hands">
+      <h3><span class="chip ok">fits</span> under the cap</h3>
+      <p>Enters whole, every engine. A typed row keeps its <code>data</code>: the ids a follow-up call needs.</p>
+    </div>
+    <div class="card guard">
+      <h3><span class="chip warn">text</span> above the cap</h3>
+      <p>Cut on a char boundary, then a footer. Local engines fit the footer inside the cap.</p>
+<pre>…first 300 000 chars…
+
+[truncated — showing 300000 of 1250000 chars]</pre>
+    </div>
+    <div class="card guard">
+      <h3><span class="chip warn">typed row</span> above a local cap</h3>
+      <p>Line 1 and features stay; <code>data</code> becomes a pointer to its store key.</p>
+<pre>hl_ctx hyperliquid:xyz:TSLA mark=436.12 oi_usd=1234567 | ok 0s live
+mark=436.12
+data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
+    </div>
+  </div>
+  <div class="bars capbars" aria-label="Per-result cap by engine and window">
+    <div class="bar"><span class="lbl">openrouter</span><span class="track"><span class="fill" style="--w:100%"></span></span><span class="val">300 000</span></div>
+    <div class="bar"><span class="lbl">local 131 072</span><span class="track"><span class="fill" style="--w:21.8%"></span></span><span class="val">65 536</span></div>
+    <div class="bar"><span class="lbl">local 32 000</span><span class="track"><span class="fill" style="--w:5.3%"></span></span><span class="val">16 000</span></div>
+    <div class="bar"><span class="lbl">local 16 384</span><span class="track"><span class="fill" style="--w:2.7%"></span></span><span class="val">8 192</span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-cid">
+  <div class="sec-head">
+    <span class="kicker">Call ids</span>
+    <h2 id="s-cid">Every chat call gets an id that never repeats</h2>
+    <p>Exec tools key their order on it (<code>client_order_id</code> default). The messages keep the provider's own id, so results still pair with calls.</p>
+  </div>
+  <div class="cid" data-inview>
+    <span>chat<small>surface</small></span><span class="sep">:</span>
+    <span>&lt;turn nonce&gt;<small>uuid, 32 hex, per loop</small></span><span class="sep">:</span>
+    <span>&lt;round&gt;<small>0, 1, 2 …</small></span><span class="sep">:</span>
+    <span>&lt;i&gt;<small>call index in the round</small></span><span class="sep">:</span>
+    <span>&lt;provider id&gt;<small>e.g. call_0; left off when empty</small></span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Caller</th><th>Call id</th></tr></thead>
+      <tbody>
+        <tr><td>chat: TUI, Telegram, webhooks, eval, <code>tool turn</code>, doctor</td><td class="wrap"><code>chat:&lt;turn nonce&gt;:&lt;round&gt;:&lt;i&gt;:&lt;provider id&gt;</code></td></tr>
+        <tr><td><code>run-agent</code> step</td><td>the model's own tool-call id</td></tr>
+        <tr><td><a href="mcp-bridge.html">MCP bridge</a>, <code>tengu tool call</code></td><td class="wrap"><code>mcp:&lt;process nonce&gt;:&lt;JSON-RPC id&gt;</code></td></tr>
+        <tr><td><a href="decision-loop.html">decision loop</a></td><td class="wrap"><code>{loop}:{session_id}:{t}</code></td></tr>
+        <tr><td><code>[feeds.&lt;n&gt;]</code> tool feed</td><td class="wrap"><code>feed:&lt;name&gt;:&lt;slot ms&gt;:&lt;i&gt;</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-end">
+  <div class="sec-head">
+    <span class="kicker">Eight endings</span>
+    <h2 id="s-end">How a turn ends</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip hands">ok</span><span><b>answer</b>A round with no tool calls. Its text is the reply and joins the flow.</span></li>
+    <li><span class="chip guard">cap</span><span><b>round cap</b>After <code>max_tool_rounds</code>, one more call with no tools offered forces an answer.</span></li>
+    <li><span class="chip data">more</span><span><b>auto-continue</b>Output ends in <code>[OUTPUT_TRUNCATED]</code>: the loop asks the model to continue, if rounds remain.</span></li>
+    <li><span class="chip warn">stop</span><span><b>cancelled</b>Telegram <code>/stop</code>. Checked before each round, before each tool, and every 2 s of stream.</span></li>
+    <li><span class="chip bad">err</span><span><b>stream idle</b>No event for 120 s: "Engine stream timed out".</span></li>
+    <li><span class="chip bad">err</span><span><b>engine error</b>An error event before any text fails the turn.</span></li>
+    <li><span class="chip data">full</span><span><b>flow limit</b>Flow tokens reach <code>max_tokens_per_flow</code>: "Flow token limit reached. Use /reset". A notice from 80 %.</span></li>
+    <li><span class="chip data">full</span><span><b>no room</b>Nothing fits the input budget: "Context budget exhausted. Use /reset to continue."</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>A tool runs with its own scope.</b> Configured entry first; a tool with none gets the fallback rooted in the workspace (no shell in a hardened sandbox). See <a href="scopes.html">Scopes</a>.</span></li>
+    <li><span><b>Unknown names never run.</b> The executor answers with the agent's real tool list, so the model can retry.</span></li>
+    <li><span><b>No result enters whole above the cap.</b> <code>max_tool_result_chars</code> on every engine; local engines ≤ 1/8 of the window, footer included.</span></li>
+    <li><span><b>Older rounds shrink to line 1.</b> Chat and <code>run-agent</code> apply the same rule, on every engine.</span></li>
+    <li><span><b>Secrets never reach the model.</b> Every surface wraps its executor in <code>SanitizedToolExecutor</code>: text, typed rows and errors redacted.</span></li>
+    <li><span><b>Call ids never repeat.</b> A fresh uuid nonce per loop, plus round and index.</span></li>
+    <li><span><b>The round cap always ends in an answer call.</b> The last call offers no tools.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Run one turn headless</h2>
+    <p>The hidden <code>tengu tool turn</code> runs the chat loop once and prints the activity; <code>tool call</code> runs one tool, no model. Needs <code>OPENROUTER_API_KEY</code> and the Tor proxy (<code>make tor</code>) unless the config sets <code>network = "open"</code>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu tool turn --agent main --goal "List the files in your workspace"</span>
+<span class="ln o"># one JSON line, wrapped here; text and numbers are example values</span>
+<span class="ln">{"metrics":[{"completion_tokens":41,"prompt_tokens":2310}],</span>
+<span class="ln"> "output":"The workspace is empty.","status":"ok",</span>
+<span class="ln"> "tools":[<span class="hl">{"name":"list_directory","ok":true}</span>]}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --agent main --tool list_directory --args '{"path":"."}'</span>
+<span class="ln">{"is_error":false,"observation":null,"text":"(empty directory)"}</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/application/chat/service.rs</code></td><td><code>process_user_text</code>, recall, flow budget, slash commands</td></tr>
+        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td><code>collect_engine_response</code>: rounds, caps, compaction, call ids, cancel</td></tr>
+        <tr><td><code>src/application/chat/prompt_budget.rs</code></td><td>reserve, input budget, history assembly</td></tr>
+        <tr><td><code>src/application/chat/flow.rs</code></td><td>flow key, history limit, flow compaction</td></tr>
+        <tr><td><code>src/application/tools/registry.rs</code></td><td><code>PluginToolExecutor</code>: per-call <code>ToolCtx</code> and scope</td></tr>
+        <tr><td><code>src/application/skills/registry.rs</code></td><td><code>build_system_prompt_with_tools</code></td></tr>
+        <tr><td><code>src/domain/token.rs</code></td><td>bytes / 4 estimate, the 1/8 window budget</td></tr>
+        <tr><td><code>src/domain/session.rs</code> · <code>usage.rs</code> · <code>message.rs</code></td><td>loop state, usage totals, <code>StreamEvent</code></td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>LimitsConfig</code>, <code>FlowConfig</code>, <code>PromptBudgetConfig</code></td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td>executor build, scope resolution, fallback scope</td></tr>
+        <tr><td><code>src/adapters/outbound/secrets.rs</code></td><td><code>SanitizedToolExecutor</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: the context-fill widget (formulas from prompt_budget.rs, token.rs, tool_loop.rs) */
+(function () {
+  var ENG = {
+    or:  { window: 1000000, local: false },
+    l32: { window: 32000, local: true },
+    l16: { window: 16384, local: true }
+  };
+  var MAX_RESULT = 300000, COMPACT = 200, SYS = 3000, HIST = 2000;
+  var eng = "l32";
+  var rsize = document.getElementById("rsize"), rsizeOut = document.getElementById("rsize-out");
+  var rounds = document.getElementById("rounds"), roundsOut = document.getElementById("rounds-out");
+  var bar = document.getElementById("ctx-bar"), segs = bar.children;
+  var list = document.getElementById("ctx-rounds"), verdict = document.getElementById("ctx-verdict");
+  function fmt(n) { return Math.round(n).toLocaleString("en-US").replace(/,/g, " "); }
+  function tok(chars) { return Math.max(1, Math.floor(chars / 4)); }
+  function outCap(w) { return Math.min(16384, Math.max(256, Math.floor(w / 8))); }
+  function reserved(w) {
+    var c = Math.min(outCap(w), w);
+    var floor = Math.min(2048, Math.max(64, Math.floor(w / 50)));
+    return Math.min(Math.max(c + Math.max(Math.floor(c / 4), 64), floor), w);
+  }
+  /* footer "\n\n[truncated — showing N of M chars]": the em dash is 3 bytes */
+  function footer(shown, total) { return ("\n\n[truncated - showing " + shown + " of " + total + " chars]").length + 2; }
+  function sizeFromSlider(v) {
+    /* 1..100 → 500 .. 400 000 chars, log scale, rounded */
+    var x = 500 * Math.pow(800, (v - 1) / 99);
+    var step = x < 5000 ? 100 : x < 50000 ? 1000 : 10000;
+    return Math.round(x / step) * step;
+  }
+  function render() {
+    var e = ENG[eng], w = e.window, size = sizeFromSlider(+rsize.value), r = +rounds.value;
+    rsizeOut.textContent = fmt(size) + " chars";
+    roundsOut.textContent = r;
+    var cap = e.local ? Math.min(Math.floor(w / 8) * 4, MAX_RESULT) : MAX_RESULT;
+    var cut = size > cap;
+    var enter = !cut ? size : (e.local ? cap : cap + footer(cap, size));
+    var old = Math.min(enter, COMPACT);
+    var tNew = tok(enter), tOld = tok(old) * (r - 1);
+    var total = SYS + HIST + tOld + tNew, raw = SYS + HIST + tNew * r, res = reserved(w);
+    function pct(t) { return Math.min(100, t / w * 100); }
+    var used = 0;
+    [SYS, HIST, tOld, tNew].forEach(function (t, i) {
+      var p = Math.min(pct(t), 100 - used);
+      segs[i].style.width = (t > 0 ? Math.max(p, 0.4) : 0) + "%";
+      used += p;
+    });
+    segs[4].style.width = pct(res) + "%";
+    segs[5].style.left = "calc(" + Math.min(99.6, pct(raw)) + "% - 1px)";
+    list.innerHTML = "";
+    for (var i = 1; i <= r; i++) {
+      var latest = i === r, c = latest ? enter : old;
+      var d = document.createElement("div");
+      d.className = "r" + (latest ? "" : " old");
+      d.innerHTML = "<b>round " + i + "</b><span class=\"t\"><span style=\"width:" + Math.max(1.5, c / Math.max(enter, 1) * 100) + "%\"></span></span><em>" +
+        fmt(c) + " chars" + (latest ? "" : " · line 1") + "</em>";
+      list.appendChild(d);
+    }
+    document.getElementById("st-enter").textContent = fmt(enter) + " chars" + (cut ? " (cap " + fmt(cap) + ")" : "");
+    document.getElementById("st-total").textContent = fmt(total) + " tok · " + (total / w * 100).toFixed(1) + "%";
+    document.getElementById("st-raw").textContent = fmt(raw) + " tok";
+    document.getElementById("st-res").textContent = fmt(res) + " tok";
+    if (total + res > w) {
+      verdict.className = "verdict bad";
+      verdict.textContent = "Over the window by " + fmt(total + res - w) + " tokens: nothing in the loop trims further";
+    } else if (cut) {
+      verdict.className = "verdict warn";
+      verdict.textContent = "Fits, but each result was cut to " + fmt(cap) + " chars";
+    } else {
+      verdict.className = "verdict ok";
+      verdict.textContent = "Fits whole, with room for the answer";
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#ctxw [data-eng]"), function (b) {
+    b.addEventListener("click", function () {
+      eng = b.getAttribute("data-eng");
+      Array.prototype.forEach.call(document.querySelectorAll("#ctxw [data-eng]"), function (x) {
+        x.setAttribute("aria-pressed", x === b ? "true" : "false");
+      });
+      render();
+    });
+  });
+  rsize.addEventListener("input", render);
+  rounds.addEventListener("input", render);
+  render();
+})();
+</script>
+</body>
+</html>

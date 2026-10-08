@@ -79,6 +79,28 @@ pub(crate) const SIGN_MESSAGE: &str = "sign_message";
 /// Every Privy tool that signs with a wallet (`ToolScope::check_wallet`).
 pub(crate) const PRIVY_SIGNING_TOOLS: &[&str] = &[SIGN_AND_SEND_TRANSACTION, SIGN_MESSAGE];
 
+/// Every default tool — on for each agent unless its `tools` lists others —
+/// plus the always-on `compress_and_store`. With `WORKSPACE_TOOLS` it is
+/// the set an agent's `tools` may name (besides `{server}__{tool}`);
+/// `catalog_tests` keep it equal to the catalog's default rows.
+pub(crate) const DEFAULT_TOOLS: &[&str] = &[
+    "read_file",
+    "list_directory",
+    "write_file",
+    "run_command",
+    "memory_ingest",
+    "memory_search",
+    "http_request",
+    SIGN_AND_SEND_TRANSACTION,
+    SIGN_MESSAGE,
+    "get_wallet_address",
+    "abi_encode",
+    "hex_to_uint256",
+    "skill_resource",
+    "view_skill",
+    "compress_and_store",
+];
+
 /// Every opt-in workspace tool name.
 pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     AGENTIC_MEMORY,

@@ -288,7 +288,7 @@ act_at = 0.01
 max_steps = 1
 escalate = false
 dry_run = true
-history = 1
+history = 1                          # the minimum; backtest replay runs every gate decision with 0 (bootstrap/decision.rs)
 
 [decision_loops.xl_gate.actions.take]
 description = "Take the proposed trade exactly as the rule specifies (side, size, exit)."

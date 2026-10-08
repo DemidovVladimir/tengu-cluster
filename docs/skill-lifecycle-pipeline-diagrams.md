@@ -345,9 +345,9 @@ sequenceDiagram
     end
 
     Note over EV: ⑥ Best-cycle selection
-    EV->>EV: pick_best(baseline, cycles)<br/>filter: no regression > 0.05 on<br/>non-target gated metrics
+    EV->>EV: pick_best(baseline, cycles)<br/>filter: target beats baseline,<br/>no other metric drops > 0.05
 
-    alt pick_best returns None (all regressed)
+    alt pick_best returns None (no winner)
         EV-->>U: "No changes applied. Worktree preserved."
     else candidate found
         Note over EV,AG: ⑦ Approval gate

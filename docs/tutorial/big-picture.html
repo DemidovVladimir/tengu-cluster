@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>One message, end to end · Tengu</title>
+<meta name="description" content="Trace one chat message through Tengu: sandbox config, the planner LLM, plan JSON, one tengu run-agent child per step, compress_and_store, and the reply.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: the "which road" widget and the process strip */
+  .road { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .road .hop { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); font-size: 0.85rem; color: var(--ink); animation: hop-in .35s ease both; }
+  .road .hop small { color: var(--muted); font-family: var(--font-mono); font-size: 0.74rem; }
+  .road .hop.heart { border-color: var(--heart); background: var(--heart-soft); }
+  .road .hop.hands { border-color: var(--hands); background: var(--hands-soft); }
+  .road .hop.data { border-color: var(--data); background: var(--data-soft); }
+  .road .arr { color: var(--faint); font-family: var(--font-mono); }
+  @keyframes hop-in { from { opacity: .35; transform: translateX(-6px) } to { opacity: 1; transform: none } }
+  .stats { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--sunk); display: grid; gap: 2px; }
+  .stat b { font-family: var(--font-mono); font-size: 1.35rem; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .stat span { font-size: 0.8rem; color: var(--muted); }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+  .seg label { display: block; padding: 0; margin: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+  .seg label:last-child span { border-right: 0; }
+  .seg input:checked + span { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .seg input:disabled + span { opacity: .45; cursor: not-allowed; }
+  .procs { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+  .proc { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+  .proc b { font-family: var(--font-mono); font-size: 0.82rem; color: var(--ink); }
+  .proc code { font-size: 0.78rem; }
+  .procs.in-view .proc { animation: hop-in .45s ease both; }
+  .procs.in-view .proc:nth-child(2) { animation-delay: .25s } .procs.in-view .proc:nth-child(3) { animation-delay: .5s } .procs.in-view .proc:nth-child(4) { animation-delay: .75s }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">始</span> Start here · end to end</div>
+  <h1>One message, end to end</h1>
+  <p class="lede">You type one line. A planner LLM reads the team roster and either answers or writes a plan. Each plan step runs as its own <code>tengu run-agent</code> process with its own tools. The last step's answer comes back.</p>
+  <ul class="facts">
+    <li><b>1</b> planner call per turn</li>
+    <li>≤ <b>70</b> tool rounds per step</li>
+    <li><b>600 s</b> wall clock per step</li>
+    <li><b>3</b> attempts, then ≤ <b>2</b> replans</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> LLM</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> memory</li>
+    <li><span class="chip data">data</span> config and files</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One turn, step by step</span>
+    <h2 id="s-flow">From prompt to reply</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 500" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">One message: config load, planner LLM, direct reply or plan, DAG executor, one tengu run-agent child per step looping model and tools until compress_and_store, JSON back to the parent, reply to the user; failed steps retry, then replan.</title>
+        <!-- process zones -->
+        <rect class="zone" x="8" y="8" width="566" height="484" rx="12"/>
+        <text x="22" y="482" class="zone-label">tengu chat · parent process</text>
+        <rect class="zone" x="586" y="140" width="266" height="352" rx="12"/>
+        <text x="598" y="160" class="zone-label">tengu run-agent · per step</text>
+
+        <!-- edges -->
+        <path class="e" id="p-cfg-you" d="M90 300 L90 228" data-at="1"/>
+        <path class="e" id="p-you-plan" d="M156 176 C176 176 176 110 194 110" data-at="2"/>
+        <path class="e dash" id="p-reg-plan" d="M276 186 L276 144" data-at="3"/>
+        <path class="e" id="p-plan-verdict" d="M356 98 L394 98" data-at="4"/>
+        <path class="e" id="p-direct" d="M460 46 C460 8 90 8 90 156" data-at="4"/>
+        <path class="e" id="p-verdict-exec" d="M460 150 L460 194" data-at="5"/>
+        <path class="e dash" id="p-exec-plan" d="M400 258 C400 300 380 306 358 306" data-at="5"/>
+        <path class="e" id="p-exec-run" d="M465 258 L465 298" data-at="6,9-10"/>
+        <path class="e" id="p-run-child" d="M540 318 C570 318 572 211 598 211" data-at="6"/>
+        <path class="e flow" id="p-llm-tool" d="M702 200 L742 200" data-at="7"/>
+        <path class="e flow" id="p-tool-llm" d="M744 226 L704 226" data-at="7"/>
+        <path class="e" id="p-llm-cas" d="M651 248 L651 278" data-at="8"/>
+        <path class="e" id="p-cas-out" d="M721 332 L721 368" data-at="8"/>
+        <path class="e dash" id="p-out-mem" d="M690 426 C690 452 600 443 542 443" data-at="8"/>
+        <path class="e" id="p-out-run" d="M600 392 C572 392 568 345 542 345" data-at="9"/>
+        <path class="e" id="p-exec-you" d="M390 236 C340 270 190 272 122 228" data-at="9"/>
+        <path class="e bad" id="p-replan" d="M400 196 C384 172 368 160 352 144" data-at="10"/>
+
+        <!-- nodes -->
+        <g class="n" data-at="1-2,4,9">
+          <rect x="24" y="160" width="132" height="64" rx="8"/>
+          <text x="90" y="187" text-anchor="middle" class="t-title">You</text>
+          <text x="90" y="206" text-anchor="middle" class="t-small">TUI or Telegram</text>
+        </g>
+        <g class="n data" data-at="1">
+          <rect x="24" y="300" width="132" height="56" rx="8"/>
+          <text x="90" y="324" text-anchor="middle" class="t-title t-mono">config.toml</text>
+          <text x="90" y="343" text-anchor="middle" class="t-small">sandboxes/&lt;name&gt;/</text>
+        </g>
+        <g class="n heart" data-at="2-4,10">
+          <rect x="196" y="56" width="160" height="84" rx="10"/>
+          <text x="276" y="82" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="276" y="104" text-anchor="middle" class="t-title">Planner LLM</text>
+          <text x="276" y="124" text-anchor="middle" class="t-small">one call · no tools</text>
+        </g>
+        <g class="n data" data-at="3">
+          <rect x="196" y="186" width="160" height="56" rx="8"/>
+          <text x="276" y="209" text-anchor="middle" class="t-title">Planner registry</text>
+          <text x="276" y="228" text-anchor="middle" class="t-small">agents · skills · tools</text>
+        </g>
+        <g class="n" data-at="4-5">
+          <polygon points="460,46 524,98 460,150 396,98"/>
+          <text x="460" y="96" text-anchor="middle" class="t-title t-mono">kind?</text>
+          <text x="460" y="114" text-anchor="middle" class="t-small">direct · plan</text>
+        </g>
+        <g class="n" data-at="5-6,9-10">
+          <rect x="390" y="196" width="150" height="62" rx="8"/>
+          <text x="465" y="222" text-anchor="middle" class="t-title">DAG executor</text>
+          <text x="465" y="241" text-anchor="middle" class="t-small">ready steps in parallel</text>
+        </g>
+        <g class="n data" data-at="5">
+          <rect x="196" y="280" width="160" height="52" rx="8"/>
+          <text x="276" y="302" text-anchor="middle" class="t-title t-mono">TENGU_PLAN.md</text>
+          <text x="276" y="320" text-anchor="middle" class="t-small">debug mirror of the plan</text>
+        </g>
+        <g class="n" data-at="6,9-10">
+          <rect x="390" y="300" width="150" height="60" rx="8"/>
+          <text x="465" y="325" text-anchor="middle" class="t-title">SubprocessRunner</text>
+          <text x="465" y="344" text-anchor="middle" class="t-small">one child per step</text>
+        </g>
+        <g class="n heart" data-at="6-8">
+          <rect x="600" y="176" width="102" height="72" rx="10"/>
+          <text x="651" y="198" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="651" y="218" text-anchor="middle" class="t-title">Agent LLM</text>
+          <text x="651" y="236" text-anchor="middle" class="t-small">[agents.&lt;a&gt;]</text>
+        </g>
+        <g class="n hands" data-at="7">
+          <rect x="744" y="176" width="98" height="72" rx="10"/>
+          <text x="793" y="198" text-anchor="middle" class="t-kanji k">手</text>
+          <text x="793" y="218" text-anchor="middle" class="t-title">Tools</text>
+          <text x="793" y="236" text-anchor="middle" class="t-small">own scopes</text>
+        </g>
+        <g class="n hands" data-at="8">
+          <rect x="600" y="280" width="242" height="52" rx="8"/>
+          <text x="721" y="302" text-anchor="middle" class="t-title t-mono">compress_and_store</text>
+          <text x="721" y="320" text-anchor="middle" class="t-small">summary · ends the loop</text>
+        </g>
+        <g class="n data" data-at="8-9">
+          <rect x="600" y="370" width="242" height="56" rx="8"/>
+          <text x="721" y="393" text-anchor="middle" class="t-title t-mono">AgentIpcOutput</text>
+          <text x="721" y="412" text-anchor="middle" class="t-small">one JSON line on stdout</text>
+        </g>
+        <g class="n brain" data-at="8">
+          <rect x="390" y="414" width="150" height="58" rx="8"/>
+          <text x="465" y="438" text-anchor="middle" class="t-title t-mono">agentic_memory</text>
+          <text x="465" y="457" text-anchor="middle" class="t-small">Postgres · optional</text>
+        </g>
+
+        <!-- per-step badges (one slot, top right) -->
+        <g class="pop badge" data-at="1"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">validate · egress installed</text></g>
+        <g class="pop badge" data-at="2"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">no [orchestrator] → direct chat</text></g>
+        <g class="pop badge" data-at="3"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">only agents with a description</text></g>
+        <g class="pop badge" data-at="4"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">tools [] · memory off · JSON out</text></g>
+        <g class="pop badge" data-at="5"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">ready steps start together</text></g>
+        <g class="pop badge" data-at="6"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">JSON on stdin · logs to the parent</text></g>
+        <g class="pop badge" data-at="7"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">≤ 70 turns · 600 s wall clock</text></g>
+        <g class="pop badge" data-at="8"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">summary → agentic_memory</text></g>
+        <g class="pop badge" data-at="9"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">leaf output(s) → reply</text></g>
+        <g class="pop badge" data-at="10"><rect x="596" y="64" width="250" height="24" rx="12"/><text x="721" y="80" text-anchor="middle">3 tries · then replan, ≤ 2</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok" r="6" data-path="p-cfg-you" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-you-plan" data-at="2"/>
+        <circle class="tok" r="5" data-path="p-reg-plan" data-at="3"/>
+        <circle class="tok heart" r="6" data-path="p-plan-verdict" data-at="4" data-dur="700"/>
+        <circle class="tok heart" r="6" data-path="p-direct" data-at="4" data-delay="700" data-dur="1700"/>
+        <circle class="tok heart" r="6" data-path="p-verdict-exec" data-at="5" data-dur="800"/>
+        <circle class="tok" r="5" data-path="p-exec-plan" data-at="5" data-delay="700"/>
+        <circle class="tok" r="6" data-path="p-exec-run" data-at="6" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-run-child" data-at="6" data-delay="700"/>
+        <circle class="tok heart" r="6" data-path="p-llm-tool" data-at="7" data-dur="800"/>
+        <circle class="tok hands" r="6" data-path="p-tool-llm" data-at="7" data-delay="900" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-llm-cas" data-at="8" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-cas-out" data-at="8" data-delay="700" data-dur="700"/>
+        <circle class="tok brain" r="6" data-path="p-out-mem" data-at="8" data-delay="1300"/>
+        <circle class="tok" r="6" data-path="p-out-run" data-at="9" data-dur="900"/>
+        <circle class="tok" r="6" data-path="p-exec-run" data-at="9" data-reverse data-delay="900" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-exec-you" data-at="9" data-delay="1500"/>
+        <circle class="tok bad" r="6" data-path="p-exec-run" data-at="10" data-reverse data-dur="700"/>
+        <circle class="tok bad" r="6" data-path="p-replan" data-at="10" data-delay="800" data-dur="900"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu chat --sandbox lping</code> loads <code>sandboxes/lping/config.toml</code>: validates it, folds scopes, pins <code>TENGU_CONFIG</code>, installs the <code>[egress]</code> policy.</li>
+        <li>With an <code>[orchestrator]</code> section the message goes to the planner. Without one (the default) the default agent answers in one in-process chat turn.</li>
+        <li>The planner prompt: the registry of described agents, skills and tools, recalled memory, recent messages, then your message.</li>
+        <li>One LLM call with tools, memory and grounding stripped. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
+        <li>The DAG executor registers the plan for this session and mirrors it to <code>TENGU_PLAN.md</code>. Every step whose <code>depends_on</code> are done starts at once.</li>
+        <li>Per step, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and writes one JSON request to its stdin.</li>
+        <li>The child reloads the same sandbox, takes <code>[agents.&lt;step.agent&gt;]</code> and loops: model turn, tool calls, results. At most 70 turns by default.</li>
+        <li>The model ends with <code>compress_and_store(summary)</code>. With <code>postgres_memory</code> the summary lands in <code>agentic_memory</code> under the shared session id.</li>
+        <li>The child prints one <code>AgentIpcOutput</code> line and exits. When all steps are done, the leaf step's output is the reply (parallel leaves joined, one section each), secrets redacted.</li>
+        <li>A failed step runs again: 3 attempts, waiting 1 s then 3 s. Still failing, the planner replans with the error, at most 2 times.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-road">
+  <div class="sec-head">
+    <span class="kicker">Try it: pick the config and the planner's answer</span>
+    <h2 id="s-road">Which road does a message take?</h2>
+    <p>The planner's choice is an example; the counts come from the code's defaults.</p>
+  </div>
+  <div class="widget" id="road">
+    <div class="widget-row">
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="orch" checked> <code>[orchestrator]</code> section in the sandbox</label>
+      <div class="seg" role="radiogroup" aria-label="Planner answer">
+        <label><input type="radio" name="verdict" value="direct"><span>direct</span></label>
+        <label><input type="radio" name="verdict" value="one" checked><span>plan · 1 step</span></label>
+        <label><input type="radio" name="verdict" value="three"><span>plan · 3 steps</span></label>
+      </div>
+    </div>
+    <div class="road" id="road-lane" aria-live="polite"></div>
+    <div class="stats">
+      <div class="stat"><b id="st-proc">1</b><span>child processes</span></div>
+      <div class="stat"><b id="st-llm">1 + 1–70</b><span>LLM calls (planner + step turns)</span></div>
+      <div class="stat"><b id="st-tools">child</b><span>where tools run</span></div>
+    </div>
+    <p class="note" id="road-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-procs">
+  <div class="sec-head">
+    <span class="kicker">Process boundary</span>
+    <h2 id="s-procs">What crosses into the child</h2>
+    <p>The parent passes names, not settings. The child re-reads the same config file.</p>
+  </div>
+  <div class="procs" data-inview>
+    <div class="proc"><b>env</b><span><code>TENGU_AGENT_IPC=1</code> guard</span><span><code>TENGU_EGRESS</code> resolved policy</span><span><code>TENGU_CONFIG</code> inherited</span></div>
+    <div class="proc"><b>stdin · AgentIpcInput</b><span><code>goal</code> + upstream outputs, <code>agent_name</code>, <code>session_id</code>, <code>step_id</code>, <code>sandbox_config</code>, <code>plan_state</code>, <code>compose</code></span></div>
+    <div class="proc"><b>stdout · AgentIpcOutput</b><span><code>status</code> ok or failed, <code>output</code>, <code>summary</code>, <code>metrics</code>, <code>tools</code></span></div>
+    <div class="proc"><b>stderr</b><span>the child's logs, read by the parent into its own log; a failed exit quotes the last 40 lines</span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-views">
+  <div class="sec-head">
+    <span class="kicker">Config → plan → request</span>
+    <h2 id="s-views">Same turn, four views</h2>
+    <p>The TOML is from <code>sandboxes/lping</code>. The plan and the JSON lines are examples.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-toml" aria-selected="true">TOML you write</button>
+      <button type="button" aria-controls="tab-plan">Plan the LLM writes</button>
+      <button type="button" aria-controls="tab-in">Child stdin</button>
+      <button type="button" aria-controls="tab-out">Child stdout</button>
+    </div>
+    <div class="tabpanel" id="tab-toml"><pre><span class="k">[orchestrator]</span>
+agent = <span class="s">"lping"</span>                 <span class="c"># whose engine + model run the planner call</span>
+engine = <span class="s">"rag"</span>                  <span class="c"># the only value</span>
+max_attempts_per_step = <span class="n">3</span>
+max_replans = <span class="n">2</span>
+
+<span class="k">[agents.lping]</span>                  <span class="c"># planner + chat agent: no description, never a step</span>
+default = <span class="n">true</span>
+engine = <span class="s">"openrouter"</span>
+model = <span class="s">"anthropic/claude-sonnet-4-6"</span>
+
+<span class="k">[agents.crypto_researcher]</span>      <span class="c"># has a description: routable, runs as run-agent</span>
+engine = <span class="s">"openrouter"</span>
+model = <span class="s">"anthropic/claude-sonnet-4-6"</span>
+workspace = <span class="s">"~/lping-workspace"</span>
+tools = [<span class="s">"http_request"</span>, <span class="s">"read_file"</span>, <span class="s">"sol_price"</span>, <span class="s">"dlmm_pools"</span>, <span class="c">…</span>]
+description = <span class="s">"Researches crypto assets and Solana DeFi …"</span>
+
+<span class="k">[agents.crypto_researcher.limits]</span>
+max_tool_rounds = <span class="n">40</span>
+step_timeout_secs = <span class="n">600</span></pre></div>
+    <div class="tabpanel" id="tab-plan" hidden><pre><span class="c"># example planner output (the turn's only LLM call before any step)</span>
+{
+  <span class="k">"kind"</span>: <span class="s">"plan"</span>,
+  <span class="k">"steps"</span>: [
+    { <span class="k">"id"</span>: <span class="s">"s1"</span>,
+      <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>,
+      <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
+      <span class="k">"depends_on"</span>: [] }
+  ]
+}
+
+<span class="c"># or, for a greeting</span>
+{ <span class="k">"kind"</span>: <span class="s">"direct"</span>, <span class="k">"response"</span>: <span class="s">"Hi. Ask me about pools or prices."</span> }</pre></div>
+    <div class="tabpanel" id="tab-in" hidden><pre><span class="c"># what SubprocessRunner writes to the child's stdin (example values)</span>
+{
+  <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
+  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,
+  <span class="k">"model"</span>: <span class="s">""</span>,             <span class="c"># empty: the child uses the agent block's model</span>
+  <span class="k">"tools"</span>: [], <span class="k">"skills"</span>: [],
+  <span class="k">"max_turns"</span>: <span class="n">40</span>,          <span class="c"># the agent's limits.max_tool_rounds</span>
+  <span class="k">"sandbox"</span>: <span class="n">null</span>,
+  <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,
+  <span class="k">"step_id"</span>: <span class="s">"s1"</span>,
+  <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,
+  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n\n- phase: `active`\n\n## Steps\n…"</span>
+}</pre></div>
+    <div class="tabpanel" id="tab-out" hidden><pre><span class="c"># one line on the child's stdout (example values, pretty-printed here)</span>
+{
+  <span class="k">"status"</span>: <span class="s">"ok"</span>,
+  <span class="k">"output"</span>: <span class="s">"SOL is … USD; 24h volume … (sources: …)"</span>,
+  <span class="k">"summary"</span>: <span class="s">"Fetched SOL price and volume from two APIs."</span>,
+  <span class="k">"metrics"</span>: [ { <span class="k">"kind"</span>: <span class="s">"subagent"</span>, <span class="k">"step_id"</span>: <span class="s">"s1"</span>, <span class="c">…</span> } ],
+  <span class="k">"tools"</span>: [ { <span class="k">"name"</span>: <span class="s">"sol_price"</span>, <span class="k">"ok"</span>: <span class="n">true</span> },
+             { <span class="k">"name"</span>: <span class="s">"compress_and_store"</span>, <span class="k">"ok"</span>: <span class="n">true</span> } ]
+}</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Six endings</span>
+    <h2 id="s-out">What the reply can be</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip heart">direct</span><span><b>the planner's text</b>A greeting or a question no agent fits. No child runs.</span></li>
+    <li><span class="chip hands">done</span><span><b>the leaf step's output</b>All steps succeeded; the step nothing depends on answers. Several such steps: their outputs joined, one <code>### &lt;id&gt; (&lt;agent&gt;)</code> section each.</span></li>
+    <li><span class="chip bad">gave up</span><span><b>Unable to complete the request after 2 replans. Last error: …</b>Every replan failed too.</span></li>
+    <li><span class="chip bad">err</span><span><b>System error: orchestrator initial call failed: …</b>The planner call itself failed. It is not retried.</span></li>
+    <li><span class="chip bad">err</span><span><b>System error: replan call failed: …</b>A replan call failed.</span></li>
+    <li><span class="chip data">empty</span><span><b>(Orchestrator returned no response)</b>The TUI shows this when the reply is blank.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>One session id per run.</b> The planner and the runner get the same string, so step summaries are found again on later turns.</span></li>
+    <li><span><b>The planner cannot act.</b> Its call runs with no tools, no tool executor and no memory recall.</span></li>
+    <li><span><b>Only described agents run steps.</b> The runner checks before spawning; the child checks again.</span></li>
+    <li><span><b>A child cannot be started by hand by accident.</b> Without <code>TENGU_AGENT_IPC=1</code> it exits with an error.</span></li>
+    <li><span><b>Same fences in the child.</b> It reloads the same sandbox file and the parent's resolved egress policy; a bad policy aborts it.</span></li>
+    <li><span><b>Steps cannot hang the turn.</b> The child is killed after the agent's <code>step_timeout_secs</code> (default 600).</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Watch one turn</h2>
+    <p>Needs <code>OPENROUTER_API_KEY</code>. <code>lping</code> is the sandbox with an <code>[orchestrator]</code> section. The TUI shows the <code>orch:</code> lines as system bubbles.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
+<span class="ln o">&gt; what is the SOL price and 24h volume?</span>
+<span class="ln o">orch: plan created (1 step)</span>
+<span class="ln">orch: ▶ s1 [<span class="hl">crypto_researcher</span>]</span>
+<span class="ln o">orch: ✓ s1</span>
+<span class="ln o">orch: plan completed</span>
+<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md TENGU_PLANNER_REGISTRY.md</span>
+<span class="ln cmd"><span class="p">$ </span>tail -f ~/.tengu/logs/tengu.log | rg 'metrics|rag query'</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td>the <code>tengu</code> commands; config path, logs, egress</td></tr>
+        <tr><td><code>src/bootstrap/sandbox.rs</code></td><td><code>--sandbox</code>: load, pin <code>TENGU_CONFIG</code>, egress</td></tr>
+        <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td>the chat screen; orchestrator or direct turn</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>build_orchestrator</code>, session id, the stripped planner turn</td></tr>
+        <tr><td><code>src/application/orchestrator/</code></td><td>planner, executor, retry, replan, events, plan files</td></tr>
+        <tr><td><code>src/application/chat/service.rs</code></td><td>one chat turn (<code>process_user_text</code>)</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>spawns the child, IPC types, timeout</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td><code>tengu run-agent</code>: the step's model + tools loop</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: which road a message takes */
+(function () {
+  var orch = document.getElementById("orch");
+  var lane = document.getElementById("road-lane"), note = document.getElementById("road-note");
+  var stProc = document.getElementById("st-proc"), stLlm = document.getElementById("st-llm"), stTools = document.getElementById("st-tools");
+  var radios = Array.prototype.slice.call(document.querySelectorAll('input[name="verdict"]'));
+  var ROUTES = {
+    off: {
+      hops: [["You", "", ""], ["default agent", "chat turn", "heart"], ["tools", "in-process", "hands"], ["reply", "", ""]],
+      proc: "0", llm: "1–70", tools: "in-process",
+      note: "No <code>[orchestrator]</code> (the built-in default): the <code>default = true</code> agent answers in one chat turn with its own tool loop. No planner, no child."
+    },
+    direct: {
+      hops: [["You", "", ""], ["planner", "1 call", "heart"], ["kind: direct", "", "data"], ["reply", "", ""]],
+      proc: "0", llm: "1", tools: "nowhere",
+      note: "The planner answered itself. No step, no child process, no tool call."
+    },
+    one: {
+      hops: [["You", "", ""], ["planner", "1 call", "heart"], ["s1", "run-agent", "hands"], ["compress_and_store", "", "data"], ["reply", "", ""]],
+      proc: "1", llm: "1 + 1–70", tools: "child",
+      note: "One child for <code>s1</code>. Its turns are capped by its agent's <code>limits.max_tool_rounds</code> (default 70)."
+    },
+    three: {
+      hops: [["You", "", ""], ["planner", "1 call", "heart"], ["s1 ∥ s2", "2 children at once", "hands"], ["s3", "gets both outputs", "hands"], ["reply", "s3's output", ""]],
+      proc: "3", llm: "1 + 3 × (1–70)", tools: "children",
+      note: "<code>s1</code> and <code>s2</code> have no <code>depends_on</code>, so they run in parallel. <code>s3</code> depends on both and is the only leaf: its output is the reply."
+    }
+  };
+  function current() {
+    if (!orch.checked) return "off";
+    var r = radios.filter(function (x) { return x.checked; })[0];
+    return r ? r.value : "one";
+  }
+  function render() {
+    var key = current(), R = ROUTES[key];
+    radios.forEach(function (r) { r.disabled = !orch.checked; });
+    lane.innerHTML = "";
+    R.hops.forEach(function (h, i) {
+      if (i) { var a = document.createElement("span"); a.className = "arr"; a.textContent = "→"; a.setAttribute("aria-hidden", "true"); lane.appendChild(a); }
+      var s = document.createElement("span");
+      s.className = "hop " + h[2];
+      s.style.animationDelay = (i * 0.12) + "s";
+      s.innerHTML = "<b>" + h[0] + "</b>" + (h[1] ? "<small>" + h[1] + "</small>" : "");
+      lane.appendChild(s);
+    });
+    stProc.textContent = R.proc;
+    stLlm.textContent = R.llm;
+    stTools.textContent = R.tools;
+    note.innerHTML = R.note;
+  }
+  orch.addEventListener("change", render);
+  radios.forEach(function (r) { r.addEventListener("change", render); });
+  render();
+})();
+</script>
+</body>
+</html>

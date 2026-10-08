@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tengu Field Manual</title>
+<meta name="description" content="A visual tutorial of Tengu-Cluster, a Rust multi-agent harness: one page per feature, built from the code.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  .home-hero h1 { font-size: clamp(2.6rem, 1.8rem + 3.4vw, 4.2rem); }
+  .doctrine { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+  .doctrine .card { grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 12px; }
+  .doctrine .big { grid-row: span 2; font-family: var(--font-display); font-weight: 800; font-size: 2.4rem; line-height: 1; }
+  .doctrine .heart .big { color: var(--heart); } .doctrine .brain .big { color: var(--brain); } .doctrine .hands .big { color: var(--hands); }
+  .doctrine b { font-size: 1rem; }
+  .doctrine p { font-size: 0.88rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero home-hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">天</span> Tengu-Cluster · visual tutorial</div>
+  <h1>Tengu field manual</h1>
+  <p class="lede">A multi-agent harness in one Rust binary. You type a message; a planner picks agents; each agent works in its own process with its own tools; memory keeps what matters. One page per feature, every page drawn from the code.</p>
+  <ul class="facts">
+    <li><b>1</b> binary, Rust only</li>
+    <li><b>1</b> TOML file per team</li>
+    <li><b>3</b> engines: OpenRouter, local, Claude Code</li>
+    <li>network through <b>Tor</b> by default</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-doctrine">
+  <div class="sec-head">
+    <span class="kicker">The doctrine</span>
+    <h2 id="s-doctrine">Heart, brain, hands</h2>
+    <p>Every diagram in this manual uses these three colours for these three jobs.</p>
+  </div>
+  <div class="doctrine">
+    <div class="card heart"><span class="big" aria-hidden="true">心</span><b>Heart = the LLM</b><p>The planner only emits plan JSON. Subagent models think and call tools.</p></div>
+    <div class="card brain"><span class="big" aria-hidden="true">脳</span><b>Brain = memory</b><p>Open Brain holds live memory; the LLM Wiki holds reviewed knowledge.</p></div>
+    <div class="card hands"><span class="big" aria-hidden="true">手</span><b>Hands = tools</b><p>Files, HTTP, wallets, market data. Each call checks its scope first.</p></div>
+  </div>
+  <figure class="stage" data-stage data-interval="3000">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 300" role="img" aria-labelledby="home-t">
+        <title id="home-t">A message goes to the planner, which hands steps to subagents; subagents use tools and memory; the reply returns to the user.</title>
+        <path class="e" id="h-user-plan" d="M150 150 L238 150" data-at="1"/>
+        <path class="e" id="h-plan-sub" d="M378 150 L456 150" data-at="2"/>
+        <path class="e" id="h-sub-tools" d="M596 130 C640 130 640 70 682 70" data-at="3"/>
+        <path class="e" id="h-sub-mem" d="M596 170 C640 170 640 230 682 230" data-at="4"/>
+        <path class="e flow" id="h-back" d="M526 196 C526 280 80 280 80 186" data-at="5"/>
+        <g class="n" data-at="1,5">
+          <rect x="10" y="114" width="140" height="72" rx="10"/>
+          <text x="80" y="144" text-anchor="middle" class="t-title">You</text>
+          <text x="80" y="164" text-anchor="middle" class="t-small">TUI · Telegram · webhook</text>
+        </g>
+        <g class="n heart" data-at="1-2">
+          <rect x="240" y="104" width="138" height="92" rx="10"/>
+          <text x="309" y="134" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="309" y="156" text-anchor="middle" class="t-title">Planner</text>
+          <text x="309" y="175" text-anchor="middle" class="t-small">emits plan JSON</text>
+        </g>
+        <g class="n heart" data-at="2-5">
+          <rect x="458" y="104" width="138" height="92" rx="10"/>
+          <text x="527" y="134" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="527" y="156" text-anchor="middle" class="t-title">Subagents</text>
+          <text x="527" y="175" text-anchor="middle" class="t-small">one process per step</text>
+        </g>
+        <g class="n hands" data-at="3">
+          <rect x="684" y="36" width="160" height="68" rx="10"/>
+          <text x="764" y="62" text-anchor="middle" class="t-kanji k">手</text>
+          <text x="764" y="84" text-anchor="middle" class="t-title">Tools</text>
+        </g>
+        <g class="n brain" data-at="4">
+          <rect x="684" y="196" width="160" height="68" rx="10"/>
+          <text x="764" y="222" text-anchor="middle" class="t-kanji k">脳</text>
+          <text x="764" y="244" text-anchor="middle" class="t-title">Memory</text>
+        </g>
+        <g class="pop badge" data-at="2"><rect x="380" y="70" width="156" height="22" rx="11"/><text x="458" y="85" text-anchor="middle">steps: agent + task</text></g>
+        <g class="pop badge" data-at="3"><rect x="600" y="118" width="160" height="22" rx="11"/><text x="680" y="133" text-anchor="middle">scope checked first</text></g>
+        <g class="pop badge" data-at="4"><rect x="610" y="158" width="150" height="22" rx="11"/><text x="685" y="173" text-anchor="middle">summary stored</text></g>
+        <circle class="tok" r="7" data-path="h-user-plan" data-at="1"/>
+        <circle class="tok heart" r="7" data-path="h-plan-sub" data-at="2"/>
+        <circle class="tok hands" r="7" data-path="h-sub-tools" data-at="3"/>
+        <circle class="tok brain" r="7" data-path="h-sub-mem" data-at="4"/>
+        <circle class="tok" r="7" data-path="h-back" data-at="5"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>You send a message from the terminal UI, Telegram or a webhook.</li>
+        <li>The planner reads the team registry and answers with a plan: which agent does which step.</li>
+        <li>Each step runs as a child process. Its model calls tools, and each tool checks its scope first.</li>
+        <li>The step ends by storing a summary; memory makes it recallable next turn.</li>
+        <li>The reply comes back to you. <a href="big-picture.html">Follow one message in detail</a>.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-all">
+  <div class="sec-head">
+    <span class="kicker">Every feature, by chapter</span>
+    <h2 id="s-all">All features</h2>
+  </div>
+  <div class="chapters" id="chapters">
+    <noscript><p>The feature list needs JavaScript. Start with <a href="big-picture.html">One message, end to end</a>.</p></noscript>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Start reading"></nav>
+<p class="stamp-foot">Every page is checked against the code. When code changes, its pages change in the same commit (docs/tutorial/AUTHORING.md).</p>
+</article>
+</main>
+</div>
+</body>
+</html>

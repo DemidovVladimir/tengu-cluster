@@ -29,7 +29,10 @@ lastrun.md
 
 # Claude Code per-user settings (settings.local.json holds approved tool
 # allow-lists for the local workstation; not portable across machines).
-/.claude/
+# settings.json is shared: its PostToolUse hook is the tutorial sync reminder
+# (docs/tutorial/AUTHORING.md).
+/.claude/*
+!/.claude/settings.json
 
 # Codex CLI per-user settings (mirror of the /.claude/ rule above).
 /.codex/

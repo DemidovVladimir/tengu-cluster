@@ -58,18 +58,14 @@ impl OrchestratorChatPort for ChatOrchestratorPortImpl {
         system_prompt: &str,
         user_message: &str,
     ) -> anyhow::Result<String> {
-        let reply = self
-            .chat
+        // A planner turn is not written to workspace memory: its "user
+        // message" is the whole assembled planner prompt (roster, recall,
+        // history), which chat recall then surfaced as a memory, and only
+        // Telegram had a store for it. Cross-plan recall reads Postgres
+        // `agentic_memory`, not this store.
+        self.chat
             .run_turn_with_system(agent, system_prompt, user_message)
-            .await?;
-        // Still record the turn into memory so cross-plan recall has it.
-        writer::sync_turn(
-            Arc::clone(&self.memory),
-            agent.to_string(),
-            user_message.to_string(),
-            reply.clone(),
-        );
-        Ok(reply)
+            .await
     }
 
     async fn run_orchestrator_turn_with_system_metered(
@@ -78,17 +74,10 @@ impl OrchestratorChatPort for ChatOrchestratorPortImpl {
         system_prompt: &str,
         user_message: &str,
     ) -> anyhow::Result<(String, TurnTelemetry)> {
-        let (reply, telemetry) = self
-            .chat
+        // Not written to workspace memory (see `run_orchestrator_turn_with_system`).
+        self.chat
             .run_turn_with_system_metered(agent, Some(system_prompt), user_message)
-            .await?;
-        writer::sync_turn(
-            Arc::clone(&self.memory),
-            agent.to_string(),
-            user_message.to_string(),
-            reply.clone(),
-        );
-        Ok((reply, telemetry))
+            .await
     }
 }
 
@@ -100,6 +89,55 @@ mod threading_tests {
     //! `RagPlanner` still relies on.
 
     use super::*;
+
+    struct Echo;
+    #[async_trait]
+    impl ChatServiceFactory for Echo {
+        async fn run_turn(&self, _agent: &str, _text: &str) -> anyhow::Result<String> {
+            Ok(r#"{"kind":"direct","response":"hi"}"#.into())
+        }
+    }
+
+    struct Recording(Arc<std::sync::atomic::AtomicUsize>);
+    #[async_trait]
+    impl crate::ports::memory::MemoryProvider for Recording {
+        fn name(&self) -> &str {
+            "builtin"
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        async fn initialize(&self, _: &str, _: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn prefetch(&self, _: &str, _: &str) -> String {
+            String::new()
+        }
+        async fn sync_turn(&self, _: &str, _: &str, _: &str) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        async fn shutdown(&self) {}
+    }
+
+    /// A planner turn writes nothing to workspace memory (its message is the
+    /// whole assembled planner prompt).
+    #[tokio::test]
+    async fn planner_turns_are_not_written_to_workspace_memory() {
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let memory = Arc::new(MemoryManager::new());
+        memory
+            .add_provider(Box::new(Recording(Arc::clone(&writes))))
+            .await;
+        let port = ChatOrchestratorPortImpl::new(Arc::new(Echo), memory);
+        port.run_orchestrator_turn_with_system_metered("planner", "sys", "## Planner registry …")
+            .await
+            .unwrap();
+        port.run_orchestrator_turn_with_system("planner", "sys", "x")
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
 
     /// The closure returned by `snapshots_inputs_fn` must look up agents by
     /// name and return cloned `ChatTurnInputs`. Missing agents produce a

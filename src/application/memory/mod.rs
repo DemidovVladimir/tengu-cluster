@@ -16,9 +16,11 @@
 //!                     vector). The default provider.
 //! - `manager`       — `MemoryManager` holding one builtin + at most one external
 //!                     provider. The handle most consumers hold.
-//! - `injector`      — pre-turn fenced context injection. **One live caller:**
-//!                     `orchestrator/wiring.rs::ChatOrchestratorPortImpl::run_orchestrator_turn`
-//!                     (planner-side LLM call). Subagent turns do NOT use it.
+//! - `injector`      — pre-turn fenced context injection. One caller:
+//!                     `orchestrator/wiring.rs::ChatOrchestratorPortImpl::run_orchestrator_turn`,
+//!                     the plain planner path; `RagPlanner` calls the
+//!                     `_with_system` variants, which inject and write nothing.
+//!                     Subagent turns do NOT use it.
 //! - `writer`        — post-turn spawned non-blocking memory writes.
 //!                     Same single caller as `injector` (`wiring.rs::sync_turn`).
 //! - `fencing`       — `<memory-context>` block helpers.

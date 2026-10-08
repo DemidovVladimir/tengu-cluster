@@ -44,7 +44,7 @@
 > | 7.1 — delete legacy | ✅ done | `roster.rs`, `ChatWorker`, `engine = "static"` removed; `wiring.rs` kept for the planner LLM port |
 > | 7.2 — v1 dead-code cleanup | ✅ done | `#[allow(dead_code)]` sweep |
 
-> Companion to `REDESIGN.md`. Where REDESIGN says *what the target looks like*,
+> Companion to `REDESIGN.md` (the v2 brief — removed 2026-10-07; its § references below resolve in its last version: `git show 9f0e98f96704eca960575d6c453c5dabb5487d65:REDESIGN.md`). Where REDESIGN says *what the target looks like*,
 > this plan says *what order to land it in so nothing breaks between commits*.
 > Every phase ends with a binary you can launch manually and exercise via TUI and
 > Telegram.

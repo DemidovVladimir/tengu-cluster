@@ -405,8 +405,47 @@ fn default_timeout_secs() -> u64 {
     120
 }
 
+/// A fixture as an eval row: its expected outcome, plus the tools it expects
+/// called, is what the judge checks.
+fn fixture_row(f: crate::application::skills::lifecycle::fixtures::Fixture) -> YamlRow {
+    let mut expected = f.expected_outcome.unwrap_or_default().trim().to_string();
+    if !f.expected_tool_calls.is_empty() {
+        let tools: Vec<&str> = f
+            .expected_tool_calls
+            .iter()
+            .map(|c| c.tool.as_str())
+            .collect();
+        let calls = format!("Calls: {}.", tools.join(", "));
+        expected = if expected.is_empty() {
+            calls
+        } else {
+            format!("{expected} {calls}")
+        };
+    }
+    YamlRow {
+        id: f.id,
+        prompt: f.prompt,
+        expected,
+        timeout_secs: default_timeout_secs(),
+        stubs: Vec::new(),
+    }
+}
+
 pub fn parse_yaml_prompts(body: &str) -> Result<Vec<PromptRow>> {
-    let raw: Vec<YamlRow> = serde_yaml::from_str(body).context("yaml prompts parse failed")?;
+    // Either a plain list of rows, or the `{schema_version, fixtures}` file
+    // that `skill_distill`, `tengu skill seed` and `manage_skill create` write
+    // (`lifecycle::fixtures::FixturesFile`) — which eval used to refuse.
+    let is_fixtures_file = serde_yaml::from_str::<serde_yaml::Value>(body)
+        .ok()
+        .and_then(|v| v.as_mapping().map(|m| m.contains_key("fixtures")))
+        .unwrap_or(false);
+    let raw: Vec<YamlRow> = if is_fixtures_file {
+        let file: crate::application::skills::lifecycle::fixtures::FixturesFile =
+            serde_yaml::from_str(body).context("yaml fixtures parse failed")?;
+        file.fixtures.into_iter().map(fixture_row).collect()
+    } else {
+        serde_yaml::from_str(body).context("yaml prompts parse failed")?
+    };
     let mut seen = std::collections::HashSet::new();
     let mut rows = Vec::with_capacity(raw.len());
     for r in raw {
@@ -1497,6 +1536,10 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     );
 
     let mut tool_defs = current_tools.clone();
+    // The agent's own executor, kept for `tool_assertion` metrics (its
+    // registry, HTTP client, scopes): they used to get none and always failed.
+    let mut plugin_executor: Option<Arc<crate::application::tools::registry::PluginToolExecutor>> =
+        None;
     let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =
         match crate::bootstrap::tools::build_tool_executor(
             &workspace_path,
@@ -1515,8 +1558,10 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                 if !extra.is_empty() {
                     tool_defs.extend(extra);
                 }
+                let executor = Arc::new(executor);
+                plugin_executor = Some(Arc::clone(&executor));
                 Arc::new(SanitizedToolExecutor::new(
-                    Arc::new(executor),
+                    executor as Arc<dyn crate::ports::engine::ToolExecutor>,
                     Arc::clone(&secret_registry),
                 )) as Arc<dyn crate::ports::engine::ToolExecutor>
             }
@@ -1683,17 +1728,22 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             expected_outcome: Some(ctx.row.expected.as_str()),
             transcript: &engine_response.text,
         };
+        let exec = plugin_executor.as_deref();
         let run_ctx = MetricRunCtx {
             skill_dir: &ctx.skill.skill_dir,
-            workspace: &ws_path,
+            // Where the agent's tools ran (its configured workspace, else the
+            // row's temp dir) — what the metrics inspect and dispatch in.
+            workspace: &workspace_path,
             shell: &shell,
-            tools: None,
+            // The row agent's registry + dispatch context: `tool_assertion`
+            // runs the tool live, as in `tengu skill evolve`.
+            tools: exec.map(|e| &e.registry),
             judge: Some(Arc::clone(&ctx.judge_client)),
-            http: None,
-            memory_manager: None,
-            secret_registry: None,
-            activity: None,
-            tool_scopes: None,
+            http: exec.map(|e| &e.http),
+            memory_manager: exec.and_then(|e| e.memory_manager.as_deref()),
+            secret_registry: exec.map(|e| &*e.secret_registry),
+            activity: exec.map(|e| &*e.activity),
+            tool_scopes: exec.map(|e| &e.scopes),
             // Pre-authored fixture path: no live conversation, no sibling lookup.
             conversation: None,
             sibling_metrics: Some(ctx.skill_metrics),
@@ -2397,6 +2447,37 @@ mod tests {
         assert_eq!(rows[1].stubs[0].responses.len(), 2);
     }
 
+    /// The fixture file the skill tools write (`{schema_version, fixtures}`)
+    /// is read too — eval used to refuse it (skills/german-teacher).
+    #[test]
+    fn yaml_reads_the_fixtures_file_the_skill_tools_write() {
+        let body = r#"
+schema_version: 1
+fixtures:
+- id: f1
+  prompt: "conjugate sein"
+  expected_tool_calls:
+  - tool: view_skill
+    args_schema: {}
+  expected_outcome: "Lists ich bin, du bist."
+  metrics: []
+- id: f2
+  prompt: "hi"
+"#;
+        let rows = parse_yaml_prompts(body).expect("parse");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].expected,
+            "Lists ich bin, du bist. Calls: view_skill."
+        );
+        assert_eq!(rows[1].expected, "");
+        assert_eq!(rows[0].timeout_secs, 120);
+        parse_yaml_prompts(
+            &std::fs::read_to_string("skills/german-teacher/evals/prompts.yaml").unwrap(),
+        )
+        .expect("the shipped german-teacher fixtures");
+    }
+
     #[test]
     fn yaml_rejects_unknown_keys() {
         let body = r#"
@@ -2847,6 +2928,74 @@ builtin_tools_profile = "none"
             "{tool_msg}"
         );
         assert!(!bodies[1].contains(&secret));
+    }
+
+    /// A `tool_assertion` metric dispatches the tool live in `tengu eval` —
+    /// it used to fail every row ("tool registry unavailable").
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn eval_tool_assertion_dispatches_the_tool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::write(ws.join("probe.txt"), "x").unwrap();
+        let (url, _server) = mock_chat_server(vec![serde_json::json!({
+            "choices": [{"message": {"content": "done"}, "finish_reason": "stop"}]
+        })
+        .to_string()])
+        .await;
+        let config = tmp.path().join("config.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[agents.main]\nengine = \"local\"\nmodel = \"mock\"\ndefault = true\n\
+                 workspace = \"{}\"\ntools = [\"list_directory\"]\n\n\
+                 [agents.main.local]\nbase_url = \"{url}\"\napi_key_env = \"\"\n\n\
+                 [agents.main.limits]\ncontext_window = 16384\n",
+                ws.display()
+            ),
+        )
+        .unwrap();
+        let metrics = vec![MetricSpec::ToolAssertion {
+            name: "lists-probe".into(),
+            tool: "list_directory".into(),
+            action: "ls".into(),
+            key: None,
+            assert: serde_json::json!({"value_matches": "probe\\.txt"}),
+            min_pass_rate: None,
+        }];
+        let skill = SkillUnderTest {
+            name: "probe".into(),
+            tier: SkillTier::Project,
+            evals_dir: tmp.path().to_path_buf(),
+            prompts_path: tmp.path().join("prompts.yaml"),
+            prompts_format: "yaml".into(),
+            config_path: config.clone(),
+            skill_md_path: tmp.path().join("SKILL.md"),
+            skill_dir: tmp.path().to_path_buf(),
+        };
+        let row = PromptRow {
+            id: "r1".into(),
+            prompt: "list".into(),
+            expected: "lists".into(),
+            timeout_secs: 20,
+            stubs: Vec::new(),
+        };
+        let judge: Arc<dyn Engine> = Arc::new(PassJudge);
+        let result = run_row(RowCtx {
+            skill: &skill,
+            row: &row,
+            judge: Arc::clone(&judge),
+            out_dir: tmp.path(),
+            keep_workspace: false,
+            config_path_override: None,
+            skill_metrics: &metrics,
+            judge_client: Arc::new(EvalJudgeClient { engine: judge }),
+            persist_transcript: false,
+        })
+        .await
+        .unwrap();
+        let outcome = &result.metric_outcomes[0];
+        assert!(outcome.pass, "{outcome:?}");
     }
 
     /// A `claude_code` eval agent gets its tengu tools through the MCP

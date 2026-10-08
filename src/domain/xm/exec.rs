@@ -332,6 +332,10 @@ impl Observed for PaperFillRow {
                 if let Some(r) = f.reason {
                     h.push_str(&format!(" rest={}", r.as_str()));
                 }
+                // A degraded exit filled at a book past its max age.
+                if f.stale_book {
+                    h.push_str(" stale_book");
+                }
             }
             Some(f) => {
                 if let Some(r) = f.reason {
@@ -393,6 +397,7 @@ impl Observed for PaperFillRow {
             set_num(&mut f, "fee_usd", Some(fill.fee_usd));
             set_int(&mut f, "levels_used", Some(fill.fills.len() as i64));
             set_str(&mut f, "reason", fill.reason.map(|r| r.as_str()));
+            set_bool(&mut f, "stale_book", Some(fill.stale_book));
         }
         set_int(
             &mut f,
@@ -754,6 +759,7 @@ mod tests {
             slippage_bps: (qty > 0.0).then_some(1.008),
             fee_usd: qty * 347.23 * 0.9e-4,
             book_age_ms: Some(20),
+            stale_book: false,
         }
     }
 
