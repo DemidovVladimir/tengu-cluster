@@ -58,16 +58,16 @@ impl MetricKind for ScriptKind {
     }
 }
 
-// Helpers exist so tests can re-build the env contract explicitly.
-fn fixture_prompt_env(_: &FixtureContext<'_>) -> String {
-    // Actual wiring happens in Task 12's runner; tests set the env directly.
-    String::new()
+// The script's env contract: the row's prompt, the agent's reply and the
+// expected outcome (all three used to be passed empty).
+fn fixture_prompt_env(f: &FixtureContext<'_>) -> String {
+    f.prompt.to_string()
 }
-fn fixture_transcript_env(_: &FixtureContext<'_>) -> String {
-    String::new()
+fn fixture_transcript_env(f: &FixtureContext<'_>) -> String {
+    f.transcript.to_string()
 }
-fn fixture_expected_env(_: &FixtureContext<'_>) -> String {
-    String::new()
+fn fixture_expected_env(f: &FixtureContext<'_>) -> String {
+    f.expected_outcome.unwrap_or_default().to_string()
 }
 
 #[derive(serde::Deserialize)]
@@ -124,6 +124,47 @@ mod tests {
             min_pass_rate: None,
         };
         ScriptKind.run(&spec, &fixture, &ctx).await.unwrap()
+    }
+
+    /// The script sees the row's prompt, the reply and the expected outcome
+    /// (all three used to be empty strings).
+    #[tokio::test]
+    async fn script_gets_prompt_transcript_and_expected_outcome() {
+        let dir = TempDir::new().unwrap();
+        let path = write_script(
+            dir.path(),
+            "#!/bin/sh\nprintf '{\"pass\": true, \"score\": 1, \"notes\": \"%s|%s|%s\"}' \"$PROMPT\" \"$TRANSCRIPT\" \"$EXPECTED_OUTCOME\"\n",
+        );
+        let ws = std::env::temp_dir();
+        let fixture = FixtureContext {
+            prompt: "conjugate sein",
+            expected_outcome: Some("ich bin"),
+            transcript: "ich bin, du bist",
+        };
+        let ctx = MetricRunCtx {
+            skill_dir: dir.path(),
+            workspace: &ws,
+            shell: &NoShell,
+            tools: None,
+            judge: None,
+            http: None,
+            memory_manager: None,
+            secret_registry: None,
+            activity: None,
+            tool_scopes: None,
+            conversation: None,
+            sibling_metrics: None,
+        };
+        let spec = MetricSpec::Script {
+            name: "m".into(),
+            path,
+            min_pass_rate: None,
+        };
+        let out = ScriptKind.run(&spec, &fixture, &ctx).await.unwrap();
+        assert_eq!(
+            out.notes.as_deref(),
+            Some("conjugate sein|ich bin, du bist|ich bin")
+        );
     }
 
     #[tokio::test]

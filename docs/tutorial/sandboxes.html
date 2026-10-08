@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sandbox config · Tengu</title>
+<meta name="description" content="One TOML file defines a whole Tengu team: how it is found, loaded, validated, folded and handed to every child process.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: resolver widget, TOML anatomy, sandbox shelf */
+  .res-controls { display: grid; gap: 12px 20px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); }
+  .res-controls select { font: inherit; font-size: 0.85rem; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); max-width: 100%; }
+  .res-controls .tick { display: flex; gap: 8px; align-items: center; }
+  .chain { display: grid; gap: 6px; }
+  .link { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); transition: border-color .3s, opacity .3s; }
+  .link .no { font-family: var(--font-mono); font-size: 0.75rem; color: var(--faint); text-align: center; }
+  .link b { font-family: var(--font-mono); font-size: 0.84rem; font-weight: 500; overflow-wrap: anywhere; }
+  .link small { grid-column: 2 / 4; color: var(--muted); font-size: 0.8rem; }
+  .link.win { border-color: var(--hands); box-shadow: inset 4px 0 0 var(--hands); }
+  .link.replaced { border-color: var(--brain); }
+  .link.fail { border-color: var(--bad); box-shadow: inset 4px 0 0 var(--bad); }
+  .link.off { opacity: .5; border-style: dashed; }
+  .res-out { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+  .res-out div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--sunk); display: grid; gap: 2px; }
+  .res-out span { font-size: 0.75rem; color: var(--faint); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .05em; }
+  .res-out code { background: none; padding: 0; font-size: 0.82rem; }
+
+  .anat { display: grid; gap: 14px; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 760px) { .anat { grid-template-columns: minmax(0, 1fr); } }
+  .toml { margin: 0; padding: 10px 0; list-style: none; background: var(--sunk); border: 1px solid var(--line); border-radius: var(--radius); font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.5; }
+  .toml li { padding: 1px 14px; white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid transparent; }
+  .toml li[data-k] { cursor: pointer; }
+  .toml li[data-k]:hover { background: var(--panel); }
+  .toml li.on { background: var(--accent-soft); border-left-color: var(--accent); }
+  .toml .h { color: var(--accent); } .toml .s { color: var(--hands); } .toml .n { color: var(--brain); } .toml .c { color: var(--faint); }
+  .anat-card { position: sticky; top: 72px; }
+  .anat-card .dflt { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .shelf-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+  .shelf { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); }
+  .sbx { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); padding: 12px 14px; display: grid; gap: 6px; align-content: start; transition: opacity .3s, transform .3s; }
+  .sbx h3 { font-family: var(--font-mono); font-size: 0.95rem; font-weight: 500; }
+  .sbx p { color: var(--muted); font-size: 0.86rem; }
+  .sbx .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .sbx .agents { font-family: var(--font-mono); font-size: 0.76rem; color: var(--faint); overflow-wrap: anywhere; }
+  .sbx.dim { opacity: .28; transform: scale(.98); }
+  .fold { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .fold pre { font-size: 0.76rem; }
+  .arrow-down { text-align: center; color: var(--faint); font-family: var(--font-mono); font-size: .8rem; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · one file</div>
+  <h1>Sandbox config</h1>
+  <p class="lede">One TOML file is the whole team: agents, tools, scopes, network, memory, loops. <code>--sandbox &lt;name&gt;</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code>, and every child process loads that same file again.</p>
+  <ul class="facts">
+    <li><b>8</b> sandboxes in the repo</li>
+    <li>unknown key = <b>load error</b></li>
+    <li>home <b>~/.tengu</b> (<code>TENGU_HOME</code>)</li>
+    <li>network <b>tor</b> unless <code>[egress]</code> says open</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip data">data</span> files and env</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> processes that run tools</li>
+    <li><span class="chip heart"><span class="k">心</span> heart</span> planner / chat</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One command, step by step</span>
+    <h2 id="s-flow">From the command line to every process</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3800">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 440" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Config resolution: the CLI picks a base path, Config::load reads, parses, validates and folds it, a sandbox file replaces it, TENGU_CONFIG is pinned, and child processes load the same file.</title>
+        <!-- zone -->
+        <rect class="zone" x="240" y="22" width="250" height="300" rx="10"/>
+        <text x="365" y="42" text-anchor="middle" class="zone-label">Config::load</text>
+
+        <!-- edges -->
+        <path class="e" id="p-cli-base" d="M110 94 L110 128" data-at="1"/>
+        <path class="e" id="p-base-r1" d="M200 182 C226 182 230 80 254 80" data-at="3"/>
+        <path class="e" id="p-r1-r2" d="M474 80 C492 80 492 142 477 142" data-at="4"/>
+        <path class="e" id="p-r2-r3" d="M474 148 C492 148 492 204 477 204" data-at="5"/>
+        <path class="e" id="p-r3-r4" d="M474 210 C492 210 492 266 477 266" data-at="6"/>
+        <path class="e" id="p-r4-sec" d="M474 274 C512 274 508 68 528 68" data-at="6"/>
+        <path class="e" id="p-sbx-r1" d="M200 335 C230 335 232 96 254 96" data-at="7"/>
+        <path class="e dash" id="p-sbx-pin" d="M110 370 C110 410 520 410 520 300 C520 200 520 182 528 182" data-at="8"/>
+        <path class="e flow" id="p-sec-p1" d="M690 62 L718 62" data-at="9"/>
+        <path class="e flow" id="p-pin-p2" d="M690 182 L718 182" data-at="9"/>
+        <path class="e flow" id="p-pin-p3" d="M690 196 C706 196 704 282 718 282" data-at="9"/>
+
+        <!-- left column -->
+        <g class="n" data-at="1,7">
+          <rect x="20" y="30" width="180" height="64" rx="8"/>
+          <text x="110" y="56" text-anchor="middle" class="t-title">tengu chat</text>
+          <text x="110" y="77" text-anchor="middle" class="t-small t-mono">--sandbox lping</text>
+        </g>
+        <g class="n data" data-at="2-3">
+          <rect x="20" y="130" width="180" height="104" rx="8"/>
+          <text x="110" y="153" text-anchor="middle" class="t-title">Base config path</text>
+          <text x="34" y="176" class="t-small">1 · -c / --config</text>
+          <text x="34" y="195" class="t-small">2 · $TENGU_CONFIG</text>
+          <text x="34" y="214" class="t-small">3 · ~/.tengu/config.toml</text>
+        </g>
+        <g class="n data" data-at="7-8">
+          <rect x="20" y="300" width="180" height="70" rx="8"/>
+          <text x="110" y="324" text-anchor="middle" class="t-title">Sandbox file</text>
+          <text x="110" y="343" text-anchor="middle" class="t-small t-mono">sandboxes/lping/</text>
+          <text x="110" y="360" text-anchor="middle" class="t-small">config.toml · from cwd</text>
+        </g>
+
+        <!-- Config::load rows -->
+        <g class="n data" data-at="3,7">
+          <rect x="256" y="54" width="218" height="52" rx="8"/>
+          <text x="365" y="76" text-anchor="middle" class="t-title">Read + ${VAR}</text>
+          <text x="365" y="95" text-anchor="middle" class="t-small">unset var stays as text</text>
+        </g>
+        <g class="n guard" data-at="4,7">
+          <rect x="256" y="116" width="218" height="52" rx="8"/>
+          <text x="365" y="138" text-anchor="middle" class="t-title">Parse TOML</text>
+          <text x="365" y="157" text-anchor="middle" class="t-small">unknown key = error</text>
+        </g>
+        <g class="n guard" data-at="5,7">
+          <rect x="256" y="178" width="218" height="52" rx="8"/>
+          <text x="365" y="200" text-anchor="middle" class="t-title">Validate</text>
+          <text x="365" y="219" text-anchor="middle" class="t-small">every issue, one error</text>
+        </g>
+        <g class="n guard" data-at="6,7">
+          <rect x="256" y="240" width="218" height="52" rx="8"/>
+          <text x="365" y="262" text-anchor="middle" class="t-title">Fold</text>
+          <text x="365" y="281" text-anchor="middle" class="t-small">default_scopes → agents</text>
+        </g>
+
+        <!-- right column -->
+        <g class="n data" data-at="6,9">
+          <rect x="530" y="30" width="160" height="76" rx="8"/>
+          <text x="610" y="54" text-anchor="middle" class="t-title">SandboxSections</text>
+          <text x="610" y="74" text-anchor="middle" class="t-small">one Arc, every agent</text>
+          <text x="610" y="91" text-anchor="middle" class="t-small">risk · paper · state dir</text>
+        </g>
+        <g class="n data" data-at="2,8-9">
+          <rect x="530" y="150" width="160" height="64" rx="8"/>
+          <text x="610" y="175" text-anchor="middle" class="t-title t-mono">TENGU_CONFIG</text>
+          <text x="610" y="196" text-anchor="middle" class="t-small">the file in effect</text>
+        </g>
+        <g class="n guard" data-at="8">
+          <rect x="530" y="240" width="160" height="58" rx="8"/>
+          <text x="610" y="264" text-anchor="middle" class="t-title">Egress policy</text>
+          <text x="610" y="283" text-anchor="middle" class="t-small">from its [egress]</text>
+        </g>
+        <g class="n heart" data-at="9">
+          <rect x="720" y="30" width="125" height="64" rx="8"/>
+          <text x="782" y="56" text-anchor="middle" class="t-title">Parent</text>
+          <text x="782" y="76" text-anchor="middle" class="t-small">planner · chat</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="720" y="150" width="125" height="64" rx="8"/>
+          <text x="782" y="176" text-anchor="middle" class="t-title">run-agent</text>
+          <text x="782" y="196" text-anchor="middle" class="t-small">name over IPC</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="720" y="250" width="125" height="64" rx="8"/>
+          <text x="782" y="276" text-anchor="middle" class="t-title">mcp-bridge</text>
+          <text x="782" y="296" text-anchor="middle" class="t-small">loads TENGU_CONFIG</text>
+        </g>
+
+        <!-- badges -->
+        <g class="pop badge" data-at="1"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">no subcommand = chat</text></g>
+        <g class="pop badge" data-at="2"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">no file → one built-in main agent</text></g>
+        <g class="pop badge" data-at="3"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">${VAR} filled from the env</text></g>
+        <g class="pop badge" data-at="4"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">[rsik] → load error</text></g>
+        <g class="pop badge" data-at="5"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">Config validation failed (2 issues)</text></g>
+        <g class="pop badge" data-at="6"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">agent's own scope wins whole</text></g>
+        <g class="pop badge" data-at="7"><rect x="240" y="352" width="250" height="22" rx="11"/><text x="365" y="367" text-anchor="middle">replaces the base: no merge</text></g>
+        <g class="pop badge" data-at="8"><rect x="560" y="330" width="250" height="22" rx="11"/><text x="685" y="345" text-anchor="middle">absolute path, egress installed</text></g>
+        <g class="pop badge" data-at="9"><rect x="560" y="330" width="250" height="22" rx="11"/><text x="685" y="345" text-anchor="middle">same file in every process</text></g>
+
+        <!-- tokens -->
+        <circle class="tok" r="6" data-path="p-cli-base" data-at="1" data-dur="900"/>
+        <circle class="tok" r="6" data-path="p-base-r1" data-at="3"/>
+        <circle class="tok guard" r="5" data-path="p-r1-r2" data-at="4" data-dur="900"/>
+        <circle class="tok guard" r="5" data-path="p-r2-r3" data-at="5" data-dur="900"/>
+        <circle class="tok guard" r="5" data-path="p-r3-r4" data-at="6" data-dur="900"/>
+        <circle class="tok" r="6" data-path="p-r4-sec" data-at="6" data-delay="700"/>
+        <circle class="tok" r="6" data-path="p-sbx-r1" data-at="7"/>
+        <circle class="tok" r="6" data-path="p-sbx-pin" data-at="8" data-dur="2000"/>
+        <circle class="tok heart" r="6" data-path="p-sec-p1" data-at="9" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-pin-p2" data-at="9" data-dur="700" data-delay="200"/>
+        <circle class="tok hands" r="6" data-path="p-pin-p3" data-at="9" data-dur="900" data-delay="400"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>You run <code>tengu chat --sandbox lping</code>. With no subcommand at all, <code>tengu</code> runs <code>chat</code>.</li>
+        <li>Base path: <code>-c</code>, else <code>$TENGU_CONFIG</code>, else <code>&lt;TENGU_HOME&gt;/config.toml</code>. It is pinned as <code>TENGU_CONFIG</code>. No file there: built-in defaults, one <code>main</code> agent.</li>
+        <li><code>Config::load</code> reads the file and fills every <code>${VAR}</code> from the environment. An unset variable stays as literal text.</li>
+        <li>Strict parse: an unknown key at the root or inside an <code>[agents.*]</code> block fails the load. A typo never switches a knob off silently.</li>
+        <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, Telegram approvals, a <code>tools</code> name no catalog row or MCP server knows) are only logged.</li>
+        <li><code>[default_scopes]</code> is copied into each agent that has no scope for that tool; <code>~</code> is expanded. Every agent gets the same <code>SandboxSections</code>.</li>
+        <li><code>--sandbox lping</code> loads <code>sandboxes/lping/config.toml</code> from the current directory, through the same steps. It replaces the base config whole.</li>
+        <li><code>TENGU_CONFIG</code> is re-pinned to the sandbox file's absolute path, and that file's <code>[egress]</code> policy is installed.</li>
+        <li>A <code>run-agent</code> child gets the sandbox name over IPC and loads the same file; <code>tengu mcp-bridge</code> loads <code>TENGU_CONFIG</code>. Same agents, scopes and sections everywhere.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-res">
+  <div class="sec-head">
+    <span class="kicker">Try it: which file wins?</span>
+    <h2 id="s-res">The resolver</h2>
+    <p>Flip the inputs. The chain follows <code>cli/mod.rs</code> and <code>bootstrap/sandbox.rs</code>. Paths marked example are examples.</p>
+  </div>
+  <div class="widget" id="res">
+    <div class="res-controls">
+      <label for="r-sbx"><code>--sandbox</code>
+        <select id="r-sbx">
+          <option value="">(not given)</option>
+          <option>jev-exec</option><option selected>lping</option><option>storage-test</option><option>tor-check</option>
+          <option>unlimited</option><option>xlab</option><option>xmarket</option><option>xmarket-weekend</option>
+        </select>
+      </label>
+      <label for="r-c"><code>-c / --config</code>
+        <select id="r-c">
+          <option value="">(not given)</option>
+          <option value="./team.toml">./team.toml (example)</option>
+          <option value="sandboxes/xlab/config.toml">sandboxes/xlab/config.toml</option>
+        </select>
+      </label>
+      <label class="tick" for="r-env"><input type="checkbox" id="r-env"> <span><code>TENGU_CONFIG=/opt/tengu/config.toml</code> (example)</span></label>
+      <label class="tick" for="r-exists"><input type="checkbox" id="r-exists" checked> <span>base file exists</span></label>
+      <label class="tick" for="r-valid"><input type="checkbox" id="r-valid" checked> <span>base file loads cleanly</span></label>
+    </div>
+    <div class="chain" id="r-chain" aria-live="polite"></div>
+    <div class="res-out" id="r-out"></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-anat">
+  <div class="sec-head">
+    <span class="kicker">Click a line</span>
+    <h2 id="s-anat">Anatomy of an agent block</h2>
+    <p>The real <code>xm_architect</code> block from <code>sandboxes/xmarket</code>, plus its private partner. One block is one agent on every surface.</p>
+  </div>
+  <div class="anat">
+    <ol class="toml" id="toml">
+      <li data-k="hdr"><span class="h">[agents.xm_architect]</span></li>
+      <li data-k="default">default = <span class="n">true</span></li>
+      <li data-k="engine">engine = <span class="s">"claude_code"</span></li>
+      <li data-k="model">model = <span class="s">"claude-opus-5-5"</span>         <span class="c"># bare slug for claude_code</span></li>
+      <li data-k="workspace">workspace = <span class="s">"~/xmarket-workspace"</span></li>
+      <li data-k="tools">tools = [<span class="s">"read_file"</span>, <span class="s">"list_directory"</span>, <span class="s">"hl_ctx"</span>, <span class="s">"hl_book"</span>, <span class="s">"risk_status"</span>, <span class="s">"paper_positions"</span>]</li>
+      <li data-k="description">description = <span class="s">"""Researches Hyperliquid perp markets for the xmarket paper desk … Researches only and never trades."""</span></li>
+      <li data-k="examples">example_queries = [<span class="s">"show the paper positions and the risk state"</span>, <span class="c">…</span>]</li>
+      <li data-k="identity"><span class="h">[agents.xm_architect.identity]</span></li>
+      <li data-k="identity">name = <span class="s">"xmarket architect"</span></li>
+      <li data-k="limits"><span class="h">[agents.xm_architect.limits]</span></li>
+      <li data-k="rounds">max_tool_rounds = <span class="n">30</span>              <span class="c"># claude_code counts tool calls</span></li>
+      <li data-k="timeout">step_timeout_secs = <span class="n">600</span></li>
+      <li data-k="cc"><span class="h">[agents.xm_architect.claude_code]</span></li>
+      <li data-k="cc">builtin_tools_profile = <span class="s">"none"</span>    <span class="c"># required in a [risk] sandbox</span></li>
+      <li>&nbsp;</li>
+      <li data-k="private"><span class="h">[agents.xm_executor]</span>  <span class="c"># no description: private</span></li>
+      <li data-k="private">tools = [<span class="s">"hl_ctx"</span>, <span class="s">"hl_book"</span>, <span class="s">"risk_status"</span>, <span class="s">"paper_order"</span>, <span class="s">"paper_close"</span>, <span class="s">"paper_positions"</span>, <span class="s">"xm_exits"</span>]</li>
+    </ol>
+    <div class="card hands anat-card" id="anat-card" aria-live="polite">
+      <h3 id="a-title">Pick a line</h3>
+      <div class="dflt" id="a-chips"></div>
+      <p id="a-text">Each line drives one feature. The card shows what reads it and its default.</p>
+      <p id="a-file" class="mono" style="font-size:.78rem"></p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-fold">
+  <div class="sec-head">
+    <span class="kicker">Fold</span>
+    <h2 id="s-fold">Defaults copied, never merged</h2>
+    <p><code>fold_default_scopes</code> copies a <code>[default_scopes.&lt;tool&gt;]</code> entry into an agent only when the agent has no entry for that tool. An agent's own entry replaces the default whole.</p>
+  </div>
+  <div class="fold">
+    <div class="card data">
+      <h3>Sandbox default</h3>
+<pre><span class="k">[default_scopes.hl_ctx]</span>
+fs_roots  = [<span class="s">"~/xmarket-workspace"</span>]
+net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
+env_reads = [<span class="s">"HL_API_URL"</span>]</pre>
+    </div>
+    <div class="card guard">
+      <h3>Agent has none → copied</h3>
+<pre><span class="c"># xm_architect.scopes.hl_ctx (after load)</span>
+fs_roots  = [<span class="s">"/Users/you/xmarket-workspace"</span>]  <span class="c"># ~ expanded (example home)</span>
+net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
+env_reads = [<span class="s">"HL_API_URL"</span>]</pre>
+    </div>
+    <div class="card heart">
+      <h3>Agent has one → kept as is</h3>
+<pre><span class="c"># example: an agent's own entry</span>
+<span class="k">[agents.a.scopes.hl_ctx]</span>
+net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
+<span class="c"># no fs_roots: denied, not inherited</span></pre>
+    </div>
+  </div>
+  <p class="note">A configured scope is deny-by-default per field. A tool with no scope at all gets the permissive fallback rooted in the workspace (see <a href="scopes.html">Scopes and hardening</a>).</p>
+</section>
+
+<section class="sec" aria-labelledby="s-shelf">
+  <div class="sec-head">
+    <span class="kicker">The real sandboxes</span>
+    <h2 id="s-shelf">Eight teams, eight files</h2>
+    <p>Read from <code>sandboxes/*/config.toml</code>. Filter by what each one turns on.</p>
+  </div>
+  <div class="shelf-filter" role="group" aria-label="Filter sandboxes">
+    <button type="button" class="btn" data-f="all" aria-pressed="true">All</button>
+    <button type="button" class="btn" data-f="tor" aria-pressed="false">Tor</button>
+    <button type="button" class="btn" data-f="open" aria-pressed="false">Open network</button>
+    <button type="button" class="btn" data-f="hard" aria-pressed="false">Hardened ([risk])</button>
+    <button type="button" class="btn" data-f="loops" aria-pressed="false">Decision loops</button>
+    <button type="button" class="btn" data-f="feeds" aria-pressed="false">Feeds</button>
+  </div>
+  <div class="shelf" id="shelf">
+    <div class="sbx" data-tags="open loops">
+      <h3>jev-exec</h3>
+      <div class="tags"><span class="chip data">open</span><span class="chip jev">1 loop</span></div>
+      <p>A Claude architect hands one task to Jev through <code>tengu decide</code>; Jev picks the tool.</p>
+      <div class="agents">architect · executor</div>
+    </div>
+    <div class="sbx" data-tags="open loops">
+      <h3>lping</h3>
+      <div class="tags"><span class="chip data">open</span><span class="chip jev">4 loops</span><span class="chip heart">planner</span><span class="chip data">webhooks</span></div>
+      <p>Crypto research and Solana LP reads. No signer: write tools only simulate.</p>
+      <div class="agents">lping · crypto_researcher · lp_executor</div>
+    </div>
+    <div class="sbx" data-tags="tor">
+      <h3>storage-test</h3>
+      <div class="tags"><span class="chip guard">tor (default)</span></div>
+      <p>Tests <code>persistent_store</code>: file storage plus vector indexing.</p>
+      <div class="agents">storage</div>
+    </div>
+    <div class="sbx" data-tags="tor">
+      <h3>tor-check</h3>
+      <div class="tags"><span class="chip guard">tor</span></div>
+      <p>The smallest config: one probe agent to check the Tor egress path.</p>
+      <div class="agents">probe</div>
+    </div>
+    <div class="sbx" data-tags="open">
+      <h3>unlimited</h3>
+      <div class="tags"><span class="chip data">open</span></div>
+      <p>One OpenRouter agent with a three-tool allow-list: no <code>run_command</code>.</p>
+      <div class="agents">unlimited</div>
+    </div>
+    <div class="sbx" data-tags="open hard loops">
+      <h3>xlab</h3>
+      <div class="tags"><span class="chip data">open · 2 hosts</span><span class="chip guard">hardened</span><span class="chip jev">1 loop</span></div>
+      <p>History first: backfill, backtest, Jev replayed on old bars.</p>
+      <div class="agents">xl_architect · xl_jev</div>
+    </div>
+    <div class="sbx" data-tags="open hard feeds">
+      <h3>xmarket</h3>
+      <div class="tags"><span class="chip data">open · 1 host</span><span class="chip guard">hardened</span><span class="chip hands">4 feeds</span></div>
+      <p>Paper trading desk with a $100 budget in <code>[risk]</code>.</p>
+      <div class="agents">xm_architect · xm_executor</div>
+    </div>
+    <div class="sbx" data-tags="open hard feeds">
+      <h3>xmarket-weekend</h3>
+      <div class="tags"><span class="chip data">open · 1 host</span><span class="chip guard">hardened</span><span class="chip hands">5 feeds</span></div>
+      <p>The weekend fade on paper. Feeds call tools directly; no LLM in the loop.</p>
+      <div class="agents">xm_weekend</div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-fail">
+  <div class="sec-head">
+    <span class="kicker">What stops the load</span>
+    <h2 id="s-fail">Load errors you will meet</h2>
+    <p>Messages as the code writes them; <code>&lt;…&gt;</code> marks a placeholder.</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip bad">parse</span><span><b>unknown field</b>A misspelled section such as <code>[rsik]</code>, or an old key like <code>max_turns</code> in an agent block.</span></li>
+    <li><span class="chip bad">engine</span><span><b>must be one of openrouter|claude_code|local</b><code>agents.&lt;id&gt;.engine</code>, with the value it got.</span></li>
+    <li><span class="chip bad">default</span><span><b>only one agent can have default=true</b>Two agents claim the chat.</span></li>
+    <li><span class="chip bad">opt-in</span><span><b>workspace_tools: unknown tool</b>Only the opt-in catalog names pass; the message lists them.</span></li>
+    <li><span class="chip bad">empty</span><span><b>at least one agent must be configured</b>A file with no <code>[agents.*]</code> block.</span></li>
+    <li><span class="chip guard">hardened</span><span><b>builtin_tools_profile = "none"</b>A <code>claude_code</code> agent in a <code>[risk]</code> or signer sandbox without it.</span></li>
+    <li><span class="chip guard">hardened</span><span><b>[[mcp_servers]] are not allowed</b>Also: any scope granting <code>shell_bins</code>.</span></li>
+    <li><span class="chip bad">loop</span><span><b>decision_loops.&lt;n&gt;.agent: no [agents.&lt;a&gt;] block</b>A loop names an agent that does not exist.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No silent typos.</b> <code>Config</code>, <code>AgentConfig</code> and <code>[agents.*.local]</code> deny unknown keys; the load fails.</span></li>
+    <li><span><b>All issues at once.</b> Validation collects every problem into one <code>Config validation failed (N issues)</code> error.</span></li>
+    <li><span><b>No merging.</b> <code>--sandbox</code> replaces the base config whole; an agent's own scope replaces the default whole.</span></li>
+    <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>doctor</code>, <code>decide</code>, <code>history</code>, <code>backtest</code> and <code>risk</code> with <code>--sandbox</code> log a warning and go on; any other command stops.</span></li>
+    <li><span><b>Children see the same file.</b> <code>run-agent</code> reloads it by sandbox name; the bridge reads the absolute <code>TENGU_CONFIG</code>.</span></li>
+    <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, state dir and rate limits.</span></li>
+    <li><span><b>Hardened means hardened.</b> With <code>[risk]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Load a sandbox</h2>
+    <p>Run from the repo root: <code>--sandbox</code> resolves <code>sandboxes/&lt;name&gt;/</code> from the current directory.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox tor-check --tor</span>
+<span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox lping</span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c sandboxes/xlab/config.toml status</span>
+<span class="ln o"># example: a sandbox "demo" with a typo in one engine</span>
+<span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox demo</span>
+<span class="ln er">Error: Failed to load sandbox 'demo' from sandboxes/demo/config.toml</span>
+<span class="ln o"> </span>
+<span class="ln o">Caused by:</span>
+<span class="ln">    Config validation failed (1 issue):</span>
+<span class="ln">    - <span class="hl">agents.main.engine must be one of openrouter|claude_code|local (got 'openruter')</span></span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>Config</code>, <code>AgentConfig</code>, defaults, <code>Config::load</code>, validation, <code>fold_default_scopes</code></td></tr>
+        <tr><td><code>src/config/paths.rs</code></td><td><code>TENGU_HOME</code>, the default config path, <code>~</code> expansion, a file's sandbox name</td></tr>
+        <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections</code>: what tools read at call time</td></tr>
+        <tr><td><code>src/config/hardening.rs</code></td><td>rules for a <code>[risk]</code> or signer sandbox</td></tr>
+        <tr><td><code>src/bootstrap/sandbox.rs</code></td><td><code>load_sandbox_or</code>: <code>--sandbox</code>, the <code>TENGU_CONFIG</code> pin, egress</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td><code>-c</code>, the base load, every subcommand's <code>--sandbox</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child reloading the parent's config</td></tr>
+        <tr><td><code>src/adapters/outbound/scaffold.rs</code></td><td><code>[scaffold]</code>: folders and seed files, never overwritten (run by <code>tengu telegram</code>)</td></tr>
+        <tr><td class="wrap"><code>sandboxes/*/config.toml</code>, <code>config.example.toml</code></td><td>the real teams and a commented template</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: the resolver, the agent-block anatomy, the sandbox filter */
+(function () {
+  "use strict";
+  var NET = { "jev-exec": "open", "lping": "open", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
+    "unlimited": "open", "xlab": "open, allow_hosts: 2", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
+  var sbx = document.getElementById("r-sbx"), cf = document.getElementById("r-c"), env = document.getElementById("r-env");
+  var ex = document.getElementById("r-exists"), ok = document.getElementById("r-valid");
+  var chain = document.getElementById("r-chain"), out = document.getElementById("r-out");
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function row(no, name, cls, chip, chipCls, note) {
+    return '<div class="link ' + cls + '"><span class="no">' + no + '</span><b>' + esc(name) + '</b><span class="chip ' + chipCls + '">' + chip + '</span><small>' + note + '</small></div>';
+  }
+  function cell(k, v) { return "<div><span>" + k + "</span><code>" + v + "</code></div>"; }
+  function render() {
+    var s = sbx.value, c = cf.value, e = env.checked, exists = ex.checked, valid = ok.checked;
+    var base = c ? c : (e ? "/opt/tengu/config.toml" : "~/.tengu/config.toml");
+    var baseFails = exists && !valid, stops = baseFails && !s;
+    var baseState = !exists ? ["missing", "warn", "no file here: built-in defaults (one main agent) instead"]
+      : baseFails ? (s ? ["ignored", "warn", "Config::load errors: logged as a warning, then ignored, since --sandbox replaces it"]
+        : ["fails", "bad", "Config::load errors: the command stops"])
+      : s ? ["replaced", "warn", "loaded and validated first, then replaced whole"]
+      : ["wins", "ok", "this file is the config"];
+    var h = "";
+    h += row(1, s ? "sandboxes/" + s + "/config.toml" : "--sandbox", s ? "win" : "off",
+      s ? "wins" : "not given", s ? "ok" : "data",
+      s ? "relative to the current directory; replaces the base" : "no sandbox: the base config is used");
+    function baseRow(no, label, isBase, skipNote) {
+      if (!isBase) return row(no, label, "off", skipNote[0], "data", skipNote[1]);
+      var cls = baseState[0] === "wins" ? "win" : baseState[0] === "fails" ? "fail" : "replaced";
+      return row(no, label, cls, baseState[0], baseState[1], baseState[2]);
+    }
+    h += baseRow(2, c ? "-c " + c : "-c / --config", !!c, ["not given", "next in line: $TENGU_CONFIG"]);
+    h += baseRow(3, e ? "$TENGU_CONFIG = /opt/tengu/config.toml" : "$TENGU_CONFIG", !c && e, c ? ["ignored", "-c is given, so the env var is not read"] : ["not set", "next in line: the home file"]);
+    h += baseRow(4, "~/.tengu/config.toml", !c && !e, ["skipped", "an earlier source named the base file"]);
+    chain.innerHTML = h;
+
+    var o = "";
+    if (stops) {
+      o += cell("result", "error: Failed to load config at " + esc(base));
+      out.innerHTML = o; return;
+    }
+    var file = s ? "sandboxes/" + s + "/config.toml" : (exists ? base : "(built-in defaults, no file)");
+    var pin = s ? "&lt;cwd&gt;/sandboxes/" + s + "/config.toml" : esc(base);
+    var owner = s ? s : (exists && c === "sandboxes/xlab/config.toml" ? "xlab" : "default");
+    var child = s ? "sandbox name '" + s + "' over IPC → same file" : (exists ? "loads $TENGU_CONFIG → same file" : "no file → built-in defaults");
+    var net = s ? NET[s] : (exists ? "the file's [egress] (tor when absent)" : "tor (default)");
+    o += cell("config in effect", esc(file));
+    o += cell("TENGU_CONFIG for children", pin);
+    o += cell("run-agent child", child);
+    o += cell("ledger owner (sections)", owner);
+    o += cell("egress network", esc(net));
+    out.innerHTML = o;
+  }
+  [sbx, cf].forEach(function (x) { x.addEventListener("change", render); });
+  [env, ex, ok].forEach(function (x) { x.addEventListener("change", render); });
+  render();
+
+  /* agent block anatomy */
+  var A = {
+    hdr: ["One block = one agent", ["deny_unknown_fields"], "The same block serves in-process chat, plan steps, decision loops, feeds and the Claude Code bridge. A misspelled key fails the load.", "src/config/mod.rs · AgentConfig"],
+    "default": ["default = true", ["at most one"], "tengu chat talks to this agent (without one: whichever comes first in the agent map). Telegram sends plain messages to it. Two defaults fail validation.", "src/adapters/inbound/tui/mod.rs · run_tui"],
+    engine: ["engine", ["required"], "openrouter, claude_code or local. Anything else fails validation. Picks the adapter that thinks for this agent.", "src/config/mod.rs · validate_agent"],
+    model: ["model", ["required", "non-empty"], "Format follows the engine: claude_code takes a bare slug like this one, OpenRouter wants anthropic/claude-sonnet-4-6, local sends the server's own id.", "src/config/mod.rs · validate_agent"],
+    workspace: ["workspace", ["default: none"], "Chat surfaces give tools only to an agent with a workspace. A plan step without one runs in a temp dir that is removed after the step.", "src/bootstrap/tools.rs · workspace_or_temp"],
+    tools: ["tools", ["empty = every default tool"], "The allow-list on every surface. A non-empty list keeps only these names (plus workspace_tools). An opt-in name here is switched on too. A name that is no catalog tool, no &lt;server&gt;__&lt;tool&gt; and no loaded shell skill tool is dropped, with a load warning.", "src/bootstrap/tools.rs · agent_base_tools"],
+    description: ["description", ["present ⇒ routable"], "Rendered into TENGU_PLANNER_REGISTRY.md; the planner may send plan steps here. Empty text fails validation. No description: in-process only.", "src/config/mod.rs · AgentConfig.description"],
+    examples: ["example_queries", ["default: []"], "Listed under the registry entry so the planner can match short questions. Used only with a description.", "src/config/mod.rs · AgentConfig.example_queries"],
+    identity: ["identity", ["name", "instructions"], "Goes into the system prompt. The TUI header shows the name.", "src/config/mod.rs · IdentityConfig"],
+    limits: ["limits", ["LimitsConfig"], "Per-agent budgets: tool rounds, step wall clock, result sizes, context window, request timeout.", "src/config/mod.rs · LimitsConfig"],
+    rounds: ["max_tool_rounds", ["default 70"], "Tool cap per chat turn or plan step. OpenRouter and local count engine turns; claude_code counts tool calls.", "src/config/mod.rs · default_max_tool_rounds"],
+    timeout: ["step_timeout_secs", ["default 600", "must be > 0"], "Wall clock for one plan step run as tengu run-agent; the parent kills the child after it.", "src/config/mod.rs · default_step_timeout_secs"],
+    cc: ["claude_code.builtin_tools_profile", ["default editor_shell"], "none, read_only, editor or editor_shell. A sandbox with [risk] or a Solana signer requires none: built-in tools ignore Tengu scopes.", "src/config/hardening.rs · claude_code_errors"],
+    "private": ["A private agent", ["no description", "not default"], "Never routable by the planner or Telegram. Only such an agent may hold exec tools like paper_order. Feeds run its tools.", "src/config/risk.rs · src/adapters/inbound/telegram.rs"]
+  };
+  var lines = Array.prototype.slice.call(document.querySelectorAll("#toml li[data-k]"));
+  var tt = document.getElementById("a-title"), tc = document.getElementById("a-chips"), tx = document.getElementById("a-text"), tf = document.getElementById("a-file");
+  function pick(k) {
+    var a = A[k]; if (!a) return;
+    lines.forEach(function (l) { l.classList.toggle("on", l.getAttribute("data-k") === k); });
+    tt.textContent = a[0];
+    tc.innerHTML = a[1].map(function (c) { return '<span class="chip data">' + esc(c) + "</span>"; }).join("");
+    tx.textContent = a[2];
+    tf.textContent = a[3];
+  }
+  lines.forEach(function (l) {
+    l.setAttribute("tabindex", "0"); l.setAttribute("role", "button");
+    l.addEventListener("click", function () { pick(l.getAttribute("data-k")); });
+    l.addEventListener("mouseenter", function () { pick(l.getAttribute("data-k")); });
+    l.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(l.getAttribute("data-k")); } });
+  });
+  pick("tools");
+
+  /* sandbox filter */
+  var btns = Array.prototype.slice.call(document.querySelectorAll(".shelf-filter .btn"));
+  var cards = Array.prototype.slice.call(document.querySelectorAll("#shelf .sbx"));
+  btns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      var f = b.getAttribute("data-f");
+      btns.forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      cards.forEach(function (c) { c.classList.toggle("dim", f !== "all" && c.getAttribute("data-tags").split(" ").indexOf(f) < 0); });
+    });
+  });
+})();
+</script>
+</body>
+</html>

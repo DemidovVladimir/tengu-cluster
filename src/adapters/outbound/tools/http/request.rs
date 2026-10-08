@@ -33,7 +33,7 @@ impl HttpRequestTool {
                     "properties": {
                         "url": {
                             "type": "string",
-                            "description": "Full URL. Supports $ENV_VAR (e.g. $MOLECULE_LABS_URL or https://api.example.com/v1/resource)"
+                            "description": "Full URL. Supports $ENV_VAR (e.g. $API_BASE_URL or https://api.example.com/v1/resource)"
                         },
                         "method": {
                             "type": "string",
@@ -42,7 +42,7 @@ impl HttpRequestTool {
                         },
                         "headers": {
                             "type": "string",
-                            "description": "JSON object of request headers. Use $ENV_VAR for secrets, e.g. {\"Authorization\": \"Bearer $BEACH_API_KEY\"}"
+                            "description": "JSON object of request headers. Use $ENV_VAR for secrets, e.g. {\"Authorization\": \"Bearer $EXAMPLE_API_KEY\"}"
                         },
                         "body": {
                             "type": "string",
@@ -58,7 +58,7 @@ impl HttpRequestTool {
                         },
                         "auth_bearer_env": {
                             "type": "string",
-                            "description": "Env var name for Bearer token auth (e.g. \"BEACH_API_KEY\")"
+                            "description": "Env var name for Bearer token auth (e.g. \"EXAMPLE_API_KEY\")"
                         },
                         "auth_basic_user_env": {
                             "type": "string",

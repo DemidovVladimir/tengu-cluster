@@ -244,6 +244,15 @@ pub fn run_tui(
         Arc::new(crate::application::memory::manager::MemoryManager::new());
     let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
         Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+    // The engine thread publishes a snapshot for this chat agent only; when
+    // `[orchestrator] agent` is another agent its planner turn needs its own.
+    if let Some(planner) =
+        crate::bootstrap::orchestrator::planner_inputs_if_other(&config, &agent_id)?
+    {
+        if let Ok(mut guard) = orchestrator_snapshots.write() {
+            guard.insert(planner.agent_id.clone(), planner);
+        }
+    }
     let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
         let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
             &orchestrator_snapshots,

@@ -110,7 +110,7 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
     rows.extend([
         ToolEntry {
             opt_in: Some(names::PERSISTENT_STORE),
-            needs_memory: false,
+            needs_memory: true, // built by the memory plugin only with a vector backend
             defs: memory::persistent_store_tool_defs,
             plugin: memory_plugin,
         },
@@ -204,6 +204,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             opt_in: Some(names::LP_SNAPSHOT),
             needs_memory: false,
             defs: || solana::defs_named(names::LP_SNAPSHOT),
+            plugin: |_| Box::new(solana::SolanaPlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::LP_SWAP_PLAN),
+            needs_memory: false,
+            defs: || solana::defs_named(names::LP_SWAP_PLAN),
             plugin: |_| Box::new(solana::SolanaPlugin),
         },
         ToolEntry {
@@ -327,9 +333,14 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
 pub(crate) fn advertised_defs(has_memory: bool, workspace_tools: &[String]) -> Vec<ToolDef> {
     catalog()
         .into_iter()
-        .filter(|row| match row.opt_in {
-            Some(name) => workspace_tools.iter().any(|t| t == name),
-            None => has_memory || !row.needs_memory,
+        .filter(|row| {
+            let wanted = match row.opt_in {
+                Some(name) => workspace_tools.iter().any(|t| t == name),
+                None => true,
+            };
+            // A memory row (opt-in too: `persistent_store`) is only built with
+            // a vector backend — advertised without one, its calls failed.
+            wanted && (has_memory || !row.needs_memory)
         })
         .flat_map(|row| (row.defs)())
         .collect()
@@ -410,6 +421,38 @@ mod catalog_tests {
                 "WORKSPACE_TOOLS '{name}' has no catalog row"
             );
         }
+    }
+
+    /// `persistent_store` is advertised only with a vector backend: its
+    /// plugin builds no tool without one.
+    #[test]
+    fn persistent_store_needs_a_memory_backend() {
+        let opted = vec![names::PERSISTENT_STORE.to_string()];
+        let names_of = |has_memory| -> Vec<String> {
+            advertised_defs(has_memory, &opted)
+                .into_iter()
+                .map(|d| d.name)
+                .collect()
+        };
+        assert!(!names_of(false).iter().any(|n| n == names::PERSISTENT_STORE));
+        assert!(names_of(true).iter().any(|n| n == names::PERSISTENT_STORE));
+    }
+
+    /// `DEFAULT_TOOLS` (what an agent's `tools` may name, with the opt-ins) is
+    /// exactly the default rows' tools + `compress_and_store`.
+    #[test]
+    fn default_rows_match_default_tools() {
+        let mut defaults: Vec<String> = catalog()
+            .iter()
+            .filter(|r| r.opt_in.is_none())
+            .flat_map(|r| (r.defs)())
+            .map(|d| d.name)
+            .collect();
+        defaults.push("compress_and_store".into());
+        defaults.sort();
+        let mut listed: Vec<String> = names::DEFAULT_TOOLS.iter().map(|s| s.to_string()).collect();
+        listed.sort();
+        assert_eq!(defaults, listed);
     }
 
     /// `XM_TOOLS` (the shared-workspace load rule, `config/xmarket.rs`) is

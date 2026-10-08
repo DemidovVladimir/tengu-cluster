@@ -1076,6 +1076,15 @@ fn cases() -> Vec<Case> {
             .route(rpc("getProgramAccounts").json(&gpa(&[])))
             .route(rpc("getMultipleAccounts").gma(&[DLMM_GMA, PERPS_GMA, WALLET_GMA]))
             .ok("perps=flat"),
+        case(
+            "lp_swap_plan",
+            json!({"wallet_sol": 0.5, "wallet_usdc": 1000,
+                   "target_sol": 1, "target_usdc": 100,
+                   "permanent_minimum_sol": 0.2, "rent_reserve_sol": 0.1,
+                   "current_price": 100, "slippage_buffer_pct": 0.02,
+                   "context": "rebalance"}),
+        )
+        .ok("direction=usdc_to_sol"),
         snapshot(case(
             "hedge_decide",
             json!({"wallet": WALLET, "pool": POOL, "knobs": hedge_knobs()}),

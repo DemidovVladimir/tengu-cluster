@@ -545,10 +545,7 @@ mod tests {
     #[test]
     fn shell_command_binary_is_the_first_command_word() {
         for (command, bin) in [
-            (
-                "curl -sS -i -X POST \"$X402_GATEWAY_URL/x\" -d '{}'",
-                "curl",
-            ),
+            ("curl -sS -i -X POST \"$GATEWAY_URL/x\" -d '{}'", "curl"),
             ("  /usr/bin/git status", "/usr/bin/git"),
             (
                 "DEK='aGVsbG8+/w==' node -e 'console.log(1)' a.pdf b.enc",

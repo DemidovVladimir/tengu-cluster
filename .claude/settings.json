@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r \".tool_input.file_path // empty\"); case \"$f\" in \"$CLAUDE_PROJECT_DIR\"/src/*.rs) jq -n --arg r \"${f#\"$CLAUDE_PROJECT_DIR\"/}\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Tutorial sync: you changed \" + $r + \". Before you finish, update every docs/tutorial page whose [pages.*] sources in docs/tutorial/sources.toml list this file or one of its parent directories, bump that page footer date, and run cargo test --test tutorial_map (rules: docs/tutorial/AUTHORING.md).\")}}' ;; esac",
+            "timeout": 10,
+            "statusMessage": "Tutorial sync check"
+          }
+        ]
+      }
+    ]
+  }
+}

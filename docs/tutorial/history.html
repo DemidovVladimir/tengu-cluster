@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Market history · Tengu</title>
+<meta name="description" content="History first: backfill public bars, funding and contexts into one warehouse, market.db, then read and backtest them as of any instant.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: coverage calculator, bar strips */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 12px 26px; align-items: end; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button { font: inherit; font-family: var(--font-mono); font-size: .8rem; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .lblrow { display: flex; justify-content: space-between; gap: 10px; width: 100%; }
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; font-size: .88rem; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--font-mono); font-size: .82rem; color: var(--ink); overflow-wrap: anywhere; }
+  .bars.reach .fill { background: var(--data); }
+  .bars.reach .bar.win .fill { background: var(--accent); }
+  .bars.reach .bar { grid-template-columns: 48px minmax(0, 1fr) 92px; }
+  .strip { width: 100%; height: auto; display: block; }
+  .strip .bar-c { fill: var(--hands-soft); stroke: var(--hands); stroke-width: 1.2; }
+  .strip .bar-o { fill: none; stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  .strip .bar-f { fill: var(--sunk); stroke: var(--faint); stroke-width: 1.2; }
+  .strip .bar-s { fill: var(--guard-soft); stroke: var(--guard); stroke-width: 1.2; }
+  .strip .bar-x { fill: none; stroke: var(--bad); stroke-width: 1.2; stroke-dasharray: 4 3; }
+  .strip .now { stroke: var(--accent); stroke-width: 2; }
+  .strip { max-width: 320px; }
+  @media (max-width: 640px) { .grid.one-col { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · History first</div>
+  <h1>Market history</h1>
+  <p class="lede">Answer trading questions from public history, not by waiting for live data. Backfill bars, funding and contexts into one warehouse, <code>&lt;state dir&gt;/market.db</code>, then read and backtest it. A bar counts only once it has closed.</p>
+  <ul class="facts">
+    <li>Hyperliquid keeps <b>5 000</b> bars per interval</li>
+    <li>1h reach <b>≈ 208 days</b></li>
+    <li>default interval <b>1h</b></li>
+    <li>read window <b>7 days</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip hands"><span class="k">手</span> hands</span> fetchers, tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> egress, checks</li>
+    <li><span class="chip data">data</span> files, the warehouse</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Backfill, store, read</span>
+    <h2 id="s-flow">From public history to one warehouse</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 470" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Hyperliquid and GeckoTerminal requests pass the egress gate and a budget; archive and JSON files are read locally; decoders check every row and drop open bars; rows land in market.db; readers see a bar only from its close; market_history and tengu backtest read it.</title>
+        <path class="e" id="p-hl-eg" d="M190 59 C210 59 210 95 228 95" data-at="1-3"/>
+        <path class="e" id="p-gk-eg" d="M190 139 C210 139 210 123 228 123" data-at="1-2,4"/>
+        <path class="e" id="p-eg-dec" d="M400 109 C420 109 420 185 438 185" data-at="3-4,6"/>
+        <path class="e" id="p-ar-dec" d="M190 319 C320 319 400 222 438 222" data-at="5"/>
+        <path class="e" id="p-js-dec" d="M190 399 C330 399 470 300 470 240" data-at="5"/>
+        <path class="e" id="p-dec-db" d="M610 199 C630 199 630 115 648 115" data-at="6-7"/>
+        <path class="e" id="p-db-asof" d="M745 190 L745 248" data-at="8"/>
+        <path class="e" id="p-asof-mh" d="M700 312 C700 345 530 345 530 378" data-at="9"/>
+        <path class="e" id="p-asof-bt" d="M760 312 L760 378" data-at="9"/>
+        <path class="e dash" id="p-mh-fetch" d="M440 409 C330 409 315 260 315 150" data-at="9"/>
+
+        <g class="n hands" data-at="1,3">
+          <rect x="20" y="30" width="170" height="58" rx="8"/>
+          <text x="105" y="54" text-anchor="middle" class="t-title">Hyperliquid</text>
+          <text x="105" y="73" text-anchor="middle" class="t-small">candles · funding</text>
+        </g>
+        <g class="n hands" data-at="1,4">
+          <rect x="20" y="110" width="170" height="58" rx="8"/>
+          <text x="105" y="134" text-anchor="middle" class="t-title">GeckoTerminal</text>
+          <text x="105" y="153" text-anchor="middle" class="t-small">DEX pool OHLCV</text>
+        </g>
+        <g class="n data" data-at="5">
+          <rect x="20" y="290" width="170" height="58" rx="8"/>
+          <text x="105" y="314" text-anchor="middle" class="t-title">HL S3 archive</text>
+          <text x="105" y="333" text-anchor="middle" class="t-small">asset_ctxs, local files</text>
+        </g>
+        <g class="n data" data-at="5">
+          <rect x="20" y="370" width="170" height="58" rx="8"/>
+          <text x="105" y="394" text-anchor="middle" class="t-title">JSON dataset</text>
+          <text x="105" y="413" text-anchor="middle" class="t-small">any venue, offline</text>
+        </g>
+        <g class="n guard" data-at="2-4,9">
+          <rect x="230" y="70" width="170" height="78" rx="10"/>
+          <text x="315" y="94" text-anchor="middle" class="t-kanji k">守</text>
+          <text x="315" y="114" text-anchor="middle" class="t-title">Egress + budget</text>
+          <text x="315" y="132" text-anchor="middle" class="t-small">hosts · rate · retry</text>
+        </g>
+        <g class="n guard" data-at="5-6">
+          <rect x="440" y="160" width="170" height="78" rx="10"/>
+          <text x="525" y="190" text-anchor="middle" class="t-title">Decode + check</text>
+          <text x="525" y="209" text-anchor="middle" class="t-small">closed bars only</text>
+          <text x="525" y="225" text-anchor="middle" class="t-small">on the UTC grid</text>
+        </g>
+        <g class="n data" data-at="7-8">
+          <rect x="650" y="40" width="190" height="150" rx="10"/>
+          <text x="745" y="64" text-anchor="middle" class="t-title t-mono">market.db</text>
+          <rect x="668" y="80" width="154" height="24" rx="5" fill="var(--panel)" stroke="var(--line)"/>
+          <text x="745" y="96" text-anchor="middle" class="t-small">bars</text>
+          <rect x="668" y="110" width="154" height="24" rx="5" fill="var(--panel)" stroke="var(--line)"/>
+          <text x="745" y="126" text-anchor="middle" class="t-small">funding</text>
+          <rect x="668" y="140" width="154" height="24" rx="5" fill="var(--panel)" stroke="var(--line)"/>
+          <text x="745" y="156" text-anchor="middle" class="t-small">ctx</text>
+          <text x="745" y="180" text-anchor="middle" class="t-small">&lt;state dir&gt;</text>
+        </g>
+        <g class="n guard" data-at="8">
+          <rect x="650" y="250" width="190" height="62" rx="8"/>
+          <text x="745" y="275" text-anchor="middle" class="t-title">As-of read</text>
+          <text x="745" y="294" text-anchor="middle" class="t-small">a bar is seen at its close</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="440" y="380" width="180" height="58" rx="8"/>
+          <text x="530" y="404" text-anchor="middle" class="t-title t-mono">market_history</text>
+          <text x="530" y="423" text-anchor="middle" class="t-small">stats · sample · gaps</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="660" y="380" width="180" height="58" rx="8"/>
+          <text x="750" y="404" text-anchor="middle" class="t-title t-mono">tengu backtest</text>
+          <text x="750" y="423" text-anchor="middle" class="t-small">reads, never writes</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">@xyz_stocks = 75 full ids</text></g>
+        <g class="pop badge" data-at="2"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">denied host ⇒ nothing sent</text></g>
+        <g class="pop badge" data-at="3"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">1h × 4 999 closed bars ≈ 208 days</text></g>
+        <g class="pop badge" data-at="4"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">--source gecko · &lt;id&gt;@&lt;pool&gt;</text></g>
+        <g class="pop badge" data-at="5"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">archive: main dex only, no xyz:*</text></g>
+        <g class="pop badge" data-at="6"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">open bar dropped, never stored</text></g>
+        <g class="pop badge" data-at="7"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">same key ⇒ row replaced</text></g>
+        <g class="pop badge" data-at="8"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">t never sees a later close</text></g>
+        <g class="pop badge" data-at="9"><rect x="230" y="22" width="300" height="22" rx="11"/><text x="380" y="37" text-anchor="middle">fetch = true fills the gap first</text></g>
+
+        <circle class="tok hands" r="6" data-path="p-hl-eg" data-at="1"/>
+        <circle class="tok hands" r="6" data-path="p-gk-eg" data-at="1" data-delay="300"/>
+        <circle class="tok guard" r="6" data-path="p-hl-eg" data-at="2" data-reverse/>
+        <circle class="tok hands" r="6" data-path="p-hl-eg" data-at="3"/>
+        <circle class="tok guard" r="6" data-path="p-eg-dec" data-at="3" data-delay="900"/>
+        <circle class="tok hands" r="6" data-path="p-gk-eg" data-at="4"/>
+        <circle class="tok guard" r="6" data-path="p-eg-dec" data-at="4" data-delay="900"/>
+        <circle class="tok" r="6" data-path="p-ar-dec" data-at="5" data-dur="1600"/>
+        <circle class="tok" r="6" data-path="p-js-dec" data-at="5" data-delay="400" data-dur="1600"/>
+        <circle class="tok guard" r="6" data-path="p-eg-dec" data-at="6"/>
+        <circle class="tok guard" r="6" data-path="p-dec-db" data-at="6" data-delay="900"/>
+        <circle class="tok" r="6" data-path="p-dec-db" data-at="7"/>
+        <circle class="tok guard" r="6" data-path="p-db-asof" data-at="8" data-dur="900"/>
+        <circle class="tok hands" r="6" data-path="p-asof-mh" data-at="9"/>
+        <circle class="tok hands" r="6" data-path="p-asof-bt" data-at="9" data-delay="300"/>
+        <circle class="tok guard" r="5" data-path="p-mh-fetch" data-at="9" data-delay="900" data-dur="1800"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu history backfill</code> names full ids or <code>@&lt;universe&gt;</code>. Source <code>hl</code> (default) or <code>gecko</code>, <code>--interval</code> default <code>1h</code>, <code>--funding</code> for funding too.</li>
+        <li>Every request passes the egress policy (<code>allow_hosts</code>), the client's host, a <code>[rate_limits.*]</code> budget and one audit line. 429, 5xx and timeouts retry: up to 5 times, 1 s to 60 s apart.</li>
+        <li>Hyperliquid serves only the newest 5 000 bars per interval. An older start is clamped and the report says so. Funding comes ≤ 500 rows a reply.</li>
+        <li>GeckoTerminal: pool OHLCV of <code>solana:</code> and <code>robinhood:</code> tokens, ≤ 1 000 bars a reply, paged backwards from the newest.</li>
+        <li>Offline: HL S3 <code>asset_ctxs</code> files (requester pays, main-dex perps only) and JSON dataset files. One bad JSON row and nothing is imported.</li>
+        <li>Decoders check every row: prices &gt; 0, high and low bound open and close, open time on the UTC grid. A bar still open is dropped.</li>
+        <li>Rows land in <code>market.db</code>: <code>bars</code>, <code>funding</code>, <code>ctx</code>. The same key replaces its row. A rerun resumes: only what is not stored is fetched.</li>
+        <li>Readers get prices only as of an instant: <code>close_at(t)</code> is the bar ending exactly at t. Funding and ctx rows count from their <code>t_ms</code>.</li>
+        <li><code>market_history</code> returns stats, a sample and coverage; <code>fetch = true</code> backfills the gap first. <code>tengu backtest</code> only reads.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-reach">
+  <div class="sec-head">
+    <span class="kicker">Try it: how far back can you go?</span>
+    <h2 id="s-reach">5 000 bars, whatever the interval</h2>
+    <p>Hyperliquid keeps the newest 5 000 bars per interval, the open one included, so 4 999 closed bars reach back. Pick an interval and a start.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <div class="seg" role="group" aria-label="Interval" id="iv"></div>
+      <label for="back"><span class="lblrow"><span><code>--from</code>, days ago</span><span class="readout" id="back-out">90</span></span>
+        <input type="range" id="back" min="1" max="900" step="1" value="90">
+      </label>
+    </div>
+    <div class="grid two">
+      <dl class="kv" id="reach-kv" aria-live="polite"></dl>
+      <div class="bars reach" id="reach-bars" aria-label="Reach per interval, log scale"></div>
+    </div>
+    <p class="note" id="reach-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-bars">
+  <div class="sec-head">
+    <span class="kicker">What a stored bar means</span>
+    <h2 id="s-bars">Three rules every reader keeps</h2>
+  </div>
+  <div class="grid one-col">
+    <div class="card guard">
+      <h3>Open bar dropped</h3>
+      <svg class="strip" viewBox="0 0 240 70" role="img" aria-label="Four closed bars stored, the open bar at fetch time dropped">
+        <rect class="bar-c" x="10" y="20" width="40" height="34" rx="3"/>
+        <rect class="bar-c" x="56" y="20" width="40" height="34" rx="3"/>
+        <rect class="bar-c" x="102" y="20" width="40" height="34" rx="3"/>
+        <rect class="bar-c" x="148" y="20" width="40" height="34" rx="3"/>
+        <rect class="bar-o" x="194" y="20" width="40" height="34" rx="3"/>
+        <line class="now" x1="212" y1="10" x2="212" y2="64"/>
+        <text x="212" y="8" text-anchor="middle" class="t-small">fetch</text>
+      </svg>
+      <p>A bar still open at fetch time is never stored. Gecko's newest bar and HL's last one are dropped the same way.</p>
+    </div>
+    <div class="card data">
+      <h3>No trades: a flat bar</h3>
+      <svg class="strip" viewBox="0 0 240 70" role="img" aria-label="Two traded bars, then two flat bars with zero trades">
+        <rect class="bar-c" x="10" y="14" width="40" height="40" rx="3"/>
+        <rect class="bar-c" x="56" y="24" width="40" height="30" rx="3"/>
+        <rect class="bar-f" x="102" y="38" width="40" height="4" rx="2"/>
+        <rect class="bar-f" x="148" y="38" width="40" height="4" rx="2"/>
+        <rect class="bar-c" x="194" y="18" width="40" height="36" rx="3"/>
+        <text x="145" y="66" text-anchor="middle" class="t-small">n = 0: last close, stale</text>
+      </svg>
+      <p>Hyperliquid keeps a no-trade hour as a flat bar at the last close, <code>n = 0</code>. A spec's <code>min_entry_trades</code> skips it (<code>thin_entry</code>).</p>
+    </div>
+    <div class="card hands">
+      <h3>Splits adjusted on read</h3>
+      <svg class="strip" viewBox="0 0 240 70" role="img" aria-label="Bars before a split divided by the ratio, the bar straddling it dropped">
+        <rect class="bar-s" x="10" y="30" width="40" height="24" rx="3"/>
+        <rect class="bar-s" x="56" y="30" width="40" height="24" rx="3"/>
+        <rect class="bar-x" x="102" y="20" width="40" height="34" rx="3"/>
+        <rect class="bar-c" x="148" y="30" width="40" height="24" rx="3"/>
+        <rect class="bar-c" x="194" y="30" width="40" height="24" rx="3"/>
+        <line class="now" x1="122" y1="10" x2="122" y2="64"/>
+        <text x="55" y="20" text-anchor="middle" class="t-small">÷ ratio</text>
+        <text x="122" y="8" text-anchor="middle" class="t-small">split</text>
+      </svg>
+      <p><code>[backtest.splits]</code> (xlab: <code>hyperliquid:xyz:KIOXIA</code> 3-for-1 at 2026-09-28T08:00:00Z). Earlier prices ÷ ratio; a straddling bar is dropped. <code>market.db</code> keeps raw bars.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-schema">
+  <div class="sec-head">
+    <span class="kicker">The warehouse</span>
+    <h2 id="s-schema">Three tables, one file per state dir</h2>
+    <p>WAL SQLite in <code>&lt;TENGU_HOME&gt;/state/&lt;xmarket.state&gt;/</code>, outside every workspace. Every row names its <code>source</code>.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-bars" aria-selected="true">bars</button>
+      <button type="button" aria-controls="tab-funding">funding</button>
+      <button type="button" aria-controls="tab-ctx">ctx</button>
+      <button type="button" aria-controls="tab-src">sources</button>
+    </div>
+    <div class="tabpanel" id="tab-bars"><pre><span class="c">-- src/adapters/outbound/market_data.rs</span>
+<span class="k">CREATE TABLE</span> bars (
+  instrument TEXT, interval TEXT, t_open_ms INTEGER,   <span class="c">-- key</span>
+  o REAL, h REAL, l REAL, c REAL, v REAL,
+  n INTEGER,                                           <span class="c">-- trades, nullable (Gecko has none)</span>
+  source TEXT, fetched_at_ms INTEGER,
+  <span class="k">PRIMARY KEY</span> (instrument, interval, t_open_ms)) <span class="k">WITHOUT ROWID</span>;</pre></div>
+    <div class="tabpanel" id="tab-funding" hidden><pre><span class="k">CREATE TABLE</span> funding (
+  instrument TEXT, t_ms INTEGER,                       <span class="c">-- key</span>
+  rate_1h REAL,                                        <span class="c">-- HL per hour; &gt; 0 = longs pay</span>
+  premium REAL, source TEXT, fetched_at_ms INTEGER,
+  <span class="k">PRIMARY KEY</span> (instrument, t_ms)) <span class="k">WITHOUT ROWID</span>;</pre></div>
+    <div class="tabpanel" id="tab-ctx" hidden><pre><span class="k">CREATE TABLE</span> ctx (                                    <span class="c">-- HL archive asset contexts</span>
+  instrument TEXT, t_ms INTEGER,                       <span class="c">-- key</span>
+  mark REAL, oracle REAL, mid REAL, impact_bid REAL, impact_ask REAL,
+  oi REAL, day_ntl_vlm REAL, funding_1h REAL, premium REAL, source TEXT,
+  <span class="k">PRIMARY KEY</span> (instrument, t_ms)) <span class="k">WITHOUT ROWID</span>;</pre></div>
+    <div class="tabpanel" id="tab-src" hidden><pre><span class="c"># source values</span>
+<span class="s">hl</span>                       <span class="c"># Hyperliquid mainnet</span>
+<span class="s">hl:&lt;host&gt;</span>                <span class="c"># any other host (testnet): never mistaken for mainnet</span>
+<span class="s">gecko:&lt;network&gt;:&lt;pool&gt;</span>   <span class="c"># GeckoTerminal pool, full pool address</span>
+<span class="s">hl-archive:asset_ctxs</span>    <span class="c"># HL S3 archive import</span>
+<span class="s">json:&lt;file name&gt;</span>         <span class="c"># JSON import without its own source</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-tool">
+  <div class="sec-head">
+    <span class="kicker">The Architect's reader</span>
+    <h2 id="s-tool">market_history: one window, one row</h2>
+    <p>Row <code>mkt_history/1:&lt;instrument&gt;:&lt;interval&gt;</code>, ttl 0: never cached. Window default: the 7 days before <code>to</code>; at most 100 000 bars; 48 sampled points (1–200).</p>
+  </div>
+  <div class="grid two">
+    <div class="card data">
+      <h3>Numbers (too few rows ⇒ left out, never 0)</h3>
+      <dl class="kv">
+        <dt>ret_bps</dt><dd>ln(last / first close) × 10⁴, ≥ 2 bars</dd>
+        <dt>vol_bps</dt><dd>sample sd of log returns × 10⁴, ≥ 3 bars</dd>
+        <dt>max_drawdown_bps</dt><dd>deepest fall from a running peak close</dd>
+        <dt>avg_volume</dt><dd>mean bar volume (HL base size, Gecko USD)</dd>
+        <dt>funding_mean_apr_pct</dt><dd>mean rate_1h × 24 × 365 × 100</dd>
+        <dt>gaps</dt><dd>grid slots with no stored bar</dd>
+      </dl>
+    </div>
+    <ul class="states">
+      <li><span class="chip ok">ok</span><span><b>ok</b>Bars in the window, nothing failed.</span></li>
+      <li><span class="chip warn">part</span><span><b>partial</b>Bars in the window, but a fetch failed.</span></li>
+      <li><span class="chip data">none</span><span><b>absent</b>No bar stored in the window, nothing failed.</span></li>
+      <li><span class="chip bad">err</span><span><b>error</b>No bar, and a fetch or the store read failed.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Only closed bars are stored.</b> Every fetcher and importer drops a bar still open at its time.</span></li>
+    <li><span><b>A bad row writes nothing.</b> The decoder names the row; its page (or the whole JSON file) is not written.</span></li>
+    <li><span><b>Every request is fenced.</b> Egress policy, the client's host and the budget, on every request; a denial sends nothing.</span></li>
+    <li><span><b>No future at t.</b> Readers take prices through <code>close_at</code> / <code>observable_at</code>: a bar closing after t is invisible at t.</span></li>
+    <li><span><b>Mainnet stays mainnet.</b> Rows from another HL host are tagged <code>hl:&lt;host&gt;</code>.</span></li>
+    <li><span><b>Agents cannot touch the file.</b> <code>market.db</code> sits in the state dir, outside every fs root and workspace.</span></li>
+    <li><span><b>Reads stay offline.</b> Without <code>fetch</code> / <code>--fetch</code> no request is sent, and a missing <code>market.db</code> is an error, never created by a backtest.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Backfill, import, check coverage</h2>
+    <p>From the repo root. Times: epoch ms, RFC 3339 or a UTC date. Exit 1 when any row failed.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu history backfill --sandbox xlab --instruments hyperliquid:xyz:TSLA,hyperliquid:SOL --from 2026-03-01 --funding</span>
+<span class="ln o"># one report row per instrument and kind: source, rows written, notes</span>
+<span class="ln cmd"><span class="p">$ </span>tengu history backfill --sandbox xlab --instruments @xyz_stocks --interval 1h --from 2026-01-01</span>
+<span class="ln o"># note: <span class="hl">HL serves only the newest 5000 1h bars: start clamped from &lt;from&gt; to &lt;reach&gt;</span></span>
+<span class="ln cmd"><span class="p">$ </span>tengu history coverage --sandbox xlab --instrument hyperliquid:xyz:TSLA</span>
+<span class="ln o"># instrument  kind  interval  first  last  rows  sources</span>
+<span class="ln cmd"><span class="p">$ </span>aws s3 cp --request-payer requester s3://hyperliquid-archive/asset_ctxs/20260901.csv.lz4 ~/hl-archive/</span>
+<span class="ln cmd"><span class="p">$ </span>tengu history import-hl-archive --sandbox xlab --dir ~/hl-archive</span>
+<span class="ln cmd"><span class="p">$ </span>tengu history import-json --sandbox xlab --file ./dataset.json</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/marketdata.rs</code></td><td>bars, funding, ctx; <code>close_at</code>, <code>observable_at</code>; split adjustment</td></tr>
+        <tr><td><code>src/domain/marketdata_decode.rs</code></td><td>HL, Gecko, archive CSV and JSON decoders; <code>closed_bars</code></td></tr>
+        <tr><td><code>src/domain/marketdata_stats.rs</code></td><td>window stats, gaps, the sample, <code>mkt_history/1</code></td></tr>
+        <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 (spec ids, cache keys)</td></tr>
+        <tr><td><code>src/ports/market_data.rs</code></td><td>the <code>MarketDataStore</code> port, coverage rows</td></tr>
+        <tr><td><code>src/adapters/outbound/market_data.rs</code></td><td><code>market.db</code>: tables, upserts, coverage</td></tr>
+        <tr><td><code>src/adapters/outbound/backfill/</code></td><td><code>hl</code>, <code>gecko</code>, <code>hl_archive</code>, <code>json</code>; retry, resume</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/history.rs</code></td><td><code>tengu history backfill | import-hl-archive | import-json | coverage</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/xlab/history.rs</code></td><td>the <code>market_history</code> tool</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: HL reach calculator (backfill/hl.rs: HL_MAX_BARS, hl_reach_ms;
+   hyperliquid/info.rs: candleSnapshot weight 20 + 1 per 60 bars) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  var IV = [["1m", 1], ["5m", 5], ["15m", 15], ["1h", 60], ["4h", 240], ["1d", 1440]];
+  var HL_MAX_BARS = 5000, CLOSED = HL_MAX_BARS - 1, BUDGET = 600, NAMES = 75;
+  var cur = "1h";
+  var seg = $("iv");
+  IV.forEach(function (p) {
+    var b = document.createElement("button");
+    b.type = "button"; b.textContent = p[0];
+    b.addEventListener("click", function () { cur = p[0]; draw(); });
+    seg.appendChild(b);
+  });
+  function days(mins) { return mins * CLOSED / 1440; }
+  function fmtDays(d) { return d >= 100 ? Math.round(d).toLocaleString("en-US") : d.toFixed(1); }
+  function draw() {
+    var back = +$("back").value;
+    $("back-out").textContent = back;
+    Array.prototype.forEach.call(seg.children, function (b) { b.setAttribute("aria-pressed", b.textContent === cur ? "true" : "false"); });
+    var mins = IV.filter(function (p) { return p[0] === cur; })[0][1];
+    var reach = days(mins), clamped = back > reach;
+    var bars = Math.min(Math.floor(back * 1440 / mins), CLOSED);
+    var weight = 20 + Math.ceil(bars / 60);
+    var total = weight * NAMES;
+    $("reach-kv").innerHTML =
+      "<dt>reach</dt><dd>" + CLOSED.toLocaleString("en-US") + " × " + cur + " = " + fmtDays(reach) + " days</dd>" +
+      "<dt>start</dt><dd>" + (clamped ? "clamped to now − 4 999 × " + cur + " (noted)" : back + " days ago, kept") + "</dd>" +
+      "<dt>bars fetched</dt><dd>" + bars.toLocaleString("en-US") + " (one request: ≤ 5 000 a window)</dd>" +
+      "<dt>weight</dt><dd>20 + ⌈" + bars + " / 60⌉ = " + weight + "</dd>" +
+      "<dt>75 names</dt><dd>" + total.toLocaleString("en-US") + " weight ≈ " + (total / BUDGET).toFixed(1) + " min at 600 / min</dd>";
+    var max = Math.log10(days(1440));
+    $("reach-bars").innerHTML = IV.map(function (p) {
+      var d = days(p[1]), w = Math.max(4, Math.log10(d * 10) / Math.log10(days(1440) * 10) * 100);
+      return '<div class="bar' + (p[0] === cur ? " win" : "") + '"><span class="lbl">' + p[0] + '</span><span class="track"><span class="fill" style="--w:' + w.toFixed(1) + '%"></span></span><span class="val">' + fmtDays(d) + " d</span></div>";
+    }).join("");
+    $("reach-note").innerHTML = "Funding has no such cap: it pages from the listing, ≤ 500 rows a reply. Bars at <b>1d</b> reach " + fmtDays(days(1440)) +
+      " days only in theory: a market's history starts at its listing. Budget: xlab's <code>[rate_limits.hyperliquid] per_minute = 600</code> (bars log scale).";
+  }
+  $("back").addEventListener("input", draw);
+  draw();
+})();
+</script>
+</body>
+</html>

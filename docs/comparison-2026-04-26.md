@@ -170,7 +170,7 @@ The smaller-effort polish items are at the top; structural work below.
 ### Architectural completeness
 
 4. **6.6 real MCP tool indexing** — **Done 2026-09-12**: registry TOOLS section = core tool defs + MCP server tools. Original note: Replace `placeholder_tools()` (6 hardcoded) with `compute_base_tools()` for real compiled-in tools plus enumerated MCP server tools via `outbound/mcp_client/client.rs::tools/list`. Touches the registry CLI subcommand.
-5. **6.7 C→B unknown-agent fallback (B half)** — **Done**: `Step.compose` (`plan.rs`, `plan_schema.json`, SKILL.md "C → B fallback"). Original note: REDESIGN §11. When all Open Brain / Karpathy LLM Wiki hits score below the threshold, today the SKILL.md tells the planner to ask the user. The B half — compose generic agent on user confirmation, run for one turn — isn't implemented. Multi-turn UX, deserves its own session.
+5. **6.7 C→B unknown-agent fallback (B half)** — **Done**: `Step.compose` (`plan.rs`, `plan_schema.json`, SKILL.md "C → B fallback"). Original note: REDESIGN.md §11 (file removed 2026-10-07; in git history). When all Open Brain / Karpathy LLM Wiki hits score below the threshold, today the SKILL.md tells the planner to ask the user. The B half — compose generic agent on user confirmation, run for one turn — isn't implemented. Multi-turn UX, deserves its own session.
 6. **session_id sharing with `SubprocessRunner`** — **Done 2026-05-09** (Fix B): `build_orchestrator` resolves one id for `RagPlanner` + `SubprocessRunner`. Original note: The open question from the original handoff is still open. Today the planner and child subprocess each mint their own UUID. Pass via IPC env or stdin payload to unify the conversation across the entire orchestration.
 
 ### Cleanup (do last)

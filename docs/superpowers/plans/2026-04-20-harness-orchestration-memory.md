@@ -3418,8 +3418,6 @@ rg -i 'heart.*brain|brain.*heart|heart.*sensors|brain.*sensors' docs/ skills/
 
 - [ ] **Step 2: For each hit, evaluate**
 
-- `skills/beach-science/SKILL.md` was flagged in the original grep. Open it. Most likely unrelated context ("beach science" is the skill for science — the hit is probably incidental). If it's quoting the old doctrine, rewrite; if it's a metaphor independent of the Tengu doctrine, leave alone. Document decision in commit message.
-
 - [ ] **Step 3: Commit any fixes**
 
 ```bash

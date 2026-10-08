@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chat surfaces · Tengu</title>
+<meta name="description" content="How the terminal UI, Telegram and webhooks feed the same Tengu runtime: routing, access control, session ids, activity lines and replies.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: Telegram router, webhook simulator, session-id strip, TUI mock */
+  .rt-in { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); width: 100%; }
+  .rt-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rt-presets .btn { font-family: var(--font-mono); font-size: 0.75rem; }
+  .rt-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.85rem; color: var(--muted); }
+  .rt-opts label { display: flex; gap: 6px; align-items: center; }
+  .trail { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; counter-reset: tr; }
+  .trail li { counter-increment: tr; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 0.88rem; color: var(--muted); padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); animation: rise .35s ease both; }
+  .trail li::before { content: counter(tr); font-family: var(--font-mono); font-size: 0.72rem; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; }
+  .trail li b { color: var(--ink); }
+  .trail li.end { border-color: var(--hands); }
+  .trail li.stop { border-color: var(--bad); }
+  .trail li:nth-child(2) { animation-delay: .08s } .trail li:nth-child(3) { animation-delay: .16s } .trail li:nth-child(4) { animation-delay: .24s } .trail li:nth-child(5) { animation-delay: .32s }
+  @keyframes rise { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+  .two { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
+  .wh-ctl { display: grid; gap: 10px; align-content: start; }
+  .wh-ctl select { font: inherit; font-size: 0.84rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); width: 100%; }
+  .wh-ctl .tick { display: flex; gap: 8px; align-items: center; }
+  .status { font-family: var(--font-mono); font-size: 1.6rem; font-weight: 500; display: flex; gap: 10px; align-items: baseline; }
+  .status small { font-size: 0.85rem; color: var(--muted); font-family: var(--font-body); }
+  .status.ok { color: var(--ok); } .status.warn { color: var(--warn); } .status.bad { color: var(--bad); }
+  .wh-body { font-size: 0.78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .sid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
+  .sid div { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); display: grid; gap: 4px; align-content: start; }
+  .sid b { font-size: 0.9rem; }
+  .sid code { font-size: 0.78rem; overflow-wrap: anywhere; }
+  .sid span { font-size: 0.8rem; color: var(--muted); }
+  .sid.in-view div { animation: rise .45s ease both; }
+  .sid.in-view div:nth-child(2) { animation-delay: .1s } .sid.in-view div:nth-child(3) { animation-delay: .2s } .sid.in-view div:nth-child(4) { animation-delay: .3s } .sid.in-view div:nth-child(5) { animation-delay: .4s }
+  .tui { border-radius: var(--radius); border: 1px solid #1E2836; background: #0B1119; color: #D5DEE8; font-family: var(--font-mono); font-size: 0.8rem; padding: 12px 14px; display: grid; gap: 6px; }
+  .tui .hdr { color: #93A3B6; border-bottom: 1px solid #1E2836; padding-bottom: 6px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .tui .b { padding: 6px 10px; border-radius: 8px; max-width: 92%; overflow-wrap: anywhere; opacity: 0; }
+  .tui.in-view .b { animation: rise .4s ease both; }
+  .tui .u { background: #1D2A47; justify-self: end; }
+  .tui .a { background: #141D2A; }
+  .tui .s { color: #E2B65C; background: transparent; border: 1px dashed #3a3220; }
+  .tui .t { color: #7FC793; font-style: italic; padding: 0 10px; }
+  .tui.in-view .b:nth-child(3) { animation-delay: .5s } .tui.in-view .b:nth-child(4) { animation-delay: 1s } .tui.in-view .b:nth-child(5) { animation-delay: 1.5s }
+  .tui.in-view .b:nth-child(6) { animation-delay: 2s } .tui.in-view .b:nth-child(7) { animation-delay: 2.5s } .tui.in-view .b:nth-child(8) { animation-delay: 3s }
+  @media (prefers-reduced-motion: reduce) { .tui .b { opacity: 1; } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · front doors</div>
+  <h1>Chat surfaces</h1>
+  <p class="lede">Three front doors share one runtime. The terminal UI and Telegram keep a conversation. A webhook fires a one-shot planner turn or a decision-loop event, and answers <code>202</code> at once.</p>
+  <ul class="facts">
+    <li>Telegram: no allow-list = <b>refuses to start</b></li>
+    <li>webhooks on <b>127.0.0.1:7080</b> by default</li>
+    <li>loop queue <b>64</b> events, then <b>429</b></li>
+    <li>Telegram replies split at <b>4000</b> chars</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip guard"><span class="k">守</span> guard</span> access checks</li>
+    <li><span class="chip heart"><span class="k">心</span> heart</span> planner</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> agent with tools</li>
+    <li><span class="chip jev"><span class="k">決</span> Jev</span> decision loop</li>
+    <li><span class="chip data">data</span> routing and output</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Three doors, step by step</span>
+    <h2 id="s-flow">From a message to an answer</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3800">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 420" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Chat surfaces: the TUI, Telegram and webhooks pass access checks and routing, then reach an agent turn, the planner or a decision loop; results come back as bubbles, chunked replies or log lines.</title>
+        <!-- edges -->
+        <path class="e" id="p-tui-d" d="M160 110 L363 110" data-at="1,4"/>
+        <path class="e" id="p-d-agent" d="M470 86 C505 60 540 58 578 58" data-at="1"/>
+        <path class="e" id="p-d-plan" d="M505 110 C540 110 545 160 578 160" data-at="4"/>
+        <path class="e" id="p-tg-g" d="M160 228 L188 228" data-at="2"/>
+        <path class="e" id="p-g-r" d="M330 228 L358 228" data-at="3"/>
+        <path class="e" id="p-r-agent" d="M510 218 C562 218 560 74 578 72" data-at="3"/>
+        <path class="e" id="p-r-d" d="M435 200 L435 152" data-at="4"/>
+        <path class="e" id="p-wh-g" d="M160 368 L188 368" data-at="5"/>
+        <path class="e" id="p-g-202" d="M330 368 L358 368" data-at="5-7"/>
+        <path class="e" id="p-202-plan" d="M510 356 C546 356 546 190 578 186" data-at="6"/>
+        <path class="e" id="p-202-loop" d="M510 370 L578 370" data-at="7"/>
+        <path class="e flow" id="p-agent-out" d="M840 58 C858 58 858 268 842 268" data-at="8-9"/>
+        <path class="e flow" id="p-plan-out" d="M710 196 L710 238" data-at="9"/>
+        <path class="e dash" id="p-loop-out" d="M710 340 L710 298" data-at="9"/>
+
+        <!-- sources -->
+        <g class="n" data-at="1,8-9">
+          <rect x="20" y="82" width="140" height="56" rx="8"/>
+          <text x="90" y="105" text-anchor="middle" class="t-title">tengu chat</text>
+          <text x="90" y="124" text-anchor="middle" class="t-small">terminal UI</text>
+        </g>
+        <g class="n" data-at="2-3">
+          <rect x="20" y="200" width="140" height="56" rx="8"/>
+          <text x="90" y="223" text-anchor="middle" class="t-title">Telegram</text>
+          <text x="90" y="242" text-anchor="middle" class="t-small">tengu telegram</text>
+        </g>
+        <g class="n" data-at="5">
+          <rect x="20" y="340" width="140" height="56" rx="8"/>
+          <text x="90" y="363" text-anchor="middle" class="t-title">Webhook POST</text>
+          <text x="90" y="382" text-anchor="middle" class="t-small t-mono">/webhooks/:name</text>
+        </g>
+        <!-- gates -->
+        <g class="n guard" data-at="2">
+          <rect x="190" y="200" width="140" height="56" rx="8"/>
+          <text x="260" y="223" text-anchor="middle" class="t-title">Allow-list</text>
+          <text x="260" y="242" text-anchor="middle" class="t-small">else "Unauthorized."</text>
+        </g>
+        <g class="n guard" data-at="5">
+          <rect x="190" y="340" width="140" height="56" rx="8"/>
+          <text x="260" y="363" text-anchor="middle" class="t-title">Auth check</text>
+          <text x="260" y="382" text-anchor="middle" class="t-small">HMAC or header</text>
+        </g>
+        <!-- routing -->
+        <g class="n data" data-at="1,4">
+          <polygon points="435,70 505,110 435,150 365,110"/>
+          <text x="435" y="108" text-anchor="middle" class="t-title" style="font-size:13px">orchestrator?</text>
+          <text x="435" y="124" text-anchor="middle" class="t-small">configured</text>
+        </g>
+        <g class="n data" data-at="3-4">
+          <rect x="360" y="200" width="150" height="56" rx="8"/>
+          <text x="435" y="223" text-anchor="middle" class="t-title">@role routing</text>
+          <text x="435" y="242" text-anchor="middle" class="t-small">reachable agents only</text>
+        </g>
+        <g class="n data" data-at="6-7">
+          <rect x="360" y="340" width="150" height="56" rx="8"/>
+          <text x="435" y="363" text-anchor="middle" class="t-title">202 Accepted</text>
+          <text x="435" y="382" text-anchor="middle" class="t-small">session id minted</text>
+        </g>
+        <!-- targets -->
+        <g class="n hands" data-at="1,3,8">
+          <rect x="580" y="30" width="260" height="56" rx="8"/>
+          <text x="710" y="53" text-anchor="middle" class="t-title">Agent turn</text>
+          <text x="710" y="72" text-anchor="middle" class="t-small">one agent, its tools</text>
+        </g>
+        <g class="n heart" data-at="4,6">
+          <rect x="580" y="140" width="260" height="56" rx="8"/>
+          <text x="710" y="163" text-anchor="middle" class="t-title">Planner + subagents</text>
+          <text x="710" y="182" text-anchor="middle" class="t-small">plan, then run-agent steps</text>
+        </g>
+        <g class="n data" data-at="8-9">
+          <rect x="580" y="240" width="260" height="56" rx="8"/>
+          <text x="710" y="263" text-anchor="middle" class="t-title">What you see</text>
+          <text x="710" y="282" text-anchor="middle" class="t-small">bubble · chunked reply · log</text>
+        </g>
+        <g class="n jev" data-at="7">
+          <rect x="580" y="340" width="260" height="56" rx="8"/>
+          <text x="710" y="363" text-anchor="middle" class="t-title">Decision loop</text>
+          <text x="710" y="382" text-anchor="middle" class="t-small">queued, one event at a time</text>
+        </g>
+
+        <!-- badges -->
+        <g class="pop badge" data-at="1"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">the default = true agent answers</text></g>
+        <g class="pop badge" data-at="2"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">unlisted sender → "Unauthorized."</text></g>
+        <g class="pop badge" data-at="3"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">@researcher: … → crypto_researcher</text></g>
+        <g class="pop badge" data-at="4"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">route_explicit_agents = false (default)</text></g>
+        <g class="pop badge" data-at="5"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">X-Tengu-Signature: sha256=&lt;hex&gt;</text></g>
+        <g class="pop badge" data-at="6"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">202 now; the turn runs after</text></g>
+        <g class="pop badge" data-at="7"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">429: 64 events already waiting</text></g>
+        <g class="pop badge" data-at="8"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">[tool] Http Request GET &lt;url&gt;</text></g>
+        <g class="pop badge" data-at="9"><rect x="130" y="30" width="340" height="22" rx="11"/><text x="300" y="45" text-anchor="middle">the TUI also tails decisions.jsonl</text></g>
+
+        <!-- tokens -->
+        <circle class="tok" r="6" data-path="p-tui-d" data-at="1,4" data-dur="1000"/>
+        <circle class="tok hands" r="6" data-path="p-d-agent" data-at="1" data-delay="1000" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-d-plan" data-at="4" data-delay="1000" data-dur="800"/>
+        <circle class="tok" r="6" data-path="p-tg-g" data-at="2" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-g-r" data-at="3" data-dur="600"/>
+        <circle class="tok hands" r="6" data-path="p-r-agent" data-at="3" data-delay="600" data-dur="1000"/>
+        <circle class="tok" r="6" data-path="p-r-d" data-at="4" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-wh-g" data-at="5" data-dur="700"/>
+        <circle class="tok guard" r="6" data-path="p-g-202" data-at="5-7" data-delay="300" data-dur="700"/>
+        <circle class="tok heart" r="6" data-path="p-202-plan" data-at="6" data-delay="900" data-dur="1100"/>
+        <circle class="tok jev" r="6" data-path="p-202-loop" data-at="7" data-delay="900" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-agent-out" data-at="8-9" data-dur="1200"/>
+        <circle class="tok heart" r="6" data-path="p-plan-out" data-at="9" data-dur="600"/>
+        <circle class="tok jev" r="5" data-path="p-loop-out" data-at="9" data-dur="700" data-delay="300"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu chat</code> opens the terminal UI on the <code>default = true</code> agent. Without <code>[orchestrator]</code>, each message is one turn of that agent with its tools.</li>
+        <li><code>tengu telegram</code> checks every sender against the allow-list. An unlisted sender gets <code>Unauthorized.</code> and nothing else runs.</li>
+        <li><code>@role: text</code> or <code>role: text</code> goes to that agent; a plain message to the default one. Roles and ids match case-insensitively, with <code>-</code> and <code>_</code> alike (<code>@lp-exec:</code> reaches <code>lp-exec</code>). Agents with no <code>description</code> that are not default are unreachable.</li>
+        <li>With <code>[orchestrator]</code>, the default agent's messages go to the planner. An explicit <code>@role:</code> to another agent skips it, unless <code>route_explicit_agents = true</code>.</li>
+        <li>A webhook POST to <code>/webhooks/&lt;name&gt;</code>: unknown name is <code>404</code>; a missing or wrong signature or header is <code>401</code>.</li>
+        <li>A planner endpoint answers <code>202</code> with <code>webhook-&lt;name&gt;-&lt;uuid&gt;</code> and runs one orchestrator turn in the background. Its <code>agent</code> field is only a label.</li>
+        <li>A loop endpoint queues the body as one event for its <code>[decision_loops.*]</code> loop: <code>429</code> past 64 waiting, <code>503</code> while shutting down.</li>
+        <li>A direct turn's tool calls show activity lines: <code>[tool]</code> in the TUI, a log line for Telegram. Plan steps run in child processes and show none. Tool output is always redacted.</li>
+        <li>The TUI shows bubbles, Telegram sends replies in 4000-character chunks, a webhook's answer goes to the log (and Open Brain with <code>postgres_memory</code>).</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-tui">
+  <div class="sec-head">
+    <span class="kicker">The terminal UI</span>
+    <h2 id="s-tui">What a TUI turn looks like</h2>
+    <p>Example values, <code>sandboxes/lping</code> with its planner. Plan bubbles need <code>[orchestrator]</code>; metrics need <code>TENGU_TUI_METRICS=1</code>. A direct turn shows <code>[tool]</code> lines instead.</p>
+  </div>
+  <div class="two">
+    <div class="tui" data-inview aria-label="Example terminal UI transcript">
+      <div class="hdr"><span>LPing</span><span>openrouter/anthropic/claude-sonnet-4-6 · eco</span></div>
+      <div class="b u">what is the SOL price?</div>
+      <div class="b s">orch: plan created (1 step)</div>
+      <div class="b s">orch: ▶ s1 [crypto_researcher]</div>
+      <div class="b s">orch: ✓ s1</div>
+      <div class="b s">orch: plan completed</div>
+      <div class="b s">metrics: tok in/out 4.5k/812 · last subagent (2.1k) · session 5.3k · lping 3.2k</div>
+      <div class="b a">SOL is 148.21 USD (sol_price row, 12 s old).</div>
+    </div>
+    <div class="grid" style="grid-template-columns:minmax(0,1fr)">
+      <div class="card data"><h3><code>TENGU_TUI_METRICS=1</code></h3><p>A one-line token summary after every recorded call. Totals are kept even while the panel is off.</p></div>
+      <div class="card data"><h3><code>TENGU_TUI_RAG_DEBUG=1</code></h3><p>A line per planner registry query with its top three hits. Both flags accept <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code>.</p></div>
+      <div class="card jev"><h3>Decision feed</h3><p>When the config has <code>[decision_loops]</code>, every new line of <code>decisions.jsonl</code> for those loops appears as a bubble, from any process. It polls every 300 ms.</p></div>
+      <div class="card hands"><h3>Slash commands</h3><p><code>/skills</code> <code>/enable</code> <code>/disable</code> <code>/reload</code> <code>/purge</code> <code>/reset</code> <code>/cost</code> <code>/context</code> <code>/engine</code> <code>/eco</code> <code>/standard</code> <code>/precise</code> <code>/theme</code> <code>/help</code>, plus skill commands.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-route">
+  <div class="sec-head">
+    <span class="kicker">Try it: route a Telegram message</span>
+    <h2 id="s-route">Who gets this message?</h2>
+    <p>Agents from <code>sandboxes/lping</code>: <code>lping</code> (default, role <code>lping</code>), <code>crypto_researcher</code> (role <code>researcher</code>, routable), <code>lp_executor</code> (private). The rules are <code>parse_agent_routing</code> and <code>telegram_routes</code>.</p>
+  </div>
+  <div class="widget">
+    <input class="rt-in" id="rt-msg" type="text" value="@researcher: best SOL/USDC pool on Meteora" aria-label="Telegram message" spellcheck="false" autocomplete="off">
+    <div class="rt-presets" role="group" aria-label="Example messages">
+      <button type="button" class="btn">what is the SOL price?</button>
+      <button type="button" class="btn">@researcher: best SOL/USDC pool on Meteora</button>
+      <button type="button" class="btn">researcher: compare DLMM bin steps</button>
+      <button type="button" class="btn">@lping: hello</button>
+      <button type="button" class="btn">@lp_executor: open 1 SOL</button>
+      <button type="button" class="btn">note: buy at 10:30</button>
+      <button type="button" class="btn">/agents</button>
+    </div>
+    <div class="rt-opts">
+      <label><input type="checkbox" id="rt-allowed" checked> sender is on the allow-list</label>
+      <label><input type="checkbox" id="rt-orch" checked> <code>[orchestrator]</code> set (lping sets it)</label>
+      <label><input type="checkbox" id="rt-explicit"> <code>route_explicit_agents = true</code></label>
+    </div>
+    <ol class="trail" id="rt-trail" aria-live="polite"></ol>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-wh">
+  <div class="sec-head">
+    <span class="kicker">Try it: send a webhook</span>
+    <h2 id="s-wh">What the listener answers</h2>
+    <p>The two real endpoints of <code>sandboxes/lping</code>. Status codes and bodies as <code>webhooks.rs</code> writes them; <code>&lt;uuid&gt;</code> is a placeholder.</p>
+  </div>
+  <div class="widget">
+    <div class="two">
+      <div class="wh-ctl">
+        <label for="wh-ep">Endpoint
+          <select id="wh-ep">
+            <option value="helius">helius → loop lp_watch</option>
+            <option value="solana_events" selected>solana_events → planner</option>
+            <option value="helios">helios (a typo)</option>
+          </select>
+        </label>
+        <label for="wh-auth">Request carries
+          <select id="wh-auth">
+            <option value="ok">the right signature / header</option>
+            <option value="missing">no auth header</option>
+            <option value="prefix">a hex signature without sha256=</option>
+            <option value="wrong">a wrong value</option>
+          </select>
+        </label>
+        <label class="tick"><input type="checkbox" id="wh-env" checked> the env var holding the secret is set</label>
+        <label for="wh-q">Events already waiting for the loop: <span class="readout" id="wh-q-out">0</span>
+          <input type="range" id="wh-q" min="0" max="64" value="0">
+        </label>
+        <label class="tick"><input type="checkbox" id="wh-down"> listener is shutting down (drain)</label>
+<pre id="wh-toml" style="font-size:.74rem"></pre>
+      </div>
+      <div class="card data" style="align-content:start">
+        <div class="status ok" id="wh-status" aria-live="polite">202 <small>Accepted</small></div>
+        <pre class="wh-body" id="wh-body"></pre>
+        <p id="wh-note"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-sid">
+  <div class="sec-head">
+    <span class="kicker">Session ids</span>
+    <h2 id="s-sid">One key per conversation</h2>
+    <p>The session id ties planner messages, subagent step summaries and recall together. Each surface mints it once, in its own way.</p>
+  </div>
+  <div class="sid" data-inview>
+    <div><b>tengu chat</b><code>$TENGU_SESSION_ID</code><span>else a fresh UUID, once per process</span></div>
+    <div><b>tengu telegram</b><code>$TENGU_SESSION_ID</code><span>else one UUID per sender: each chat user gets its own planner and session; with the env var, <code>&lt;id&gt;-&lt;sender&gt;</code></span></div>
+    <div><b>webhook, planner</b><code>webhook-&lt;name&gt;-&lt;uuid&gt;</code><span>new for every request</span></div>
+    <div><b>webhook, loop</b><code>webhook-&lt;name&gt;-&lt;uuid&gt;</code><span>the loop's event id; tool call ids become <code>{loop}:{session}:{t}</code></span></div>
+    <div><b>tengu decide</b><code>decide-&lt;loop&gt;-&lt;uuid&gt;</code><span>one per run</span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-cmd">
+  <div class="sec-head">
+    <span class="kicker">Telegram commands</span>
+    <h2 id="s-cmd">What a slash does in Telegram</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip bad">stop</span><span><b>/stop</b>Cancels the running turn: "⏹ Stop requested."</span></li>
+    <li><span class="chip data">list</span><span><b>/agents</b>Reachable agents with role, tool count and [default].</span></li>
+    <li><span class="chip data">reset</span><span><b>/reset · /purge</b>Clear your conversations; purge also wipes vector memory and saved attachments.</span></li>
+    <li><span class="chip hands">skills</span><span><b>/reload</b>Re-scan the skill files and rebuild the tools.</span></li>
+    <li><span class="chip hands">dir</span><span><b>/project &lt;name&gt;</b>A new project folder from <code>[scaffold.project]</code>; conversations reset.</span></li>
+    <li><span class="chip data">lens</span><span><b>/help /eco /standard /precise /cost /context /engine</b>Built-in chat commands.</span></li>
+  </ul>
+  <p class="note warn"><b>Not implemented:</b> <code>[telegram] tool_approvals</code> and <code>approve_only</code> gate nothing; no tool call waits for an approval. The config still loads and logs a warning naming them. <code>/agents</code> also advertises <code>/team</code>, which has no handler.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Telegram fails closed.</b> No <code>[telegram] allowed_users</code> and no <code>TENGU_TELEGRAM_ALLOWED_USERS</code>: <code>tengu telegram</code> refuses to start.</span></li>
+    <li><span><b>Private agents stay private.</b> No <code>description</code> and not default: never routable, never the default, not in <code>/agents</code> or the team block.</span></li>
+    <li><span><b>Webhooks authenticate first.</b> HMAC-SHA256 or an exact <code>Authorization</code> header, compared in constant time, before any work starts.</span></li>
+    <li><span><b>Bad endpoint config fails at start.</b> Both or neither secret, an empty inline secret, or a loop with no <code>[decision_loops]</code> block stops the listener.</span></li>
+    <li><span><b>One owner.</b> <code>tengu webhooks</code> takes the same leases as <code>tengu run</code>; a second process exits 1.</span></li>
+    <li><span><b>Loops stay ordered.</b> One event at a time per loop, at most 64 waiting by default; the rest get <code>429</code>.</span></li>
+    <li><span><b>Redaction on every surface.</b> Tool output passes <code>SanitizedToolExecutor</code>; Telegram replies and the TUI's planner answers are redacted again.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Open each door</h2>
+    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code> and <code>telegram</code>. The secret below is an example.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
+<span class="ln cmd"><span class="p">$ </span>TELEGRAM_BOT_TOKEN=&lt;bot token&gt; TENGU_TELEGRAM_ALLOWED_USERS=&lt;your id&gt; tengu telegram --sandbox lping</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release --features webhooks</span>
+<span class="ln cmd"><span class="p">$ </span>TENGU_LPING_WEBHOOK_SECRET=example-secret target/release/tengu webhooks --sandbox lping</span>
+<span class="ln cmd"><span class="p">$ </span>BODY='{"pool":"example"}'; SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac example-secret | sed 's/^.* //')</span>
+<span class="ln cmd"><span class="p">$ </span>curl -s -X POST localhost:7081/webhooks/solana_events -H "X-Tengu-Signature: sha256=$SIG" -d "$BODY"</span>
+<span class="ln">{"agent":"lping","endpoint":"solana_events","session_id":"webhook-solana_events-<span class="hl">&lt;uuid&gt;</span>","status":"accepted"}</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td>the TUI loop, plan and metrics bubbles, decision feed</td></tr>
+        <tr><td><code>src/adapters/inbound/tui/view.rs</code></td><td>bubbles, <code>[tool]</code> lines, header, themes</td></tr>
+        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>allow-list, routing, per-user state, commands, chunked replies</td></tr>
+        <tr><td><code>src/adapters/inbound/channel.rs</code></td><td><code>@role:</code> parsing, chunking, team activity</td></tr>
+        <tr><td><code>src/adapters/inbound/activity.rs</code></td><td>activity line text per tool</td></tr>
+        <tr><td><code>src/ports/tool_activity.rs</code></td><td>the activity port every surface implements</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns</td></tr>
+        <tr><td><code>src/application/runtime/loops.rs</code></td><td>the loop queue: one at a time, cap, drain</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>resolve_session_id</code>, <code>build_orchestrator</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: Telegram router (lping agents) and webhook simulator */
+(function () {
+  "use strict";
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // telegram_routes over sandboxes/lping: roles then ids, both normalised (lowercase, - to _)
+  var ROUTES = { lping: "lping", researcher: "crypto_researcher", crypto_researcher: "crypto_researcher" };
+  var ROLES = ["lping", "researcher"]; // roles of reachable agents, sorted (the "Available:" list)
+  var DEFAULT = "lping";
+  var msg = document.getElementById("rt-msg"), allowed = document.getElementById("rt-allowed");
+  var orch = document.getElementById("rt-orch"), explicitT = document.getElementById("rt-explicit"), trail = document.getElementById("rt-trail");
+  function norm(s) { return s.trim().toLowerCase().replace(/-/g, "_"); }
+  function parse(text) {
+    var t = text.trim();
+    if (t.charAt(0) === "@") {
+      var rest = t.slice(1), c = rest.indexOf(":");
+      if (c >= 0) {
+        var role = norm(rest.slice(0, c)), m = rest.slice(c + 1).trim();
+        if (role && m) return [role, m];
+      }
+    }
+    var k = t.indexOf(":");
+    if (k >= 0) {
+      var cand = norm(t.slice(0, k)), mm = t.slice(k + 1).trim();
+      if (cand && mm && ROUTES[cand]) return [cand, mm];
+    }
+    return [null, t];
+  }
+  function li(cls, html) { return '<li class="' + cls + '"><span>' + html + "</span></li>"; }
+  function route() {
+    var h = "", text = msg.value;
+    if (!allowed.checked) {
+      h += li("stop", "<b>Not on the allow-list.</b> The bot replies <code>Unauthorized.</code> and stops.");
+      trail.innerHTML = h; return;
+    }
+    h += li("", "<b>Allowed.</b> Sender id is in <code>allowed_users</code> or <code>TENGU_TELEGRAM_ALLOWED_USERS</code>.");
+    if (text.trim().charAt(0) === "/") {
+      h += li("end", "<b>Slash command.</b> Handled by the bot itself, no routing (see the list below).");
+      trail.innerHTML = h; return;
+    }
+    var p = parse(text), role = p[0], body = p[1];
+    var target;
+    if (role) {
+      if (!ROUTES[role]) {
+        h += li("", "<b>Routing key</b> <code>" + esc(role) + "</code> parsed from the message.");
+        h += li("stop", "<b>Reply:</b> <code>Unknown agent role: " + esc(role) + "</code> / <code>Available: " + ROLES.join(", ") + "</code>");
+        trail.innerHTML = h; return;
+      }
+      target = ROUTES[role];
+      h += li("", "<b>Routed</b> by <code>" + esc(role) + "</code> to <code>" + target + "</code>. Text sent: <code>" + esc(body) + "</code>");
+    } else {
+      target = DEFAULT;
+      h += li("", "<b>No routing key.</b> Goes to the default agent <code>lping</code>" + (text.indexOf(":") >= 0 ? " (the text before <code>:</code> is no known role)" : "") + ".");
+    }
+    var explicitRoute = target !== DEFAULT;
+    var viaPlanner = orch.checked && (!explicitRoute || explicitT.checked);
+    if (viaPlanner) h += li("end", "<b>Planner turn.</b> The planner reads the registry and may run plan steps as subagents (<code>crypto_researcher</code> is the routable one).");
+    else h += li("end", "<b>Direct turn</b> of <code>" + target + "</code> with its own tools" + (orch.checked && explicitRoute ? ": an explicit route skips the planner" : "") + ".");
+    trail.innerHTML = h;
+  }
+  msg.addEventListener("input", route);
+  [allowed, orch, explicitT].forEach(function (x) { x.addEventListener("change", route); });
+  Array.prototype.forEach.call(document.querySelectorAll(".rt-presets .btn"), function (b) {
+    b.addEventListener("click", function () { msg.value = b.textContent; route(); });
+  });
+  route();
+
+  /* webhook simulator */
+  var EP = {
+    helius: { loop: "lp_watch", env: "HELIUS_WEBHOOK_AUTH", toml: '[webhooks.endpoints.helius]\nloop = "lp_watch"\nauth_header_env = "HELIUS_WEBHOOK_AUTH"' },
+    solana_events: { agent: "lping", env: "TENGU_LPING_WEBHOOK_SECRET", toml: '[webhooks.endpoints.solana_events]\nagent = "lping"\nsecret_env = "TENGU_LPING_WEBHOOK_SECRET"\ngoal_template = "A Solana on-chain event arrived. …"' }
+  };
+  var ep = document.getElementById("wh-ep"), auth = document.getElementById("wh-auth"), env = document.getElementById("wh-env");
+  var q = document.getElementById("wh-q"), qOut = document.getElementById("wh-q-out"), down = document.getElementById("wh-down");
+  var st = document.getElementById("wh-status"), body = document.getElementById("wh-body"), note = document.getElementById("wh-note"), toml = document.getElementById("wh-toml");
+  var REASON = { 202: "Accepted", 401: "Unauthorized", 404: "Not Found", 429: "Too Many Requests", 500: "Internal Server Error", 503: "Service Unavailable" };
+  function out(code, obj, n) {
+    st.className = "status " + (code === 202 ? "ok" : code === 429 || code === 503 ? "warn" : "bad");
+    st.innerHTML = code + " <small>" + REASON[code] + "</small>";
+    body.textContent = JSON.stringify(obj);
+    note.innerHTML = n;
+  }
+  function wh() {
+    var name = ep.value, e = EP[name];
+    qOut.textContent = q.value;
+    var prefixOpt = auth.querySelector('option[value="prefix"]');
+    prefixOpt.disabled = name === "helius";
+    if (name === "helius" && auth.value === "prefix") auth.value = "wrong";
+    q.disabled = down.disabled = !(e && e.loop);
+    toml.innerHTML = e ? esc(e.toml) : "<span class=\"c\"># no [webhooks.endpoints.helios] block</span>";
+    if (!e) return out(404, { error: "unknown webhook endpoint '" + name + "'" }, "Checked first, before any auth: a typo in the URL is easy to spot.");
+    if (!env.checked) {
+      var m = e.loop ? "auth_header_env points at `" + e.env + "` but that env var is unset or empty in the listener's process"
+        : "secret_env points at `" + e.env + "` but that env var is not set in the listener's process";
+      return out(500, { error: "server misconfiguration: " + m }, "The env var is read on every request, so a rotated secret needs no restart.");
+    }
+    if (auth.value !== "ok") {
+      var r = e.loop
+        ? (auth.value === "missing" ? "missing `Authorization` header" : "Authorization header mismatch")
+        : (auth.value === "missing" ? "missing `X-Tengu-Signature` header" : auth.value === "prefix" ? "`X-Tengu-Signature` must start with `sha256=`" : "HMAC mismatch");
+      return out(401, { error: r }, e.loop ? "Exact <code>Authorization</code> value, compared in constant time (Helius sends it)." : "HMAC-SHA256 of the raw body, hex, after <code>sha256=</code>.");
+    }
+    if (e.loop) {
+      if (down.checked) return out(503, { error: "shutting down — not accepting loop events" }, "New events are refused while running ones drain.");
+      if (+q.value >= 64) return out(429, { error: "decision loop queue full: 64 events already waiting ([runtime] max_queued_per_loop) — event refused, retry later" }, "The refused event is counted as dropped in the loop's stats.");
+      return out(202, { endpoint: name, loop: e.loop, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The JSON body becomes the loop event (a non-JSON body becomes a string). Events run one at a time.");
+    }
+    out(202, { agent: e.agent, endpoint: name, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The planner gets <code>goal_template</code> plus the raw body. The answer goes to the log and, with <code>postgres_memory</code>, to Open Brain.");
+  }
+  [ep, auth, env, down].forEach(function (x) { x.addEventListener("change", wh); });
+  q.addEventListener("input", wh);
+  wh();
+})();
+</script>
+</body>
+</html>

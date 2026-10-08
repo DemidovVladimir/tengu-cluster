@@ -27,7 +27,7 @@
 //! | `privy_off` | `sign_message`, `sign_and_send_transaction` — scopes without wallets (Privy signing off) | both calls refused (`ok = false`) before any env read or request; the answer quotes the refusal (`wallet`). Nothing is ever signed |
 //! | `privy` | `get_wallet_address` (a read) — needs `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID` (env or the repo's `.env`), else skipped | the answer holds the address (`PRIVY_WALLET_ADDRESS` when known); the app secret (registered) nowhere in the child's output |
 //! | `solana_read` | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx` — live, public mainnet RPC + Jupiter lite + Meteora datapi | every tool stored a row; the answer quotes a number of the `sol_price` and the `dlmm_pool` rows (headline or features, within 1e-5: `quotes_near`) |
-//! | `solana_decide` | `lp_snapshot` → `hedge_decide` → `lp_decide` (all knobs, `commit` off: the decisions store nothing) | `lp_snapshot` stored a row; the answer quotes the snapshot's oracle price (`hedge_decide` `price_usd`, `lp_decide` `cycle_price`) |
+//! | `solana_decide` | `lp_swap_plan` + `lp_snapshot` → `hedge_decide` → `lp_decide` (all knobs, `commit` off: the decisions store nothing) | reserve-aware swap plan is callable; `lp_snapshot` stored a row; the answer quotes the snapshot's oracle price (`hedge_decide` `price_usd`, `lp_decide` `cycle_price`) |
 //! | `solana_write` | `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position` (a live position of `LP_OWNER`, else the stale fixture one), `jup_perps_order` — `mode = simulate` only: no signer, no wallet grant | every call ran (`ok`), the answer quotes `simulated`. Nothing is ever signed or sent |
 //! | `agentic_memory` | `agentic_memory` `capture` → `recall` — needs `--features postgres_memory` + `TENGU_MEMORY_DATABASE_URL`, else skipped | the answer holds the captured token |
 //!
@@ -332,7 +332,7 @@ impl Set {
                 "solana_wallet",
                 "solana_tx",
             ],
-            Set::SolanaDecide => &["lp_snapshot", "hedge_decide", "lp_decide"],
+            Set::SolanaDecide => &["lp_swap_plan", "lp_snapshot", "hedge_decide", "lp_decide"],
             Set::SolanaWrite => &[
                 "solana_close_token_accounts",
                 "jupiter_swap",
@@ -600,6 +600,14 @@ impl Set {
                 let knobs = |k: &str| -> Value { serde_json::from_str(k).unwrap() };
                 (
                     vec![
+                        call(
+                            "lp_swap_plan",
+                            json!({"wallet_sol": 0.5, "wallet_usdc": 1000,
+                                   "target_sol": 1, "target_usdc": 100,
+                                   "permanent_minimum_sol": 0.2, "rent_reserve_sol": 0.1,
+                                   "current_price": 100, "slippage_buffer_pct": 0.02,
+                                   "context": "rebalance"}),
+                        ),
                         call("lp_snapshot", json!({"wallet": WALLET, "pool": POOL})),
                         call(
                             "hedge_decide",

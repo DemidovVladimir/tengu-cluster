@@ -46,7 +46,7 @@ use super::gates::{
 };
 use super::hedge::{self, Decision, HedgeInput, LpRegime};
 use super::market::{OraclePrice, PriceSource};
-use super::perps::{CustodyRates, PerpSide, PerpsState, RequestStatus};
+use super::perps::{CustodyRates, PerpSide, PerpsState, RequestStatus, Side};
 use super::wallet::{TokenAmount, WalletInventory};
 use crate::domain::observation::{
     set_bool, set_int, set_num, set_str, ErrorClass, Features, Field, ObsMeta, ObsStatus,
@@ -1537,6 +1537,10 @@ pub(crate) struct HedgeDecision {
     pub input: Option<HedgeInput>,
     pub action: HedgeAction,
     pub trace: GuardTrace,
+    /// The `jup_perps_order` arguments the action maps to
+    /// ([`HedgeDecision::perps_order`]); `None` = no order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<PerpsOrder>,
 }
 
 impl HedgeDecision {
@@ -1560,6 +1564,7 @@ impl HedgeDecision {
                 guard: Guard::StaleInput,
             },
             trace: GuardTrace::default(),
+            order: None,
         }
     }
 }
@@ -1991,8 +1996,134 @@ pub(crate) fn decide_hedge(
 /// timer, as the bot's hedge does (`hedge_decide` then needs no earlier
 /// `lp_decide`). Returns the decision and the next controller state (only
 /// the position observation when a gate fired before the core; the caller
-/// persists it only with `commit = true`).
+/// persists it only with `commit = true`). `order` = the action as
+/// `jup_perps_order` arguments ([`HedgeDecision::perps_order`]).
 pub(crate) fn decide_hedge_in_cycle(
+    snap: &LpSnapshot,
+    snap_meta: &ObsMeta,
+    snap_age_ms: u64,
+    knobs: &HedgeKnobs,
+    state: &LpControllerState,
+    cycle: Option<&LpCycle<'_>>,
+    now_ms: i64,
+) -> (HedgeDecision, LpControllerState) {
+    let (mut d, next) =
+        decide_hedge_core(snap, snap_meta, snap_age_ms, knobs, state, cycle, now_ms);
+    d.order = d.perps_order();
+    (d, next)
+}
+
+/// `jup_perps_order` `action` argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PerpsOrderKind {
+    Increase,
+    Decrease,
+    Close,
+}
+
+/// A hedge action as `jup_perps_order` arguments (`data.order` of
+/// `hedge_decide/1`), so a decision loop binds each field one to one and
+/// no translation lives in TOML. `slippage_bps`, `wallet`, `pool` and
+/// `mode` stay with the caller.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PerpsOrder {
+    pub side: Side,
+    pub action: PerpsOrderKind,
+    /// USD notional added (increase) or removed (decrease); the decision's
+    /// size on a close (the tool ignores it).
+    pub size_usd: f64,
+    /// Increase: collateral in the side's token (SOL for a long, USDC for a
+    /// short). Decrease / close: USD of collateral withdrawn.
+    pub collateral: f64,
+    /// Cap on the side's post-order size. Increase: the decision's cap
+    /// (`view.max_notional_usd`). Decrease / close: at least the side's
+    /// current notional — the tool checks the cap on increases only, and a
+    /// zero auto cap (LP gone) must not block unwinding the hedge.
+    pub max_notional_usd: f64,
+}
+
+impl HedgeDecision {
+    /// The order this decision's action maps to: side and kind from the
+    /// action, `close` for an entire-position decrease. `None` = no order:
+    /// `none` / `blocked`, no view, or no positive, finite cap.
+    pub(crate) fn perps_order(&self) -> Option<PerpsOrder> {
+        let view = self.view.as_ref()?;
+        let current = |side: Side| {
+            self.input.as_ref().map_or(0.0, |i| match side {
+                Side::Long => i.long_notional_usd,
+                Side::Short => i.short_notional_usd,
+            })
+        };
+        let (side, action, size_usd, collateral) = match &self.action {
+            HedgeAction::None { .. } | HedgeAction::Blocked { .. } => return None,
+            HedgeAction::IncreaseLong {
+                size_usd,
+                collateral_tokens,
+                ..
+            } => (
+                Side::Long,
+                PerpsOrderKind::Increase,
+                *size_usd,
+                *collateral_tokens,
+            ),
+            HedgeAction::IncreaseShort {
+                size_usd,
+                collateral_tokens,
+                ..
+            } => (
+                Side::Short,
+                PerpsOrderKind::Increase,
+                *size_usd,
+                *collateral_tokens,
+            ),
+            HedgeAction::DecreaseLong {
+                size_usd,
+                entire_position,
+                withdraw_collateral_usd,
+                ..
+            } => (
+                Side::Long,
+                if *entire_position {
+                    PerpsOrderKind::Close
+                } else {
+                    PerpsOrderKind::Decrease
+                },
+                *size_usd,
+                *withdraw_collateral_usd,
+            ),
+            HedgeAction::DecreaseShort {
+                size_usd,
+                entire_position,
+                withdraw_collateral_usd,
+                ..
+            } => (
+                Side::Short,
+                if *entire_position {
+                    PerpsOrderKind::Close
+                } else {
+                    PerpsOrderKind::Decrease
+                },
+                *size_usd,
+                *withdraw_collateral_usd,
+            ),
+        };
+        let cap = match action {
+            PerpsOrderKind::Increase => view.max_notional_usd,
+            _ => view.max_notional_usd.max(current(side)),
+        };
+        let finite = [size_usd, collateral, cap].iter().all(|x| x.is_finite());
+        (finite && cap > 0.0).then_some(PerpsOrder {
+            side,
+            action,
+            size_usd,
+            collateral,
+            max_notional_usd: cap,
+        })
+    }
+}
+
+fn decide_hedge_core(
     snap: &LpSnapshot,
     snap_meta: &ObsMeta,
     snap_age_ms: u64,
@@ -2013,6 +2144,7 @@ pub(crate) fn decide_hedge_in_cycle(
             reason: String::new(),
         },
         trace: GuardTrace::default(),
+        order: None,
     };
     let blocked = |guard: Guard, reason: String| HedgeAction::Blocked { reason, guard };
     // Seeing (or not seeing) a position is an observation: recorded before
@@ -3594,6 +3726,71 @@ mod tests {
         let o = Observation::of("hedge_decide", &d, NOW, 0, ObsSource::Live);
         assert_eq!(o.key, format!("hedge_decide/1:{WALLET}:{POOL}"));
         assert_eq!(o.features["action"], json!("increase_short"));
+
+        // `data.order` = the action as `jup_perps_order` arguments.
+        let order = PerpsOrder {
+            side: Side::Short,
+            action: PerpsOrderKind::Increase,
+            size_usd: usdc,
+            collateral: usdc,
+            max_notional_usd: v.max_notional_usd,
+        };
+        assert_eq!(d.order.as_ref(), Some(&order));
+        assert_eq!(o.data["order"]["side"], json!("short"));
+        assert_eq!(o.data["order"]["action"], json!("increase"));
+        assert_eq!(o.data["order"]["size_usd"], json!(usdc));
+
+        // Decrease / close: the side's current notional keeps the cap > 0
+        // when the auto cap is gone (LP closed) — unwinding never blocks.
+        let mut unwind = d.clone();
+        unwind.view.as_mut().unwrap().max_notional_usd = 0.0;
+        unwind.input.as_mut().unwrap().short_notional_usd = 140.0;
+        unwind.input.as_mut().unwrap().long_notional_usd = 30.0;
+        unwind.action = HedgeAction::DecreaseShort {
+            size_usd: 140.0,
+            entire_position: true,
+            withdraw_collateral_usd: 45.0,
+            adjust_sol: 1.2,
+        };
+        let close = unwind.perps_order().unwrap();
+        assert_eq!(
+            (
+                close.side,
+                close.action,
+                close.collateral,
+                close.max_notional_usd
+            ),
+            (Side::Short, PerpsOrderKind::Close, 45.0, 140.0)
+        );
+        unwind.action = HedgeAction::DecreaseLong {
+            size_usd: 20.0,
+            entire_position: false,
+            withdraw_collateral_usd: 5.0,
+            adjust_sol: -0.2,
+        };
+        let dec = unwind.perps_order().unwrap();
+        assert_eq!(
+            (dec.side, dec.action),
+            (Side::Long, PerpsOrderKind::Decrease)
+        );
+        // A decrease with nothing open on that side is no order.
+        unwind.input.as_mut().unwrap().long_notional_usd = 0.0;
+        assert_eq!(unwind.perps_order(), None);
+        // An increase needs a positive cap of its own.
+        unwind.action = d.action.clone();
+        assert_eq!(unwind.perps_order(), None);
+        // No action, no order.
+        unwind.action = HedgeAction::None {
+            reason: "in band".into(),
+        };
+        assert_eq!(unwind.perps_order(), None);
+        let blocked = HedgeDecision::without_snapshot(WALLET, POOL, &d.knobs, "no row");
+        assert_eq!(blocked.order, None);
+        let o = Observation::of("hedge_decide", &blocked, NOW, 0, ObsSource::Live);
+        assert!(
+            o.data.get("order").is_none(),
+            "no order key without an order"
+        );
     }
 
     #[test]

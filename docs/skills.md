@@ -8,14 +8,11 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 
 | Skill | Kind | Purpose | Loaded by |
 |---|---|---|---|
-| `aura-orchestrator` | documentation (`env_vars`) | End-to-end DeSci pipeline: POI registration, IP-NFT mint, Molecule auth, project creation, file upload (public or encrypted), announcement | `aura` → agent `aura` |
-| `molecule-x402` | documentation (`env_vars`) | Paid Molecule Labs mutations via x402 (USDC on Base): project, uploads, announcements, ownership | `aura` → `aura` |
-| `beach-science` | API reference (`homepage`) | Beach.science, a science social platform for AI agents: post hypotheses, discuss research | `aura` → `aura` |
-| `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) | Privy agentic wallets: create / manage wallets, policies, transactions | `aura` → `aura` |
-| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | `aura` → `learning-agent` |
+| `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) | Privy agentic wallets: create / manage wallets, policies, transactions | no sandbox lists it |
+| `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | no sandbox lists it |
 | `telegram-rag-ingest` | documentation | Resources shared in Telegram (attachments, URLs, text) → searchable vector memory; answer from it later (`http_request` → `write_file` → `persistent_store`) | `storage-test` → `storage` |
 | `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab` → `xl_architect` |
-| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`aura`, `lping`, `xmarket`) — read by the planner from the cwd, not through `skill_packages` |
+| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping`, `xmarket`) — read by the planner from the cwd, not through `skill_packages` |
 | `skill-eval` | documentation | Points to `tengu eval` / `tengu skill metrics` / `tengu skill evolve` | none |
 | `german-teacher` · `spanish-teacher` | documentation, learner-facing (`resources/`, `evals/prompts.yaml`) | Teacher-seeded skills (`tengu skill seed`), `editable_by_learner: true`; read their materials with `skill_resource` | none |
 | `orchestration-e2e` | no `SKILL.md` — `evals/` only | 9 eval rows + an orchestrated eval config (`tengu eval orchestration-e2e`) | `tengu eval` |
@@ -131,7 +128,7 @@ Writers refuse agent / CLI state paths (`.tengu/`, `.claude/`, `skills/` via `wr
 | `tengu skill install <source> [--tier T] [--strict] [--yes]` | Quarantine → scan → validate → install from URL / git / local path (default tier `managed`; `--strict` refuses caution / dangerous verdicts) |
 | `tengu skill seed <name> [<resources_dir>] [--tier T] [--description] [--learner-facing] [--yes]` | Teacher onboarding: SKILL.md template + `resources/` folder |
 
-Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); `sandboxes/aura/config.toml` ships one — `docs/configuration.md` § Skill lifecycle.
+Evolve needs `[skill_lifecycle]` (`improver_agent`) + that agent's block in the active config (`--sandbox <name>`, else `~/.tengu/config.toml`); no sandbox ships one — commented `[skill_lifecycle]` sample in `config.example.toml`, `docs/configuration.md` § Skill lifecycle.
 
 ## Example: shell skill
 

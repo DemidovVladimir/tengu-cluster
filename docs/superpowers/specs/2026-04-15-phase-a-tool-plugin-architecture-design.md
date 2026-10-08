@@ -507,7 +507,7 @@ max_concurrent = 8
 
 [[plugins]]
 name = "skill"
-packages = ["x402", "desci"]
+packages = ["xlab-research", "telegram-rag-ingest"]
 ```
 
 The `skill_packages`, `workspace_tools`, and per-executor config options that currently sit on `AgentConfig` merge into these plugin entries. `config.rs` shrinks meaningfully as a side effect (not counted in Phase A's ~−2 400 net LOC estimate, since some of that work bleeds into Phase C).

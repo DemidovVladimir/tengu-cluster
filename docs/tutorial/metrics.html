@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Metrics and audit trails · Tengu</title>
+<meta name="description" content="One MetricsRecord per model call: the log line, the global sink, the TUI panel and the IPC path from subagents; plus where each JSONL audit trail lives.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: aggregator simulator, layer bars, trail cards */
+  .adders { display: flex; flex-wrap: wrap; gap: 6px; }
+  .adders .btn b { font-family: var(--font-mono); font-weight: 500; }
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: .86rem; color: var(--muted); }
+  .pane { border: 1px solid var(--line); border-radius: 8px; background: var(--sunk); padding: 10px; display: grid; gap: 6px; min-height: 120px; align-content: start; }
+  .bubble { font-family: var(--font-mono); font-size: .76rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--data); border-radius: 6px; padding: 5px 8px; overflow-wrap: anywhere; animation: pop .3s ease both; }
+  .bubble.you { border-left-color: var(--accent); font-family: var(--font-body); font-size: .84rem; }
+  .bubble.off { border-left-color: var(--faint); color: var(--faint); font-style: italic; font-family: var(--font-body); }
+  @keyframes pop { from { transform: translateY(4px); opacity: 0 } to { transform: none; opacity: 1 } }
+  .roll { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  .roll th, .roll td { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; }
+  .roll th:first-child, .roll td:first-child { text-align: left; }
+  .roll td:first-child { font-family: var(--font-mono); font-size: .78rem; overflow-wrap: anywhere; }
+  .roll tr.top td { color: var(--accent); font-weight: 600; }
+  .lay .bar { grid-template-columns: minmax(96px, 130px) minmax(0, 1fr) 64px; }
+  .lay .fill { background: var(--accent); }
+  .lay .bar.zero .lbl { color: var(--faint); }
+  .lay h3 { font-family: var(--font-mono); font-size: .9rem; margin-bottom: 4px; }
+  .grid.trails { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); }
+  .trails .card h3 { font-family: var(--font-mono); font-size: .86rem; overflow-wrap: anywhere; }
+  .trails .card p { font-size: .86rem; }
+  .trails .fields { font-family: var(--font-mono); font-size: .72rem; color: var(--faint); overflow-wrap: anywhere; }
+  .fieldtbl td:first-child { font-family: var(--font-mono); }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · observability</div>
+  <h1>Metrics and audit trails</h1>
+  <p class="lede">Every planner call, subagent turn, embedding, wiki compile and Jev decision leaves one record: always a log line, a TUI line on request. Network calls, decisions and risk verdicts also leave JSONL lines on disk.</p>
+  <ul class="facts">
+    <li><b>5</b> record kinds</li>
+    <li>log line at <b>info</b>, always</li>
+    <li>TUI panel <b>off</b> by default</li>
+    <li>sink holds <b>256</b> records</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> LLM calls</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> embeddings</li>
+    <li><span class="chip jev"><span class="k">決</span> Jev</span> typed decisions</li>
+    <li><span class="chip data">data</span> logs, sink, IPC</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One record per call</span>
+    <h2 id="s-flow">From a model call to the TUI</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 420" role="img" aria-labelledby="mt-t">
+        <title id="mt-t">Planner calls, run-agent children, the embedder, the wiki compiler and Jev decisions each call record(). record writes a log line and, when installed, sends to the global sink; a bridge forwards records to the orchestrator bus, where the TUI aggregator folds them into a status line. Child records travel back over IPC and the parent runner re-emits them.</title>
+        <path class="e" id="p-p1" d="M192 45 C470 45 510 60 510 148" data-at="1"/>
+        <path class="e" id="p-ch-r" d="M192 128 L228 128" data-at="4"/>
+        <path class="e" id="p-r-rec" d="M392 128 C415 128 415 175 438 175" data-at="4"/>
+        <path class="e" id="p-p3" d="M192 191 C300 191 340 195 438 195" data-at="5"/>
+        <path class="e" id="p-p4" d="M192 261 C320 261 360 215 438 215" data-at="5"/>
+        <path class="e" id="p-p5" d="M192 331 C330 331 370 235 438 235" data-at="5"/>
+        <path class="e" id="p-rec-log" d="M582 180 C600 180 600 48 618 48" data-at="2"/>
+        <path class="e" id="p-rec-sink" d="M582 205 C600 205 600 158 618 158" data-at="6"/>
+        <path class="e" id="p-sink-bus" d="M730 186 L730 238" data-at="7"/>
+        <path class="e" id="p-bus-tui" d="M730 296 L730 348" data-at="8"/>
+
+        <g class="n heart" data-at="1">
+          <rect x="20" y="20" width="172" height="50" rx="8"/>
+          <text x="106" y="41" text-anchor="middle" class="t-title">Planner call</text>
+          <text x="106" y="59" text-anchor="middle" class="t-small">planner · with layers</text>
+        </g>
+        <g class="n heart" data-at="3-4">
+          <rect x="20" y="96" width="172" height="58" rx="8"/>
+          <text x="106" y="119" text-anchor="middle" class="t-title">run-agent child</text>
+          <text x="106" y="138" text-anchor="middle" class="t-small">subagent · per turn</text>
+        </g>
+        <g class="n brain" data-at="5">
+          <rect x="20" y="166" width="172" height="50" rx="8"/>
+          <text x="106" y="187" text-anchor="middle" class="t-title">Embedder</text>
+          <text x="106" y="205" text-anchor="middle" class="t-small">embedding</text>
+        </g>
+        <g class="n heart" data-at="5">
+          <rect x="20" y="236" width="172" height="50" rx="8"/>
+          <text x="106" y="257" text-anchor="middle" class="t-title">Wiki compiler</text>
+          <text x="106" y="275" text-anchor="middle" class="t-small">wiki_compiler</text>
+        </g>
+        <g class="n jev" data-at="5">
+          <rect x="20" y="306" width="172" height="50" rx="8"/>
+          <text x="106" y="327" text-anchor="middle" class="t-title">Jev decision</text>
+          <text x="106" y="345" text-anchor="middle" class="t-small">decision · agent = loop</text>
+        </g>
+        <g class="n data" data-at="4">
+          <rect x="230" y="100" width="160" height="56" rx="8"/>
+          <text x="310" y="122" text-anchor="middle" class="t-title">SubprocessRunner</text>
+          <text x="310" y="141" text-anchor="middle" class="t-small">re-emits IPC records</text>
+        </g>
+        <g class="n" data-at="1-2,4-6">
+          <rect x="440" y="150" width="140" height="100" rx="10"/>
+          <text x="510" y="182" text-anchor="middle" class="t-title t-mono">record()</text>
+          <text x="510" y="204" text-anchor="middle" class="t-small">never errors</text>
+          <text x="510" y="220" text-anchor="middle" class="t-small">never waits</text>
+        </g>
+        <g class="n data" data-at="2-3">
+          <rect x="620" y="20" width="220" height="56" rx="8"/>
+          <text x="730" y="43" text-anchor="middle" class="t-title">Log line</text>
+          <text x="730" y="62" text-anchor="middle" class="t-small">info "metrics" · tengu.log</text>
+        </g>
+        <g class="n data" data-at="6-7">
+          <rect x="620" y="130" width="220" height="56" rx="8"/>
+          <text x="730" y="153" text-anchor="middle" class="t-title">Global sink</text>
+          <text x="730" y="172" text-anchor="middle" class="t-small">broadcast, 256 slots</text>
+        </g>
+        <g class="n" data-at="7-8">
+          <rect x="620" y="240" width="220" height="56" rx="8"/>
+          <text x="730" y="263" text-anchor="middle" class="t-title">Orchestrator bus</text>
+          <text x="730" y="282" text-anchor="middle" class="t-small">MetricsRecorded event</text>
+        </g>
+        <g class="n brain" data-at="8">
+          <rect x="620" y="350" width="220" height="56" rx="8"/>
+          <text x="730" y="373" text-anchor="middle" class="t-title">TUI aggregator</text>
+          <text x="730" y="392" text-anchor="middle" class="t-small">TENGU_TUI_METRICS=1 shows it</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">a failed call records nothing</text></g>
+        <g class="pop badge" data-at="2"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">layer sizes: debug level only</text></g>
+        <g class="pop badge" data-at="3"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">0 tokens if the engine sends no usage</text></g>
+        <g class="pop badge" data-at="4"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">crash or timeout: the records are lost</text></g>
+        <g class="pop badge" data-at="5"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">embeddings: completion tokens 0</text></g>
+        <g class="pop badge" data-at="6"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">first install wins, later ones reuse it</text></g>
+        <g class="pop badge" data-at="7"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">a lagging reader skips ahead</text></g>
+        <g class="pop badge" data-at="8"><rect x="230" y="380" width="360" height="22" rx="11"/><text x="410" y="395" text-anchor="middle">totals count with the panel off too</text></g>
+
+        <circle class="tok heart" r="6" data-path="p-p1" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-rec-log" data-at="2"/>
+        <circle class="tok heart" r="6" data-path="p-ch-r" data-at="4" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-r-rec" data-at="4" data-delay="700"/>
+        <circle class="tok brain" r="6" data-path="p-p3" data-at="5"/>
+        <circle class="tok heart" r="6" data-path="p-p4" data-at="5" data-delay="300"/>
+        <circle class="tok jev" r="6" data-path="p-p5" data-at="5" data-delay="600"/>
+        <circle class="tok" r="6" data-path="p-rec-sink" data-at="6"/>
+        <circle class="tok" r="6" data-path="p-sink-bus" data-at="7"/>
+        <circle class="tok brain" r="6" data-path="p-bus-tui" data-at="8"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A planner call returns. One record: kind <code>planner</code>, agent <code>planner/&lt;agent&gt;</code> (<code>replanner/</code> on replan), the engine's token counts and the prompt's layers.</li>
+        <li><code>record()</code> always writes one info line, message <code>metrics</code>: kind, agent, model, tokens, chars, latency, step and session. Layer sizes go to debug.</li>
+        <li>A <code>run-agent</code> child records one per engine turn, with its <code>step_id</code>, and logs that line in its own process.</li>
+        <li>The records ride back in <code>AgentIpcOutput.metrics</code>. The parent puts each one on the sink, after a success and after a failure; its log line already came with the child's log.</li>
+        <li>Embedding calls (agent <code>embedder</code>), the wiki compiler and Jev decisions (agent = the loop's name) report the same way.</li>
+        <li><code>build_orchestrator</code> installs one global sink: a broadcast channel with 256 slots. Without an orchestrator there is no sink, only the log line.</li>
+        <li>A bridge task copies every record onto the orchestrator bus as <code>OrchestratorEvent::MetricsRecorded</code>. Eval runs read it there too.</li>
+        <li>The TUI folds every record into <code>AggregatorState</code>, panel on or off. With <code>TENGU_TUI_METRICS=1</code> it adds a <code>metrics:</code> System bubble after each call.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-agg">
+  <div class="sec-head">
+    <span class="kicker">Try it: feed the aggregator</span>
+    <h2 id="s-agg">The status line the TUI prints</h2>
+    <p>Each button sends one example record. The line is built by the same rules as <code>format_status_line</code>: k and M rounding, last call, session total, the agent with the most tokens.</p>
+  </div>
+  <div class="widget">
+    <div class="adders" aria-label="Send a record">
+      <button type="button" class="btn" data-k="planner">+ <b>planner</b> call</button>
+      <button type="button" class="btn" data-k="subagent">+ <b>subagent</b> turn</button>
+      <button type="button" class="btn" data-k="embedding">+ <b>embedding</b></button>
+      <button type="button" class="btn" data-k="wiki_compiler">+ <b>wiki_compiler</b></button>
+      <button type="button" class="btn" data-k="decision">+ <b>decision</b></button>
+      <button type="button" class="btn" id="agg-reset">Reset</button>
+    </div>
+    <div class="ctrls">
+      <label><input type="checkbox" id="agg-on" checked> <code>TENGU_TUI_METRICS=1</code></label>
+    </div>
+    <div class="grid two">
+      <div class="pane" id="agg-pane" aria-live="polite" aria-label="TUI chat pane"></div>
+      <div class="table-wrap"><table class="roll" id="agg-roll"></table></div>
+    </div>
+    <p class="note">Example values. A planner record is agent <code>planner/lping</code>; a subagent record carries the agent name (<code>crypto_researcher</code>); a decision record the loop name (<code>lp_exec</code>).</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-who">
+  <div class="sec-head">
+    <span class="kicker">Covered and not covered</span>
+    <h2 id="s-who">Which calls leave a record</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">yes</span><span><b>planner plan / replan</b>After the engine answers. Layers included.</span></li>
+    <li><span class="chip ok">yes</span><span><b>subagent engine turn</b>One per turn of the <code>run-agent</code> loop: logged by the child, sent on by the parent without a second line.</span></li>
+    <li><span class="chip ok">yes</span><span><b>embedding call</b>Tokens from the response's <code>usage</code>, else chars / 4.</span></li>
+    <li><span class="chip ok">yes</span><span><b>wiki compiler · Jev decision</b>One per successful call.</span></li>
+    <li><span class="chip bad">no</span><span><b>a failed call</b>Planner, embedding or decision errors return before recording. A failed decision still gets an audit line.</span></li>
+    <li><span class="chip bad">no</span><span><b>in-process chat turn</b>TUI, Telegram or webhook agent with no plan. Its tokens show in <code>/cost</code> instead.</span></li>
+    <li><span class="chip bad">no</span><span><b>a child that dies</b>A crash or step timeout returns no IPC payload, so its records never reach the parent.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-layers">
+  <div class="sec-head">
+    <span class="kicker">Where the planner's prompt went</span>
+    <h2 id="s-layers">Per-layer attribution</h2>
+    <p>Planner records list each prompt block's chars and bytes, measured before the call. Example sizes; an off lane is still listed, at 0.</p>
+  </div>
+  <div class="grid two lay">
+    <div class="widget">
+      <h3>plan()</h3>
+      <div class="bars" id="bars-plan"></div>
+    </div>
+    <div class="widget">
+      <h3>replan()</h3>
+      <div class="bars" id="bars-replan"></div>
+    </div>
+  </div>
+  <p class="note"><b>Approximate.</b> Only text the planner builds is measured. Engine framing (tool schemas, message wrappers, thinking blocks) is not, so compare layers with each other, not with <code>prompt_tokens</code>.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-shape">
+  <div class="sec-head">
+    <span class="kicker">The record itself</span>
+    <h2 id="s-shape">Three views of one record</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-json" aria-selected="true">MetricsRecord</button>
+      <button type="button" aria-controls="tab-ipc">IPC payload</button>
+      <button type="button" aria-controls="tab-log">Log line fields</button>
+    </div>
+    <div class="tabpanel" id="tab-json"><pre><span class="c"># one subagent turn, example values (serde field order)</span>
+{
+  <span class="k">"ts_unix"</span>: <span class="c">&lt;unix seconds&gt;</span>,
+  <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,
+  <span class="k">"kind"</span>: <span class="s">"subagent"</span>,
+  <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>,
+  <span class="k">"model"</span>: <span class="s">"anthropic/claude-sonnet-4-6"</span>,
+  <span class="k">"prompt_tokens"</span>: <span class="n">6250</span>, <span class="k">"completion_tokens"</span>: <span class="n">430</span>, <span class="k">"total_tokens"</span>: <span class="n">6680</span>,
+  <span class="k">"prompt_chars"</span>: <span class="n">24800</span>, <span class="k">"prompt_bytes"</span>: <span class="n">25120</span>, <span class="k">"response_chars"</span>: <span class="n">1350</span>,
+  <span class="k">"latency_ms"</span>: <span class="n">8400</span>,
+  <span class="k">"step_id"</span>: <span class="s">"s1"</span>
+}
+<span class="c"># "layers" appears only when non-empty (planner); "step_id" only for subagents</span></pre></div>
+    <div class="tabpanel" id="tab-ipc" hidden><pre><span class="c"># stdout of tengu run-agent, one line (example, shortened to the fields that matter here)</span>
+{ <span class="k">"status"</span>: <span class="s">"ok"</span>, <span class="k">"output"</span>: <span class="s">"&lt;reply&gt;"</span>, <span class="k">"summary"</span>: <span class="s">"&lt;compress_and_store text&gt;"</span>,
+  <span class="k">"metrics"</span>: [ <span class="c">&lt;one MetricsRecord per engine turn&gt;</span> ],
+  <span class="k">"tools"</span>: [ { <span class="k">"name"</span>: <span class="s">"read_file"</span>, <span class="k">"ok"</span>: <span class="n">true</span> } ] }
+
+<span class="c"># "status": "failed" carries "error" + "output" + the same "metrics"
+# an older child without "metrics" still parses: the field defaults to []</span></pre></div>
+    <div class="tabpanel" id="tab-log" hidden>
+      <div class="table-wrap" style="border:0;border-radius:0">
+        <table class="fieldtbl">
+          <thead><tr><th>Field</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>message</td><td><code>metrics</code> at info; each layer as <code>metrics.layer</code> at debug</td></tr>
+            <tr><td>kind · agent · model</td><td>planner · subagent · embedding · wiki_compiler · decision</td></tr>
+            <tr><td>prompt_tokens · completion_tokens · total_tokens</td><td>from the engine, else 0 (embeddings and the wiki compiler: chars / 4)</td></tr>
+            <tr><td>prompt_chars · response_chars · latency_ms</td><td>measured locally</td></tr>
+            <tr><td>layer_count · step_id · session_id</td><td>embeddings and the wiki compiler use <code>TENGU_SESSION_ID</code>, else <code>-</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-trails">
+  <div class="sec-head">
+    <span class="kicker">On disk</span>
+    <h2 id="s-trails">Where each trail lives</h2>
+    <p>Paths assume the default <code>TENGU_HOME</code>, <code>~/.tengu</code>. Every JSONL line is appended whole.</p>
+  </div>
+  <div class="grid trails">
+    <div class="card data"><h3>~/.tengu/logs/tengu.log</h3><p>All tracing, metrics lines included. TUI: file only. Telegram, webhooks, <code>tengu run</code>: file + stderr.</p><span class="fields">default filter tengu=info</span></div>
+    <div class="card guard"><h3>~/.tengu/logs/egress.jsonl</h3><p>Every <code>http_request</code> hop and network-looking shell command, allowed or denied. <a href="egress.html">Egress</a>.</p><span class="fields">ts pid session agent call_id via proxy verdict</span></div>
+    <div class="card jev"><h3>~/.tengu/logs/decisions.jsonl</h3><p>One line per Jev decisions call, failures included. <a href="decision-loop.html">Decision loop</a>.</p><span class="fields">ts_ms loop sandbox session_id t call_id model act_at latency_ms answers usage result args ok output obs trigger</span></div>
+    <div class="card guard"><h3>~/.tengu/logs/risk.jsonl</h3><p>Every <code>[risk]</code> verdict, allow or deny, after its ledger commit. <a href="paper-desk.html">Paper desk</a>.</p><span class="fields">ts_ms decision_id account call_id session_id tool client_order_id instrument verdict rule</span></div>
+    <div class="card jev"><h3>~/.tengu/logs/maps/&lt;sha256&gt;.json</h3><p>Each accepted execution map, canonical JSON. Its run's audit lines carry <code>trigger = map:&lt;sha256&gt;</code>.</p><span class="fields">tengu decide --map</span></div>
+    <div class="card hands"><h3>&lt;workspace&gt;/skills/.audit.jsonl</h3><p>Skill install, remove and export, with the verdict and sha256.</p><span class="fields">ts op name verdict source sha256</span></div>
+    <div class="card data"><h3>&lt;state dir&gt;/backtests/holdout-reads.jsonl</h3><p>Each counted holdout read of the xlab <code>backtest</code> tool.</p><span class="fields">ts_ms time via run_id spec_sha256 strategy split call_id</span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Metrics never gate work.</b> <code>record()</code> returns nothing and cannot fail; a send with no subscriber is ignored.</span></li>
+    <li><span><b>One sink per process.</b> The first install wins; every later <code>build_orchestrator</code> reuses it.</span></li>
+    <li><span><b>Both outcomes report.</b> The parent re-emits a child's records after <code>ok</code> and after <code>failed</code>.</span></li>
+    <li><span><b>Old children still parse.</b> A payload without <code>metrics</code> reads as an empty list.</span></li>
+    <li><span><b>True totals.</b> The TUI aggregator absorbs every record even with the panel off, so turning it on shows real numbers.</span></li>
+    <li><span><b>Slow readers never block.</b> A lagging subscriber skips the records it missed, with a warning.</span></li>
+    <li><span><b>Lines never interleave.</b> Decision and risk lines are one <code>write_all</code> each on an append-only file; egress lines too.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Watch the numbers</h2>
+    <p><code>lping</code> has a planner, so it installs the sink. The bubble below is an example.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tail -f ~/.tengu/logs/tengu.log | rg --line-buffered metrics</span>
+<span class="ln o">  # in another terminal: one line per planner call, subagent turn, embedding</span>
+<span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
+<span class="ln o">  <span class="hl">metrics: tok in/out 4.2k/180 · last planner (4.4k) · session 4.4k · planner/lping 4.4k</span></span>
+<span class="ln o">  /cost         # in-process chat turns: session input / output tokens</span>
+<span class="ln cmd"><span class="p">$ </span>tail -n 1 ~/.tengu/logs/decisions.jsonl</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/metrics.rs</code></td><td><code>MetricsRecord</code>, kinds, layers, <code>AggregatorState</code>, the status line</td></tr>
+        <tr><td><code>src/application/metrics.rs</code></td><td>the global sink, <code>record()</code>, the log line</td></tr>
+        <tr><td><code>src/domain/usage.rs</code></td><td>chat-turn token totals behind <code>/cost</code></td></tr>
+        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td>planner records and their layers</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>one record per child engine turn</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td><code>AgentIpcOutput.metrics</code>, re-emit</td></tr>
+        <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>embedding records</td></tr>
+        <tr><td><code>src/application/decision_loop/mod.rs</code></td><td>decision records, <code>decisions.jsonl</code> lines</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>sink install, bus bridge</td></tr>
+        <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td><code>TENGU_TUI_METRICS</code> panel</td></tr>
+        <tr><td><code>src/adapters/outbound/egress.rs</code></td><td><code>egress.jsonl</code></td></tr>
+        <tr><td><code>src/adapters/outbound/paper_store.rs</code></td><td><code>risk.jsonl</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: aggregator simulator (domain/metrics.rs), layer bars */
+(function () {
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  /* --- AggregatorState::absorb + format_status_line + fmt_tokens --- */
+  var SAMPLES = {
+    planner: { kind: "planner", agent: "planner/lping", p: 4210, c: 180 },
+    subagent: { kind: "subagent", agent: "crypto_researcher", p: 6250, c: 430 },
+    embedding: { kind: "embedding", agent: "embedder", p: 12, c: 0 },
+    wiki_compiler: { kind: "wiki_compiler", agent: "wiki_compiler", p: 3120, c: 910 },
+    decision: { kind: "decision", agent: "lp_exec", p: 880, c: 35 }
+  };
+  function fmt(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+    return String(n);
+  }
+  var st, log;
+  function reset() { st = { last: null, overall: { n: 0, p: 0, c: 0, t: 0 }, byAgent: {}, byKind: {} }; log = []; }
+  function roll(map, key, r) {
+    var x = map[key] || (map[key] = { n: 0, p: 0, c: 0, t: 0 });
+    x.n += 1; x.p += r.p; x.c += r.c; x.t += r.p + r.c;
+  }
+  function topAgent() {
+    var best = null;
+    Object.keys(st.byAgent).forEach(function (a) {
+      var t = st.byAgent[a].t;
+      if (t > 0 && (!best || t >= st.byAgent[best].t)) best = a;
+    });
+    return best;
+  }
+  function line() {
+    if (!st.last) return null;
+    var top = topAgent();
+    return "tok in/out " + fmt(st.overall.p) + "/" + fmt(st.overall.c) + " · last " + st.last.kind + " (" + fmt(st.last.p + st.last.c) + ") · session " + fmt(st.overall.t) + (top ? " · " + top + " " + fmt(st.byAgent[top].t) : "");
+  }
+  var pane = document.getElementById("agg-pane"), tbl = document.getElementById("agg-roll"), on = document.getElementById("agg-on");
+  function render() {
+    if (!log.length) {
+      pane.innerHTML = '<div class="bubble you">Send a record with the buttons above.</div>';
+    } else {
+      pane.innerHTML = log.slice(-5).map(function (b) {
+        return b.on ? '<div class="bubble">metrics: ' + esc(b.text) + "</div>" : '<div class="bubble off">(' + esc(b.kind) + " absorbed, no bubble: panel off)</div>";
+      }).join("");
+    }
+    var top = topAgent();
+    var rows = Object.keys(st.byAgent).map(function (a) {
+      var x = st.byAgent[a];
+      return "<tr" + (a === top ? ' class="top"' : "") + "><td>" + esc(a) + "</td><td>" + x.n + "</td><td>" + fmt(x.p) + "</td><td>" + fmt(x.c) + "</td><td>" + fmt(x.t) + "</td></tr>";
+    });
+    tbl.innerHTML = "<thead><tr><th>agent</th><th>calls</th><th>in</th><th>out</th><th>total</th></tr></thead><tbody>" +
+      (rows.join("") || '<tr><td colspan="5">no records yet</td></tr>') +
+      (st.overall.n ? "<tr><td><b>overall</b></td><td>" + st.overall.n + "</td><td>" + fmt(st.overall.p) + "</td><td>" + fmt(st.overall.c) + "</td><td>" + fmt(st.overall.t) + "</td></tr>" : "") + "</tbody>";
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("[data-k]"), function (b) {
+    b.addEventListener("click", function () {
+      var r = SAMPLES[b.getAttribute("data-k")];
+      roll(st.byAgent, r.agent, r); roll(st.byKind, r.kind, r);
+      st.overall.n += 1; st.overall.p += r.p; st.overall.c += r.c; st.overall.t += r.p + r.c;
+      st.last = r;
+      log.push({ on: on.checked, text: line(), kind: r.kind });
+      render();
+    });
+  });
+  document.getElementById("agg-reset").addEventListener("click", function () { reset(); render(); });
+  reset();
+  /* start with a planner call and one subagent turn, as after a one-step plan */
+  ["planner", "subagent"].forEach(function (k) { document.querySelector('[data-k="' + k + '"]').click(); });
+
+  /* --- layer bars: names from planner.rs plan() / replan(); sizes are examples --- */
+  var PLAN = [["system", 6200], ["roster", 9800], ["cross_session", 0], ["history", 640], ["session_recall", 0], ["user_message", 64]];
+  var REPLAN = [["system", 6200], ["roster", 9800], ["cross_session", 0], ["history", 640], ["recall", 1500], ["failure", 900], ["user_message", 64]];
+  function bars(id, list) {
+    var max = 9800, el = document.getElementById(id);
+    el.innerHTML = list.map(function (l) {
+      var w = l[1] ? Math.max(1, Math.round(l[1] / max * 100)) : 0;
+      return '<div class="bar' + (l[1] ? "" : " zero") + '"><span class="lbl">' + l[0] + '</span><span class="track"><span class="fill" style="--w:' + w + '%"></span></span><span class="val">' + (l[1] >= 1000 ? (l[1] / 1000).toFixed(1) + "k" : l[1]) + "</span></div>";
+    }).join("");
+  }
+  bars("bars-plan", PLAN);
+  bars("bars-replan", REPLAN);
+})();
+</script>
+</body>
+</html>

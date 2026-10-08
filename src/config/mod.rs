@@ -5,6 +5,7 @@
 pub(crate) mod backtest;
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
+pub(crate) mod execution_map;
 pub(crate) mod feeds;
 pub(crate) mod hardening;
 pub(crate) mod lineage;
@@ -804,7 +805,7 @@ pub struct WebhookEndpointConfig {
     pub secret: Option<String>,
     /// Prefix prepended to the synthesized user message that the
     /// orchestrator receives. The full user message is
-    /// `<goal_template>\n\nPayload (JSON):\n<request body>`. Defaults to
+    /// `<goal_template>\n\nPayload (raw body, may be JSON):\n<request body>`. Defaults to
     /// `"A webhook arrived. Process the payload below."` if omitted.
     #[serde(default = "default_webhook_goal_template")]
     pub goal_template: String,
@@ -949,9 +950,10 @@ pub struct MemoryConfig {
     #[serde(default = "default_persistent_store_chunk_overlap")]
     pub persistent_store_chunk_overlap: usize,
 
-    /// Number of most-recent session messages the orchestrator reloads
-    /// each turn (by `session_id`, ordered by timestamp) for multi-turn
-    /// dialogue coherence. Deterministic, not vector-search based.
+    /// Number of most-recent user messages of this session the planner shows
+    /// each turn for multi-turn dialogue coherence — kept in an in-memory ring
+    /// per planner (lost on restart), not reloaded from storage. Deterministic,
+    /// not vector-search based.
     #[serde(default = "default_session_recent_n")]
     pub session_recent_n: usize,
     /// Top-K breadth for fuzzy cross-plan recall during replan (vector
@@ -979,7 +981,7 @@ pub struct MemoryConfig {
     /// summaries captured by `run-agent` in this session are
     /// retrievable on the next user turn. Without this, step outputs
     /// are only read on `replan()` (`cross_plan_top_k`) — which is why
-    /// follow-up questions like "was the molecule project created?"
+    /// follow-up questions like "was the report saved?"
     /// previously got "I have no record of that step" answers.
     /// Recommended `3–5` once your sandbox config opts in.
     #[serde(default = "default_within_session_output_top_k")]
@@ -1266,6 +1268,13 @@ impl Config {
         let default = default_context_window();
         let mut out = Vec::new();
         for (id, agent) in &self.agents {
+            for name in agent.tools.iter().filter(|n| !self.is_known_tool(n)) {
+                out.push(format!(
+                    "agents.{id}.tools: '{name}' is no catalog tool (`tengu tool list`) and no \
+                     `<server>__<tool>` of a [[mcp_servers]] entry — dropped unless a shell skill \
+                     the agent loads defines it"
+                ));
+            }
             if agent.engine == "local" && agent.limits.context_window == default {
                 out.push(format!(
                     "agents.{id}.limits.context_window is the {default} default; set the local \
@@ -1406,6 +1415,19 @@ impl Config {
         }
 
         errors.into_vec()
+    }
+
+    /// A name an agent's `tools` may list: a default or opt-in catalog tool,
+    /// or `<server>__<tool>` of a configured `[[mcp_servers]]` entry (its
+    /// tools are known only once connected). Any other name warns at load —
+    /// a misspelled name used to be dropped silently; not an error, because a
+    /// shell skill's tool (found in the skill tiers at run time) is legal too.
+    fn is_known_tool(&self, name: &str) -> bool {
+        crate::domain::tools::DEFAULT_TOOLS.contains(&name)
+            || crate::domain::tools::WORKSPACE_TOOLS.contains(&name)
+            || name.split_once("__").is_some_and(|(server, tool)| {
+                !tool.is_empty() && self.mcp_servers.iter().any(|s| s.name == server)
+            })
     }
 
     fn validate_agent(agent_id: &str, agent: &AgentConfig, errors: &mut ValidationErrors) {
@@ -1663,6 +1685,35 @@ impl Default for Config {
 mod tests {
     use super::*;
 
+    /// A `tools` name that is no catalog tool and no `<server>__<tool>` of a
+    /// configured `[[mcp_servers]]` entry warns at load (it used to be dropped
+    /// silently) but still loads — a shell skill's tool is legal there.
+    #[test]
+    fn unknown_agent_tools_warn() {
+        let cfg = |tools: &str| -> Config {
+            toml::from_str(&format!(
+                "[agents.a]\nengine = \"local\"\nmodel = \"m\"\ntools = {tools}\n\n[[mcp_servers]]\nname = \"docs\"\ntransport = \"stdio\"\ncommand = [\"x\"]\n"
+            ))
+            .unwrap()
+        };
+        let warned = |tools: &str| {
+            let c = cfg(tools);
+            assert!(
+                !c.validation_errors().iter().any(|e| e.contains(".tools")),
+                "{tools}"
+            );
+            c.validation_warnings()
+                .into_iter()
+                .filter(|w| w.starts_with("agents.a.tools:"))
+                .collect::<Vec<_>>()
+        };
+        assert!(warned(r#"["read_fiel"]"#)[0].contains("'read_fiel'"));
+        assert!(warned(r#"["other__search"]"#)[0].contains("'other__search'"));
+        for ok in [r#"["read_file", "hl_ctx"]"#, r#"["docs__search"]"#] {
+            assert!(warned(ok).is_empty(), "{ok}");
+        }
+    }
+
     #[test]
     fn validate_accepts_default_config() {
         let config = Config::default();
@@ -1697,7 +1748,7 @@ secret_env = "GITHUB_WEBHOOK_SECRET"
 goal_template = "GitHub PR webhook arrived."
 
 [webhooks.endpoints.local_test]
-agent = "aura"
+agent = "main"
 secret = "literal-dev-secret"
 "#;
         let parsed: toml::Value = toml::from_str(toml_str).unwrap();
@@ -2239,16 +2290,21 @@ ttl_days = 7
         );
     }
 
-    /// `[telegram] tool_approvals` / `approve_only` gate nothing: the load
-    /// still succeeds (aura sets them) and one warning names the keys that
-    /// are set; `false` / empty / absent warn nothing.
+    /// `[telegram] tool_approvals` / `approve_only` gate nothing: a config
+    /// that sets them still loads and one warning names the keys that are
+    /// set; `false` / empty / absent warn nothing.
     #[test]
     fn telegram_approval_keys_load_with_one_warning() {
-        let aura = Config::load(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/aura/config.toml"),
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[telegram]\ntool_approvals = true\napprove_only = [\"sign_and_send_transaction\"]\n\n\
+             [agents.m]\nengine = \"openrouter\"\nmodel = \"m\"\n",
         )
-        .expect("aura loads");
-        let warnings: Vec<String> = aura
+        .unwrap();
+        let cfg = Config::load(&path).expect("loads");
+        let warnings: Vec<String> = cfg
             .validation_warnings()
             .into_iter()
             .filter(|w| w.starts_with("[telegram]"))

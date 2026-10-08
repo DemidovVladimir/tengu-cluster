@@ -1,20 +1,23 @@
 # Tengu Cluster — "lping" sandbox (2026-09-24)
-# Crypto research + read-only Solana LP / hedge monitoring. Run with:
+# Crypto research + guarded, live-capable Solana LP / hedge execution. Run with:
 #   tengu chat --sandbox lping
-#   tengu decide --sandbox lping --loop lp_watch      (or --loop hedge_watch)
+#   tengu decide --sandbox lping --loop lp_watch      (or hedge_watch, hedge_exec, lp_exec)
 #
 # Roadmap (see docs/lping-2026-09-24.md):
 #   1. research      — market / token / pool research over http_request      (done)
 #   2. typed reads   — sol_price, dlmm_pools, dlmm_pool, dlmm_positions,
 #                      jup_perps, solana_wallet, solana_tx, lp_snapshot,
-#                      hedge_decide, lp_decide (typed, cached observations)  (done)
+#                      lp_swap_plan, hedge_decide, lp_decide                 (done)
 #   3. data feed     — Yellowstone gRPC stream → acct/1 rows                  (phase 5)
 #   4. write tools   — solana_close_token_accounts, jupiter_swap,
 #                      dlmm_open_position, dlmm_close_position,
-#                      jup_perps_order; simulate by default                   (done, 6b)
+#                      jup_perps_order; each supports simulate | send         (done, 6b)
+#   5. exec chains   — hedge_exec, lp_exec: every argument bound (event,
+#                      earlier step, `snap` row); writes simulate              (step A)
 #
 # Signing is OFF here: no [solana] signer_key_file and no wallet grant, so
-# every write tool only simulates (keyless). To let `lp_executor` send, see
+# every write tool refuses `send` but can simulate keylessly. To let
+# `lp_executor` send real transactions, see
 # "Signing" at the bottom of this file.
 
 runtime_profile = "auto"
@@ -168,8 +171,8 @@ granted it a wallet. Always show token mints, pool addresses and tx
 signatures in full, never shortened."""
 
 # Routable subagent (has a `description`) — runs as `tengu run-agent`, and is
-# the tool / scope / workspace owner of both decision loops below. The ten
-# Solana tool names are workspace-tool opt-ins.
+# the tool / scope / workspace owner of both decision loops below. The eleven
+# observe/plan tool names plus five write names are workspace-tool opt-ins.
 [agents.crypto_researcher]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"
@@ -178,7 +181,7 @@ workspace = "~/lping-workspace"
 tools = [
     "http_request", "read_file", "list_directory",
     "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
-    "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+    "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide",
     # write tools: simulate only (no wallet grant on this routable agent)
     "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
     "dlmm_close_position", "jup_perps_order",
@@ -207,7 +210,7 @@ example_queries = [
 name = "Crypto Researcher"
 instructions = """You research crypto markets and Solana DeFi. Prefer the typed
 Solana tools (sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps,
-solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide) — they are
+solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide) — they are
 cached and never report a failed read as 0. Call lp_snapshot before
 hedge_decide / lp_decide; leave `commit` false unless asked. Write tools
 (solana_close_token_accounts, jupiter_swap, dlmm_open_position,
@@ -234,10 +237,22 @@ model = "anthropic/claude-sonnet-4-6"
 workspace = "~/lping-workspace"
 tools = [
     "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
-    "solana_wallet", "solana_tx", "lp_snapshot", "hedge_decide", "lp_decide",
+    "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide",
     "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
     "dlmm_close_position", "jup_perps_order",
 ]
+
+[agents.lp_executor.identity]
+name = "LP Executor"
+instructions = """You own atomic Solana execution tools. Paper is only a
+verification mode: each write tool supports mode = simulate | send. Never
+invent an amount. For LP funding, call lp_swap_plan and merge its one route
+with wallet, oracle_gate_bps and mode for jupiter_swap; then re-read balances
+before dlmm_open_position. For hedge mutation, call lp_snapshot then
+hedge_decide, and translate only its typed action into jup_perps_order. A
+blocked or stale plan means hold. Never route Raydium LP or Hyperliquid live
+orders through http_request: typed write adapters for those venues do not
+exist yet."""
 
 # --- Decision loops (Jev picks, tools execute) --------------------------------
 # Design: docs/decision-loop-plan-2026-09-24.md. Test one event:
@@ -400,6 +415,224 @@ max_divergence_bps = 50.0        # tengu gate (no bot knob); mirrors SWAP_ORACLE
 max_snapshot_age_secs = 30       # tengu gate: the snapshot row ≤ 30 s (= requires.snap)
 min_wallet_sol = 0.2             # MINIMUM_WALLET_BALANCE_SOL: default 0.2
 rent_reserve_sol = 0.1           # RENT_RESERVE_SOL: default 0.1
+
+# --- Execution chains (simulate): bound slots carry each tool's output -------
+# Jev only orders the steps; every argument is bound — from the event (what a
+# higher-order agent hands the loop), an earlier step of this event or the
+# `snap` world row. An unresolved binding keeps its action illegal, so a
+# chain only advances on real values. `dry_run = false` + `mode = "simulate"`
+# literal in every write: the tools run their keyless simulations; Jev cannot
+# change `mode` (not a slot) and `send` would refuse anyway (no signer here).
+# Test: tengu decide --sandbox lping --loop hedge_exec
+#       echo '{"target_sol":0.5,"target_usdc":40}' | tengu decide --sandbox lping --loop lp_exec --event -
+
+[decision_loops.hedge_exec]
+goal = """Bring the operator wallet's Jupiter perps hedge to what the hedge \
+controller decides — the controller is the judge, not this loop. The loop \
+offers one step at a time: snapshot (always first, even when world.snap is \
+fresh — it is then served from the cache), decide_hedge, then order only \
+when the decision carries one. Take the offered step; hold only when hold \
+is the only choice. Orders are simulated, never sent."""
+agent = "lp_executor"
+sequence = ["snapshot", "decide_hedge", "order?"]
+dry_run = false                      # the write runs in simulate mode (args)
+act_at = 0.8
+history = 8
+max_steps = 4
+world = { snap = "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
+world_max_age_secs = 30
+
+[decision_loops.hedge_exec.actions.hold]
+description = "Nothing (more) to do for this event"
+
+[decision_loops.hedge_exec.actions.snapshot]
+description = "Read the wallet x pool snapshot (cached 10 s)"
+tool = "lp_snapshot"
+read_only = true
+args = { wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
+
+# Same knobs as hedge_watch.decide_hedge; commit = false: a simulated chain
+# never moves the controller state hedge_watch keeps.
+[decision_loops.hedge_exec.actions.decide_hedge]
+description = "Hedge decision on the fresh snapshot (pure): none, blocked, or an order"
+tool = "hedge_decide"
+read_only = true
+requires = { snap = 30 }
+reduce = { action = "/features/action", guard = "/features/guard", order = "/data/order" }
+
+[decision_loops.hedge_exec.actions.decide_hedge.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"
+commit = false
+
+[decision_loops.hedge_exec.actions.decide_hedge.args.knobs]
+target_delta_sol = 0.0
+delta_threshold_sol = 0.25
+band_bins = 8
+bin_count = 28
+cap_mult = 1.25
+max_notional_usd = 0.0
+min_collateral_ratio = 0.15
+target_collateral_ratio = 0.33
+carry_cap_bps = 5000.0
+cooldown_ms = 600000
+lp_input = "midpoint"
+include_wallet_sol = true
+min_wallet_sol = 0.2
+rent_reserve_sol = 0.1
+max_divergence_bps = 50.0
+max_snapshot_age_secs = 30
+trend_confirm_ms = 600000
+no_lp_grace_ms = 300000
+
+[decision_loops.hedge_exec.actions.decide_hedge.args.lp_knobs]
+imbalance_threshold = 0.92
+bin_count = 28
+storm_pct_5m = 2.0
+trend_confirm_ms = 600000
+reentry_confirm_ms = 7200000
+reentry_tol_frac = 0.20
+max_divergence_bps = 50.0
+max_snapshot_age_secs = 30
+min_wallet_sol = 0.2
+rent_reserve_sol = 0.1
+
+# Every argument but the literals is decide_hedge's `data.order` (side, kind,
+# size, collateral, cap — the policy translation lives in hedge_decide).
+[decision_loops.hedge_exec.actions.order]
+description = "Place the decided Jupiter perps order (simulated)"
+tool = "jup_perps_order"
+requires = { snap = 30 }
+
+[decision_loops.hedge_exec.actions.order.slots]
+side = { from = "decide_hedge", path = "/order/side" }
+kind = { from = "decide_hedge", path = "/order/action" }
+size_usd = { from = "decide_hedge", path = "/order/size_usd" }
+collateral = { from = "decide_hedge", path = "/order/collateral" }
+max_notional_usd = { from = "decide_hedge", path = "/order/max_notional_usd" }
+
+[decision_loops.hedge_exec.actions.order.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"
+side = "{side}"
+action = "{kind}"
+size_usd = "{size_usd}"
+collateral = "{collateral}"
+max_notional_usd = "{max_notional_usd}"
+slippage_bps = 50                    # bot default
+mode = "simulate"
+
+# lp_exec: the higher-order agent sets the deposit (event.target_sol /
+# event.target_usdc, capped below); lp_swap_plan funds it from the snapshot's
+# balances and the bot's reserves; its one route feeds jupiter_swap.
+[decision_loops.lp_exec]
+goal = """Fund and open the LP position the event asks for (target_sol SOL + \
+target_usdc USDC) in pool 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6. The \
+loop offers one step at a time: snapshot (always first, even when \
+world.snap is fresh), plan_swap, swap + refresh only when the plan has a \
+route, open only when the plan is feasible. Take each offered step; hold \
+when only hold is offered or the state shows a problem. Everything is \
+simulated, never sent."""
+agent = "lp_executor"
+sequence = ["snapshot", "plan_swap", "swap?", "refresh?", "open"]
+dry_run = false                      # the writes run in simulate mode (args)
+act_at = 0.8
+history = 8
+max_steps = 6
+event_reduce = { target_sol = "/target_sol", target_usdc = "/target_usdc" }
+world = { snap = "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
+world_max_age_secs = 30
+
+[decision_loops.lp_exec.actions.hold]
+description = "Nothing (more) to do for this event"
+
+[decision_loops.lp_exec.actions.snapshot]
+description = "Read the wallet x pool snapshot (cached 10 s)"
+tool = "lp_snapshot"
+read_only = true
+args = { wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6" }
+
+[decision_loops.lp_exec.actions.refresh]
+description = "Re-read the snapshot live after the swap (balances changed)"
+tool = "lp_snapshot"
+read_only = true
+# A gate, not an argument (no `{swapped}` in args): legal only once `swap`
+# succeeded in this event — without a swap the sequence skips it.
+slots = { swapped = { from = "swap", path = "/status" } }
+args = { wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S", pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6", max_age_secs = 0 }
+
+# Reserves = the bot's production values (delta_neutral_bot): 0.2 permanent
+# (MINIMUM_WALLET_BALANCE_SOL), 0.1 rent (RENT_RESERVE_SOL), 0.0575 measured
+# position rent, 2 % input buffer.
+[decision_loops.lp_exec.actions.plan_swap]
+description = "Plan the swap that funds the deposit (pure): no swap, one route, or blocked"
+tool = "lp_swap_plan"
+read_only = true
+requires = { snap = 30 }
+reduce = { feasible = "/features/feasible", blocked = "/features/blocked", swaps = "/data/swaps", deposit = "/data/deposit" }
+caps = { target_sol = 2.0, target_usdc = 250.0 }
+
+[decision_loops.lp_exec.actions.plan_swap.slots]
+wallet_sol = { observation = "snap", path = "/data/wallet_balances/native_sol/value" }
+wallet_usdc = { observation = "snap", path = "/data/wallet_balances/quote/value/ui" }
+current_price = { observation = "snap", path = "/data/oracle/usd" }
+target_sol = { event = "/target_sol" }
+target_usdc = { event = "/target_usdc" }
+
+[decision_loops.lp_exec.actions.plan_swap.args]
+wallet_sol = "{wallet_sol}"
+wallet_usdc = "{wallet_usdc}"
+current_price = "{current_price}"
+target_sol = "{target_sol}"
+target_usdc = "{target_usdc}"
+permanent_minimum_sol = 0.2
+rent_reserve_sol = 0.1
+position_rent_sol = 0.0575
+reserve_usdc = 0
+slippage_buffer_pct = 0.02
+context = "initial_position"
+
+[decision_loops.lp_exec.actions.swap]
+description = "Swap along the plan's route through Jupiter (simulated)"
+tool = "jupiter_swap"
+requires = { snap = 30 }
+
+[decision_loops.lp_exec.actions.swap.slots]
+input_mint = { from = "plan_swap", path = "/swaps/0/input_mint" }
+output_mint = { from = "plan_swap", path = "/swaps/0/output_mint" }
+amount = { from = "plan_swap", path = "/swaps/0/amount" }
+
+[decision_loops.lp_exec.actions.swap.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+input_mint = "{input_mint}"
+output_mint = "{output_mint}"
+amount = "{amount}"
+oracle_gate_bps = 50                 # SWAP_ORACLE_GATE_BPS default
+mode = "simulate"
+
+# Knobs as lp_watch.open_position (bot production entry values).
+[decision_loops.lp_exec.actions.open]
+description = "Open the DLMM position with the plan's deposit (simulated)"
+tool = "dlmm_open_position"
+requires = { snap = 30 }
+caps = { amount_x = 2.0, amount_y = 250.0 }
+
+[decision_loops.lp_exec.actions.open.slots]
+amount_x = { from = "plan_swap", path = "/deposit/sol" }    # only a feasible plan has a deposit
+amount_y = { from = "plan_swap", path = "/deposit/usdc" }
+
+[decision_loops.lp_exec.actions.open.args]
+wallet = "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+pool = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"
+amount_x = "{amount_x}"
+amount_y = "{amount_y}"
+bin_count = 28
+strategy = "spot"
+max_active_bin_slippage = 1
+min_wallet_sol = 0.2
+max_new_bin_arrays = 1
+max_divergence_bps = 50
+mode = "simulate"
 
 # --- Signing (off) -------------------------------------------------------------
 # To let the loops SEND (docs/typed-observations-2026-09-24.md § Write tools):

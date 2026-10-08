@@ -1466,12 +1466,12 @@ mod tests {
         let specs = vec![shell_spec("m1", Some(0.8))];
         let samples = vec![sample("m1", true), sample("m1", false)];
 
-        finalize_run(skill_dir, "mint-ipnft", "2026-04-22T14-03-11Z", &specs, &samples, 10).unwrap();
+        finalize_run(skill_dir, "summarize-paper", "2026-04-22T14-03-11Z", &specs, &samples, 10).unwrap();
 
         let mj: MetricsJson = serde_json::from_slice(
             &std::fs::read(metrics_json_path(skill_dir)).unwrap()
         ).unwrap();
-        assert_eq!(mj.skill, "mint-ipnft");
+        assert_eq!(mj.skill, "summarize-paper");
         let r = mj.metrics.get("m1").unwrap();
         assert!((r.pass_rate - 0.5).abs() < 1e-4);
         assert_eq!(r.n, 2);
@@ -2230,14 +2230,14 @@ mod tests {
         let activity = NoActivity;
 
         let messages = vec![
-            Message { role: Role::User, content: "mint please".into(), tool_call_id: None, tool_calls: None },
+            Message { role: Role::User, content: "summarize please".into(), tool_call_id: None, tool_calls: None },
             Message { role: Role::Assistant, content: "ok".into(), tool_call_id: None, tool_calls: None },
         ];
 
         let tool = SkillDistillTool::new();
         let args = json!({
-            "name": "mint-ipnft",
-            "description": "Use when minting an IPNFT.",
+            "name": "summarize-paper",
+            "description": "Use when summarizing a paper.",
             "body_markdown": "## Procedure\n1. Call x.\n",
             "metrics": [
                 { "kind": "shell_check", "name": "m1", "cmd": "echo ok", "expect_exit_code": 0 }
@@ -2254,10 +2254,10 @@ mod tests {
         assert_eq!(v["metrics_declared"], 1);
         assert_eq!(v["loaded_in_current_conversation"], false);
 
-        let skill_md = std::fs::read_to_string(ws.path().join("skills/mint-ipnft/SKILL.md")).unwrap();
-        assert!(skill_md.contains("name: mint-ipnft"));
+        let skill_md = std::fs::read_to_string(ws.path().join("skills/summarize-paper/SKILL.md")).unwrap();
+        assert!(skill_md.contains("name: summarize-paper"));
         assert!(skill_md.contains("## Procedure"));
-        assert!(ws.path().join("skills/mint-ipnft/evals/prompts.yaml").exists());
+        assert!(ws.path().join("skills/summarize-paper/evals/prompts.yaml").exists());
     }
 
     #[tokio::test]
@@ -3974,7 +3974,7 @@ When the user says "let's save this as a skill" or equivalent after completing a
 
 **Inputs you supply (you are the author):**
 
-- `name` — kebab-case, verb-first (e.g. `mint-ipnft`).
+- `name` — kebab-case, verb-first (e.g. `summarize-paper`).
 - `description` — starts with "Use when...", third person, triggering conditions only.
 - `body_markdown` — the skill body you compose from your in-context understanding. Structure: Overview → When to Use → Procedure → Common Mistakes. Refer to what *worked*; omit exploration that failed.
 - `metrics` — at least one metric. Prefer `shell_check` for deterministic outcomes (tx confirmed, file exists). Use `llm_judge` with a narrative rubric for qualitative criteria. See `docs/superpowers/specs/2026-04-20-skill-metrics-evolution-design.md` §6 for the full schema.
@@ -4086,9 +4086,9 @@ schema_version: 1
 fixtures:
   - id: f1
     prompt: |
-      The user has just successfully minted an IPNFT by calling http_request (gas price),
-      sign_and_send_transaction (mint call), and persistent_store (save tx hash).
-      They ask: "Let's save this as a skill called mint-ipnft."
+      The user has just successfully fetched and summarized a paper by calling http_request (fetch the PDF),
+      write_file (save the summary), and persistent_store (index the summary).
+      They ask: "Let's save this as a skill called summarize-paper."
       Produce a skill_distill call and show its body_markdown.
     expected_outcome: "skill_distill invoked with coherent body and at least one metric"
     metrics: [distill_quality]

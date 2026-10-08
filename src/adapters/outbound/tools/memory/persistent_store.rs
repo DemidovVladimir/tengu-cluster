@@ -514,8 +514,8 @@ impl PersistentStoreTool {
                 file_id = %file_id,
                 chunk_count = manifest.chunk_count,
                 "Legacy manifest without chunk_ids — vectors cannot be deleted individually. \
-                 Run `tengu memory purge` to clear the full vector store if stale entries \
-                 cause problems."
+                 Run `tengu prune --sandbox <name>` (removes this workspace's `memory/` and \
+                 `.tengu/storage/`) if stale entries cause problems."
             );
         }
 
@@ -562,6 +562,10 @@ impl Tool for PersistentStoreTool {
         let result = match operation {
             "store" => {
                 let file_path = require_str(args, "persistent_store store", "file_path")?;
+                // The source may be any absolute path: it must be readable under
+                // the agent's scope (the workspace write check above is not it).
+                ctx.scope
+                    .check_fs_read(&self.resolve_source_path(file_path)?)?;
                 let description = args.get("description").and_then(|v| v.as_str());
                 self.execute_store(file_path, description).await?
             }
@@ -656,6 +660,37 @@ mod tests {
             .execute(&json!({ "operation": "list" }), &harness.ctx())
             .await;
         assert!(result.is_err(), "expected scope denial, got: {:?}", result);
+    }
+
+    /// `store` reads its source under the agent's read scope: a file outside
+    /// `fs_roots` is refused (any absolute path used to be read).
+    #[tokio::test]
+    async fn persistent_store_store_checks_the_source_read_scope() {
+        let ws = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let secret = outside.path().join("id_rsa");
+        std::fs::write(&secret, "PRIVATE").unwrap();
+        std::fs::write(ws.path().join("note.txt"), "fine").unwrap();
+        let scope = ToolScope {
+            fs_roots: vec![ws.path().to_path_buf()],
+            ..Default::default()
+        };
+        let harness = TestHarness::with_scope(ws.path(), scope);
+        let tool =
+            PersistentStoreTool::new(ws.path().to_path_buf(), make_manager().await, 1000, 200);
+        let denied = tool
+            .execute(
+                &json!({ "operation": "store", "file_path": secret.to_string_lossy() }),
+                &harness.ctx(),
+            )
+            .await;
+        assert!(denied.is_err(), "outside fs_roots: {denied:?}");
+        tool.execute(
+            &json!({ "operation": "store", "file_path": "note.txt" }),
+            &harness.ctx(),
+        )
+        .await
+        .expect("inside the workspace");
     }
 
     #[tokio::test]

@@ -243,8 +243,9 @@ pub(crate) fn within_generation(agent: &AgentConfig, tools: &[ToolDef]) -> Vec<T
 /// Resolve the per-tool scope map for an executor: a configured entry in
 /// `configured` (per-agent `[agents.*.scopes.<tool>]`, with `[default_scopes]`
 /// already folded in) wins; any tool without one gets `permissive_scope` —
-/// minus the shell when `no_shell` (a `[solana]` signing sandbox: a shell
-/// could read the key file, `config/solana.rs`).
+/// minus the shell when `no_shell` (every hardened sandbox — a `[solana]`
+/// signer or a `[risk]` section, `config/hardening.rs`: a shell could read a
+/// key file or route around the risk gate).
 /// Shared by `build_tool_executor` and `mcp_bridge::build_bridge_executor`.
 pub(crate) fn resolve_tool_scopes(
     workspace: &Path,

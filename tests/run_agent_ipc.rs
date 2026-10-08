@@ -528,7 +528,7 @@ fn openrouter_step_caps_results_and_compacts_older_rounds() {
 }
 
 /// W1-gate parity: a `claude_code` plan step whose agent has no `workspace`
-/// (aura's `researcher`) runs in a temp dir of its own — the CLI's cwd and
+/// (e.g. a `researcher` agent) runs in a temp dir of its own — the CLI's cwd and
 /// the bridge's workspace — and gets the bridge (`--mcp-config`, its tools
 /// in `--allowedTools`, `compress_and_store` included); the system prompt
 /// rides on `--system-prompt` only; the bridge's transcript holds the

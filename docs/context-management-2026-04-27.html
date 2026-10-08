@@ -720,7 +720,7 @@ const SYMPTOMS = [
 const CONFIG = [
   { layer: 1, knob: "flow.max_history_turns", def: "20-40 (per-scope)", where: "[agents.<name>.flow] + application/chat/flow.rs:46", what: "User-turn count cap on history before per-turn assembly." },
   { layer: 1, knob: "flow.compaction_threshold_ratio", def: "0.82-0.88 (per-scope)", where: "application/chat/flow.rs:97", what: "Fraction of max_tokens_per_flow that triggers maybe_compact_flow." },
-  { layer: 1, knob: "flow.compaction_keep_turns", def: "24-60 (per-scope)", where: "application/chat/flow.rs:97", what: "Number of recent user turns kept verbatim during flow compaction." },
+  { layer: 1, knob: "flow.compaction_keep_turns", def: "history limit / 2 (10-20)", where: "application/chat/flow.rs", what: "Number of recent user turns kept verbatim during flow compaction; clamped below the history limit." },
   { layer: 1, knob: "flow.compaction_summary_max_tokens", def: "auto (15% input budget)", where: "application/chat/flow.rs:130", what: "Max tokens for the compaction summary message." },
   { layer: 1, knob: "limits.max_tokens_per_flow", def: "100_000", where: "config.rs:401", what: "Per-flow lifetime budget. Hard stop returns reset notice." },
   { layer: 2, knob: "limits.context_window", def: "1_000_000", where: "config.rs:407", what: "Model context window. Feeds reserved_output_tokens arithmetic." },

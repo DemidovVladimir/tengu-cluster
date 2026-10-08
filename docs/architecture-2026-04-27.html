@@ -907,7 +907,7 @@ const SUBSYSTEMS = [
     files: [
       ["config/mod.rs::AgentConfig", "one struct (deny_unknown_fields) for in-process agents, subagents and loop / feed agents — engine, model, description, example_queries, tools, skill_packages (skills alias), workspace, scopes, limits.max_tool_rounds / step_timeout_secs, identity, claude_code"],
       ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest] on every surface"],
-      ["sandboxes/<name>/config.toml", "one config per sandbox: aura, lping, jev-exec, xmarket, xmarket-weekend, xlab, tor-check, storage-test, unlimited"],
+      ["sandboxes/<name>/config.toml", "one config per sandbox: lping, jev-exec, xmarket, xmarket-weekend, xlab, tor-check, storage-test, unlimited"],
       ["application/orchestrator/shared_files.rs::routable_agents", "blocks with a description → TENGU_PLANNER_REGISTRY.md"],
       ["bootstrap/tools.rs::subagent_config", "merges workspace-tool names listed in tools into workspace_tools"],
       ["adapters/inbound/cli/run_agent.rs::run_agent_subprocess", "loads the parent config first, then config.agents.get(name)"],
@@ -975,7 +975,7 @@ const SUBSYSTEMS = [
       ["AttributedExecutor / CallScope", "a tengu run feed's or loop's calls carry their own agent / session / call id on the audit"],
       ["warn_if_proxy_unreachable", "one startup warning from the parent CLI; tengu doctor prints the resolved network"],
     ],
-    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: aura, lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab (the last three under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
+    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab (the last three under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
   },
   {
     key: "runtime", title: "tengu run — runtime supervisor (2026-09-30)",
@@ -1026,7 +1026,7 @@ const SUBSYSTEMS = [
     key: "tools", title: "tool families (opt-in, WORKSPACE_TOOLS)",
     subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research — each a plugin, one catalog row per tool.",
     files: [
-      ["adapters/outbound/tools/solana/", "10 read tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
+      ["adapters/outbound/tools/solana/", "11 observe/plan tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
       ["adapters/outbound/solana/", "SolanaRpc, cache-through account reads, JSON fetch, read planning, send pipeline, signer, writes store"],
       ["adapters/outbound/tools/hyperliquid/", "hl_ctx (dex sweep or ≤ 64 coins → mkt_ctx/1 + mkt_instrument/1), hl_book (hl_book/1)"],
       ["adapters/outbound/hyperliquid/info.rs", "HlInfo — POST /info over the scoped egress client, [rate_limits.hyperliquid] weights"],
@@ -1197,7 +1197,7 @@ const FILE_MAP = [
   ["src/adapters/outbound/tools/crypto/mod.rs", "tools", "Privy crypto tools — sign_and_send_transaction, sign_message, get_wallet_address, abi_encode, hex_to_uint256 (the two signing ones off in a [risk] sandbox)"],
   ["src/adapters/outbound/tools/skill_lifecycle/mod.rs", "tools", "skill_lifecycle plugin — skill_distill, apply_improver_proposal, compress_and_store (definition)"],
   ["src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs", "tools", "the implicit-on-every-subagent compress_and_store tool"],
-  ["src/adapters/outbound/tools/solana/", "tools", "Solana LP family: 10 read tools + 5 write tools (defs.rs = interfaces)"],
+  ["src/adapters/outbound/tools/solana/", "tools", "Solana LP family: 11 observe/plan tools + 5 live-capable write tools (defs.rs = interfaces)"],
   ["src/adapters/outbound/solana/", "tools", "SolanaRpc (error classes), fetch_accounts (acct/1 cache-through), fetch_json, read planning, send pipeline, LocalKeypair signer, writes store"],
   ["src/domain/lp/", "domain", "pure DLMM / Jupiter decoders + math, hedge controller port, LP gates, snapshot + decisions"],
   ["src/domain/solana.rs · solana_tx.rs · solana_write.rs", "domain", "base58 + PDAs · transaction wire format · write results + send policy"],

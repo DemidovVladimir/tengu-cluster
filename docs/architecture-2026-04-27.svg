@@ -714,7 +714,7 @@
     <text x="10" y="42" class="h3">Solana LP read (10)</text>
     <text x="10" y="56" class="small">sol_price, dlmm_pools, dlmm_pool,</text>
     <text x="10" y="68" class="small">dlmm_positions, jup_perps, solana_wallet,</text>
-    <text x="10" y="80" class="small">solana_tx, lp_snapshot, hedge_decide, lp_decide</text>
+    <text x="10" y="80" class="small">solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide</text>
     <text x="10" y="102" class="h3">Solana write (5): simulate by default</text>
     <text x="10" y="116" class="small">solana_close_token_accounts, jupiter_swap,</text>
     <text x="10" y="128" class="small">dlmm_open_position, dlmm_close_position,</text>
@@ -807,25 +807,23 @@
     <rect width="284" height="310" rx="6" class="panel" />
     <rect x="0" y="0" width="284" height="22" rx="6" class="pill-agt" />
     <text x="10" y="15" class="pt">sandboxes  -  what runs where</text>
-    <text x="10" y="44" class="file">aura</text>
-    <text x="108" y="44" class="small">DeSci planner + subagents</text>
-    <text x="10" y="62" class="file">lping</text>
-    <text x="108" y="62" class="small">Solana LP loops (dry run)</text>
-    <text x="10" y="80" class="file">jev-exec</text>
-    <text x="108" y="80" class="small">architect → tengu decide → Jev</text>
-    <text x="10" y="98" class="file">xmarket</text>
-    <text x="108" y="98" class="small">paper desk M0, tengu run, $100</text>
-    <text x="10" y="116" class="file">xmarket-weekend</text>
-    <text x="108" y="116" class="small">rule W on paper, tool feeds</text>
-    <text x="10" y="134" class="file">xlab</text>
-    <text x="108" y="134" class="small">history research, backtests</text>
-    <text x="10" y="152" class="file">tor-check</text>
-    <text x="108" y="152" class="small">Tor egress check</text>
-    <text x="10" y="170" class="file">storage-test</text>
-    <text x="108" y="170" class="small">persistent_store test</text>
-    <text x="10" y="188" class="file">unlimited</text>
-    <text x="108" y="188" class="small">one agent over Telegram</text>
-    <text x="10" y="214" class="small">network open: aura, lping, jev-exec, unlimited,</text>
+    <text x="10" y="44" class="file">lping</text>
+    <text x="108" y="44" class="small">Solana LP loops (dry run)</text>
+    <text x="10" y="62" class="file">jev-exec</text>
+    <text x="108" y="62" class="small">architect → tengu decide → Jev</text>
+    <text x="10" y="80" class="file">xmarket</text>
+    <text x="108" y="80" class="small">paper desk M0, tengu run, $100</text>
+    <text x="10" y="98" class="file">xmarket-weekend</text>
+    <text x="108" y="98" class="small">rule W on paper, tool feeds</text>
+    <text x="10" y="116" class="file">xlab</text>
+    <text x="108" y="116" class="small">history research, backtests</text>
+    <text x="10" y="134" class="file">tor-check</text>
+    <text x="108" y="134" class="small">Tor egress check</text>
+    <text x="10" y="152" class="file">storage-test</text>
+    <text x="108" y="152" class="small">persistent_store test</text>
+    <text x="10" y="170" class="file">unlimited</text>
+    <text x="108" y="170" class="small">one agent over Telegram</text>
+    <text x="10" y="214" class="small">network open: lping, jev-exec, unlimited,</text>
     <text x="10" y="226" class="small">xmarket, xmarket-weekend, xlab (allow_hosts:</text>
     <text x="10" y="238" class="small">Hyperliquid; xlab also GeckoTerminal)</text>
     <text x="10" y="260" class="small">[risk] sandboxes: hardened (no shell, no</text>
@@ -837,7 +835,7 @@
   <g transform="translate(20, 3078)">
     <rect width="1160" height="96" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
-    <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox aura, type "what is the BTC price?", and follow it:</text>
+    <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>
     <text x="10" y="54" class="small">tui/mod.rs - build_orchestrator - RagPlanner::plan - SubprocessRunner::run_step - run_agent_subprocess - http_request - compress_and_store. That is the chat turn.</text>
     <text x="10" y="68" class="small">Other flows: tengu backtest --sandbox xlab --strategy weekend_fade (no LLM) → cli/backtest.rs → application/backtest/ → domain/backtest/engine.rs → the run dir;</text>
     <text x="10" y="82" class="small">tengu run --sandbox xmarket (runbook at the top of its config) → inbound/run.rs → bootstrap/runtime.rs → application/runtime/feeds.rs → tools/xm/exec_common.rs.</text>

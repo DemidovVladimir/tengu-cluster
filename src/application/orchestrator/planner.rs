@@ -39,7 +39,7 @@ pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
         return Ok(v);
     }
 
-    // Path 3: JSON embedded in prose. Find the largest balanced {...}
+    // Path 3: JSON embedded in prose. Take the first balanced {...}
     // substring (considers brace nesting + string literals with escapes
     // so "{" inside a string doesn't unbalance the tracker).
     if let Some(json) = extract_balanced_json_object(trimmed) {
@@ -550,7 +550,7 @@ impl Planner for RagPlanner {
 
         // Fix A (2026-05-09) — within-session output recall on the normal
         // plan() path. Without this, prior step outputs are only readable
-        // on replan; follow-up questions like "was the molecule project
+        // on replan; follow-up questions like "was the report
         // created?" return "I have no record of that step." Off by default
         // (`within_session_output_top_k = 0`) so existing users see no
         // behaviour change.

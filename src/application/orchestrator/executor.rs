@@ -36,10 +36,11 @@ impl DagExecutor {
 
         loop {
             // Honor cancellation before dispatching the next batch of ready
-            // steps. In-flight steps are left to drain naturally; the loop
-            // returns `Cancelled` as soon as we observe the flag at a
-            // dispatch boundary.
+            // steps. Every early return aborts the steps still in flight
+            // (`abort_in_flight`): a dropped `JoinHandle` only detaches its
+            // task, which kept running (and its `run-agent` child with it).
             if cancel.load(Ordering::SeqCst) {
+                abort_in_flight(&futures);
                 return ExecResult::Cancelled;
             }
 
@@ -84,6 +85,7 @@ impl DagExecutor {
                 }
                 Some(Ok((id, StepOutcome::Exhausted(err)))) => {
                     in_flight.remove(&id);
+                    abort_in_flight(&futures);
                     return ExecResult::NeedsReplan {
                         failed: id,
                         error: err,
@@ -92,6 +94,7 @@ impl DagExecutor {
                 Some(Err(join_err)) => {
                     // Task panicked. Treat as catastrophic.
                     info!(?join_err, "executor task panicked");
+                    abort_in_flight(&futures);
                     return ExecResult::NeedsReplan {
                         failed: StepId::new("<panicked>"),
                         error: format!("task panic: {}", join_err),
@@ -103,21 +106,61 @@ impl DagExecutor {
             // Re-check cancellation after each completion so a flag set
             // while steps were running is observed before the next dispatch.
             if cancel.load(Ordering::SeqCst) {
+                abort_in_flight(&futures);
                 return ExecResult::Cancelled;
             }
         }
 
-        // All steps completed — leaf's output is the final response.
-        if let Some(leaf) = plan.single_leaf() {
-            let out = completed_outputs.get(&leaf.id).cloned().unwrap_or_default();
-            ExecResult::Done { final_output: out }
-        } else {
-            // Validation should have caught this — but be defensive.
-            ExecResult::NeedsReplan {
-                failed: StepId::new("<no-leaf>"),
-                error: "plan has no single leaf".into(),
-            }
+        // Nothing in flight, nothing ready: a step that never ran depends on
+        // an unknown step or sits in a cycle (plans are not validated up
+        // front). Its section of the reply would be empty — replan instead.
+        if let Some(stuck) = plan
+            .steps
+            .iter()
+            .find(|s| !completed_outputs.contains_key(&s.id))
+        {
+            return ExecResult::NeedsReplan {
+                failed: stuck.id.clone(),
+                error: format!(
+                    "step {} never became ready: its depends_on names an unknown step or forms a cycle",
+                    stuck.id.0
+                ),
+            };
         }
+
+        // All steps completed — the leaf's output is the final response;
+        // parallel leaves (no join step) are joined in plan order, one section
+        // per leaf (they used to run, then be thrown away by a replan).
+        match plan.leaves().as_slice() {
+            [] => ExecResult::NeedsReplan {
+                failed: StepId::new("<no-leaf>"),
+                error: "plan has no steps".into(),
+            },
+            [leaf] => ExecResult::Done {
+                final_output: completed_outputs.get(&leaf.id).cloned().unwrap_or_default(),
+            },
+            leaves => ExecResult::Done {
+                final_output: leaves
+                    .iter()
+                    .map(|s| {
+                        let out = completed_outputs
+                            .get(&s.id)
+                            .map(String::as_str)
+                            .unwrap_or_default();
+                        format!("### {} ({})\n\n{}", s.id.0, s.agent, out.trim())
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            },
+        }
+    }
+}
+
+/// Abort every step task still running: dropping its `JoinHandle` would only
+/// detach it. The task drops its `run-agent` child, which is `kill_on_drop`.
+fn abort_in_flight<T>(futures: &FuturesUnordered<tokio::task::JoinHandle<T>>) {
+    for handle in futures.iter() {
+        handle.abort();
     }
 }
 
@@ -228,6 +271,99 @@ mod tests {
             }
             _ => panic!("expected Done"),
         }
+    }
+
+    fn step(id: &str, deps: &[&str]) -> Step {
+        Step {
+            id: StepId::new(id),
+            agent: format!("agent_{id}"),
+            goal: id.into(),
+            depends_on: deps.iter().map(|d| StepId::new(*d)).collect(),
+            compose: None,
+        }
+    }
+
+    /// Parallel steps with no join: both outputs make the reply, in plan
+    /// order (they used to run, then be discarded by a replan).
+    #[tokio::test]
+    async fn parallel_leaves_are_joined_into_the_reply() {
+        let bus = new_bus();
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let plan = Plan {
+            steps: vec![step("a", &[]), step("b", &[])],
+        };
+        match DagExecutor::run(&plan, Arc::new(OkWorker), &policy, &bus, no_cancel()).await {
+            ExecResult::Done { final_output } => {
+                let (a, b) = (
+                    final_output.find("### a (agent_a)"),
+                    final_output.find("### b (agent_b)"),
+                );
+                assert!(a.is_some() && b.is_some() && a < b, "{final_output}");
+                assert!(final_output.contains("out(a)") && final_output.contains("out(b)"));
+            }
+            _ => panic!("expected Done"),
+        }
+    }
+
+    /// A step that can never start (unknown dependency, or a cycle) makes
+    /// the plan replan — never a reply with that step's section empty.
+    #[tokio::test]
+    async fn a_step_that_never_starts_needs_a_replan() {
+        let bus = new_bus();
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        for steps in [
+            vec![step("a", &[]), step("b", &["ghost"])],
+            vec![step("a", &[]), step("b", &["a", "ghost"])],
+            vec![step("a", &["b"]), step("b", &["a"])],
+        ] {
+            let plan = Plan { steps };
+            match DagExecutor::run(&plan, Arc::new(OkWorker), &policy, &bus, no_cancel()).await {
+                ExecResult::NeedsReplan { error, .. } => {
+                    assert!(error.contains("never became ready"), "{error}")
+                }
+                _ => panic!("expected NeedsReplan"),
+            }
+        }
+    }
+
+    struct FailFastSlowWorker {
+        slow_finished: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait]
+    impl WorkerHandle for FailFastSlowWorker {
+        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+            if step.id.0 == "fail" {
+                anyhow::bail!("boom");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            self.slow_finished
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok("late".into())
+        }
+    }
+
+    /// A failure that triggers a replan aborts its siblings still in flight.
+    #[tokio::test]
+    async fn a_replan_aborts_steps_still_in_flight() {
+        let bus = new_bus();
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = Arc::new(FailFastSlowWorker {
+            slow_finished: Arc::clone(&slow_finished),
+        });
+        let plan = Plan {
+            steps: vec![step("fail", &[]), step("slow", &[])],
+        };
+        let result = DagExecutor::run(&plan, worker, &policy, &bus, no_cancel()).await;
+        assert!(matches!(result, ExecResult::NeedsReplan { .. }));
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert!(
+            !slow_finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the in-flight sibling kept running after the replan"
+        );
     }
 
     #[tokio::test]

@@ -156,7 +156,7 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
     // 4. Best-cycle selection.
     let Some(idx) = pick_best(&baseline, &cycles) else {
         eprintln!(
-            "evolve found {} proposals but all regressed gated metrics. No changes applied.",
+            "evolve found {} proposals but none beat the target's baseline without another metric dropping by more than 0.05. No changes applied.",
             cycles.len()
         );
         eprintln!(
@@ -177,7 +177,8 @@ pub async fn run_evolve(args: EvolveArgs<'_>) -> Result<()> {
     let gated_snapshots: Vec<(String, f32, f32)> = baseline
         .rollups
         .iter()
-        .filter(|(n, r)| **n != baseline.target_metric && r.gated)
+        // Every non-target metric is guarded (`pick_best`), not only failing ones.
+        .filter(|(n, _)| **n != baseline.target_metric)
         .map(|(n, r)| {
             let p = best.rollups.get(n).map(|x| x.pass_rate).unwrap_or(0.0);
             (n.clone(), r.pass_rate, p)
@@ -391,7 +392,7 @@ async fn call_skill_improver(
     let others = baseline
         .rollups
         .iter()
-        .filter(|(n, r)| *n != tgt && r.gated)
+        .filter(|(n, _)| *n != tgt)
         .map(|(n, r)| format!("- {}: {:.2}", n, r.pass_rate))
         .collect::<Vec<_>>()
         .join("\n");

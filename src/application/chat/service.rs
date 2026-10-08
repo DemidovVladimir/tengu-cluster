@@ -249,8 +249,15 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub suppress_grounding_nudge: bool,
 }
 
+/// The message asks about the latest history ("last", "most recent", …).
+/// Markers match whole words (a phrase: consecutive words), so
+/// "Elasticsearch" or "blasting" no longer count as "last".
 pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
-    let lower = text.trim().to_lowercase();
+    let lower = text.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
     [
         "last",
         "latest",
@@ -261,7 +268,10 @@ pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
         "before that",
     ]
     .iter()
-    .any(|marker| lower.contains(marker))
+    .any(|marker| {
+        let phrase: Vec<&str> = marker.split(' ').collect();
+        words.windows(phrase.len()).any(|w| w == phrase.as_slice())
+    })
 }
 
 /// Create a new `ChatLoopState` with defaults from agent config.
@@ -494,5 +504,27 @@ impl<'a> ChatRuntimeService<'a> {
             total_output_tokens: state.total_output_tokens,
             tool_outcomes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Whole words only: "Elasticsearch" used to match "last" and skip recall.
+    #[test]
+    fn grounding_markers_match_whole_words() {
+        assert!(needs_fresh_history_grounding(
+            "What was the last SOL price?"
+        ));
+        assert!(needs_fresh_history_grounding("show the MOST RECENT fills"));
+        assert!(needs_fresh_history_grounding("and before that?"));
+        assert!(!needs_fresh_history_grounding(
+            "Elasticsearch cluster health"
+        ));
+        assert!(!needs_fresh_history_grounding(
+            "blasting off; mostly recentish"
+        ));
+        assert!(!needs_fresh_history_grounding("most of it, recent or not"));
     }
 }

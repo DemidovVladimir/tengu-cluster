@@ -10,12 +10,17 @@
 //!    actions whose every slot has candidates (`slots::candidates`, caps
 //!    applied; `FromHistory` reads only this event's entries) and whose
 //!    every `requires` alias is fresh.
+//!    With a `sequence`: only its next step + the terminal actions (an
+//!    optional step that is not legal is skipped; a failed or refused step
+//!    halts the chain — terminal actions only).
 //! 2. One decisions call: `next_action` (choice over legal actions) + one
 //!    `choice` per multi-candidate slot (`<action>__<slot>`), against
 //!    `state = {goal, event, world (omitted when empty), history, step}`.
 //! 3. Gate: min(confidence of action, its slots) < `act_at` → escalate
 //!    (orchestrator turn via `Escalator`) and stop.
-//! 4. Terminal → stop. Write action under `dry_run` → log and stop.
+//! 4. Terminal → stop. Write action under `dry_run` → log it (history
+//!    `result = "dry_run"`, `ok` unset) and continue: a slot bound to it
+//!    has no candidate, so what needs its output stays illegal.
 //!    Otherwise render args, re-check caps, run the tool through the
 //!    `ToolExecutor` port (`execute_typed`; same scopes / egress as an
 //!    agent) and append to `history`: a typed result contributes its
@@ -110,6 +115,10 @@ struct LoopState {
     /// hours old.
     event_start: u64,
     history: VecDeque<HistoryEntry>,
+    /// `sequence` progress in the current event: the next step's index,
+    /// and whether a failed / refused step halted the chain.
+    seq_pos: usize,
+    seq_halted: bool,
 }
 
 impl DecisionLoop {
@@ -187,7 +196,8 @@ impl DecisionLoop {
     }
 
     /// Up to `max_steps` steps for one event, each with the decision it
-    /// acted on; stops after a step that did not run a tool.
+    /// acted on; stops after a terminal, escalated or rejected step (a
+    /// dry-run write goes on, so a chain can be walked without its writes).
     async fn run_event(
         &self,
         event: &Value,
@@ -195,13 +205,17 @@ impl DecisionLoop {
     ) -> Result<Vec<(StepOutcome, Decision)>> {
         let mut st = self.state.lock().await;
         st.event_start = st.t;
+        st.seq_pos = 0;
+        st.seq_halted = false;
         let event = reduce::reduce(event, &self.cfg.event_reduce);
         let mut steps = Vec::new();
         for step in 0..self.cfg.max_steps {
             let (outcome, decision) = self.step(&mut st, &event, step, session_id).await?;
             let stop = !matches!(
                 outcome,
-                StepOutcome::Executed { .. } | StepOutcome::Refused { .. }
+                StepOutcome::Executed { .. }
+                    | StepOutcome::Refused { .. }
+                    | StepOutcome::DryRun { .. }
             );
             steps.push((outcome, decision));
             if stop {
@@ -234,8 +248,8 @@ impl DecisionLoop {
             let mut slots = BTreeMap::new();
             for (sn, slot) in &action.slots {
                 let this_event = st.history.iter().filter(|h| h.t > st.event_start);
-                let c =
-                    slots::candidates(sn, slot, action.caps.get(sn).copied(), this_event, &world);
+                let cap = action.caps.get(sn).copied();
+                let c = slots::candidates(sn, slot, cap, this_event, &world, event);
                 if c.is_empty() {
                     break;
                 }
@@ -244,6 +258,11 @@ impl DecisionLoop {
             if slots.len() == action.slots.len() {
                 legal.insert(an.as_str(), slots);
             }
+        }
+        // `sequence`: the next step + the terminal actions, nothing else.
+        if !self.cfg.sequence.is_empty() {
+            let next = self.sequence_next(st, &legal);
+            legal.retain(|an, _| self.cfg.actions[*an].tool.is_none() || Some(*an) == next);
         }
 
         // 2. Questions + state.
@@ -305,6 +324,9 @@ impl DecisionLoop {
 
         let t_before = st.t;
         let outcome = self.apply(st, &legal, &decision, &state, session_id).await;
+        if !self.cfg.sequence.is_empty() {
+            Self::sequence_advance(st, &outcome);
+        }
         // A step that ran (or dry-ran) appended one history entry with the resolved args.
         let entry = st.history.back().filter(|_| st.t > t_before);
         self.audit(
@@ -475,6 +497,47 @@ impl DecisionLoop {
             None => StepOutcome::Executed {
                 action: action_name,
             },
+        }
+    }
+
+    /// The `sequence` action offered this step: optional steps that are not
+    /// legal are skipped (for good — the order puts what feeds a step before
+    /// it); `None` = the chain is halted, done, or its required next step is
+    /// not legal — terminal actions only.
+    fn sequence_next<'c>(
+        &'c self,
+        st: &mut LoopState,
+        legal: &BTreeMap<&str, BTreeMap<&str, Vec<Candidate>>>,
+    ) -> Option<&'c str> {
+        if st.seq_halted {
+            return None;
+        }
+        while let Some(s) = self.cfg.sequence.get(st.seq_pos) {
+            if legal.contains_key(s.action.as_str()) {
+                return Some(s.action.as_str());
+            }
+            if !s.optional {
+                return None;
+            }
+            st.seq_pos += 1;
+        }
+        None
+    }
+
+    /// After a step: a successful (or dry-run) sequence step moves the chain
+    /// on; a failed tool (`ok != true`) or a `[risk]` refusal halts it.
+    fn sequence_advance(st: &mut LoopState, outcome: &StepOutcome) {
+        match outcome {
+            StepOutcome::DryRun { .. } => st.seq_pos += 1,
+            StepOutcome::Executed { .. } => {
+                if st.history.back().and_then(|e| e.ok) == Some(true) {
+                    st.seq_pos += 1;
+                } else {
+                    st.seq_halted = true;
+                }
+            }
+            StepOutcome::Refused { .. } => st.seq_halted = true,
+            _ => {}
         }
     }
 
@@ -1252,7 +1315,7 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
     }
 
     #[tokio::test]
-    async fn dry_run_blocks_write_actions() {
+    async fn dry_run_blocks_write_actions_and_goes_on() {
         let (l, _, tools, _) = build(
             true,
             vec![
@@ -1262,20 +1325,324 @@ slots = {{ pool = {{ observation = "pools", items = "/data/pools/*", value = "ad
                     ("open__pool", "pool_2", 0.9),
                     ("open__size", "1", 0.9),
                 ]),
+                pick(&[("next_action", "hold", 0.99)]),
             ],
         );
         let out = l.handle_event(&json!({}), "s").await.unwrap();
         assert_eq!(
-            out.last(),
-            Some(&StepOutcome::DryRun {
-                action: "open".into()
-            })
+            out[1..],
+            [
+                StepOutcome::DryRun {
+                    action: "open".into()
+                },
+                StepOutcome::Stopped {
+                    action: "hold".into()
+                }
+            ]
         );
         assert_eq!(
             tools.0.lock().unwrap().len(),
             1,
             "only the read-only fetch ran"
         );
+    }
+
+    /// A chain bound end to end: the event (what a higher-order agent hands
+    /// the loop) fills `wallet` / `size`, the earlier `fetch` fills `pool` —
+    /// no slot question reaches Jev, and `open` is illegal until every
+    /// binding resolves.
+    fn chain(
+        dry_run: bool,
+        script: Vec<Decision>,
+    ) -> (DecisionLoop, Arc<Scripted>, Arc<FakeTools>) {
+        let cfg: DecisionLoopConfig = toml::from_str(&format!(
+            r#"
+goal = "fetch, then open what the event asks for"
+agent = "a"
+dry_run = {dry_run}
+[actions.hold]
+description = "nothing"
+[actions.fetch]
+description = "fetch pools"
+tool = "http_request"
+read_only = true
+args = {{ method = "GET", url = "https://x/pools" }}
+[actions.open]
+description = "open position"
+tool = "open_position"
+args = {{ wallet = "{{wallet}}", pool = "{{pool}}", size = "{{size}}", mode = "simulate" }}
+slots = {{ wallet = {{ event = "/wallet" }}, size = {{ event = "/size" }}, pool = {{ from = "fetch", path = "/pools/0/address" }} }}
+caps = {{ size = 2.0 }}
+"#
+        ))
+        .unwrap();
+        assert!(cfg.validation_errors("chain").is_empty());
+        let engine = Arc::new(Scripted::new(script));
+        let tools = Arc::new(FakeTools(StdMutex::new(vec![])));
+        let l = DecisionLoop::new(
+            "chain",
+            cfg,
+            engine.clone(),
+            tools.clone(),
+            None,
+            None,
+            None,
+        );
+        (l, engine, tools)
+    }
+
+    fn fetch_open_hold() -> Vec<Decision> {
+        vec![
+            pick(&[("next_action", "fetch", 0.95)]),
+            pick(&[("next_action", "open", 0.95)]),
+            pick(&[("next_action", "hold", 0.99)]),
+        ]
+    }
+
+    #[tokio::test]
+    async fn bound_slots_fill_args_from_event_and_history() {
+        let (l, engine, tools) = chain(false, fetch_open_hold());
+        let out = l
+            .handle_event(&json!({"wallet": "W1", "size": 1.5}), "s")
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 3, "{out:?}");
+        assert!(!legal_actions(&engine, 0).contains(&"open".to_string()));
+        assert!(legal_actions(&engine, 1).contains(&"open".to_string()));
+        let seen = engine.seen.lock().unwrap();
+        assert!(
+            seen[1].keys().all(|k| !k.starts_with("open__")),
+            "bound slots ask nothing: {:?}",
+            seen[1].keys()
+        );
+        let calls = tools.0.lock().unwrap();
+        assert_eq!(
+            calls[1].arguments,
+            json!({"wallet": "W1", "pool": "A1", "size": 1.5, "mode": "simulate"})
+        );
+    }
+
+    #[tokio::test]
+    async fn unresolved_or_capped_bindings_keep_the_action_illegal() {
+        for event in [
+            json!({"wallet": "W1", "size": 3}), // above the cap
+            json!({"size": 1}),                 // no wallet
+            json!({"wallet": null, "size": 1}), // null is nothing
+        ] {
+            let (l, engine, tools) = chain(
+                false,
+                vec![
+                    pick(&[("next_action", "fetch", 0.95)]),
+                    pick(&[("next_action", "hold", 0.99)]),
+                ],
+            );
+            l.handle_event(&event, "s").await.unwrap();
+            assert!(
+                !legal_actions(&engine, 1).contains(&"open".to_string()),
+                "{event}"
+            );
+            assert_eq!(tools.0.lock().unwrap().len(), 1, "{event}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dry_run_walks_the_chain_without_its_write() {
+        let (l, _, tools) = chain(true, fetch_open_hold());
+        let out = l
+            .handle_event(&json!({"wallet": "W1", "size": 1}), "s")
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            [
+                StepOutcome::Executed {
+                    action: "fetch".into()
+                },
+                StepOutcome::DryRun {
+                    action: "open".into()
+                },
+                StepOutcome::Stopped {
+                    action: "hold".into()
+                },
+            ]
+        );
+        assert_eq!(tools.0.lock().unwrap().len(), 1, "the write never ran");
+        let h = l.history().await;
+        assert_eq!(h[1].args["pool"], json!("A1"), "dry-run args are resolved");
+    }
+
+    // ── sequence ──────────────────────────────────────────────────────
+
+    /// `broken` answers HTTP 500 (a failed step); everything else 200.
+    struct SeqTools(StdMutex<Vec<ToolCall>>);
+
+    #[async_trait]
+    impl ToolExecutor for SeqTools {
+        async fn execute(&self, call: &ToolCall, _m: &[Message]) -> Result<String> {
+            self.0.lock().unwrap().push(call.clone());
+            Ok(if call.name == "broken" {
+                "HTTP 500 https://x\nboom".into()
+            } else {
+                "HTTP 200 https://x\n{\"ok\":1}".into()
+            })
+        }
+    }
+
+    fn sequenced(
+        sequence: &str,
+        script: Vec<Decision>,
+    ) -> (DecisionLoop, Arc<Scripted>, Arc<SeqTools>) {
+        let cfg: DecisionLoopConfig = toml::from_str(&format!(
+            r#"
+goal = "g"
+agent = "a"
+max_steps = 5
+dry_run = false
+sequence = {sequence}
+[actions.hold]
+description = "nothing"
+[actions.a]
+description = "a"
+tool = "http_request"
+args = {{ url = "https://x/a" }}
+[actions.b]
+description = "b"
+tool = "http_request"
+args = {{ url = "https://x/b" }}
+[actions.maybe]
+description = "needs the event's x"
+tool = "t"
+slots = {{ x = {{ event = "/x" }} }}
+[actions.broken]
+description = "fails"
+tool = "broken"
+"#
+        ))
+        .unwrap();
+        assert!(
+            cfg.validation_errors("s").is_empty(),
+            "{:?}",
+            cfg.validation_errors("s")
+        );
+        let engine = Arc::new(Scripted::new(script));
+        let tools = Arc::new(SeqTools(StdMutex::new(vec![])));
+        let l = DecisionLoop::new("s", cfg, engine.clone(), tools.clone(), None, None, None);
+        (l, engine, tools)
+    }
+
+    #[tokio::test]
+    async fn sequence_offers_only_the_next_step_and_skips_unresolved_optionals() {
+        let (l, engine, tools) = sequenced(
+            r#"["b", "maybe?", "a"]"#,
+            vec![
+                pick(&[("next_action", "b", 0.95)]),
+                pick(&[("next_action", "a", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+        );
+        l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(legal_actions(&engine, 0), ["b", "hold"]);
+        assert_eq!(
+            legal_actions(&engine, 1),
+            ["a", "hold"],
+            "maybe? skipped: no event x"
+        );
+        assert_eq!(legal_actions(&engine, 2), ["hold"], "done: terminals only");
+        let urls: Vec<_> = tools
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.arguments["url"].clone())
+            .collect();
+        assert_eq!(urls, [json!("https://x/b"), json!("https://x/a")]);
+    }
+
+    #[tokio::test]
+    async fn sequence_runs_a_resolved_optional_step() {
+        let (l, engine, _) = sequenced(
+            r#"["maybe?", "a"]"#,
+            vec![
+                pick(&[("next_action", "maybe", 0.95)]),
+                pick(&[("next_action", "a", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+        );
+        l.handle_event(&json!({"x": 1}), "s").await.unwrap();
+        assert_eq!(legal_actions(&engine, 0), ["hold", "maybe"]);
+        assert_eq!(legal_actions(&engine, 1), ["a", "hold"]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_step_halts_the_chain() {
+        let (l, engine, tools) = sequenced(
+            r#"["broken", "a"]"#,
+            vec![
+                pick(&[("next_action", "broken", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+        );
+        let out = l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(
+            legal_actions(&engine, 1),
+            ["hold"],
+            "a is never offered after a failure"
+        );
+        assert!(matches!(out.last(), Some(StepOutcome::Stopped { .. })));
+        assert_eq!(tools.0.lock().unwrap().len(), 1);
+        // The next event starts the chain again.
+        let (l2, engine2, _) = sequenced(
+            r#"["broken", "a"]"#,
+            vec![
+                pick(&[("next_action", "broken", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+        );
+        l2.handle_event(&json!({}), "s").await.unwrap();
+        l2.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(legal_actions(&engine2, 2), ["broken", "hold"]);
+    }
+
+    #[tokio::test]
+    async fn an_unresolved_required_step_offers_terminals_only() {
+        let (l, engine, tools) = sequenced(
+            r#"["maybe", "a"]"#,
+            vec![pick(&[("next_action", "hold", 0.99)])],
+        );
+        l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(legal_actions(&engine, 0), ["hold"]);
+        assert!(tools.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_dry_run_step_moves_the_chain_on() {
+        let (l, engine, tools) = sequenced(
+            r#"["b", "a"]"#,
+            vec![
+                pick(&[("next_action", "b", 0.95)]),
+                pick(&[("next_action", "a", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+        );
+        let mut cfg = l.cfg.clone();
+        cfg.dry_run = true;
+        let l = DecisionLoop::new("s", cfg, engine.clone(), tools.clone(), None, None, None);
+        let out = l.handle_event(&json!({}), "s").await.unwrap();
+        assert_eq!(legal_actions(&engine, 1), ["a", "hold"]);
+        assert!(matches!(&out[1], StepOutcome::DryRun { action } if action == "a"));
+        assert!(tools.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_off_sequence_answer_is_rejected() {
+        let (l, _, tools) = sequenced(r#"["b", "a"]"#, vec![pick(&[("next_action", "a", 0.95)])]);
+        let out = l.handle_event(&json!({}), "s").await.unwrap();
+        assert!(
+            matches!(&out[0], StepOutcome::Rejected { action, .. } if action == "a"),
+            "{out:?}"
+        );
+        assert!(tools.0.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

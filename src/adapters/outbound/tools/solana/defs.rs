@@ -1,5 +1,5 @@
 //! The Solana LP family's tool interface — names, descriptions and JSON input
-//! schemas of the ten read tools and the write tools, defined in one place. Family files
+//! schemas of the eleven read tools (`lp_swap_plan` the eleventh) and the write tools, defined in one place. Family files
 //! (`price.rs`, `pools.rs`, `dlmm.rs`, `perps.rs`, `wallet.rs`, `lp.rs`) take
 //! their `ToolDef` from [`def`]; the catalog rows advertise [`defs_named`].
 //!
@@ -34,6 +34,7 @@ pub(crate) fn tool_defs() -> Vec<ToolDef> {
         solana_wallet(),
         solana_tx(),
         lp_snapshot(),
+        lp_swap_plan(),
         hedge_decide(),
         lp_decide(),
     ]
@@ -240,7 +241,7 @@ fn knobs(properties: Value, description: &str) -> Value {
     })
 }
 
-// ── the ten tools ────────────────────────────────────────────────
+// ── the read tools ────────────────────────────────────────────────
 
 fn sol_price() -> ToolDef {
     ToolDef::new(
@@ -399,6 +400,35 @@ fn lp_snapshot() -> ToolDef {
     )
 }
 
+fn lp_swap_plan() -> ToolDef {
+    ToolDef::new(
+        names::LP_SWAP_PLAN,
+        "Deterministically plan the optional Jupiter swap needed before a Meteora LP open/recenter. Reserves permanent SOL, transaction/rent SOL, refundable position rent and hedge-collateral USDC; blocks underfunded plans instead of inventing an amount. Pure: never reads, signs or sends. Merge its single data.swaps route with wallet, oracle_gate_bps and mode to call jupiter_swap, which independently applies the live oracle gate.",
+        object(
+            json!({
+                "wallet_sol": num(Some(0.0), None, "Live wallet SOL in token units"),
+                "wallet_usdc": num(Some(0.0), None, "Live wallet USDC in token units"),
+                "target_sol": num(Some(0.0), None, "SOL the next LP position will deposit"),
+                "target_usdc": num(Some(0.0), None, "USDC the next LP position will deposit"),
+                "permanent_minimum_sol": num(Some(0.0), None, "Permanent SOL floor that may not fund the deposit or swap"),
+                "rent_reserve_sol": num(Some(0.0), None, "Temporary SOL reserve for transaction fees and account creation"),
+                "position_rent_sol": {"type": "number", "minimum": 0, "default": 0, "description": "Refundable SOL rent locked by the new DLMM position account; production bot measured/padded value 0.0575"},
+                "reserve_usdc": {"type": "number", "minimum": 0, "default": 0, "description": "USDC kept out of the deposit for the next short-hedge collateral increase"},
+                "current_price": num(Some(0.0), None, "Current base-token price in quote units; for SOL/USDC this is SOL/USD"),
+                "slippage_buffer_pct": num(Some(0.0), None, "Fraction added to swap input, e.g. 0.02 = 2%"),
+                "context": {"type": "string", "enum": ["initial_position", "rebalance"], "description": "Which LP path owns this plan"},
+                "base_mint": {"type": "string", "default": WSOL, "description": format!("Base mint; default wSOL {WSOL}")},
+                "quote_mint": {"type": "string", "default": USDC, "description": format!("Quote mint; default USDC {USDC}")},
+            }),
+            &[
+                "wallet_sol", "wallet_usdc", "target_sol", "target_usdc",
+                "permanent_minimum_sol", "rent_reserve_sol", "current_price",
+                "slippage_buffer_pct", "context",
+            ],
+        ),
+    )
+}
+
 fn hedge_knobs() -> Value {
     knobs(
         json!({
@@ -501,7 +531,7 @@ fn lp_decide() -> ToolDef {
 mod tests {
     use super::*;
 
-    const ALL: [&str; 10] = [
+    const ALL: [&str; 11] = [
         names::SOL_PRICE,
         names::DLMM_POOLS,
         names::DLMM_POOL,
@@ -510,6 +540,7 @@ mod tests {
         names::SOLANA_WALLET,
         names::SOLANA_TX,
         names::LP_SNAPSHOT,
+        names::LP_SWAP_PLAN,
         names::HEDGE_DECIDE,
         names::LP_DECIDE,
     ];
@@ -544,7 +575,7 @@ mod tests {
     fn every_read_tool_takes_optional_max_age_secs() {
         for d in tool_defs()
             .into_iter()
-            .filter(|d| ALL.contains(&d.name.as_str()))
+            .filter(|d| ALL.contains(&d.name.as_str()) && d.name != names::LP_SWAP_PLAN)
         {
             let p = &d.parameters["properties"]["max_age_secs"];
             assert_eq!(p["type"], json!("integer"), "{}", d.name);

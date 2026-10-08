@@ -181,13 +181,12 @@ No `agents/` directory, no separate spec type. A subagent is an `[agents.<name>]
 | Fields | `engine` (`openrouter` \| `local` \| `claude_code`), `model`, `description`, `example_queries`, `tools` (allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias), `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap per step), `limits.step_timeout_secs` (default 600), `identity`, `claude_code` |
 | Sandbox sections | `AgentConfig::sandbox` (`config/sections.rs`) — `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`, `[backtest]` reach tools on every surface |
 | Child lookup | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` loads the parent config first, then `config.agents.get(name)` (`compose.base_agent` when composed) |
-| Examples | `sandboxes/aura` (`aura`, `researcher`, `learning-agent`), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private) |
+| Examples | `sandboxes/lping` (`lping` planner · `crypto_researcher` routable · `lp_executor` private), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private) |
 
 Edit a block + restart chat → the planner registry file is regenerated on the next planner turn. No rebuild required.
 
 | Sandbox | Runs | Network |
 |---|---|---|
-| `aura` | DeSci planner + subagents, webhooks | `open` |
 | `lping` | Solana LP loops `lp_watch`, `hedge_watch` (dry run, simulate-only writes) | `open` |
 | `jev-exec` | Claude architect → `tengu decide` → Jev executor | `open` |
 | `xmarket` | paper desk, stage M0: `tengu run`, tool feeds, `[risk]` $100 | `open`, `allow_hosts` HL |
@@ -301,7 +300,7 @@ Doc: `docs/typed-observations-2026-09-24.md`.
 
 | Family | Tools | Code |
 |---|---|---|
-| Solana LP read (10) | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide` | `adapters/outbound/tools/solana/` · `adapters/outbound/solana/{rpc,accounts,http_json,plan,layouts}.rs` · `domain/solana.rs`, `domain/lp/` |
+| Solana LP observe / plan (11) | `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide` | `adapters/outbound/tools/solana/` · `adapters/outbound/solana/{rpc,accounts,http_json,plan,layouts}.rs` · `domain/solana.rs`, `domain/lp/` |
 | Solana write (5) | `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` — `mode = "simulate"` default; `send` = `[solana] signer_key_file` + a wallet grant on a private agent | `tools/solana/write_*.rs` · `outbound/solana/{send,signer,writes_store}.rs` · `domain/solana_tx.rs`, `domain/solana_write.rs` · `config/solana.rs` |
 | Hyperliquid (2) | `hl_ctx` (dex sweep or ≤ 64 coins → `mkt_ctx/1` + `mkt_instrument/1`), `hl_book` (`hl_book/1` L2 book) | `tools/hyperliquid/` · `outbound/hyperliquid/info.rs` (`HlInfo`, `[rate_limits.hyperliquid]`) · `domain/hl/` |
 | xmarket risk / paper (6) | `risk_status`, `paper_positions`; exec tools `paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` | `tools/xm/` (§2.11) |
@@ -449,7 +448,7 @@ When the planner LLM returns prose instead of JSON (Claude Code being conversati
 
 ### K. Every LLM network path goes through `egress.rs` (2026-09-16)
 
-`[egress] network = "tor"` is the default — with no `[egress]` section every request goes through `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides) and `route_llm_api` is on; `network = "open"` (e.g. `sandboxes/aura`, `xmarket`, `xlab`) is plain internet, optionally under an `allow_hosts` ceiling. `EgressConfig::resolved()` fills the defaults once; `egress::install` is called by `main` / `load_sandbox_or` / `run-agent` / `mcp-bridge`; children inherit the *resolved* config via `TENGU_EGRESS`. Chokepoints: `tool_client` (http_request, crypto, Hyperliquid, GeckoTerminal, Solana RPC), `llm_api_client` (OpenRouter, embeddings, Jev — proxied iff `route_llm_api`), `mcp_client`, `shell_command` (`sandbox-exec` under `isolated`), `guard_shell`, `claude_cli_env` (`HTTPS_PROXY` = HTTP CONNECT on the SOCKS port for the Claude Code CLI), `claude_code_profile` (drops builtin Bash under a proxy), a proxied reqwest 0.11 client for Telegram (`TelegramPipe::build_bot`). `build_tool_executor` takes no HTTP client argument, so nothing can hand in an unproxied one. Operator doc: `docs/egress-2026-09-16.md`; §2.6 has the function table.
+`[egress] network = "tor"` is the default — with no `[egress]` section every request goes through `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides) and `route_llm_api` is on; `network = "open"` (e.g. `sandboxes/lping`, `xmarket`, `xlab`) is plain internet, optionally under an `allow_hosts` ceiling. `EgressConfig::resolved()` fills the defaults once; `egress::install` is called by `main` / `load_sandbox_or` / `run-agent` / `mcp-bridge`; children inherit the *resolved* config via `TENGU_EGRESS`. Chokepoints: `tool_client` (http_request, crypto, Hyperliquid, GeckoTerminal, Solana RPC), `llm_api_client` (OpenRouter, embeddings, Jev — proxied iff `route_llm_api`), `mcp_client`, `shell_command` (`sandbox-exec` under `isolated`), `guard_shell`, `claude_cli_env` (`HTTPS_PROXY` = HTTP CONNECT on the SOCKS port for the Claude Code CLI), `claude_code_profile` (drops builtin Bash under a proxy), a proxied reqwest 0.11 client for Telegram (`TelegramPipe::build_bot`). `build_tool_executor` takes no HTTP client argument, so nothing can hand in an unproxied one. Operator doc: `docs/egress-2026-09-16.md`; §2.6 has the function table.
 
 ### L. Money paths fail closed inside the tool (2026-09-30)
 
@@ -485,11 +484,11 @@ The backtest engine reads series only through an as-of view: a bar is observable
 Trace ONE turn end-to-end before changing anything:
 
 ```
-cargo run --release --features postgres_memory,claude_code -- chat --sandbox aura
+cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping
 > what is the current BTC price in USD?
 ```
 
-(`aura` is `[egress] network = "open"`; for a Tor sandbox run `make tor` first.)
+(`lping` is `[egress] network = "open"`; for a Tor sandbox run `make tor` first.)
 
 Follow the call chain:
 

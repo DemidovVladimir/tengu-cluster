@@ -24,6 +24,9 @@
 #          on AC; the battery lasts ~7 h), lid open, online;
 #          a restart in the pane included — no separate `caffeinate -w <pid>`
 #          logs: the pane + ~/.tengu/logs/tengu.log; a second start exits 1 (lease runtime:xmarket-weekend)
+#          unattended (2026-10-02 run): tmux xmw runs ~/.tengu/state/xmarket-weekend/run-logs/supervise.sh
+#          under caffeinate — restarts after a crash (rc ≠ 0), stops on a clean drain (rc 0);
+#          TENGU_SECRETS_LOADED= (no vault prompt), RUST_LOG=info,tengu=debug; pane → run-logs/pane.log
 #   check  "$T" doctor --sandbox xmarket-weekend --live      exit 0 = heartbeat fresh, every required feed live —
 #          not proof of fills: a fade row other than `error` counts as live even when every fade failed
 #          "$T" risk status --sandbox xmarket-weekend        capped ledger: equity, positions, halts
@@ -241,8 +244,8 @@ per_minute = 1200                # HL: 1200 weight / min / IP; this sandbox peak
 
 [recorder]
 enabled = true
-schemas = ["mkt_ctx/1", "hl_book/1", "mkt_instrument/1"]
-keep_data = ["hl_book/1"]        # full books (levels); the others keep features
+schemas = ["*"]                  # every typed row: ctx, books, instruments + fade, exits, risk, positions (2026-10-02)
+keep_data = ["*"]                # full payloads, not features only (operator 2026-10-02: store everything)
 change_only = true
 heartbeat_secs = 300             # ≤ anchor_max_age_secs
 retention_days = 90              # covers the run + its analysis

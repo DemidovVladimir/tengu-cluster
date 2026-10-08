@@ -23,7 +23,7 @@ tengu secret set OPENROUTER_API_KEY sk-or-...
 tengu secret set TELEGRAM_BOT_TOKEN 123:ABC-..
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
 make tor                                       # Tor proxy (default network); or set [egress] network = "open"
-tengu chat                                     # or: tengu chat --sandbox aura
+tengu chat                                     # or: tengu chat --sandbox lping
 ```
 
 ## Root sections
@@ -121,7 +121,7 @@ example_queries = ["what is the BTC price?"]
 
 ```toml
 [orchestrator]
-agent = "aura"                 # the [agents.*] block that runs the planner LLM call (use an OpenRouter agent)
+agent = "lping"                # the [agents.*] block that runs the planner LLM call (use an OpenRouter agent)
 engine = "rag"                 # the only accepted value (historical name; file-registry planner)
 max_attempts_per_step = 3      # Tier 1: retries per step before escalation
 max_replans = 2                # Tier 2: replans before bailing out
@@ -157,7 +157,7 @@ Durable memory is the Postgres `agentic_memory` plugin: `--features postgres_mem
 |---|---|---|
 | `enabled` | `false` | |
 | `allowed_users` | `[]` | merged with `TENGU_TELEGRAM_ALLOWED_USERS`; both empty = `tengu telegram` refuses to start; an unlisted sender gets "Unauthorized." |
-| `tool_approvals` · `approve_only` | `false` · `[]` | **not implemented** — parsed (aura sets `approve_only`), gate nothing on any engine or surface; `Config::load` warns while set. Gate tools with `tools` and scopes |
+| `tool_approvals` · `approve_only` | `false` · `[]` | **not implemented** — parsed, gate nothing on any engine or surface; `Config::load` warns while set. Gate tools with `tools` and scopes |
 
 Private agents (no `description`, not `default`) are never `@`-routable from Telegram nor its default.
 
@@ -403,11 +403,11 @@ At least one of `every_secs`, `windows`, `at`; names `[a-z0-9_-]+`. Call ids `fe
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Nine today: `aura`, `jev-exec`, `lping`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab` — purposes and networks in the README § Sandboxes. Every one and `config.example.toml` must load (`config::risk::tests::every_sandbox_and_the_example_load`).
+`sandboxes/<name>/config.toml`, run from the repo root. Eight today: `jev-exec`, `lping`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab` — purposes and networks in the README § Sandboxes. Every one and `config.example.toml` must load (`config::risk::tests::every_sandbox_and_the_example_load`).
 
 ```bash
-tengu chat --sandbox aura
-cargo run --features claude_code -- chat --sandbox aura   # aura's agents use engine = "claude_code"
+tengu chat --sandbox lping
+cargo run --features claude_code -- chat --sandbox xlab   # xlab's agents use engine = "claude_code"
 tengu run --sandbox xmarket                               # long-running: feeds, loops, webhooks
 tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 ```

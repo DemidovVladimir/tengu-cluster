@@ -17,8 +17,9 @@
 //! ### Three-tier walk
 //!
 //! Mirrors `application/skills/registry.rs::skill_directories` precedence: managed (`~/.tengu/skills`)
-//! → workspace (`<cwd>/.tengu/skills`) → project (`<cwd>/skills`). First
-//! match wins; the winning tier is reported in `list` and `read` outputs.
+//! → workspace (`<workspace>/.tengu/skills`) → project (`<workspace>/skills`, then
+//! the repo's `skills/` where tengu runs). First match wins; the winning tier
+//! is reported in `list` and `read` outputs.
 //!
 //! ### Schema
 //! - `action: "list" | "read" | "read_resource"` (required)
@@ -116,11 +117,11 @@ impl Tool for ViewSkillTool {
         let action = require_str(args, VIEW_SKILL_TOOL_NAME, "action")?;
 
         match action {
-            "list" => list_all_skills(&cwd()),
+            "list" => list_all_skills(ctx.workspace),
             "read" => {
                 let skill = require_str(args, VIEW_SKILL_TOOL_NAME, "skill")?;
                 validate_skill_name(skill)?;
-                let (skill_dir, tier) = locate_skill_dir(skill, &cwd())
+                let (skill_dir, tier) = locate_skill_dir(skill, ctx.workspace)
                     .ok_or_else(|| anyhow!("no skill '{}' found in any tier", skill))?;
                 read_skill(skill, &skill_dir, tier)
             }
@@ -129,7 +130,7 @@ impl Tool for ViewSkillTool {
                 let path = require_str(args, VIEW_SKILL_TOOL_NAME, "path")?;
                 validate_skill_name(skill)?;
                 validate_path_under_resources(path)?;
-                let (skill_dir, _tier) = locate_skill_dir(skill, &cwd())
+                let (skill_dir, _tier) = locate_skill_dir(skill, ctx.workspace)
                     .ok_or_else(|| anyhow!("no skill '{}' found in any tier", skill))?;
                 let resources_dir = skill_dir.join("resources");
                 read_resource(skill, &resources_dir, path)
@@ -140,10 +141,6 @@ impl Tool for ViewSkillTool {
             ),
         }
     }
-}
-
-fn cwd() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 // ---------------------------------------------------------------------------
@@ -226,8 +223,8 @@ impl Tier {
 
 /// Walk managed → workspace → project; return the first directory that
 /// contains a `SKILL.md` file (matching `scan_skills`'s shadowing order).
-fn locate_skill_dir(skill: &str, cwd: &Path) -> Option<(PathBuf, Tier)> {
-    for (tier, root) in tier_roots(cwd) {
+fn locate_skill_dir(skill: &str, workspace: &Path) -> Option<(PathBuf, Tier)> {
+    for (tier, root) in tier_roots(workspace) {
         let candidate = root.join(skill);
         if candidate.join("SKILL.md").is_file() {
             return Some((candidate, tier));
@@ -236,14 +233,25 @@ fn locate_skill_dir(skill: &str, cwd: &Path) -> Option<(PathBuf, Tier)> {
     None
 }
 
-fn tier_roots(cwd: &Path) -> Vec<(Tier, PathBuf)> {
-    let mut out = Vec::with_capacity(3);
-    if let Some(home) = dirs_next::home_dir() {
-        out.push((Tier::Managed, home.join(".tengu").join("skills")));
-    }
-    out.push((Tier::Workspace, cwd.join(".tengu").join("skills")));
-    out.push((Tier::Project, cwd.join("skills")));
-    out
+/// The skill loader's directories (`skills::registry::skill_directories`)
+/// for `workspace`, each with its tier — the tool used the process cwd in
+/// place of the agent's workspace.
+fn tier_roots(workspace: &Path) -> Vec<(Tier, PathBuf)> {
+    let managed = dirs_next::home_dir().map(|h| h.join(".tengu").join("skills"));
+    let dotdir = workspace.join(".tengu").join("skills");
+    crate::application::skills::registry::skill_directories(workspace)
+        .into_iter()
+        .map(|dir| {
+            let tier = if Some(&dir) == managed.as_ref() {
+                Tier::Managed
+            } else if dir == dotdir {
+                Tier::Workspace
+            } else {
+                Tier::Project
+            };
+            (tier, dir)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -261,11 +269,11 @@ struct SkillSummary {
     editable_by_learner: bool,
 }
 
-fn list_all_skills(cwd: &Path) -> Result<ToolOutput> {
+fn list_all_skills(workspace: &Path) -> Result<ToolOutput> {
     let mut by_name: std::collections::HashMap<String, SkillSummary> =
         std::collections::HashMap::new();
 
-    for (tier, root) in tier_roots(cwd) {
+    for (tier, root) in tier_roots(workspace) {
         if !root.is_dir() {
             continue;
         }
@@ -706,10 +714,19 @@ mod tests {
             "x",
         );
 
+        // The listing also holds the managed tier and the repo's `skills/` (the
+        // test cwd), as the skill loader does: count relative to an empty
+        // workspace, and find the seeded skills by name.
+        let empty = TempDir::new().unwrap();
+        let base = listed(empty.path());
         let out = list_all_skills(tmp.path()).unwrap();
         let v: Value = serde_json::from_str(&out.text).unwrap();
-        assert_eq!(v["count"], 2);
-        let arr = v["skills"].as_array().unwrap();
+        assert_eq!(v["count"].as_u64().unwrap(), base.len() as u64 + 2);
+        let all = v["skills"].as_array().unwrap();
+        let arr: Vec<&Value> = all
+            .iter()
+            .filter(|s| s["name"] == "alpha" || s["name"] == "bravo")
+            .collect();
         // sorted by name.
         assert_eq!(arr[0]["name"], "alpha");
         assert_eq!(arr[0]["tier"], "project");
@@ -720,14 +737,54 @@ mod tests {
         assert_eq!(arr[1]["editable_by_learner"], true);
     }
 
+    /// `read` finds a skill in the calling agent's workspace — the tool
+    /// searched the process cwd, so a workspace skill was "not found".
+    #[tokio::test]
+    async fn read_finds_a_skill_in_the_agents_workspace() {
+        use crate::adapters::outbound::tools::workspace::test_support::TestHarness;
+        let ws = TempDir::new().unwrap();
+        let name = format!("ws-only-{}", uuid::Uuid::new_v4().simple());
+        seed_skill(
+            ws.path(),
+            &name,
+            &format!("name: {name}\ndescription: d\n"),
+            "# Body\n",
+        );
+        let harness = TestHarness::new(ws.path());
+        let out = ViewSkillTool::new()
+            .execute(&json!({"action": "read", "skill": name}), &harness.ctx())
+            .await
+            .expect("found in the workspace");
+        assert!(out.text.contains("Body"), "{}", out.text);
+    }
+
     #[test]
     fn list_handles_no_skills_dir() {
         let tmp = TempDir::new().unwrap();
-        // No skills/ directory at all.
-        let out = list_all_skills(tmp.path()).unwrap();
+        // No skills/ directory in the workspace: only the managed tier and the
+        // repo's `skills/` show, none from the workspace tiers.
+        let names = listed(tmp.path());
+        assert!(
+            names.iter().all(|(_, tier)| tier != "workspace"),
+            "{names:?}"
+        );
+        assert_eq!(names, listed(TempDir::new().unwrap().path()));
+    }
+
+    fn listed(ws: &Path) -> Vec<(String, String)> {
+        let out = list_all_skills(ws).unwrap();
         let v: Value = serde_json::from_str(&out.text).unwrap();
-        assert_eq!(v["count"], 0);
-        assert_eq!(v["skills"].as_array().unwrap().len(), 0);
+        v["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                (
+                    s["name"].as_str().unwrap().to_string(),
+                    s["tier"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
     }
 
     #[test]

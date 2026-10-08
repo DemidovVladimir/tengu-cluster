@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Diagnose and deploy · Tengu</title>
+<meta name="description" content="tengu doctor, status and prune; the Docker image, compose files and Makefile; the installer, cloud-init and the Arti + lyrebird-rs Tor proxy container.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: make-up planner, doctor verdict, prune planner, target grid */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .readout { white-space: nowrap; }
+  .sel { font: inherit; font-family: var(--font-mono); font-size: .82rem; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .plan { display: grid; gap: 0; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .plan div { display: grid; grid-template-columns: minmax(90px, 130px) minmax(0, 1fr); gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: .85rem; background: var(--panel); }
+  .plan div:last-child { border-bottom: 0; }
+  .plan span:first-child { font-family: var(--font-mono); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); padding-top: 2px; }
+  .plan code { overflow-wrap: anywhere; }
+  .plan .warn { color: var(--warn); } .plan .bad { color: var(--bad); } .plan .good { color: var(--ok); }
+  .dgrid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+  .dbox { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 6px; align-content: start; }
+  .dbox h4 { margin: 0; font-family: var(--font-mono); font-size: .76rem; font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); display: flex; gap: 8px; align-items: center; }
+  .dbox label { display: flex !important; gap: 6px !important; align-items: center; font-size: .82rem !important; color: var(--muted); }
+  .dbox.off { opacity: .5; }
+  .dbox input[type="range"] { flex: 1 1 auto; min-width: 0; width: auto !important; }
+  .dout { font-family: var(--font-mono); font-size: .78rem; background: #0B1119; color: #D5DEE8; border-radius: var(--radius); padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; margin: 0; }
+  .dout .g { color: #7FC793; } .dout .r { color: #F0806A; } .dout .d { color: #93A3B6; } .dout .y { color: #E2B65C; }
+  .health { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .plist { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+  .plist li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; font-size: .84rem; color: var(--muted); align-items: start; }
+  .plist li::before { font-family: var(--font-mono); font-weight: 600; }
+  .plist li.rm::before { content: "✓"; color: var(--bad); }
+  .plist li.keep::before { content: "·"; color: var(--ok); }
+  .plist code { overflow-wrap: anywhere; }
+  .targets { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
+  .targets div { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); font-size: .82rem; color: var(--muted); display: block; line-height: 1.45; }
+  .targets b { display: block; font-family: var(--font-mono); font-size: .82rem; color: var(--ink); }
+  .targets div.tor { border-left: 3px solid var(--guard); }
+  .targets div.dk { border-left: 3px solid var(--hands); }
+  .targets div.dz { border-left: 3px solid var(--bad); }
+  .card h3 { flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">営</span> Operate · diagnose, deploy, clean</div>
+  <h1>Diagnose and deploy</h1>
+  <p class="lede"><code>tengu doctor</code> is the health check: any failed check exits non-zero, and Docker marks the container unhealthy. <code>make up</code> runs tengu in Docker behind its own Tor proxy unless the config says <code>network = "open"</code>.</p>
+  <ul class="facts">
+    <li>health check every <b>60 s</b>, <b>3</b> retries</li>
+    <li>proxy <b>socks5h://127.0.0.1:9050</b></li>
+    <li><code>--live</code> stale after <b>30 s</b></li>
+    <li>image CMD <b>tengu telegram</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> the tengu container</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> make targets</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> Tor proxy and checks</li>
+    <li><span class="chip data">data</span> config and volumes</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Clone → container → health</span>
+    <h2 id="s-flow">From <code>make up</code> to a healthy container</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 460" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">The installer runs make up; make mounts the sandbox config and derives NETWORK; under tor the tengu container sits on an internal network whose only exit is the Arti and lyrebird-rs container; Docker runs tengu doctor every minute.</title>
+        <rect class="zone" x="236" y="112" width="414" height="330" rx="12"/>
+        <text class="zone-label" x="636" y="132" text-anchor="end">tor-front · internal</text>
+
+        <path class="e" id="p-inst-make" d="M105 80 L105 116" data-at="1"/>
+        <path class="e" id="p-make-cfg" d="M190 144 C 220 144, 220 52, 250 52" data-at="2"/>
+        <path class="e" id="p-make-net" d="M105 172 L105 214" data-at="3"/>
+        <path class="e" id="p-cfg-tengu" d="M345 80 L345 150" data-at="2,7"/>
+        <path class="e" id="p-net-tengu" d="M175 262 C 212 262, 214 202, 250 202" data-at="4"/>
+        <path class="e" id="p-net-open" d="M105 310 L105 372" data-at="10"/>
+        <path class="e" id="p-tengu-tor" d="M440 202 L470 202" data-at="5"/>
+        <path class="e" id="p-tor-lyre" d="M635 178 L680 178" data-at="5-6"/>
+        <path class="e" id="p-lyre-net" d="M760 206 L760 250" data-at="5-6"/>
+        <path class="e" id="p-tengu-hc" d="M345 254 L345 320" data-at="8"/>
+        <path class="e dash" id="p-hc-tor" d="M440 365 C 520 365, 552 300, 552 254" data-at="8"/>
+
+        <g class="n" data-at="1">
+          <rect x="20" y="24" width="170" height="56" rx="8"/>
+          <text x="105" y="47" text-anchor="middle" class="t-title t-mono">install.sh</text>
+          <text x="105" y="66" text-anchor="middle" class="t-small">or cloud-init.yml</text>
+        </g>
+        <g class="n hands" data-at="2-3">
+          <rect x="20" y="116" width="170" height="56" rx="8"/>
+          <text x="105" y="139" text-anchor="middle" class="t-title">make up</text>
+          <text x="105" y="158" text-anchor="middle" class="t-small t-mono">SANDBOX=&lt;name&gt;</text>
+        </g>
+        <g class="n guard" data-at="3-4,10">
+          <polygon points="105,214 175,262 105,310 35,262"/>
+          <text x="105" y="258" text-anchor="middle" class="t-title">network</text>
+          <text x="105" y="276" text-anchor="middle" class="t-small t-mono">= "open"?</text>
+        </g>
+        <g class="n" data-at="10">
+          <rect x="20" y="372" width="170" height="58" rx="8"/>
+          <text x="105" y="395" text-anchor="middle" class="t-title">open: direct</text>
+          <text x="105" y="414" text-anchor="middle" class="t-small">port 7080 published</text>
+        </g>
+        <g class="n data" data-at="2,7">
+          <rect x="250" y="24" width="190" height="56" rx="8"/>
+          <text x="345" y="47" text-anchor="middle" class="t-title t-mono">config.toml</text>
+          <text x="345" y="66" text-anchor="middle" class="t-small">mounted read-only</text>
+        </g>
+        <g class="n heart" data-at="4,7-8">
+          <rect x="250" y="150" width="190" height="104" rx="10"/>
+          <text x="345" y="176" text-anchor="middle" class="t-kanji k">天</text>
+          <text x="345" y="198" text-anchor="middle" class="t-title">tengu container</text>
+          <text x="345" y="217" text-anchor="middle" class="t-small">CMD: tengu telegram</text>
+          <text x="345" y="234" text-anchor="middle" class="t-small">TENGU_HOME: tengu-data</text>
+        </g>
+        <g class="n guard" data-at="5-6,8">
+          <rect x="470" y="150" width="165" height="104" rx="10"/>
+          <text x="552" y="178" text-anchor="middle" class="t-title">tor container</text>
+          <text x="552" y="198" text-anchor="middle" class="t-small">Arti on :9050</text>
+          <text x="552" y="215" text-anchor="middle" class="t-small">SOCKS + HTTP CONNECT</text>
+          <text x="552" y="232" text-anchor="middle" class="t-small">healthy = IsTor</text>
+        </g>
+        <g class="n guard" data-at="5-6">
+          <rect x="680" y="150" width="160" height="56" rx="8"/>
+          <text x="760" y="173" text-anchor="middle" class="t-title">lyrebird-rs</text>
+          <text x="760" y="192" text-anchor="middle" class="t-small">obfs4 · snowflake</text>
+        </g>
+        <g class="n" data-at="5-6">
+          <rect x="680" y="250" width="160" height="56" rx="8"/>
+          <text x="760" y="273" text-anchor="middle" class="t-title">Tor network</text>
+          <text x="760" y="292" text-anchor="middle" class="t-small">through bridges only</text>
+        </g>
+        <g class="n guard" data-at="8-9">
+          <rect x="250" y="320" width="190" height="90" rx="8"/>
+          <text x="345" y="346" text-anchor="middle" class="t-title">HEALTHCHECK</text>
+          <text x="345" y="366" text-anchor="middle" class="t-small">tengu doctor · 60 s</text>
+          <text x="345" y="384" text-anchor="middle" class="t-small">3 fails → unhealthy</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">TENGU_NETWORK=tor default</text></g>
+        <g class="pop badge" data-at="2"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">./config.toml w/o SANDBOX</text></g>
+        <g class="pop badge" data-at="3"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">NETWORK= overrides</text></g>
+        <g class="pop badge" data-at="4"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">ports: none published</text></g>
+        <g class="pop badge" data-at="5"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">Arti 2.6.0, bridges on</text></g>
+        <g class="pop badge" data-at="6"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">every 15 s, ≤ 40 tries</text></g>
+        <g class="pop badge" data-at="7"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">/opt/tengu/data</text></g>
+        <g class="pop badge" data-at="8"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">any failure → exit 1</text></g>
+        <g class="pop badge" data-at="9"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">timeout 10 s · start 10 s</text></g>
+        <g class="pop badge" data-at="10"><rect x="660" y="392" width="190" height="22" rx="11"/><text x="755" y="407" text-anchor="middle">no tor container</text></g>
+
+        <circle class="tok" r="6" data-path="p-inst-make" data-at="1"/>
+        <circle class="tok hands" r="6" data-path="p-make-cfg" data-at="2"/>
+        <circle class="tok" r="5" data-path="p-cfg-tengu" data-at="2" data-delay="700"/>
+        <circle class="tok hands" r="6" data-path="p-make-net" data-at="3"/>
+        <circle class="tok guard" r="6" data-path="p-net-tengu" data-at="4"/>
+        <circle class="tok heart" r="6" data-path="p-tengu-tor" data-at="5" data-dur="700"/>
+        <circle class="tok guard" r="6" data-path="p-tor-lyre" data-at="5" data-delay="600" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-lyre-net" data-at="5" data-delay="1200" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-tor-lyre" data-at="6" data-dur="800"/>
+        <circle class="tok guard" r="6" data-path="p-lyre-net" data-at="6" data-delay="600" data-dur="800"/>
+        <circle class="tok" r="6" data-path="p-cfg-tengu" data-at="7"/>
+        <circle class="tok guard" r="6" data-path="p-tengu-hc" data-at="8"/>
+        <circle class="tok guard" r="5" data-path="p-hc-tor" data-at="8" data-delay="700"/>
+        <circle class="tok" r="6" data-path="p-net-open" data-at="10"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>deploy/install.sh</code> (or <code>cloud-init.yml</code> on a VPS) clones the repo and lyrebird-rs, copies <code>.env</code> and <code>config.toml</code> from the examples, then runs <code>make up</code>.</li>
+        <li><code>make up SANDBOX=&lt;name&gt;</code> mounts <code>sandboxes/&lt;name&gt;/config.toml</code> read-only as <code>/opt/tengu/config.toml</code>. Without <code>SANDBOX</code> it mounts <code>./config.toml</code>.</li>
+        <li><code>NETWORK</code> comes from that file: <code>network = "open"</code> inside its <code>[egress]</code> section means open, anything else means tor. <code>NETWORK=tor|open</code> on the command line wins.</li>
+        <li>Under tor, <code>docker-compose.tor.yml</code> joins: tengu sits on <code>tor-front</code>, an internal network with no gateway. No port is published; <code>TENGU_TOR_PROXY=socks5h://tor:9050</code>.</li>
+        <li>The tor container runs Arti, SOCKS5 and HTTP CONNECT on port 9050. Arti starts lyrebird-rs; every connection into Tor goes through an obfs4 or snowflake bridge.</li>
+        <li>The tor container is healthy only once <code>check.torproject.org</code> reports a Tor exit, tried every 15 s up to 40 times. tengu waits for that.</li>
+        <li>The tengu container runs <code>tengu telegram</code>. <code>TENGU_HOME</code> is <code>/opt/tengu/data</code> on the <code>tengu-data</code> volume; <code>skills/</code> and <code>sandboxes/</code> are baked into the image.</li>
+        <li>Every 60 s Docker runs <code>tengu doctor</code>: it builds every agent's engine, looks for the Claude CLI of each <code>claude_code</code> agent and checks the proxy port answers. Any failure exits 1.</li>
+        <li>Three failed checks in a row mark the container unhealthy. <code>make doctor</code> runs the same command, plus <code>--tor</code> under tor for a live exit check.</li>
+        <li><code>NETWORK=open</code> skips the override: no tor container, port 7080 published for <code>tengu webhooks</code>, traffic leaves under the config's <code>[egress]</code> rules.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-make">
+  <div class="sec-head">
+    <span class="kicker">Try it: pick a sandbox</span>
+    <h2 id="s-make">What <code>make up</code> will do</h2>
+    <p>The Makefile's own rules, fed with the real sandbox configs. The health line checks what <code>tengu doctor</code> needs to pass.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="m-sb"><code>SANDBOX=</code> <select class="sel" id="m-sb"></select></label>
+      <label for="m-net"><code>NETWORK=</code> <select class="sel" id="m-net"><option value="">(derived)</option><option>tor</option><option>open</option></select></label>
+      <label for="m-mem"><input type="checkbox" id="m-mem"> <code>make up-memory</code></label>
+      <label for="m-cc"><input type="checkbox" id="m-cc"> <code>claude_code</code> in <code>TENGU_FEATURES</code></label>
+    </div>
+    <div class="plan" id="m-plan" aria-live="polite"></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-doctor">
+  <div class="sec-head">
+    <span class="kicker">Try it: break something</span>
+    <h2 id="s-doctor">What makes <code>tengu doctor</code> fail</h2>
+    <p>Every block below adds failures to one list; a non-empty list exits 1. Docker's health check runs plain <code>tengu doctor</code>, without flags.</p>
+  </div>
+  <div class="widget">
+    <div class="dgrid">
+      <div class="dbox"><h4>always</h4>
+        <label><input type="checkbox" id="d-build" checked> every agent's engine builds</label>
+        <label><input type="checkbox" id="d-port" checked> proxy port answers (3 s)</label>
+      </div>
+      <div class="dbox" id="b-tor"><h4><label style="font-family:var(--font-mono)"><input type="checkbox" id="d-tor"> --tor</label></h4>
+        <label><input type="checkbox" id="d-istor" checked> check.torproject.org: <code>IsTor</code></label>
+      </div>
+      <div class="dbox" id="b-live"><h4><label style="font-family:var(--font-mono)"><input type="checkbox" id="d-live"> --live</label></h4>
+        <label>heartbeat <select class="sel" id="d-hb"><option value="running">running</option><option value="stopped">stopped</option><option value="missing">missing</option></select></label>
+        <label>last beat <input type="range" id="d-age" min="0" max="120" step="5" value="5"> <span class="readout" id="d-age-o">5 s</span></label>
+        <label><input type="checkbox" id="d-feed"> a required feed is down</label>
+      </div>
+      <div class="dbox" id="b-eng"><h4><label style="font-family:var(--font-mono)"><input type="checkbox" id="d-eng"> --engines</label></h4>
+        <label><input type="checkbox" id="d-ls" checked> <code>list_directory</code> called</label>
+        <label><input type="checkbox" id="d-rf" checked> <code>read_file</code> called</label>
+        <label><input type="checkbox" id="d-err"> a smoke tool returned an error</label>
+        <label><input type="checkbox" id="d-tok" checked> answer holds the token</label>
+      </div>
+    </div>
+    <pre class="dout" id="d-out" aria-live="polite"></pre>
+    <div class="health"><span class="verdict ok" id="d-exit"></span><span class="readout" id="d-health"></span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-prune">
+  <div class="sec-head">
+    <span class="kicker">Try it: <code>tengu prune</code></span>
+    <h2 id="s-prune">What prune removes, and what it never touches</h2>
+    <p>The plan is printed first and needs <code>y</code> unless <code>--yes</code>. Workspaces come from the sandbox's <code>[agents.*] workspace</code> lines.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="p-sb"><code>--sandbox</code> <select class="sel" id="p-sb">
+        <option value="">(none)</option><option>lping</option><option>unlimited</option><option>jev-exec</option><option>xlab</option>
+      </select></label>
+      <label for="p-hard"><input type="checkbox" id="p-hard"> <code>--hard</code></label>
+    </div>
+    <div class="grid two">
+      <div class="card guard"><h3>Will remove</h3><ul class="plist" id="p-rm"></ul></div>
+      <div class="card hands"><h3>Never removed</h3><ul class="plist" id="p-keep"></ul></div>
+    </div>
+    <p class="note" id="p-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-targets">
+  <div class="sec-head">
+    <span class="kicker">Makefile</span>
+    <h2 id="s-targets">Every target, one line each</h2>
+    <p>Pass the same <code>SANDBOX=</code> to every target of a stack: <code>NETWORK</code> is derived from it.</p>
+  </div>
+  <div class="targets">
+    <div class="dk"><b>setup</b>copy <code>.env.example</code> and <code>config.example.toml</code> if missing</div>
+    <div class="dk"><b>up</b>tengu on the chosen config; checks it exists first</div>
+    <div class="dk"><b>up-memory</b>+ Postgres / pgvector; image with <code>postgres_memory</code></div>
+    <div class="dk"><b>chat</b>the TUI in a throwaway container, same wiring</div>
+    <div class="dk"><b>build · pull</b>build the images · pull base images</div>
+    <div class="dk"><b>logs · status</b>tail tengu logs · list services</div>
+    <div class="dk"><b>doctor</b><code>tengu doctor</code> in the container, <code>--tor</code> under tor</div>
+    <div class="dk"><b>down</b>stop the stack, memory profile included</div>
+    <div class="dz"><b>down-all</b>both networks + the standalone proxy; keeps volumes</div>
+    <div class="dz"><b>clean</b>down and delete volumes, after a 3 s pause</div>
+    <div class="tor"><b>tor</b>standalone proxy on <code>127.0.0.1:9050</code> for a native tengu</div>
+    <div class="tor"><b>tor-down · tor-logs</b>stop it · tail Arti + lyrebird-rs</div>
+    <div class="tor"><b>tor-bridges</b>print fresh obfs4 + snowflake bridge lines</div>
+    <div><b>native · native-release · native-memory</b>cargo builds: debug · all features · <code>postgres_memory</code></div>
+    <div><b>check-config · help</b>fail on a missing config · list targets</div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-more">
+  <div class="sec-head">
+    <span class="kicker">Three more pieces</span>
+    <h2 id="s-more">Status, secrets and the proxy image</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-status" aria-selected="true">tengu status</button>
+      <button type="button" aria-controls="tab-secret">tengu secret</button>
+      <button type="button" aria-controls="tab-img">images</button>
+      <button type="button" aria-controls="tab-vps">install · cloud-init</button>
+    </div>
+    <div class="tabpanel" id="tab-status"><pre><span class="c"># a static snapshot; never fails</span>
+tengu status
+<span class="c">#   Profile, the number of agents, each agent's engine/model [default]
+#   with its diagnostics (or "unavailable (&lt;why&gt;)"), and [hub] bind:port</span></pre></div>
+    <div class="tabpanel" id="tab-secret" hidden><pre><span class="c"># the encrypted vault &lt;TENGU_HOME&gt;/secrets.vault — see Secrets and redaction</span>
+tengu secret init              <span class="c"># create it, with a master password</span>
+tengu secret set KEY VALUE
+tengu secret remove KEY
+tengu secret list              <span class="c"># names only, values hidden</span>
+tengu secret change-password
+tengu secret path</pre></div>
+    <div class="tabpanel" id="tab-img" hidden><pre><span class="c"># Dockerfile (tengu)</span>
+builder  rust:1.91-bookworm, FEATURES=<span class="s">"openrouter,telegram"</span> (TENGU_FEATURES overrides)
+runtime  debian:bookworm-slim + ca-certificates, libssl3   <span class="c"># no Claude CLI inside</span>
+         /opt/tengu/{skills,sandboxes}, WORKDIR /opt/tengu
+         TENGU_CONFIG=/opt/tengu/config.toml  TENGU_HOME=/opt/tengu/data
+         EXPOSE 7080   HEALTHCHECK tengu doctor   ENTRYPOINT tengu   CMD telegram
+
+<span class="c"># deploy/tor/Dockerfile (proxy)</span>
+arti     cargo install arti --version 2.6.0 --locked --features http-connect
+lyrebird built from ../lyrebird-rs (LYREBIRD_RS_DIR / LYREBIRD_RS_SRC)
+runtime  debian:bookworm-slim, user arti, volume tor-state (guards + consensus)
+         CMD arti proxy -c /etc/arti/arti.toml</pre></div>
+    <div class="tabpanel" id="tab-vps" hidden><pre><span class="c"># deploy/install.sh — env knobs</span>
+TENGU_DIR=./tengu-cluster  TENGU_BRANCH=main  TENGU_NETWORK=tor|open
+TENGU_PROFILE=postgres-memory  SKIP_DOCKER=true  SKIP_START=true
+<span class="c"># open: a new config.toml gets [egress] network = "open" appended
+# tor:  lyrebird-rs is cloned next to the install dir when missing</span>
+
+<span class="c"># deploy/cloud-init.yml — a fresh Ubuntu VPS</span>
+Docker → clone both repos to /opt → copy examples → make build
+systemd tengu.service: ExecStart=make up, ExecStop=make down, TimeoutStartSec=900
+ufw: allow 22/tcp and 7080/tcp
+<span class="c"># then: ssh in, edit .env and config.toml, make up</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Doctor rows</span>
+    <h2 id="s-out">What a doctor run can report</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">0</span><span><b>all ok</b>Exit 0; Docker keeps the container healthy.</span></li>
+    <li><span class="chip bad">1</span><span><b>backend init error</b>An engine did not build: e.g. <code>OPENROUTER_API_KEY is required</code>, or <code>claude_code</code> without its feature.</span></li>
+    <li><span class="chip bad">1</span><span><b>proxy unreachable</b>The <code>[egress]</code> proxy port refused or timed out: is tor running?</span></li>
+    <li><span class="chip bad">1</span><span><b>not via Tor</b><code>--tor</code>: the exit is not a Tor exit, or the check failed.</span></li>
+    <li><span class="chip bad">1</span><span><b>NOT live</b><code>--live</code>: heartbeat missing, stopped or stale, or a required feed down or stale.</span></li>
+    <li><span class="chip bad">1</span><span><b>FAIL row</b><code>--engines</code>: a smoke turn missed a tool, got an error, or lost the token.</span></li>
+    <li><span class="chip">skip</span><span><b>local on macOS</b>A <code>local</code> agent on a loopback <code>base_url</code> is never contacted.</span></li>
+    <li><span class="chip">skip</span><span><b>scopes deny</b>The agent's own scopes deny <code>list_directory</code> or <code>read_file</code>.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code and config</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Doctor fails loudly.</b> Any failed check, in any block, returns an error: exit 1 with every failure listed.</span></li>
+    <li><span><b>The smoke turn is sealed.</b> <code>--engines</code> runs only <code>list_directory</code> and <code>read_file</code> in a temp folder with a random token; Claude Code built-ins are off.</span></li>
+    <li><span><b>No way out but Tor.</b> Under tor, tengu and Postgres sit on an internal network with no gateway and no published ports.</span></li>
+    <li><span><b>Bridges only.</b> Arti's <code>[bridges] enabled = true</code>: it never dials a guard or relay directly.</span></li>
+    <li><span><b>Healthy means Tor.</b> The proxy is healthy only after <code>"IsTor":true</code>; tengu does not start before.</span></li>
+    <li><span><b>Config is read-only.</b> The sandbox config is mounted <code>:ro</code>; secrets come from <code>.env</code>.</span></li>
+    <li><span><b>Prune keeps what matters.</b> Never <code>&lt;TENGU_HOME&gt;/state</code> beyond <code>state/flows</code>, the vault, the config or the managed skills; <code>--hard</code> empties a workspace but keeps the folder.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Check, run, clean</h2>
+    <p><code>tor-check</code> is the smallest sandbox for the Tor path; start the proxy with <code>make tor</code> first. Output is an excerpt with placeholders.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>make tor &amp;&amp; tengu doctor --sandbox tor-check --tor</span>
+<span class="ln o">  Egress:</span>
+<span class="ln o">    network: tor</span>
+<span class="ln o">    proxy: socks5h://127.0.0.1:9050</span>
+<span class="ln o">    proxy port: 127.0.0.1:9050 reachable</span>
+<span class="ln o">    tor: IsTor=true exit=<span class="hl">&lt;exit ip&gt;</span></span>
+<span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox jev-exec --engines</span>
+<span class="ln o">    architect  claude_code  claude-opus-5-5  skipped (list_directory, read_file denied by its own scopes)</span>
+<span class="ln o">    executor   openrouter   anthropic/claude-haiku-4-5  <span class="hl">&lt;ok|FAIL&gt;</span>  list_directory, read_file  <span class="hl">&lt;secs&gt;</span></span>
+<span class="ln cmd"><span class="p">$ </span>make up SANDBOX=unlimited &amp;&amp; make doctor SANDBOX=unlimited</span>
+<span class="ln cmd"><span class="p">$ </span>tengu prune --sandbox lping</span>
+<span class="ln o">Will remove:</span>
+<span class="ln o">  ✓ conversation flows (<span class="hl">&lt;TENGU_HOME&gt;</span>/state/flows)</span>
+<span class="ln o">Proceed? [y/N]</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu status</code>, <code>tengu doctor</code> and its four blocks</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td>flags of doctor, prune, secret; the prune prompt</td></tr>
+        <tr><td><code>src/domain/engine_smoke.rs</code></td><td>the smoke prompt, tools, round cap and verdict</td></tr>
+        <tr><td><code>src/domain/runtime.rs</code></td><td><code>live_verdict</code>: heartbeat, loops, feeds</td></tr>
+        <tr><td><code>src/config/runtime.rs</code></td><td><code>heartbeat_stale_secs</code> and the other <code>[runtime]</code> knobs</td></tr>
+        <tr><td><code>src/adapters/outbound/prune.rs</code></td><td>prune plan: targets, <code>--hard</code>, the state-dir guard</td></tr>
+        <tr><td><code>Dockerfile</code></td><td>the tengu image, its HEALTHCHECK and CMD</td></tr>
+        <tr><td><code>docker-compose.yml</code></td><td>tengu + optional Postgres / pgvector</td></tr>
+        <tr><td><code>docker-compose.tor.yml</code></td><td>the Tor topology override</td></tr>
+        <tr><td><code>Makefile</code></td><td>targets, <code>SANDBOX</code>, derived <code>NETWORK</code></td></tr>
+        <tr><td><code>deploy/tor/</code></td><td>Arti + lyrebird-rs image, <code>arti.toml</code>, compose files</td></tr>
+        <tr><td><code>deploy/install.sh</code></td><td>one-line installer</td></tr>
+        <tr><td><code>deploy/cloud-init.yml</code></td><td>VPS provisioning and the systemd unit</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: make-up planner (Makefile + compose), doctor verdict (doctor.rs, engine_smoke.rs,
+   runtime.rs live_verdict), prune plan (prune.rs plan_prune) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+
+  /* --- make up: sandbox facts read from sandboxes/<name>/config.toml --- */
+  var SB = {
+    "": { file: "config.toml", open: false, cc: 0, or: 1, tg: false },
+    "jev-exec": { file: "sandboxes/jev-exec/config.toml", open: true, cc: 1, or: 1, tg: false },
+    "lping": { file: "sandboxes/lping/config.toml", open: true, cc: 0, or: 3, tg: false },
+    "storage-test": { file: "sandboxes/storage-test/config.toml", open: false, cc: 1, or: 0, tg: true },
+    "tor-check": { file: "sandboxes/tor-check/config.toml", open: false, cc: 0, or: 1, tg: false },
+    "unlimited": { file: "sandboxes/unlimited/config.toml", open: true, cc: 0, or: 1, tg: true },
+    "xlab": { file: "sandboxes/xlab/config.toml", open: true, cc: 2, or: 0, tg: false },
+    "xmarket": { file: "sandboxes/xmarket/config.toml", open: true, cc: 2, or: 0, tg: false },
+    "xmarket-weekend": { file: "sandboxes/xmarket-weekend/config.toml", open: true, cc: 0, or: 1, tg: false }
+  };
+  var sel = $("m-sb");
+  Object.keys(SB).forEach(function (k) {
+    var o = document.createElement("option"); o.value = k; o.textContent = k || "(none)";
+    if (k === "unlimited") o.selected = true;
+    sel.appendChild(o);
+  });
+  function row(k, v) { return "<div><span>" + k + "</span><span>" + v + "</span></div>"; }
+  function plan() {
+    var k = sel.value, s = SB[k], ov = $("m-net").value, mem = $("m-mem").checked, cc = $("m-cc").checked;
+    var net = ov || (s.open ? "open" : "tor");
+    var why = ov ? "set on the command line" : (s.open ? "its <code>[egress]</code> section says <code>network = \"open\"</code>" : "no <code>network = \"open\"</code> under <code>[egress]</code> → tor");
+    var files = "-f docker-compose.yml" + (net === "tor" ? " -f docker-compose.tor.yml" : "");
+    var cmd = (mem ? "TENGU_FEATURES=openrouter,telegram,postgres_memory " : "") + "docker compose " + files + (mem ? " --profile postgres-memory" : "") + " up -d --build";
+    var ports = net === "tor" ? "none (internal network)" : "<code>7080</code> (webhooks)" + (mem ? ", <code>5432</code> (Postgres)" : "");
+    var proxy = net === "tor" ? "<code>socks5h://tor:9050</code> via <code>TENGU_TOR_PROXY</code>" : "none from compose; the config's <code>[egress]</code> applies";
+    var h = [];
+    if (s.cc && !cc) h.push('<span class="bad">doctor exits 1: ' + s.cc + " <code>claude_code</code> agent" + (s.cc > 1 ? "s" : "") + " need the feature → unhealthy</span>");
+    if (s.cc && cc) h.push('<span class="bad">doctor exits 1: the image has no Claude CLI (<code>claude</code> not on PATH) → unhealthy</span>');
+    if (s.or) h.push("needs <code>OPENROUTER_API_KEY</code> in <code>.env</code> (" + s.or + " openrouter agent" + (s.or > 1 ? "s" : "") + ")");
+    if (net === "open" && !s.open) h.push('<span class="warn">NETWORK=open but the config still says tor: doctor\'s proxy check fails without a proxy on 127.0.0.1:9050</span>');
+    if (net === "tor" && s.open && ov) h.push('<span class="warn">NETWORK=tor but the config says open: tengu goes direct inside a network with no exit</span>');
+    if (!h.some(function (x) { return x.indexOf("bad") >= 0; })) h.push('<span class="good">doctor can pass</span>');
+    var tg = s.tg ? "has a <code>[telegram]</code> block" : "no <code>[telegram]</code> block: set <code>TENGU_TELEGRAM_ALLOWED_USERS</code> or it refuses to start";
+    $("m-plan").innerHTML =
+      row("config", "<code>" + s.file + "</code> → <code>/opt/tengu/config.toml</code> (ro)") +
+      row("network", "<b>" + net + "</b> — " + why) +
+      row("command", "<code>" + cmd + "</code>") +
+      row("ports", ports) +
+      row("proxy", proxy) +
+      row("runs", "<code>tengu telegram</code>; " + tg) +
+      row("health", h.join("<br>")) +
+      row("doctor", "<code>make doctor" + (k ? " SANDBOX=" + k : "") + "</code> → <code>tengu doctor" + (net === "tor" ? " --tor" : "") + "</code>");
+  }
+  [sel, $("m-net"), $("m-mem"), $("m-cc")].forEach(function (e) { e.addEventListener("change", plan); });
+  plan();
+
+  /* --- doctor verdict --- */
+  var dIds = ["d-build", "d-port", "d-tor", "d-istor", "d-live", "d-hb", "d-age", "d-feed", "d-eng", "d-ls", "d-rf", "d-err", "d-tok"];
+  function doctor() {
+    var v = function (i) { return $(i).checked; };
+    var age = +$("d-age").value; $("d-age-o").textContent = age + " s";
+    $("b-tor").classList.toggle("off", !v("d-tor"));
+    $("b-live").classList.toggle("off", !v("d-live"));
+    $("b-eng").classList.toggle("off", !v("d-eng"));
+    var out = [], fails = [];
+    out.push("  TENGU CLUSTER — Doctor", "  Backend diagnostics:");
+    if (v("d-build")) out.push("    main: engine=openrouter <span class=\"d\">&lt;diagnostics&gt;</span>");
+    else { out.push('    main: <span class="r">backend init error: OPENROUTER_API_KEY is required</span>'); fails.push("main: OPENROUTER_API_KEY is required"); }
+    out.push("  Egress:", "    network: tor", "    proxy: socks5h://127.0.0.1:9050");
+    if (v("d-port")) out.push('    proxy port: 127.0.0.1:9050 <span class="g">reachable</span>');
+    else { out.push('    proxy port: 127.0.0.1:9050 <span class="r">UNREACHABLE (timeout)</span>'); fails.push("egress: proxy 127.0.0.1:9050 connect timed out"); }
+    if (v("d-tor")) {
+      if (v("d-istor")) out.push('    tor: <span class="g">IsTor=true</span> exit=&lt;exit ip&gt;');
+      else { out.push('    tor: <span class="r">IsTor=false</span> exit=&lt;exit ip&gt;'); fails.push("egress: traffic exits at <exit ip>, NOT via Tor"); }
+    }
+    if (v("d-live")) {
+      out.push("  Runtime (live): sandbox xmarket · &lt;state dir&gt;");
+      var hb = $("d-hb").value, ok = true, d;
+      if (hb === "missing") { ok = false; d = "missing: no run-xmarket.json — is `tengu run --sandbox xmarket` running?"; }
+      else if (hb === "stopped") { ok = false; d = "stopped " + age + " s ago: <reason>"; }
+      else if (age > 30) { ok = false; d = "stale: last beat " + age + " s ago (limit 30 s)"; }
+      else d = "running · last beat " + age + " s ago (limit 30 s)";
+      out.push("    " + (ok ? "ok  " : '<span class="r">FAIL</span>') + " heartbeat                " + d.replace(/</g, "&lt;"));
+      if (!ok) fails.push("live: heartbeat — " + d);
+      if (v("d-feed")) { out.push('    <span class="r">FAIL</span> feed hl_ctx (required)    down: &lt;detail&gt;'); fails.push("live: feed hl_ctx (required) — down"); }
+      out.push("    => " + (ok && !v("d-feed") ? '<span class="g">live</span>' : '<span class="r">NOT live</span>'));
+    }
+    if (v("d-eng")) {
+      var missing = [], failed = [];
+      if (!v("d-ls")) missing.push("list_directory");
+      if (!v("d-rf")) missing.push("read_file");
+      if (v("d-err")) { if (v("d-rf")) failed.push("read_file"); else if (v("d-ls")) failed.push("list_directory"); }
+      var p = [];
+      if (missing.length) p.push("not called: " + missing.join(", "));
+      if (failed.length) p.push("returned an error: " + failed.join(", "));
+      if (!v("d-tok")) p.push("token not in the answer (result not read)");
+      out.push("  Engines (smoke turn: list_directory + read_file in a temp workspace):");
+      out.push("    main  openrouter  <span class=\"d\">&lt;model&gt;</span>  " + (p.length ? '<span class="r">FAIL</span>' : '<span class="g">ok</span>  '));
+      if (p.length) { out.push('      <span class="r">' + p.join("; ") + "</span>"); fails.push("engines: main: " + p.join("; ")); }
+    }
+    if (fails.length) out.push('<span class="r">Error: doctor: ' + fails.length + " check(s) failed:</span>", fails.map(function (f) { return '<span class="r">  - ' + f.replace(/</g, "&lt;") + "</span>"; }).join("\n"));
+    $("d-out").innerHTML = out.join("\n");
+    var ex = $("d-exit");
+    ex.className = "verdict " + (fails.length ? "bad" : "ok");
+    ex.textContent = fails.length ? "exit 1" : "exit 0";
+    var plainFail = !v("d-build") || !v("d-port");
+    $("d-health").textContent = "Docker health (plain doctor): " + (plainFail ? "unhealthy after 3 failed runs, 60 s apart" : "healthy");
+  }
+  dIds.forEach(function (i) { $(i).addEventListener("input", doctor); $(i).addEventListener("change", doctor); });
+  doctor();
+
+  /* --- prune plan --- */
+  var WS = { lping: "~/lping-workspace", unlimited: "~/unlimited-workspace", "jev-exec": "~/jev-exec-workspace", xlab: "~/xlab-ws" };
+  function prune() {
+    var sb = $("p-sb").value, hard = $("p-hard").checked, ws = WS[sb];
+    var rm = ["<code>&lt;TENGU_HOME&gt;/state/flows</code> conversation flows", "<code>&lt;TENGU_HOME&gt;/memory</code> global memory vectors", "<code>&lt;TENGU_HOME&gt;/logs</code> log files"];
+    if (ws && !hard) ["memory", ".tengu-tasks", ".tengu-attachments", ".tengu/storage"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
+    if (ws && hard) rm.push("every entry inside <code>" + ws + "</code>: <code>.tengu/</code> (cache, observations, workspace skills), output folders, <code>TENGU_PLAN.md</code> …");
+    var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code> beyond <code>flows</code>: xmarket state dirs, <code>solana-writes.db</code>",
+      "<code>&lt;TENGU_HOME&gt;/secrets.vault</code>", "<code>&lt;TENGU_HOME&gt;/config.toml</code>", "<code>~/.tengu/skills</code> (managed skills)",
+      "the repo: <code>sandboxes/</code>, <code>skills/</code>"];
+    if (ws && hard) keep.push("the folder <code>" + ws + "</code> itself (emptied, kept)");
+    if (ws && !hard) keep.push("<code>" + ws + "/.tengu/</code> and other files (soft mode)");
+    $("p-rm").innerHTML = rm.map(function (x) { return '<li class="rm"><span>' + x + "</span></li>"; }).join("");
+    $("p-keep").innerHTML = keep.map(function (x) { return '<li class="keep"><span>' + x + "</span></li>"; }).join("");
+    var n;
+    if (hard && !ws) n = "<b>--hard has no effect without --sandbox</b> (no workspace to reset); pruning global state only.";
+    else if (!ws) n = "<b>Global only.</b> Without <code>--sandbox</code> no workspace is known.";
+    else if (hard) n = "<b>Hard reset.</b> Every child of the workspace root goes, so arbitrary agent output goes too.";
+    else n = "<b>Soft.</b> A fixed allow-list per workspace, plus <code>[scaffold.project] directories</code> when set (none of these sandboxes sets it).";
+    $("p-note").innerHTML = n + " Missing targets print as <code>[not found]</code>; nothing at all → <code>Nothing to prune.</code>";
+  }
+  $("p-sb").addEventListener("change", prune);
+  $("p-hard").addEventListener("change", prune);
+  prune();
+})();
+</script>
+</body>
+</html>

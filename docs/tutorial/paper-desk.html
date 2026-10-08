@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Paper desk · Tengu</title>
+<meta name="description" content="How every xmarket order tool runs the [risk] gate inside itself, then fills on paper against a live Hyperliquid book read after a simulated latency.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: gate tester, exit checker, fade selector */
+  .form3 { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); }
+  .form3 fieldset { margin: 0; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 12px; display: grid; gap: 10px; align-content: start; }
+  .form3 legend { font-family: var(--font-mono); font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); padding: 0 4px; }
+  .form3 input[type="range"] { width: 100%; }
+  .form3 select { font: inherit; font-size: .85rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
+  .widget label.tick { display: flex; gap: 8px; align-items: center; }
+  .lblrow { display: flex; justify-content: space-between; gap: 8px; width: 100%; }
+  .rules { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rule { font-family: var(--font-mono); font-size: .74rem; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--panel); overflow-wrap: anywhere; }
+  .rule.pass { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .rule.skip { color: var(--faint); border-style: dashed; }
+  .rule.waive { color: var(--warn); border-color: var(--warn); background: var(--brain-soft); }
+  .rule.fail { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, transparent); }
+  .rule.first { color: var(--bad); border-color: var(--bad); background: var(--heart-soft); font-weight: 600; }
+  .rkey { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .78rem; color: var(--muted); }
+  .rkey span { display: inline-flex; gap: 6px; align-items: center; }
+  .out2 { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; font-size: .86rem; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--font-mono); font-size: .8rem; color: var(--ink); overflow-wrap: anywhere; }
+  .detail { font-family: var(--font-mono); font-size: .78rem; color: var(--muted); overflow-wrap: anywhere; margin: 0; }
+  .prec { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .prec div { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--panel); display: grid; gap: 2px; font-size: .8rem; color: var(--muted); }
+  .prec b { font-family: var(--font-mono); font-size: .8rem; color: var(--ink); }
+  .prec.in-view div { animation: lit .5s ease both; }
+  .prec.in-view div:nth-child(2) { animation-delay: .3s } .prec.in-view div:nth-child(3) { animation-delay: .6s } .prec.in-view div:nth-child(4) { animation-delay: .9s }
+  @keyframes lit { from { transform: translateY(6px); opacity: .3 } to { transform: none; opacity: 1 } }
+  @media (max-width: 640px) { .prec { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .steps span { font-family: var(--font-mono); font-size: .76rem; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: var(--sunk); }
+  .names { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); }
+  .nm { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; display: grid; gap: 2px; background: var(--panel); transition: border-color .3s, background .3s; }
+  .nm b { font-family: var(--font-mono); font-size: .74rem; overflow-wrap: anywhere; font-weight: 500; }
+  .nm small { font-size: .76rem; color: var(--muted); }
+  .nm.cap { border-color: var(--guard); background: var(--guard-soft); }
+  .nm.cap small { color: var(--ink); }
+  .tl { width: 100%; max-width: 720px; height: auto; display: block; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">市</span> Trading desk · Paper</div>
+  <h1>Paper desk and risk gate</h1>
+  <p class="lede">Every order tool runs the <code>[risk]</code> gate <b>inside itself</b>, in one ledger transaction, before anything fills. An allowed order fills on paper against a live Hyperliquid book read after a simulated latency. No key, no venue order.</p>
+  <ul class="facts">
+    <li>budget <b>$100</b> paper cash</li>
+    <li>max order <b>$25</b></li>
+    <li>latency <b>250 ± 100 ms</b></li>
+    <li>loss halts <b>$10</b> day · <b>$25</b> total</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> Architect (Claude)</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools, fill engine</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks, gate</li>
+    <li><span class="chip data">data</span> ledger, rows, logs</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One order, end to end</span>
+    <h2 id="s-flow">Gate first, then the fill</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 470" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A caller runs paper_order. The tool checks the agent and the order id, reads stored rows, sleeps the latency, reads a live book, then in one ledger transaction values the account, runs the risk gate, records the verdict, fills and writes the rows, and returns a paper_fill row.</title>
+        <rect class="zone" x="180" y="140" width="520" height="215" rx="12"/>
+        <text x="194" y="346" class="zone-label">ledger.db · one BEGIN IMMEDIATE</text>
+
+        <path class="e" id="p-call-exec" d="M160 59 L188 59" data-at="1-2"/>
+        <path class="e" id="p-exec-rows" d="M330 59 L358 59" data-at="3"/>
+        <path class="e" id="p-rows-lat" d="M500 59 L528 59" data-at="4"/>
+        <path class="e" id="p-lat-book" d="M670 59 L698 59" data-at="4"/>
+        <path class="e" id="p-book-own" d="M770 88 L770 116 L275 116 L275 170" data-at="5"/>
+        <path class="e" id="p-own-gate" d="M350 201 L388 201" data-at="6"/>
+        <path class="e" id="p-gate-dec" d="M540 201 L564 201" data-at="7"/>
+        <path class="e" id="p-dec-log" d="M690 201 L718 201" data-at="7"/>
+        <path class="e bad" id="p-gate-state" d="M400 240 C400 256 290 250 290 266" data-at="7"/>
+        <path class="e" id="p-gate-fill" d="M465 240 L465 266" data-at="8"/>
+        <path class="e" id="p-fill-write" d="M540 297 L564 297" data-at="9"/>
+        <path class="e" id="p-write-row" d="M628 326 L628 390" data-at="9"/>
+        <path class="e flow" id="p-row-call" d="M566 419 L90 419 L90 90" data-at="9"/>
+
+        <g class="n" data-at="1-2,9">
+          <rect x="20" y="30" width="140" height="58" rx="8"/>
+          <text x="90" y="54" text-anchor="middle" class="t-title">Caller</text>
+          <text x="90" y="73" text-anchor="middle" class="t-small">feed, loop or @agent</text>
+        </g>
+        <g class="n guard" data-at="2-3">
+          <rect x="190" y="30" width="140" height="58" rx="8"/>
+          <text x="260" y="54" text-anchor="middle" class="t-title">Exec checks</text>
+          <text x="260" y="73" text-anchor="middle" class="t-small">private agent · id</text>
+        </g>
+        <g class="n data" data-at="3-4">
+          <rect x="360" y="30" width="140" height="58" rx="8"/>
+          <text x="430" y="54" text-anchor="middle" class="t-title">Store rows</text>
+          <text x="430" y="73" text-anchor="middle" class="t-small">read, never fetched</text>
+        </g>
+        <g class="n hands" data-at="4">
+          <rect x="530" y="30" width="140" height="58" rx="8"/>
+          <text x="600" y="54" text-anchor="middle" class="t-title">Latency</text>
+          <text x="600" y="73" text-anchor="middle" class="t-small">sleep 250 ± 100 ms</text>
+        </g>
+        <g class="n hands" data-at="4-5">
+          <rect x="700" y="30" width="140" height="58" rx="8"/>
+          <text x="770" y="54" text-anchor="middle" class="t-title">hl_book read</text>
+          <text x="770" y="73" text-anchor="middle" class="t-small">live L2 after sleep</text>
+        </g>
+
+        <g class="n guard" data-at="5-6">
+          <rect x="200" y="172" width="150" height="58" rx="8"/>
+          <text x="275" y="196" text-anchor="middle" class="t-title">Value + owner</text>
+          <text x="275" y="215" text-anchor="middle" class="t-small">marks · day · KILL</text>
+        </g>
+        <g class="n guard" data-at="6-8">
+          <rect x="390" y="162" width="150" height="78" rx="10"/>
+          <text x="465" y="186" text-anchor="middle" class="t-kanji k">守</text>
+          <text x="465" y="206" text-anchor="middle" class="t-title">Risk gate</text>
+          <text x="465" y="224" text-anchor="middle" class="t-small">first failing rule</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="566" y="172" width="124" height="58" rx="8"/>
+          <text x="628" y="196" text-anchor="middle" class="t-title">Verdict row</text>
+          <text x="628" y="215" text-anchor="middle" class="t-small">risk_decisions</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="720" y="172" width="130" height="58" rx="8"/>
+          <text x="785" y="196" text-anchor="middle" class="t-title t-mono">risk.jsonl</text>
+          <text x="785" y="215" text-anchor="middle" class="t-small">mirror after commit</text>
+        </g>
+        <g class="n data" data-at="5,7">
+          <rect x="200" y="268" width="150" height="58" rx="8"/>
+          <text x="275" y="292" text-anchor="middle" class="t-title">risk_state</text>
+          <text x="275" y="311" text-anchor="middle" class="t-small">halts · day start</text>
+        </g>
+        <g class="n hands" data-at="8-9">
+          <rect x="390" y="268" width="150" height="58" rx="8"/>
+          <text x="465" y="292" text-anchor="middle" class="t-title">Fill engine</text>
+          <text x="465" y="311" text-anchor="middle" class="t-small">VWAP · fee · HL codes</text>
+        </g>
+        <g class="n data" data-at="9">
+          <rect x="566" y="268" width="124" height="58" rx="8"/>
+          <text x="628" y="292" text-anchor="middle" class="t-title">Ledger rows</text>
+          <text x="628" y="311" text-anchor="middle" class="t-small">orders, fills, cash</text>
+        </g>
+        <g class="n" data-at="9">
+          <rect x="566" y="392" width="200" height="54" rx="8"/>
+          <text x="666" y="414" text-anchor="middle" class="t-title t-mono">paper_fill/1</text>
+          <text x="666" y="432" text-anchor="middle" class="t-small">&lt;account&gt;:&lt;client_order_id&gt;</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">exec tools: private agents only</text></g>
+        <g class="pop badge" data-at="2"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">same client_order_id ⇒ stored row</text></g>
+        <g class="pop badge" data-at="3"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">convergence entry ⇒ hedge_not_supported</text></g>
+        <g class="pop badge" data-at="4"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">the market moves while it waits</text></g>
+        <g class="pop badge" data-at="5"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">another sandbox's account ⇒ refused</text></g>
+        <g class="pop badge" data-at="6"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">every rule runs; first fail = verdict</text></g>
+        <g class="pop badge" data-at="7"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">loss over a limit ⇒ halt recorded</text></g>
+        <g class="pop badge" data-at="8"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">$5 order ⇒ MinTradeNtl (HL min $10)</text></g>
+        <g class="pop badge" data-at="9"><rect x="190" y="366" width="350" height="22" rx="11"/><text x="365" y="381" text-anchor="middle">ttl 0: recorded, never cached</text></g>
+
+        <circle class="tok" r="6" data-path="p-call-exec" data-at="1"/>
+        <circle class="tok guard" r="6" data-path="p-call-exec" data-at="2" data-reverse/>
+        <circle class="tok guard" r="6" data-path="p-exec-rows" data-at="3"/>
+        <circle class="tok hands" r="6" data-path="p-rows-lat" data-at="4" data-dur="1000"/>
+        <circle class="tok hands" r="6" data-path="p-lat-book" data-at="4" data-delay="1100" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-book-own" data-at="5" data-dur="2000"/>
+        <circle class="tok guard" r="6" data-path="p-own-gate" data-at="6" data-dur="700"/>
+        <circle class="tok guard" r="6" data-path="p-gate-dec" data-at="7" data-dur="600"/>
+        <circle class="tok" r="5" data-path="p-dec-log" data-at="7" data-delay="700" data-dur="600"/>
+        <circle class="tok bad" r="6" data-path="p-gate-state" data-at="7" data-delay="300"/>
+        <circle class="tok hands" r="6" data-path="p-gate-fill" data-at="8" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-fill-write" data-at="9" data-dur="600"/>
+        <circle class="tok" r="6" data-path="p-write-row" data-at="9" data-delay="600" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-row-call" data-at="9" data-delay="1300" data-dur="1800"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A feed, a decision loop or the operator's <code>@xm_executor</code> chat calls <code>paper_order</code>. Only a private agent (no <code>description</code>, not <code>default</code>) holds exec tools.</li>
+        <li><code>run_exec</code> needs <code>[risk]</code> + <code>[paper]</code> and a <code>client_order_id</code> (the arg, else the call id). An id already stored returns its row: nothing new is placed.</li>
+        <li>Rows come from the store, never fetched: <code>mkt_ctx/1</code>, <code>mkt_instrument/1</code>, the opportunity row. Owed funding is booked first. A <code>require_hedge_for</code> entry is refused.</li>
+        <li>The order shape is checked, then the clock sleeps <code>latency_ms ± latency_jitter_ms</code>. Only then is the live book read, so the market moves during the wait.</li>
+        <li>One <code>BEGIN IMMEDIATE</code> on <code>ledger.db</code>: the account owner is checked, the account is valued at fresh marks, the UTC day rolls, the kill-switch file is probed again.</li>
+        <li>The gate runs all its rules in a fixed order. The verdict is the first failing rule, else <code>ok</code> (or <code>allow_reduce_degraded</code> when a check was waived).</li>
+        <li>Every verdict is a <code>risk_decisions</code> row, mirrored as one line of <code>logs/risk.jsonl</code>. A loss over its limit or the kill file trips a halt in <code>risk_state</code>.</li>
+        <li>Allowed: <code>simulate_fill</code> walks the post-latency book to the IOC bound. VWAP, taker fee, HL tick and lot rounding, HL rejection codes.</li>
+        <li>Orders, fills, positions and cash are written in the same transaction. The tool returns <code>paper_fill/1:&lt;account&gt;:&lt;client_order_id&gt;</code>.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-gate">
+  <div class="sec-head">
+    <span class="kicker">Try it: send an order to the gate</span>
+    <h2 id="s-gate">The gate, rule by rule</h2>
+    <p>Limits are <code>sandboxes/xmarket</code>'s <code>[risk]</code> and <code>[paper]</code>. The book is an example (mid 250.00). Every rule runs; the first red one names the verdict.</p>
+  </div>
+  <div class="widget">
+    <div class="form3">
+      <fieldset>
+        <legend>Order</legend>
+        <label for="g-inst">instrument
+          <select id="g-inst">
+            <option value="hyperliquid:xyz:TSLA">hyperliquid:xyz:TSLA</option>
+            <option value="hyperliquid:xyz:NVDA">hyperliquid:xyz:NVDA</option>
+          </select>
+        </label>
+        <label for="g-side">side
+          <select id="g-side"><option value="1">buy</option><option value="-1">sell</option></select>
+        </label>
+        <label for="g-n"><span class="lblrow"><span><code>notional_usd</code></span><span class="readout" id="g-n-out">20</span></span>
+          <input type="range" id="g-n" min="5" max="120" step="5" value="20">
+        </label>
+        <label for="g-strat">strategy
+          <select id="g-strat"><option value="">none</option><option value="overreaction">overreaction</option><option value="convergence">convergence</option></select>
+        </label>
+        <label class="tick" for="g-ro"><input type="checkbox" id="g-ro"> <code>reduce_only</code></label>
+      </fieldset>
+      <fieldset>
+        <legend>Account now</legend>
+        <label for="g-pos"><span class="lblrow"><span>TSLA position, USD</span><span class="readout" id="g-pos-out">0</span></span>
+          <input type="range" id="g-pos" min="-50" max="50" step="5" value="0">
+        </label>
+        <label for="g-loss"><span class="lblrow"><span>lost today, USD</span><span class="readout" id="g-loss-out">0</span></span>
+          <input type="range" id="g-loss" min="0" max="30" step="1" value="0">
+        </label>
+        <label for="g-rate"><span class="lblrow"><span>entries in last 60 s</span><span class="readout" id="g-rate-out">1</span></span>
+          <input type="range" id="g-rate" min="0" max="8" step="1" value="1">
+        </label>
+        <label class="tick" for="g-kill"><input type="checkbox" id="g-kill"> KILL file present</label>
+        <label class="tick" for="g-halt"><input type="checkbox" id="g-halt"> operator halt</label>
+      </fieldset>
+      <fieldset>
+        <legend>Market data</legend>
+        <label for="g-eside">opportunity row backs
+          <select id="g-eside"><option value="buy">a buy</option><option value="sell">a sell</option><option value="none">no row</option></select>
+        </label>
+        <label for="g-edge"><span class="lblrow"><span><code>edge_after_costs_bps</code></span><span class="readout" id="g-edge-out">15</span></span>
+          <input type="range" id="g-edge" min="0" max="40" step="1" value="15">
+        </label>
+        <label for="g-bage"><span class="lblrow"><span>book age, ms</span><span class="readout" id="g-bage-out">300</span></span>
+          <input type="range" id="g-bage" min="0" max="8000" step="100" value="300">
+        </label>
+        <label for="g-cage"><span class="lblrow"><span>ctx row age, ms</span><span class="readout" id="g-cage-out">6000</span></span>
+          <input type="range" id="g-cage" min="0" max="30000" step="1000" value="6000">
+        </label>
+        <label class="tick" for="g-thin"><input type="checkbox" id="g-thin"> thin book (example)</label>
+      </fieldset>
+    </div>
+    <div class="rkey" aria-hidden="true">
+      <span><span class="rule pass">pass</span></span><span><span class="rule skip">skipped</span></span><span><span class="rule waive">waived</span> exit, <code>allow_reduce_degraded</code></span><span><span class="rule fail">fail</span></span><span><span class="rule first">first fail</span> = verdict</span>
+    </div>
+    <div class="rules" id="g-rules" aria-live="polite"></div>
+    <div class="out2">
+      <div class="card guard">
+        <h3>Verdict</h3>
+        <span class="verdict ok" id="g-verdict">ok</span>
+        <p class="detail" id="g-detail"></p>
+      </div>
+      <div class="card hands">
+        <h3>Fill (example book)</h3>
+        <dl class="kv" id="g-fill"></dl>
+      </div>
+    </div>
+    <p class="note">The order rate counts entries only: exits never count and are never rate-limited. Fee 0.9 bps is the formula-derived <code>xyz:TSLA</code> taker rate in <code>cost.rs</code> (tier 0).</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-halt">
+  <div class="sec-head">
+    <span class="kicker">Halts</span>
+    <h2 id="s-halt">Who trips a halt, who clears it</h2>
+    <p>A halt denies entries. Reduce-only exits still pass while <code>allow_reduce_degraded = true</code>.</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip warn">day</span><span><b>daily_loss</b>Day-start equity − equity over <code>$10</code>. Clears at the next 00:00 UTC, or by resume.</span></li>
+    <li><span class="chip bad">total</span><span><b>total_loss</b>Initial cash − equity over <code>$25</code>. Only <code>tengu risk resume</code> clears it.</span></li>
+    <li><span class="chip heart">op</span><span><b>operator</b><code>tengu risk halt</code> at a terminal. Only resume clears it.</span></li>
+    <li><span class="chip guard">file</span><span><b>file</b><code>~/.tengu/state/xmarket/KILL</code> exists. Resume is refused until the file is gone.</span></li>
+  </ul>
+  <div class="prec" data-inview aria-label="Halt precedence among new trips">
+    <div><b>file</b>wins first</div>
+    <div><b>total_loss</b>then</div>
+    <div><b>operator</b>then</div>
+    <div><b>daily_loss</b>yields to a sticky halt</div>
+  </div>
+  <p class="note">A sticky halt is never replaced. Resume clears any halt, but a loss still over its limit halts again at the next valuation.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-exit">
+  <div class="sec-head">
+    <span class="kicker">Try it: is this position due?</span>
+    <h2 id="s-exit">Exits close what is due</h2>
+    <p><code>xm_exits</code> runs every 15 s from a feed: no LLM, no Jev. Limits are <code>[risk.exits]</code>: take profit 200 bps, stop loss 100 bps, max hold 24 h. Entry 250.00 is an example.</p>
+  </div>
+  <div class="widget">
+    <div class="form3">
+      <fieldset>
+        <legend>Position</legend>
+        <label for="x-side">side
+          <select id="x-side"><option value="1">long</option><option value="-1">short</option></select>
+        </label>
+        <label for="x-mark"><span class="lblrow"><span>mark now</span><span class="readout" id="x-mark-out">250.00</span></span>
+          <input type="range" id="x-mark" min="244" max="256" step="0.1" value="250">
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Time</legend>
+        <label for="x-held"><span class="lblrow"><span>held, hours</span><span class="readout" id="x-held-out">3</span></span>
+          <input type="range" id="x-held" min="0" max="30" step="0.5" value="3">
+        </label>
+        <label class="tick" for="x-dl"><input type="checkbox" id="x-dl"> <code>exit_at_ms</code> passed</label>
+        <label class="tick" for="x-fired"><input type="checkbox" id="x-fired"> TP / SL fired earlier</label>
+      </fieldset>
+    </div>
+    <div class="widget-row">
+      <span>P&amp;L <span class="readout" id="x-pnl">0.0 bps</span></span>
+      <span class="verdict ok" id="x-verdict" aria-live="polite">not due</span>
+    </div>
+    <p class="detail" id="x-id"></p>
+    <div>
+      <p class="note">A close rejected for a reason that may pass later waits, then retries under <code>&lt;id&gt;:&lt;n&gt;</code>. A final reason (delisted, lot or tick rule) is never retried.</p>
+    </div>
+    <div class="steps" aria-label="Wait after 1 to 7 rejections in a row">
+      <span>15 s</span><span>30 s</span><span>1 min</span><span>2 min</span><span>4 min</span><span>8 min</span><span>15 min cap</span>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-fade">
+  <div class="sec-head">
+    <span class="kicker">Rule W · sandboxes/xmarket-weekend</span>
+    <h2 id="s-fade">The weekend fade</h2>
+    <p>Fade each stock perp's weekend move: s = ln(P<sub>entry</sub> / P<sub>anchor</sub>), side = −sign(s). Times are New York wall clock.</p>
+  </div>
+  <svg class="tl" viewBox="0 0 560 120" role="img" aria-labelledby="tl-t">
+    <title id="tl-t">Anchor at 20:00 on the last trading day, entry at 18:00 on the last non-trading day, exit at 09:00 on the next trading day.</title>
+    <path class="e" d="M40 60 L530 60" data-no-arrow/>
+    <rect x="40" y="52" width="160" height="16" rx="4" fill="var(--sunk)" stroke="var(--line)"/>
+    <rect x="200" y="52" width="220" height="16" rx="4" fill="var(--guard-soft)" stroke="var(--guard)"/>
+    <circle cx="40" cy="60" r="7" fill="var(--data)"/>
+    <circle cx="200" cy="60" r="7" fill="var(--guard)"/>
+    <circle cx="420" cy="60" r="7" fill="var(--hands)"/>
+    <text x="40" y="34" text-anchor="middle" class="t-title">anchor</text>
+    <text x="40" y="90" text-anchor="middle" class="t-small">Fri 20:00</text>
+    <text x="200" y="34" text-anchor="middle" class="t-title">entry</text>
+    <text x="200" y="90" text-anchor="middle" class="t-small">Sun 18:00</text>
+    <text x="420" y="34" text-anchor="middle" class="t-title">exit</text>
+    <text x="420" y="90" text-anchor="middle" class="t-small">Mon 09:00</text>
+    <text x="120" y="110" text-anchor="middle" class="t-small">s measured</text>
+    <text x="310" y="110" text-anchor="middle" class="t-small">position held</text>
+    <text x="490" y="110" text-anchor="middle" class="t-small">P&amp;L once flat</text>
+  </svg>
+  <div class="widget">
+    <div class="ctrls widget-row">
+      <label for="f-n"><span class="lblrow"><span><code>capped_top_n</code></span><span class="readout" id="f-n-out">4</span></span>
+        <input type="range" id="f-n" min="1" max="8" step="1" value="4">
+      </label>
+      <label for="f-min"><span class="lblrow"><span><code>min_abs_signal_bps</code></span><span class="readout" id="f-min-out">50</span></span>
+        <input type="range" id="f-min" min="0" max="250" step="5" value="50">
+      </label>
+    </div>
+    <div class="names" id="f-names" aria-live="polite"></div>
+    <p class="note" id="f-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-agents">
+  <div class="sec-head">
+    <span class="kicker">Who may trade</span>
+    <h2 id="s-agents">Agents on the desk</h2>
+    <p>No <code>[orchestrator]</code>: no planner. <code>tengu chat</code> talks to the Architect; <code>tengu run</code> feeds call the exec tools directly.</p>
+  </div>
+  <div class="grid">
+    <div class="card heart">
+      <h3>xm_architect</h3>
+      <p>Opus 5.5 on the Claude CLI, <code>default</code>, routable. Reads <code>hl_ctx</code>, <code>hl_book</code>, <code>risk_status</code>, <code>paper_positions</code>. No order tool.</p>
+    </div>
+    <div class="card hands">
+      <h3>xm_executor</h3>
+      <p>Sonnet 5.5 on the Claude CLI, private. Holds <code>paper_order</code>, <code>paper_close</code>, <code>xm_exits</code>. Feeds run its tools; its model is never called by <code>tengu run</code>.</p>
+    </div>
+    <div class="card guard">
+      <h3>xm_weekend</h3>
+      <p>The one private agent of <code>xmarket-weekend</code>. Holds <code>xm_weekend_fade</code> and <code>xm_exits</code>. Own state dir, ledger and lease.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-hl">
+  <div class="sec-head">
+    <span class="kicker">Market reads</span>
+    <h2 id="s-hl">hl_ctx and hl_book</h2>
+    <p>Hyperliquid <code>POST /info</code> behind the egress gate and <code>[rate_limits.hyperliquid]</code>. How a reply becomes a row:</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">200</span><span><b>JSON</b>Decoded into <code>mkt_ctx/1</code>, <code>mkt_instrument/1</code> or <code>hl_book/1</code>.</span></li>
+    <li><span class="chip data">null</span><span><b>200 null</b>Unknown coin or user: the row is absent.</span></li>
+    <li><span class="chip data">n/a</span><span><b>500 null</b>Unknown dex or coin: not applicable, not an outage.</span></li>
+    <li><span class="chip warn">429</span><span><b>rate_limited</b>The bucket drains; <code>Retry-After</code> is kept.</span></li>
+    <li><span class="chip bad">5xx</span><span><b>transient</b>An error row: recorded, never stored.</span></li>
+    <li><span class="chip bad">403</span><span><b>auth_required</b>"blocked (geo/WAF/Tor exit?)".</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No gate, no order.</b> Without <code>[risk]</code> every exec tool refuses <code>risk_config_missing</code>; <code>mode = "live"</code> fails the config load.</span></li>
+    <li><span><b>Only private agents trade.</b> A load rule, checked again at call time: <code>exec_agent_not_private</code>.</span></li>
+    <li><span><b>Check and act are one step.</b> Gate, fill and write run in one <code>BEGIN IMMEDIATE</code>: two processes never race one account.</span></li>
+    <li><span><b>Missing data fails closed.</b> An absent or failed input is <code>missing:&lt;field&gt;</code>, never 0.</span></li>
+    <li><span><b>A retry never doubles an order.</b> The same <code>client_order_id</code> returns the stored row; a different request under it is <code>client_order_id_conflict</code>.</span></li>
+    <li><span><b>One owner per account.</b> Another sandbox writing it is refused <code>account_owner_mismatch</code>.</span></li>
+    <li><span><b>Exits are never rate-limited.</b> With <code>allow_reduce_degraded</code> they pass halts and stale data.</span></li>
+    <li><span><b>Halts stay with the human.</b> <code>tengu risk halt | resume</code> refuse without a terminal or inside an agent process.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Look at the desk, halt it, resume it</h2>
+    <p>From the repo root. <code>paper_order</code> needs fresh rows: read <code>hl_ctx</code> first.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu risk status --sandbox xmarket</span>
+<span class="ln o"># per account: halt, day-start equity, cash, positions, owed funding, last verdicts, KILL file</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xmarket --agent xm_executor --tool hl_ctx --args '{"coins":["xyz:TSLA"]}'</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xmarket --agent xm_executor --tool paper_order \</span>
+<span class="ln cmd">    --args '{"instrument":"hyperliquid:xyz:TSLA","side":"buy","notional_usd":20,"kind":"market","max_slippage_bps":30,"client_order_id":"try-1"}'</span>
+<span class="ln o"># no opportunity row backs it: denied <span class="hl">missing:edge_after_costs_bps</span></span>
+<span class="ln cmd"><span class="p">$ </span>touch ~/.tengu/state/xmarket/KILL</span>
+<span class="ln o"># entries now deny kill_switch; the next gate call records a "file" halt</span>
+<span class="ln cmd"><span class="p">$ </span>rm ~/.tengu/state/xmarket/KILL &amp;&amp; tengu risk resume --sandbox xmarket</span>
+<span class="ln o"># type the account name (xmarket) to confirm</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/xm/risk.rs</code></td><td>the gate: rules, order, verdict, the shadow gate</td></tr>
+        <tr><td><code>src/domain/xm/risk_state.rs</code></td><td>halts, the UTC day roll, trip precedence</td></tr>
+        <tr><td><code>src/domain/xm/paper.rs</code></td><td>the fill engine: HL checks, depth walk, outcomes</td></tr>
+        <tr><td><code>src/domain/xm/cost.rs</code></td><td>HL tick and lot, fee tiers, HIP-3 scale, funding</td></tr>
+        <tr><td><code>src/domain/xm/ledger.rs</code></td><td>positions, cash, marks, exposure, funding</td></tr>
+        <tr><td><code>src/domain/xm/exec.rs</code></td><td>order ids, fingerprints, venue facts, <code>paper_fill/1</code></td></tr>
+        <tr><td><code>src/domain/xm/exits.rs</code></td><td>exit reasons, retry waits</td></tr>
+        <tr><td><code>src/domain/xm/weekend_fade.rs</code></td><td>rule W: window, signal, capped and shadow ledgers</td></tr>
+        <tr><td><code>src/domain/hl/</code> · <code>src/domain/book.rs</code></td><td>HL reply decoders, the L2 book and its walk</td></tr>
+        <tr><td><code>src/application/paper.rs</code></td><td>latency, then the book, then the fill; the ledger closure</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/xm/</code></td><td><code>run_exec</code> and the six xmarket tools</td></tr>
+        <tr><td><code>src/adapters/outbound/paper_store.rs</code></td><td><code>ledger.db</code> tables, owner check, <code>risk.jsonl</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/hyperliquid/</code></td><td><code>hl_ctx</code>, <code>hl_book</code>, the live book source</td></tr>
+        <tr><td><code>src/adapters/outbound/hyperliquid/info.rs</code></td><td><code>POST /info</code>: weights, budget, error mapping</td></tr>
+        <tr><td><code>src/config/risk.rs</code> · <code>src/config/xmarket.rs</code></td><td><code>[risk]</code>, <code>[paper]</code>, state dir, calendars, load rules</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/risk.rs</code></td><td><code>tengu risk status | halt | resume</code></td></tr>
+        <tr><td><code>src/ports/paper.rs</code> · <code>src/ports/book.rs</code></td><td>the ledger and book-source ports</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: gate tester (domain/xm/risk.rs::evaluate), exit checker
+   (domain/xm/exits.rs), capped selection (weekend_fade.rs::select_capped) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  var TOL = 1e-12;
+  function withinMax(v, lim) { return isFinite(v) && v <= lim + TOL * Math.max(Math.abs(lim), 1); }
+  function atLeast(v, min) { return isFinite(v) && v >= min - TOL * Math.max(Math.abs(min), 1); }
+
+  /* sandboxes/xmarket/config.toml [risk] + [paper] */
+  var L = { account: "xmarket", venues: ["hyperliquid"], allow: ["hyperliquid:xyz:TSLA"],
+    maxOrder: 25, maxPos: 50, maxAsset: 50, maxVenue: 100, maxGross: 100, maxNet: 100, maxLev: 1,
+    daily: 10, total: 25, minEdge: 10, maxSlip: 30, minDepth: 250, hedgeFor: ["convergence"],
+    book: 5000, ctx: 20000, rate: 6, open: 4, degraded: true, cash: 100 };
+  /* example books, mid 250.00 */
+  var BOOK = { asks: [[250.05, .4], [250.10, .8], [250.20, 1.5], [250.40, 3], [251.00, 10]],
+               bids: [[249.95, .4], [249.90, .8], [249.80, 1.5], [249.60, 3], [249.00, 10]] };
+  var THIN = { asks: [[250.05, .2], [250.60, .3], [251.50, 1]],
+               bids: [[249.95, .2], [249.40, .3], [248.50, 1]] };
+  var MID = 250, FEE_BPS = 0.9, SZ_DEC = 3;
+
+  function levels(book, side) { return side > 0 ? book.asks : book.bids; }
+  function depthWithin(book, side, bps) {
+    var lim = side > 0 ? MID * (1 + bps / 1e4) : MID * (1 - bps / 1e4), usd = 0;
+    levels(book, side).forEach(function (l) { if (side > 0 ? l[0] <= lim : l[0] >= lim) usd += l[0] * l[1]; });
+    return usd;
+  }
+  /* walk a USD notional (gate) or a qty (fill) to an optional bound */
+  function walk(book, side, usd, qty, bound) {
+    var leftUsd = usd, leftQty = qty, cost = 0, got = 0;
+    var ls = levels(book, side);
+    for (var i = 0; i < ls.length; i++) {
+      var px = ls[i][0], sz = ls[i][1];
+      if (bound != null && (side > 0 ? px > bound : px < bound)) break;
+      var take = usd != null ? Math.min(sz, leftUsd / px) : Math.min(sz, leftQty);
+      cost += take * px; got += take;
+      if (usd != null) { leftUsd -= take * px; if (leftUsd <= 1e-9) break; }
+      else { leftQty -= take; if (leftQty <= 1e-12) break; }
+    }
+    var vwap = got > 0 ? cost / got : null;
+    var slip = vwap == null ? null : (side > 0 ? (vwap - MID) / MID : (MID - vwap) / MID) * 1e4;
+    var unfilled = usd != null ? Math.max(0, leftUsd) : Math.max(0, leftQty);
+    return { qty: got, notional: cost, vwap: vwap, slip: slip, done: unfilled <= 1e-9 };
+  }
+  function f2(x) { return (Math.round(x * 100) / 100).toFixed(2); }
+
+  var ORDER = ["intent", "account", "kill_switch", "halted", "reduce_only", "venue", "instrument", "lifecycle",
+    "daily_loss", "total_loss", "order_rate", "open_orders", "book_age", "ctx_age", "market_status", "min_edge",
+    "depth", "slippage", "order_notional", "position_notional", "asset_exposure", "venue_exposure",
+    "gross_exposure", "net_exposure", "leverage", "hedge", "skew"];
+  var ids = ["g-inst", "g-side", "g-n", "g-strat", "g-ro", "g-pos", "g-loss", "g-rate", "g-kill", "g-halt", "g-eside", "g-edge", "g-bage", "g-cage", "g-thin"];
+
+  function gate() {
+    var inst = $("g-inst").value, side = +$("g-side").value, N = +$("g-n").value, strat = $("g-strat").value;
+    var ro = $("g-ro").checked, posT = +$("g-pos").value, loss = +$("g-loss").value, rate = +$("g-rate").value;
+    var kill = $("g-kill").checked, halt = $("g-halt").checked, eside = $("g-eside").value, edge = +$("g-edge").value;
+    var bage = +$("g-bage").value, cage = +$("g-cage").value, book = $("g-thin").checked ? THIN : BOOK;
+    $("g-n-out").textContent = N; $("g-pos-out").textContent = posT; $("g-loss-out").textContent = loss;
+    $("g-rate-out").textContent = rate; $("g-edge-out").textContent = edge; $("g-bage-out").textContent = bage; $("g-cage-out").textContent = cage;
+
+    var rulesBox = $("g-rules"), verdict = $("g-verdict"), detail = $("g-detail"), fill = $("g-fill");
+    var pos = inst === "hyperliquid:xyz:TSLA" ? posT : 0;
+    var sideWord = side > 0 ? "buy" : "sell";
+    /* run_exec step 5: refused before the gate, nothing written */
+    if (!ro && L.hedgeFor.indexOf(strat) >= 0) {
+      rulesBox.innerHTML = '<span class="rule skip">gate not reached</span>';
+      verdict.className = "verdict bad"; verdict.textContent = "refused: hedge_not_supported";
+      detail.textContent = "an entry of a [risk] require_hedge_for strategy (convergence): no exec path places the hedge leg yet. Tool error, nothing written.";
+      fill.innerHTML = "<dt>fill</dt><dd>none</dd>";
+      return;
+    }
+    var reduces = pos !== 0 && Math.sign(pos) === -side && N <= Math.abs(pos) * (1 + TOL);
+    var exit = ro && reduces;
+    var equity = L.cash - loss, dayStart = L.cash;
+    var C = {}, trips = [];
+    function put(r, st, d) { C[r] = { st: st, d: d }; }
+    function degr(r, d) { put(r, exit && L.degraded ? "waive" : "fail", d); }
+
+    put("intent", "pass", (exit ? "exit " : "entry ") + sideWord + " notional " + N + " USD on " + inst);
+    put("account", "pass", "account " + L.account);
+    if (kill) { trips.push("file"); degr("kill_switch", "kill-switch file present"); } else put("kill_switch", "pass", "kill-switch file absent");
+    if (halt) degr("halted", "halted: operator"); else put("halted", "pass", "not halted");
+    if (!ro) put("reduce_only", "skip", "not reduce-only");
+    else if (reduces) put("reduce_only", "pass", sideWord + " " + N + " USD of position " + pos + " USD");
+    else put("reduce_only", "fail", sideWord + " " + N + " USD would open or flip position " + pos + " USD on " + inst);
+    if (exit) { put("venue", "pass", "exit of an open position"); put("instrument", "pass", "exit of an open position"); }
+    else {
+      put("venue", "pass", "venue hyperliquid permitted");
+      if (L.allow.indexOf(inst) >= 0) put("instrument", "pass", inst + " is allow-listed");
+      else put("instrument", "fail", inst + " is not in instruments_allow");
+    }
+    put("lifecycle", "skip", "no lifecycle rule (M0: permission = instruments_allow)");
+    var dLoss = dayStart - equity, tLoss = L.cash - equity;
+    var tBreach = !withinMax(tLoss, L.total), dBreach = !withinMax(dLoss, L.daily);
+    if (tBreach) trips.push("total_loss"); if (dBreach) trips.push("daily_loss");
+    [["daily_loss", dLoss, L.daily, dBreach], ["total_loss", tLoss, L.total, tBreach]].forEach(function (x) {
+      var d = "loss " + x[1] + " USD, limit " + x[2] + " USD";
+      if (!x[3]) put(x[0], "pass", d);
+      else if (exit) put(x[0], "pass", d + " — breached (exit: not gated)");
+      else put(x[0], "fail", d + " — breached, halts entries");
+    });
+    if (exit) put("order_rate", "skip", "exit: never rate-limited (" + rate + " entries in the last 60 s, max " + L.rate + ")");
+    else if (rate < L.rate) put("order_rate", "pass", rate + " entries in the last 60 s, max " + L.rate);
+    else put("order_rate", "fail", rate + " entries in the last 60 s: another exceeds " + L.rate);
+    put("open_orders", "pass", "0 resting orders, max " + L.open + " (IOC orders never rest)");
+    if (bage <= L.book) put("book_age", "pass", "age " + bage + " ms, max " + L.book + " ms"); else degr("book_age", "stale: age " + bage + " ms, max " + L.book + " ms");
+    if (cage <= L.ctx) put("ctx_age", "pass", "age " + cage + " ms, max " + L.ctx + " ms"); else degr("ctx_age", "stale: age " + cage + " ms, max " + L.ctx + " ms");
+    var posAfter = pos + side * N;
+    if (exit) put("market_status", "skip", "exit: the fill engine decides"); else put("market_status", "pass", inst + " open");
+    if (exit) put("min_edge", "skip", "exit");
+    else if (eside === "none") C.min_edge = { st: "fail", d: "the order names no opportunity row (opportunity_key)", code: "missing:edge_after_costs_bps" };
+    else if ((eside === "buy" ? 1 : -1) !== side) put("min_edge", "fail", "the row backs a " + eside + "; the order is a " + sideWord);
+    else if (!atLeast(edge, L.minEdge)) put("min_edge", "fail", "edge_after_costs_bps " + edge + " bps, min " + L.minEdge + " bps");
+    else put("min_edge", "pass", "edge_after_costs_bps " + edge + " bps, min " + L.minEdge + " bps");
+    if (exit) { put("depth", "skip", "exit"); put("slippage", "skip", "exit"); }
+    else {
+      var dep = depthWithin(book, side, L.maxSlip);
+      put("depth", atLeast(dep, L.minDepth) ? "pass" : "fail", sideWord + " depth " + f2(dep) + " USD within " + L.maxSlip + " bps, min " + L.minDepth + " USD");
+      var w = walk(book, side, N, null, null);
+      if (!w.done) put("slippage", "fail", "walk of " + N + " USD leaves USD unfilled (visible depth)");
+      else put("slippage", withinMax(w.slip, L.maxSlip) ? "pass" : "fail", N + " USD vwap " + f2(w.vwap) + " slippage " + w.slip.toFixed(2) + " bps vs mid, max " + L.maxSlip + " bps");
+    }
+    var caps = ["order_notional", "position_notional", "asset_exposure", "venue_exposure", "gross_exposure", "net_exposure", "leverage"];
+    if (exit) caps.forEach(function (r) { put(r, "skip", "exit: reduces the position"); });
+    else {
+      var other = inst === "hyperliquid:xyz:TSLA" ? 0 : posT;
+      var gross = Math.abs(other) + Math.abs(posAfter), net = Math.abs(other + posAfter);
+      put("order_notional", withinMax(N, L.maxOrder) ? "pass" : "fail", "order " + N + " USD, cap " + L.maxOrder + " USD");
+      put("position_notional", withinMax(Math.abs(posAfter), L.maxPos) ? "pass" : "fail", "position " + pos + " → " + posAfter + " USD, cap " + L.maxPos + " USD");
+      put("asset_exposure", withinMax(Math.abs(posAfter), L.maxAsset) ? "pass" : "fail", "net " + inst + " " + Math.abs(posAfter) + " USD, cap " + L.maxAsset + " USD");
+      put("venue_exposure", withinMax(gross, L.maxVenue) ? "pass" : "fail", "gross hyperliquid " + gross + " USD, cap " + L.maxVenue + " USD");
+      put("gross_exposure", withinMax(gross, L.maxGross) ? "pass" : "fail", "gross " + gross + " USD, cap " + L.maxGross + " USD");
+      put("net_exposure", withinMax(net, L.maxNet) ? "pass" : "fail", "net " + net + " USD, cap " + L.maxNet + " USD");
+      if (equity <= 0) put("leverage", "fail", "equity " + equity + " USD ≤ 0");
+      else { var lev = gross / equity; put("leverage", withinMax(lev, L.maxLev) ? "pass" : "fail", "gross " + gross + " USD / equity " + equity + " USD = " + lev.toFixed(3) + "x, max " + L.maxLev + "x"); }
+    }
+    put("hedge", "skip", exit ? "exit" : "strategy needs no hedge"); put("skew", "skip", exit ? "exit" : "strategy needs no hedge");
+
+    var first = null, waived = false;
+    ORDER.forEach(function (r) { if (!first && C[r].st === "fail") first = r; if (C[r].st === "waive") waived = true; });
+    rulesBox.innerHTML = ORDER.map(function (r) {
+      var c = C[r], name = c.code && c.st === "fail" ? c.code : r;
+      var cls = c.st === "fail" && r === first ? "first" : c.st;
+      return '<span class="rule ' + cls + '" title="' + c.d.replace(/"/g, "&quot;") + '">' + name + "</span>";
+    }).join("");
+    var rank = ["file", "total_loss", "operator", "daily_loss"], trip = null;
+    rank.forEach(function (t) { if (!trip && trips.indexOf(t) >= 0) trip = t; });
+    var tripNote = trip ? (halt ? " Trips " + trip + ", but the operator halt is sticky: it stays." : " Halt recorded: " + trip + ".") : "";
+
+    if (first) {
+      var code = C[first].code || first;
+      verdict.className = "verdict bad"; verdict.textContent = "deny · " + code;
+      detail.textContent = C[first].d + "." + tripNote;
+      fill.innerHTML = "<dt>fill</dt><dd>none: denied, verdict row written</dd><dt>row</dt><dd>paper_fill/1 status error (denied)</dd>";
+      return;
+    }
+    verdict.className = waived ? "verdict warn" : "verdict ok";
+    verdict.textContent = "allow · " + (waived ? "allow_reduce_degraded" : "ok");
+    detail.textContent = (exit ? "exit class: halts and stale data may be waived." : "entry class: every rule ran.") + tripNote;
+    /* fill engine (paper.rs): book age, MinTradeNtl, IOC bound, walk, fee */
+    var rows = "<dt>latency</dt><dd>250 ms ± 100 (example draw 250)</dd>";
+    if (bage > L.book) { fill.innerHTML = rows + "<dt>result</dt><dd>rejected: stale_book (book age " + bage + " ms &gt; " + L.book + " ms)</dd>"; return; }
+    var qty = Math.floor(N / MID * Math.pow(10, SZ_DEC)) / Math.pow(10, SZ_DEC);
+    if (ro) qty = Math.min(qty, Math.abs(pos) / MID);
+    var bound = side > 0 ? MID * (1 + L.maxSlip / 1e4) : MID * (1 - L.maxSlip / 1e4);
+    var whole = ro && Math.abs(N - Math.abs(pos)) < 1e-9;
+    if (qty * bound < 10 && !whole) { fill.innerHTML = rows + "<dt>size</dt><dd>" + qty.toFixed(SZ_DEC) + " (lot " + SZ_DEC + " decimals)</dd><dt>result</dt><dd>rejected: MinTradeNtl (size × bound under $10)</dd>"; return; }
+    var w2 = walk(book, side, null, qty, bound);
+    var fee = w2.notional * FEE_BPS / 1e4;
+    fill.innerHTML = rows +
+      "<dt>size</dt><dd>" + qty.toFixed(SZ_DEC) + " (USD / mid, rounded down)</dd>" +
+      "<dt>IOC bound</dt><dd>" + f2(bound) + " (mid ± " + L.maxSlip + " bps)</dd>" +
+      "<dt>status</dt><dd>" + (w2.done ? "filled" : "partial (rest canceled)") + "</dd>" +
+      "<dt>avg_px</dt><dd>" + (w2.vwap ? w2.vwap.toFixed(4) : "none") + "</dd>" +
+      "<dt>slippage</dt><dd>" + (w2.slip != null ? w2.slip.toFixed(2) + " bps vs mid" : "none") + "</dd>" +
+      "<dt>fee</dt><dd>" + fee.toFixed(4) + " USD (0.9 bps taker)</dd>";
+  }
+  ids.forEach(function (i) { $(i).addEventListener("input", gate); $(i).addEventListener("change", gate); });
+  gate();
+
+  /* --- exit checker: exits.rs, [risk.exits] of sandboxes/xmarket --- */
+  var TP = 200, SL = 100, MAXH = 24, ENTRY = 250;
+  function exits() {
+    var side = +$("x-side").value, mark = +$("x-mark").value, held = +$("x-held").value;
+    var dl = $("x-dl").checked, fired = $("x-fired").checked;
+    $("x-mark-out").textContent = mark.toFixed(2); $("x-held-out").textContent = held;
+    var pnl = side * (mark - ENTRY) / ENTRY * 1e4;
+    $("x-pnl").textContent = pnl.toFixed(1) + " bps";
+    var reason = null;
+    if (dl) reason = "deadline";
+    else if (held >= MAXH) reason = "max_hold";
+    else if (fired) reason = "<stop_loss | take_profit>";
+    else if (pnl <= -SL + 1e-9) reason = "stop_loss";
+    else if (pnl >= TP - 1e-9) reason = "take_profit";
+    var v = $("x-verdict");
+    if (!reason) { v.className = "verdict ok"; v.textContent = "not due"; $("x-id").textContent = ""; return; }
+    v.className = "verdict warn";
+    v.textContent = fired && !dl && held < MAXH ? "due: the fired TP / SL (stays due until flat)" : "due: " + reason;
+    $("x-id").textContent = "close: reduce-only market IOC of the whole position, id exit:xmarket:hyperliquid:xyz:TSLA:" + reason + ":<opened_ms>";
+  }
+  ["x-side", "x-mark", "x-held", "x-dl", "x-fired"].forEach(function (i) { $(i).addEventListener("input", exits); $(i).addEventListener("change", exits); });
+  exits();
+
+  /* --- capped selection: select_capped (example signals) --- */
+  var SIG = [["hyperliquid:xyz:TSLA", 182], ["hyperliquid:xyz:NVDA", -96], ["hyperliquid:xyz:AAPL", 31], ["hyperliquid:xyz:COIN", -240],
+             ["hyperliquid:xyz:MSTR", 75], ["hyperliquid:xyz:AMD", -48], ["hyperliquid:xyz:PLTR", 120], ["hyperliquid:xyz:META", -12]];
+  function fade() {
+    var n = +$("f-n").value, min = +$("f-min").value;
+    $("f-n-out").textContent = n; $("f-min-out").textContent = min;
+    var picks = SIG.filter(function (s) { return Math.abs(s[1]) >= min; })
+      .sort(function (a, b) { return Math.abs(b[1]) - Math.abs(a[1]) || (a[0] < b[0] ? -1 : 1); })
+      .slice(0, n).map(function (s) { return s[0]; });
+    $("f-names").innerHTML = SIG.map(function (s) {
+      var cap = picks.indexOf(s[0]) >= 0, side = s[1] > 0 ? "sell" : "buy";
+      return '<div class="nm' + (cap ? " cap" : "") + '"><b>' + s[0] + "</b><small>s = " + (s[1] > 0 ? "+" : "") + s[1] + " bps · fade " + side +
+        (cap ? " · capped $25 + shadow $100" : " · shadow $100") + "</small></div>";
+    }).join("");
+    $("f-note").innerHTML = "<b>Example signals.</b> Shadow ledger: every eligible name at $100, outside the budget, shadow gate. Capped ledger: " +
+      picks.length + " name(s) at $25 each through the full <code>[risk]</code> gate. Real knobs: top 4, ≥ 50 bps.";
+  }
+  ["f-n", "f-min"].forEach(function (i) { $(i).addEventListener("input", fade); });
+  fade();
+})();
+</script>
+</body>
+</html>

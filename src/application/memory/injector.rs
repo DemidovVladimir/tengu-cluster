@@ -2,8 +2,8 @@
 //!
 //! **Phase 7.1 note:** this module had two callers historically — the
 //! deleted `ChatWorker::run_step` AND `ChatOrchestratorPortImpl::run_orchestrator_turn`.
-//! After Phase 7.1 only the latter remains, so this is now planner-LLM-turn
-//! plumbing only. Subagent turns (running in `tengu run-agent` subprocesses)
+//! After Phase 7.1 only the latter remains — the plain planner path; the
+//! `RagPlanner` calls the `_with_system` variants, which skip it. Subagent turns (running in `tengu run-agent` subprocesses)
 //! handle their own context assembly via `[agents.<name>].skill_packages` and do
 //! NOT call this. Don't add new callers without thinking about whether
 //! per-turn memory injection is actually what you want.

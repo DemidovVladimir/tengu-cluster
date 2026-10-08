@@ -493,8 +493,8 @@ mod tests {
 
         let tool = SkillDistillTool::new();
         let args = json!({
-            "name": "mint-ipnft",
-            "description": "Use when minting an IPNFT.",
+            "name": "summarize-paper",
+            "description": "Use when summarizing a research paper.",
             "body_markdown": "## Procedure\n1. Call x.\n",
             "metrics": [
                 { "kind": "shell_check", "name": "m1", "cmd": "echo ok", "expect_exit_code": 0 }
@@ -523,25 +523,25 @@ mod tests {
         assert_eq!(v["loaded_in_current_conversation"], false);
 
         let skill_md =
-            std::fs::read_to_string(ws.path().join("skills/mint-ipnft/SKILL.md")).unwrap();
-        assert!(skill_md.contains("name: mint-ipnft"));
+            std::fs::read_to_string(ws.path().join("skills/summarize-paper/SKILL.md")).unwrap();
+        assert!(skill_md.contains("name: summarize-paper"));
         assert!(skill_md.contains("## Procedure"));
         assert!(ws
             .path()
-            .join("skills/mint-ipnft/evals/prompts.yaml")
+            .join("skills/summarize-paper/evals/prompts.yaml")
             .exists());
 
         // evals/config.toml is auto-seeded (G3) so the skill is immediately
-        // runnable via `tengu eval mint-ipnft`.
-        let eval_config_path = ws.path().join("skills/mint-ipnft/evals/config.toml");
+        // runnable via `tengu eval summarize-paper`.
+        let eval_config_path = ws.path().join("skills/summarize-paper/evals/config.toml");
         assert!(eval_config_path.exists(), "evals/config.toml not created");
         let eval_config = std::fs::read_to_string(&eval_config_path).unwrap();
         assert!(
-            eval_config.contains("[agents.mint-ipnft-agent]"),
-            "expected [agents.mint-ipnft-agent] in config.toml, got: {eval_config}"
+            eval_config.contains("[agents.summarize-paper-agent]"),
+            "expected [agents.summarize-paper-agent] in config.toml, got: {eval_config}"
         );
         assert!(eval_config.contains("runtime_profile = \"cloud\""));
-        assert!(eval_config.contains("name = \"Mint Ipnft Eval Agent\""));
+        assert!(eval_config.contains("name = \"Summarize Paper Eval Agent\""));
     }
 
     #[tokio::test]

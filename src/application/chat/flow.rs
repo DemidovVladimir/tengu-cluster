@@ -107,10 +107,18 @@ pub(crate) fn resolve_flow_compaction_policy(
         .clamp(0.1, 1.0);
     let threshold_tokens = ((max_tokens_per_flow as f32) * threshold_ratio) as u64;
 
+    // Compaction keeps the newest `keep_turns` user turns and summarises the
+    // rest, so it can only run while fewer turns are kept than the history
+    // limit leaves (that limit drops older turns first). Default: half the
+    // limit; a configured value is clamped below it (the old scope defaults,
+    // 24–60, were always above it, so compaction never ran).
+    let history_limit = resolve_history_turn_limit(flow);
     let keep_turns = flow
         .compaction_keep_turns
-        .map(|v| v.max(1) as usize)
-        .unwrap_or_else(|| default_compaction_keep_turns_for_scope(&flow.scope));
+        .map(|v| v as usize)
+        .unwrap_or(history_limit / 2)
+        .min(history_limit.saturating_sub(1))
+        .max(1);
 
     let max_input_budget = crate::application::chat::prompt_budget::compute_total_input_budget(
         context_window,
@@ -140,15 +148,6 @@ fn default_compaction_threshold_ratio_for_scope(scope: &str) -> f32 {
         "per-group" => 0.86,
         "per-pipe-sender" => 0.84,
         _ => 0.82,
-    }
-}
-
-fn default_compaction_keep_turns_for_scope(scope: &str) -> usize {
-    match scope {
-        "main" => 60,
-        "per-group" => 40,
-        "per-pipe-sender" => 32,
-        _ => 24,
     }
 }
 
@@ -267,5 +266,63 @@ fn role_label(role: &Role) -> &'static str {
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::Tool => "tool",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn(text: &str, role: Role) -> Message {
+        Message {
+            role,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    /// `keep_turns` stays below the history limit: half of it by default, a
+    /// larger configured value is clamped (else compaction never ran).
+    #[test]
+    fn keep_turns_stays_below_the_history_limit() {
+        let flow = FlowConfig::default(); // per-sender: 20 turns of history
+        let p = resolve_flow_compaction_policy(&flow, 100_000, 200_000, 8_000);
+        assert_eq!(p.keep_turns, 10);
+        let flow = FlowConfig {
+            compaction_keep_turns: Some(30),
+            ..FlowConfig::default()
+        };
+        let p = resolve_flow_compaction_policy(&flow, 100_000, 200_000, 8_000);
+        assert_eq!(p.keep_turns, 19);
+    }
+
+    /// On defaults, a long flow over the threshold is compacted after the
+    /// history limit ran — and its token count drops back.
+    #[tokio::test]
+    async fn default_policy_compacts_a_long_flow() {
+        let flow = FlowConfig::default();
+        let policy = resolve_flow_compaction_policy(&flow, 1_000, 200_000, 8_000);
+        let mut messages = Vec::new();
+        for i in 0..25 {
+            messages.push(turn(&format!("question {i}"), Role::User));
+            messages.push(turn(&format!("answer {i}"), Role::Assistant));
+        }
+        enforce_history_turn_limit(&mut messages, resolve_history_turn_limit(&flow));
+        let mut usage = 950; // over 82 % of 1 000
+        let out = maybe_compact_flow("f", &mut messages, &mut usage, policy, "test")
+            .await
+            .unwrap();
+        assert!(out.applied, "compaction ran");
+        assert!(messages[0].content.starts_with("[Flow compaction summary]"));
+        let kept_users = messages
+            .iter()
+            .filter(|m| matches!(m.role, Role::User))
+            .count();
+        assert_eq!(kept_users, policy.keep_turns);
+        assert!(
+            usage < 950,
+            "usage recomputed from the kept messages: {usage}"
+        );
     }
 }

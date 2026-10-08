@@ -44,7 +44,7 @@
 > | 7.1 — delete legacy | ✅ done | `roster.rs`, `ChatWorker`, `engine = "static"` removed; `wiring.rs` kept for the planner LLM port |
 > | 7.2 — v1 dead-code cleanup | ✅ done | `#[allow(dead_code)]` sweep |
 
-> Companion to `REDESIGN.md`. Where REDESIGN says *what the target looks like*,
+> Companion to `REDESIGN.md` (the v2 brief — removed 2026-10-07; its § references below resolve in its last version: `git show 9f0e98f96704eca960575d6c453c5dabb5487d65:REDESIGN.md`). Where REDESIGN says *what the target looks like*,
 > this plan says *what order to land it in so nothing breaks between commits*.
 > Every phase ends with a binary you can launch manually and exercise via TUI and
 > Telegram.
@@ -310,7 +310,7 @@ The baseline behaviour MUST match Phase 0 exactly. Only difference the user shou
 
 ### Files touched
 - NEW: `src/adapters/agents/mod.rs`
-- NEW: `agents/aura-orchestrator.toml`, `agents/storage.toml` (or similar, migrated from sandboxes)
+- NEW: `agents/storage.toml` (or similar, migrated from sandboxes)
 - NEW: `skills/orchestrator/SKILL.md`
 - NEW: `skills/orchestrator/plan_schema.json`
 - `src/adapters/rag/indexer.rs` (new scanners)
@@ -501,7 +501,7 @@ Set `engine = "static"`. Old path is unchanged. If a bug is found, fix it under 
    - `src/application/orchestrator/wiring.rs`
    - `src/adapters/inbound/eval.rs` (kept in-tree — `tengu eval`; ideas moved to `docs/ideas/`)
    - `src/application/skills/lifecycle/evolve.rs` (kept in-tree — `tengu skill evolve`; `docs/ideas/auto-improving-agent-skills.md`)
-   - `sandboxes/aura/`, `sandboxes/storage-test/` (NOT deleted — reversed 2026-09-18: sandboxes are the single config; `agents/` was removed instead)
+   - `sandboxes/storage-test/` (NOT deleted — reversed 2026-09-18: sandboxes are the single config; `agents/` was removed instead)
 4. Remove the `engine` flag — Open Brain / Karpathy LLM Wiki is the only path. Remove the `static` branch from `planner.rs` and `main.rs`.
 5. Update `README.md` with the new architecture summary + link to REDESIGN.md.
 6. Compile, test, clippy.
@@ -566,6 +566,6 @@ The cutover risk lives entirely in Phase 4. Phases 0–3 are additive and safe. 
 1. Confirm legacy vector DB is running locally or that the team has a remote legacy vector DB reachable from your dev machine.
 2. Confirm embedding API keys (OpenAI / Voyage / Ollama) are configured.
 3. Decide who reviews each phase's PR — the plan's value comes from each increment being reviewed before the next starts.
-4. Decide which two sandboxes (`aura`, `storage-test`) to migrate first as example `agents/*.toml` in Phase 2.
+4. Decide which sandbox (`storage-test`) to migrate first as example `agents/*.toml` in Phase 2.
 
 If any of those are unknown, Phase 0 is where to answer them.

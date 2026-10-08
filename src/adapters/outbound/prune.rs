@@ -117,9 +117,12 @@ pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
             ws.join(".tengu-attachments"),
             format!("attachments ({ws_display})"),
         );
+        // `persistent_store` files + manifests (`tools/memory/persistent_store.rs`);
+        // their vectors live in `memory/` above. (Was `<ws>/storage`, which no
+        // code writes — a user folder of that name was deleted instead.)
         push(
-            ws.join("storage"),
-            format!("storage agent data ({ws_display})"),
+            ws.join(".tengu").join("storage"),
+            format!("persistent_store files ({ws_display})"),
         );
 
         // Scaffold project output directories — pipeline artifacts that go
@@ -236,6 +239,26 @@ mod tests {
         assert!(hard_paths.contains(&ws.join("TENGU_PLAN.md")));
         // The workspace root itself is never a target — only emptied.
         assert!(!hard_paths.contains(&ws));
+    }
+
+    /// Soft prune clears `persistent_store` data where the tool writes it
+    /// (`.tengu/storage`) and leaves a user's own `storage/` folder alone.
+    #[test]
+    fn soft_prune_targets_persistent_store_not_a_user_storage_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path().to_path_buf();
+        std::fs::create_dir_all(ws.join(".tengu/storage/f1")).unwrap();
+        std::fs::create_dir_all(ws.join("storage")).unwrap();
+        let soft = plan_prune(&PruneOptions {
+            tengu_home: home.path(),
+            workspaces: &[ws.clone()],
+            project_dirs: &[],
+            hard: false,
+        });
+        let paths = existing_paths(&soft);
+        assert!(paths.contains(&ws.join(".tengu/storage")));
+        assert!(!paths.contains(&ws.join("storage")));
     }
 
     /// The xmarket state dir survives every mode and workspace — even a

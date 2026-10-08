@@ -35,7 +35,7 @@ Concrete scenario driving every batch below:
 | # | Decision |
 |---|---|
 | A1 | Per-user state → **sidecar JSON** at `skills/<name>/state/<learner>.json`. Body shared, state per-user, no reindex cost. |
-| A2 | Resource fetcher → **new `resource-finder` agent** (TOML). `skill-improver-inline` dispatches it via the orchestrator. **Superseded 2026-04-29**: folded into the single `[agents.learning-agent]` block (`sandboxes/aura/config.toml`) — `docs/skill-redesign-2026-04-29.md`. |
+| A2 | Resource fetcher → **new `resource-finder` agent** (TOML). `skill-improver-inline` dispatches it via the orchestrator. **Superseded 2026-04-29**: folded into the single `[agents.learning-agent]` block — `docs/skill-redesign-2026-04-29.md`. |
 | A3 | Teacher/learner permissions → **frontmatter flag** `editable_by_learner: bool`. Per-skill declarative. |
 
 ---
@@ -69,13 +69,13 @@ Concrete scenario driving every batch below:
 | Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_summaries` (planner registry) |
 | Planner registry regenerated on every planner turn (no reindex step) | Shipped | `shared_files::ensure_planner_registry` |
 | Cache-discipline invariant (`loaded_in_current_conversation: false`) | Shipped | `distill.rs:217` |
-| `[skill_lifecycle]` config block enabled in a sandbox | Shipped | `sandboxes/aura/config.toml` (+ `[agents.skill-improver]`); commented sample in `config.example.toml` |
+| `[skill_lifecycle]` config block | Sample only | commented sample in `config.example.toml` (no sandbox ships one) |
 | `tengu skill remove / list / install / export / doctor / seed` | Shipped | `src/main.rs` (`SkillAction::*`) |
 | Description-triggering eval | Shipped | `src/application/skills/lifecycle/metric_kinds/description_trigger.rs` |
 | Human qualitative review | **Missing** | — |
 | `evals/config.toml` seeded by `skill_distill` | Shipped (G3) | `src/adapters/outbound/tools/skill_lifecycle/distill.rs` |
 | Threat scanner on install / doctor | Shipped | `src/application/skills/lifecycle/scanner.rs` |
-| In-chat lifecycle verbs → single `learning-agent` with `view_skill` / `manage_skill` | Shipped | `skills/orchestrator/SKILL.md` "Lifecycle verbs" · `[agents.learning-agent]` in `sandboxes/aura/config.toml` · `src/adapters/outbound/tools/{view_skill,manage_skill}/` |
+| In-chat lifecycle verbs → single `learning-agent` with `view_skill` / `manage_skill` | Shipped | `skills/orchestrator/SKILL.md` "Lifecycle verbs" · `src/adapters/outbound/tools/{view_skill,manage_skill}/` |
 | Per-learner sidecar state (A1) | Shipped | `src/application/skills/lifecycle/learner_state.rs` |
 | `editable_by_learner` frontmatter flag (A3) | Shipped | `skill_lifecycle/evolve.rs::is_editable_by_learner` |
 
@@ -85,7 +85,7 @@ Concrete scenario driving every batch below:
 
 | # | Gap | Impact | Doctrine fit | Batch |
 |---|---|---|---|---|
-| G1 | `[skill_lifecycle]` not enabled in any sandbox — **closed** (`sandboxes/aura`) | Blocks `tengu skill evolve` end-to-end | D1 (TOML only) | Batch 1 |
+| G1 | `[skill_lifecycle]` not enabled in any sandbox — commented sample in `config.example.toml` | Blocks `tengu skill evolve` end-to-end | D1 (TOML only) | Batch 1 |
 | G2 | Phantom skill refs in `[agents.researcher].skill_packages` — **closed** | Cosmetic warns | D1 | Batch 1 |
 | G3 | `skill_distill` doesn't seed `evals/config.toml` — **closed** | Distilled skills can't `tengu eval` | D2 | Batch 3 |
 | G4 | No `tengu skill remove / list / install / export / doctor` — **closed** | Operator must `rm -rf` | D2 | Batch 2 |
@@ -164,9 +164,8 @@ D1 = pure TOML/SKILL.md edit. D2 = additive Rust edit. D3 = new abstraction (non
 
 | # | Action | File |
 |---|---|---|
-| 1 | Activate `[skill_lifecycle]` + define `[agents.skill-improver]` (`fixture_runner_agent` is optional/unused) | `sandboxes/aura/config.toml` |
-| 2 | Drop phantom `web-research` / `summarizer` from researcher | `[agents.researcher]` in `sandboxes/aura/config.toml` |
-| 3 | Add this doc to "audit-for-staleness" list | `CLAUDE.md` |
+| 1 | Activate `[skill_lifecycle]` + define `[agents.skill-improver]` (`fixture_runner_agent` is optional/unused) | `config.example.toml` (commented sample) |
+| 2 | Add this doc to "audit-for-staleness" list | `CLAUDE.md` |
 
 ### Batch 2 — CLI completeness (D2, ~1 day)
 
@@ -256,7 +255,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 | "fix it" / "apply the fix" / "improve the skill" | plan | `skill-improver-inline` | `apply_proposal_to_skill_md` on the named skill |
 | "rollback" | direct | — | `git checkout skills/<name>/SKILL.md` (one shell-out) |
 
-**Shipped shape (2026-04-29)**: rows 22–26 collapsed into ONE `[agents.learning-agent]` block in `sandboxes/aura/config.toml` (`view_skill` + `manage_skill`); phrase → plan table lives in `skills/orchestrator/SKILL.md` "Lifecycle verbs" — `docs/skill-redesign-2026-04-29.md`.
+**Shipped shape (2026-04-29)**: rows 22–26 collapsed into ONE `[agents.learning-agent]` block (`view_skill` + `manage_skill`); phrase → plan table lives in `skills/orchestrator/SKILL.md` "Lifecycle verbs" — `docs/skill-redesign-2026-04-29.md`.
 
 **Cache discipline still holds**: distilled / improved skills don't activate in the current conversation. The user gets a confirmation message ("Saved to `skills/<name>/`. Available next session.") not a hot-swap.
 
@@ -267,7 +266,7 @@ Goal: user types `create skill from our dialog` or `evaluate` in chat; harness r
 | # | Action | File / shape |
 |---|---|---|
 | 27 | **Sidecar state writer/reader** (per A1). Schema: `{learner_id, topics_covered: [...], topics_weak: [...], mastery_scores: {topic: 0..1}, last_session_ts}`. Module: `skill_lifecycle/learner_state.rs`. Atomic write via temp + rename, same as `distill.rs:196`. | `skills/<name>/state/<learner>.json` |
-| 28 | **`resource-finder` agent** (per A2). New `[agents.resource-finder]` block with `tools = ["http_request"]`. Identity: "Given a topic + learner gap description, find 2–5 high-quality web resources, return JSON `[{url, title, why_relevant, length}]`". Superseded — `learning-agent` calls `http_request` itself. | `[agents.learning-agent]` in `sandboxes/aura/config.toml` |
+| 28 | **`resource-finder` agent** (per A2). New `[agents.resource-finder]` block with `tools = ["http_request"]`. Identity: "Given a topic + learner gap description, find 2–5 high-quality web resources, return JSON `[{url, title, why_relevant, length}]`". Superseded — `learning-agent` calls `http_request` itself. | `[agents.learning-agent]` |
 | 29 | **Frontmatter flags** (per A3). Extend SKILL.md schema with `editable_by_learner: bool` (default `false`). `skill_lifecycle/evolve.rs` checks the flag; refuses to apply diffs from learner-mode chats unless set. | `skills/skill-creator/SKILL.md` doc + `skill_lifecycle/metrics.rs` parser |
 | 30 | **`adjust yourself` planner block.** Extend `skills/orchestrator/SKILL.md` with the trigger. Plan shape: 3 sequential steps — `skill-evaluator` (DialogReplay + load state) → `resource-finder` (only if eval reports gaps) → `skill-improver-inline` (proposal updates SKILL.md + state JSON + cites new resources). One approval gate at the end. | `skills/orchestrator/SKILL.md` |
 | 31 | **`tengu skill seed <name> <resources_dir>`** CLI for teacher onboarding. Drops `SKILL.md` template + populates `skills/<name>/resources/` from a directory. Atomic. | `Commands::SkillSeed` in `main.rs` |
