@@ -1,0 +1,45 @@
+id = "fwd.rule_w.2026-10-09"
+title = "Rule W forward paper test #2, weekend 2026-10-09 → 2026-10-12 (capped $100 top 4 + $10,000 shadow of every eligible name) — preregistered"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4"
+generation = "W1"
+environment = "XMARKET"
+kind = "FORWARD_PAPER"
+registered_at = "2026-10-08T13:00:00Z"
+ran_at = "2026-10-09T23:00:00Z"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = "Live paper fills as in fwd.rule_w.2026-10-02: sleep latency 250 ± 100 ms, then walk a fresh HL L2 book (VWAP); IOC bound 30 bps for capped entries, 100 bps for shadow fades and every exit; HL taker fee per name from mkt_instrument/1; funding hourly at the size held from mkt_ctx/1"
+cost_pin = "config:xmarket-weekend/paper"
+capabilities = ["capital.weekend_fade_exec", "capital.exits", "risk.paper_gate", "infra.paper_ledger", "infra.recorder", "intel.hl_market_context", "intel.hl_order_book"]
+uncertainty = "One window, one draw; no CI; counts toward the M3 go (≥ 12 weekends, mean net ≥ +15 bps at executable prices, t ≥ 1.5, not carried by ≤ 2 weekends): 2 of 12 after this one"
+split_by = "NONE"
+incidents = []
+validity = "UNRESOLVED"
+limitations = ["W1 as merged, not as first run: binary tengu-acdef66 (main acdef66fc45252cba181a351cbc237ed6886ad57) carries the W1-gate and 2026-10-07 code-findings fixes that tengu-6fcb455 lacked (D6); every W1-pinned config section unchanged (lineage verify --pins).", "ran_at = the planned start (Fri 2026-10-09 19:00 New York); the run itself is the operator's (docs/forward-evidence-runbook-2026-10-08.md)."]
+notes = "Frozen before the anchor. Primary: the capped account's rule W top 4 (mean net bps per trade on filled notional) and the shadow account (every eligible name). Secondary, graded after the exit from this weekend's recording and backfilled 1m bars, never changing the primary: the registered variants weekend_fade.top4.close_stop500, weekend_fade.top4.noise_only (SEC events published before the decision) and weekend_fade.top4.net_of_cost (with this weekend's recorded books), and a Jev gate run judged by tengu evidence evaluate. Binary sha256 fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445; config sandboxes/xmarket-weekend/config.toml sha256 16c8267eed35e034f5d1ba4a9794114bcef1bea6839f57ec17d5af4ed8e0ce7c (last changed e81b162af8f52e4fb1ab103c2392a373d03805cf). Monday 2026-10-12 (Columbus Day) is an NYSE trading day."
+
+[[windows]]
+role = "FORWARD"
+from = "2026-10-10T00:00:00Z"
+to = "2026-10-12T13:00:00Z"
+scope = "75 xyz stock perps; anchor Fri 20:00 New York = 2026-10-10T00:00:00Z, entry Sun 18:00 = 2026-10-11T22:00:00Z, exit Mon 09:00 = 2026-10-12T13:00:00Z"
+integrity = "CLEAN"
+
+[verdict]
+value = "PENDING"
+reason = "Preregistered 2026-10-08, before the anchor; graded after the exit (tengu evidence grade + regrade from the recorded books)."
+decided_at = "2026-10-08"
+decided_by = "Phase 11 follow-up (Claude, operator-delegated): forward evidence, W1 kept"
+
+[[evidence]]
+ref = "state:xmarket-weekend/ledger.db"
+role = "the forward ledger (both accounts) — live until the stop, then snapshotted into a vault"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+
+[[evidence]]
+ref = "repo:docs/forward-evidence-runbook-2026-10-08.md"
+role = "prereg runbook"
+class = "NONE"
+provenance = "NOT_APPLICABLE"

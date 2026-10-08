@@ -9,3 +9,8 @@ generation = "W1"
 manifest_sha256 = "a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43"
 frozen_at = "2026-10-06T10:44:23Z"
 commit = "2aa79717f5cfb1d8a8211672c50ecaed18b568a7"
+
+[[sealed]]
+record = "experiment:fwd.rule_w.2026-10-09"
+sha256 = "f0c96ead78f02f46df7858406cebb00d7d3e43985e512c86c98a1093af1526f3"
+sealed_at = "2026-10-08T12:56:28Z"
