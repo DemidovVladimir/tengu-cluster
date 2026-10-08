@@ -17,6 +17,15 @@
 > outside the repo (e.g. with the bot's own libraries) and commit only the
 > resulting fixtures (`tests/fixtures/**`). Existing non-Rust files are
 > infra only: `deploy/*.sh`, `Makefile`, `Dockerfile*`, test shell fixtures.
+>
+> **One exception — the Studio web page (operator, 2026-10-08):** HTML, CSS
+> and vanilla JavaScript may live under `web/studio/` only, for the Tengu
+> Studio frontend: no build step, no TypeScript, no CDN, no telemetry, embedded
+> in the binary with `include_str!`. It only draws what the Rust API serves —
+> every rule (risk, scope, schedule, legality, health, colour from status) is
+> computed in Rust. Never for tools, adapters, runtime, tests, fixtures or
+> probes. `tests/language_policy.rs` enforces where each language may live
+> (`docs/` keeps its static site).
 
 Tengu-Cluster is a multi-agent harness in **Rust**. Single binary. The user runs
 `tengu chat --sandbox <name>` (or `tengu telegram --sandbox <name>`) and types

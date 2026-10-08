@@ -229,6 +229,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `tests/scope_lint.rs` | every `Tool::execute` calls a scope check within its first 30 lines (or says `// scope: pure-compute`) |
 | `tests/code_map.rs` | this file lists every source file; `code-map.html` graph is current |
 | `tests/tutorial_map.rs` | the visual tutorial `docs/tutorial/`: every `src/` file is explained by a page in `sources.toml` (or `[glue]`), no dead paths, `nav.js` = `sources.toml`, pages well-formed (`docs/tutorial/AUTHORING.md`) |
+| `tests/language_policy.rs` | non-Rust source only where `CLAUDE.md` allows it: web files under `docs/` + `web/studio/` (the Studio page), `.sh` under `deploy/` + `tests/fixtures/`, no `.py` / TypeScript; `web/studio/` loads nothing remote |
 | `tests/run_agent_ipc.rs` | `tengu run-agent` IPC boundary |
 | `tests/mcp_bridge_external.rs` | bridge proxies `[[mcp_servers]]` (fixture `tests/fixtures/fake_mcp_server.sh`) |
 | `tests/bridge_conformance.rs` | every catalog tool gives the same text + store rows in-process (`tengu tool call`) and through a real `tengu mcp-bridge`; fails for a catalog tool without a case (convention 20); also a shell skill (+ none under `[risk]`), `[[mcp_servers]]` tools in / out of `tools`, the Privy egress gate; two bridge sessions never replay each other's paper order |
