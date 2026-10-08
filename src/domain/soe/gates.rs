@@ -40,7 +40,8 @@
 //! | Contradiction | counts unless surely after `as_of` (an unknown time counts) |
 //!
 //! [`gates`] refuses (`Err`) an unsigned profile, an unknown decision time and
-//! an opportunity dated after it (`future_leakage`).
+//! an opportunity dated after it (`future_leakage`). [`GateVerdict::with_holds`]
+//! adds an O3 Critic's `BLOCK_GATE` as `HOLD` failures — it never lifts one.
 
 // Consumers land with the ranking, the eval set and `tengu soe` (O1 W5–W8).
 #![allow(dead_code)]
@@ -322,19 +323,7 @@ impl Run {
     }
 
     fn finish(mut self, as_of: Time, sc: &Scenarios) -> GateVerdict {
-        let mut seen = BTreeSet::new();
-        self.out.retain(|f| seen.insert((f.code, f.field.clone())));
-        self.out.sort_by(|a, b| {
-            let key = |f: &GateFailure| (f.outcome != Verdict::Reject, f.code, f.field.clone());
-            key(a).cmp(&key(b))
-        });
-        let verdict = if self.out.iter().any(|f| f.outcome == Verdict::Reject) {
-            Verdict::Reject
-        } else if self.out.is_empty() {
-            Verdict::Pass
-        } else {
-            Verdict::Hold
-        };
+        let verdict = settle(&mut self.out);
         GateVerdict {
             verdict,
             as_of,
@@ -342,6 +331,38 @@ impl Run {
             inputs_sha256: sc.inputs_sha256.clone(),
             failures: self.out,
         }
+    }
+}
+
+/// One failure per (code, field), rejections first, then by code and field;
+/// the verdict they give (module table).
+fn settle(out: &mut Vec<GateFailure>) -> Verdict {
+    let mut seen = BTreeSet::new();
+    out.retain(|f| seen.insert((f.code, f.field.clone())));
+    out.sort_by(|a, b| {
+        let key = |f: &GateFailure| (f.outcome != Verdict::Reject, f.code, f.field.clone());
+        key(a).cmp(&key(b))
+    });
+    if out.iter().any(|f| f.outcome == Verdict::Reject) {
+        Verdict::Reject
+    } else if out.is_empty() {
+        Verdict::Pass
+    } else {
+        Verdict::Hold
+    }
+}
+
+impl GateVerdict {
+    /// `self` with `holds` added as `HOLD` failures (an O3 Critic's
+    /// `BLOCK_GATE`): the same order and dedup as the gates', the verdict
+    /// recomputed — a block can hold a `PASS`, never pass or lift a failure.
+    pub fn with_holds(mut self, holds: impl IntoIterator<Item = GateFailure>) -> GateVerdict {
+        self.failures.extend(holds.into_iter().map(|mut f| {
+            f.outcome = Verdict::Hold;
+            f
+        }));
+        self.verdict = settle(&mut self.failures);
+        self
     }
 }
 

@@ -4,9 +4,10 @@
 //! them, why one ranks above another, what moved between two rankings and
 //! how sensitive a verdict is to one input — plus the pieces of a
 //! `WeeklyPortfolio`. Pure and deterministic. The allocation (who gets a
-//! test within the weekly hours and the tranche) is O3 `allocate`, the one
-//! portfolio builder; here only weeks with nothing allocated are assembled:
-//! the `HOLD` week (nothing passes) and, until O3, the unallocated week.
+//! test within the weekly hours and the tranche) is `allocate.rs` (O3), the
+//! one portfolio builder; here only weeks with nothing allocated are
+//! assembled: the `HOLD` week (nothing passes) and the unallocated week
+//! `tengu soe portfolio` prints until the command moves to `allocate`.
 //!
 //! | `RankKey` | Value ([`KeyValue`]) | Ranks first |
 //! |---|---|---|
@@ -41,7 +42,7 @@
 //! | [`week_next_information`] | the fields behind the held candidates' `HOLD` failures, by how many candidates each blocks, then by name |
 //! | [`portfolio_inputs_sha256`] | canonical sha256 of every candidate's (id, version, `inputs_sha256`), by id |
 //! | [`hold_week`] | the `HOLD` week: nothing ranked, every failed gate, the next information, a rationale; refused when a candidate passes (that week is the allocation's) |
-//! | [`unallocated_week`] | `tengu soe portfolio` until O3: the `HOLD` week, or the `PASS` candidates ranked, each `HOLD`, nothing allocated, rationale [`NOT_ALLOCATED`] |
+//! | [`unallocated_week`] | `tengu soe portfolio` until it moves to `allocate`: the `HOLD` week, or the `PASS` candidates ranked, each `HOLD`, nothing allocated, rationale [`NOT_ALLOCATED`] |
 
 // Some consumers land with the O3 allocation.
 #![allow(dead_code)]
@@ -895,8 +896,9 @@ pub struct WeekHead {
     pub profile_sha256: String,
 }
 
-/// Every assessment made at the week's decision time, in its currency.
-fn same_decision(head: &WeekHead, all: &[Assessment]) -> Vec<ValueError> {
+/// Every assessment made at the week's decision time, in its currency
+/// (one error per one that is not).
+pub fn same_decision(head: &WeekHead, all: &[Assessment]) -> Vec<ValueError> {
     all.iter()
         .filter(|a| a.verdict.as_of != head.as_of || a.scenarios.currency != head.currency)
         .map(|a| {
@@ -971,10 +973,11 @@ pub fn hold_week(head: WeekHead, all: &[Assessment]) -> Result<WeeklyPortfolio, 
 /// `hold_rationale` of an [`unallocated_week`] that ranks a candidate.
 pub const NOT_ALLOCATED: &str = "not allocated: every ranked candidate holds until the O3 allocation gives tests within weekly_owner_hours and max_validation_tranche";
 
-/// Module table: the week `tengu soe portfolio` prints before O3 —
+/// Module table: the week `tengu soe portfolio` prints until it moves to
+/// `allocate::allocate` —
 /// [`hold_week`] when nothing passes; else every `PASS` candidate ranked by
 /// `order` with the action `HOLD` (nothing allocated), the held / rejected
-/// rows, the next information and [`NOT_ALLOCATED`]. O3 `allocate` replaces
+/// rows, the next information and [`NOT_ALLOCATED`]. `allocate` replaces
 /// it; `Err` as [`hold_week`] (another decision time or currency, a broken
 /// record).
 pub fn unallocated_week(

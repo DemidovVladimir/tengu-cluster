@@ -67,6 +67,19 @@ pub mod codes {
     pub const OPERATOR_PROFILE_UNSIGNED: &str = "operator_profile_unsigned";
     // Eval set (`eval.rs`).
     pub const PROFILE_MISMATCH: &str = "profile_mismatch";
+    // O3 proposals, challenges, allocation, forecast (`proposal.rs` …).
+    pub const COMPUTED_FIELD: &str = "computed_field";
+    pub const UNSUPPORTED_EVIDENCE: &str = "unsupported_evidence";
+    pub const FACT_WITHOUT_EVIDENCE: &str = "fact_without_evidence";
+    pub const UNTRACED_EVIDENCE: &str = "untraced_evidence";
+    pub const UNKNOWN_FIELD: &str = "unknown_field";
+    pub const UNKNOWN_TARGET: &str = "unknown_target";
+    pub const CHAIN_BROKEN: &str = "chain_broken";
+    pub const EVIDENCE_BEFORE_FREEZE: &str = "evidence_before_freeze";
+    pub const HIT_AFTER_DEADLINE: &str = "hit_after_deadline";
+    pub const MISS_BEFORE_DEADLINE: &str = "miss_before_deadline";
+    pub const HORIZON_TOO_LONG: &str = "horizon_too_long";
+    pub const UNKNOWN_ITEM: &str = "unknown_item";
 }
 
 /// A refused value: a [`codes`] entry + what was wrong.

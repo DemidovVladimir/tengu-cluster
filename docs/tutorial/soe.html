@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set and the offline tengu soe command.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command and the O3 weekly allocation, memo and forecast log as pure code.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,7 +22,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
   <h1>Software opportunities</h1>
-  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. <code>tengu soe</code> runs it offline on a private, signed profile: three scenarios, the hard gates, the ranking, the week and a dated eval set. Nothing here reads the network or acts.</p>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. <code>tengu soe</code> runs it offline on a private, signed profile: three scenarios, the hard gates, the ranking, the week and a dated eval set. The O3 allocation turns the week into tests within the weekly hours and tranche. Nothing here reads the network or acts.</p>
   <ul class="facts">
     <li>money in <b>2</b> minor digits, never a float</li>
     <li><b>22</b> gate codes, <b>3</b> verdicts</li>
@@ -337,6 +337,55 @@
   </div>
 </section>
 
+<section class="sec" aria-labelledby="s-allocate">
+  <div class="sec-head">
+    <span class="kicker">O3, pure code</span>
+    <h2 id="s-allocate">From proposals to an allocated week</h2>
+    <p>Models write data, never a figure: an Architect proposes, a separate Critic challenges, the deterministic code decides. <code>decide_week</code> runs the stages; <code>allocate</code> is the one portfolio builder.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Stage</th><th>Reads</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>Observe</td><td>one O2 evidence packet at the decision</td><td>copies of one item are one confirmation; a single non-primary origin is a trigger, not support</td></tr>
+        <tr><td>Architect</td><td>the packet, the profile</td><td>a draft opportunity, a <code>FACT</code> or <code>INFERENCE</code> basis per input, a forecast; any computed key is refused (<code>computed_field</code>)</td></tr>
+        <tr><td>Challenge</td><td>the proposals</td><td>widen an input only against the candidate, make it unknown, or hold it on a gate; never improve it</td></tr>
+        <tr><td>Gates · economics · rank</td><td>the challenged opportunity</td><td>the O1 rules above, the Critic's holds added</td></tr>
+        <tr><td>Allocate</td><td>the verdicts, the profile's order, hours and tranche</td><td>the actions below; novelty is never read</td></tr>
+        <tr><td>Report</td><td>the week</td><td>a private memo: facts, inference, computed fields, unsupported claims, unknowns, challenges, next information</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">PASS</span><span><b>ranked</b>In the profile's order: <code>CONTINUE_ACTIVE</code> or <code>CHEAP_TEST</code> while the week has hours and tranche left, else <code>HOLD</code>.</span></li>
+    <li><span class="chip warn">HOLD</span><span><b>held</b>A bounded path or one demand event: <code>CHEAP_TEST</code> if it fits. An acquisition's open blocks: <code>DILIGENCE</code> with the questions and the next tranche. Anything else: <code>HOLD</code>.</span></li>
+    <li><span class="chip bad">REJECT</span><span><b>rejected</b><code>REPRICE</code> at the least price that clears the contribution gate (a recurring price or a one-off contract), else <code>REJECT</code>.</span></li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Roadmap case (synthetic profile)</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>Strong news, weak demand: three copies of one release, one buyer post</td><td>held on <code>SINGLE_DEMAND_SIGNAL</code>; a cheap demand test (0.00, 5 h)</td></tr>
+        <tr><td>12000.00 a month, 160 owner hours (one-off)</td><td><code>REPRICE</code> 14200.00 = 160 h × 70.00 + the 3000.00 target</td></tr>
+        <tr><td>Acquisition, transfer unverifiable</td><td><code>DILIGENCE</code>: four questions, next tranche 750.00</td></tr>
+        <tr><td>Two articles copy one source</td><td>one confirmation: held; an independent report makes two</td></tr>
+        <tr><td>Improving active vs equal new</td><td>evidence decides; novelty changes no byte</td></tr>
+        <tr><td>Nothing passes</td><td>a valid empty week with every failed gate</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>O4 record</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>Forecast log</td><td>frozen with the week, each line hashes the previous; resolved only by evidence seen after the freeze; calibration in whole basis points</td></tr>
+        <tr><td>Cycle ops</td><td>latency and tokens per stage, source failures; cost unknown without prices</td></tr>
+        <tr><td>Review #2 packet</td><td>cycles, grades, calibration, misses, ops, source terms, lanes; stop flags from roadmap § 14. The operator decides.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="sec" aria-labelledby="s-eval">
   <div class="sec-head">
     <span class="kicker">Dated, synthetic, replayable</span>
@@ -380,6 +429,8 @@
         <tr><td><code>OpportunityEpisode</code></td><td><code>soe.opportunity_episode/1</code></td><td>verdict, actions, spend, hours, forecast vs actual, lineage quality and lesson</td><td>private</td></tr>
         <tr><td><code>WeeklyPortfolio</code></td><td><code>soe.weekly_portfolio/1</code></td><td>ranked, held and rejected rows with an action; allocation; <code>HOLD</code> rationale</td><td>private</td></tr>
         <tr><td><code>PublicBrief</code></td><td><code>soe.public_brief/1</code></td><td>facts with <code>url:</code> links, thesis, disclosed assumptions</td><td>the only public one</td></tr>
+        <tr><td><code>MechanismProposal</code> · <code>Challenge</code></td><td><code>soe.mechanism_proposal/1</code> · <code>soe.challenge/1</code></td><td>a model's draft and the tool's provenance: no computed field</td><td>private</td></tr>
+        <tr><td><code>Forecast</code> · <code>CycleGrade</code></td><td><code>soe.forecast/1</code> · <code>soe.cycle_grade/1</code></td><td>predictions frozen with a week · the operator's grades of a cycle</td><td>private</td></tr>
         <tr><td><code>EvalCase</code></td><td><code>soe.eval_case/1</code></td><td>a dated decision: record views, candidates, expected verdicts, gates, ranking, next information</td><td>public, synthetic</td></tr>
       </tbody>
     </table>
@@ -453,7 +504,12 @@
     <li><span><b>Unsigned never decides.</b> <code>check</code>, <code>portfolio</code>, <code>sensitivity</code> and <code>eval</code> refuse an unsigned profile, an <code>init</code> template included.</span></li>
     <li><span><b>The profile is never overwritten.</b> <code>init</code> creates the file only when none exists, mode 0600, and never inside a git work tree.</span></li>
     <li><span><b>Same inputs, same week.</b> A <code>portfolio</code> rerun prints the same bytes, whatever the file order.</span></li>
-    <li><span><b>Nothing is allocated yet.</b> Until the O3 allocation, every ranked candidate holds; no command contacts, spends or publishes.</span></li>
+    <li><span><b>The command allocates nothing yet.</b> <code>tengu soe portfolio</code> holds every ranked candidate until it moves to the O3 allocation; no command contacts, spends or publishes.</span></li>
+    <li><span><b>A model never writes a number the code computes.</b> A proposal or challenge with a figure, verdict, rank key, action or provenance key is refused, path by path.</span></li>
+    <li><span><b>Evidence traces.</b> A proposal cites only records of the cycle's packet, and an input's evidence link must be the link of a record it cites.</span></li>
+    <li><span><b>A Critic only makes things worse.</b> Each end of a challenged input moves only against the candidate; an unknown stays unknown; a block holds, never passes.</span></li>
+    <li><span><b>The week never overspends.</b> Tests fit the profile's weekly hours and validation tranche; a diligence tranche is capped at the tranche and spends nothing.</span></li>
+    <li><span><b>A forecast cannot be fixed later.</b> An edited, dropped or reordered log line breaks the chain; evidence from before the freeze resolves nothing.</span></li>
   </ul>
 </section>
 
@@ -484,7 +540,7 @@
 <span class="ln cmd"><span class="p">$ </span>cargo test --test soe_cli</span>
 <span class="ln o"># 9 tests: eval, init, refusals, a byte-identical portfolio rerun, check JSON, the tornado, the week fixture</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu soe</span>
-<span class="ln o"># 86 unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init</span></pre>
+<span class="ln o"># 117 unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init, the O3 stages and the six roadmap cases</span></pre>
   </div>
 </section>
 
@@ -510,6 +566,11 @@
         <tr><td><code>src/domain/soe/matching.rs</code></td><td><code>fit</code>, <code>active_at</code>, <code>FitLevel</code></td></tr>
         <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code>, <code>unallocated_week</code></td></tr>
         <tr><td><code>src/domain/soe/eval.rs</code></td><td><code>EvalCase</code>, <code>run_case</code></td></tr>
+        <tr><td><code>src/domain/soe/observe.rs</code></td><td><code>EvidenceIndex</code>, <code>cited_views</code> (the O2 packet in)</td></tr>
+        <tr><td><code>src/domain/soe/proposal.rs</code> · <code>challenge.rs</code></td><td><code>ProposalDraft</code>, <code>MechanismProposal</code>, <code>COMPUTED_KEYS</code> · <code>ChallengeDraft</code>, <code>Challenge</code>, <code>apply</code></td></tr>
+        <tr><td><code>src/domain/soe/allocate.rs</code></td><td><code>allocate</code>, <code>decide_week</code>, <code>min_price</code>, <code>Budget</code>, <code>Track</code></td></tr>
+        <tr><td><code>src/domain/soe/memo.rs</code></td><td><code>render_memo</code></td></tr>
+        <tr><td><code>src/domain/soe/forecast.rs</code> · <code>review.rs</code> · <code>ops.rs</code></td><td><code>Forecast</code>, <code>LogLine</code>, <code>verify_chain</code>, <code>resolve</code>, <code>calibration</code> · <code>CycleGrade</code>, <code>ReviewPacket</code>, <code>stop_flags</code> · <code>CycleOps</code></td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
