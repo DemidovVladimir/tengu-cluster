@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::backtest::evaluation::{join, summarize, EvalRow, EvalSummary, JevCall};
+use crate::domain::backtest::evaluation::{
+    capped_lens, join, summarize, EvalRow, EvalSummary, JevCall,
+};
 use crate::domain::book::L2Book;
 use crate::domain::canonical::sha256_hex;
 use crate::domain::evidence::{tree_hash, EvidenceRecord, ItemKind, ManifestEntry};
@@ -403,7 +405,11 @@ pub(crate) fn evaluate(
         );
     }
     let rows = join(&files.candidates, &files.research, &calls);
-    let summary = summarize(&rows, bootstrap, seed);
+    let mut summary = summarize(&rows, bootstrap, seed);
+    summary.capped = files
+        .capped
+        .as_ref()
+        .map(|(rules, jev)| capped_lens(rules, jev, bootstrap, seed));
     Ok((files.run_id, rows, summary))
 }
 

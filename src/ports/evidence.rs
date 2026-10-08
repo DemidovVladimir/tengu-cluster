@@ -151,6 +151,9 @@ pub(crate) struct RunFiles {
     pub research: Vec<Trade>,
     /// `decisions.jsonl`, one JSON value per line.
     pub decisions: Vec<Value>,
+    /// `trades-rules_capped.jsonl` + `trades-jev_capped.jsonl`: the two
+    /// capped books (`[risk]` + `[paper]`), when the run had them.
+    pub capped: Option<(Vec<Trade>, Vec<Trade>)>,
 }
 
 /// A backtest run dir, read-only (module table).

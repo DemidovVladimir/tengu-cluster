@@ -12,9 +12,10 @@
 //! | Common set | rows with an outcome and an answered decision (class not `error`): every policy is scored on exactly these |
 //! | Per candidate | rules = outcome · jev = outcome when `take`, else 0 · hold = 0; bps per candidate, and per trade where a policy trades |
 //! | Differences | per candidate: jev − rules, jev − hold, rules − hold (`stats::per_candidate_diff_ci`, paired bootstrap over periods, `[backtest] bootstrap` / `seed`); per trade: jev − rules (`stats::paired_diff_ci_of` — the gate's own `jev − rules`, selection quality) |
-//! | Jev status ([`JevStatus`]) | `PROVEN` when jev − rules and jev − hold (per candidate) both have a 95 % CI above 0 · `REJECTED` when jev − hold lies below 0 (its takes lose money) · else `UNPROVEN` — also when Jev is worse than rules per candidate: it skips winners, but taking every candidate is the uncapped research arm, which a capped book cannot do; the reason states every lens |
+//! | Jev status ([`JevStatus`]) | `PROVEN` when jev − rules and jev − hold (per candidate) both have a 95 % CI above 0 · `REJECTED` when jev − hold lies below 0 (its takes lose money) · else `UNPROVEN` — also when Jev is worse than rules per candidate (it skips winners): only losing money against HOLD rejects; the reason states every lens, the capped books print beside it |
 //! | Calibration | p(take) against outcome > 0 over the common set (`stats::calibration`, the gate's bins), Brier |
 //! | Latency · cost | p50 / p95 / max `latency_ms` of the common set's calls (a cached replay reads ~1 ms: the original call's time is not kept); Σ `usage.cost` of every call line, USD |
+//! | Capped books ([`capped_lens`]) | when the run has `trades-rules_capped.jsonl` + `trades-jev_capped.jsonl`: trades and Σ net USD of each book (what a $100 account would have made), jev − rules per trade (`stats::paired_diff_ci`, the gate's capped figure) |
 
 use std::collections::BTreeMap;
 
@@ -24,7 +25,7 @@ use serde_json::Value;
 use crate::domain::backtest::engine::{Candidate, Trade};
 use crate::domain::backtest::gate::{p_take, GateClass, CALIBRATION_BINS};
 use crate::domain::backtest::stats::{
-    calibration, paired_diff_ci_of, per_candidate_diff_ci, Calibration, DiffCi,
+    calibration, paired_diff_ci, paired_diff_ci_of, per_candidate_diff_ci, Calibration, DiffCi,
 };
 use crate::domain::book::Side;
 use crate::domain::decision::{Answer, StepOutcome, Verdict};
@@ -211,6 +212,36 @@ pub struct EvalSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency: Option<Latency>,
     pub cost_usd: f64,
+    /// The capped books (`[risk]` + `[paper]`), when the run had them: the
+    /// deployable lens a $100 account trades ([`capped_lens`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capped: Option<CappedLens>,
+}
+
+/// The capped books of a gated run: rules_capped (every decided candidate
+/// through the caps) vs jev_capped (Jev's takes through the same caps).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CappedLens {
+    pub rules_trades: usize,
+    pub rules_net_usd: f64,
+    pub jev_trades: usize,
+    pub jev_net_usd: f64,
+    /// Mean net bps per trade, jev − rules, paired over periods (the gate's
+    /// own `jev − rules (capped)`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jev_minus_rules_per_trade: Option<DiffCi>,
+}
+
+/// The [`CappedLens`] of two capped books.
+pub fn capped_lens(rules: &[Trade], jev: &[Trade], bootstrap: u32, seed: u64) -> CappedLens {
+    let usd = |ts: &[Trade]| ts.iter().map(|t| t.net_usd).sum::<f64>() + 0.0;
+    CappedLens {
+        rules_trades: rules.len(),
+        rules_net_usd: usd(rules),
+        jev_trades: jev.len(),
+        jev_net_usd: usd(jev),
+        jev_minus_rules_per_trade: paired_diff_ci(jev, rules, bootstrap, seed),
+    }
 }
 
 /// The module table's Jev status, with every lens in the reason.
@@ -242,8 +273,8 @@ fn status(
         (Some(r), _) if r.hi_bps < 0.0 => (
             JevStatus::Unproven,
             format!(
-                "it skips winners: worse than taking every candidate, which a capped book \
-                 cannot do — {lenses}"
+                "it skips winners: worse than rules per candidate (not REJECTED: only losing \
+                 money against hold rejects) — {lenses}"
             ),
         ),
         (Some(_), Some(_)) => (JevStatus::Unproven, format!("a CI spans 0 — {lenses}")),
@@ -355,6 +386,7 @@ pub fn summarize(rows: &[EvalRow], bootstrap: u32, seed: u64) -> EvalSummary {
         calibration: calibration(&points, CALIBRATION_BINS),
         latency,
         cost_usd: decided.iter().filter_map(|j| j.cost_usd).sum(),
+        capped: None,
     }
 }
 
@@ -420,6 +452,19 @@ impl EvalSummary {
                 .map_or("—".to_string(), |b| format!("{b:.3}")),
             self.cost_usd
         ));
+        if let Some(c) = &self.capped {
+            out.push(format!(
+                "capped books: rules {} trades ${:+.2} · jev {} trades ${:+.2} · jev − rules per trade {}",
+                c.rules_trades,
+                c.rules_net_usd,
+                c.jev_trades,
+                c.jev_net_usd,
+                c.jev_minus_rules_per_trade.as_ref().map_or("no CI".to_string(), |d| format!(
+                    "{:+.2} bps, ci95 [{:+.1}, {:+.1}]",
+                    d.diff_bps, d.lo_bps, d.hi_bps
+                ))
+            ));
+        }
         out.push(format!(
             "Jev: {} — {}",
             self.jev_status.as_str(),
@@ -543,6 +588,30 @@ mod tests {
         );
         assert_eq!(st(Some(&a), Some(&ci(-9.0, -1.0))), JevStatus::Rejected);
         assert_eq!(st(None, Some(&b)), JevStatus::Unproven);
+    }
+
+    /// The capped lens sums each book's USD and pairs the per-trade means
+    /// over periods; one period alone gives no CI.
+    #[test]
+    fn the_capped_lens_sums_usd_and_pairs_trades() {
+        use crate::domain::backtest::testkit::trade;
+        let rules = vec![
+            trade("p1", "a", 100.0, 25.0, 1),
+            trade("p1", "b", -40.0, 25.0, 1),
+            trade("p2", "a", 20.0, 25.0, 2),
+        ];
+        let jev = vec![
+            trade("p1", "a", 100.0, 25.0, 1),
+            trade("p2", "a", 20.0, 25.0, 2),
+        ];
+        let c = capped_lens(&rules, &jev, 200, 7);
+        assert_eq!((c.rules_trades, c.jev_trades), (3, 2));
+        assert!((c.rules_net_usd - 0.2).abs() < 1e-12);
+        assert!((c.jev_net_usd - 0.3).abs() < 1e-12);
+        assert!(c.jev_minus_rules_per_trade.is_some());
+        assert!(capped_lens(&rules[..2], &jev[..1], 200, 7)
+            .jev_minus_rules_per_trade
+            .is_none());
     }
 
     /// The per-candidate difference pairs a period's candidates: one period
