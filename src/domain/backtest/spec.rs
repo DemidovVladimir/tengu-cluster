@@ -18,7 +18,7 @@
 //!
 //! | Kind | Params — default | Bounds |
 //! |---|---|---|
-//! | `weekend_window` | `calendar` (an exchange `[xmarket.calendars]` id), `direction`, `min_abs_signal_bps` — 0, `top_n` — all, `anchor_offset_mins` / `entry_offset_mins` / `exit_offset_mins` — 0 | offsets ±1440, whole bars |
+//! | `weekend_window` | `calendar` (an exchange `[xmarket.calendars]` id), `direction`, `min_abs_signal_bps` — 0, `top_n` — all, `anchor_offset_mins` / `entry_offset_mins` / `exit_offset_mins` — 0, `labels` — off (`{skip, lookback_mins, new_listing_days, forms}`: `labels.rs`) | offsets ±1440, whole bars; `labels` bounds in `labels.rs`; absent ⇒ the canonical JSON and `spec_sha256` are unchanged |
 //! | `daily_window` | `days` (`all` · `weekdays` · `trading` + `calendar`), `tz`, `anchor` / `entry` / `exit` (`HH:MM`), `direction`, `min_abs_signal_bps` — 0, `top_n` — all | `tz` a `domain::tz` zone; times whole bars |
 //! | `move_trigger` | `lookback_bars`, `threshold_bps`, `min_volume_ratio` + `volume_baseline_bars` — off, `direction`, `hold_bars`, `cooldown_bars` — `hold_bars`, `take_profit_bps` / `stop_loss_bps` — off | bars 1..=10000 (cooldown 0..=10000), bps 0 < x ≤ 10000, ratio 0 < x ≤ 1000 |
 //! | `funding_carry` | `min_apr_pct`, `exit_apr_pct` — off, `hold_hours` | 0 < min ≤ 10000, 0 ≤ exit < min, hours 1..=8760 |
@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::domain::backtest::costs::{CostSpec, HalfSpread};
+use crate::domain::backtest::labels::LabelSpec;
 use crate::domain::backtest::stats::PeriodKind;
 use crate::domain::book::Side;
 use crate::domain::calendar::parse_hm;
@@ -201,6 +202,10 @@ pub struct WeekendWindowParams {
     pub entry_offset_mins: i64,
     #[serde(default)]
     pub exit_offset_mins: i64,
+    /// Phase 7 information labels (`labels.rs`); absent ⇒ none, and the
+    /// canonical JSON (`spec_sha256`) is the one before Phase 7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<LabelSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -521,6 +526,14 @@ impl StrategySpec {
         }
     }
 
+    /// The `labels` table (`weekend_window` only; `labels.rs`).
+    pub fn labels(&self) -> Option<&LabelSpec> {
+        match &self.kind {
+            StrategyKind::WeekendWindow(p) => p.labels.as_ref(),
+            _ => None,
+        }
+    }
+
     /// The ids a `pair_spread` / `event_window` spec names (sorted, distinct);
     /// empty for the universe kinds.
     pub fn named_instruments(&self) -> Vec<String> {
@@ -658,6 +671,9 @@ impl StrategySpec {
                 check_window_interval(&mut e, kind, iv);
                 check_bps(&mut e, "min_abs_signal_bps", p.min_abs_signal_bps, true);
                 check_top_n(&mut e, p.top_n);
+                if let Some(labels) = &p.labels {
+                    e.extend(labels.validation_errors());
+                }
                 for (field, mins) in [
                     ("anchor_offset_mins", p.anchor_offset_mins),
                     ("entry_offset_mins", p.entry_offset_mins),
@@ -1268,6 +1284,65 @@ mod tests {
         .unwrap_err();
         assert_eq!(e.len(), 21, "{e:?}");
         assert!(e[20].ends_with("… and 5 more problems"), "{e:?}");
+    }
+
+    /// `labels` (Phase 7): `weekend_window` only, defaults filled, bounds
+    /// named; absent, the spec's JSON keys — and so its hash — are what they
+    /// were (the pinned hashes: `config::backtest` tests).
+    #[test]
+    fn labels_parse_on_weekend_window_only_and_absent_change_nothing() {
+        let base = every_kind()[0].clone();
+        let plain = parse(base.clone()).unwrap();
+        assert!(plain.labels().is_none());
+        let keys: Vec<String> = plain
+            .to_value()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "anchor_offset_mins",
+                "calendar",
+                "direction",
+                "entry_offset_mins",
+                "exit_offset_mins",
+                "interval",
+                "kind",
+                "min_abs_signal_bps",
+                "name",
+                "top_n",
+                "universe"
+            ]
+        );
+        let mut v = base.clone();
+        v["labels"] = json!({"skip": ["NEWS"]});
+        let s = parse(v).unwrap();
+        let l = s.labels().unwrap();
+        assert_eq!((l.lookback_mins, l.new_listing_days), (240, 14));
+        assert_eq!(
+            s.to_value()["labels"],
+            json!({"skip": ["NEWS"], "lookback_mins": 240, "new_listing_days": 14})
+        );
+        assert_eq!(StrategySpec::from_value("s", &s.to_value()).unwrap(), s);
+        assert_ne!(
+            spec_sha256(&s.to_value()),
+            spec_sha256(&plain.to_value()),
+            "labels are part of the spec"
+        );
+        let mut bad = base.clone();
+        bad["labels"] = json!({"skip": ["NEWS", "NOISE", "UNCERTAIN"], "lookback_mins": 99999});
+        let e = errors(bad);
+        assert!(e.contains("labels.skip names every class"), "{e}");
+        assert!(e.contains("labels.lookback_mins must be within"), "{e}");
+        let mut typo = base;
+        typo["labels"] = json!({"skips": ["NEWS"]});
+        assert!(errors(typo).contains("unknown field `skips`"));
+        let mut daily = every_kind()[1].clone();
+        daily["labels"] = json!({});
+        assert!(errors(daily).contains("unknown field `labels`"));
     }
 
     #[test]

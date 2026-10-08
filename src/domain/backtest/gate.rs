@@ -6,7 +6,7 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | [`gate_event`] | `{strategy, instrument, side, signal_bps, decided_at, features}` — `decided_at` RFC 3339 UTC; numbers rounded to 0.01, whole ones as integers (a short, stable cache key); nothing known only after the decision: no exit, period, anchor, label (free text an operator may write with hindsight), data time or outcome |
+//! | [`gate_event`] | `{strategy, instrument, side, signal_bps, decided_at, features}` — `decided_at` RFC 3339 UTC; numbers rounded to 0.01, whole ones as integers (a short, stable cache key); nothing known only after the decision: no exit, period, anchor, label (free text an operator may write with hindsight), data time or outcome; the Phase 7 `info_label` (NEWS / UNCERTAIN / NOISE, `labels.rs`) stays out for now — the gate sees what it saw before |
 //! | [`GateClass::of`] | `Stopped` `take` ⇒ take · `Stopped` `ask_architect` ⇒ ask_architect · any other `Stopped` ⇒ skip · `Escalated` (below `act_at`) ⇒ unsure · `Rejected` ⇒ rejected · a failed call ⇒ error ([`GateDecision::failed`]); a tool outcome (never from a terminal-only loop) ⇒ rejected. Only take trades |
 //! | [`p_take`] | `probabilities["take"]`, else the confidence when the action is `take`, else 0 |
 //! | [`GateSummary`] | counts per class; take rate = take ÷ answered (decided − errors); the run's cache hits / misses / errors; est. cost = misses × the price per decision ([`COST_PER_DECISION_USD`]; the caller passes 0 offline); calibration — [`CALIBRATION_BINS`] bins of p(take) against the candidate's research trade winning (net bps > 0), Brier — over answered verdicts but rejected ones, joined by `seq`; jev − rules = `paired_diff_ci` of the taken candidates' trades against every decided candidate's (research; capped too when given) — none when an arm traded in fewer than 2 periods or misses over 1 % of the resamples (`stats.rs`) |
@@ -458,6 +458,7 @@ mod tests {
     use super::*;
     use crate::domain::backtest::engine::{ExitPlan, Leg};
     use crate::domain::backtest::features::FEATURE_KEYS;
+    use crate::domain::backtest::labels::InfoLabel;
     use crate::domain::backtest::testkit::{trade, utc, H};
     use crate::domain::book::Side;
     use crate::domain::observation::{assert_features_ok, Features};
@@ -508,6 +509,7 @@ mod tests {
                 ("volume_ratio_24h".into(), 0.004),
             ]),
             label: Some("earnings beat, +10 % by Monday".into()),
+            info_label: Some(InfoLabel::News),
         }
     }
 
@@ -540,7 +542,8 @@ mod tests {
             ]
         );
         // Nothing from after the decision: no exit (field or time), outcome,
-        // period, anchor, data time or the hindsight label.
+        // period, anchor, data time or the hindsight label — nor (for now)
+        // the Phase 7 information label.
         let text = e.to_string();
         for banned in [
             "exit",
@@ -553,6 +556,7 @@ mod tests {
             "anchor",
             "asof",
             "label",
+            "NEWS",
             "earnings",
             "legs",
             "431.27",

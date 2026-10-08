@@ -1028,6 +1028,7 @@ mod tests {
                         ("hour_of_week".into(), 166.0),
                     ]),
                     label: None,
+                    info_label: None,
                 }
             })
             .collect()

@@ -9,7 +9,7 @@
 //! | Step | Call | Rule |
 //! |---|---|---|
 //! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated ([`spec_of`]: every problem, one each — the `backtest` tool's spec check); universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
-//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; with `data_through_ms` (`--data-through`) the rows after it cut (`MarketData::cut_after`, a data note), else the newest row loaded recorded as the run's `data_through_ms` (lineage D1); `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
+//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; with `data_through_ms` (`--data-through`) the rows after it cut (`MarketData::cut_after`, a data note), else the newest row loaded recorded as the run's `data_through_ms` (lineage D1); `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); a spec with `labels` (`weekend_window`, Phase 7) also loads [`InfoData`] (`load_info`: each instrument's events over the window − `lookback_mins`, its event coverage, its earliest stored bar at any interval, its `[backtest.splits]`) before the cut — `--data-through` cuts events like rows and clips coverage — and a data note names the instruments no source covers (ids in full); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
 //! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: `run_gate` reads [`Prepared::set`] (candidates in decision order, features as-of) and decides them |
 //! | 3 | [`evaluate`] · `gate::evaluate_gated` | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split. With the gate: `evaluate_gated` = `evaluate` + the gate's `rules` / `jev` arms (research + capped) over the decided candidates, comparisons, calibration, summary, `decisions.jsonl` |
 //! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache or a run the bound generation's registry cites — `keep_cited`) |
@@ -39,11 +39,12 @@ use crate::domain::backtest::costs::{cost_for, CostSpec, HalfSpread};
 use crate::domain::backtest::engine::{
     candidates, simulate, Arm, ArmResult, Candidate, CandidateSet, MarketData, RiskCaps, RunParams,
 };
+use crate::domain::backtest::labels::{InfoData, LabelSpec};
 use crate::domain::backtest::report::{BacktestReport, CAPPED_ARM, PRIMARY_ARM};
 use crate::domain::backtest::spec::{
     spec_sha256, valid_name, SplitSpec, StrategyKind, StrategySpec,
 };
-use crate::domain::marketdata::{fmt_time, Interval};
+use crate::domain::marketdata::{fmt_time, Interval, StockSplit};
 use crate::ports::market_data::MarketDataStore;
 
 const HOUR_MS: i64 = 3_600_000;
@@ -310,6 +311,79 @@ async fn load(
     Ok(md)
 }
 
+/// What a labelled spec's labels read (module table, step 2;
+/// `domain/backtest/labels.rs`): per instrument its events over
+/// `[lo − lookback, hi)`, every source's event coverage, its earliest stored
+/// bar at any interval; `[backtest.splits]` of the run's instruments.
+async fn load_info(
+    store: &dyn MarketDataStore,
+    r: &Resolved,
+    labels: &LabelSpec,
+    splits: &BTreeMap<String, Vec<StockSplit>>,
+    (lo, hi): (i64, i64),
+) -> Result<InfoData> {
+    let mut info = InfoData::default();
+    let from = lo.saturating_sub(labels.lookback_ms());
+    for id in &r.instruments {
+        let events = store.events(id, from, hi).await?;
+        if !events.is_empty() {
+            info.events.insert(id.clone(), events);
+        }
+        let coverage = store.event_coverage(id).await?;
+        if !coverage.is_empty() {
+            info.coverage.insert(id.clone(), coverage);
+        }
+        let first = store
+            .coverage(Some(id))
+            .await?
+            .into_iter()
+            .filter(|row| row.kind == "bars")
+            .map(|row| row.first_ms)
+            .min();
+        if let Some(first) = first {
+            info.listed_ms.insert(id.clone(), first);
+        }
+        if let Some(list) = splits.get(id) {
+            info.splits.insert(id.clone(), list.clone());
+        }
+    }
+    Ok(info)
+}
+
+/// The labels' data note on coverage (module table): which instruments no
+/// source covers at all — every candidate of theirs is UNCERTAIN unless an
+/// event says NEWS. Ids in full.
+fn coverage_note(r: &Resolved, info: &InfoData) -> Option<String> {
+    let uncovered: Vec<&str> = r
+        .instruments
+        .iter()
+        .filter(|id| {
+            !info
+                .coverage
+                .get(id.as_str())
+                .is_some_and(|cs| cs.iter().any(|c| c.covered))
+        })
+        .map(String::as_str)
+        .collect();
+    if uncovered.is_empty() {
+        return None;
+    }
+    let n = r.instruments.len();
+    Some(if uncovered.len() == n {
+        format!(
+            "labels: no event source covers any of the {n} instrument(s) — every candidate is \
+             UNCERTAIN unless an event says NEWS (backfill the events first: tengu history events)"
+        )
+    } else {
+        format!(
+            "labels: no event source covers {} of the {n} instruments — their candidates are \
+             UNCERTAIN unless an event says NEWS: {}",
+            uncovered.len(),
+            uncovered.join(", ")
+        )
+    })
+}
+
 /// `[risk]` + `[paper]` ⇒ the capped arm's caps.
 fn risk_caps(sections: &SandboxSections) -> Option<RiskCaps> {
     let (risk, paper) = (sections.risk.as_ref()?, sections.paper.as_ref()?);
@@ -353,6 +427,9 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
     }
     let window = r.data_window(&bt.costs, from, to);
     let mut md = load(env.store.as_ref(), &r, &bt.costs, window).await?;
+    if let Some(labels) = r.spec.labels() {
+        md.info = load_info(env.store.as_ref(), &r, labels, &bt.stock_splits(), window).await?;
+    }
     // The data this run reads, recorded so a rerun can read the same.
     let mut through_notes = Vec::new();
     if let Some(t) = job.data_through_ms {
@@ -366,7 +443,10 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
     }
     let data_through_ms = job.data_through_ms.or_else(|| md.newest_ms());
     // Share splits before any decision reads a price.
-    let split_notes = md.adjust_for_splits(&bt.stock_splits());
+    let mut split_notes = md.adjust_for_splits(&bt.stock_splits());
+    if r.spec.labels().is_some() {
+        split_notes.extend(coverage_note(&r, &md.info));
+    }
     let params = RunParams {
         from_ms: from,
         to_ms: to,
@@ -485,7 +565,7 @@ mod tests {
     use crate::adapters::outbound::market_data::SqliteMarketData;
     use crate::config::risk::{PaperConfig, RiskConfig};
     use crate::domain::backtest::engine::{SkipReason, Trade};
-    use crate::domain::backtest::testkit::{nyse, utc, H};
+    use crate::domain::backtest::testkit::{et, nyse, utc, H};
     use crate::domain::calendar::Calendar;
     use crate::domain::lineage::generation::GenerationScope;
     use crate::domain::marketdata::{Bar, FundingPoint};
@@ -1411,6 +1491,147 @@ mod tests {
         );
         assert_ne!(uncut.arms, cut.arms, "the later data changes the run");
         assert!(uncut.data_through_ms > Some(through));
+    }
+
+    /// Phase 7: a spec with `labels` reads `market.db`'s events, event
+    /// coverage and first bars — AAA's 8-K of Fri 2026-09-18 16:30 New York
+    /// makes its 09-20 decision NEWS (skipped), the uncovered CCC is
+    /// UNCERTAIN (and named in a note), the first two weekends are within
+    /// 14 days of the first bar (UNCERTAIN); `candidates.jsonl` carries the
+    /// labels, `skips.json` counts `label_skipped:NEWS`; `--data-through`
+    /// cuts a later event and clips coverage, labels before it unchanged.
+    /// The same spec without `labels` loads none of it.
+    #[tokio::test]
+    async fn labels_read_events_and_coverage_and_respect_data_through() {
+        use crate::domain::backtest::labels::InfoLabel;
+        use crate::domain::marketdata::{EventCoverage, MarketEvent};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let filing = |published_ms: i64, id: &str| MarketEvent {
+            instrument: AAA.into(),
+            published_ms,
+            kind: "filing".into(),
+            id: id.into(),
+            form: "8-K".into(),
+            title: None,
+        };
+        let late = utc("2026-09-28 01:00");
+        store
+            .put_events(
+                "sec",
+                &[
+                    filing(et("2026-09-18 16:30"), "0000000001-26-000001"),
+                    filing(late, "0000000001-26-000002"),
+                ],
+            )
+            .await
+            .unwrap();
+        for id in [AAA, BBB] {
+            store
+                .put_event_coverage(&EventCoverage {
+                    instrument: id.into(),
+                    source: "sec".into(),
+                    from_ms: utc("2026-01-01 00:00"),
+                    to_ms: utc("2026-10-01 00:00"),
+                    covered: true,
+                    note: None,
+                    fetched_at_ms: utc("2026-10-01 00:00"),
+                })
+                .await
+                .unwrap();
+        }
+        let spec = |labels: Option<Value>| {
+            let mut v = json!({"name": "wl", "kind": "weekend_window", "universe": "@xyz",
+                "interval": "1h", "calendar": "us_equity", "direction": "fade"});
+            if let Some(l) = labels {
+                v["labels"] = l;
+            }
+            SpecSource::Json {
+                value: v,
+                fallback_name: None,
+            }
+        };
+        let e = env(store, &tmp.path().join("state/backtests"));
+        let p = prepare(&e, job(spec(Some(json!({"skip": ["NEWS"]})))))
+            .await
+            .unwrap();
+        assert_eq!(p.md.info.listed_ms[AAA], utc("2026-09-01 00:00"));
+        assert_eq!(p.md.info.events[AAA].len(), 2);
+        let label = |id: &str, t: i64| {
+            p.set
+                .candidates
+                .iter()
+                .find(|c| c.instrument == id && c.decided_at_ms == t)
+                .and_then(|c| c.info_label)
+        };
+        let sep20 = utc("2026-09-20 22:00");
+        assert_eq!(label(BBB, sep20), Some(InfoLabel::Noise));
+        assert_eq!(label(CCC, sep20), Some(InfoLabel::Uncertain));
+        assert_eq!(label(AAA, sep20), None, "skipped");
+        assert!(p.set.skipped.iter().any(|k| k.instrument == AAA
+            && k.decided_at_ms == sep20
+            && k.reason == SkipReason::LabelSkipped
+            && k.info_label == Some(InfoLabel::News)));
+        assert_eq!(
+            label(AAA, utc("2026-09-13 22:00")),
+            Some(InfoLabel::Uncertain),
+            "12.9 days after the first bar"
+        );
+        assert!(p.set.candidates.iter().all(|c| c.info_label.is_some()));
+        assert!(
+            p.set.notes.contains(&format!(
+                "labels: no event source covers 1 of the 3 instruments — their candidates are \
+                 UNCERTAIN unless an event says NEWS: {CCC}"
+            )),
+            "{:?}",
+            p.set.notes
+        );
+        assert!(p
+            .set
+            .notes
+            .iter()
+            .any(|n| n.starts_with("labels: NEWS 1 · ")));
+        let mut run = evaluate(&p, Vec::new()).unwrap();
+        assert_eq!(run.report.skipped["label_skipped:NEWS"], 1);
+        let dir = write_run_dir(&p, &mut run).unwrap();
+        let rows = lines(&dir.join("candidates.jsonl"));
+        assert!(!rows.is_empty() && rows.iter().all(|r| r["info_label"].is_string()));
+        let skips: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("skips.json")).unwrap())
+                .unwrap();
+        assert_eq!(skips["candidates"]["label_skipped:NEWS"], 1);
+
+        // --data-through: the later event is cut (counted), coverage
+        // clipped; every decision by then labelled the same.
+        let through = utc("2026-09-28 00:00");
+        let cut = prepare(
+            &e,
+            BacktestJob {
+                data_through_ms: Some(through),
+                ..job(spec(Some(json!({"skip": ["NEWS"]}))))
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cut.md.info.events[AAA].len(), 1);
+        assert!(cut.md.info.coverage[AAA]
+            .iter()
+            .all(|c| c.to_ms == through + 1));
+        let upto = |s: &CandidateSet| -> Vec<Candidate> {
+            s.candidates
+                .iter()
+                .filter(|c| c.decided_at_ms <= through)
+                .cloned()
+                .collect()
+        };
+        assert_eq!(upto(&cut.set), upto(&p.set));
+        assert!(!upto(&cut.set).is_empty());
+
+        // Without labels: nothing loaded, nothing labelled, no label note.
+        let plain = prepare(&e, job(spec(None))).await.unwrap();
+        assert_eq!(plain.md.info, InfoData::default());
+        assert!(plain.set.candidates.iter().all(|c| c.info_label.is_none()));
+        assert!(!plain.set.notes.iter().any(|n| n.starts_with("labels:")));
     }
 
     /// Lineage D3: a run the bound generation's registry cites is never

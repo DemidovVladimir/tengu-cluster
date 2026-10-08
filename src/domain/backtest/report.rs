@@ -6,7 +6,7 @@
 //!
 //! | Piece | Holds |
 //! |---|---|
-//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, data through (`data_through_ms`: the newest row read, the rerun bound), instruments, candidates, arms, skips by reason, data notes (incl. applied share splits); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
+//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, data through (`data_through_ms`: the newest row read, the rerun bound), instruments, candidates, arms, skips by reason (a label skip by class: `label_skipped:NEWS`), data notes (incl. applied share splits and a labelled spec's class counts and uncovered instruments); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
 //! | [`ArmReport`] | candidates offered, summary, split halves (in-sample / holdout), refusals by rule, drops by reason |
 //! | Drawdown | research arms (`research`, `rules`, `jev`): USD + bps of one trade's notional; capped arms: USD + % of `initial_cash_usd` (`stats.rs`) |
 //! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison + the gate's `jev_*` in the slots left (`t_stat` is clustered by period, `sharpe` annualised by the rate of periods with trades — `stats.rs`); `partial` with an error per data gap kind (missing prices, exits without a price, funding hours without a row) |
@@ -92,7 +92,7 @@ pub struct BacktestReport {
     pub to_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split: Option<SplitSpec>,
-    /// The newest observation the run read (bar close, funding or ctx row),
+    /// The newest observation the run read (bar close, funding or ctx row, event),
     /// or the `--data-through` bound it was cut at: rerun with it over a
     /// grown `market.db` to read the same data. `None` in reports written
     /// before 2026-10-08 (lineage D1).
