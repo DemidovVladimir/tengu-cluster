@@ -5,12 +5,14 @@
 //! | Helper | Builds |
 //! |---|---|
 //! | [`open_sink`] | a new recording of the runner name (`--sandbox`, else `default`) under `<TENGU_HOME>/logs/trace/`, `config_hash` = `Config::source_sha256`, redacting with the process `SecretRegistry`; fail-soft: an unwritable dir = `NoopTrace` + a warn, the run goes on |
-//! | [`run_ids`] | `runtime_id` + `run_id` for `AuditLog` (`decisions.jsonl`) |
+//! | [`run_ids`] · [`Recording`] | `runtime_id` + `run_id` for `AuditLog` (`decisions.jsonl`) · the sink + ids handed to each decision loop (`bootstrap::decision`) |
 //! | [`reader`] · [`run_path`] | a sandbox's `JsonlTraceReader` · one run's file |
 //!
-//! Who records (ST-11): `tengu run` (`RunKind::Run`, `runtime_id` = the lease
-//! holder, `bootstrap/runtime.rs::start`), `tengu decide` (`RunKind::Decide`,
-//! no `runtime_id`). `tengu webhooks` does not record yet.
+//! Who records: `tengu run` (`RunKind::Run`, `runtime_id` = the lease holder,
+//! `bootstrap/runtime.rs::start`: `runtime.*`, `feed.*`, `loop.*` and every
+//! loop's step / tool events), `tengu decide` (`RunKind::Decide`, no
+//! `runtime_id`: `trigger.*` + the loop's step / tool events). `tengu
+//! webhooks` does not record yet ([`Recording::default`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -68,6 +70,32 @@ pub(crate) fn run_ids(trace: &dyn TraceSink, runtime_id: Option<&str>) -> RunIds
     RunIds {
         runtime_id: runtime_id.map(str::to_string),
         run_id: trace.run_id().map(str::to_string),
+    }
+}
+
+/// One process's recording as the composition hands it to what it builds
+/// (decision loops, feeds): the sink their events go to + the ids their
+/// audit lines carry. [`Default`] = records nothing (`NoopTrace`, no ids):
+/// `tengu webhooks`, tests.
+#[derive(Clone)]
+pub(crate) struct Recording {
+    pub sink: Arc<dyn TraceSink>,
+    pub ids: RunIds,
+}
+
+impl Recording {
+    pub(crate) fn of(sink: Arc<dyn TraceSink>, runtime_id: Option<&str>) -> Self {
+        let ids = run_ids(&*sink, runtime_id);
+        Self { sink, ids }
+    }
+}
+
+impl Default for Recording {
+    fn default() -> Self {
+        Self {
+            sink: Arc::new(NoopTrace),
+            ids: RunIds::default(),
+        }
     }
 }
 

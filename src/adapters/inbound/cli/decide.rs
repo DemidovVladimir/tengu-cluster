@@ -15,18 +15,28 @@
 //! audit line and in the output (`run_id`, `trace` = the file;
 //! `tengu trace show --run <run_id>`). Stdout is the JSON alone; logs go to
 //! stderr (`cli/mod.rs`).
+//!
+//! | Trace event | Node | Status |
+//! |---|---|---|
+//! | `trigger.decide` · `trigger.map` (root: every step event is its descendant) | `trigger:decide` · `trigger:map/<sha256>` | `running`; `failed` when the loop cannot be built (no key, unknown agent) |
+//! | `trigger.completed` · `trigger.failed` | same | `ok` (`outcomes`) · `failed` (`error`: a decisions call failed), with `duration_ms` |
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 
+use crate::application::trace_exec::{self, Cause};
+use crate::bootstrap::trace::Recording;
 use crate::config::execution_map::ExecutionMap;
 use crate::config::Config;
 use crate::domain::secrets::SecretRegistry;
-use crate::domain::trace::RunKind;
+use crate::domain::trace::{Component, EventDraft, RunKind, Status};
+use crate::domain::workflow::node_id;
+use crate::ports::trace::TraceSink;
 
 pub(super) async fn run_decide(
     config: &Config,
@@ -36,12 +46,13 @@ pub(super) async fn run_decide(
     secret_registry: Arc<SecretRegistry>,
 ) -> Result<()> {
     let open_trace = || {
-        let trace =
+        let sink =
             crate::bootstrap::trace::open_sink(config, None, RunKind::Decide, &secret_registry);
-        let ids = crate::bootstrap::trace::run_ids(&*trace, None);
-        (trace, ids)
+        Recording::of(sink, None)
     };
-    let (loop_name, event, dl, map_out, trace) = match map {
+    // Each arm: the loop's name and event, the trace root's kind / node /
+    // payload, the map's output block, and the built loop (or why not).
+    let (loop_name, event, root, map_out, rec, built) = match map {
         Some(p) => {
             let map =
                 ExecutionMap::parse(&read_input(p, "execution map")?).map_err(|e| anyhow!(e))?;
@@ -62,17 +73,18 @@ pub(super) async fn run_decide(
                 .map_err(|errs| anyhow!("execution map refused:\n- {}", errs.join("\n- ")))?;
             let sha = map.sha256();
             let kept = keep_map(&sha, &map.canonical())?;
-            let (trace, ids) = open_trace();
-            let dl = crate::bootstrap::decision::build_mapped_loop(
+            let rec = open_trace();
+            let built = crate::bootstrap::decision::build_mapped_loop(
                 config,
                 &map.loop_name,
                 cfg,
                 format!("map:{sha}"),
                 Arc::clone(&secret_registry),
-                ids,
-            )?;
-            let out = serde_json::json!({"sha256": sha, "path": kept});
-            (map.loop_name, map.event, dl, Some(out), trace)
+                rec.clone(),
+            );
+            let out = json!({"sha256": sha, "path": kept});
+            let root = ("trigger.map", node_id::trigger_map(&sha));
+            (map.loop_name, map.event, root, Some(out), rec, built)
         }
         None => {
             let loop_name = loop_name.ok_or_else(|| anyhow!("--loop or --map is required"))?;
@@ -87,20 +99,67 @@ pub(super) async fn run_decide(
             if !config.decision_loops.contains_key(loop_name) {
                 bail!("no [decision_loops.{loop_name}] block in this config");
             }
-            let (trace, ids) = open_trace();
-            let dl = crate::bootstrap::decision::build_decision_loop(
+            let rec = open_trace();
+            let built = crate::bootstrap::decision::build_decision_loop(
                 config,
                 loop_name,
                 None,
                 Arc::clone(&secret_registry),
-                ids,
-            )?;
-            (loop_name.to_string(), event, dl, None, trace)
+                rec.clone(),
+            );
+            let root = ("trigger.decide", node_id::trigger_decide());
+            (loop_name.to_string(), event, root, None, rec, built)
         }
     };
     let session_id = format!("decide-{loop_name}-{}", uuid::Uuid::new_v4());
-    let outcomes = dl.handle_event(&event, &session_id).await?;
-    let mut out = serde_json::json!({
+    let (kind, node) = root;
+    let trigger = |kind: &str, status: Status, payload: Value| {
+        EventDraft::new(Component::Loop, kind, status)
+            .session(session_id.clone())
+            .node(node.clone())
+            .payload(payload)
+    };
+    let mut root_payload = json!({"loop": loop_name, "event": event});
+    if let (Some(m), Value::Object(o)) = (&map_out, &mut root_payload) {
+        o.insert("map".into(), m.clone());
+    }
+    let dl = match built {
+        Ok(dl) => dl,
+        Err(e) => {
+            if let Value::Object(o) = &mut root_payload {
+                o.insert("error".into(), json!(format!("{e:#}")));
+            }
+            rec.sink.emit(trigger(kind, Status::Failed, root_payload));
+            return Err(e);
+        }
+    };
+    let root_id = rec.sink.emit(trigger(kind, Status::Running, root_payload));
+    let t0 = Instant::now();
+    let cause = Cause::new(root_id.clone(), session_id.clone());
+    let handled = trace_exec::caused_by(cause, dl.handle_event(&event, &session_id)).await;
+    let ms = t0.elapsed().as_millis() as u64;
+    let (done, outcomes) = match handled {
+        Ok(outcomes) => {
+            let d = trigger(
+                "trigger.completed",
+                Status::Ok,
+                json!({"outcomes": outcomes}),
+            );
+            (d, outcomes)
+        }
+        Err(e) => {
+            let d = trigger(
+                "trigger.failed",
+                Status::Failed,
+                json!({"error": format!("{e:#}")}),
+            );
+            finish(&*rec.sink, d, root_id, ms);
+            return Err(e);
+        }
+    };
+    finish(&*rec.sink, done, root_id, ms);
+    let trace = &rec.sink;
+    let mut out = json!({
         "session_id": session_id,
         "outcomes": outcomes,
         "history": dl.history().await,
@@ -115,6 +174,15 @@ pub(super) async fn run_decide(
     }
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
+}
+
+/// The run's last event: child of the trigger, timed.
+fn finish(sink: &dyn TraceSink, d: EventDraft, root: Option<String>, ms: u64) {
+    let d = d.duration(ms);
+    sink.emit(match root {
+        Some(r) => d.parent(r),
+        None => d,
+    });
 }
 
 /// A file's text, or stdin's for `-`.

@@ -36,11 +36,12 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · Studio read model</div>
   <h1>Studio graph and trace</h1>
-  <p class="lede">Two read models for the coming Studio UI. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is a redacted, ordered event file per run. The terminal reads both today.</p>
+  <p class="lede">Two read models for Studio. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is one redacted, ordered event file per run: every runtime, feed, loop, Jev, action and tool step.</p>
   <ul class="facts">
     <li>schema <b>v1</b> for both</li>
     <li>payload ≤ <b>4096</b> bytes</li>
     <li>graph in <b>8</b> columns</li>
+    <li><b>8</b> event families</li>
     <li>follow: <b>250 ms</b> poll · <b>256</b> buffered</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
@@ -211,7 +212,7 @@
   <div class="sec-head">
     <span class="kicker">Ten statuses</span>
     <h2 id="s-status">What an event can say</h2>
-    <p>The colours Studio will draw come from these, never from a guess in the page. Today a run records <code>run.opened</code>; the loop, feed, Jev and tool events are the next step.</p>
+    <p>The colours Studio will draw come from these, never from a guess in the page. Each status is written where the rule already ran, from the value it computed.</p>
   </div>
   <ul class="states">
     <li><span class="chip ok">ok</span><span><b>ok</b>Done as asked.</span></li>
@@ -222,6 +223,56 @@
     <li><span class="chip warn">old</span><span><b>stale</b> · <b>missing</b>An observation too old, or absent.</span></li>
     <li><span class="chip data">skip</span><span><b>dropped</b> · <b>skipped</b>Not run: shed under load, or an optional step passed over.</span></li>
   </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-fam">
+  <div class="sec-head">
+    <span class="kicker">What a run records</span>
+    <h2 id="s-fam">Eight event families</h2>
+    <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool. A tool feed's calls hang on its <code>feed.fired</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Family</th><th>Kinds</th><th>Parent</th></tr></thead>
+      <tbody>
+        <tr><td><code>runtime</code></td><td><code>run.opened</code>, <code>runtime.starting</code> · <code>running</code> · <code>start_failed</code> · <code>stopping</code> · <code>stopped</code> (drain, lease released)</td><td><code>stopped</code> ← <code>stopping</code></td></tr>
+        <tr><td><code>feed</code></td><td><code>feed.fired</code> → <code>completed</code> · <code>retrying</code> (class, delay) · <code>failed</code> · <code>tick_sent</code> · <code>dropped</code> · <code>skipped</code></td><td>outcome ← <code>feed.fired</code></td></tr>
+        <tr><td><code>loop</code></td><td><code>loop.queued</code> → <code>started</code> → <code>completed</code> · <code>failed</code>; <code>dropped</code>, <code>refused</code>; each with the loop's counters</td><td><code>queued</code> ← the tick's <code>feed.fired</code></td></tr>
+        <tr><td><code>trigger</code></td><td><code>trigger.decide</code> · <code>trigger.map</code> → <code>trigger.completed</code> · <code>trigger.failed</code></td><td>the root of a <code>tengu decide</code> run</td></tr>
+        <tr><td><code>observation</code></td><td><code>observation.read</code> per <code>world</code> alias per step: ok, stale, missing or failed, with its age</td><td><code>loop.started</code> or the trigger</td></tr>
+        <tr><td><code>jev</code></td><td><code>jev.completed</code> (answers, model, usage, the <b>legal set</b> offered) · <code>jev.failed</code></td><td><code>loop.started</code> or the trigger</td></tr>
+        <tr><td><code>action</code></td><td><code>action.selected</code> → <code>completed</code> · <code>refused</code>; <code>escalated</code>, <code>rejected</code>; payload <code>outcome</code> = the loop's own result</td><td><code>selected</code> ← its <code>jev.completed</code></td></tr>
+        <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code>, with <code>duration_ms</code> and the call id</td><td><code>action.selected</code> or <code>feed.fired</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-ui">
+  <div class="sec-head">
+    <span class="kicker">No guessed animation</span>
+    <h2 id="s-ui">What each Studio visual reads</h2>
+    <p>Every colour and highlight the plan asks for points to a persisted event and one of its fields. The full table is in <code>docs/runtime-2026-09-30.md</code> § Trace.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Visual</th><th>Event</th><th>Field</th></tr></thead>
+      <tbody>
+        <tr><td>Highlighted edge</td><td><code>action.selected</code> · <code>escalated</code> · <code>rejected</code></td><td><code>node_id</code> + <code>parent_event_id</code> = that step's <code>jev.completed</code></td></tr>
+        <tr><td>Grey node</td><td><code>jev.completed</code></td><td>an action not in <code>payload.legal</code></td></tr>
+        <tr><td>Amber: waiting</td><td><code>loop.queued</code> · <code>loop.started</code> · <code>action.selected</code> · <code>tool.started</code></td><td><code>status</code> pending / running</td></tr>
+        <tr><td>Amber: stale</td><td><code>observation.read</code></td><td><code>status</code> stale / missing, <code>payload.age_ms</code></td></tr>
+        <tr><td>Amber: retrying</td><td><code>feed.retrying</code></td><td><code>payload.retry_in_ms</code>, <code>payload.class</code></td></tr>
+        <tr><td>Amber: below confidence</td><td><code>action.escalated</code></td><td><code>payload.confidence</code> &lt; <code>payload.act_at</code></td></tr>
+        <tr><td>Red: failed</td><td><code>tool.failed</code> · <code>action.completed</code> · <code>feed.failed</code> · <code>jev.failed</code> · <code>loop.failed</code></td><td><code>status</code> failed, <code>payload.error</code></td></tr>
+        <tr><td>Red: refused</td><td><code>action.refused</code> · <code>action.rejected</code> · <code>loop.refused</code></td><td><code>status</code> refused, the rule or reason</td></tr>
+        <tr><td>Green</td><td><code>tool.completed</code> · <code>action.completed</code> · <code>feed.completed</code> · <code>loop.completed</code> · terminal <code>action.selected</code></td><td><code>status</code> ok</td></tr>
+        <tr><td>Counters move</td><td><code>loop.*</code></td><td><code>payload.stats</code>: queued, in flight, completed</td></tr>
+        <tr><td>Header</td><td>every event · <code>runtime.*</code> · <code>jev.completed</code></td><td>run, runtime, config hash · state + heartbeat <code>artifact</code> · <code>payload.model</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Not traced yet: planner / subagent steps, a typed scope refusal (today a <code>tool.failed</code> with the refusal text), <code>tengu webhooks</code>.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -238,6 +289,7 @@
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
+    <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read.</span></li>
   </ul>
 </section>
 
@@ -254,10 +306,18 @@
 <span class="ln cmd"><span class="p">$ </span>tengu studio graph --sandbox control-loop-lab --map sandboxes/control-loop-lab/scenarios/uncertain.map.json</span>
 <span class="ln o">… "map_changes": {"act_at": {"base": 0.8, "map": 1.0}, "dry_run": {"base": false, "map": true}} …</span>
 <span class="ln cmd"><span class="p">$ </span>echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event - | jq -c '{outcomes, run_id}'</span>
-<span class="ln o">{"outcomes":[…],"run_id":"0c6f502e-c8db-48f4-bf4f-9843c0836fc1"}</span>
+<span class="ln o">{"outcomes":[…],"run_id":"71650e67-fb10-4aac-8a5a-a1c837c1cee8"}</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace runs --sandbox control-loop-lab</span>
-<span class="ln o">{"run_id":"0c6f502e-c8db-48f4-bf4f-9843c0836fc1","kind":"decide","runtime_id":null,"events":1,"last_kind":"run.opened",…}</span>
-<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run 0c6f502e-c8db-48f4-bf4f-9843c0836fc1 --after 0 --follow</span></pre>
+<span class="ln o">{"run_id":"71650e67-fb10-4aac-8a5a-a1c837c1cee8","kind":"decide","runtime_id":null,"events":12,"last_kind":"trigger.completed",…}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run 71650e67-fb10-4aac-8a5a-a1c837c1cee8 | jq -r '[.seq, .kind, .status, .node_id] | @tsv'</span>
+<span class="ln o">2  trigger.decide    running  trigger:decide</span>
+<span class="ln o">4  jev.completed     ok       jev:demo</span>
+<span class="ln o">5  action.selected   running  action:demo/write_marker</span>
+<span class="ln o">7  tool.completed    ok       tool:lab/write_file</span>
+<span class="ln o">8  action.completed  ok       action:demo/write_marker</span>
+<span class="ln o">11 action.selected   ok       action:demo/hold</span>
+<span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/studio-trace-evidence-2026-10-08.md</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span></pre>
   </div>
 </section>
 
@@ -276,7 +336,10 @@
         <tr><td><code>src/domain/trace.rs</code></td><td>the event envelope, statuses, <code>bound_payload</code>, order, run summary</td></tr>
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> and <code>TraceReader</code></td></tr>
         <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow</td></tr>
-        <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; run ids for audit lines</td></tr>
+        <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + run ids) for each loop</td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code></td></tr>
+        <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
+        <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio graph</code> · <code>tengu trace runs | show</code></td></tr>
         <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code></td></tr>
       </tbody>

@@ -164,9 +164,6 @@ pub(crate) struct EventDraft {
     pub ts_ms: Option<i64>,
 }
 
-// The builders beyond `new` / `payload` are for the instrumentation sites
-// (TENGU_STUDIO_PLAN.md ST-12).
-#[cfg_attr(not(test), allow(dead_code))]
 impl EventDraft {
     pub(crate) fn new(component: Component, kind: impl Into<String>, status: Status) -> Self {
         Self {
@@ -219,6 +216,8 @@ impl EventDraft {
         });
         self
     }
+    /// The caller's clock (a replay's); unused by the live sites.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn at(mut self, ts_ms: i64) -> Self {
         self.ts_ms = Some(ts_ms);
         self

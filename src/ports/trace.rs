@@ -15,8 +15,8 @@ use crate::domain::trace::{EventDraft, ExecutionEvent, RunSummary};
 pub(crate) trait TraceSink: Send + Sync {
     /// Write one event; its `event_id`, or `None` when nothing was written
     /// (a no-op sink, an IO error — logged, never raised). Called by the
-    /// instrumentation sites (ST-12); `run.opened` is written by the store.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// instrumentation sites (`trace_exec`, loops, feeds, decision loop,
+    /// runtime, `tengu decide`); `run.opened` is written by the store.
     fn emit(&self, draft: EventDraft) -> Option<String>;
     /// This recording's `run_id`; `None` for a sink that records nothing.
     fn run_id(&self) -> Option<&str>;

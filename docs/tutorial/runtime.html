@@ -364,7 +364,7 @@
     <li><span><b>Readers never see half a heartbeat.</b> It is written to a temp file, then renamed.</span></li>
     <li><span><b>No URLs in health.</b> Heartbeats and <code>loop/1</code> / <code>feed/1</code> rows replace every URL with <code>&lt;url&gt;</code>.</span></li>
     <li><span><b>Shutdown is bounded.</b> <code>shutdown_grace_secs</code> ≤ 3600; a second signal exits 130 at once.</span></li>
-    <li><span><b>Each start is its own recording.</b> A new trace <code>run_id</code> per process; every loop audit line carries it and the lease holder as <code>runtime_id</code> (<a href="studio.html">Studio graph and trace</a>).</span></li>
+    <li><span><b>Each start is its own recording.</b> A new trace <code>run_id</code> per process; every loop audit line carries it and the lease holder as <code>runtime_id</code>. The run writes <code>runtime.*</code> (starting, running, stopping, stopped with the drain), <code>feed.*</code> per slot and <code>loop.*</code> per event with the counters (<a href="studio.html">Studio graph and trace</a>).</span></li>
   </ul>
 </section>
 

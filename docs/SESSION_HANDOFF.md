@@ -12,9 +12,11 @@
 |---|---|
 | ST-00…ST-03 | lab `sandboxes/control-loop-lab` + runbook `docs/control-loop-lab-2026-10-08.md` + real-Jev baseline; Gate 1 waived (operator instruction 2026-10-08) |
 | ST-10 | `tengu studio graph --sandbox <s> [--map <file>]`: `domain/workflow.rs` + `application/studio/graph.rs` + `bootstrap/studio.rs`; `Config::source_sha256` = `config_hash`; goldens `tests/fixtures/studio/` (`TENGU_REGEN_GOLDEN=1`) |
-| ST-11 | `domain/trace.rs` envelope + `ports/trace.rs` + JSONL store `adapters/outbound/trace_store.rs` (`<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`); `tengu run` / `tengu decide` record (`run.opened` only); `decisions.jsonl` lines + `runtime_id` / `run_id`; `tengu trace runs\|show`; `decide` / `doctor` / `studio` log to stderr |
-| Next | ST-12 instrument the lab path (runtime / loop / feed / Jev / tool events through `Runtime::trace()` + `DecisionLoop`), then Gate 2 |
-| Gotchas | lab runs export `TENGU_HOME="$HOME/tengu-lab/home"` first (parent `.env` = `~/.tengu`); `tengu webhooks` does not record a trace yet |
+| ST-11 | `domain/trace.rs` envelope + `ports/trace.rs` + JSONL store `adapters/outbound/trace_store.rs` (`<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`); `tengu run` / `tengu decide` record (`run.opened` first); `decisions.jsonl` lines + `runtime_id` / `run_id`; `tengu trace runs\|show`; `decide` / `doctor` / `studio` log to stderr |
+| ST-12 | every lab step is an event: `runtime.*` (`bootstrap/runtime.rs` `start_recorded` / `shutdown`), `loop.*` (`LoopDispatch::with_trace`, counters), `feed.*` (`FeedEnv::trace`), `observation.read` / `jev.*` (legal set) / `action.*` (`DecisionLoop::with_trace`, payload = the computed `StepOutcome`), `tool.*` (`application/trace_exec.rs` `TracedExecutor`), `trigger.*` (`tengu decide`; a loop that cannot be built is `trigger.* failed`, not an empty run); parents via `trace_exec::cause`; coverage table `docs/runtime-2026-09-30.md` § Trace + tutorial `studio.html` |
+| Gate 2 | waived (operator instruction 2026-10-08) — evidence `docs/studio-trace-evidence-2026-10-08.md` (real-Jev decide act / tool-error / uncertain map + `tengu run` with ticks, SIGINT, restart, SIGINT; `tengu trace show` reconstructs each run) |
+| Next | ST-20 `tengu studio` local server + read-only API / SSE (feature `studio`) |
+| Gotchas | lab runs export `TENGU_HOME="$HOME/tengu-lab/home"` first (parent `.env` = `~/.tengu`); `tengu webhooks` does not record a trace yet; a tick's feed and loop events share the session `tick:<slot ms>` = one correlation |
 
 ## Operator Review #1 = APPROVE (Thu 2026-10-08)
 

@@ -337,6 +337,7 @@ sources = [
   "src/domain/trace.rs",
   "src/ports/trace.rs",
   "src/application/studio/",
+  "src/application/trace_exec.rs",
   "src/bootstrap/studio.rs",
   "src/bootstrap/trace.rs",
   "src/adapters/outbound/trace_store.rs",

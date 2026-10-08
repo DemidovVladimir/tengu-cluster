@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use serde_json::{json, Value};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
@@ -32,12 +33,18 @@ use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, R
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
 use crate::application::runtime::{keep_lease, LeaseTiming, Stop, StopRx, Stopper, Supervisor};
+use crate::application::trace_exec::TracedExecutor;
+use crate::bootstrap::trace::Recording;
 use crate::config::feeds::{FeedConfig, FeedKind};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
-use crate::domain::runtime::{lease_resource, state_lease_resource, RunState, RunnerLease};
+use crate::domain::runtime::{
+    heartbeat_file, lease_resource, state_lease_resource, RunState, RunnerLease,
+};
 use crate::domain::secrets::SecretRegistry;
+use crate::domain::trace::{Component, EventDraft, Status};
+use crate::domain::workflow::node_id;
 use crate::ports::clock::Clock;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
@@ -294,30 +301,19 @@ pub(crate) async fn start(
     secrets: Arc<SecretRegistry>,
     escalator: Option<Arc<dyn Escalator>>,
 ) -> Result<Runtime> {
-    let mut rt = Runtime::begin(
+    let rt = Runtime::begin(
         LeasePlan::of(config),
         config.runtime.clone(),
         LeaseTiming::default(),
     )
     .await?;
-    rt.trace = crate::bootstrap::trace::open_sink(
+    let trace = crate::bootstrap::trace::open_sink(
         config,
         Some(rt.holder()),
         crate::domain::trace::RunKind::Run,
         &secrets,
     );
-    let ids = crate::bootstrap::trace::run_ids(&*rt.trace, Some(rt.holder()));
-    let started = build_loops(config, Arc::clone(&secrets), escalator, ids).and_then(|(h, s)| {
-        rt.launch(h, s);
-        start_feeds(config, &mut rt, &secrets, Arc::new(SystemClock))
-    });
-    match started {
-        Ok(()) => Ok(rt),
-        Err(e) => {
-            rt.shutdown().await;
-            Err(e)
-        }
-    }
+    rt.start_recorded(config, secrets, escalator, trace).await
 }
 
 /// One agent's tool executor + the tool names it runs.
@@ -362,6 +358,7 @@ pub(crate) fn start_feeds(
             clock: Arc::clone(&clock),
             rand01: Arc::clone(&rand01),
             health,
+            trace: Some(rt.trace()),
         };
         rt.spawn(format!("feed:{name}"), move |stop| {
             run_feed(spec, env, stop)
@@ -408,7 +405,10 @@ fn feed_spec(
                      the log above)"
                 );
             }
-            // Egress records name the feed's agent + `feed:<name>` + the call id.
+            // `tool.*` events per call; egress records name the feed's agent +
+            // `feed:<name>` + the call id.
+            let executor: Arc<dyn ToolExecutor> =
+                Arc::new(TracedExecutor::new(executor, rt.trace(), &agent_name, None));
             let executor = Arc::new(AttributedExecutor::new(
                 executor,
                 &agent_name,
@@ -467,7 +467,7 @@ fn build_loops(
     config: &Config,
     secrets: Arc<SecretRegistry>,
     escalator: Option<Arc<dyn Escalator>>,
-    ids: crate::domain::trace::RunIds,
+    rec: Recording,
 ) -> Result<BuiltLoops> {
     let (mut handlers, mut stores): BuiltLoops = Default::default();
     let mut names: Vec<&String> = config.decision_loops.keys().collect();
@@ -478,7 +478,7 @@ fn build_loops(
             name,
             escalator.clone(),
             Arc::clone(&secrets),
-            ids.clone(),
+            rec.clone(),
         )
         .with_context(|| format!("build [decision_loops.{name}]"))?;
         handlers.insert(name.clone(), dl as Arc<dyn LoopHandler>);
@@ -502,6 +502,44 @@ fn build_loops(
         }
     }
     Ok((handlers, stores))
+}
+
+/// Where `runtime.*` events go: node `runtime:<sandbox>`, artifact = the
+/// heartbeat file (`run-<sandbox>.json`).
+struct Lifecycle {
+    trace: Arc<dyn TraceSink>,
+    node: String,
+    heartbeat: String,
+    /// Parent of the next event (`runtime.stopped` → `runtime.stopping`).
+    parent: Option<String>,
+}
+
+impl Lifecycle {
+    fn emit(
+        &self,
+        kind: &str,
+        status: Status,
+        payload: Value,
+        duration_ms: Option<u64>,
+    ) -> Option<String> {
+        let mut d = EventDraft::new(Component::Runtime, kind, status)
+            .node(self.node.clone())
+            .payload(payload)
+            .artifact(self.heartbeat.clone(), None);
+        d.duration_ms = duration_ms;
+        d.parent_event_id = self.parent.clone();
+        self.trace.emit(d)
+    }
+}
+
+/// Per-loop counters as a trace payload carries them.
+fn loop_stats_json(stats: &BTreeMap<String, LoopStats>) -> Value {
+    Value::Object(
+        stats
+            .iter()
+            .map(|(name, s)| (name.clone(), s.to_json()))
+            .collect(),
+    )
 }
 
 fn holder_id() -> String {
@@ -558,10 +596,80 @@ impl Runtime {
         })
     }
 
+    /// [`start`] after the leases: record into `trace` (`runtime.starting`),
+    /// build the loops, launch them + the heartbeat, start the feeds
+    /// (`runtime.running`); a failure is `runtime.start_failed`, then the
+    /// shutdown (`runtime.stopping` → `runtime.stopped`) and the error.
+    async fn start_recorded(
+        mut self,
+        config: &Config,
+        secrets: Arc<SecretRegistry>,
+        escalator: Option<Arc<dyn Escalator>>,
+        trace: Arc<dyn TraceSink>,
+    ) -> Result<Self> {
+        self.trace = trace;
+        self.lifecycle(
+            "runtime.starting",
+            Status::Pending,
+            json!({
+                "holder": self.holder(),
+                "leases": self.owner.resources(),
+                "state_dir": self.state_dir.display().to_string(),
+                "pid": std::process::id(),
+            }),
+        );
+        let rec = Recording::of(self.trace(), Some(self.holder()));
+        let started =
+            build_loops(config, Arc::clone(&secrets), escalator, rec).and_then(|(h, s)| {
+                self.launch(h, s);
+                start_feeds(config, &mut self, &secrets, Arc::new(SystemClock))
+            });
+        match started {
+            Ok(()) => {
+                self.lifecycle(
+                    "runtime.running",
+                    Status::Running,
+                    json!({
+                        "loops": self.loops.names(),
+                        "feeds": config.feeds.keys().collect::<Vec<_>>(),
+                    }),
+                );
+                Ok(self)
+            }
+            Err(e) => {
+                self.lifecycle(
+                    "runtime.start_failed",
+                    Status::Failed,
+                    json!({"error": format!("{e:#}")}),
+                );
+                self.shutdown().await;
+                Err(e)
+            }
+        }
+    }
+
     /// This process's trace recording (`NoopTrace` before [`start`] opens
     /// one, or when the trace dir cannot be written).
     pub(crate) fn trace(&self) -> Arc<dyn TraceSink> {
         Arc::clone(&self.trace)
+    }
+
+    fn life(&self) -> Lifecycle {
+        Lifecycle {
+            trace: Arc::clone(&self.trace),
+            node: node_id::runtime(&self.sandbox),
+            heartbeat: self
+                .state_dir
+                .join(heartbeat_file(&self.sandbox))
+                .display()
+                .to_string(),
+            parent: None,
+        }
+    }
+
+    /// A `runtime.*` event (module table).
+    fn lifecycle(&self, kind: &str, status: Status, payload: Value) {
+        self.life().emit(kind, status, payload, None);
     }
 
     /// Install the loop handlers (+ each loop agent's observation store for
@@ -572,11 +680,14 @@ impl Runtime {
         handlers: BTreeMap<String, Arc<dyn LoopHandler>>,
         loop_stores: BTreeMap<String, Arc<dyn ObservationStore>>,
     ) {
-        self.loops = Arc::new(LoopDispatch::new(
-            handlers,
-            self.cfg.max_decisions_in_flight,
-            self.cfg.max_queued_per_loop,
-        ));
+        self.loops = Arc::new(
+            LoopDispatch::new(
+                handlers,
+                self.cfg.max_decisions_in_flight,
+                self.cfg.max_queued_per_loop,
+            )
+            .with_trace(Arc::clone(&self.trace)),
+        );
         self.health = Arc::new(HealthBoard::new(
             &self.sandbox,
             self.owner.holder(),
@@ -639,6 +750,7 @@ impl Runtime {
     /// `shutdown_grace_secs`, then release the leases. The heartbeat says
     /// `stopping` during the drain and `stopped` after it.
     pub(crate) async fn shutdown(self) -> ShutdownReport {
+        let life = self.life();
         let Runtime {
             cfg,
             store,
@@ -654,6 +766,18 @@ impl Runtime {
             reason: "shutdown".into(),
             failed: false,
         });
+        let t0 = Instant::now();
+        let stopping = life.emit(
+            "runtime.stopping",
+            Status::Pending,
+            json!({
+                "reason": stop.reason,
+                "failed": stop.failed,
+                "grace_secs": cfg.shutdown_grace_secs,
+                "stats": loop_stats_json(&loops.stats()),
+            }),
+            None,
+        );
         let beat = |state| {
             let (health, loops, store, reason) = (&health, &loops, &store, &stop.reason);
             async move {
@@ -669,6 +793,27 @@ impl Runtime {
             tokio::join!(loops.drain(deadline), supervisor.shutdown(deadline));
         beat(RunState::Stopped).await;
         let lease_released = owner.release().await;
+        let status = if stop.failed {
+            Status::Failed
+        } else {
+            Status::Ok
+        };
+        let stopped = json!({
+            "reason": stop.reason,
+            "failed": stop.failed,
+            "drain": {
+                "finished": drained.finished,
+                "dropped": drained.dropped,
+                "aborted": drained.aborted,
+            },
+            "aborted_tasks": aborted_tasks,
+            "lease_released": lease_released,
+            "stats": loop_stats_json(&loops.stats()),
+        });
+        let elapsed = Some(t0.elapsed().as_millis() as u64);
+        let mut life = life;
+        life.parent = stopping;
+        life.emit("runtime.stopped", status, stopped, elapsed);
         ShutdownReport {
             stop,
             loops: drained,
@@ -1145,6 +1290,109 @@ mod tests {
             "{err}"
         );
         rt.shutdown().await;
+    }
+
+    /// Agent `main` in `workspace` + one tool feed of `tool` (no loops: no
+    /// Jev key needed).
+    fn tool_feed_config(workspace: &Path, tool: &str) -> Config {
+        let text = format!(
+            "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n\
+             workspace = \"{}\"\n\n[feeds.probe]\nkind = \"tool\"\nagent = \"main\"\n\
+             tool = \"{tool}\"\nargs = {{ path = \".\" }}\nevery_secs = 3600\n\
+             run_on_start = true\n",
+            workspace.display()
+        );
+        let mut c: Config = toml::from_str(&text).unwrap();
+        c.validate().unwrap();
+        c.fold_default_scopes();
+        c
+    }
+
+    /// `runtime.starting` → `runtime.running` (the feed's events in between,
+    /// its tool call traced through the agent's executor) → on shutdown
+    /// `runtime.stopping` → `runtime.stopped` (its child, timed, drain +
+    /// lease); a start that fails is `runtime.start_failed`, then the same
+    /// shutdown pair. Node `runtime:<sandbox>`, artifact = the heartbeat.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lifecycle_events_on_start_and_shutdown() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let sink = Arc::new(MemTrace::default());
+        let rt = begin_as(plan("control-loop-lab", dir.path(), false), slow_timing())
+            .await
+            .unwrap();
+        let config = tool_feed_config(ws.path(), "list_directory");
+        let secrets = Arc::new(SecretRegistry::new());
+        let rt = rt
+            .start_recorded(&config, secrets, None, sink.clone())
+            .await
+            .unwrap();
+        for _ in 0..400 {
+            if sink.kinds().iter().any(|k| k == "feed.completed") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let report = rt.shutdown().await;
+        assert!(report.lease_released);
+        let d = sink.all();
+        let kinds = sink.kinds();
+        let at = |k: &str| kinds.iter().position(|x| x == k).unwrap();
+        assert_eq!(kinds[0], "runtime.starting");
+        assert!(at("runtime.running") > 0);
+        assert_eq!(
+            kinds[kinds.len() - 2..],
+            ["runtime.stopping", "runtime.stopped"]
+        );
+        let (fired, started, done) = (at("feed.fired"), at("tool.started"), at("tool.completed"));
+        assert!(fired < started && started < done && done < at("feed.completed"));
+        assert_eq!(d[started].parent_event_id, Some(MemTrace::id(fired)));
+        assert_eq!(
+            d[started].node_id.as_deref(),
+            Some("tool:main/list_directory")
+        );
+        let stopped = d.last().unwrap();
+        assert_eq!(stopped.status, Status::Ok);
+        assert_eq!(stopped.parent_event_id, Some(MemTrace::id(d.len() - 2)));
+        assert!(stopped.duration_ms.is_some());
+        assert_eq!(stopped.payload["lease_released"], json!(true));
+        assert_eq!(stopped.payload["drain"]["aborted"], json!(0));
+        assert_eq!(d[0].node_id.as_deref(), Some("runtime:control-loop-lab"));
+        assert_eq!(d[0].payload["leases"], json!(["runtime:control-loop-lab"]));
+        let hb = dir.path().join("run-control-loop-lab.json");
+        assert_eq!(
+            d[0].artifact.as_ref().unwrap().file,
+            hb.display().to_string()
+        );
+
+        // A start that fails: start_failed, then the shutdown pair.
+        let sink = Arc::new(MemTrace::default());
+        let rt = begin_as(plan("control-loop-lab", dir.path(), false), slow_timing())
+            .await
+            .unwrap();
+        let config = tool_feed_config(ws.path(), "read_fil");
+        let Err(err) = rt
+            .start_recorded(&config, Arc::new(SecretRegistry::new()), None, sink.clone())
+            .await
+        else {
+            panic!("a feed whose agent cannot run its tool must refuse to start");
+        };
+        assert!(format!("{err:#}").contains("cannot run `read_fil`"));
+        assert_eq!(
+            sink.kinds(),
+            [
+                "runtime.starting",
+                "runtime.start_failed",
+                "runtime.stopping",
+                "runtime.stopped"
+            ]
+        );
+        let failed = &sink.all()[1];
+        assert_eq!(failed.status, Status::Failed);
+        assert!(failed.payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot run `read_fil`"));
     }
 
     #[tokio::test]

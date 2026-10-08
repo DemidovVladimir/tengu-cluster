@@ -1,0 +1,117 @@
+# Studio trace evidence — ST-12 / Gate 2 (2026-10-08)
+
+`TENGU_STUDIO_PLAN.md` ST-12 + Gate 2: the control-loop lab run for real, then `tengu trace show` reconstructs every run. Gate 2 is **waived by the operator's 2026-10-08 instruction**, not reviewed. Event contract: `docs/runtime-2026-09-30.md` § Trace. Runbook rows G6–G8: `docs/control-loop-lab-2026-10-08.md`.
+
+| Item | Value |
+|---|---|
+| When | 2026-10-08 20:36:16Z → 20:37:49Z |
+| Build | `cargo build --release` of the ST-12 tree on `feature/studio` (parent `9b956fa4fb2ea748d0c32a429bdc964f29d6701c`), default features |
+| Home | `TENGU_HOME=$HOME/tengu-lab/home` (exported first); `~/.tengu/logs/decisions.jsonl` sha256 equal before and after |
+| Jev | 12 real calls, model `typesafe/jev-1.13-20260917`, latency 249–529 ms, cost $0.00030891 |
+| `config_hash` | `a68882899f1aacfe0dde95eb5c6c1a9490750886c5af79b11255437044b4b40f` on every event (= the ST-10 graph) |
+
+Paths below: `$HOME` replaces the home dir. Ids are in full.
+
+## The five recordings (`tengu trace runs`)
+
+| Run | `run_id` | `kind` | `runtime_id` | Events | First → last |
+|---|---|---|---|---|---|
+| decide act | `71650e67-fb10-4aac-8a5a-a1c837c1cee8` | decide | null | 12 | `run.opened` → `trigger.completed` |
+| decide tool-error | `7343fce8-0543-414a-bcbb-c38eb9ff512d` | decide | null | 12 | `run.opened` → `trigger.completed` |
+| decide `uncertain.map.json` | `ca7326e9-8304-42cb-b4e5-125f9755d54a` | decide | null | 6 | `run.opened` → `trigger.completed` |
+| `tengu run` #1 (62 s, SIGINT) | `d3987899-1b21-45b1-af40-87c3335ee767` | run | `Vladimirs-MacBook-Pro-2.local:27798:bfd39ea7-b4cb-4260-9618-3e5a0a88f482` | 57 | `run.opened` → `runtime.stopped` |
+| `tengu run` #2 (restart, 26 s, SIGINT) | `47c724e2-b8cf-4d23-a771-4a51be54c056` | run | `Vladimirs-MacBook-Pro-2.local:28618:9860a615-b02d-44c4-bd82-1b0ce7399a51` | 29 | `run.opened` → `runtime.stopped` |
+
+## Decide `act` — the whole run
+
+`echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event -` → exit 0, outcomes `executed write_marker`, `stopped hold`; session `decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4`. Parent = the parent's `seq` (`event_id` = `<run_id>:<seq>`).
+
+| seq | kind | status | node | parent | call id | ms |
+|---|---|---|---|---|---|---|
+| 1 | `run.opened` | ok | `trigger:decide` | - | - | - |
+| 2 | `trigger.decide` | running | `trigger:decide` | - | - | - |
+| 3 | `observation.read` | missing | `world:demo/tick` | 2 | - | - |
+| 4 | `jev.completed` | ok | `jev:demo` | 2 | - | 529 |
+| 5 | `action.selected` | running | `action:demo/write_marker` | 4 | `demo:decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4:1` | - |
+| 6 | `tool.started` | running | `tool:lab/write_file` | 5 | `demo:decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4:1` | - |
+| 7 | `tool.completed` | ok | `tool:lab/write_file` | 6 | `demo:decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4:1` | 0 |
+| 8 | `action.completed` | ok | `action:demo/write_marker` | 5 | `demo:decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4:1` | - |
+| 9 | `observation.read` | missing | `world:demo/tick` | 2 | - | - |
+| 10 | `jev.completed` | ok | `jev:demo` | 2 | - | 262 |
+| 11 | `action.selected` | ok | `action:demo/hold` | 10 | - | - |
+| 12 | `trigger.completed` | ok | `trigger:decide` | 2 | - | 793 |
+
+| Event | Payload excerpt |
+|---|---|
+| 4 `jev.completed` | `decision_id` `gen-dec-1791491777-jRTDHH7q6gLFhkBPI3MC` · `legal` `{"hold":{},"read_probe":{"probe":["absent"]},"write_marker":{"scenario":["act"]}}` · `questions` `["next_action"]` · `next_action` `{"choice":"write_marker","confidence":0.89,"probabilities":{"hold":0.07,"read_probe":0.0,"write_marker":0.93}}` · `usage.cost` 0.000022344 · `artifact` `$HOME/tengu-lab/home/logs/decisions.jsonl` key = the `decision_id` |
+| 7 `tool.completed` | `{"line1":"File 'out/marker.txt' written (12 bytes)","text_bytes":40,"tool":"write_file"}` |
+| 8 `action.completed` | `args` `{"content":"scenario=act","path":"out/marker.txt"}` · `ok` true · `outcome` `{"action":"write_marker","outcome":"executed"}` · `confidence` 0.89 |
+
+## Decide `tool-error` and the `uncertain` map
+
+| Run | Events (seq kind status node ← parent) | Excerpt |
+|---|---|---|
+| tool-error `7343fce8-0543-414a-bcbb-c38eb9ff512d` | same shape as act; 5 `action.selected` running `action:demo/read_probe` ← 4 · 6 `tool.started` `tool:lab/read_file` ← 5 · **7 `tool.failed`** ← 6 · **8 `action.completed` failed** ← 5 · 11 `action.selected` ok `action:demo/hold` · 12 `trigger.completed` | 7: `{"error":"Cannot read file 'in/absent.txt': No such file or directory (os error 2)","tool":"read_file"}` · 8: `ok` false, `outcome` `executed` (a tool failure is not a loop failure) |
+| uncertain `ca7326e9-8304-42cb-b4e5-125f9755d54a` | 2 `trigger.map` running `trigger:map/1a97d5793e4abfd1a53fb717c34b1a9fbfa1dc49b7ef6dd4ec165813cac5a1ef` · 3 `observation.read` missing · 4 `jev.completed` ← 2 · **5 `action.escalated` escalated `gate:demo/act_at`** ← 4 · 6 `trigger.completed` | 4: `next_action` `hold` confidence 0.92 (`decision_id` `gen-dec-1791491778-A5QiPbr5wsRyT46JHv92`) · 5: `{"act_at":1.0,"action":"hold","confidence":0.92,"escalate":false,"escalator":false,"outcome":{"action":"hold","confidence":0.92,"outcome":"escalated"}}` |
+
+## `tengu run` #1 — ticks, probe failures, SIGINT
+
+Ticks every 20 s (+ one at start), probe every 30 s. One tick and one probe slot, in file order (the run repeats them; 5 ticks, 3 probes):
+
+| seq | kind | status | node | parent | session |
+|---|---|---|---|---|---|
+| 1–3 | `run.opened` · `runtime.starting` (pending) · `runtime.running` | | `runtime:control-loop-lab` | - | - |
+| 4 | `feed.fired` | running | `feed:probe` | - | `probe:1791491779196` |
+| 5 | `feed.fired` | running | `feed:tick` | - | `tick:1791491779196` |
+| 6 | `loop.queued` | pending | `loop:demo` | 5 | `tick:1791491779196` |
+| 7 · 8 | `tool.started` · `tool.failed` | running · failed | `tool:lab/read_file` | 4 · 7 | `probe:1791491779196` |
+| 9 | `loop.started` | running | `loop:demo` | 6 | `tick:1791491779196` |
+| 10 | `feed.failed` | failed | `feed:probe` | 4 | `probe:1791491779196` |
+| 11 | `observation.read` | missing | `world:demo/tick` | 9 | `tick:1791491779196` |
+| 12 | `feed.tick_sent` | ok | `feed:tick` | 5 | `tick:1791491779196` |
+| 13 | `jev.completed` | ok | `jev:demo` | 9 | `tick:1791491779196` |
+| 14 | `action.selected` | ok | `action:demo/hold` | 13 | `tick:1791491779196` |
+| 15 | `loop.completed` | ok | `loop:demo` | 9 | `tick:1791491779196` |
+| 16–55 | 4 more ticks (`observation.read` **ok** from the 2nd: the `feed/1:tick` row exists) + 2 probe slots | | | | `tick:1791491780000` … `tick:1791491840000` |
+| 56 | `runtime.stopping` | pending | `runtime:control-loop-lab` | - | - |
+| 57 | `runtime.stopped` | ok | `runtime:control-loop-lab` | 56 | - |
+
+| Event | Payload excerpt |
+|---|---|
+| 2 `runtime.starting` | `holder` = the `runtime_id` · `leases` `["runtime:control-loop-lab"]` · `pid` 27798 · `artifact` `$HOME/tengu-lab/home/state/run-control-loop-lab.json` |
+| 10 `feed.failed` | `{"class":"fatal","error":"Cannot read file 'in/absent.txt': No such file or directory (os error 2)","failed":1,"ok":0,"retrying":false}` |
+| `loop.completed` ×5 | `stats.completed` 1 → 2 → 3 → 4 → 5 (`accepted` the same, `failed` 0), `duration_ms` 250–366 |
+| 56 · 57 | `reason` `SIGINT` · `grace_secs` 10 · `drain` `{"finished":0,"dropped":0,"aborted":0}` · `aborted_tasks` [] · `lease_released` true |
+| health (same run) | `doctor --live` at 62 s: exit 0, `=> live`, `loop demo … done 5`, `feed probe (optional) down … fatal`, `feed tick (required) live · items 5`; heartbeat after: `stopped`, `SIGINT`, holder = the `runtime_id` |
+
+## Restart (`tengu run` #2) and live = replay
+
+| Check | Result |
+|---|---|
+| New ids | run #2 `run_id` `47c724e2-b8cf-4d23-a771-4a51be54c056` ≠ #1 · `runtime_id` pid 28618 / uuid `9860a615-b02d-44c4-bd82-1b0ce7399a51` ≠ #1 · each heartbeat's `holder` = its run's `runtime_id` |
+| Evidence not mixed | `decisions.jsonl`: 5 tick lines carry run #1's ids, 2 carry run #2's, each decide's lines (2 · 2 · 1) its own `run_id` and no `runtime_id`; every trace file has one `run_id`, one `runtime_id`, one `config_hash` |
+| Run #2 events | 29: `runtime.*` ×4, `feed.fired` ×4, `loop.queued / started / completed` ×2, `tool.failed` ×2, `feed.failed` ×2, `runtime.stopped` (`lease_released` true) · its first `observation.read` is **ok** (run #1's `feed/1:tick` row is ≤ 60 s old in the workspace store — the store persists, the trace does not) |
+| Live follow = replay | `trace show --run 47c724e2-b8cf-4d23-a771-4a51be54c056 --after 0 --follow`, started 4 s into run #2: 29 lines, byte-identical (`jq -c`) to the replay after the stop |
+
+## Reconstruction checks (all 5 runs)
+
+| Check | Result |
+|---|---|
+| Order | `seq` = 1 … n with no gap; `event_id` = `<run_id>:<seq>` on every event |
+| Tree | every `parent_event_id` names an earlier event of the same run (90 of 116 events have a parent; the 26 roots: `run.opened`, `runtime.starting / running / stopping`, `feed.fired`, the `trigger.decide / map` root) |
+| Stable replay | `trace show` twice = same bytes; `--after 5` = the replay's tail from seq 6 |
+| Close | each decide ends `trigger.completed`, each run `runtime.stopped` |
+| No secret | `rg -F` of the `OPENROUTER_API_KEY` value (never printed): 0 matches in `$HOME/tengu-lab/home/logs/trace` (5 files), 0 anywhere under the lab home |
+| Nothing dangerous | `$HOME/tengu-lab/control-loop-lab/out` = `marker.txt` only · no `egress.jsonl`, no `risk.jsonl` · `~/.tengu` unchanged |
+
+## Findings
+
+| # | Finding | Effect |
+|---|---|---|
+| 1 | The first tick of a fresh runtime reads `world.tick` **missing**: `feed.tick_sent` (and the health row) follow the submit | true to the code; later ticks read `ok` |
+| 2 | A decide run's `run.opened` names `trigger:decide` also for a map run (the store opens before the map is known); the root `trigger.map` names `trigger:map/<sha256>` | cosmetic; Studio keys on `trigger.*` |
+| 3 | `tool.*` `duration_ms` 0 for `read_file` / `write_file` (sub-millisecond); `runtime.stopped` drain 0 ms (SIGINT while idle) | real values |
+
+## Cleanup
+
+The runbook's guarded block ran after the extracts (`TENGU_HOME` = the lab home): `out/marker.txt`, the workspace `observations.db*`, `$HOME/tengu-lab/home/{logs,state}` removed. Left: the empty lab dirs. Raw outputs stayed in the session scratchpad, not committed.

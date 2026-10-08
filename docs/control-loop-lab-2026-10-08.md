@@ -1,6 +1,6 @@
 # Control-loop lab — runbook + acceptance matrix (2026-10-08)
 
-`sandboxes/control-loop-lab`: the safe reference run of tick → Jev → tool → audit → health (TENGU_STUDIO_PLAN.md ST-01 / ST-02). Existing CLI and tools only — no new tool, no Studio. Guard test: `config::decision_loop::tests::control_loop_lab_has_no_dangerous_surface`. Live proof: ST-03 `docs/control-loop-lab-baseline-2026-10-08.md` — A0–A15 passed on real Jev (`typesafe/jev-1.13-20260917`, 32 calls, $0.000799134); the rows below carry what that run corrected. ST-10 / ST-11: `tengu studio graph` (the workflow graph) and `tengu trace` (each `run` / `decide` is a recording; audit lines carry `runtime_id` / `run_id`) — § Graph + trace below.
+`sandboxes/control-loop-lab`: the safe reference run of tick → Jev → tool → audit → health (TENGU_STUDIO_PLAN.md ST-01 / ST-02). Existing CLI and tools only — no new tool, no Studio. Guard test: `config::decision_loop::tests::control_loop_lab_has_no_dangerous_surface`. Live proof: ST-03 `docs/control-loop-lab-baseline-2026-10-08.md` — A0–A15 passed on real Jev (`typesafe/jev-1.13-20260917`, 32 calls, $0.000799134); the rows below carry what that run corrected. ST-10 – ST-12: `tengu studio graph` (the workflow graph) and `tengu trace` (each `run` / `decide` is a recording of every runtime, feed, loop, Jev, action and tool step; audit lines carry `runtime_id` / `run_id`) — § Graph + trace below.
 
 ## The sandbox
 
@@ -69,7 +69,7 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 
 `tengu decide` builds its own loop outside the runtime lease: it may run while A7 is up (separate history, own `decide-demo-<uuid>` session, runtime counters untouched). It reads the same workspace observation store, so while A7 keeps `feed/1:tick` ≤ 60 s old its Jev state carries `world.tick` (ST-03: 609 input tokens vs 532 without); with no runtime the row is missing.
 
-## Graph + trace (ST-10 / ST-11, no Jev call)
+## Graph + trace (ST-10 – ST-12)
 
 | # | Command | Expected |
 |---|---|---|
@@ -78,8 +78,11 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 | G3 | after A2 + A7: `$T trace runs --sandbox control-loop-lab` | one line per recording: `kind` `decide` (`runtime_id` null) · `run` (`runtime_id` = A7's holder); first event `run.opened` |
 | G4 | `$T trace show --sandbox control-loop-lab --run <run_id> [--after <seq>] [--follow]` | the run's events in `seq` order (`event_id` = `<run_id>:<seq>`); `--follow` tails until Ctrl-C · a bad id (`../x`) is refused |
 | G5 | `rg '"session_id":"tick:' $TENGU_HOME/logs/decisions.jsonl \| jq -c '{runtime_id, run_id}'` | every A7 tick line: A7's holder + its trace `run_id`; `decide` lines: `run_id` = the output's `run_id`, no `runtime_id` |
+| G6 | after A2: `$T trace show --sandbox control-loop-lab --run <A2 run_id> \| jq -r '[.seq, .kind, .status, .node_id] \| @tsv'` | `run.opened` · `trigger.decide` (running) · `observation.read` (`world:demo/tick`) · `jev.completed` (`jev:demo`) · `action.selected` (running, `action:demo/write_marker`) · `tool.started` → `tool.completed` (`tool:lab/write_file`) · `action.completed` (ok) · `observation.read` · `jev.completed` · `action.selected` (ok, `action:demo/hold`) · `trigger.completed` |
+| G7 | A3 / A4 runs, same command | A3: `tool.failed` (`tool:lab/read_file`, `payload.error` `Cannot read file 'in/absent.txt' …`) → `action.completed` **failed** · A4: `trigger.map` (`trigger:map/<sha256>`) → `jev.completed` → `action.escalated` (`gate:demo/act_at`, `confidence` < `act_at` 1.0) |
+| G8 | after A7 (≥ 1 tick): the `run` recording | `runtime.starting` → `runtime.running` · per tick `feed.fired` (`feed:tick`) → `loop.queued` → `feed.tick_sent` → `loop.started` → step events → `loop.completed` (`payload.stats`) · per probe `feed.fired` → `tool.failed` → `feed.failed` (`fatal`, `retrying: false`) · Ctrl-C: `runtime.stopping` → `runtime.stopped` (`lease_released: true`) · A12 = a new `run_id` and `runtime_id` |
 
-ST-11 records `run.opened` only; the loop / feed / Jev / tool events land with ST-12. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below).
+Every event's fields, parents and the Studio visual it drives: `docs/runtime-2026-09-30.md` § Trace. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below). Recorded run: `docs/studio-trace-evidence-2026-10-08.md`.
 
 ## Troubleshooting
 

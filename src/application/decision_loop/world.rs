@@ -1,16 +1,17 @@
 //! `state.world` — the loop's read-only view of the observation store. Each
 //! `[decision_loops.<n>] world` alias (→ observation key) renders as one of:
 //!
-//! | Entry | Rendered |
-//! |---|---|
-//! | usable, age ≤ `world_max_age_secs` | `Observation::decision_value` |
-//! | usable, older | `{"status":"stale","age_s":N}` |
-//! | no row | `{"status":"missing"}` |
-//! | error row / store unavailable | `{"status":"error","errors":[..]}` |
+//! | Entry | [`Read`] | Rendered |
+//! |---|---|---|
+//! | usable, age ≤ `world_max_age_secs` | `fresh` | `Observation::decision_value` |
+//! | usable, older | `stale` | `{"status":"stale","age_s":N}` |
+//! | no row | `missing` | `{"status":"missing"}` |
+//! | error row / store unavailable | `error` | `{"status":"error","errors":[..]}` |
 //!
 //! Stale, missing and failed entries carry no feature numbers. The world is
 //! read once per step and never fetched: typed tools (or a stream) write the
-//! rows, the loop only reads them.
+//! rows, the loop only reads them. [`World::reads`] hands the same
+//! classification to the trace (`observation.read`).
 
 use std::collections::BTreeMap;
 
@@ -109,6 +110,33 @@ impl World {
         })
     }
 
+    /// How `entry` reads this step (module table).
+    fn read_of(&self, entry: &Entry) -> Read {
+        match entry {
+            Entry::Missing => Read::Missing,
+            Entry::Unavailable(_) => Read::Error,
+            Entry::Row(o) if !o.status.usable() => Read::Error,
+            Entry::Row(o) if o.age_ms(self.now_ms) > self.max_age_ms => Read::Stale,
+            Entry::Row(_) => Read::Fresh,
+        }
+    }
+
+    /// Each alias as this step reads it — the rule [`Self::to_state`]
+    /// renders — with the row's age (none for a missing / unavailable
+    /// entry). The trace's `observation.read` events.
+    pub(crate) fn reads(&self) -> Vec<(&str, Read, Option<u64>)> {
+        self.entries
+            .iter()
+            .map(|(alias, entry)| {
+                let age = match entry {
+                    Entry::Row(o) => Some(o.age_ms(self.now_ms)),
+                    _ => None,
+                };
+                (alias.as_str(), self.read_of(entry), age)
+            })
+            .collect()
+    }
+
     /// The `state.world` object; `None` when the loop has no `world`.
     pub(crate) fn to_state(&self) -> Option<Value> {
         if self.entries.is_empty() {
@@ -116,25 +144,48 @@ impl World {
         }
         let mut out = Map::new();
         for (alias, entry) in &self.entries {
-            let v = match entry {
-                Entry::Missing => json!({"status": "missing"}),
-                Entry::Unavailable(msg) => json!({
+            let v = match (self.read_of(entry), entry) {
+                (_, Entry::Missing) => json!({"status": "missing"}),
+                (_, Entry::Unavailable(msg)) => json!({
                     "status": "error",
                     "errors": [ReadError::new("store", ErrorClass::Transient, msg.clone())],
                 }),
-                Entry::Row(o) if !o.status.usable() => json!({
+                (Read::Error, Entry::Row(o)) => json!({
                     "status": "error",
                     "errors": o.errors,
                 }),
-                Entry::Row(o) if o.age_ms(self.now_ms) > self.max_age_ms => json!({
+                (Read::Stale, Entry::Row(o)) => json!({
                     "status": "stale",
                     "age_s": o.meta(self.now_ms).age_s,
                 }),
-                Entry::Row(o) => o.decision_value(self.now_ms),
+                (_, Entry::Row(o)) => o.decision_value(self.now_ms),
             };
             out.insert(alias.clone(), v);
         }
         Some(Value::Object(out))
+    }
+}
+
+/// How one `world` entry reads in a step (module table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Read {
+    /// Usable and within `world_max_age_secs`.
+    Fresh,
+    Stale,
+    /// No row under the key.
+    Missing,
+    /// An error row, or the store is unavailable.
+    Error,
+}
+
+impl Read {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Read::Fresh => "fresh",
+            Read::Stale => "stale",
+            Read::Missing => "missing",
+            Read::Error => "error",
+        }
     }
 }
 
@@ -205,6 +256,17 @@ mod tests {
         assert!(w.satisfies(&BTreeMap::from([("price".to_string(), 30)])));
         assert!(!w.satisfies(&BTreeMap::from([("price".to_string(), 1)])));
         assert!(!w.satisfies(&BTreeMap::from([("gone".to_string(), 30)])));
+        assert_eq!(
+            w.reads(),
+            [
+                ("gone", Read::Missing, None),
+                ("price", Read::Fresh, Some(5_000))
+            ]
+        );
+        let stale = world_with(Some(price(0, ObsStatus::Ok)), 31_000).await;
+        assert_eq!(stale.reads()[1], ("price", Read::Stale, Some(31_000)));
+        let err = world_with(Some(price(0, ObsStatus::Error)), 1_000).await;
+        assert_eq!(err.reads()[1].1, Read::Error);
     }
 
     #[tokio::test]
