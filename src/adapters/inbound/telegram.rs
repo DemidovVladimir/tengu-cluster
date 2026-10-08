@@ -2,10 +2,10 @@
 //!
 //! Provides the full Telegram integration:
 //!
-//! - **TelegramPipe** — concrete struct for chat actions, inline approvals,
-//!   text/media sending, and teloxide-based message dispatch.
-//! - **Inline keyboard approval** — tools with `requires_approval: true` prompt
-//!   the user with Approve/Deny buttons. 60-second timeout auto-denies.
+//! - **TelegramPipe** — concrete struct for chat actions, text / media sending,
+//!   and teloxide-based message dispatch.
+//! - **No tool approvals** — `[telegram] tool_approvals` / `approve_only` load
+//!   but nothing waits for an approval (`Config::load` warns naming them).
 //! - **Typing indicator** — runs as an independent `tokio::spawn` task.
 //! - **File attachments** — documents and photos downloaded and saved to
 //!   `{workspace}/.tengu-attachments/`.
@@ -14,8 +14,8 @@
 //! - **Per-user state** — each Telegram user gets their own `ChatLoopState`.
 //! - **Secret redaction** — all outbound text passes through `SecretRegistry::redact`.
 //! - **Hot-reload** — skills are re-scanned on each message if files changed.
-//! - **Multi-agent routing** — `@role: message` targeting, automatic classification,
-//!   `/team` orchestration via event-bus. Only agents with a `description` or
+//! - **Multi-agent routing** — `@role: message` targeting; plain messages go to
+//!   the orchestrator (plan, then steps). Only agents with a `description` or
 //!   the `default` one are reachable: a private agent (the exec-tool and
 //!   signing owners) is never routable, the default or listed.
 //! - **Access control, fail closed** — `tengu telegram` refuses to start
@@ -1767,11 +1767,9 @@ impl TelegramSession {
         lines.push(String::new());
         lines.push("Direct: @role: message  or  role: message".to_string());
         lines.push("Auto:    plain messages  (plan & execute across agents)".to_string());
-        lines.push("Team:    /team <goal>     (explicit team planning command)".to_string());
         lines.push("Project: /project <name>  (new project subfolder)".to_string());
         lines.push("Example: @backend_engineer: add rate limiting".to_string());
         lines.push("Example: summarize this paper and save the notes".to_string());
-        lines.push("Example: /team build a full stack Rust app".to_string());
         self.pipe
             .send_text(sender, &lines.join("\n"), &self.delivery_opts)
             .await?;

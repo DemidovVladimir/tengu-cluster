@@ -1159,6 +1159,12 @@ impl Config {
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         let content = Self::substitute_env_vars(&raw)?;
+        for name in Self::unset_env_vars(&raw) {
+            tracing::warn!(
+                path = %path.display(),
+                "${{{name}}} is not set: it stays literal in the config (set it, or remove the reference)"
+            );
+        }
         let mut config: Config = toml::from_str(&content)?;
         let mut errors = config.validation_errors();
         errors.extend(hardening::config_file_errors(&config, path));
@@ -1586,6 +1592,23 @@ impl Config {
         }
     }
 
+    /// The `${VAR}` names `substitute_env_vars` leaves literal because the
+    /// variable is unset — outside `#` comment lines (an example there is
+    /// no reference); each name once, in first-seen order.
+    fn unset_env_vars(content: &str) -> Vec<String> {
+        let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+        let mut out: Vec<String> = Vec::new();
+        for line in content.lines().filter(|l| !l.trim_start().starts_with('#')) {
+            for cap in re.captures_iter(line) {
+                let name = cap[1].to_string();
+                if std::env::var(&name).is_err() && !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+
     fn substitute_env_vars(content: &str) -> anyhow::Result<String> {
         let mut result = content.to_string();
         let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
@@ -1684,6 +1707,17 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An unset `${VAR}` outside comments is named once (it stays literal and
+    /// `Config::load` warns); a set one, or one in a `#` line, is not.
+    #[test]
+    fn unset_env_references_are_named_once_outside_comments() {
+        let text = "a = \"${TENGU_TEST_UNSET_9F3A}\"\n# b = \"${TENGU_TEST_UNSET_COMMENT_9F3A}\"\nc = \"${HOME}\"\nd = \"x${TENGU_TEST_UNSET_9F3A}y\"\n";
+        assert_eq!(
+            Config::unset_env_vars(text),
+            vec!["TENGU_TEST_UNSET_9F3A".to_string()]
+        );
+    }
 
     /// A `tools` name that is no catalog tool and no `<server>__<tool>` of a
     /// configured `[[mcp_servers]]` entry warns at load (it used to be dropped

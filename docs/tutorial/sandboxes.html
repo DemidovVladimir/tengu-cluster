@@ -209,7 +209,7 @@
       <ol class="captions">
         <li>You run <code>tengu chat --sandbox lping</code>. With no subcommand at all, <code>tengu</code> runs <code>chat</code>.</li>
         <li>Base path: <code>-c</code>, else <code>$TENGU_CONFIG</code>, else <code>&lt;TENGU_HOME&gt;/config.toml</code>. It is pinned as <code>TENGU_CONFIG</code>. No file there: built-in defaults, one <code>main</code> agent.</li>
-        <li><code>Config::load</code> reads the file and fills every <code>${VAR}</code> from the environment. An unset variable stays as literal text.</li>
+        <li><code>Config::load</code> reads the file and fills every <code>${VAR}</code> from the environment. An unset variable stays as literal text, with a warning naming it (comment lines are skipped).</li>
         <li>Strict parse: an unknown key at the root or inside an <code>[agents.*]</code> block fails the load. A typo never switches a knob off silently.</li>
         <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, Telegram approvals, a <code>tools</code> name no catalog row or MCP server knows) are only logged.</li>
         <li><code>[default_scopes]</code> is copied into each agent that has no scope for that tool; <code>~</code> is expanded. Every agent gets the same <code>SandboxSections</code>.</li>
