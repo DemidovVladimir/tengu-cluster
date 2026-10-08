@@ -1,0 +1,12 @@
+# Lineage fixture locks: W1 frozen; rule_w.saturday sealed before any run.
+
+[[frozen]]
+generation = "W1"
+manifest_sha256 = "db85f75c5e8c86681562797d3f9ba1bab78893f9e51d5f4021ae5aaba392ccf6"
+frozen_at = "2026-10-06T09:00:00Z"
+commit = "c80d5beb724ff7eaf2fc61a4928ff15aa9a7cd16"
+
+[[sealed]]
+record = "variant:rule_w.saturday"
+sha256 = "ceb93e2a168c0f2ff7ea53a4e955fd4cbe0a8e0991bdb65a7f46d9e36a998ba8"
+sealed_at = "2026-10-06T09:43:39Z"

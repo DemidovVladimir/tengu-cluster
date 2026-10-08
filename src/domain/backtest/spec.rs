@@ -404,6 +404,14 @@ pub fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
+/// A run's `spec_sha256` (`application/backtest/`) and a generation's
+/// `spec:` pin (`domain/lineage/pins.rs`): sha256 hex of the canonical JSON
+/// (`domain/canonical.rs`) of [`StrategySpec::to_value`] — defaults filled,
+/// keys sorted at every depth.
+pub fn spec_sha256(spec_value: &Value) -> String {
+    crate::domain::canonical::canonical_sha256(spec_value)
+}
+
 impl StrategySpec {
     /// Parse and validate `value`. `name` is the strategies key (`""` = take
     /// the value's own `name`); every error names the strategy and the field.

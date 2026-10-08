@@ -1,0 +1,93 @@
+id = "fwd.saturday_fade.2026-10-03"
+title = "Preregistered Saturday-entry weekend fade, graded on the recorded books of the 2026-10-02 weekend"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.saturday.top4"
+generation = "W1"
+environment = "XMARKET"
+kind = "FORWARD_PAPER"
+registered_at = "2026-10-03T12:36:41Z"
+ran_at = "2026-10-03T12:30:00Z"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = "Fills = book-walk VWAP of the recorded hl_book/1 sweeps ($25 and $100) + 0.9 bps taker per side + funding paid / received (prereg); no paper orders were placed"
+uncertainty = "One window; no CI"
+split_by = "NONE"
+incidents = ["inc.2026-10-05.saturday-grading-unsaved", "inc.2026-10-03.prereg-kioxia-split"]
+validity = "UNRESOLVED"
+limitations = ["The Monday grade was never saved (no query, no output); re-graded 2026-10-06 from the vault books with `tengu evidence regrade` (DERIVED). The unsaved Monday figures (top 4 +47.3, all +2.1 bps) are not reproduced and stay REPORTED.", "Selection timing: the registered signals are the 2026-10-03T12:33:05Z price sweep (they match the prereg 75 / 75), the entry fills the 12:30Z books — the selection used prices 3 min after its own entry instant. Read strictly as of 12:30:00Z the top 4 changes (IREN in, MSTR out) — a reading defined after the outcome, so not preregistered evidence.", "The entry instant (the 2026-10-03T12:30Z sweep) precedes the registration (12:36:41Z) by 6 min: entry prices were visible at registration, the outcome (exit Mon 13:00Z) was not.", "Prior-evidence figures in the prereg were corrected at 12:56:02Z (KIOXIA split weekend); the rule is unchanged.", "Graded from recorded books, not executed: no latency, no rejections, no risk gate.", "Variant 2 (all names, weekend_fade.saturday.all) is graded in this experiment too (result label \"saturday all\")."]
+notes = "Same anchor as rule W (2026-10-03T00:00:00Z) and same exit books (2026-10-05T13:00Z): compare with fwd.rule_w.2026-10-02 on the same names and books. Top 4 at registration (all SHORT): hyperliquid:xyz:CBRS, hyperliquid:xyz:BIRD, hyperliquid:xyz:CRWD, hyperliquid:xyz:MSTR."
+
+[[windows]]
+role = "FORWARD"
+from = "2026-10-03T00:00:00Z"
+to = "2026-10-05T13:00:00Z"
+scope = "75 xyz stock perps; anchor 2026-10-03T00:00:00Z, entry = the hl_book/1 sweep of 2026-10-03T12:30Z, exit = the recorded books of 2026-10-05T13:00Z"
+integrity = "CLEAN"
+
+[[results]]
+label = "saturday top 4 (|s| ≥ 50 bps) at $25, as registered"
+arm = "top4_25"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 54.6574
+net_usd = 0.546574
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+note = "DERIVED: tengu evidence regrade --history <vault>/xmarket-weekend/history --anchor 2026-10-03T00:00:00Z --signal-at 2026-10-03T12:33:05Z --entry 2026-10-03T12:30:00Z --exit 2026-10-05T13:00:00Z --top-n 4 --min-abs-signal-bps 50 --notional-usd 25 --taker-fee-bps 0.9 --market-db <vault>/xlab/market.db. Legs CBRS, BIRD, CRWD, MSTR (all short), 3 / 4 positive. At $100: +52.2001 bps, $2.088003."
+
+[[results]]
+label = "saturday all (every name with s ≠ 0, variant weekend_fade.saturday.all) at $25, as registered"
+arm = "all_25"
+class = "FORWARD_PAPER"
+n = 74
+mean_net_bps = 3.5723
+net_usd = 0.660877
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+note = "DERIVED: the same regrade without --top-n / --min-abs-signal-bps; 37 / 74 positive. At $100: +3.0438 bps, $2.252382."
+
+[[results]]
+label = "rule W Sunday top 4 on the same books (regrade, recorded fees) — the comparison the prereg named"
+arm = "rule_w_top4_regrade"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 140.3425
+net_usd = 1.403425
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261004.db"
+note = "DERIVED: tengu evidence regrade --anchor 2026-10-03T00:00:00Z --entry 2026-10-04T22:00:00Z --exit 2026-10-05T13:00:00Z --top-n 4 --min-abs-signal-bps 50 --notional-usd 25 --fees recorded; the ledger says +141.8168 (fwd.rule_w.2026-10-02)."
+
+[[results]]
+label = "saturday top 4 read strictly as of 12:30:00Z — post-outcome reading, NOT preregistered"
+arm = "top4_25_strict_pit"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 127.4458
+net_usd = 1.274458
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+note = "DERIVED: --signal-at 2026-10-03T12:30:00Z; legs CBRS, CRWD, BIRD, IREN. Defined after the outcome was known: a robustness reading only, never evidence for the Saturday variant. All names strict at $100: +2.3582 bps."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "As registered the Saturday top 4 earned +54.66 bps vs rule W's +140.34 on the same books (one window). The registered selection read prices 3 min after its entry instant, and the strict reading (+127.45) was defined after the outcome — neither is a clean test; one window cannot rank the two entries."
+decided_at = "2026-10-06T10:30:00Z"
+decided_by = "coordinator, P0 regrade (tengu evidence regrade)"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+role = "prereg"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "b45f4c5138161d54f1d2034e03c0a156c12ddc958d9973e902f2813f278132e9"
+note = "The file now (correction appended 2026-10-03T12:56:02Z). Hash recorded at registration 12:36:41Z: ea4d709b87a54b54b3b2a77a3469284d9cf3e394022f05db22eb00b9c88bc10e = sha256 of the first 4457 bytes (the body before the correction)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+role = "entry: hl_book/1 sweep 2026-10-03T12:30Z + the anchor mkt_ctx/1 rows"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+note = "SKIPPED-LARGE in the inventory (415805440 B): the vault manifest holds its sha256."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261005.db"
+role = "exit: hl_book/1 sweeps around 2026-10-05T13:00Z (60 s cadence 12:30–13:30Z)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+note = "SKIPPED-LARGE in the inventory (295100416 B)."

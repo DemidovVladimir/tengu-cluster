@@ -1,0 +1,16 @@
+id = "weekend_momentum_follow"
+title = "Weekend momentum follow — placebo of rule W"
+hypothesis = "Following (not fading) each xyz stock perp's move from Fri 20:00 to Sun 18:00 New York, held to Mon 09:00 New York, earns after costs."
+role = "NEGATIVE_CONTROL"
+status = "REJECTED"
+status_reason = "Behaves as a control should: −58.0 bps (CI −89.1 … −23.3, n 1,500), holdout −53.0 (CI −100.7 … −0.3) (20261001T182838Z-weekend_follow). It is the exact mirror of rule W's trades: −58.05 = −(+50.45) − 2 × 3.8 bps cost, so it checks the sign and the cost model, not an independent effect."
+origin_at = "2026-10-01"
+origin = "repo:sandboxes/xlab/config.toml"
+origin_by = "xlab strategy library ([backtest.strategies.weekend_follow], comment \"Placebo\")"
+parent = "NONE"
+
+[prior_search]
+count = 0
+precision = "EXACT"
+source = "repo:sandboxes/xlab/config.toml"
+note = "Defined as a placebo, not searched."

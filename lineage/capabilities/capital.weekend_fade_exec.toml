@@ -1,0 +1,15 @@
+id = "capital.weekend_fade_exec"
+title = "Rule W execution tool (xm_weekend_fade)"
+class = "CAPITAL"
+version = 1
+permission = "PAPER"
+lifecycle = "FORWARD_PAPER"
+contract = "tool_schema:xm_weekend_fade"
+bindings = ["tool:xm_weekend_fade"]
+notes = "One idempotent step of the weekend window per call (feed every 60 s): snapshot by CAS, capped fades through the [risk] gate (run_exec), shadow fades through ExecGate::Shadow, shadow exits after the deadline. Exec tool: private agent only."
+
+[[evidence]]
+ref = "record:experiment/fwd.rule_w.2026-10-02"
+role = "executed the forward test"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

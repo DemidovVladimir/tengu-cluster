@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::backtest::BacktestConfig;
 use super::rate_limits::RateLimitConfig;
@@ -15,6 +16,7 @@ use super::risk::{PaperConfig, RiskConfig};
 use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
+use crate::domain::lineage::generation::GenerationScope;
 
 /// Owner name of a config that is no `sandboxes/<name>/config.toml` file —
 /// as `tengu run` names its runner then.
@@ -55,6 +57,11 @@ pub struct SandboxSections {
     /// `[backtest]` (`config/backtest.rs`): what `tengu backtest` and the
     /// `backtest` / `market_history` tools read (xlab).
     pub backtest: Option<BacktestConfig>,
+    /// `[generation]` resolved (`config/lineage.rs`): the tools and strategy
+    /// kinds the bound generation's capabilities make available; `None` =
+    /// unbound. The backtest use case refuses a kind outside it
+    /// (`capability_unavailable`), the executor build a tool.
+    pub generation: Option<Arc<GenerationScope>>,
 }
 
 impl SandboxSections {

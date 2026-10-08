@@ -1,0 +1,65 @@
+id = "ext.rule_w.bigmove_follow.2026-10-03"
+title = "Fade vs follow of weekend falls ≥ 500 bps (hand-rolled SQL, n = 3)"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.bigmove_follow"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-10-03"
+ran_at = "2026-10-03T15:00:50Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on 1h closes"
+uncertainty = "n = 3: no meaningful CI (bucketci.sql clusters the ≥ 500 bps bucket by weekend; its output was not stored)"
+incidents = []
+limitations = ["n = 3 trades.", "The query read ≥ 6 cells (2 sides × 4 size buckets, plus size × side for ≥ 500 bps): a picked cell.", "No stored output; REPORTED from the plan addendum § 8.", "ran_at = sides.sql / bucketci.sql mtime."]
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-13"
+to = "2026-09-28"
+scope = "xyz stock perps in market.db, 24 normal weekends; names that fell ≥ 500 bps"
+integrity = "CLEAN"
+
+[[results]]
+label = "follow, ≥ 500 bps falls"
+class = "DEVELOPMENT"
+n = 3
+mean_net_bps = 83.0
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[[results]]
+label = "fade (rule W), ≥ 500 bps falls"
+class = "DEVELOPMENT"
+n = 3
+mean_net_bps = -90.6
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "n = 3 only — \"needs news labels on weekend moves before it means anything\" (addendum § 8)."
+decided_at = "2026-10-03T15:04:45Z"
+decided_by = "weekend research session (plan addendum § 8)"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "reported figures (addendum § 8)"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/sides.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "2b06a52194cddb07b351359a59c7ff844345aed52376d340cf69ddfa4cd1dcc8"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/bucketci.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "09ff7e985b34da751375f986c9aa9c37a4a96e99dcbf02a279bc23f9772685e2"

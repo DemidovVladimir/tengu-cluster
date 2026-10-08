@@ -1,0 +1,43 @@
+id = "ep.rule_w.news_loss"
+title = "A supported fade that lost on Monday news (good unlucky)"
+kind = "STRATEGY"
+generation = "W1"
+experiment = "rule_w.backtest"
+family = "rule_w"
+variant = "rule_w.all"
+
+[context]
+summary = "xyz:TSLA fell 180 bps over the weekend of 2026-08-15; Monday news extended the fall."
+as_of = "2026-08-16T22:00:00Z"
+
+[[information]]
+item = "Sunday 18:00 New York mark"
+available_at = "2026-08-16T22:00:00Z"
+evidence = "run:xlab/20261001T120034Z-rule_w"
+provenance = "BACKFILLED"
+
+[[alternatives]]
+action = "fade (buy) xyz:TSLA"
+chosen = true
+counterfactual_valid = true
+
+[[alternatives]]
+action = "hold"
+chosen = false
+counterfactual_net_usd = 0.0
+counterfactual_valid = true
+
+[decision]
+action = "fade (buy) xyz:TSLA"
+decided_at = "2026-08-16T22:00:00Z"
+policy = "DETERMINISTIC"
+
+[outcome]
+net_bps = -95.0
+
+[quality]
+decision = "SUPPORTED"
+decision_note = "Exactly the rule, on information known at 18:00; the news came Monday 08:00."
+execution = "NOT_APPLICABLE"
+outcome = "UNFAVORABLE"
+attribution = ["RANDOM_OUTCOME"]

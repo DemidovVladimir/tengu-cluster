@@ -1,0 +1,20 @@
+id = "weekend_fade.liquid50"
+family = "weekend_overshoot_fade"
+title = "Rule W on liquid entries only (entry hour ≥ 50 trades)"
+parent = "weekend_fade"
+reason = "Thin names: 8.7 % of entry bars had no trades (stale entry price); the names holdout read entry bars with ≥ 50 trades at +72.3 bps (n 363)."
+registered_at = "2026-09-30"
+order = 3
+preregistered = false
+status = "SURVIVING"
+notes = "The only W variant whose xlab time-holdout CI excludes 0 (+72.2, CI +6.3 … +130.9) — on a contaminated window, with an in-sample CI that spans 0. Runs with this spec_sha256: 20261001T165231Z, 170553Z, 170648Z, 171022Z, 182835Z, 193044Z, 193449Z, 194044Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "weekend_fade_liquid"
+spec_sha256 = "dabdf28465aeae58204da189d435cf5dd2840308050330932eb40f9be4881a7f"
+
+[[changed]]
+dim = "min_entry_trades"
+from = "none"
+to = 50

@@ -1,0 +1,32 @@
+id = "weekend_fade.top4.stop100"
+family = "weekend_overshoot_fade"
+title = "Rule W top 4 with a 100 bps stop on 1h highs / lows (hand-rolled SQL)"
+parent = "weekend_fade.top4"
+reason = "Operator question 2026-10-03 (plan addendum § 6): which stop level for rule W? The forward desk runs [risk.exits] stop_loss_bps = 1000 as a disaster stop."
+registered_at = "2026-10-03"
+order = 13
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "One of 5 stop levels swept in one query (stops.sql, mtime 2026-10-03T14:55:01Z); tested in ext.rule_w.stops.2026-10-03 (result label stop100: REPORTED top 4 mean +61.7 bps over 24 weekends; no stored output). The addendum: needs a stop setting on xlab's weekend_window kind for a real in-sample + one-holdout test. The query also computed an all-names group, never reported."
+
+[spec]
+described = "Rule W top 4 (|s| ≥ 50 bps, Sun 18:00 → Mon 09:00 New York, fixed EDT offsets), stopped when the hourly high / low moves 100 bps against the fade; stop fill = the stop level + 10 bps slippage; 3.8 bps round trip; 24 weekends 2026-03-13 … 09-25 (holiday weekends and KIOXIA 2026-09-25 left out)."
+
+[[changed]]
+dim = "stop_loss_bps"
+from = "none"
+to = 100
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/stops.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "d6e8f28ac2f49be64bc1cf07e3b7fb12eb0fe14c3aaffcc8cd242ea168f4f41a"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "reported figure (plan addendum § 6, \"Added 2026-10-03 ~15:30Z\"; file last modified 2026-10-03T15:04:45Z)"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"

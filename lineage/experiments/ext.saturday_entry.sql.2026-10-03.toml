@@ -1,0 +1,142 @@
+id = "ext.saturday_entry.sql.2026-10-03"
+title = "Saturday vs Sunday entry on history (hand-rolled SQL over xlab market.db) — the prereg's prior evidence"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.saturday.top4"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-10-03T12:36:41Z"
+ran_at = "2026-10-03"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on 1h bar closes (fixed EDT offsets: anchor bar Fri 23:00Z, Sat 11:00Z, Sun 21:00Z, Mon 12:00Z); no funding"
+uncertainty = "CI over 24 weekends (normal approximation in SQL: mean ± 1.96 sd / √n of per-weekend means)"
+split_by = "TIME"
+incidents = ["inc.2026-10-03.prereg-kioxia-split"]
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["No stored output: figures only in the prereg file (REPORTED); re-running the SQL needs market.db, whose 1h rows for 2026-10-01 … 10-05 were rewritten 2026-10-05T14:12–14:14Z.", "First figures included KIOXIA's 2026-09-25 split weekend; corrected 2026-10-03T12:56:02Z.", "Hand SQL outside tengu: generation UNKNOWN; robustness cuts (traded-bars-only, no-outlier) computed in robust.sql were not reported."]
+notes = "hist.sql / robust.sql / split.sql at 12:36:41Z; robust2.sql / split2.sql / usd2.sql (KIOXIA removed) at 12:55:45Z. Rule W Sunday figures from the same queries are labelled."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-13"
+to = "2026-07-01T00:00:00Z"
+scope = "xyz stock perps in market.db, 24 normal weekends 2026-03-13 … 09-25 (holiday weekends left out)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-09-28"
+scope = "July–September weekends of the same 24"
+integrity = "CONTAMINATED"
+note = "Already read by the feasibility study, the names holdout and xlab."
+
+[[results]]
+label = "Saturday entry, all names, whole period (after the KIOXIA correction)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 72.6
+ci95_bps = [28.7, 116.5]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+note = "REPORTED. Before the correction: +79.0 (CI +33.4 … +124.6). Whole period: not a holdout figure."
+
+[[results]]
+label = "Saturday entry, all names, July–Sept holdout (after the correction)"
+class = "HOLDOUT"
+n = "UNKNOWN"
+mean_net_bps = 52.5
+ci95_bps = [9.5, 95.6]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+note = "REPORTED. Before the correction: +66.6 (CI +13.8 … +119.4)."
+
+[[results]]
+label = "Saturday entry, top 4, whole period"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 198.9
+ci95_bps = [79.3, 318.5]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+note = "REPORTED; unchanged by the correction."
+
+[[results]]
+label = "Saturday entry, top 4, July–Sept holdout"
+class = "HOLDOUT"
+n = "UNKNOWN"
+mean_net_bps = 191.1
+ci95_bps = [-25.4, 407.6]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+note = "REPORTED; the correction keeps this CI (mean stated only before it)."
+
+[[results]]
+label = "rule W Sunday entry, top 4, whole period (same queries, after the correction)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 143.7
+ci95_bps = [39.2, 248.2]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+note = "REPORTED (variant weekend_fade.top4)."
+
+[[results]]
+label = "rule W Sunday entry, all names, whole period (after the correction)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 48.7
+ci95_bps = [11.3, 86.2]
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+note = "REPORTED (variant weekend_fade)."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "Screening only: Saturday entry read better than Sunday on history (top 4 +198.9 vs +143.7), but its holdout CI spans 0 on a contaminated window; it led to the preregistered forward test fwd.saturday_fade.2026-10-03."
+decided_at = "2026-10-03T12:36:41Z"
+decided_by = "weekend research session (prereg file)"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+role = "reported figures (prereg + correction)"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+sha256 = "b45f4c5138161d54f1d2034e03c0a156c12ddc958d9973e902f2813f278132e9"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/hist.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "cf968a256b1d9b74b560c127dd71b49ee47a11d1cd3cb181b5df518f4026fa46"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/robust.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "a3ea6271701159691d525982cdf6f86f13f2bdaf546b6487351bfbe3435572d7"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/split.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "06b8bc82fe4f41fb73ccd06ee840864b55e116047835d528f9273713e6e4e6b3"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/robust2.sql"
+role = "query, KIOXIA removed (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "9e7fb2fd0174cf224cfea59ab5fdd9f2a09aae1ebba347a805015ab2719a7da0"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/split2.sql"
+role = "query, KIOXIA removed (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "caf403e772383536399a55d8cc8b2580f9131343a05b4ccf91f6dbc0cd4ec07b"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/usd2.sql"
+role = "query, USD per weekend (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "01ca6fa9a877cca2deecfd27f881925bf60d8359c00a261c09de0b27849ca2a9"

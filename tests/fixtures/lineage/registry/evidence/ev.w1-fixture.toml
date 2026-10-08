@@ -1,0 +1,28 @@
+id = "ev.w1-fixture"
+title = "The forward weekend's ledger and preregistration (fixture vault)"
+vault = "w1-fixture"
+captured_at = "2026-10-06T08:00:00Z"
+manifest_sha256 = "b836e41e2c442bc6a790c9f93ec5908121a9c94fa19796766d8550bcd7fdbd46"
+experiment = "rule_w.forward"
+
+[[items]]
+path = "xmarket-weekend/ledger.db"
+source = "~/.tengu/state/xmarket-weekend/ledger.db"
+kind = "FILE"
+sha256 = "f20d3793f2c4430cfa05260f0e01a75b82822cc1644e8a49c6a81e79e0b8c38d"
+files = 1
+bytes = 57
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "ledger"
+
+[[items]]
+path = "xmarket-weekend/prereg.md"
+source = "~/.tengu/state/xmarket-weekend/research/prereg.md"
+kind = "FILE"
+sha256 = "194a012a40d670db810261e34ee71795c160410ab0fde6a531030052efc84f60"
+files = 1
+bytes = 118
+provenance = "LIVE_RECORDED"
+class = "NONE"
+role = "prereg"

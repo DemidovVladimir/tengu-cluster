@@ -1,0 +1,11 @@
+id = "generic_8k_reaction.feasibility"
+family = "generic_8k_reaction"
+title = "Generic 8-K reaction as measured by the feasibility study"
+parent = "ROOT"
+reason = "PRD information latency on filings."
+registered_at = "2026-09-30"
+preregistered = false
+status = "REJECTED"
+
+[spec]
+described = "Trade the HL perp after an EDGAR 8-K / 6-K since March for the 22 names; net bps after 3.8 bps round trip; reaction time of HL to the filing."

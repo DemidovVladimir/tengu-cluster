@@ -1,0 +1,35 @@
+id = "overnight_follow.backtest"
+title = "Overnight follow-through on history"
+family = "overnight_follow"
+variant = "overnight_follow.base"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "UNKNOWN"
+ran_at = "2026-09-20"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on xyz"
+capabilities = ["cap.daily_window", "cap.backtest"]
+uncertainty = "UNKNOWN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-01"
+to = "2026-09-19"
+integrity = "CLEAN"
+
+[[results]]
+label = "all trading days"
+class = "DEVELOPMENT"
+n = 210
+mean_net_bps = -12.4
+ci95_bps = [-30.1, 5.0]
+evidence = "repo:docs/study.md"
+note = "REPORTED in the study; the run dir is gone"
+
+[verdict]
+value = "NO_GO"
+reason = "Negative after costs; nothing to hold out."
+decided_at = "2026-09-20"
+decided_by = "operator"

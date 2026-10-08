@@ -1,0 +1,11 @@
+id = "hl_underlying_convergence.feasibility"
+family = "hl_underlying_convergence"
+title = "HL ↔ underlying gap as measured by the feasibility study"
+parent = "ROOT"
+reason = "PRD cross-market convergence, the perp vs its stock."
+registered_at = "2026-09-30"
+preregistered = false
+status = "REJECTED"
+
+[spec]
+described = "Gap between the HL xyz perp and the underlying (Robinhood public history; hourly only since 2026-06-30) on 1h / 5m / 1m bars of 22 names; gap size, half-life and frequency vs costs."

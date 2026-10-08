@@ -1,0 +1,99 @@
+id = "xlab.weeknight_fade.top4_0400.2026-10-05"
+title = "Weeknight fade top 4, entry 04:00 New York — preregistered sibling"
+family = "weeknight_fade"
+variant = "weeknight_fade.top4_0400"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-03T13:03:50Z"
+ran_at = "2026-10-05T14:03:29Z"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:xyz:"]: taker 0.9 bps + fixed half-spread 1.0 bps per side + funding; $25 per trade (spec notional_usd), top 4 a night; min_entry_trades 1'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["capital.strategy.daily_window", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (nights; 2000 resamples, seed 7); t clustered by period"
+split_by = "TIME"
+incidents = ["inc.2026-10-05.weeknight-holdout-reads-uncounted"]
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["The holdout was already covered by the weekday.sql screening (plan honesty note): not a clean holdout.", "The holdout was read from the CLI (--split): no holdout-reads.jsonl line.", "Monday 00:00 entries anchor on Friday 20:00 and span the weekend; the stored figures include them.", "Data end 2026-10-01T00:00:00Z; run on the branch config 868dabab6edb253125040a09c134e81c91b00ca4, not in W1's sandboxes/xlab/config.toml."]
+notes = "Commit 868dabab… reports weeknights only: +22.3 bps (CI +0.6 … +44.0), holdout +20.4 — REPORTED, not stored; the inventory recomputed +19.88 per trade."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CONTAMINATED"
+note = "weekday.sql (2026-10-03, 113 nights 2026-03-09 … 09-28) had already read this window; the plan says so."
+
+[[results]]
+label = "research arm, whole window (incl. Monday entries)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 568
+mean_net_bps = 21.825272913086938
+ci95_bps = [1.2242889248058384, 43.21715130480866]
+net_usd = 30.991887536583413
+t_stat = 2.072740855068381
+evidence = "run:xlab/20261005T140329Z-xyz_weeknight_fade_top4_0400"
+extract = "arm:research"
+note = "In-sample + holdout together: not a holdout figure."
+
+[[results]]
+label = "research arm, in-sample (to 2026-07-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 312
+mean_net_bps = 25.956193783366178
+ci95_bps = [-5.362961566925199, 58.07124552975632]
+net_usd = 20.245831151025605
+t_stat = 1.588784560531664
+evidence = "run:xlab/20261005T140329Z-xyz_weeknight_fade_top4_0400"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-07-01), read from the CLI"
+arm = "research"
+class = "HOLDOUT"
+n = 256
+mean_net_bps = 16.790713102434054
+ci95_bps = [-6.689654916392558, 39.898347908787436]
+net_usd = 10.746056385557802
+t_stat = 1.3607014949302014
+evidence = "run:xlab/20261005T140329Z-xyz_weeknight_fade_top4_0400"
+extract = "arm:research/holdout"
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "All periods +21.83 bps (CI +1.2 … +43.2, n 568), in-sample +25.96 (CI −5.4 … +58.1), holdout +16.79 (CI −6.7 … +39.9) on a contaminated window."
+decided_at = "2026-10-05T14:42:24Z"
+decided_by = "operator session, commit 868dabab6edb253125040a09c134e81c91b00ca4 (\"Small edge, not proven.\")"
+
+[[evidence]]
+ref = "run:xlab/20261005T140329Z-xyz_weeknight_fade_top4_0400"
+role = "run report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "9c11b385d74b981b0858732a1b9318132267abd5bce12d4b15ee6e22052ca1e8"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "prereg"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"
+note = "Spec + steps written 2026-10-03T13:03:50Z before any xlab run; addendum § 6–8 appended later (last modified 2026-10-03T15:04:45Z); no hash recorded at registration."
+
+[[evidence]]
+ref = "git:868dabab6edb253125040a09c134e81c91b00ca4"
+role = "spec committed with the result summary"
+class = "NONE"
+provenance = "NOT_APPLICABLE"

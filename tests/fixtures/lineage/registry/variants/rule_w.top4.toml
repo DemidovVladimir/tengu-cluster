@@ -1,0 +1,23 @@
+id = "rule_w.top4"
+family = "rule_w"
+title = "Rule W, the 4 largest moves of at least 50 bps (the capped ledger)"
+parent = "rule_w.all"
+reason = "A $100 book holds 4 positions of $25."
+registered_at = "2026-10-06"
+order = 2
+preregistered = false
+status = "ACTIVE"
+
+[[changed]]
+dim = "top_n"
+from = "all"
+to = 4
+
+[[changed]]
+dim = "min_abs_signal_bps"
+from = 0
+to = 50
+
+[spec]
+spec_sha256 = "f4dd0eb2fac4ed4cb8c9b045367fdf83ad2f84228227304f46f1f99a26ff395f"
+source = "run:xlab/20261002T100000Z-rule_w_top4"

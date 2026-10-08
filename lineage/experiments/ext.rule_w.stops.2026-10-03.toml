@@ -1,0 +1,91 @@
+id = "ext.rule_w.stops.2026-10-03"
+title = "Stop-level sweep on rule W top 4 (hand-rolled SQL on 1h highs / lows)"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4.stop500"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-10-03"
+ran_at = "2026-10-03T14:55:01Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on 1h closes; a stop fills at the stop level + 10 bps slippage, checked on each hourly high / low after entry"
+uncertainty = "CI over 24 weekends (normal approximation in SQL); CIs not reported"
+incidents = []
+limitations = ["One sweep of 5 levels + none in one query: 5 variants tried at once; the variant field names the level the addendum proposed (500), each result names its own.", "No stored output: figures only in the plan addendum (REPORTED); the query also computed an all-names group, never reported.", "Whole period, no holdout; hourly highs / lows, not ticks.", "ran_at = stops.sql mtime (its last write)."]
+notes = "Proposed desk change after Monday: [risk.exits] stop_loss_bps 1000 → 500 (next weekend, never mid-run) — not applied in W1."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-13"
+to = "2026-09-28"
+scope = "xyz stock perps in market.db, 24 normal weekends 2026-03-13 … 09-25, top 4 |s| ≥ 50 bps"
+integrity = "CLEAN"
+
+[[results]]
+label = "no stop (rule W top 4, variant weekend_fade.top4)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 143.7
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED (addendum § 6)."
+
+[[results]]
+label = "stop1000 (variant weekend_fade.top4.stop1000)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 145.6
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[[results]]
+label = "stop500 (variant weekend_fade.top4.stop500)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 161.0
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[[results]]
+label = "stop300 (variant weekend_fade.top4.stop300)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 153.1
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[[results]]
+label = "stop200 (variant weekend_fade.top4.stop200)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 97.8
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[[results]]
+label = "stop100 (variant weekend_fade.top4.stop100)"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+mean_net_bps = 61.7
+evidence = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+note = "REPORTED."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "In-sample sweep only: 500 bps read best (+161.0 vs +143.7 without a stop); needs a stop setting on xlab's weekend_window kind for a real in-sample + one-holdout test (addendum § 6)."
+decided_at = "2026-10-03T15:04:45Z"
+decided_by = "weekend research session (plan addendum § 6; time = the plan file's last write)"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "reported figures (addendum § 6)"
+class = "DEVELOPMENT"
+provenance = "REPORTED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/stops.sql"
+role = "query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "d6e8f28ac2f49be64bc1cf07e3b7fb12eb0fe14c3aaffcc8cd242ea168f4f41a"

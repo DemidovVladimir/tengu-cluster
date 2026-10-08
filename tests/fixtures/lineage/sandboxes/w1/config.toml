@@ -1,0 +1,161 @@
+# Lineage fixture — a minimal xlab-like sandbox bound to generation W1
+# (tests/fixtures/lineage/registry). Loaded only by tests; never run.
+# Its rule_w strategy is the 2026-09-26 golden replay's spec
+# (domain/backtest/checks.rs): the 75 xyz names, 5 m bars, KIOXIA excluded,
+# half the 3.8 bps round trip per side, no spread, slippage or funding.
+
+runtime_profile = "auto"
+
+[generation]
+id = "W1"
+registry = "../../registry"
+
+[egress]
+network = "open"
+allow_hosts = ["api.hyperliquid.xyz"]
+
+[memory]
+enabled = false
+
+[xmarket]
+state = "lineage-fixture-w1"
+
+[xmarket.calendars.us_equity]
+kind = "exchange"
+tz = "America/New_York"
+core = ["09:30", "16:00"]
+pre = "04:00"
+post = "20:00"
+overnight = true
+early_close = "13:00"
+early_post = "17:00"
+holidays = [
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+    "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31",
+    "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+    "2028-01-17", "2028-02-21", "2028-04-14", "2028-05-29", "2028-06-19",
+    "2028-07-04", "2028-09-04", "2028-11-23", "2028-12-25",
+]
+early_closes = ["2026-11-27", "2026-12-24", "2027-11-26", "2028-07-03", "2028-11-24"]
+
+[backtest]
+notional_usd = 100
+bootstrap = 200
+seed = 7
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.strategies.rule_w]
+kind = "weekend_window"
+universe = [
+    "hyperliquid:xyz:AAOI", "hyperliquid:xyz:AAPL", "hyperliquid:xyz:AMAT", "hyperliquid:xyz:AMD",
+    "hyperliquid:xyz:AMZN", "hyperliquid:xyz:ARM", "hyperliquid:xyz:ASML", "hyperliquid:xyz:AVGO",
+    "hyperliquid:xyz:BABA", "hyperliquid:xyz:BB", "hyperliquid:xyz:BE", "hyperliquid:xyz:BIRD",
+    "hyperliquid:xyz:BMNR", "hyperliquid:xyz:BOT", "hyperliquid:xyz:BX", "hyperliquid:xyz:CBRS",
+    "hyperliquid:xyz:COIN", "hyperliquid:xyz:COST", "hyperliquid:xyz:CRCL", "hyperliquid:xyz:CRWD",
+    "hyperliquid:xyz:CRWV", "hyperliquid:xyz:CVX", "hyperliquid:xyz:CXMT", "hyperliquid:xyz:DELL",
+    "hyperliquid:xyz:DKNG", "hyperliquid:xyz:EBAY", "hyperliquid:xyz:GEV", "hyperliquid:xyz:GIGADEV",
+    "hyperliquid:xyz:GME", "hyperliquid:xyz:GOOGL", "hyperliquid:xyz:HIMS", "hyperliquid:xyz:HOOD",
+    "hyperliquid:xyz:HYUNDAI", "hyperliquid:xyz:IBM", "hyperliquid:xyz:INTC", "hyperliquid:xyz:IREN",
+    "hyperliquid:xyz:KIOXIA", "hyperliquid:xyz:LITE", "hyperliquid:xyz:LLY", "hyperliquid:xyz:META",
+    "hyperliquid:xyz:MINIMAX", "hyperliquid:xyz:MRNA", "hyperliquid:xyz:MRVL", "hyperliquid:xyz:MSFT",
+    "hyperliquid:xyz:MSTR", "hyperliquid:xyz:MU", "hyperliquid:xyz:NBIS", "hyperliquid:xyz:NET",
+    "hyperliquid:xyz:NFLX", "hyperliquid:xyz:NOK", "hyperliquid:xyz:NOW", "hyperliquid:xyz:NVDA",
+    "hyperliquid:xyz:ORCL", "hyperliquid:xyz:PLTR", "hyperliquid:xyz:PURRDAT", "hyperliquid:xyz:QCOM",
+    "hyperliquid:xyz:QNT", "hyperliquid:xyz:RDDT", "hyperliquid:xyz:RIVN", "hyperliquid:xyz:RKLB",
+    "hyperliquid:xyz:SHAZ", "hyperliquid:xyz:SHEIN", "hyperliquid:xyz:SKHX", "hyperliquid:xyz:SKHY",
+    "hyperliquid:xyz:SMSN", "hyperliquid:xyz:SNDK", "hyperliquid:xyz:SOFTBANK", "hyperliquid:xyz:SPCX",
+    "hyperliquid:xyz:TSLA", "hyperliquid:xyz:TSM", "hyperliquid:xyz:UNITREE", "hyperliquid:xyz:USAR",
+    "hyperliquid:xyz:WDC", "hyperliquid:xyz:ZHIPU", "hyperliquid:xyz:ZM",
+]
+interval = "5m"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+exclude = ["hyperliquid:xyz:KIOXIA"]
+costs = { taker_fee_bps = 1.9, half_spread = { model = "fixed", bps = 0.0 }, slippage_bps = 0.0, funding = false }
+
+# The rejected predecessor: overnight follow-through on the same names.
+[backtest.strategies.overnight]
+kind = "daily_window"
+universe = ["hyperliquid:xyz:AAPL", "hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]
+interval = "1h"
+days = "trading"
+calendar = "us_equity"
+tz = "America/New_York"
+anchor = "16:00"
+entry = "20:00"
+exit = "09:00"
+direction = "follow"
+min_abs_signal_bps = 100
+
+[risk]
+account = "lineage-fixture-w1"
+mode = "paper"
+venues = ["hyperliquid"]
+min_lifecycle = "paper_tradable"
+instruments_allow = ["hyperliquid:xyz:AAPL", "hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]
+instruments_deny = []
+max_order_notional_usd = 25
+max_position_notional_usd = 50
+max_asset_exposure_usd = 50
+max_venue_exposure_usd = 110
+max_gross_exposure_usd = 110
+max_net_exposure_usd = 110
+max_leverage = 1.2
+daily_loss_limit_usd = 10
+total_loss_limit_usd = 25
+min_edge_bps = 10
+max_slippage_bps = 30
+min_depth_usd = 250
+require_hedge_for = []
+max_data_age_ms = { book = 5000, ctx = 90000, reference = 60000, quote = 20000 }
+max_skew_ms = 5000
+max_orders_per_min = 12
+max_open_orders = 4
+kill_switch_file = "~/.tengu/state/lineage-fixture-w1/KILL"
+allow_reduce_degraded = true
+
+[risk.exits]
+take_profit_bps = 2000
+stop_loss_bps = 1000
+max_hold_secs = 259200
+
+[paper]
+initial_cash_usd = 100
+latency_ms = 250
+latency_jitter_ms = 100
+fee_tier = 0
+staking_discount_pct = 0
+order_types = ["market", "ioc"]
+
+[agents.architect]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-opus-4.7"
+workspace = "~/lineage-fixture-ws"
+tools = ["backtest", "market_history", "read_file"]
+description = "The fixture's Architect: backtests rule W on history."
+
+[default_scopes.sign_and_send_transaction]
+
+[default_scopes.sign_message]
+
+[default_scopes.write_file]
+
+[default_scopes.run_command]
+
+[default_scopes.http_request]
+
+[default_scopes.read_file]
+fs_roots = ["~/lineage-fixture-ws"]
+
+[default_scopes.backtest]
+fs_roots = ["~/lineage-fixture-ws"]
+
+[default_scopes.market_history]
+fs_roots = ["~/lineage-fixture-ws"]
+net_hosts = ["api.hyperliquid.xyz"]

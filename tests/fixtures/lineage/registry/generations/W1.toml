@@ -1,0 +1,96 @@
+id = "W1"
+title = "W1 — rule W on paper, frozen after the 2026-10-02 weekend"
+status = "FROZEN"
+parent = "NONE"
+frozen_at = "2026-10-06T09:00:00Z"
+sandboxes = ["w1"]
+
+[code]
+commit = "c80d5beb724ff7eaf2fc61a4928ff15aa9a7cd16"
+forward_binary = "tengu-6fcb455"
+forward_binary_sha256 = "f4dd0eb2fac4ed4cb8c9b045367fdf83ad2f84228227304f46f1f99a26ff395f"
+forward_commit = "UNKNOWN"
+
+[[capabilities]]
+id = "cap.weekend_window"
+version = 1
+
+[[capabilities]]
+id = "cap.daily_window"
+version = 1
+
+[[capabilities]]
+id = "cap.backtest"
+version = 1
+
+[[capabilities]]
+id = "cap.market_history"
+version = 1
+
+[[capabilities]]
+id = "cap.risk_gate"
+version = 1
+
+[[capabilities]]
+id = "cap.paper_exec"
+version = 1
+
+[[capabilities]]
+id = "cap.market_store"
+version = 1
+
+[[capabilities]]
+id = "cap.jev_gate"
+version = 1
+
+[decision_policy]
+primary = "rule W, deterministic"
+summary = "The rule decides; Jev is measured beside it, never in the loop."
+
+[[decision_policy.arms]]
+name = "rules"
+status = "BASELINE"
+
+[[decision_policy.arms]]
+name = "jev"
+status = "UNPROVEN"
+summary = "Gate replay inconclusive (rule_w.jev_gate)."
+
+[research_policy]
+summary = "History first: backtest, hold out, then paper."
+
+[[models]]
+role = "architect"
+engine = "openrouter"
+model = "anthropic/claude-opus-4.7"
+where = "config:w1/agents.architect.model"
+
+[[pins]]
+target = "spec:w1/rule_w"
+role = "STRATEGY"
+sha256 = "cba7a380444a5e6648f0d1421837ce5504c0a1e55e6b3126a8de6596ea343a7f"
+
+[[pins]]
+target = "spec:w1/overnight"
+role = "STRATEGY"
+sha256 = "2f9a1d782a79e5ee5c577ff6fed115e525233e632e8962441acb35a8758e93de"
+
+[[pins]]
+target = "config:w1/backtest.costs.\"hyperliquid:xyz:\""
+role = "COST_MODEL"
+sha256 = "ccf23d6a3c6d18866430479e0eed5b6c81327cb6e67e97e676abc5157155b37f"
+
+[[pins]]
+target = "config:w1/risk"
+role = "RISK_POLICY"
+sha256 = "241b167a509e9e561b11424f877a61c0aa13d75189b11acfaaee000869d98eeb"
+
+[[pins]]
+target = "config:w1/agents.architect.model"
+role = "MODEL"
+sha256 = "6e0d68ea6387f3451dcd6490cfddeda0b6e26510bc82b05fb06dc6d96baffe0a"
+
+[[pins]]
+target = "tool_schema:backtest"
+role = "SCHEMA"
+sha256 = "ecdfbcb088f15cd17bb176337fe147e5b704ccb1eceb6da119084ba380b082a6"

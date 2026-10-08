@@ -1,0 +1,61 @@
+id = "inc.2026-10-05.network-loss-2"
+title = "Second network loss 2026-10-05 09:35:05 → 09:41:06Z with positions open"
+class = "NETWORK"
+started_at = "2026-10-05T09:35:05Z"
+ended_at = "2026-10-05T09:41:06Z"
+detected_by = "runner WARN `feed calls failed; backing off` at 09:35:05.506053Z; recovery hl_ctx ok 09:41:06.339924Z, hl_book 09:40 slot ok 09:41:10.352039Z; sampler sweep 09:37:29Z books=0"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+strategy_impact = "DEGRADED"
+strategy_impact_note = "Positions open; exit monitoring on stale marks (xm_exits partial rows, see inc.2026-10-05.network-loss-1) — TP / SL blind, whether one would have fired is UNKNOWN; P&L unaffected (the 13:00Z exit was clean)."
+notes = "Last ok before the loss: hl_ctx 09:34:03.344226Z. The process stayed awake."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (weekend recorder)"
+from = "2026-10-05T09:35:00Z"
+to = "2026-10-05T09:41:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 09:34:02 → 09:41:05: minutes 09:35–09:40 (6) lost; 1m bars 450, 204 flat — prices only."
+
+[[data_impact]]
+stream = "hl_book/1 (weekend recorder), slot 09:35"
+from = "2026-10-05T09:35:00Z"
+to = "2026-10-05T09:40:00Z"
+after = "MISSING"
+note = "Lost for good (no xyz book archive; the sampler lost 09:37:29 too)."
+
+[[data_impact]]
+stream = "hl_book/1 (weekend recorder), slot 09:40"
+from = "2026-10-05T09:40:00Z"
+to = "2026-10-05T09:41:05Z"
+after = "LIVE_RECORDED"
+note = "Recorded late at 09:41:04."
+
+[[data_impact]]
+stream = "sampler l2book.jsonl / ctx.jsonl"
+from = "2026-10-05T09:37:29Z"
+to = "2026-10-05T09:37:30Z"
+after = "MISSING"
+note = "Sweep 09:37:29Z books=0, no ctx line."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (desk recorder, sandbox xmarket)"
+from = "2026-10-05T09:35:00Z"
+to = "2026-10-05T09:41:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 09:34:31 → 09:41:00."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+role = "runner WARN / recovery lines"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "93bba3ff7bc62b42459aeb9e03da06aa6e4681dc2e9b0f173612d858c3454d1b"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261005.db"
+role = "recorder rows"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

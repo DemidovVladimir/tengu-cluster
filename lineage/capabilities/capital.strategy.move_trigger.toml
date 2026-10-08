@@ -1,0 +1,15 @@
+id = "capital.strategy.move_trigger"
+title = "Strategy kind move_trigger"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "HISTORICALLY_TESTED"
+contract = "repo:src/domain/backtest/spec.rs"
+bindings = ["strategy_kind:move_trigger"]
+notes = "Backtested: crypto_move_fade (no-go)."
+
+[[evidence]]
+ref = "record:experiment/xlab.crypto_move_fade.2026-10-01"
+role = "library run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

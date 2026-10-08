@@ -1,0 +1,104 @@
+id = "xlab.crypto_funding_carry.2026-10-01"
+title = "Crypto funding carry, time split 2026-07-01 — post-fix library run"
+family = "crypto_funding_carry"
+variant = "crypto_funding_carry.library"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T18:28:46Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:"]: taker 4.5 bps + ctx half-spread (fallback 1.0 bps) per side + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["capital.strategy.funding_carry", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; periods treated as independent (xlab § 11)"
+split_by = "TIME"
+incidents = []
+notes = "Post-fix library run (figures after xlab-fix-engine, db96cb25c0ffa1efa13f8d7c388e407dfb107d24; xlab doc § 14). CLI --split run: the holdout half is in the report but no holdout-reads.jsonl line (CLI reads are not counted). Earlier runs of this spec: xlab.library.prefix.2026-10-01 (INVALID)."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T18:28:46Z"
+scope = "@crypto: hyperliquid:BTC, hyperliquid:ETH, hyperliquid:SOL, hyperliquid:HYPE, 1h bars"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "@crypto: hyperliquid:BTC, hyperliquid:ETH, hyperliquid:SOL, hyperliquid:HYPE, 1h bars"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T18:28:46Z"
+scope = "@crypto: hyperliquid:BTC, hyperliquid:ETH, hyperliquid:SOL, hyperliquid:HYPE, 1h bars"
+integrity = "UNKNOWN"
+note = "No earlier tengu study of these perps is recorded; whoever wrote the library spec may have seen the period (LLM lookahead: xlab § 11)."
+
+[[results]]
+label = "research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 68
+mean_net_bps = 27.81074481951494
+ci95_bps = [-64.76441320105656, 117.31893599854092]
+net_usd = 18.91130647727016
+t_stat = 0.6216387423401853
+evidence = "run:xlab/20261001T182846Z-crypto_funding_carry"
+extract = "arm:research"
+note = "In-sample + holdout together: not a holdout figure."
+
+[[results]]
+label = "research arm, in-sample (to 2026-07-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 55
+mean_net_bps = 49.94386236268816
+ci95_bps = [-34.72891823792688, 140.0823201681332]
+net_usd = 27.46912429947848
+t_stat = 1.1032118424147463
+evidence = "run:xlab/20261001T182846Z-crypto_funding_carry"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-07-01)"
+arm = "research"
+class = "HOLDOUT"
+n = 13
+mean_net_bps = -65.82936786314096
+ci95_bps = [-376.6514253983318, 186.42676254249758]
+net_usd = -8.557817822208325
+t_stat = -0.4829647824047121
+evidence = "run:xlab/20261001T182846Z-crypto_funding_carry"
+extract = "arm:research/holdout"
+
+[[results]]
+label = "capped arm ($100 [risk] book), whole window"
+arm = "capped"
+class = "DEVELOPMENT"
+n = 70
+mean_net_bps = 29.009877170672514
+ci95_bps = [-55.09070235647094, 114.00992181850248]
+net_usd = 5.076728504867689
+t_stat = 0.6661947263058922
+evidence = "run:xlab/20261001T182846Z-crypto_funding_carry"
+extract = "arm:capped"
+note = "Capped n 70 (+29.0): the research arm drops 2 plans the data cannot finish."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go after costs: +27.8 bps with a CI spanning 0 (−64.8 … +117.3, n 68; 2 censored at the end); in-sample +49.9 turns into holdout −65.8."
+decided_at = "2026-10-01"
+decided_by = "xlab doc § 14 verdict (repo:docs/xlab-2026-10-01.md)"
+
+[[evidence]]
+ref = "run:xlab/20261001T182846Z-crypto_funding_carry"
+role = "run report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "616e37ecda7800ac630c391774e34cac6516d4e496ddf698b3e58604286ff262"
+note = "Backfilled history only (market.db, BACKFILLED); report.json carries both the in-sample and the holdout halves."

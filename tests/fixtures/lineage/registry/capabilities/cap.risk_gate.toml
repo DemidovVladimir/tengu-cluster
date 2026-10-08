@@ -1,0 +1,8 @@
+id = "cap.risk_gate"
+title = "Deterministic risk gate and its state"
+class = "RISK"
+version = 1
+permission = "RISK_AUTHORITY"
+lifecycle = "ACTIVE"
+contract = "tool_schema:risk_status"
+bindings = ["tool:risk_status"]

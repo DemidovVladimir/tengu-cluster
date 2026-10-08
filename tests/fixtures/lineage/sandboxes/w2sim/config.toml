@@ -1,0 +1,76 @@
+# Lineage fixture — the simulated W2 candidate (generation W2-SIM): W1's
+# capabilities plus two W2-only ones — the `event_window` strategy kind and a
+# news probe tool (`w2_news_probe`, not a real tool). Loaded only by tests.
+
+runtime_profile = "auto"
+
+[generation]
+id = "W2-SIM"
+registry = "../../registry"
+
+[egress]
+network = "open"
+allow_hosts = ["api.hyperliquid.xyz"]
+
+[memory]
+enabled = false
+
+[xmarket]
+state = "lineage-fixture-w2sim"
+
+[xmarket.calendars.us_equity]
+kind = "exchange"
+tz = "America/New_York"
+core = ["09:30", "16:00"]
+pre = "04:00"
+post = "20:00"
+overnight = true
+early_close = "13:00"
+early_post = "17:00"
+holidays = [
+    "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25",
+    "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
+]
+early_closes = ["2026-11-27", "2026-12-24"]
+
+[backtest]
+notional_usd = 100
+bootstrap = 200
+seed = 7
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.strategies.rule_w]
+kind = "weekend_window"
+universe = ["hyperliquid:xyz:AAPL", "hyperliquid:xyz:TSLA", "hyperliquid:xyz:NVDA"]
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+
+# W2-only: trade a published event (needs capability cap.event_window).
+[backtest.strategies.news_event]
+kind = "event_window"
+events = [{ instrument = "hyperliquid:xyz:TSLA", t = "2026-09-29T13:30:00Z", label = "earnings" }]
+interval = "5m"
+direction = "follow"
+exit_after_mins = 60
+
+[agents.architect]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-opus-4.7"
+tools = ["backtest", "market_history", "read_file", "w2_news_probe"]
+description = "The W2-SIM Architect: rule W plus the news probe."
+
+[default_scopes.read_file]
+fs_roots = ["~/lineage-fixture-ws"]
+
+[default_scopes.backtest]
+fs_roots = ["~/lineage-fixture-ws"]
+
+[default_scopes.market_history]
+fs_roots = ["~/lineage-fixture-ws"]
+net_hosts = ["api.hyperliquid.xyz"]

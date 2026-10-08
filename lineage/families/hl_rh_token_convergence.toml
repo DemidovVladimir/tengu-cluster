@@ -1,0 +1,15 @@
+id = "hl_rh_token_convergence"
+title = "Hyperliquid ↔ Robinhood Chain token convergence"
+hypothesis = "Price gaps between Hyperliquid xyz stock perps and the matching Robinhood Chain stock tokens converge, and the gap can be traded after costs."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go (feasibility 2026-09-30, confidence medium): $100 round trip p50 −19.9 bps, p75 −12.1 bps; 0 of 1,199 swaps positive at $25 — the pools are already arbitraged to within their fees; 16 of 21 Robinhood tokens cost 30–220+ bps per round trip."
+origin_at = "2026-09-29"
+origin = "repo:docs/xmarket-prd-2026-09-29.md"
+origin_by = "operator PRD (§ Cross-Market Convergence — the PRD's central idea)"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "Variants tried by the study's analysts are not itemised."

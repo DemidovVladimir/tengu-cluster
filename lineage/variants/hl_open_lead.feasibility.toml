@@ -1,0 +1,11 @@
+id = "hl_open_lead.feasibility"
+family = "hl_open_lead"
+title = "HL's closed-market move vs the stock's open, as measured by the feasibility study"
+parent = "ROOT"
+reason = "PRD information latency: does HL lead price discovery at the open?"
+registered_at = "2026-09-30"
+preregistered = false
+status = "REJECTED"
+
+[spec]
+described = "Regress the stock's opening move on HL's closed-market move at 09:00 ET and 09:30 ET, 22 names, ~92 ticker-opens / week."

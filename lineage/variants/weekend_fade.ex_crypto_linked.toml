@@ -1,0 +1,30 @@
+id = "weekend_fade.ex_crypto_linked"
+family = "weekend_overshoot_fade"
+title = "Rule W (|s| ≥ 50 bps) on the 69 names that are not crypto-linked"
+parent = "weekend_fade"
+reason = "The complement group of weekend_fade.crypto_linked in the same query."
+registered_at = "2026-10-04"
+order = 16
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "crypto.sql (mtime 2026-10-04T10:07:52Z). Result UNKNOWN: no stored output."
+
+[spec]
+described = "As weekend_fade.crypto_linked on the other 69 of the 75 names."
+
+[[changed]]
+dim = "universe"
+from = "@xyz_stocks (75)"
+to = "75 minus MSTR, COIN, BMNR, CRCL, HOOD, IREN"
+
+[[changed]]
+dim = "min_abs_signal_bps"
+from = 0
+to = 50
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/crypto.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "2cff0a33bf9044222014cc519d7d10c671272454d58760042192b9413ef651c1"

@@ -1,0 +1,44 @@
+id = "rule_w.holdout_names"
+title = "Rule W on 15 names the study never looked at"
+family = "rule_w"
+variant = "rule_w.all"
+generation = "W1"
+environment = "XLAB"
+kind = "HOLDOUT_TEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T15:00:00Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on xyz"
+capabilities = ["cap.weekend_window", "cap.backtest"]
+uncertainty = "15 names over 30 weekends; CI by weekend."
+split_by = "INSTRUMENTS"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-01"
+to = "2026-09-26"
+scope = "the 60 names of the study"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-03-01"
+to = "2026-09-26"
+scope = "15 names listed later"
+integrity = "UNKNOWN"
+note = "whether the study glanced at these names is not recorded"
+
+[[results]]
+label = "names holdout"
+class = "HOLDOUT"
+n = 300
+mean_net_bps = 30.2
+ci95_bps = [-4.0, 64.4]
+evidence = "repo:docs/study.md"
+
+[verdict]
+value = "PASS"
+reason = "Same sign and size as in-sample; the CI touches zero."
+decided_at = "2026-10-01"
+decided_by = "operator"

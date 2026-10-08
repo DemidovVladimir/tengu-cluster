@@ -1,0 +1,15 @@
+id = "xyz_funding_carry"
+title = "Funding carry on xyz stock perps"
+hypothesis = "Receiving funding on xyz stock perps while |rate| ≥ 50 % APR (out below 15 % APR or after 48 h) earns after costs."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go after costs (xlab § 14): −3.0 bps (CI −7.6 … +1.7, n 12,884), in-sample +0.5, holdout −5.4 (CI −10.3 … −0.6) (20261001T182842Z-xyz_funding_carry)."
+origin_at = "2026-10-01"
+origin = "repo:sandboxes/xlab/config.toml"
+origin_by = "xlab strategy library"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:sandboxes/xlab/config.toml"
+note = "The feasibility study read 30 days of xyz funding; parameter choice not recorded."

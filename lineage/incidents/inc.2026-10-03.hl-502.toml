@@ -1,0 +1,69 @@
+id = "inc.2026-10-03.hl-502"
+title = "Hyperliquid API 502s then timeouts, 2026-10-03 09:10–09:13Z (both runners and the sampler)"
+class = "VENUE"
+started_at = "2026-10-03T09:10:19Z"
+ended_at = "2026-10-03T09:13:26Z"
+detected_by = "sampler sweep 09:10:19Z partial (48 of 110 books; errors.log: 62 jq parse errors = HL 502 HTML); runner WARN `feed calls failed; backing off` (HTTP 502 from api.hyperliquid.xyz, then timeouts); egress.jsonl 46 × status 502 09:10:45.411716Z → 09:11:46.061617Z (nginx/1.22.1 and nginx/1.30.3 bodies) + 10 timeouts to 09:13:26.382413Z"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-02"
+strategy_impact = "NONE"
+strategy_impact_note = "Saturday morning: no position open, no decision instant (the Saturday prereg entry at 12:30Z was unaffected)."
+notes = "Older notes said 09:10:20Z–09:12:08Z; the times here are from the files (inventory § 3, § 9)."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (weekend recorder)"
+from = "2026-10-03T09:11:00Z"
+to = "2026-10-03T09:12:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 09:10:01 → 09:12:03: minute 09:11 lost. 1m bars over 09:10–09:12: 225 bars, 218 flat (n = 0) — prices only."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (desk recorder, sandbox xmarket)"
+from = "2026-10-03T09:10:00Z"
+to = "2026-10-03T09:12:00Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-06/xlab/market.db"
+note = "Sweeps 09:09:45 → 09:12:00: minutes 09:10, 09:11."
+
+[[data_impact]]
+stream = "sampler l2book.jsonl"
+from = "2026-10-03T09:10:19Z"
+to = "2026-10-03T09:10:20Z"
+after = "MISSING"
+note = "62 of 110 books of the 09:10:19Z sweep; no historical source for xyz books."
+
+[[data_impact]]
+stream = "hl_book/1 (desk recorder: AAPL, NVDA, TSLA)"
+from = "2026-10-03T09:11:02Z"
+to = "2026-10-03T09:13:14Z"
+after = "MISSING"
+note = "20 error rows 09:11:02–09:13:13; mkt_instrument/1 partial (129 rows) at 09:13:16."
+
+[[data_impact]]
+stream = "hl_sweep/1, hl_at_oi_cap/1 (weekend recorder)"
+from = "2026-10-03T09:11:04Z"
+to = "2026-10-03T09:13:17Z"
+after = "LIVE_RECORDED"
+note = "Rows recorded with status error: 09:11:04–09:11:43 (502) and 09:13:05–09:13:16 (timeout)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/tengu-logs/egress.jsonl"
+role = "502 and timeout lines"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "af5c810f9b2d0d454ac5c85ea27f7ba24cafe633bbb656a52d6ab8a13d1a5184"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/errors.log"
+role = "sampler: 62 jq parse errors of the 09:10:19Z sweep"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "8a2b704db7b79b9feeeb5c47af1448835c1c8c1ea2460c0bc5484b7303f3461e"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+role = "runner WARN lines"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "93bba3ff7bc62b42459aeb9e03da06aa6e4681dc2e9b0f173612d858c3454d1b"

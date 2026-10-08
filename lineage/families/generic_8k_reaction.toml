@@ -1,0 +1,15 @@
+id = "generic_8k_reaction"
+title = "Generic 8-K filing reaction on Hyperliquid"
+hypothesis = "Trading the HL xyz perp after a generic EDGAR 8-K / 6-K filing earns after costs."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go (feasibility 2026-09-30, confidence medium): +7 bps (CI −58 … +74); HL prices a filing within 1–2 h; ~7 filings / week."
+origin_at = "2026-09-29"
+origin = "repo:docs/xmarket-prd-2026-09-29.md"
+origin_by = "operator PRD (§ Information Latency)"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "Not itemised."

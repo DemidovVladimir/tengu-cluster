@@ -1,0 +1,166 @@
+id = "xlab.jev_gate.weekend_fade.2026-10-01"
+title = "Jev gate vs deterministic rule W on all 1,500 W candidates (offline replay, post-fix)"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.jev_gate"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01T17:05:37Z"
+ran_at = "2026-10-01T18:29:05Z"
+preregistered = false
+policies = ["DETERMINISTIC", "JEV_GATE"]
+cost_model = '''[backtest.costs."hyperliquid:xyz:"]: taker 0.9 bps + fixed half-spread 1.0 bps per side (3.8 bps round trip) + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["intel.jev_gate", "capital.strategy.weekend_window", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; jev − rules = paired bootstrap over the same decided candidates (29 periods)"
+split_by = "TIME"
+incidents = []
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["Holdout window contaminated (see windows).", "Jev's p(take) never passed 0.55 and the lowest bin wins most (Brier 0.349): calibration uninformative.", "Jev answers vary call to call; only the decision cache (typesafe/jev-1.13-20260917, 1,616 rows, all 2026-10-01) makes this replay identical.", "The decisions were made live by run 20261001T170537Z-weekend_fade on the pre-fix engine; the events (as-of features) did not change with the fixes (1,500 cache hits, 0 misses)."]
+notes = "Jev took 277 of 1,500 (18 %). Its trades split in-sample +14.8 bps (n 90) vs holdout +110.4 (n 187); the rules arm in-sample +57.7 vs holdout +45.4. Pre-fix top-4 gate: xlab.jev_gate.top4.prefix.2026-10-01."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T18:29:05Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T18:29:05Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CONTAMINATED"
+note = "The feasibility study (22 names) and its names holdout (53 names) had already read 2026-03 … 2026-09 for all 75 names before xlab existed. Jev's own training window is UNKNOWN (LLM lookahead, xlab § 11)."
+
+[[results]]
+label = "jev − rules, research (paired, same decided candidates)"
+class = "DEVELOPMENT"
+n = 1500
+mean_net_bps = 28.93016658921264
+ci95_bps = [-23.481945265541754, 81.63454182789674]
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "gate"
+note = "Whole window. Capped jev − rules: −25.390389999965763 bps (CI −113.5066521769609 … +63.835080098008035), 29 periods, 2000 resamples (report.json gate.diff_ci_capped)."
+
+[[results]]
+label = "rules arm (every candidate), whole window"
+arm = "rules"
+class = "DEVELOPMENT"
+n = 1500
+mean_net_bps = 50.44598450686777
+ci95_bps = [15.65747436993503, 81.51037160851962]
+net_usd = 756.6897676030144
+t_stat = 2.9305975348638484
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:rules"
+note = "Equal to the research arm."
+
+[[results]]
+label = "jev arm (Jev took 277), whole window"
+arm = "jev"
+class = "DEVELOPMENT"
+n = 277
+mean_net_bps = 79.3761510960804
+ci95_bps = [13.97482807650788, 139.03480415111758]
+net_usd = 219.87193853614278
+t_stat = 2.4737044850018735
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:jev"
+
+[[results]]
+label = "jev arm, in-sample (to 2026-07-01)"
+arm = "jev"
+class = "DEVELOPMENT"
+n = 90
+mean_net_bps = 14.815362282021216
+ci95_bps = [-63.44911638641786, 82.47393477823357]
+net_usd = 13.333826053819095
+t_stat = 0.4074606650289086
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:jev/in_sample"
+
+[[results]]
+label = "jev arm, holdout (from 2026-07-01)"
+arm = "jev"
+class = "HOLDOUT"
+n = 187
+mean_net_bps = 110.44818849322127
+ci95_bps = [28.80113082373204, 189.85517578592663]
+net_usd = 206.53811248232375
+t_stat = 2.5482953522777314
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:jev/holdout"
+
+[[results]]
+label = "rules arm, holdout (from 2026-07-01)"
+arm = "rules"
+class = "HOLDOUT"
+n = 886
+mean_net_bps = 45.4389444079402
+ci95_bps = [-7.256235405114595, 93.14753035161763]
+net_usd = 402.5890474543505
+t_stat = 1.6879713940105403
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:rules/holdout"
+
+[[results]]
+label = "rules arm capped ($100 book), whole window"
+arm = "rules_capped"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 147.57352423795666
+ci95_bps = [53.04371249854734, 247.59918690261395]
+net_usd = 42.79632202900741
+t_stat = 2.9564682629345804
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:rules_capped"
+
+[[results]]
+label = "jev arm capped ($100 book), whole window"
+arm = "jev_capped"
+class = "DEVELOPMENT"
+n = 96
+mean_net_bps = 122.1831342379909
+ci95_bps = [23.61672181462484, 220.59708544834936]
+net_usd = 29.323952217117807
+t_stat = 2.4179896792858573
+evidence = "run:xlab/20261001T182905Z-weekend_fade"
+extract = "arm:jev_capped"
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "jev − rules +28.9 bps (CI −23.5 … +81.6) research, −25.4 (CI −113.5 … +63.8) capped; Brier 0.349 — no evidence yet that Jev adds value over rule W: Jev UNPROVEN (xlab § 14; handoff § 16)."
+decided_at = "2026-10-01"
+decided_by = "xlab doc § 14 verdict (repo:docs/xlab-2026-10-01.md)"
+
+[[evidence]]
+ref = "run:xlab/20261001T182905Z-weekend_fade"
+role = "gate run report (offline replay)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "3461a687939f706bb355eb95e5832cbf3b48e98737e6dc4a593c932c2c67c5e0"
+
+[[evidence]]
+ref = "run:xlab/20261001T170537Z-weekend_fade"
+role = "live gate run that filled the decision cache (pre-fix engine, ≈ $0.05)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "6ed76ad2ab6b7a55b94372f8c440137567a0087cbb5f38306ed0186fba12f925"
+note = "jev − rules +32.79 bps (CI −19.83 … +85.99), capped −22.95, Brier 0.349 on the pre-fix engine."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xlab/backtests/decision-cache.db"
+sha256 = "45463ba52303ff870f4fbb183c94462b20a5a32e75a582e4605015e87176cdfb"
+role = "Jev decision cache (key = sha256 of model, canonical state, questions)"
+class = "DEVELOPMENT"
+provenance = "LIVE_RECORDED"
+note = "1,616 rows, model typesafe/jev-1.13-20260917, created 2026-10-01 16:52:40–17:07:19Z; sha256 45463ba52303ff870f4fbb183c94462b20a5a32e75a582e4605015e87176cdfb at the 2026-10-06 inventory (mutable store: not pinned here)."

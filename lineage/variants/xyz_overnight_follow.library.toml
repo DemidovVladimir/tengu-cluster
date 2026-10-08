@@ -1,0 +1,15 @@
+id = "xyz_overnight_follow.library"
+family = "xyz_overnight_follow"
+title = "xyz_overnight_follow (xlab library spec)"
+parent = "ROOT"
+reason = "Library strategy: rule E's mechanism without events."
+registered_at = "2026-10-01"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Runs: 20261001T161326Z, 171024Z (pre-fix), 182840Z."
+
+[spec]
+sandbox = "xlab"
+strategy = "xyz_overnight_follow"
+spec_sha256 = "051791688d07b49900bf10d8a43aad668f735a7bae1f266f155ae13dc9ec711b"

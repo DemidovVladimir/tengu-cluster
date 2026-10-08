@@ -6,6 +6,33 @@
 
 ---
 
+## Operator Review #1 = APPROVE (Thu 2026-10-08)
+
+| Item | Answer |
+|---|---|
+| Verdict | `APPROVE` — package accepted, § 16 Phase 6–10 as proposed (`docs/w1-review-2026-10-06.md` § Verdict) |
+| U8 | PRs #25 + #26 merged |
+| U9 | `sandboxes/xmarket` desk stays unbound |
+| U10 | forward run `VALID_WITH_LIMITATIONS` and Saturday prereg `UNRESOLVED` accepted |
+| Next | Phase 6 decision evaluation: first D1 (`data_asof` in reports), D2 (count CLI holdout reads), D3 (never prune a registered run), D11 (late funding from HL history) — `TENGU_ROADMAP.md` § Phase 6, gate G6 |
+
+## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
+
+Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568a7`). Review package: `docs/w1-review-2026-10-06.md`. **No Phase 6+ until the operator answers APPROVE / APPROVE_WITH_FIXES / REWORK / ABORT_DIRECTION.**
+
+| Phase | Landed | Doc |
+|---|---|---|
+| P0 | vault `~/.tengu/state/evidence/w1-2026-10-06/` (486 files, read-only, record `lineage/evidence/w1-2026-10-06.toml`); `tengu evidence snapshot / verify / coverage / grade / regrade`; forward run `VALID_WITH_LIMITATIONS` (capped +1.370036060021 USD, +141.82 bps, n 4; shadow +6.213796012 USD, +8.43 bps, n 74; all reconciliation checks PASS); Saturday prereg graded from the books (+54.66 bps as registered, INCONCLUSIVE, validity UNRESOLVED) | `docs/w1-p0-weekend-2026-10-06.md` |
+| P1 | inventory, gap analysis, 11 known defects; 1,514 unit tests + offline suites green; 8 of 10 recorded xlab runs + the Jev gate replay byte-identical; W1 manifest `lineage/generations/W1.toml` (37 pins) frozen in `lineage/locks.toml`; tags `w1-forward-2026-10-02` (`6fcb455bae5553e2d51390e4cedd334779ca0d9c`) + `w1-forward-config-2026-10-02` (local, not pushed) | `docs/w1-inventory-2026-10-06.md` |
+| P2–P4 | `lineage/` registry (14 families, 41 variants, 30 experiments, 3 episodes, 8 incidents) + `tengu lineage verify / show / trace / family / attempts / report / capabilities / generation / seal` | `docs/lineage-2026-10-06.md` |
+| P5 | 17 capabilities; `[generation] id = "W1"` in `sandboxes/xlab` + `xmarket-weekend` — refused at load: a non-W1 opt-in tool, an unlisted sandbox, a drifted pin; `backtest` refuses a kind outside the generation | same, § 4 |
+| Review fixes | branch `feature/w1-review-fixes`: the W1 lock now covers its capability records (row recomputed: `a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43`); `sandbox_unbound`; live `-wal` refused (readers + snapshot); forward seal = window start; `holdout_seen_before` / `window_unknown`; grade checks `funding_qty` / `funding_hours` (vault: 12 / 12 PASS both accounts); regrade look-ahead flag + `mkt_ctx/1` universe; Docker mounts `SANDBOX=<s>` at its own path; minors #11 #14 #16 #18 #19 #21–#23; #12 #13 #15 #17 #20 #24 = known limits | `docs/lineage-2026-10-06.md` § 6 |
+
+| Open | Note |
+|---|---|
+| PRs #25 / #26 | merged 2026-10-08 (`aa73e42e2628987f6fe6e5b5b7da3482fec37ab2`, `746efca44e115f8888862599b0d5c366ccea9df1`); branches kept — lineage records cite their commits (`e5daae83febea00e549ce9b8cac83bddce12a0a2` also tagged `w1-forward-config-2026-10-02`) |
+| Docker | a bound sandbox loads `lineage/` (`COPY lineage` added); `make up SANDBOX=<s>` mounts at `/opt/tengu/sandboxes/<s>/config.toml` (`TENGU_CONTAINER_CONFIG`) so `../../lineage` resolves |
+| Known defects D1–D11 | `docs/w1-inventory-2026-10-06.md` § 5 — proposed for P6 |
 ## Visual tutorial `docs/tutorial/` (2026-10-07, on `main` @ `9f0e98f`)
 
 | What | State |
@@ -13,7 +40,7 @@
 | Site | `docs/tutorial/index.html` + 25 feature pages, one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
 | Sync rule | every code change updates the pages whose `sources` cover it (`docs/tutorial/sources.toml`) — CLAUDE.md / AGENTS.md "REQUIRED updates"; `cargo test --test tutorial_map`; Claude Code `PostToolUse` hook in `.claude/settings.json` (`.gitignore` now `/.claude/*` + `!/.claude/settings.json`) |
 | Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` |
-| Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (uncommitted on `main`, each with a test; pages re-checked), 4 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) |
+| Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (PR #31, each with a test; pages re-checked), 4 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) |
 
 ## Local data to clean up later (operator, 2026-10-07)
 

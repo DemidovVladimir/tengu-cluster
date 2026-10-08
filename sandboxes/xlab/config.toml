@@ -38,6 +38,15 @@ https_only = true
 [memory]
 enabled = false
 
+# --- Generation: this sandbox is part of the frozen W1 (TENGU_ROADMAP P1 / P5) -----
+# Every load checks it against lineage/generations/W1.toml: the tools, feeds and
+# strategy kinds must be W1 capabilities and the pinned sections (strategies,
+# costs, risk, rule W, Jev, models) must equal their pins — a change is a new
+# generation (docs/lineage-2026-10-06.md § 4), never an edit of W1.
+[generation]
+id = "W1"
+registry = "../../lineage"
+
 # --- xmarket state dir + calendars --------------------------------------------
 [xmarket]
 state = "xlab"

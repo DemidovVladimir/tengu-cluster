@@ -1,0 +1,41 @@
+id = "ext.feasibility.hl_open_lead.2026-09-30"
+title = "Feasibility study: Hyperliquid's lead at the open"
+family = "hl_open_lead"
+variant = "hl_open_lead.feasibility"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "Not applicable (regression of the open on HL's closed-market move)"
+uncertainty = "As reported by the study (critic re-computed every load-bearing number); per-figure CIs where given"
+incidents = []
+limitations = ["Throwaway analysis scripts (session scratchpad): only the doc's numbers survive.", "Generation UNKNOWN: outside tengu, before any generation."]
+
+[[windows]]
+role = "DATA"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "22 HL xyz perps vs the stocks' opens (~92 ticker-opens / week)"
+integrity = "CLEAN"
+
+[[results]]
+label = "slope 1.03, R² 0.92 at 09:00 ET; R² 0.996 at 09:30 ET → edge ≈ 0"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; the number of opens used is not stated."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go (confidence high): the open already prices HL's closed-market move."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study (one collector, four analysts, a critic)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"

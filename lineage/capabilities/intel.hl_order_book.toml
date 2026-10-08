@@ -1,0 +1,15 @@
+id = "intel.hl_order_book"
+title = "Hyperliquid L2 order books"
+class = "INTELLIGENCE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "FORWARD_PAPER"
+contract = "tool_schema:hl_book"
+bindings = ["tool:hl_book"]
+notes = "Rows hl_book/1 (20 levels): the paper fill engine's book walk and the recorded books the Saturday variant is graded on."
+
+[[evidence]]
+ref = "record:experiment/fwd.rule_w.2026-10-02"
+role = "used in the forward paper test"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

@@ -36,8 +36,8 @@ use super::{defs, field, object_args, opt_str, opt_time, XlabShared};
 use crate::adapters::outbound::market_data::market_state_dir;
 use crate::adapters::outbound::tools::hyperliquid::store_live;
 use crate::application::backtest::{
-    evaluate, prepare, spec_of, write_run_dir, BacktestEnv, BacktestJob, BacktestRun, Prepared,
-    SpecSource,
+    capability_refusal, evaluate, prepare, spec_of, write_run_dir, BacktestEnv, BacktestJob,
+    BacktestRun, Prepared, SpecSource,
 };
 use crate::config::backtest::BacktestConfig;
 use crate::config::sections::SandboxSections;
@@ -291,7 +291,8 @@ fn parse_job(o: &serde_json::Map<String, Value>, bt: &BacktestConfig) -> Result<
 }
 
 /// Every problem of the job's spec before any read (module table):
-/// `spec_of`'s, then — for a spec that parses — its universe and calendar.
+/// `spec_of`'s, then — for a spec that parses — its kind against a bound
+/// `[generation]` (`capability_unavailable`), its universe and calendar.
 pub(crate) fn spec_problems(
     bt: &BacktestConfig,
     sections: &SandboxSections,
@@ -303,6 +304,8 @@ pub(crate) fn spec_problems(
     };
     let at = format!("strategy `{}`", spec.name);
     let mut out = Vec::new();
+    // `[generation]`: a kind outside the bound generation (`capability_unavailable`).
+    out.extend(capability_refusal(sections, &spec));
     if let Err(e) = bt.spec_instruments(&spec) {
         out.push(format!("{at}: universe: {e}"));
     }
@@ -905,6 +908,40 @@ mod tests {
             assert!(e.starts_with("backtest: "), "{e}");
             assert!(e.contains(needle), "{v}: {e}");
         }
+    }
+
+    /// `[generation]` on the tool surface: an inline spec of a kind the bound
+    /// generation lacks is refused before any read, `capability_unavailable`
+    /// among its problems.
+    #[test]
+    fn a_kind_outside_the_bound_generation_is_a_spec_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = crate::config::lineage::load_registry(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/lineage/registry"),
+        )
+        .unwrap();
+        let mut s = sections(dir.path());
+        s.generation = Some(Arc::new(
+            crate::domain::lineage::generation::GenerationScope::of(&reg, "W1").unwrap(),
+        ));
+        let spec = SpecSource::Json {
+            value: json!({"kind": "event_window", "interval": "1h", "direction": "follow",
+                "events": [{"instrument": "hyperliquid:xyz:AAA", "t": "2026-09-10T14:00:00Z"}],
+                "exit_after_mins": 120}),
+            fallback_name: Some(ARCHITECT_SPEC.into()),
+        };
+        let e = check_spec(&backtest_config(), &s, &spec)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains(
+                "\ncapability_unavailable: strategy `architect_spec`: strategy kind \
+                 `event_window` is bound by capability `cap.event_window`, which generation \
+                 `W1` does not include"
+            ),
+            "{e}"
+        );
     }
 
     /// A bad spec is refused before any read with every problem at once.

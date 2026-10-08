@@ -1,0 +1,25 @@
+id = "weekend_fade.crypto_residual_btc_hedged"
+family = "weekend_overshoot_fade"
+title = "BTC-residual fade on the 6 crypto-linked names, hedged with BTC (beta 1)"
+parent = "weekend_fade.crypto_residual"
+reason = "UNKNOWN (sibling cut in the same query: the residual fade with a BTC hedge leg)."
+registered_at = "2026-10-05"
+order = 24
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "cryptoadj.sql / cryptoadj3.sql. Result UNKNOWN: no stored output."
+
+[spec]
+described = "As weekend_fade.crypto_residual, plus an opposite hyperliquid:BTC leg (beta 1); costs 7.6 bps (two legs)."
+
+[[changed]]
+dim = "hedge"
+from = "none"
+to = "hyperliquid:BTC, beta 1"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/cryptoadj.sql"
+role = "analysis query (no stored output)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "81b74476fbec0a900d3291085531a73f4b7e626363f47c9eb4680e7c1beae7b7"

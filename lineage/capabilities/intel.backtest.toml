@@ -1,0 +1,15 @@
+id = "intel.backtest"
+title = "Deterministic backtest engine + run dirs + counted holdout reads"
+class = "INTELLIGENCE"
+version = 1
+permission = "RESEARCH"
+lifecycle = "HISTORICALLY_TESTED"
+contract = "tool_schema:backtest"
+bindings = ["tool:backtest"]
+notes = "Rules arms (research, [risk]-capped) on a named or inline spec; a split's holdout hidden until read with holdout: true (counted in holdout-reads.jsonl; CLI --split reads are not). Time integrity is a test (domain/backtest/checks.rs). The same engine serves tengu backtest (CLI)."
+
+[[evidence]]
+ref = "record:experiment/xlab.weekend_fade.2026-10-01"
+role = "library runs"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

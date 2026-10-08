@@ -8,7 +8,7 @@
 //! | Time integrity — arms | under every move, per arm: what became of each candidate decided at or before t (admitted — traded or held as `missing_exit` —, refused by rule, dropped at the decision) is unchanged, and so are the trades closed at or before t (the research arm under the cut: those whose exit plan ends inside the cut data — a later horizon is censored) |
 //! | As-of | `data_asof_ms ≤ decided_at_ms` for every candidate and trade, every world and kind, both arms; entries fill at the decision's close |
 //! | Splits | the split-adjusted series keeps no bar that opens before a split and closes after it; no candidate shows the split as a move |
-//! | Rule W golden | `weekend_window` on the 2026-09-26 golden candles (`weekend_fade::golden`, 5 m) with half the round-trip cost per side, no spread, slippage or funding = `weekend_fade::replay`: the same 74 names, prices, signals, sides and instants exactly; gross = side × (exit / entry − 1) exactly and = the replay's log gross through dir × (e^{dir × g / 10⁴} − 1) × 10⁴; net = gross − the round trip; the mean of the converted rows (+93.90 bps; the replay's log mean +95.46); the same 53 positive; `top_n` 4 / 50 bps = the replay's capped four |
+//! | Rule W golden (`assert_rule_w_golden`, also the W1 generation's replay check) | `weekend_window` on the 2026-09-26 golden candles (`weekend_fade::golden`, 5 m) with half the round-trip cost per side, no spread, slippage or funding = `weekend_fade::replay`: the same 74 names, prices, signals, sides and instants exactly; gross = side × (exit / entry − 1) exactly and = the replay's log gross through dir × (e^{dir × g / 10⁴} − 1) × 10⁴; net = gross − the round trip; the mean of the converted rows (+93.90 bps; the replay's log mean +95.46); the same 53 positive; `top_n` 4 / 50 bps = the replay's capped four |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +24,7 @@ use crate::domain::backtest::testkit::{
     aggregate, et, nyse, random_intraday, random_market, run_params, utc, H,
 };
 use crate::domain::marketdata::{fmt_time, Bar, BarSeries, Interval, StockSplit};
-use crate::domain::xm::weekend_fade::{fade_window, golden, replay, FadeRule};
+use crate::domain::xm::weekend_fade::{fade_window, golden, replay, FadeRule, Replay};
 
 const IDS: [&str; 3] = [
     "hyperliquid:xyz:AAA",
@@ -671,11 +671,9 @@ fn a_split_never_leaves_a_mixed_bar_or_a_fake_move() {
     }
 }
 
-/// Rule W, bit for bit where it can be (module table).
-#[test]
-fn golden_weekend_window_equals_the_rule_w_replay() {
-    let candles = golden::candles();
-    let bars: BTreeMap<String, BarSeries> = candles
+/// The golden weekend's candles as 5 m bars (every price the close).
+pub(crate) fn golden_market() -> MarketData {
+    let bars: BTreeMap<String, BarSeries> = golden::candles()
         .iter()
         .map(|(id, cs)| {
             let bars = cs
@@ -693,43 +691,42 @@ fn golden_weekend_window_equals_the_rule_w_replay() {
             (id.clone(), BarSeries::new(id.clone(), Interval::M5, bars))
         })
         .collect();
-    let md = MarketData {
+    MarketData {
         bars,
         ..Default::default()
-    };
-    // The window of the rule's golden test, from the same calendar row.
+    }
+}
+
+/// The rule's golden replay: its window (from the same calendar row) and the
+/// capped rule of its test.
+fn golden_replay() -> Replay {
     let w = fade_window(&nyse(), et("2026-09-25 12:00")).unwrap();
-    assert_eq!(
-        (w.anchor_ms, w.entry_ms, w.exit_ms),
-        (
-            utc("2026-09-26 00:00"),
-            utc("2026-09-27 22:00"),
-            utc("2026-09-28 13:00")
-        )
-    );
-    let excluded = golden::excluded();
-    let cost_rt = golden::cost_rt_bps();
-    let ids: Vec<&String> = candles.keys().collect();
-    let spec_with = |extra: Value| {
-        let mut v = json!({"kind": "weekend_window", "universe": ids, "interval": "5m",
-            "calendar": "us_equity", "direction": "fade", "min_abs_signal_bps": 0,
-            "exclude": excluded,
-            "costs": {"taker_fee_bps": cost_rt / 2.0, "half_spread": {"model": "fixed", "bps": 0},
-                      "slippage_bps": 0, "funding": false}});
-        for (k, x) in extra.as_object().unwrap() {
-            v[k] = x.clone();
-        }
-        StrategySpec::from_value("weekend_fade", &v).unwrap()
-    };
-    let p = run_params(utc("2026-09-25 00:00"), utc("2026-09-29 00:00"));
-    let s = spec_with(json!({}));
-    let set = candidates(&s, &md, &p).unwrap();
-    let r = simulate(&s, &md, &p, &set.candidates, Arm::Research);
     let rule = FadeRule {
         capped_top_n: 4,
         min_abs_signal_bps: 50.0,
     };
-    let want = replay(&candles, &w, &excluded, cost_rt, &rule);
+    replay(
+        &golden::candles(),
+        &w,
+        &golden::excluded(),
+        golden::cost_rt_bps(),
+        &rule,
+    )
+}
+
+/// Rule W through the engine on the golden weekend = the replay, bit for
+/// bit where it can be (module table: Rule W golden). `s` = a
+/// `weekend_window` fade over the golden universe, KIOXIA excluded, half the
+/// round trip a side, no spread / slippage / funding; `p` = its run params
+/// over 2026-09-25 → 09-29 with a `us_equity` calendar. Shared with the W1
+/// generation's replay check (`config/lineage_tests.rs`).
+pub(crate) fn assert_rule_w_golden(s: &StrategySpec, p: &RunParams) {
+    let md = golden_market();
+    let w = fade_window(&nyse(), et("2026-09-25 12:00")).unwrap();
+    let cost_rt = golden::cost_rt_bps();
+    let set = candidates(s, &md, p).unwrap();
+    let r = simulate(s, &md, p, &set.candidates, Arm::Research);
+    let want = golden_replay();
     golden::assert_replay(&want);
     assert_eq!(r.trades.len(), want.rows.len());
     assert_eq!(r.trades.len(), 74);
@@ -789,6 +786,40 @@ fn golden_weekend_window_equals_the_rule_w_replay() {
         BTreeMap::from([("excluded".to_string(), 1)]),
         "only the split-halted KIOXIA"
     );
+}
+
+/// Rule W, bit for bit where it can be (module table).
+#[test]
+fn golden_weekend_window_equals_the_rule_w_replay() {
+    let candles = golden::candles();
+    let md = golden_market();
+    // The window of the rule's golden test, from the same calendar row.
+    let w = fade_window(&nyse(), et("2026-09-25 12:00")).unwrap();
+    assert_eq!(
+        (w.anchor_ms, w.entry_ms, w.exit_ms),
+        (
+            utc("2026-09-26 00:00"),
+            utc("2026-09-27 22:00"),
+            utc("2026-09-28 13:00")
+        )
+    );
+    let excluded = golden::excluded();
+    let cost_rt = golden::cost_rt_bps();
+    let ids: Vec<&String> = candles.keys().collect();
+    let spec_with = |extra: Value| {
+        let mut v = json!({"kind": "weekend_window", "universe": ids, "interval": "5m",
+            "calendar": "us_equity", "direction": "fade", "min_abs_signal_bps": 0,
+            "exclude": excluded,
+            "costs": {"taker_fee_bps": cost_rt / 2.0, "half_spread": {"model": "fixed", "bps": 0},
+                      "slippage_bps": 0, "funding": false}});
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        StrategySpec::from_value("weekend_fade", &v).unwrap()
+    };
+    let p = run_params(utc("2026-09-25 00:00"), utc("2026-09-29 00:00"));
+    assert_rule_w_golden(&spec_with(json!({})), &p);
+    let want = golden_replay();
     // The capped selection: the four largest |s| ≥ 50 bps.
     let capped = spec_with(json!({"top_n": 4, "min_abs_signal_bps": 50}));
     let set4 = candidates(&capped, &md, &p).unwrap();

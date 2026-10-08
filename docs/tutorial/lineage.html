@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lineage and generations · Tengu</title>
+<meta name="description" content="The lineage registry: families, variants, experiments, Experience episodes, incidents, capabilities and generations as TOML records; tengu lineage verify, trace and seal; a frozen generation that a bound sandbox cannot drift from.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: kind cards, quadrant, time check, binding check, code filter */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: end; }
+  .widget select { font: inherit; font-size: .85rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
+  .kind .n { font-family: var(--font-mono); font-size: .78rem; color: var(--faint); }
+  .kind h3 code { font-size: .9rem; }
+  .kind p code { font-size: .78rem; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button { font: inherit; font-size: .78rem; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 3px 12px; cursor: pointer; font-family: var(--font-mono); overflow-wrap: anywhere; text-align: left; }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 500; }
+  .quad { display: grid; grid-template-columns: minmax(0, 92px) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+  .quad .qh, .quad .qv { font-family: var(--font-mono); font-size: .7rem; color: var(--faint); letter-spacing: .04em; align-self: end; overflow-wrap: anywhere; }
+  .quad .qv { align-self: center; }
+  .quad .qc, .quad .qu { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--panel); display: grid; gap: 3px; min-width: 0; transition: border-color .3s, background .3s, opacity .3s; opacity: .55; }
+  .quad .qu { grid-column: 2 / 4; }
+  .quad b { font-family: var(--font-mono); font-size: .7rem; color: var(--ink); font-weight: 500; }
+  .quad small { color: var(--muted); font-size: .76rem; }
+  .quad .on { opacity: 1; border-color: var(--accent); background: var(--accent-soft); }
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; font-size: .88rem; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--font-mono); font-size: .8rem; color: var(--ink); overflow-wrap: anywhere; }
+  .msg { font-size: .76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .edits { border: 0; margin: 0; padding: 0; display: grid; gap: 6px; min-width: 0; }
+  .edits legend { font-size: .85rem; color: var(--muted); margin-bottom: 4px; }
+  .edits label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; font-size: .86rem; color: var(--ink); }
+  .edits label code { font-size: .78rem; }
+  .edits input { margin-top: 4px; accent-color: var(--accent); }
+  .states li[hidden] { display: none; }
+  #codes b { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Lineage</div>
+  <h1>Lineage and generations</h1>
+  <p class="lede">Every idea, variant, run, verdict, decision and incident is one TOML record under <code>lineage/</code>. <code>tengu lineage</code> checks how they link and what was known when. A frozen generation pins its parts; a bound sandbox refuses to load if one drifts.</p>
+  <ul class="facts">
+    <li><b>8</b> record kinds, one file each</li>
+    <li>W1: <b>17</b> capabilities · <b>37</b> pins</li>
+    <li><b>21</b> Rule-W acceptance answers</li>
+    <li>verify exits <b>1</b> on any Error</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip data">data</span> records and files</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks, locks</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> capabilities, tools</li>
+    <li><span class="chip bad">refused</span> load error</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Records, then a freeze</span>
+    <h2 id="s-flow">From an idea to a frozen generation</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3800">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 880 512" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Records link family, variant, experiment, results, verdict, episode and incident, which tengu lineage trace walks from any id. A generation lists capabilities and pins; its frozen digest is kept in locks.toml. A sandbox bound to the generation is checked on every Config::load: inside the generation it runs, a drifted pin refuses the load.</title>
+        <rect class="zone" x="14" y="12" width="332" height="462" rx="12"/>
+        <text x="30" y="30" class="zone-label">lineage/ · one file per record</text>
+        <rect class="zone" x="360" y="12" width="506" height="226" rx="12"/>
+        <text x="376" y="30" class="zone-label">Freeze · generation W1</text>
+        <rect class="zone" x="360" y="250" width="506" height="224" rx="12"/>
+        <text x="376" y="270" class="zone-label">Every Config::load</text>
+
+        <path class="e dash flow" id="p-trace" d="M32 48 L32 412" data-at="5"/>
+        <path class="e" id="p-fam-var" d="M190 80 L190 96" data-at="2"/>
+        <path class="e" id="p-var-exp" d="M190 136 L190 152" data-at="3"/>
+        <path class="e" id="p-exp-res" d="M190 192 L190 208" data-at="3"/>
+        <path class="e" id="p-res-ver" d="M190 248 L190 264" data-at="3"/>
+        <path class="e" id="p-ver-ep" d="M190 304 L190 320" data-at="4"/>
+        <path class="e" id="p-ep-inc" d="M190 360 L190 376" data-at="4"/>
+        <path class="e dash" id="p-exp-gen" d="M328 172 C352 172 356 176 378 176" data-at="6"/>
+        <path class="e" id="p-cap-gen" d="M485 92 L485 148" data-at="6"/>
+        <path class="e" id="p-cap-dig" d="M590 66 L634 66" data-at="7"/>
+        <path class="e" id="p-gen-dig" d="M590 166 C616 166 612 84 634 84" data-at="7"/>
+        <path class="e" id="p-dig-lock" d="M741 92 L741 148" data-at="7"/>
+        <path class="e" id="p-sbx-load" d="M590 316 L634 316" data-at="8"/>
+        <path class="e" id="p-gen-load" d="M590 192 C630 192 690 240 690 288" data-at="8"/>
+        <path class="e" id="p-lock-load" d="M800 202 L800 288" data-at="8"/>
+        <path class="e" id="p-load-ok" d="M660 342 C660 384 620 426 592 426" data-at="9"/>
+        <path class="e bad" id="p-load-bad" d="M760 342 L760 398" data-at="10"/>
+
+        <g class="n data" data-at="1,5">
+          <rect x="52" y="40" width="276" height="40" rx="8"/>
+          <text x="190" y="57" text-anchor="middle" class="t-title">Family</text>
+          <text x="190" y="72" text-anchor="middle" class="t-small t-mono">weekend_overshoot_fade</text>
+        </g>
+        <g class="n data" data-at="2,5">
+          <rect x="52" y="96" width="276" height="40" rx="8"/>
+          <text x="190" y="113" text-anchor="middle" class="t-title">Variant</text>
+          <text x="190" y="128" text-anchor="middle" class="t-small t-mono">weekend_fade.top4</text>
+        </g>
+        <g class="n data" data-at="3,5-6">
+          <rect x="52" y="152" width="276" height="40" rx="8"/>
+          <text x="190" y="169" text-anchor="middle" class="t-title">Experiment</text>
+          <text x="190" y="184" text-anchor="middle" class="t-small t-mono">fwd.rule_w.2026-10-02</text>
+        </g>
+        <g class="n data" data-at="3,5">
+          <rect x="52" y="208" width="276" height="40" rx="8"/>
+          <text x="190" y="225" text-anchor="middle" class="t-title">Windows · results</text>
+          <text x="190" y="240" text-anchor="middle" class="t-small">each names its evidence</text>
+        </g>
+        <g class="n guard" data-at="3,5">
+          <rect x="52" y="264" width="276" height="40" rx="8"/>
+          <text x="190" y="281" text-anchor="middle" class="t-title">Verdict</text>
+          <text x="190" y="296" text-anchor="middle" class="t-small">value · reason · who</text>
+        </g>
+        <g class="n data" data-at="4-5">
+          <rect x="52" y="320" width="276" height="40" rx="8"/>
+          <text x="190" y="337" text-anchor="middle" class="t-title">Episode</text>
+          <text x="190" y="352" text-anchor="middle" class="t-small">decision ≠ outcome</text>
+        </g>
+        <g class="n data" data-at="4-5">
+          <rect x="52" y="376" width="276" height="40" rx="8"/>
+          <text x="190" y="393" text-anchor="middle" class="t-title">Incident</text>
+          <text x="190" y="408" text-anchor="middle" class="t-small t-mono">inc.2026-10-03.hl-502</text>
+        </g>
+        <g class="n" data-at="5">
+          <rect x="52" y="428" width="276" height="34" rx="8"/>
+          <text x="190" y="449" text-anchor="middle" class="t-mono">tengu lineage trace &lt;id&gt;</text>
+        </g>
+
+        <g class="n hands" data-at="6-7">
+          <rect x="380" y="40" width="210" height="52" rx="8"/>
+          <text x="485" y="62" text-anchor="middle" class="t-title">Capabilities</text>
+          <text x="485" y="80" text-anchor="middle" class="t-small t-mono">tool: · strategy_kind:</text>
+        </g>
+        <g class="n data" data-at="6-8">
+          <rect x="380" y="150" width="210" height="52" rx="8"/>
+          <text x="485" y="172" text-anchor="middle" class="t-title t-mono">W1.toml</text>
+          <text x="485" y="190" text-anchor="middle" class="t-small">FROZEN · 37 pins</text>
+        </g>
+        <g class="n guard" data-at="7">
+          <rect x="636" y="40" width="210" height="52" rx="8"/>
+          <text x="741" y="62" text-anchor="middle" class="t-title">Frozen digest</text>
+          <text x="741" y="80" text-anchor="middle" class="t-small">manifest + capabilities</text>
+        </g>
+        <g class="n data" data-at="7-8">
+          <rect x="636" y="150" width="210" height="52" rx="8"/>
+          <text x="741" y="172" text-anchor="middle" class="t-title t-mono">locks.toml</text>
+          <text x="741" y="190" text-anchor="middle" class="t-small t-mono">[[frozen]] W1 row</text>
+        </g>
+        <g class="n data" data-at="8-10">
+          <rect x="380" y="290" width="210" height="52" rx="8"/>
+          <text x="485" y="312" text-anchor="middle" class="t-title t-mono">xlab/config.toml</text>
+          <text x="485" y="330" text-anchor="middle" class="t-small t-mono">[generation] id = "W1"</text>
+        </g>
+        <g class="n guard" data-at="8-10">
+          <rect x="636" y="290" width="210" height="52" rx="8"/>
+          <text x="741" y="312" text-anchor="middle" class="t-title t-mono">Config::load</text>
+          <text x="741" y="330" text-anchor="middle" class="t-small">every surface</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="380" y="400" width="210" height="52" rx="8"/>
+          <text x="485" y="422" text-anchor="middle" class="t-title">Runs inside W1</text>
+          <text x="485" y="440" text-anchor="middle" class="t-small">tools · kinds of W1</text>
+        </g>
+        <g class="n bad" data-at="10">
+          <rect x="636" y="400" width="210" height="52" rx="8"/>
+          <text x="741" y="422" text-anchor="middle" class="t-title">Load refused</text>
+          <text x="741" y="440" text-anchor="middle" class="t-small">nothing starts</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">SURVIVING · prior search 27 (APPROX)</text></g>
+        <g class="pop badge" data-at="2"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">parent weekend_fade · top_n none → 4</text></g>
+        <g class="pop badge" data-at="3"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">capped n 4 · +141.8 bps a trade · PENDING</text></g>
+        <g class="pop badge" data-at="4"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">SUPPORTED × FAVORABLE · execution CLEAN</text></g>
+        <g class="pop badge" data-at="5"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">▶ marks the record you started from</text></g>
+        <g class="pop badge" data-at="6"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">17 capabilities · 2 sandboxes · 37 pins</text></g>
+        <g class="pop badge" data-at="7"><rect x="224" y="482" width="432" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43</text></g>
+        <g class="pop badge" data-at="8"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">checked in Config::load, on every surface</text></g>
+        <g class="pop badge" data-at="9"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">outside W1: not listed, not registered</text></g>
+        <g class="pop badge" data-at="10"><rect x="290" y="482" width="300" height="22" rx="11"/><text x="440" y="497" text-anchor="middle">pin config:xlab/risk drifted → load fails</text></g>
+
+        <circle class="tok" r="5" data-path="p-fam-var" data-at="2" data-dur="600"/>
+        <circle class="tok" r="5" data-path="p-var-exp" data-at="3" data-dur="500"/>
+        <circle class="tok" r="5" data-path="p-exp-res" data-at="3" data-dur="500" data-delay="500"/>
+        <circle class="tok guard" r="5" data-path="p-res-ver" data-at="3" data-dur="500" data-delay="1000"/>
+        <circle class="tok" r="5" data-path="p-ver-ep" data-at="4" data-dur="500"/>
+        <circle class="tok" r="5" data-path="p-ep-inc" data-at="4" data-dur="500" data-delay="500"/>
+        <circle class="tok" r="6" data-path="p-trace" data-at="5" data-dur="2600"/>
+        <circle class="tok hands" r="6" data-path="p-cap-gen" data-at="6" data-dur="900"/>
+        <circle class="tok" r="5" data-path="p-exp-gen" data-at="6" data-dur="900" data-delay="400"/>
+        <circle class="tok hands" r="6" data-path="p-cap-dig" data-at="7" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-gen-dig" data-at="7" data-dur="900" data-delay="300"/>
+        <circle class="tok guard" r="6" data-path="p-dig-lock" data-at="7" data-dur="700" data-delay="1200"/>
+        <circle class="tok" r="6" data-path="p-sbx-load" data-at="8" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-gen-load" data-at="8" data-dur="1100" data-delay="300"/>
+        <circle class="tok guard" r="6" data-path="p-lock-load" data-at="8" data-dur="900" data-delay="300"/>
+        <circle class="tok hands" r="6" data-path="p-load-ok" data-at="9" data-dur="1000"/>
+        <circle class="tok bad" r="6" data-path="p-load-bad" data-at="10" data-dur="800"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A <b>family</b> is one idea: hypothesis, role, status, and how much searching happened before the registry. Rule W (<code>weekend_overshoot_fade</code>) records about 27 variants.</li>
+        <li>A <b>variant</b> is what was searched: its parent, the dimensions it changed, and one spec: a library spec with its <code>spec_sha256</code>, a hash seen in a run, or a description.</li>
+        <li>An <b>experiment</b> runs a variant: windows (development, holdout, forward), results that name their evidence, then a verdict. <code>fwd.rule_w.2026-10-02</code> is <code>PENDING</code>: one window cannot validate rule W.</li>
+        <li>An <b>episode</b> stores decision quality, execution and outcome apart; Rule W's forward one is SUPPORTED, CLEAN, FAVORABLE. An <b>incident</b> keeps an ops or data problem apart from strategy failure.</li>
+        <li><code>tengu lineage trace &lt;id&gt;</code> starts from any record and prints family → variants → experiments → windows, results, evidence → verdict → episodes → incidents. <code>▶</code> marks the start.</li>
+        <li>A <b>generation</b> lists capabilities at exact versions, its sandboxes, and pins. W1: 17 capabilities, 2 sandboxes, 37 pins of config values, specs, tool schemas and one skill.</li>
+        <li><b>Freeze.</b> The frozen digest hashes the generation file's digest with each listed capability file's. <code>locks.toml</code> keeps it; any change is <code>frozen_manifest_changed</code>.</li>
+        <li>A sandbox with <code>[generation] id = "W1"</code> is checked inside <code>Config::load</code>: listed by W1, every tool and strategy kind inside its capabilities, every <code>config:</code> and <code>spec:</code> pin equal.</li>
+        <li>It loads. Executors and <code>tengu mcp-bridge</code> still drop any tool outside W1, and a backtest of a kind outside it is refused: <code>capability_unavailable</code>.</li>
+        <li>Edit <code>[risk]</code> in <code>sandboxes/xlab/config.toml</code>: pin <code>config:xlab/risk</code> no longer matches and the load fails. Changing W1 means a new generation, never an edit.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-kinds">
+  <div class="sec-head">
+    <span class="kicker">Eight kinds, one TOML file each</span>
+    <h2 id="s-kinds">What the registry holds</h2>
+    <p>Counts are the repo's <code>lineage/</code> today. The file stem is the id; ids are unique across all kinds, so <code>show</code> and <code>trace</code> take a bare id.</p>
+  </div>
+  <div class="grid">
+    <div class="card data kind"><span class="n">families/ · 14</span><h3>Family</h3><p>One idea: <code>hypothesis</code>, <code>role</code> (primary, negative control, placebo), <code>status</code>, <code>[prior_search]</code>. Links <code>preceded_by</code> and <code>controls</code>.</p></div>
+    <div class="card data kind"><span class="n">variants/ · 41</span><h3>Variant</h3><p><code>family</code>, <code>parent</code> (or <code>ROOT</code>), <code>[[changed]]</code> dims, <code>preregistered</code>, exactly one <code>[spec]</code> shape.</p></div>
+    <div class="card data kind"><span class="n">experiments/ · 30</span><h3>Experiment</h3><p><code>kind</code>, <code>[[windows]]</code>, <code>[[results]]</code> with <code>evidence</code> and <code>extract</code>, <code>[verdict]</code>, <code>validity</code>. Links family, variant, generation, capabilities, incidents.</p></div>
+    <div class="card data kind"><span class="n">episodes/ · 3</span><h3>Episode</h3><p>Context, information with <code>available_at</code>, alternatives (one chosen), decision, action, outcome, <code>[quality]</code>, a lesson.</p></div>
+    <div class="card data kind"><span class="n">incidents/ · 8</span><h3>Incident</h3><p><code>class</code>, start and end, <code>strategy_impact</code>, <code>[[data_impact]]</code>: each gap <code>MISSING</code>, <code>BACKFILLED</code> or <code>LIVE_RECORDED</code>.</p></div>
+    <div class="card hands kind"><span class="n">capabilities/ · 17</span><h3>Capability</h3><p>Class, <code>version</code>, permission, lifecycle, a <code>contract</code> pin target, <code>bindings</code>: <code>tool:&lt;name&gt;</code> or <code>strategy_kind:&lt;kind&gt;</code>.</p></div>
+    <div class="card guard kind"><span class="n">generations/ · 1</span><h3>Generation</h3><p>W1: <code>status</code>, <code>sandboxes</code>, <code>[[capabilities]] id, version</code>, decision and research policy, models, <code>[[pins]]</code>.</p></div>
+    <div class="card data kind"><span class="n">evidence/ · 1</span><h3>Evidence</h3><p>A read-only vault snapshot: items with sha256. See <a href="evidence.html">Forward evidence</a>.</p></div>
+  </div>
+  <p class="note"><b>Values.</b> A missing fact is the string <code>"UNKNOWN"</code>, never a guess. Times are quoted UTC: an instant <code>"2026-10-04T22:00:00Z"</code> or a day <code>"2026-09-30"</code>. Evidence is a locator: <code>repo:</code>, <code>run:</code>, <code>vault:</code>, <code>state:</code>, <code>git:</code> (40 hex), <code>record:&lt;kind&gt;/&lt;id&gt;</code> or <code>url:</code>. <code>locks.toml</code> holds one <code>[[frozen]]</code> row (W1) and no <code>[[sealed]]</code> row yet.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-exp">
+  <div class="sec-head">
+    <span class="kicker">Try it: Experience episodes</span>
+    <h2 id="s-exp">A good decision can lose; a bad one can win</h2>
+    <p>Decision quality and outcome are separate fields. The quadrant is derived, never stored. Execution is graded apart and never moves the quadrant. Pick a real episode or set the fields.</p>
+  </div>
+  <div class="widget">
+    <div class="seg" role="group" aria-label="Episodes" id="q-eps"></div>
+    <div class="ctrls">
+      <label for="q-dec"><span>decision</span>
+        <select id="q-dec"><option>SUPPORTED</option><option>UNSUPPORTED</option><option>UNKNOWN</option></select>
+      </label>
+      <label for="q-exe"><span>execution</span>
+        <select id="q-exe"><option>CLEAN</option><option>DEGRADED</option><option>FAILED</option><option>NOT_APPLICABLE</option></select>
+      </label>
+      <label for="q-out"><span>outcome</span>
+        <select id="q-out"><option>FAVORABLE</option><option>UNFAVORABLE</option><option>NEUTRAL</option><option>UNKNOWN</option></select>
+      </label>
+    </div>
+    <div class="quad" id="quad" aria-live="polite">
+      <span class="qh">↓ outcome</span><span class="qh">decision SUPPORTED</span><span class="qh">decision UNSUPPORTED</span>
+      <span class="qv">FAVORABLE</span>
+      <div class="qc" data-q="GOOD_DECISION_GOOD_OUTCOME"><b>GOOD_<wbr>DECISION_<wbr>GOOD_<wbr>OUTCOME</b></div>
+      <div class="qc" data-q="BAD_DECISION_GOOD_OUTCOME"><b>BAD_<wbr>DECISION_<wbr>GOOD_<wbr>OUTCOME</b><small>lucky bad</small></div>
+      <span class="qv">UNFAVORABLE</span>
+      <div class="qc" data-q="GOOD_DECISION_BAD_OUTCOME"><b>GOOD_<wbr>DECISION_<wbr>BAD_<wbr>OUTCOME</b><small>good unlucky</small></div>
+      <div class="qc" data-q="BAD_DECISION_BAD_OUTCOME"><b>BAD_<wbr>DECISION_<wbr>BAD_<wbr>OUTCOME</b></div>
+      <span class="qv">else</span>
+      <div class="qu" data-q="UNKNOWN"><b>UNKNOWN</b><small>any UNKNOWN, or a NEUTRAL outcome</small></div>
+    </div>
+    <dl class="kv" id="q-kv"></dl>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-time">
+  <div class="sec-head">
+    <span class="kicker">Try it: was it known in time?</span>
+    <h2 id="s-time">future_leakage: information before the decision</h2>
+    <p>Each <code>[[information]]</code> item must be provably available at or before <code>decided_at</code>. A day covers [00:00, 24:00) UTC, so it is before an instant only if it ends first. Real values are from <code>ep.rule_w.forward.2026-10-02</code>.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="t-av"><span>information <code>available_at</code></span>
+        <select id="t-av">
+          <option value="2026-10-03T00:00:00Z">2026-10-03T00:00:00Z (anchor prices)</option>
+          <option value="2026-10-04T21:59:59Z">2026-10-04T21:59:59Z (example)</option>
+          <option value="2026-10-04T22:00:00Z" selected>2026-10-04T22:00:00Z (entry prices)</option>
+          <option value="2026-10-04T22:00:01Z">2026-10-04T22:00:01Z (example)</option>
+          <option value="2026-10-04">2026-10-04, a day (example)</option>
+          <option value="UNKNOWN">UNKNOWN</option>
+        </select>
+      </label>
+      <label for="t-dec"><span>decision <code>decided_at</code></span>
+        <select id="t-dec">
+          <option value="2026-10-04T22:00:00Z" selected>2026-10-04T22:00:00Z (the episode's)</option>
+          <option value="2026-10-04">2026-10-04, a day (example)</option>
+          <option value="UNKNOWN">UNKNOWN</option>
+        </select>
+      </label>
+    </div>
+    <dl class="kv" id="t-kv"></dl>
+    <div class="widget-row"><span class="verdict ok" id="t-v" aria-live="polite">ok</span></div>
+    <pre class="msg" id="t-msg"></pre>
+    <p class="note">The same order rule checks <code>context.as_of</code> (not after the decision), <code>action.executed_at</code> (not before it) and seals (before the first outcome). An undecidable same-day order is a Warn. Rule E's four information items and its decision are all <code>2026-09-30</code>: four Warns.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-seal">
+  <div class="sec-head">
+    <span class="kicker">Preregistration</span>
+    <h2 id="s-seal">Seal it before the outcome</h2>
+    <p>A record with <code>preregistered = true</code> is sealed: <code>tengu lineage seal</code> appends its file digest and the time to <code>locks.toml</code>. The digest hashes the values (TOML → canonical JSON), so comments and layout do not count.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-seal" aria-selected="true">Seal</button>
+      <button type="button" aria-controls="tab-edit">Edited later</button>
+      <button type="button" aria-controls="tab-late">Sealed too late</button>
+      <button type="button" aria-controls="tab-old">Before the registry</button>
+    </div>
+    <div class="tabpanel" id="tab-seal"><pre><span class="c"># lineage/variants/&lt;id&gt;.toml has preregistered = true; &lt;id&gt; is a placeholder</span>
+$ tengu lineage seal variant:&lt;id&gt;
+
+<span class="k">[[sealed]]</span>
+record = <span class="s">"variant:&lt;id&gt;"</span>
+sha256 = <span class="s">"&lt;64 hex: the file's digest&gt;"</span>
+sealed_at = <span class="s">"&lt;now, UTC, whole seconds&gt;"</span>
+<span class="c"># stderr: sealed variant:&lt;id&gt; into lineage/locks.toml</span>
+
+<span class="c"># refused, nothing written:</span>
+<span class="h">variant:&lt;id&gt; is already sealed in lineage/locks.toml — a seal is never redone</span>
+<span class="h">variant `&lt;id&gt;` is not preregistered = true — set it before sealing</span>
+<span class="h">variant/&lt;id&gt; has errors — fix them before sealing:</span>
+<span class="h">variant/&lt;id&gt;: its first outcome (&lt;t&gt;) is already past — a seal now is not a preregistration</span>
+<span class="h">variant/&lt;id&gt;: its first outcome is UNKNOWN (a FORWARD window start or a ran_at not given) — a seal cannot be shown to precede it; record the start first</span>
+<span class="c"># a variant with no experiment yet has no outcome: it seals</span></pre></div>
+    <div class="tabpanel" id="tab-edit" hidden><pre><span class="c"># a value of the sealed file changed afterwards: verify row (severity, code, record, message)</span>
+ERROR  seal_mismatch  variant/&lt;id&gt;  <span class="h">sealed &lt;sha256 in the row&gt; at &lt;sealed_at&gt;; the file now hashes &lt;sha256 now&gt;</span>
+<span class="c"># a new comment or a re-ordered table: same digest, no finding</span></pre></div>
+    <div class="tabpanel" id="tab-late" hidden><pre><span class="c"># first outcome: an experiment's ran_at; a FORWARD_PAPER one's FORWARD window start;</span>
+<span class="c"># a variant's: the earliest of its experiments'</span>
+ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">sealed at &lt;t&gt;, after its first outcome &lt;outcome&gt;: not a preregistration</span>
+WARN   seal_mismatch  experiment/&lt;id&gt;  <span class="h">sealed &lt;day&gt; vs first outcome &lt;day&gt;: not provably before — give instants</span></pre></div>
+    <div class="tabpanel" id="tab-old" hidden><pre><span class="c"># preregistered before the registry existed: an [[evidence]] with role = "prereg" instead</span>
+<span class="c"># lineage/experiments/fwd.rule_w.2026-10-02.toml (class, provenance, note left out)</span>
+<span class="k">[[evidence]]</span>
+ref = <span class="s">"vault:w1-2026-10-06/ext/binaries/tengu-6fcb455"</span>
+role = <span class="s">"prereg"</span>
+sha256 = <span class="s">"e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72"</span>
+<span class="c"># neither a seal nor such a ref: Error</span>
+ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but neither sealed (`tengu lineage seal experiment:&lt;id&gt;`) nor carrying an [[evidence]] with role = "prereg"</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-bind">
+  <div class="sec-head">
+    <span class="kicker">Try it: edit a W1 sandbox</span>
+    <h2 id="s-bind">A bound sandbox cannot drift</h2>
+    <p><code>sandboxes/xlab</code> and <code>sandboxes/xmarket-weekend</code> bind W1 (<code>registry = "../../lineage"</code>). Pick one example edit; the output is the load error the code writes for it. See <a href="sandboxes.html">Sandbox config</a> for the rest of the load.</p>
+  </div>
+  <div class="widget">
+    <fieldset class="edits" id="b-edits">
+      <legend>One edit, then <code>tengu doctor --sandbox xlab</code></legend>
+      <label><input type="radio" name="b" value="none" checked> <span>No edit: the committed files</span></label>
+      <label><input type="radio" name="b" value="comment"> <span>A comment above <code>[risk]</code> in <code>sandboxes/xlab/config.toml</code></span></label>
+      <label><input type="radio" name="b" value="tool"> <span><code>xl_architect</code>: add <code>sol_price</code> to <code>tools</code></span></label>
+      <label><input type="radio" name="b" value="risk"> <span><code>[risk] max_order_notional_usd</code> 25 → 30</span></label>
+      <label><input type="radio" name="b" value="spec"> <span><code>[backtest.strategies.weekend_fade_top4] top_n</code> 4 → 5</span></label>
+      <label><input type="radio" name="b" value="cap"> <span><code>lineage/capabilities/intel.backtest.toml</code>: add a binding, keep <code>version = 1</code></span></label>
+      <label><input type="radio" name="b" value="list"> <span><code>lineage/generations/W1.toml</code>: drop <code>"xlab"</code> from <code>sandboxes</code></span></label>
+      <label><input type="radio" name="b" value="id"> <span><code>[generation] id = "W2"</code></span></label>
+    </fieldset>
+    <div class="widget-row"><span class="verdict ok" id="b-v" aria-live="polite">loads</span></div>
+    <pre class="msg" id="b-out"></pre>
+    <p class="note">W1 binds all six strategy kinds, so <code>capability_unavailable</code> cannot fire in the repo today; the tests prove it with a fixture generation that lacks <code>event_window</code>. <code>tool_schema:</code> and <code>skill:</code> pins are checked by <code>tengu lineage verify --pins</code>, not at load.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-codes">
+  <div class="sec-head">
+    <span class="kicker">What verify can say</span>
+    <h2 id="s-codes">The codes verify can return</h2>
+    <p>Each finding is one row: severity, code, record, message. Any Error exits 1. Filter by the pass that runs it.</p>
+  </div>
+  <div class="seg" role="group" aria-label="Filter codes" id="c-filter">
+    <button type="button" data-f="all" aria-pressed="true">all</button>
+    <button type="button" data-f="always" aria-pressed="false">always</button>
+    <button type="button" data-f="pins" aria-pressed="false">--pins</button>
+    <button type="button" data-f="evidence" aria-pressed="false">--evidence</button>
+  </div>
+  <ul class="states" id="codes">
+    <li data-p="always"><span class="chip bad">error</span><span><b>duplicate_id</b>One id used by two records, of any kinds. <code>invalid_id</code>: an id outside <code>^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$</code>.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>invalid_field</b>A shape rule: empty or over-160-char title, a hash not 64 hex, a <code>[spec]</code> not one shape, a window ending before it starts.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>dangling_ref</b>A family, variant, generation, incident, capability, <code>record:</code> or lock row naming no record. <code>UNKNOWN</code> / <code>NONE</code> exempt.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>inconsistent_ref</b>A variant of another family than the record naming both.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>future_leakage</b>Information unknown-timed or after the decision; <code>decided_at</code> UNKNOWN; <code>as_of</code> after it; <code>executed_at</code> before it. Same day: Warn.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>holdout_missing</b>A HOLDOUT result, or a HOLDOUT_TEST, without a HOLDOUT window.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>holdout_overlaps_development</b>Development and holdout overlap in time without <code>split_by = "INSTRUMENTS"</code>.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>holdout_seen_before</b>A CLEAN holdout another experiment of the family developed on, and that one ran not after it. Instruments split or same day: Warn.</span></li>
+    <li data-p="always"><span class="chip warn">warn</span><span><b>window_unknown</b>A CLEAN holdout or development window with an UNKNOWN bound: its overlap cannot be checked.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>forward_incomplete</b>A FORWARD_PAPER experiment without a known FORWARD window, a <code>validity</code> or FORWARD_PAPER evidence.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>binding_conflict</b>One <code>tool:</code> or <code>strategy_kind:</code> binding owned by two capabilities. <code>capability_version_missing</code>: a listed version absent.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>frozen_manifest_changed</b>A generation's frozen digest differs from its last <code>[[frozen]]</code> row, or a FROZEN one has no row.</span></li>
+    <li data-p="always"><span class="chip bad">error</span><span><b>seal_mismatch</b>A sealed record changed, or sealed after its first outcome; a preregistered one neither sealed nor carrying prereg evidence.</span></li>
+    <li data-p="pins"><span class="chip bad">error</span><span><b>pin_drift</b>A <code>[[pins]]</code> sha256 recomputes differently, or a library variant's <code>spec_sha256</code> no longer equals its spec.</span></li>
+    <li data-p="pins"><span class="chip bad">error</span><span><b>pin_unresolved</b>A pin, <code>contract</code>, <code>cost_pin</code> or model <code>where</code> does not resolve.</span></li>
+    <li data-p="pins"><span class="chip bad">error</span><span><b>unknown_binding</b>A binding naming no catalog tool or strategy kind.</span></li>
+    <li data-p="pins"><span class="chip bad">error</span><span><b>sandbox_unbound</b>A sandbox a FROZEN or ACTIVE generation lists has no <code>[generation] id</code> for it, or points at another registry.</span></li>
+    <li data-p="evidence"><span class="chip bad">error</span><span><b>evidence_missing · evidence_mismatch</b>A locator that does not resolve, or a file whose sha256 differs from the record's or the vault's.</span></li>
+    <li data-p="evidence"><span class="chip bad">error</span><span><b>result_mismatch</b>A result with <code>extract</code> recomputed from its evidence: n exact, bps ± 0.05, USD ± 0.005, t ± 0.005.</span></li>
+    <li data-p="evidence"><span class="chip warn">warn</span><span><b>mutable_evidence · extract_unsupported</b>A live <code>state:</code> file; an <code>extract</code> no result source reads. <code>evidence_planned</code> (Info): not captured yet.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Strict records.</b> Every table denies unknown fields; the file stem must equal <code>id</code>; another dir or file is refused. Each load error names its file.</span></li>
+    <li><span><b>Nothing guessed.</b> <code>UNKNOWN</code> compares to nothing, and an unknown decision time or information time is an Error.</span></li>
+    <li><span><b>Luck is visible.</b> Decision quality and outcome are separate fields; the quadrant is computed from them on every read.</span></li>
+    <li><span><b>A freeze holds.</b> The last <code>[[frozen]]</code> row must equal the digest of the generation file plus every capability file it lists, even one edited at the same version.</span></li>
+    <li><span><b>Bound means bound.</b> <code>Config::load</code> refuses an unlisted sandbox, a tool, feed, loop action or strategy kind outside the generation, and a drifted <code>config:</code> / <code>spec:</code> pin of a FROZEN one.</span></li>
+    <li><span><b>Closed world for opt-ins.</b> An opt-in tool that no capability binds is refused under any generation; base tools stay.</span></li>
+    <li><span><b>Defense in depth.</b> The executor build and the MCP bridge drop a tool outside the generation; a backtest refuses an outside kind before any read (<a href="backtest.html">Backtests</a>).</span></li>
+    <li><span><b>A seal is never redone.</b> <code>seal</code> refuses a record already sealed, not preregistered, with errors, or whose first outcome is past or unknown.</span></li>
+    <li><span><b>Read-only views.</b> Only <code>seal</code> writes: one row appended to <code>locks.toml</code>. The adapters never write a registry, vault, run dir or state file.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Ask the registry</h2>
+    <p>From the repo root: <code>--registry</code> defaults to <code>lineage</code> under the current directory. No sandbox config and no secrets needed. Long prose is cut with <code>…</code>; ids and hashes are whole.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu lineage verify --pins</span>
+<span class="ln o"># one row per finding: severity, code, record, message</span>
+<span class="ln">lineage verify lineage --pins: <span class="hl">0 error(s)</span>, 6 warning(s)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage trace ep.rule_e.rejected.2026-09-30</span>
+<span class="ln o"># selected lines</span>
+<span class="ln">  family post_earnings_follow: Rule E — overnight follow-through after post-market earnings [PRIMARY · REJECTED: Not confirmed on the pre-registered names holdout (2026-09-30): …] — hypothesis: …</span>
+<span class="ln">    variant post_earnings_follow.t0_4h: Rule E, entry t0 + 4 h after the release [REJECTED] — described: …</span>
+<span class="ln">      experiment ext.holdout_names.rule_e.2026-09-30: Pre-registered names holdout: rule E unchanged on the other xyz single-stock perps — not confirmed [HOLDOUT_TEST · EXTERNAL · generation UNKNOWN · ran 2026-09-30 · preregistered] cost: …</span>
+<span class="ln">        result ext.holdout_names.rule_e.2026-09-30: E enter t0 + 4 h — holdout [HOLDOUT]: n 37, mean 35.5 bps, CI95 [-33.7, 108.9] bps — repo:docs/xmarket-feasibility-2026-09-30.md</span>
+<span class="ln">        evidence ext.holdout_names.rule_e.2026-09-30: prereg git:47fc090de426205df91425df789849466e962399 [NONE · NOT_APPLICABLE]</span>
+<span class="ln">        verdict ext.holdout_names.rule_e.2026-09-30: <span class="hl">FAIL</span> — Not confirmed: t0 + 4 h +35.5 bps &lt; the +40 threshold; … · validity VALID_WITH_LIMITATIONS</span>
+<span class="ln"><span class="hl">▶</span>       episode ep.rule_e.rejected.2026-09-30: Rule E (post-earnings follow-through) not carried forward: it failed its preregistered names holdout [REJECTED_STRATEGY · UNKNOWN] decided `E not confirmed: not carried into any forward test; only rule W went to the weekend paper run` at 2026-09-30 by HOLD; decision SUPPORTED, execution NOT_APPLICABLE, outcome UNKNOWN</span>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage generation W1</span>
+<span class="ln">generation W1 — W1 — xlab history-first research harness … [FROZEN · parent NONE · frozen 2026-10-06T10:44:23Z]</span>
+<span class="ln">sandboxes: xlab, xmarket-weekend</span>
+<span class="ln">manifest digest 130930c58e06a6d4afd6a05406182a5ecb6a807e75ee7a81106f73239f3ffa84 · frozen digest (manifest + listed capabilities) a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43 · lock <span class="hl">OK</span> (a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43 at 2026-10-06T10:44:23Z)</span>
+<span class="ln">OK          STRATEGY         spec:xlab/weekend_fade  pinned e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14</span>
+<span class="ln">OK          RISK_POLICY      config:xlab/risk  pinned 7df5f9610ae0e5e4dc059eec5f227b8bb024471ab44686e223790937f011cf7a</span>
+<span class="ln o"># … one line per pin, 37 in all: OK, DRIFT (+ now &lt;sha256&gt;) or UNRESOLVED</span>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage capabilities --generation W1</span>
+<span class="ln">intel.backtest v1 [INTELLIGENCE · RESEARCH · HISTORICALLY_TESTED] Deterministic backtest engine + run dirs + counted holdout reads — bindings tool:backtest · contract tool_schema:backtest · generations W1 v1</span>
+<span class="ln">17 capabilities of generation W1</span>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage family weekend_overshoot_fade --state xlab</span>
+<span class="ln o"># the variant tree (24 variants), then search accounting: prior search 27 (APPROX), run dirs, holdout reads, total tried</span>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage report weekend_overshoot_fade --forward fwd.rule_w.2026-10-02</span>
+<span class="ln"> 1. What hypothesis produced Rule W?</span>
+<span class="ln o"># … 21 answers, each with the fields it read; UNKNOWN with the reason when none says</span></pre>
+  </div>
+  <p class="note">Also: <code>show &lt;id&gt;</code> (the file as written, its digest, an episode's quadrant), <code>attempts --state xlab</code> (every run dir → its variant or <code>UNREGISTERED</code>), <code>verify --evidence</code> (needs the vault on the machine that captured it) and <code>--format json</code> on every view.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/lineage/mod.rs</code></td><td><code>Finding</code>, <code>Severity</code>, the table of codes</td></tr>
+        <tr><td><code>src/domain/lineage/value.rs</code></td><td>ids, <code>Time</code>, <code>Count</code>, locators, pin targets, bindings</td></tr>
+        <tr><td class="wrap"><code>src/domain/lineage/{family,variant,experiment,episode,incident,capability,generation,locks}.rs</code></td><td>one record type each; the episode quadrant; <code>GenerationScope</code></td></tr>
+        <tr><td><code>src/domain/lineage/registry.rs</code></td><td><code>Registry</code>, <code>frozen_digest</code>, first outcome, every locator a record names</td></tr>
+        <tr><td><code>src/domain/lineage/validate.rs</code></td><td>every always-on <code>verify</code> code</td></tr>
+        <tr><td><code>src/domain/lineage/query.rs</code></td><td><code>trace</code>, <code>family_report</code> (search accounting), <code>attempt_rows</code></td></tr>
+        <tr><td><code>src/domain/lineage/acceptance.rs</code></td><td>the 21 Rule-W answers</td></tr>
+        <tr><td><code>src/domain/lineage/pins.rs</code></td><td>record digests, <code>config:</code> / <code>spec:</code> / <code>tool_schema:</code> pin hashes</td></tr>
+        <tr><td><code>src/ports/lineage.rs</code></td><td><code>ContractProbe</code>, <code>EvidenceResolver</code>, <code>ResultSource</code>, <code>AttemptSource</code></td></tr>
+        <tr><td><code>src/application/lineage/verify.rs</code></td><td>the <code>--pins</code> and <code>--evidence</code> passes, pin status</td></tr>
+        <tr><td><code>src/application/lineage/attempts.rs</code></td><td>the run-dir and holdout-read scan</td></tr>
+        <tr><td><code>src/adapters/outbound/lineage/</code></td><td>repo and catalog probe, locator resolver, run dirs, <code>ledger:</code> results</td></tr>
+        <tr><td><code>src/config/lineage.rs</code></td><td>the registry loader, <code>[generation]</code>, the load rules</td></tr>
+        <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections::generation</code>: the scope tools see</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/lineage.rs</code></td><td><code>tengu lineage</code> and its subcommands</td></tr>
+        <tr><td class="wrap"><code>lineage/</code> · <code>lineage/locks.toml</code></td><td>the records, the W1 manifest and its lock</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: quadrant (domain/lineage/episode.rs Episode::quadrant),
+   time order (domain/lineage/value.rs Time::order, validate.rs future_leakage),
+   load errors (config/lineage.rs binding_errors, config/mod.rs fail_on),
+   code filter */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+  /* --- Experience quadrant --- */
+  var EPS = [
+    { id: "ep.rule_w.forward.2026-10-02", d: "SUPPORTED", x: "CLEAN", o: "FAVORABLE", kind: "STRATEGY", src: "lineage/" },
+    { id: "ep.rule_e.rejected.2026-09-30", d: "SUPPORTED", x: "NOT_APPLICABLE", o: "UNKNOWN", kind: "REJECTED_STRATEGY", src: "lineage/" },
+    { id: "ep.ops.2026-10-05.network-loss", d: "SUPPORTED", x: "DEGRADED", o: "NEUTRAL", kind: "OPERATIONAL_INCIDENT", src: "lineage/" },
+    { id: "ep.rule_w.stale_price", d: "UNSUPPORTED", x: "CLEAN", o: "FAVORABLE", kind: "STRATEGY", src: "test fixture" },
+    { id: "ep.rule_w.news_loss", d: "SUPPORTED", x: "NOT_APPLICABLE", o: "UNFAVORABLE", kind: "STRATEGY", src: "test fixture" }
+  ];
+  var dec = $("q-dec"), exe = $("q-exe"), out = $("q-out"), segQ = $("q-eps"), picked = 0;
+  EPS.forEach(function (e, i) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = e.id + (e.src === "test fixture" ? " (fixture)" : "");
+    b.addEventListener("click", function () { picked = i; dec.value = e.d; exe.value = e.x; out.value = e.o; quad(); });
+    segQ.appendChild(b);
+  });
+  function quadrant(d, o) {
+    if (d === "SUPPORTED" && o === "FAVORABLE") return "GOOD_DECISION_GOOD_OUTCOME";
+    if (d === "SUPPORTED" && o === "UNFAVORABLE") return "GOOD_DECISION_BAD_OUTCOME";
+    if (d === "UNSUPPORTED" && o === "FAVORABLE") return "BAD_DECISION_GOOD_OUTCOME";
+    if (d === "UNSUPPORTED" && o === "UNFAVORABLE") return "BAD_DECISION_BAD_OUTCOME";
+    return "UNKNOWN";
+  }
+  function quad() {
+    var q = quadrant(dec.value, out.value);
+    var e = picked >= 0 ? EPS[picked] : null;
+    if (e && (e.d !== dec.value || e.x !== exe.value || e.o !== out.value)) { picked = -1; e = null; }
+    Array.prototype.forEach.call(segQ.children, function (b, i) { b.setAttribute("aria-pressed", i === picked ? "true" : "false"); });
+    Array.prototype.forEach.call($("quad").querySelectorAll("[data-q]"), function (c) { c.classList.toggle("on", c.getAttribute("data-q") === q); });
+    $("q-kv").innerHTML =
+      "<dt>episode</dt><dd>" + (e ? esc(e.id) + " · " + e.kind + " · " + e.src : "your fields (example)") + "</dd>" +
+      "<dt>quadrant</dt><dd>" + q + "</dd>" +
+      "<dt>execution</dt><dd>" + exe.value + " (graded apart: never changes the quadrant)</dd>";
+  }
+  [dec, exe, out].forEach(function (s) { s.addEventListener("change", quad); });
+  quad();
+
+  /* --- time order --- */
+  var DAY = 86400000;
+  function parse(s) {
+    if (s === "UNKNOWN") return null;
+    if (s.length === 10) { var p = s.split("-"); var d = Date.UTC(+p[0], +p[1] - 1, +p[2]); return { lo: d, hi: d + DAY - 1, txt: s, day: true }; }
+    var t = Date.parse(s); return { lo: t, hi: t, txt: s, day: false };
+  }
+  function order(a, b) {
+    if (!a || !b) return "Unknown";
+    if (a.hi <= b.lo) return "NotAfter";
+    if (a.lo > b.hi) return "After";
+    return "Ambiguous";
+  }
+  function timeCheck() {
+    var avS = $("t-av").value, dS = $("t-dec").value;
+    var av = parse(avS), d = parse(dS), o = order(av, d);
+    var what = "information[0] `<item>`", rows = [], sev = "ok";
+    if (!d) { rows.push(["ERROR", "decision.decided_at is UNKNOWN: its context and information cannot be shown to precede it"]); }
+    if (o === "After") rows.push(["ERROR", what + " became available at " + avS + ", after the decision at " + dS]);
+    else if (o === "Ambiguous") rows.push(["WARN", what + " available " + avS + " vs decision " + dS + ": not provably before — give instants"]);
+    else if (o === "Unknown" && !av) rows.push(["ERROR", what + " has available_at UNKNOWN: unknown-timed information"]);
+    rows.forEach(function (r) { if (r[0] === "ERROR") sev = "bad"; else if (sev === "ok") sev = "warn"; });
+    function span(t) { return t ? (t.day ? "a day: " + new Date(t.lo).toISOString().slice(0, 10) + " 00:00 → 24:00" : "an instant") : "no time"; }
+    $("t-kv").innerHTML =
+      "<dt>available_at</dt><dd>" + esc(avS) + " · " + span(av) + "</dd>" +
+      "<dt>decided_at</dt><dd>" + esc(dS) + " · " + span(d) + "</dd>" +
+      "<dt>order</dt><dd>" + (o === "NotAfter" ? "not after: its latest instant ≤ the decision's earliest" : o === "After" ? "after: its earliest instant > the decision's latest" : o === "Ambiguous" ? "undecidable: the two overlap" : "unknown: nothing to compare") + "</dd>";
+    var v = $("t-v");
+    v.className = "verdict " + sev;
+    v.textContent = sev === "ok" ? "no finding: provably known in time" : sev === "warn" ? "WARN future_leakage" : "ERROR future_leakage: verify exits 1";
+    function pad(s, n) { while (s.length < n) s += " "; return s; }
+    /* the verify row: {:<5}  {:<28}  {:<36}  {} (cli/lineage.rs run_verify) */
+    $("t-msg").textContent = rows.length ? rows.map(function (r) {
+      return pad(r[0], 5) + "  " + pad("future_leakage", 28) + "  " + pad("episode/ep.rule_w.forward.2026-10-02", 36) + "  " + r[1];
+    }).join("\n") : "(no verify row for this item)";
+  }
+  ["t-av", "t-dec"].forEach(function (i) { $(i).addEventListener("change", timeCheck); });
+  timeCheck();
+
+  /* --- binding: the error lines config/lineage.rs writes --- */
+  var AT = '[generation] id = "W1": ';
+  var LOCK = "a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43";
+  var CHANGED = AT + "frozen_manifest_changed generation/W1: locks.toml freezes " + LOCK + " (at 2026-10-06T10:44:23Z); the manifest with its listed capability records now hashes <64 hex chars>";
+  var EDITS = {
+    none: { ok: "# GenerationScope of W1, what every tool sees (SandboxSections::generation)\ntools bound in W1: backtest, hl_book, hl_ctx, market_history, paper_positions, risk_status, xm_exits, xm_weekend_fade\nstrategy kinds: daily_window, event_window, funding_carry, move_trigger, pair_spread, weekend_window\nbase tools (no capability binds them): allowed" },
+    comment: { ok: "# pins hash the canonical JSON of the value, not the text:\n# config:xlab/risk still 7df5f9610ae0e5e4dc059eec5f227b8bb024471ab44686e223790937f011cf7a" },
+    tool: { errs: ["sandbox `xlab` agent `xl_architect`: opt-in tool `sol_price` is bound by no capability of the registry — generation `W1` admits no unregistered opt-in tool"] },
+    risk: { errs: [AT + "FROZEN generation `W1` pin `config:xlab/risk` drifted: pinned 7df5f9610ae0e5e4dc059eec5f227b8bb024471ab44686e223790937f011cf7a, now <64 hex chars>"] },
+    spec: { errs: [AT + "FROZEN generation `W1` pin `spec:xlab/weekend_fade_top4` drifted: pinned aee630b88c13216bb1c812eb53e71dbc2249331f58fa6a9471ab78bb9b4bdf56, now <64 hex chars>"] },
+    cap: { errs: [CHANGED] },
+    list: { errs: [AT + "generation `W1` does not list sandbox `xlab` (its sandboxes: xmarket-weekend)", CHANGED] },
+    id: { errs: ['[generation] id = "W2": no generations/W2.toml in the registry sandboxes/xlab/../../lineage'] }
+  };
+  function bind() {
+    var sel = document.querySelector('#b-edits input:checked');
+    var e = EDITS[sel ? sel.value : "none"], v = $("b-v"), o = $("b-out");
+    if (e.ok) {
+      v.className = "verdict ok"; v.textContent = "loads";
+      o.textContent = e.ok;
+      return;
+    }
+    v.className = "verdict bad"; v.textContent = "refused: nothing starts";
+    o.textContent = "Error: Failed to load sandbox 'xlab' from sandboxes/xlab/config.toml\n\nCaused by:\n    Config validation failed (" +
+      e.errs.length + " issue" + (e.errs.length === 1 ? "" : "s") + "):\n" +
+      e.errs.map(function (x) { return "    - " + x; }).join("\n");
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('#b-edits input'), function (r) { r.addEventListener("change", bind); });
+  bind();
+
+  /* --- code filter --- */
+  var fb = $("c-filter");
+  Array.prototype.forEach.call(fb.children, function (b) {
+    b.addEventListener("click", function () {
+      var f = b.getAttribute("data-f");
+      Array.prototype.forEach.call(fb.children, function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      Array.prototype.forEach.call($("codes").children, function (li) { li.hidden = !(f === "all" || li.getAttribute("data-p") === f); });
+    });
+  });
+})();
+</script>
+</body>
+</html>

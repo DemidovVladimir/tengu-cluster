@@ -1,0 +1,15 @@
+id = "intel.jev_gate"
+title = "Jev gate decision loop (xl_gate)"
+class = "INTELLIGENCE"
+version = 1
+permission = "ADVISORY"
+lifecycle = "CANDIDATE"
+contract = "config:xlab/decision_loops.xl_gate"
+bindings = []
+notes = "Pinned build typesafe/jev-1.13-20260917, terminal actions take / skip / ask_architect, act_at 0.01, dry_run, replayed on history with history 0 through the decision cache. Value UNPROVEN: jev − rules +28.9 bps (CI −23.5 … +81.6), Brier 0.349. Never ran forward (the weekend sandbox is the floor profile: no Jev)."
+
+[[evidence]]
+ref = "record:experiment/xlab.jev_gate.weekend_fade.2026-10-01"
+role = "the gate arm vs rules"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

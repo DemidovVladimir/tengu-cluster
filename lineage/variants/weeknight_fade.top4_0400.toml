@@ -1,0 +1,26 @@
+id = "weeknight_fade.top4_0400"
+family = "weeknight_fade"
+title = "xyz_weeknight_fade_top4_0400 — as top4_0000 with the entry at 04:00 New York"
+parent = "weeknight_fade.top4_0000"
+reason = "The plan's only sibling (\"no other variants (forking paths)\"); weekday.sql read the 04:00 entry at +21.1."
+registered_at = "2026-10-03T13:03:50Z"
+order = 2
+preregistered = true
+status = "INCONCLUSIVE"
+
+[spec]
+spec_sha256 = "0a429b9a4e41b02ab4ba329d15f2848deee90d72f4b1d4ca7494d36c35ef07c2"
+source = "run:xlab/20261005T140329Z-xyz_weeknight_fade_top4_0400"
+
+[[changed]]
+dim = "entry"
+from = "00:00 America/New_York"
+to = "04:00 America/New_York"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+role = "prereg"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "3a5e3c079f6482c46293f6b2938351cd619a37d38d8669c74736687a25e7b63e"
+note = "Plan step 3 names this sibling; same file and caveat as weeknight_fade.top4_0000."

@@ -1,0 +1,15 @@
+id = "hl_underlying_convergence"
+title = "Hyperliquid xyz perp ↔ underlying stock convergence"
+hypothesis = "Gaps between an xyz stock perp and its underlying stock converge, and the gap can be traded after costs."
+role = "PRIMARY"
+status = "REJECTED"
+status_reason = "No-go (feasibility 2026-09-30, confidence high): |gap| p90 is 10–11 bps, below costs; HL sits a median +3.6 bps from the stock and gaps halve in 0.5–2 min; gaps > 30 bps in 0.2–0.6 % of bars."
+origin_at = "2026-09-29"
+origin = "repo:docs/xmarket-prd-2026-09-29.md"
+origin_by = "operator PRD (§ Cross-Market Convergence)"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "Not itemised."

@@ -1,0 +1,8 @@
+id = "cap.news_probe"
+title = "News probe (W2 only; simulated, no such tool yet)"
+class = "INTELLIGENCE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "DISCOVERED"
+contract = "tool_schema:w2_news_probe"
+bindings = ["tool:w2_news_probe"]

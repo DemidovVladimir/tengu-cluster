@@ -1,0 +1,86 @@
+id = "xlab.architect_holdout.weekend_fade.2026-10-01"
+title = "The Architect's counted holdout read of rule W (split 2026-08-01) — verdict \"not robust\""
+family = "weekend_overshoot_fade"
+variant = "weekend_fade"
+generation = "W1"
+environment = "XLAB"
+kind = "HOLDOUT_TEST"
+registered_at = "2026-10-01T19:30:44Z"
+ran_at = "2026-10-01T19:41:06Z"
+preregistered = false
+policies = ["DETERMINISTIC", "ARCHITECT"]
+cost_model = '''[backtest.costs."hyperliquid:xyz:"]: taker 0.9 bps + fixed half-spread 1.0 bps per side (3.8 bps round trip) + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["intel.architect", "intel.backtest", "intel.market_history", "capital.strategy.weekend_window"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period"
+split_by = "TIME"
+incidents = []
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["Holdout read #4 of this spec_sha256 in holdout-reads.jsonl: 19:31:07Z split 2026-07-01, 19:35:21Z and 19:35:51Z split 2026-07-15, 19:41:06Z split 2026-08-01 — every earlier read already showed Aug–Sep, so this split was chosen after peeking.", "Holdout window contaminated by the feasibility study.", "Architect at the time: engine openrouter, model anthropic/claude-sonnet-4-6 (xlab config before 2026-10-02), not the W1 Architect (claude_code claude-opus-5-5)."]
+notes = "Final of 4 live Architect turns 2026-10-01 (xlab state dir logs/architect-turn*.json). Its tuning runs with the holdout hidden: 20261001T193044Z (to 07-01, n 614), 193448Z (to 07-15, n 734), 194043Z (to 08-01, n 861) and the liquid siblings 193044Z / 193449Z / 194044Z. Its own inline variants were refused for spec-shape errors (xlab § 14)."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-08-01T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-08-01T00:00:00Z"
+to = "2026-10-01T19:41:06Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CONTAMINATED"
+note = "The feasibility study (22 names) and its names holdout (53 names) had already read 2026-03 … 2026-09 for all 75 names before xlab existed. Plus three earlier Architect holdout reads covering this window the same evening."
+
+[[results]]
+label = "research arm, in-sample (to 2026-08-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 861
+mean_net_bps = 52.59507039317535
+ci95_bps = [19.91618259678408, 87.09111436061941]
+net_usd = 452.8435560852397
+t_stat = 3.034788385960219
+evidence = "run:xlab/20261001T194106Z-weekend_fade"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-08-01) — the read the Architect judged"
+arm = "research"
+class = "HOLDOUT"
+n = 639
+mean_net_bps = 47.55026784315731
+ci95_bps = [-17.796465980125465, 106.32911366797441]
+net_usd = 303.8462115177751
+t_stat = 1.3781722813497992
+evidence = "run:xlab/20261001T194106Z-weekend_fade"
+extract = "arm:research/holdout"
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "In-sample +52.6 bps (CI +19.9 … +87.1, n 861) → holdout +47.6 (CI −17.8 … +106.3, n 639): \"not robust: the holdout CI crosses 0\" — the xlab-research protocol's \"weak\"."
+decided_at = "2026-10-01T19:41:23Z"
+decided_by = "xl_architect (openrouter anthropic/claude-sonnet-4-6), final live turn; time = mtime of its turn log"
+
+[[evidence]]
+ref = "run:xlab/20261001T194106Z-weekend_fade"
+role = "holdout read run report"
+class = "HOLDOUT"
+provenance = "DERIVED"
+sha256 = "8b7a6ef265628fde59a103ab847a12e2821d95e57b4fd53c93986f3d705869a4"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xlab/backtests/holdout-reads.jsonl"
+sha256 = "82e2e4d620e1bd73a47ac033d8da36d4b2604759a62613cc918e3f4c204800eb"
+role = "holdout-read ledger (4 lines, all spec e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14)"
+class = "HOLDOUT"
+provenance = "LIVE_RECORDED"
+note = "Append-only; sha256 82e2e4d620e1bd73a47ac033d8da36d4b2604759a62613cc918e3f4c204800eb at the 2026-10-06 inventory. Read #4 = run 20261001T194106Z-weekend_fade, call id chat:c8307d7a135f4f49bad500341681c4d8:7:0:toolu_01U9ckL5eLFMQ5TS8NRf5vju."
+
+[[evidence]]
+ref = "repo:docs/xlab-2026-10-01.md"
+role = "verdict text (§ 14 \"Architect after the review fixes\")"
+class = "NONE"
+provenance = "REPORTED"

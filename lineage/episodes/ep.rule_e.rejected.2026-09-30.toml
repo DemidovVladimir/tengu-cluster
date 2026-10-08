@@ -1,0 +1,93 @@
+id = "ep.rule_e.rejected.2026-09-30"
+title = "Rule E (post-earnings follow-through) not carried forward: it failed its preregistered names holdout"
+kind = "REJECTED_STRATEGY"
+generation = "UNKNOWN"
+experiment = "ext.holdout_names.rule_e.2026-09-30"
+family = "post_earnings_follow"
+variant = "post_earnings_follow.t0_4h"
+incidents = []
+notes = "Generation UNKNOWN: the decision preceded any tengu generation (throwaway analysis scripts). Its generic cousin xyz_overnight_follow failed in xlab the next day (xlab.xyz_overnight_follow.2026-10-01, −29.4 bps) — after this decision, so not listed as information."
+
+[context]
+summary = "2026-09-30, xmarket feasibility study: two HL-only rules survived the in-sample screen (W weekend fade, E post-earnings follow); both were re-run unchanged on the other xyz single-stock perps with pass thresholds fixed before the run."
+as_of = "2026-09-30"
+
+[[context.facts]]
+key = "prior search"
+value = "~100 variants tried before E was chosen (one 7-month rally regime, 36 events)"
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+
+[[context.facts]]
+key = "threshold"
+value = "E ≥ +40 bps mean net per trade on the names holdout (fixed before the run); M3 later also needs the CI to exclude 0"
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+
+[hypothesis]
+statement = "1–4 h after a post-market Item 2.02 earnings release, following HL's move and exiting before 09:30 New York earns after costs."
+family = "post_earnings_follow"
+
+[[information]]
+item = "In-sample: +110 bps net per trade (CI +43 … +174, nights resampled), +67 without the 5 best; placebo nights −11"
+available_at = "2026-09-30"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+provenance = "REPORTED"
+
+[[information]]
+item = "Names holdout t0 + 4 h: +35.5 bps (CI −33.7 … +108.9, n 37, 25 names); −21.8 without the 5 best events"
+available_at = "2026-09-30"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+provenance = "REPORTED"
+
+[[information]]
+item = "Names holdout t0 + 2 h: +72.9 bps (CI −6.7 … +149.2, n 37) — passes on the mean only"
+available_at = "2026-09-30"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+provenance = "REPORTED"
+
+[[information]]
+item = "ARM's 6-K earnings night (accession 0001973239-26-000113, 2026-07-29), left out by the protocol, would have lost 1,580 bps and turns t0 + 4 h into a fail"
+available_at = "2026-09-30"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+provenance = "REPORTED"
+
+[[alternatives]]
+action = "Reject E for now: no forward paper test, not in the weekend sandbox"
+chosen = true
+counterfactual = "The actual decision: no trades, 0 P&L"
+counterfactual_valid = true
+
+[[alternatives]]
+action = "Forward paper test E at t0 + 2 h (the variant that passed on its mean)"
+chosen = false
+counterfactual = "Never run: no forward events recorded for E"
+counterfactual_valid = false
+
+[[alternatives]]
+action = "Accept E on the pooled in-sample + holdout figure (+75.4, n 73)"
+chosen = false
+counterfactual = "The pooled figure is carried by the in-sample half — accepting it would ignore the holdout"
+counterfactual_valid = false
+
+[decision]
+action = "E not confirmed: not carried into any forward test; only rule W went to the weekend paper run"
+decided_at = "2026-09-30"
+policy = "HOLD"
+
+[action]
+executed = false
+
+[outcome]
+economic = "None (no trades)."
+operational = "E stayed a REJECTED family; the xlab library kept only its generic cousin xyz_overnight_follow, which also failed."
+
+[quality]
+decision = "SUPPORTED"
+decision_note = "The preregistered threshold was missed (+35.5 < +40), the alternative entry passed on the mean only, the edge vanished without the 5 best events, and an excluded 6-K night would have flipped it."
+execution = "NOT_APPLICABLE"
+outcome = "UNKNOWN"
+attribution = ["ANALYSIS"]
+
+[lesson]
+text = "A rule picked after ~100 variants on 36 events did not hold on 37 new-name events. Count every variant before trusting an in-sample edge, fix the threshold before the holdout, and read the drop-the-best-5 figure — not the pooled one."
+status = "PROPOSED"
+affects = ["record:family/post_earnings_follow", "record:family/xyz_overnight_follow"]

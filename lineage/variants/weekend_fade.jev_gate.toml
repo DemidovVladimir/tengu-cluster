@@ -1,0 +1,18 @@
+id = "weekend_fade.jev_gate"
+family = "weekend_overshoot_fade"
+title = "Rule W gated by Jev (decision-policy variant, not a new spec)"
+parent = "weekend_fade"
+reason = "PRD baseline C: does Jev, deciding take / skip per candidate from as-of features, beat the deterministic rule on the same candidates?"
+registered_at = "2026-10-01T16:52:39Z"
+order = 4
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "First run on weekend_fade_top4 (20261001T165239Z, pre-fix), then all 1,500 W candidates live (20261001T170537Z) and replayed offline after the engine fixes (20261001T182905Z): jev − rules +28.9 bps (CI −23.5 … +81.6), Brier 0.349 — Jev UNPROVEN."
+
+[spec]
+described = "Every rule W candidate (spec e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14) decided by [decision_loops.xl_gate]: Jev typesafe/jev-1.13-20260917, terminal actions take / skip / ask_architect, act_at 0.01, history 0 in replay, decisions cached in decision-cache.db; take = trade as the rule specifies."
+
+[[changed]]
+dim = "decision_policy"
+from = "DETERMINISTIC"
+to = "JEV_GATE"

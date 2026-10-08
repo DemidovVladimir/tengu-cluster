@@ -1,0 +1,17 @@
+id = "rule_w.liquid"
+family = "rule_w"
+title = "Rule W on liquid entries only (≥ 50 trades in the entry bar)"
+parent = "rule_w.all"
+reason = "UNKNOWN"
+registered_at = "2026-10-06"
+order = 3
+preregistered = false
+status = "REJECTED"
+
+[[changed]]
+dim = "min_entry_trades"
+from = "none"
+to = 50
+
+[spec]
+described = "rule_w.all with min_entry_trades = 50"

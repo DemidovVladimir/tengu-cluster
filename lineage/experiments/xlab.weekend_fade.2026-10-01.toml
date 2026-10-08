@@ -1,0 +1,106 @@
+id = "xlab.weekend_fade.2026-10-01"
+title = "Rule W (all names) on backfilled history, time split 2026-07-01 — post-fix library run"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T18:28:09Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:xyz:"]: taker 0.9 bps + fixed half-spread 1.0 bps per side (3.8 bps round trip) + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders, loss limits 10 / 25 USD)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["capital.strategy.weekend_window", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; periods treated as independent (xlab § 11)"
+split_by = "TIME"
+incidents = []
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["The holdout window (from 2026-07-01) is contaminated: The feasibility study (22 names) and its names holdout (53 names) had already read 2026-03 … 2026-09 for all 75 names before xlab existed.", "Fills at 1h bar closes ± modelled costs, not executable books (no historical xyz books exist)."]
+notes = "Post-fix library run (figures after xlab-fix-engine, db96cb25c0ffa1efa13f8d7c388e407dfb107d24; xlab doc § 14). CLI --split run: the holdout half is in the report but no holdout-reads.jsonl line (CLI reads are not counted). Earlier runs of this spec: xlab.library.prefix.2026-10-01 (INVALID)."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T18:28:09Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T18:28:09Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars (26 names from 2026-03-07, 49 from their listing)"
+integrity = "CONTAMINATED"
+note = "The feasibility study (22 names) and its names holdout (53 names) had already read 2026-03 … 2026-09 for all 75 names before xlab existed."
+
+[[results]]
+label = "research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1500
+mean_net_bps = 50.44598450686777
+ci95_bps = [15.65747436993503, 81.51037160851962]
+net_usd = 756.6897676030144
+t_stat = 2.9305975348638484
+evidence = "run:xlab/20261001T182809Z-weekend_fade"
+extract = "arm:research"
+note = "In-sample + holdout together: not a holdout figure."
+
+[[results]]
+label = "research arm, in-sample (to 2026-07-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 614
+mean_net_bps = 57.67112706004317
+ci95_bps = [25.69220086895594, 94.33494823123452]
+net_usd = 354.10072014866455
+t_stat = 3.177995094464634
+evidence = "run:xlab/20261001T182809Z-weekend_fade"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-07-01)"
+arm = "research"
+class = "HOLDOUT"
+n = 886
+mean_net_bps = 45.4389444079402
+ci95_bps = [-7.256235405114595, 93.14753035161763]
+net_usd = 402.5890474543505
+t_stat = 1.6879713940105403
+evidence = "run:xlab/20261001T182809Z-weekend_fade"
+extract = "arm:research/holdout"
+
+[[results]]
+label = "capped arm ($100 [risk] book), whole window"
+arm = "capped"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 147.57352423795666
+ci95_bps = [53.04371249854734, 247.59918690261395]
+net_usd = 42.79632202900741
+t_stat = 2.9564682629345804
+evidence = "run:xlab/20261001T182809Z-weekend_fade"
+extract = "arm:capped"
+note = "Capped refusals: max_gross_exposure_usd 1384."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "Whole window +50.4 bps (CI +15.7 … +81.5, t 2.93 clustered), in-sample +57.7 (CI +25.7 … +94.3), but the holdout CI spans 0 (+45.4, CI −7.3 … +93.1) on a contaminated window. xlab § 14: the fade family survives costs out of sample, weakly."
+decided_at = "2026-10-01"
+decided_by = "xlab doc § 14 verdict (repo:docs/xlab-2026-10-01.md)"
+
+[[evidence]]
+ref = "run:xlab/20261001T182809Z-weekend_fade"
+role = "run report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "ad345442b7254f1448bf20f28ba05d4d7e719a31ab68e3d5b25c9fcb1897d7e3"
+note = "Backfilled history only (market.db, BACKFILLED); report.json carries both the in-sample and the holdout halves."

@@ -1,0 +1,282 @@
+id = "w1-2026-10-06"
+title = "W1 weekend forward paper run 2026-10-02 → 2026-10-05 (rule W, capped $100 + shadow): raw evidence"
+notes = "Snapshot of everything the P0 grade rests on (TENGU_ROADMAP.md Phase 0, docs/lineage-2026-10-06.md § 3). Run: binary tengu-6fcb455 (sandbox xmarket-weekend, runner pid 31380, 2026-10-02T19:18:55Z → SIGINT 2026-10-05T14:00:44.844Z, 1 start) + the desk recorder tengu-desk-2026-10-02 (sandbox xmarket, pid 31386). Not included: ~/.tengu/state/research/market-scan-2026-10-05 (8.0 GB overnight market scan, unrelated to the run); ~/.tengu/state/xlab/import (HL S3 archive asset_ctxs, re-downloadable); ~/.tengu/state/xlab/market.db-wal (0 B) and market.db-shm (a reader's WAL index); ~/.tengu/state/xmarket/runtime.db (leases, 0 rows); ~/.tengu/state/xmarket/research/parity_audit_leads.md (W1 parity audit leads, unrelated); ~/xlab-ws/.tengu/observations.db (0 rows). Not on disk anywhere (MISSING, see the inventory § 8): the Saturday-prereg grading, outputs of the ad-hoc SQL, watchdog alert lines, sleep / lid logs."
+vault = "w1-2026-10-06"
+captured_at = "2026-10-06T09:39:35Z"
+manifest_sha256 = "931da65978c3137c9cc37b52e1ffe65e70f57bf99124160032e11bf36ccecafa"
+
+[[items]]
+path = "xmarket-weekend/ledger.db"
+source = "~/.tengu/state/xmarket-weekend/ledger.db"
+kind = "FILE"
+sha256 = "7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e"
+files = 1
+bytes = 1847296
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "ledger"
+note = "Paper ledger of binary 6fcb455 (old schema: no funding_owed, orders.fingerprint, accounts.sandbox): capped xmarket-weekend ($100) + shadow xmarket-weekend-shadow ($10,000); accounts + deposits created 2026-10-01T01:31:57Z in the dry run, no trade before 2026-10-04T22:00Z. Inventory sha256 7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e."
+
+[[items]]
+path = "xmarket-weekend/history"
+source = "~/.tengu/state/xmarket-weekend/history"
+kind = "DIR"
+sha256 = "954920eab43d3fc22bec0d48270008338bede2565336ee886de0463a288b0a33"
+files = 7
+bytes = 1250553856
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "recorder"
+note = "Recorder day files (obs_history, every row source = live; hl_book/1 with full 20-level books, every schema with data): 20261001.db is the pre-run dry run 01:31:57–07:04:04Z (+ its empty -wal and leftover -shm); 20261002–20261005 the run 2026-10-02T19:18:55Z → 2026-10-05T14:00:30Z."
+
+[[items]]
+path = "xmarket-weekend/run-logs"
+source = "~/.tengu/state/xmarket-weekend/run-logs"
+kind = "DIR"
+sha256 = "5fddd2d85620f2f846ee94fdc73b5ebe3bc8b17809df292cafa62aeb042e536a"
+files = 5
+bytes = 33497326
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "pane.log (tmux capture of tengu run, RUST_LOG=info,tengu=debug), supervisor.log, watch.state are live records; supervise.sh and watch.sh are the operator scripts (watch.sh edited 2026-10-03T09:12Z during the outage)."
+
+[[items]]
+path = "xmarket-weekend/run-xmarket-weekend.json"
+source = "~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json"
+kind = "FILE"
+sha256 = "f6664c4eb0e00ec0d266191e247a6f46e1c80e195d9cfdbfe5cf8a94b1a4415a"
+files = 1
+bytes = 2301
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "heartbeat"
+note = "Final heartbeat: state stopped, SIGINT, feed counters."
+
+[[items]]
+path = "xmarket-weekend/runtime.db"
+source = "~/.tengu/state/xmarket-weekend/runtime.db"
+kind = "FILE"
+sha256 = "13d2855856185a896c8b8d7e98f8d2ac6f42bc4fb26cdb9aeaf8e358c2c3ae61"
+files = 1
+bytes = 12288
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "runtime"
+note = "Leases (0 rows after the clean stop)."
+
+[[items]]
+path = "xmarket/ledger.db"
+source = "~/.tengu/state/xmarket/ledger.db"
+kind = "FILE"
+sha256 = "2a80df7c156183e4df59fbdd7ad1d137c8a2632a36fd790c7b346535ac3b9068"
+files = 1
+bytes = 81920
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "ledger"
+note = "Desk ledger (newer schema of tengu-desk-2026-10-02): only the $100 deposit, no trading."
+
+[[items]]
+path = "xmarket/history"
+source = "~/.tengu/state/xmarket/history"
+kind = "DIR"
+sha256 = "48b5c9e340fd7cc9a916771cccb817348f524ed6cda12b823dde501057a2a8b0"
+files = 5
+bytes = 415797248
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "recorder"
+note = "Desk recorder (binary tengu-desk-2026-10-02, not 6fcb455): mkt_ctx/1 + mkt_instrument/1 features only (data NULL), hl_book/1 for hyperliquid:xyz:AAPL, hyperliquid:xyz:NVDA, hyperliquid:xyz:TSLA only; 20261001.db pre-run 02:28–13:07Z. Not a byte-equivalent copy of the weekend recorder."
+
+[[items]]
+path = "xmarket/run-logs"
+source = "~/.tengu/state/xmarket/run-logs"
+kind = "DIR"
+sha256 = "f0d10e51c31bcd1443a7dbc75ba104471358ae82bc05dd821e018e6a3b787a9d"
+files = 3
+bytes = 20969962
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "Desk pane.log + supervisor.log (live) and supervise.sh (script)."
+
+[[items]]
+path = "xmarket/run-xmarket.json"
+source = "~/.tengu/state/xmarket/run-xmarket.json"
+kind = "FILE"
+sha256 = "be929a21f03d0db4d2292438226d688024f835555c55eea1dd7546d61f8a3d17"
+files = 1
+bytes = 1919
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "heartbeat"
+note = "Desk final heartbeat (feeds hl_book / hl_ctx / risk_day / xm_exits)."
+
+[[items]]
+path = "xmarket/research/weekend-2026-10-02"
+source = "~/.tengu/state/xmarket/research/weekend-2026-10-02"
+kind = "DIR"
+sha256 = "d292f32092c002476e6d0cf0bc692ba9d5c0f3336ce19c0f05f4af910aab238b"
+files = 24
+bytes = 238756097
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "research"
+note = "A mix: LIVE_RECORDED = the independent 5-min curl sampler (ctx.jsonl, l2book.jsonl, rhj.jsonl, sampler.log, errors.log; 2026-10-02T23:30Z → 2026-10-05T13:57Z, not in egress.jsonl); documents = prereg-saturday-fade.md (Saturday-entry prereg written 2026-10-03T12:36:41Z, correction appended 12:56:02Z; body before the correction sha256 ea4d709b87a54b54b3b2a77a3469284d9cf3e394022f05db22eb00b9c88bc10e) and plan-weekday-night-fade-xlab.md; the *.sql files are ad-hoc queries over xlab market.db 1h bars (BACKFILLED inputs, DEVELOPMENT) whose outputs were never stored."
+
+[[items]]
+path = "xmarket/research/replay-2026-09-26"
+source = "~/.tengu/state/xmarket/research/replay-2026-09-26"
+kind = "DIR"
+sha256 = "d2ffd5f9f1a0eed2e55e4d964737c6358c9a3ff867d341c8e29db9782eec0f7b"
+files = 7
+bytes = 1698436
+provenance = "BACKFILLED"
+class = "DEVELOPMENT"
+role = "golden"
+note = "Rule W replay golden for the 2026-09-26 weekend: 5m candles of all xyz markets, meta snapshots, the 75-name universe, golden output (74 names, +95.5 bps mean)."
+
+[[items]]
+path = "xmarket/research/wave_d_notes.md"
+source = "~/.tengu/state/xmarket/research/wave_d_notes.md"
+kind = "FILE"
+sha256 = "98afec4055d5c74c8c05acffca6bc16125b01be82855de3d9a7033606e5e4ee0"
+files = 1
+bytes = 10277
+provenance = "NOT_APPLICABLE"
+class = "NONE"
+role = "doc"
+note = "Wave D design constraints for rule W (universe 75, fees, risk sizing, shadow account rules)."
+
+[[items]]
+path = "xlab/backtests"
+source = "~/.tengu/state/xlab/backtests"
+kind = "DIR"
+sha256 = "9cce5669bf9ec4dac4d7aa9323ee70bc5d69b18ca1ba89140fab05c049c0af66"
+files = 405
+bytes = 174595925
+provenance = "DERIVED"
+class = "DEVELOPMENT"
+role = "run-dir"
+note = "63 xlab run dirs + decision-cache.db (1616 Jev answers, typesafe/jev-1.13-20260917, 2026-10-01) + holdout-reads.jsonl (4 reads). Runs with a split hold their HOLDOUT halves inside report.json / report.md (class HOLDOUT for those figures); the two 2026-10-05 weeknight runs read their holdout without a holdout-reads row. No run between 2026-10-02T18:38:33Z and 2026-10-05T14:03:28Z."
+
+[[items]]
+path = "xlab/market.db"
+source = "~/.tengu/state/xlab/market.db"
+kind = "FILE"
+sha256 = "b5a0dc45e37660f8f66be0eb401b3adc67dcd4ef47758c71cafc1951dc503ac7"
+files = 1
+bytes = 96423936
+provenance = "BACKFILLED"
+class = "DEVELOPMENT"
+role = "warehouse"
+note = "History warehouse (bars 1h + 1m, funding, ctx), every row backfilled; the weekend-window 1m bars / 1h refresh / funding were fetched 2026-10-05T14:01:16Z → 14:20:24Z, after the run stopped (egress sessions history-backfill:1791208874503, history-backfill:1791209536916, history-backfill:1791209690803). Its -wal is empty (0 B): market.db copied alone."
+
+[[items]]
+path = "xlab/logs"
+source = "~/.tengu/state/xlab/logs"
+kind = "DIR"
+sha256 = "acc87ffae6aa70a80a1d7e32065fe449e2f67968a9d5c95f34e81becc724facd"
+files = 15
+bytes = 1614546
+provenance = "DERIVED"
+class = "DEVELOPMENT"
+role = "log"
+note = "Architect turns 1–4, the 2026-10-01 1h backfill log, Jev gate check / replay, strategy library run."
+
+[[items]]
+path = "tengu-logs/egress.jsonl"
+source = "~/.tengu/logs/egress.jsonl"
+kind = "FILE"
+sha256 = "af5c810f9b2d0d454ac5c85ea27f7ba24cafe633bbb656a52d6ab8a13d1a5184"
+files = 1
+bytes = 31663524
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "Egress audit 2026-09-19T22:17:16Z → 2026-10-05T14:20:26Z: the run's traffic (pid 31380 weekend, pid 31386 desk) plus earlier sessions and the post-run backfill; the sampler's curl calls are not in it."
+
+[[items]]
+path = "tengu-logs/tengu.log"
+source = "~/.tengu/logs/tengu.log"
+kind = "FILE"
+sha256 = "2c92818adb608ef66541137c532968c2c4759d97c4f0e055e090b98bedee53a2"
+files = 1
+bytes = 45071880
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "Both runners interleaved 2026-10-02 → 2026-10-05 (+ earlier sessions from 2026-09-15 and the desk pre-run 18:58:04–18:58:44Z)."
+
+[[items]]
+path = "tengu-logs/risk.jsonl"
+source = "~/.tengu/logs/risk.jsonl"
+kind = "FILE"
+sha256 = "48eb153350461c31c6aeae879fe2590f804bcf4ce92a2c42cb6aa5f6ca69f6ef"
+files = 1
+bytes = 1117546
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "156 risk verdict lines 2026-10-04T22:00:00.703Z → 2026-10-05T13:00:10.374Z = the ledger's risk_decisions mirror (canonical: the ledger)."
+
+[[items]]
+path = "tengu-logs/decisions.jsonl"
+source = "~/.tengu/logs/decisions.jsonl"
+kind = "FILE"
+sha256 = "fa69ebb2778693a565c6ec0b1301fc804f278b308be3d4d4eb3e4a513aab2b07"
+files = 1
+bytes = 62194
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "82 Jev decision lines 2026-09-24 → 2026-09-29; none in the run window (rule W ran as a tool feed, loops: {})."
+
+[[items]]
+path = "ext/xmarket-weekend-ws/observations.db"
+source = "~/xmarket-weekend-ws/.tengu/observations.db"
+kind = "FILE"
+sha256 = "3f0b9d111cdeab8f5abc48f52195ea19b2dc57958362be470e6dca15a2bf3d5b"
+files = 1
+bytes = 1097728
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "observation-cache"
+note = "Weekend workspace observation cache (latest row per key, 424 rows): the 74 xm_weekend_signal/1 rows + the final xm_weekend/1:2026-10-02 row. Its 7-day retention purge would delete the xm_weekend/1:2026-10-02 row after ~2026-10-12."
+
+[[items]]
+path = "ext/xmarket-workspace/observations.db"
+source = "~/xmarket-workspace/.tengu/observations.db"
+kind = "FILE"
+sha256 = "5975ae81dbe7f3f9cc557c7f22c92abddf69c17923cc1276b70d2d89cdc28ce5"
+files = 1
+bytes = 573440
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "observation-cache"
+note = "Desk workspace observation cache."
+
+[[items]]
+path = "ext/binaries/tengu-6fcb455"
+source = "~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455"
+kind = "FILE"
+sha256 = "e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72"
+files = 1
+bytes = 30640528
+provenance = "NOT_APPLICABLE"
+class = "NONE"
+role = "binary"
+note = "The frozen weekend binary, commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c; expected sha256 e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72."
+
+[[items]]
+path = "ext/binaries/tengu-desk-2026-10-02"
+source = "~/.cache/tengu-xm.noindex/weekend/tengu-desk-2026-10-02"
+kind = "FILE"
+sha256 = "13ee5f988dc100e140d3cd73da233aca4a7ef14581151ac67ce5be65c786e8a0"
+files = 1
+bytes = 33059504
+provenance = "NOT_APPLICABLE"
+class = "NONE"
+role = "binary"
+note = "The desk recorder binary (built 2026-10-02T19:18:50Z), commit UNKNOWN; inventory sha256 13ee5f988dc100e140d3cd73da233aca4a7ef14581151ac67ce5be65c786e8a0."

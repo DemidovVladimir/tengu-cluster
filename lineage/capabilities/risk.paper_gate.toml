@@ -1,0 +1,15 @@
+id = "risk.paper_gate"
+title = "The [risk] gate inside every exec tool + kill switch + daily roll"
+class = "RISK"
+version = 1
+permission = "RISK_AUTHORITY"
+lifecycle = "FORWARD_PAPER"
+contract = "config:xmarket-weekend/risk"
+bindings = ["tool:risk_status"]
+notes = "Pure gate domain/xm/risk.rs, run inside paper_order / paper_close / xm_exits / xm_weekend_fade (check + fill + ledger write in one transaction), fails closed on any missing input; KILL file; risk_status rolls the daily-loss base (feed risk_day). Forward: 156 verdicts, all allow (rule ok). Architect, Jev and tools cannot bypass it."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/tengu-logs/risk.jsonl"
+role = "156 verdicts of the forward test"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

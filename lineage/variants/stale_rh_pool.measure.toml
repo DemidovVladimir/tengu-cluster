@@ -1,0 +1,20 @@
+id = "stale_rh_pool.measure"
+family = "stale_rh_pool"
+title = "Measure Robinhood pool staleness after HL jumps"
+parent = "ROOT"
+reason = "The feasibility study's \"measure only\" row; only the stale-pool quote recording continues."
+registered_at = "2026-09-30"
+preregistered = false
+status = "REGISTERED"
+notes = "RHJ quotes recorded every 5 min 2026-10-02T23:30Z → 2026-10-05T13:58Z by the weekend sampler (rhj.jsonl, 745 snapshots); never analysed."
+
+[spec]
+described = "After an HL xyz jump, compare the Robinhood Chain token pool quote (0.05 % fee tier pools) with HL for ~1 h; break-even ~15 bps."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/rhj.jsonl"
+role = "recorded quotes (unanalysed)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "6a8eb184d39c7d4fb0e00107bb0e0192d6ad114f88bdd57dc4f05d0cb3298bb1"
+note = "Forward-recorded market quotes from the weekend sampler; no paper trades."

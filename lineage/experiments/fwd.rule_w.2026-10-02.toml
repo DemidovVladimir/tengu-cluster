@@ -1,0 +1,184 @@
+id = "fwd.rule_w.2026-10-02"
+title = "Rule W forward paper test, weekend 2026-10-02 → 2026-10-05 (capped $100 top 4 + $10,000 shadow of every eligible name)"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4"
+generation = "W1"
+environment = "XMARKET"
+kind = "FORWARD_PAPER"
+registered_at = "2026-10-02T19:18:32Z"
+ran_at = "2026-10-02T19:18:55Z"
+preregistered = true
+policies = ["DETERMINISTIC"]
+cost_model = "Live paper fills: sleep latency 250 ± 100 ms, then walk a fresh HL L2 book (VWAP); IOC bound 30 bps for capped entries ([risk] max_slippage_bps), 100 bps for shadow fades and every exit; HL taker fee per name from mkt_instrument/1 (0.9 bps growth mode; ~9 bps on MSTR, PURRDAT, BMNR); funding hourly at the size held from mkt_ctx/1"
+cost_pin = "config:xmarket-weekend/paper"
+capabilities = ["capital.weekend_fade_exec", "capital.exits", "risk.paper_gate", "infra.paper_ledger", "infra.recorder", "intel.hl_market_context", "intel.hl_order_book"]
+uncertainty = "One window: a weekend is one draw (sd ≈ 110–240 bps per weekend in the feasibility study); no CI; the M3 go needs ≥ 12 weekends, mean net ≥ +15 bps at executable prices, t ≥ 1.5, not carried by ≤ 2 weekends"
+split_by = "NONE"
+incidents = ["inc.2026-10-02.host-sleep", "inc.2026-10-03.hl-502", "inc.2026-10-05.network-loss-1", "inc.2026-10-05.network-loss-2", "inc.2026-10-05.funding-booked-late"]
+validity = "VALID_WITH_LIMITATIONS"
+limitations = ["The 2026-10-05 08:00Z funding hour was booked 275 s late after the network gap, at the rate observed then (inc.2026-10-05.funding-booked-late): about +$0.015 on the capped account; the book-replay regrade (+140.34 bps) differs from the ledger (+141.82) by this.", "One window (capped n 4, shadow n 74): cannot validate rule W; the M3 go threshold needs ≥ 12 weekends.", "Per-name taker fees ~9 bps per side on hyperliquid:xyz:MSTR and hyperliquid:xyz:PURRDAT (capped; also hyperliquid:xyz:BMNR in the shadow) vs 0.9 bps modelled in xlab.", "Filled entry notional $98.43, not $100 (size rounding: hyperliquid:xyz:CBRS intent qty 0.13612109332462158 → filled 0.13).", "Data gaps outside the decision instants (4 incidents; ctx minutes backfilled by 1m bars, 4 hl_book slots lost); entry 2026-10-04T22:00:00–22:00:16Z and exit 2026-10-05T13:00:00–13:00:10Z had no WARN.", "Binary tengu-6fcb455 (commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c, not on main) lacks the later W1-gate fixes (money-safety batches: exit backoff, shadow PaperFills proof, KILL probed inside the transaction, funding accrual, one owner per ledger, …): W1 as run ≠ W1 as merged.", "The capped result is carried by one name: hyperliquid:xyz:CBRS +0.955818 of +1.370036 USD.", "xm_exits ran on stale marks 2026-10-05T07:44:45–09:41:00Z (TP / SL blind; no exit was due).", "Ledger accounts and deposits were created by the 2026-10-01T01:31:57Z dry run; no trade before 2026-10-04T22:00Z."]
+notes = "Frozen before the anchor: rule W in commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c (2026-10-01T06:22:10Z), binary sha256 e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72 (soaked 2026-10-01 06:34–07:04Z), config e5daae83febea00e549ce9b8cac83bddce12a0a2 (= main's sandbox except recorder schemas / keep_data \"*\"). Runner pid 31380, one start 2026-10-02T19:18:55Z, SIGINT stop 2026-10-05T14:00:44.844Z, rc 0. Capped picks (all short): hyperliquid:xyz:CBRS +400.5, hyperliquid:xyz:BIRD +211.8, hyperliquid:xyz:MSTR −23.3, hyperliquid:xyz:PURRDAT −21.7 bps net. Shadow: n_universe 75, n_eligible 74, 1 flat (hyperliquid:xyz:ASML); 57 shorts / 17 longs; 40 of 74 net > 0. All 156 risk verdicts allow (rule ok)."
+
+[[windows]]
+role = "DATA"
+from = "2026-10-02T19:18:55Z"
+to = "2026-10-05T14:00:45Z"
+scope = "live recording by the weekend runner (mkt_ctx/1 110 markets / 60 s, hl_book/1 75 books / 300 s, 60 s Sun 21:00–22:59Z and Mon 12:30–13:30Z)"
+integrity = "CLEAN"
+
+[[windows]]
+role = "FORWARD"
+from = "2026-10-03T00:00:00Z"
+to = "2026-10-05T13:00:00Z"
+scope = "75 xyz stock perps; anchor Fri 20:00 New York = 2026-10-03T00:00:00Z, entry Sun 18:00 = 2026-10-04T22:00:00Z, exit Mon 09:00 = 2026-10-05T13:00:00Z"
+integrity = "CLEAN"
+note = "Exit fills 2026-10-05T13:00:00–13:00:10Z."
+
+[[results]]
+label = "capped account xmarket-weekend: rule W top 4 at $25, through the [risk] gate"
+arm = "capped"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 141.81679234698376
+net_usd = 1.370036060021
+evidence = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+extract = "ledger:xmarket-weekend"
+note = "net_usd = final cash 101.370036060021 − 100 (cash id 1270, 2026-10-05T13:00:02Z): realized 1.29679 − fees 0.09819988 + funding received 0.1714459429; mean = per-trade net bps on filled notional (fade row xm_weekend/1:2026-10-02 capped_mean_net_bps)."
+
+[[results]]
+label = "shadow account xmarket-weekend-shadow: every eligible name at $100, no caps (variant weekend_fade)"
+arm = "shadow"
+class = "FORWARD_PAPER"
+n = 74
+mean_net_bps = 8.43210862319518
+net_usd = 6.213796012
+evidence = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+extract = "ledger:xmarket-weekend-shadow"
+note = "net_usd = final cash 10006.213796012 − 10000 (cash id 1328, 2026-10-05T13:00:10Z): realized 6.849795 − fees 1.80911946 + funding received 1.1731204705; mean = fade row shadow_mean_net_bps."
+
+[[results]]
+label = "book-replay regrade of the capped picks (independent of the paper engine; first book at / after each instant, recorded fees)"
+arm = "capped_regrade"
+class = "FORWARD_PAPER"
+n = 4
+mean_net_bps = 140.3425
+net_usd = 1.403425
+evidence = "vault:w1-2026-10-06/xmarket-weekend/history/20261004.db"
+note = "DERIVED (tengu evidence regrade, P0): every entry and exit price equals the ledger fill; the gap to +141.82 is the late 08:00 funding hour. All 74 names at $100: +8.0036 bps, $5.922647 vs the shadow ledger +8.4321, $6.213796 (sides agree 74 / 74)."
+
+[verdict]
+value = "PENDING"
+reason = "One window cannot validate rule W (M3 go: ≥ 12 weekends, mean ≥ +15 bps, t ≥ 1.5, not carried by ≤ 2 weekends). Capped +1.37 USD (+141.8 bps a trade, n 4; CBRS alone +0.96); shadow +6.21 USD (+8.4 bps a trade, n 74)."
+decided_at = "2026-10-06"
+decided_by = "lineage import (P0 / P2 coordinator brief, 2026-10-06)"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/ledger.db"
+role = "paper ledger: both accounts, orders, fills, funding, risk verdicts (old schema of 6fcb455)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261002.db"
+role = "recorder day file Fri 19:18:55–23:59:45Z (anchor side)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "b64013bc93ec840542e63b62892fb4a17605680fc699546605e23c9df06c5a42"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261003.db"
+role = "recorder day file Sat (anchor row, books)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+note = "415805440 B; not hashed in the inventory (SKIPPED-LARGE): the vault manifest holds its sha256."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261004.db"
+role = "recorder day file Sun (entry 22:00Z: 74 xm_weekend_signal/1 rows, 78 paper_fill/1 rows)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+note = "447082496 B; SKIPPED-LARGE in the inventory."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261005.db"
+role = "recorder day file Mon to 14:00:30Z (exit fills 13:00Z; 92 xm_exits/1 partial rows)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+note = "295100416 B; SKIPPED-LARGE in the inventory."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/ext/xmarket-weekend-ws/observations.db"
+role = "observation cache: the 74 signal rows + final xm_weekend/1:2026-10-02 row (purged on open after ~2026-10-12 — the vault copy is the durable one)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "3f0b9d111cdeab8f5abc48f52195ea19b2dc57958362be470e6dca15a2bf3d5b"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/tengu-logs/risk.jsonl"
+role = "156 risk verdicts (capped 4 + 4, shadow 74 + 74), all allow"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "48eb153350461c31c6aeae879fe2590f804bcf4ce92a2c42cb6aa5f6ca69f6ef"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/run-logs/pane.log"
+role = "runner log (RUST_LOG=info,tengu=debug), 106908 lines, 154 WARN, 0 ERROR"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "93bba3ff7bc62b42459aeb9e03da06aa6e4681dc2e9b0f173612d858c3454d1b"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/tengu-logs/egress.jsonl"
+role = "egress audit (weekend pid 31380: 77408 × 200, 4259 errors, 14 × 502)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "af5c810f9b2d0d454ac5c85ea27f7ba24cafe633bbb656a52d6ab8a13d1a5184"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/l2book.jsonl"
+role = "independent 5-min curl sampler of every xyz book from 2026-10-02T23:30Z (not in egress.jsonl)"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "b5255caa260ff513380b3f000c3a30b8c894ba84f556995667bd5ac65dc8bcec"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/ctx.jsonl"
+role = "independent 5-min curl sampler of contexts from 2026-10-02T23:30Z"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "579a874244348262a214bae3d64a87929ee25898217df9d8e62abafda40b1586"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xlab/market.db"
+role = "1m bars 2026-10-02T19:00Z → 10-05T14:00Z backfilled after the stop (fetched 2026-10-05T14:01:16–14:12:16Z); 59 % are n = 0 flat bars"
+class = "FORWARD_PAPER"
+provenance = "BACKFILLED"
+sha256 = "b5a0dc45e37660f8f66be0eb401b3adc67dcd4ef47758c71cafc1951dc503ac7"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/ext/binaries/tengu-6fcb455"
+role = "prereg"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+sha256 = "e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72"
+note = "The frozen weekend binary (30640528 B), built from 6fcb455bae5553e2d51390e4cedd334779ca0d9c; rule, binary and config frozen before the 2026-10-03T00:00:00Z anchor."
+
+[[evidence]]
+ref = "git:e5daae83febea00e549ce9b8cac83bddce12a0a2"
+role = "prereg: the sandbox config that ran (2026-10-02T19:18:32Z)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+
+[[evidence]]
+ref = "git:6fcb455bae5553e2d51390e4cedd334779ca0d9c"
+role = "the code of the frozen binary (only on origin/feature/xmarket)"
+class = "NONE"
+provenance = "NOT_APPLICABLE"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/replay-2026-09-26/weekend_2026-09-26_golden.json"
+role = "rule W replay golden of the 2026-09-26 weekend (74 names, +95.5 bps mean) — the rule's correctness check before the run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "9fab0fcf71fd4a10d4d300e94b8ba0781d1e9844bdb5d3e6e039db8d3d9cae0f"

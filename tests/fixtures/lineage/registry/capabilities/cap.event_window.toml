@@ -1,0 +1,8 @@
+id = "cap.event_window"
+title = "Event-window strategy kind (W2 only)"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "CANDIDATE"
+contract = "spec:w2sim/news_event"
+bindings = ["strategy_kind:event_window"]

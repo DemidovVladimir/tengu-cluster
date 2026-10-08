@@ -1,0 +1,16 @@
+id = "rule_w.saturday"
+family = "rule_w"
+title = "Rule W entered Saturday instead of Sunday (registered before any run)"
+parent = "rule_w.all"
+reason = "Earlier entry catches more of the reversion if it starts Saturday."
+registered_at = "2026-10-06T10:00:00Z"
+preregistered = true
+status = "REGISTERED"
+
+[[changed]]
+dim = "entry"
+from = "Sun 18:00 NY"
+to = "Sat 12:00 NY"
+
+[spec]
+described = "rule_w.all with the entry moved to Saturday 12:00 New York"

@@ -1,0 +1,19 @@
+id = "rule_w"
+title = "Rule W — fade the weekend move of the xyz stock perps"
+hypothesis = "Weekend moves of the xyz stock perps, made while the underlying market is closed, revert by Monday's open."
+mechanism = "Thin weekend books overreact; the Monday open reprices to the underlying."
+role = "PRIMARY"
+status = "SURVIVING"
+status_reason = "Positive after costs on the time holdout and the instruments holdout."
+origin_at = "2026-09-26"
+origin = "repo:docs/study.md"
+origin_by = "operator + Architect"
+parent = "NONE"
+preceded_by = ["overnight_follow"]
+controls = ["weekend_follow"]
+
+[prior_search]
+count = 27
+precision = "APPROX"
+source = "repo:docs/study.md"
+note = "variants tried in the feasibility study before the registry"

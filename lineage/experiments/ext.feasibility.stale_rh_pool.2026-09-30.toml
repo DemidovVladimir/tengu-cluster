@@ -1,0 +1,41 @@
+id = "ext.feasibility.stale_rh_pool.2026-09-30"
+title = "Feasibility study: stale Robinhood pool after HL jumps (measure only)"
+family = "stale_rh_pool"
+variant = "stale_rh_pool.measure"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "Pool fee tier (0.05 % pools) → ~15 bps break-even"
+uncertainty = "As reported by the study (critic re-computed every load-bearing number); per-figure CIs where given"
+incidents = []
+limitations = ["Throwaway analysis scripts (session scratchpad): only the doc's numbers survive.", "Generation UNKNOWN: outside tengu, before any generation."]
+
+[[windows]]
+role = "DATA"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "Robinhood Chain token pools vs HL after events"
+integrity = "CLEAN"
+
+[[results]]
+label = "tokens lag HL for ~1 h after events; only the 0.05 % pools could clear their ~15 bps break-even; ~1 / week"
+class = "DEVELOPMENT"
+n = "UNKNOWN"
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; edge unknown."
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "Measure only: edge unknown; the stale-pool quote recording continues as a measurement."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study (one collector, four analysts, a critic)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"

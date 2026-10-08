@@ -1,0 +1,15 @@
+id = "infra.recorder"
+title = "History recorder (live day files)"
+class = "INFRASTRUCTURE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "FORWARD_PAPER"
+contract = "config:xmarket-weekend/recorder"
+bindings = []
+notes = "Appends typed rows to <state dir>/history/<YYYYMMDD>.db with source live; the anchor of rule W is read from it. W1 main config records mkt_ctx/1, hl_book/1, mkt_instrument/1; the forward run used schemas / keep_data \"*\" (config e5daae83febea00e549ce9b8cac83bddce12a0a2)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket-weekend/history/20261002.db"
+role = "first live day file of the forward test"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"

@@ -1,0 +1,17 @@
+id = "weeknight_fade"
+title = "Weeknight fade — rule W's mechanism on Mon–Thu nights"
+hypothesis = "Fading the 4 largest |s| ≥ 50 bps moves of xyz stock perps from 20:00 to 00:00 New York (exit 09:00) on Mon–Thu nights earns more than costs."
+mechanism = "As rule W, on the overnight close of the underlying instead of the weekend."
+role = "PRIMARY"
+status = "INCONCLUSIVE"
+status_reason = "xlab, preregistered spec: all periods +26.83 bps (CI −0.7 … +55.8, n 568), in-sample +38.21 (CI +1.1 … +74.2), holdout +12.95 (CI −32.7 … +58.7) — and that holdout had already been seen by weekday.sql (contaminated, said so in the plan). Commit 868dabab6edb253125040a09c134e81c91b00ca4: \"Small edge, not proven.\" The clean test is forward nights after 2026-10-05 (not started)."
+origin_at = "2026-10-03T13:03:50Z"
+origin = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/plan-weekday-night-fade-xlab.md"
+origin_by = "weekend research session (plan file, written before any xlab run)"
+parent = "weekend_overshoot_fade"
+
+[prior_search]
+count = 3
+precision = "LOWER_BOUND"
+source = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/weekday.sql"
+note = "weekday.sql (113 nights 2026-03-09 … 09-28) reported top 4 at 00:00 (+37.3), all names at 00:00 (+10.5) and top 4 at 04:00 (+21.1); other cuts it may have computed are not stored."

@@ -4,7 +4,9 @@
 mod backtest;
 mod decide;
 mod doctor;
+mod evidence;
 mod history;
+mod lineage;
 mod risk;
 mod run_agent;
 mod skill;
@@ -138,6 +140,19 @@ enum Commands {
         #[command(flatten)]
         args: backtest::BacktestArgs,
     },
+    /// Preserve and grade forward evidence (docs/lineage-2026-10-06.md § 3):
+    /// `snapshot` a record into a read-only vault, `verify` it, recorder
+    /// `coverage`, `grade` a paper ledger, `regrade` rule W from recorded
+    /// books. No config, no network; every reader is read-only.
+    Evidence {
+        #[command(subcommand)]
+        action: evidence::EvidenceAction,
+    },
+    /// The lineage registry (`lineage/`): verify it, trace a record, a
+    /// family's search accounting, the Rule-W acceptance report,
+    /// capabilities, generations, seal a preregistration. No config needed.
+    /// See docs/lineage-2026-10-06.md § 5.
+    Lineage(lineage::LineageArgs),
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
     /// account name, and for the content of `TENGU_RISK_RESUME_SECRET_FILE`
@@ -402,6 +417,33 @@ pub(crate) async fn run() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
         return tool::run_tool_command(cli.config, action).await;
+    }
+
+    if let Some(Commands::Evidence { action }) = cli.command {
+        // No config, secrets or egress: read-only files + the new vault.
+        // stdout carries the report; logs go to stderr.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return tokio::task::block_in_place(|| evidence::run_evidence(action));
+    }
+
+    if let Some(Commands::Lineage(args)) = cli.command {
+        // Registry only — no config, no secrets; stdout carries the view.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return lineage::run_lineage(args);
     }
 
     let tengu_home = resolve_tengu_home();
@@ -741,8 +783,14 @@ pub(crate) async fn run() -> Result<()> {
             // exhaustiveness only.
             unreachable!("Commands::RunAgent is dispatched earlier in main()")
         }
+        Commands::Lineage(_) => {
+            unreachable!("Commands::Lineage is dispatched earlier in run()")
+        }
         Commands::Tool { .. } => {
             unreachable!("Commands::Tool is dispatched earlier in main()")
+        }
+        Commands::Evidence { .. } => {
+            unreachable!("Commands::Evidence is dispatched earlier in main()")
         }
     }
 }

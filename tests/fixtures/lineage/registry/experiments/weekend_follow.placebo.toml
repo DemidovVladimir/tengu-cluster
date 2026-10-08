@@ -1,0 +1,34 @@
+id = "weekend_follow.placebo"
+title = "The weekend follow placebo on history"
+family = "weekend_follow"
+variant = "weekend_follow.base"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T12:30:00Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "3.8 bps round trip on xyz"
+capabilities = ["cap.weekend_window", "cap.backtest"]
+uncertainty = "Bootstrap CI over weekends."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-01"
+to = "2026-09-26"
+integrity = "CLEAN"
+
+[[results]]
+label = "follow"
+class = "DEVELOPMENT"
+n = 1480
+mean_net_bps = -44.9
+ci95_bps = [-70.0, -20.0]
+evidence = "repo:docs/study.md"
+
+[verdict]
+value = "FAIL"
+reason = "The placebo loses what rule W earns: the control behaves."
+decided_at = "2026-10-01"
+decided_by = "operator"

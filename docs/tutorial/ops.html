@@ -182,12 +182,12 @@
     <div class="stage-side">
       <ol class="captions">
         <li><code>deploy/install.sh</code> (or <code>cloud-init.yml</code> on a VPS) clones the repo and lyrebird-rs, copies <code>.env</code> and <code>config.toml</code> from the examples, then runs <code>make up</code>.</li>
-        <li><code>make up SANDBOX=&lt;name&gt;</code> mounts <code>sandboxes/&lt;name&gt;/config.toml</code> read-only as <code>/opt/tengu/config.toml</code>. Without <code>SANDBOX</code> it mounts <code>./config.toml</code>.</li>
+        <li><code>make up SANDBOX=&lt;name&gt;</code> mounts <code>sandboxes/&lt;name&gt;/config.toml</code> read-only at its own path, <code>/opt/tengu/sandboxes/&lt;name&gt;/config.toml</code>, and points <code>TENGU_CONFIG</code> there. Without <code>SANDBOX</code>: <code>./config.toml</code> as <code>/opt/tengu/config.toml</code>.</li>
         <li><code>NETWORK</code> comes from that file: <code>network = "open"</code> inside its <code>[egress]</code> section means open, anything else means tor. <code>NETWORK=tor|open</code> on the command line wins.</li>
         <li>Under tor, <code>docker-compose.tor.yml</code> joins: tengu sits on <code>tor-front</code>, an internal network with no gateway. No port is published; <code>TENGU_TOR_PROXY=socks5h://tor:9050</code>.</li>
         <li>The tor container runs Arti, SOCKS5 and HTTP CONNECT on port 9050. Arti starts lyrebird-rs; every connection into Tor goes through an obfs4 or snowflake bridge.</li>
         <li>The tor container is healthy only once <code>check.torproject.org</code> reports a Tor exit, tried every 15 s up to 40 times. tengu waits for that.</li>
-        <li>The tengu container runs <code>tengu telegram</code>. <code>TENGU_HOME</code> is <code>/opt/tengu/data</code> on the <code>tengu-data</code> volume; <code>skills/</code> and <code>sandboxes/</code> are baked into the image.</li>
+        <li>The tengu container runs <code>tengu telegram</code>. <code>TENGU_HOME</code> is <code>/opt/tengu/data</code> on the <code>tengu-data</code> volume. <code>skills/</code>, <code>sandboxes/</code> and <code>lineage/</code> are baked in, so <code>registry = "../../lineage"</code> finds <code>/opt/tengu/lineage</code>.</li>
         <li>Every 60 s Docker runs <code>tengu doctor</code>: it builds every agent's engine, looks for the Claude CLI of each <code>claude_code</code> agent and checks the proxy port answers. Any failure exits 1.</li>
         <li>Three failed checks in a row mark the container unhealthy. <code>make doctor</code> runs the same command, plus <code>--tor</code> under tor for a live exit check.</li>
         <li><code>NETWORK=open</code> skips the override: no tor container, port 7080 published for <code>tengu webhooks</code>, traffic leaves under the config's <code>[egress]</code> rules.</li>
@@ -317,8 +317,9 @@ tengu secret path</pre></div>
     <div class="tabpanel" id="tab-img" hidden><pre><span class="c"># Dockerfile (tengu)</span>
 builder  rust:1.91-bookworm, FEATURES=<span class="s">"openrouter,telegram"</span> (TENGU_FEATURES overrides)
 runtime  debian:bookworm-slim + ca-certificates, libssl3   <span class="c"># no Claude CLI inside</span>
-         /opt/tengu/{skills,sandboxes}, WORKDIR /opt/tengu
+         /opt/tengu/{skills,sandboxes,lineage}, WORKDIR /opt/tengu
          TENGU_CONFIG=/opt/tengu/config.toml  TENGU_HOME=/opt/tengu/data
+         <span class="c"># compose sets TENGU_CONFIG=${TENGU_CONTAINER_CONFIG} (Makefile: the sandbox's own path)</span>
          EXPOSE 7080   HEALTHCHECK tengu doctor   ENTRYPOINT tengu   CMD telegram
 
 <span class="c"># deploy/tor/Dockerfile (proxy)</span>
@@ -412,10 +413,10 @@ ufw: allow 22/tcp and 7080/tcp
         <tr><td><code>src/domain/runtime.rs</code></td><td><code>live_verdict</code>: heartbeat, loops, feeds</td></tr>
         <tr><td><code>src/config/runtime.rs</code></td><td><code>heartbeat_stale_secs</code> and the other <code>[runtime]</code> knobs</td></tr>
         <tr><td><code>src/adapters/outbound/prune.rs</code></td><td>prune plan: targets, <code>--hard</code>, the state-dir guard</td></tr>
-        <tr><td><code>Dockerfile</code></td><td>the tengu image, its HEALTHCHECK and CMD</td></tr>
-        <tr><td><code>docker-compose.yml</code></td><td>tengu + optional Postgres / pgvector</td></tr>
+        <tr><td><code>Dockerfile</code></td><td>the tengu image (<code>skills/</code>, <code>sandboxes/</code>, <code>lineage/</code>), its HEALTHCHECK and CMD</td></tr>
+        <tr><td><code>docker-compose.yml</code></td><td>tengu + optional Postgres / pgvector; the config mount at <code>TENGU_CONTAINER_CONFIG</code></td></tr>
         <tr><td><code>docker-compose.tor.yml</code></td><td>the Tor topology override</td></tr>
-        <tr><td><code>Makefile</code></td><td>targets, <code>SANDBOX</code>, derived <code>NETWORK</code></td></tr>
+        <tr><td><code>Makefile</code></td><td>targets, <code>SANDBOX</code>, <code>TENGU_CONTAINER_CONFIG</code>, <code>NETWORK</code> from the <code>[egress]</code> table</td></tr>
         <tr><td><code>deploy/tor/</code></td><td>Arti + lyrebird-rs image, <code>arti.toml</code>, compose files</td></tr>
         <tr><td><code>deploy/install.sh</code></td><td>one-line installer</td></tr>
         <tr><td><code>deploy/cloud-init.yml</code></td><td>VPS provisioning and the systemd unit</td></tr>
@@ -425,7 +426,7 @@ ufw: allow 22/tcp and 7080/tcp
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>
@@ -444,9 +445,9 @@ ufw: allow 22/tcp and 7080/tcp
     "storage-test": { file: "sandboxes/storage-test/config.toml", open: false, cc: 1, or: 0, tg: true },
     "tor-check": { file: "sandboxes/tor-check/config.toml", open: false, cc: 0, or: 1, tg: false },
     "unlimited": { file: "sandboxes/unlimited/config.toml", open: true, cc: 0, or: 1, tg: true },
-    "xlab": { file: "sandboxes/xlab/config.toml", open: true, cc: 2, or: 0, tg: false },
+    "xlab": { file: "sandboxes/xlab/config.toml", open: true, cc: 2, or: 0, tg: false, gen: true },
     "xmarket": { file: "sandboxes/xmarket/config.toml", open: true, cc: 2, or: 0, tg: false },
-    "xmarket-weekend": { file: "sandboxes/xmarket-weekend/config.toml", open: true, cc: 0, or: 1, tg: false }
+    "xmarket-weekend": { file: "sandboxes/xmarket-weekend/config.toml", open: true, cc: 0, or: 1, tg: false, gen: true }
   };
   var sel = $("m-sb");
   Object.keys(SB).forEach(function (k) {
@@ -472,7 +473,8 @@ ufw: allow 22/tcp and 7080/tcp
     if (!h.some(function (x) { return x.indexOf("bad") >= 0; })) h.push('<span class="good">doctor can pass</span>');
     var tg = s.tg ? "has a <code>[telegram]</code> block" : "no <code>[telegram]</code> block: set <code>TENGU_TELEGRAM_ALLOWED_USERS</code> or it refuses to start";
     $("m-plan").innerHTML =
-      row("config", "<code>" + s.file + "</code> → <code>/opt/tengu/config.toml</code> (ro)") +
+      row("config", "<code>" + s.file + "</code> → <code>/opt/tengu/" + (k ? "sandboxes/" + k + "/" : "") + "config.toml</code> (ro) = <code>TENGU_CONFIG</code>") +
+      row("lineage", s.gen ? "<code>[generation] registry = \"../../lineage\"</code> → <code>/opt/tengu/lineage</code>, baked into the image; the generation must list this sandbox, named from its mount path" : "no <code>[generation]</code>: no registry binding") +
       row("network", "<b>" + net + "</b> — " + why) +
       row("command", "<code>" + cmd + "</code>") +
       row("ports", ports) +

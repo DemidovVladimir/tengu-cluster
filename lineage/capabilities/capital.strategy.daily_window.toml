@@ -1,0 +1,15 @@
+id = "capital.strategy.daily_window"
+title = "Strategy kind daily_window"
+class = "CAPITAL"
+version = 1
+permission = "RESEARCH"
+lifecycle = "HISTORICALLY_TESTED"
+contract = "repo:src/domain/backtest/spec.rs"
+bindings = ["strategy_kind:daily_window"]
+notes = "Backtested: xyz_overnight_follow (no-go), the weeknight fade specs (inconclusive)."
+
+[[evidence]]
+ref = "record:experiment/xlab.xyz_overnight_follow.2026-10-01"
+role = "library run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

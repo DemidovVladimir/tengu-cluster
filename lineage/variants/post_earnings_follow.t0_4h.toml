@@ -1,0 +1,13 @@
+id = "post_earnings_follow.t0_4h"
+family = "post_earnings_follow"
+title = "Rule E, entry t0 + 4 h after the release"
+parent = "ROOT"
+reason = "The feasibility study's rule E (\"1–4 h after an Item 2.02 release, follow HL's move, exit before 09:30 ET\"); the names holdout tested it at t0 + 4 h."
+registered_at = "2026-09-30"
+order = 1
+preregistered = false
+status = "REJECTED"
+notes = "Which entry delay produced the in-sample +110 bps is not stated (the doc says \"1–4 h\"): UNKNOWN."
+
+[spec]
+described = "After a post-market EDGAR Item 2.02 (earnings) release at t0 for one of the xyz names, at t0 + 4 h follow the HL perp's move since t0; exit before 09:30 New York; HL candle closes; 3.8 bps round trip. 6-K rows (no item codes) left out by the protocol."

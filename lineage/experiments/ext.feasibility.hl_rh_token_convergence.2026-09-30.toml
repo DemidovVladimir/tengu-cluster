@@ -1,0 +1,41 @@
+id = "ext.feasibility.hl_rh_token_convergence.2026-09-30"
+title = "Feasibility study: HL ↔ Robinhood token convergence"
+family = "hl_rh_token_convergence"
+variant = "hl_rh_token_convergence.feasibility"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "Pool fees + HL taker 0.9 bps; 16 of 21 Robinhood tokens cost 30–220+ bps per round trip"
+uncertainty = "As reported by the study (critic re-computed every load-bearing number); per-figure CIs where given"
+incidents = []
+limitations = ["Throwaway analysis scripts (session scratchpad): only the doc's numbers survive.", "Generation UNKNOWN: outside tengu, before any generation."]
+
+[[windows]]
+role = "DATA"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "22 HL xyz perps vs Robinhood Chain stock-token pools: 1,199 real swaps (GeckoTerminal)"
+integrity = "CLEAN"
+
+[[results]]
+label = "$100 round trip p50 −19.9 bps, p75 −12.1 bps; 0 of 1,199 swaps positive at $25"
+class = "DEVELOPMENT"
+n = 1199
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED; a distribution, not a mean (no mean_net_bps)."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go (confidence medium): the pools are already arbitraged to within their fees."
+decided_at = "2026-09-30"
+decided_by = "xmarket feasibility study (one collector, four analysts, a critic)"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"

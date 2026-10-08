@@ -1,0 +1,60 @@
+id = "rule_w.jev_gate"
+title = "Jev as a gate on rule W's top-4 candidates, replayed on history"
+family = "rule_w"
+variant = "rule_w.top4"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-02"
+ran_at = "2026-10-02T10:00:00Z"
+preregistered = false
+policies = ["DETERMINISTIC", "JEV_GATE"]
+cost_model = "3.8 bps round trip on xyz"
+capabilities = ["cap.weekend_window", "cap.backtest", "cap.jev_gate"]
+uncertainty = "Paired bootstrap of jev − rules over weekends."
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-01"
+to = "2026-10-01"
+integrity = "CONTAMINATED"
+note = "Jev's training data may cover the period"
+
+[[results]]
+label = "rules"
+arm = "rules"
+class = "DEVELOPMENT"
+n = 120
+mean_net_bps = 55.0
+ci95_bps = [12.0, 98.0]
+net_usd = 66.0
+t_stat = 2.2
+evidence = "run:xlab/20261002T100000Z-rule_w_top4"
+extract = "arm:rules"
+
+[[results]]
+label = "jev"
+arm = "jev"
+class = "DEVELOPMENT"
+n = 61
+mean_net_bps = 49.9
+ci95_bps = [-10.0, 108.0]
+net_usd = 30.44
+t_stat = 1.4
+evidence = "run:xlab/20261002T100000Z-rule_w_top4"
+extract = "arm:jev"
+
+[[results]]
+label = "jev − rules"
+class = "DEVELOPMENT"
+n = 120
+mean_net_bps = -5.1
+ci95_bps = [-60.2, 48.7]
+evidence = "run:xlab/20261002T100000Z-rule_w_top4"
+extract = "gate"
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "Jev took half the candidates and did not beat the rules."
+decided_at = "2026-10-02"
+decided_by = "operator"

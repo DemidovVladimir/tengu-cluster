@@ -10,7 +10,7 @@
 //! | `--from` / `--to` | decisions in `[from, to)`: epoch ms, RFC 3339 or a UTC date (`domain::marketdata::parse_time`); default the earliest stored bar of the run's instruments at the spec's interval / now |
 //! | `--split time:<t>` · `instruments:<id,…>` | in-sample vs holdout, side by side |
 //! | `--format table` (default) · `json` | the compact summary (+ the gate's two lines) + the run dir · `report.json` on stdout (the run dir on stderr) |
-//! | `--fetch` | first `tengu history backfill` (same code: resume, budgets, egress audit) of the run's Hyperliquid instruments at the spec's interval + funding, over the run's data range (from HL's oldest bar without `--from`); prints its run table (stderr with `json`); a failed row is a warning — the run goes on with what is stored |
+//! | `--fetch` | a kind outside the sandbox's `[generation]` is refused before anything is fetched (`capability_unavailable`); then `tengu history backfill` (same code: resume, budgets, egress audit) of the run's Hyperliquid instruments at the spec's interval + funding, over the run's data range (from HL's oldest bar without `--from`); prints its run table (stderr with `json`); a failed row is a warning — the run goes on with what is stored |
 //! | `--gate [<loop>]` | the Jev gate arm (§ 7) with `[decision_loops.<loop>]`; no value = `[backtest] gate` (neither ⇒ an error). Built before `--fetch` and `prepare` — an unknown or tool-calling loop, or a missing `OPENROUTER_API_KEY` online, fails before any work |
 //! | `--max-decisions <n>` | 500: the first n candidates by seq are decided, the rest counted as cut (`report.md`, the CLI lines) |
 //! | `--concurrency <k>` | 4, 1–16: replay loops deciding at once (the decisions never depend on k) |
@@ -36,8 +36,8 @@ use crate::adapters::outbound::backfill::hl::hl_reach_ms;
 use crate::adapters::outbound::market_data::{market_state_dir, open_market_data};
 use crate::application::backtest::gate::{describe, evaluate_gated, run_gate, Gate, GateAudit};
 use crate::application::backtest::{
-    evaluate, prepare, resolve, write_run_dir, BacktestEnv, BacktestJob, BacktestRun, Prepared,
-    SpecSource,
+    capability_refusal, evaluate, prepare, resolve, write_run_dir, BacktestEnv, BacktestJob,
+    BacktestRun, Prepared, SpecSource,
 };
 use crate::bootstrap::decision::build_gate;
 use crate::config::backtest::BacktestConfig;
@@ -258,6 +258,10 @@ async fn fetch(
 ) -> Result<()> {
     let bt = sections.backtest.clone().unwrap_or_default();
     let r = resolve(&bt, &job.spec)?;
+    // A kind outside the bound generation fetches nothing (`prepare` refuses it too).
+    if let Some(refusal) = capability_refusal(sections, &r.spec) {
+        bail!("{refusal}");
+    }
     let interval = r.spec.interval;
     let to = job.to_ms.unwrap_or(now);
     let (lo, hi) = match job.from_ms {
@@ -537,5 +541,38 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("read /nonexistent/x.json"));
+    }
+
+    /// Review #16: `--fetch` of a kind the bound generation lacks writes
+    /// nothing into `market.db` — refused before the backfill.
+    #[tokio::test]
+    async fn fetch_refuses_a_kind_outside_the_generation_before_fetching() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lineage/registry");
+        let reg = crate::config::lineage::load_registry(&dir).unwrap();
+        let sections = SandboxSections {
+            generation: Some(std::sync::Arc::new(
+                crate::domain::lineage::generation::GenerationScope::of(&reg, "W1").unwrap(),
+            )),
+            ..Default::default()
+        };
+        let job = BacktestJob {
+            spec: SpecSource::Json {
+                value: serde_json::json!({"name": "news", "kind": "event_window", "interval": "1h",
+                    "events": [{"instrument": "hyperliquid:xyz:TSLA", "t": "2026-09-10T14:00:00Z"}],
+                    "direction": "follow", "exit_after_mins": 120}),
+                fallback_name: None,
+            },
+            from_ms: Some(parse_time("2026-09-01").unwrap()),
+            to_ms: Some(parse_time("2026-09-20").unwrap()),
+            split: None,
+        };
+        let e = fetch(&sections, &job, now_ms(), OutputFormat::Table)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.starts_with("capability_unavailable: strategy `news`"),
+            "{e}"
+        );
     }
 }

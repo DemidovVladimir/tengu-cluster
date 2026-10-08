@@ -1,0 +1,15 @@
+id = "intel.architect"
+title = "The xlab Architect (research agent)"
+class = "INTELLIGENCE"
+version = 1
+permission = "RESEARCH"
+lifecycle = "DISCOVERED"
+contract = "config:xlab/agents.xl_architect"
+bindings = []
+notes = "W1: claude_code claude-opus-5-5, builtin_tools_profile none, tools market_history / backtest / read_file / list_directory, skill xlab-research; reads and backtests only, never trades. Its research quality was never evaluated (the 2026-10-01 turns ran on openrouter anthropic/claude-sonnet-4-6 and read one spec's holdout 4 times over 3 splits)."
+
+[[evidence]]
+ref = "record:experiment/xlab.architect_holdout.weekend_fade.2026-10-01"
+role = "its counted holdout read"
+class = "HOLDOUT"
+provenance = "DERIVED"

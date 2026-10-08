@@ -105,6 +105,9 @@ pub(crate) fn build_tool_executor(
     agent_config: &AgentConfig,
     mcp_servers: &[McpServerConfig],
 ) -> Option<PluginToolExecutor> {
+    // Defense in depth for `[generation]`: `Config::load` already refuses a
+    // config listing a tool outside the bound generation.
+    let tools = &within_generation(agent_config, tools);
     if tools.is_empty() {
         return None;
     }
@@ -214,6 +217,27 @@ pub(crate) fn build_tool_executor(
         // borrow into ToolCtx happens in PluginToolExecutor::execute.
         agent_config: Some(agent_config.clone()),
     })
+}
+
+/// `tools` minus the ones the agent's bound generation refuses
+/// (`[generation]`, `GenerationScope::tool_refusal`: a tool another
+/// generation's capability binds, an opt-in tool no capability binds), each
+/// dropped with a warning; all of them when the sandbox binds none.
+pub(crate) fn within_generation(agent: &AgentConfig, tools: &[ToolDef]) -> Vec<ToolDef> {
+    let Some(scope) = &agent.sandbox.generation else {
+        return tools.to_vec();
+    };
+    tools
+        .iter()
+        .filter(|t| match scope.tool_refusal(&t.name) {
+            None => true,
+            Some(why) => {
+                tracing::warn!(tool = %t.name, generation = %scope.id, "{why} — not registered");
+                false
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 /// Resolve the per-tool scope map for an executor: a configured entry in
@@ -410,12 +434,14 @@ pub(crate) fn agent_base_tools(
 ) -> Vec<ToolDef> {
     let cfg = subagent_config(agent);
     let base = compute_base_tools(uses_tools, has_memory, &cfg.workspace_tools);
-    if agent.tools.is_empty() {
-        return base;
-    }
-    base.into_iter()
-        .filter(|t| agent.tools.contains(&t.name) || cfg.workspace_tools.contains(&t.name))
-        .collect()
+    let listed: Vec<ToolDef> = if agent.tools.is_empty() {
+        base
+    } else {
+        base.into_iter()
+            .filter(|t| agent.tools.contains(&t.name) || cfg.workspace_tools.contains(&t.name))
+            .collect()
+    };
+    within_generation(agent, &listed)
 }
 
 /// A plan step's `compose` applied to its base `[agents.<compose.base_agent>]`
@@ -583,6 +609,56 @@ mod golden_tests {
     struct StubActivity;
     impl ToolActivityPort for StubActivity {
         fn publish_tool_activity(&self, _call: &ToolCall) {}
+    }
+
+    /// `[generation]` defense in depth: an agent bound to W1 (the lineage
+    /// fixture) gets no W2-only tool and no unregistered opt-in tool, even
+    /// when its list names them; base tools stay.
+    #[test]
+    fn a_tool_outside_the_bound_generation_is_not_registered() {
+        let reg = crate::config::lineage::load_registry(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/lineage/registry"),
+        )
+        .unwrap();
+        let scope = crate::domain::lineage::generation::GenerationScope::of(&reg, "W1").unwrap();
+        let def = |name: &str| ToolDef {
+            name: name.into(),
+            description: String::new(),
+            parameters: serde_json::json!({"type": "object"}),
+        };
+        let tools = vec![
+            def("backtest"),
+            def("read_file"),
+            def("w2_news_probe"),
+            def("hl_ctx"),
+        ];
+        let mut agent = Config::default().agents["main"].clone();
+        let names = |a: &AgentConfig| -> Vec<String> {
+            within_generation(a, &tools)
+                .into_iter()
+                .map(|t| t.name)
+                .collect()
+        };
+        assert_eq!(names(&agent).len(), 4, "unbound: every tool");
+        let mut sections = (*agent.sandbox).clone();
+        sections.generation = Some(Arc::new(scope));
+        agent.sandbox = Arc::new(sections);
+        assert_eq!(names(&agent), vec!["backtest", "read_file"]);
+        // The advertised list goes through the same filter.
+        agent.tools = vec!["backtest".into(), "read_file".into(), "hl_ctx".into()];
+        let advertised: Vec<String> = agent_base_tools(&agent, true, false)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            advertised.contains(&"backtest".to_string()),
+            "{advertised:?}"
+        );
+        assert!(
+            !advertised.contains(&"hl_ctx".to_string()),
+            "{advertised:?}"
+        );
     }
 
     /// No `workspace`: a fresh temp dir (canonical, named by the prefix,

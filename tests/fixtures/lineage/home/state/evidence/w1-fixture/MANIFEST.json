@@ -1,0 +1,12 @@
+[
+  {
+    "path": "xmarket-weekend/ledger.db",
+    "sha256": "f20d3793f2c4430cfa05260f0e01a75b82822cc1644e8a49c6a81e79e0b8c38d",
+    "bytes": 57
+  },
+  {
+    "path": "xmarket-weekend/prereg.md",
+    "sha256": "194a012a40d670db810261e34ee71795c160410ab0fde6a531030052efc84f60",
+    "bytes": 118
+  }
+]

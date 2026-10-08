@@ -1,0 +1,43 @@
+id = "ext.feasibility.rule_e.2026-09-30"
+title = "Feasibility study: rule E found in-sample (post-market earnings follow-through)"
+family = "post_earnings_follow"
+variant = "post_earnings_follow.t0_4h"
+generation = "UNKNOWN"
+environment = "EXTERNAL"
+kind = "ANALYSIS"
+registered_at = "2026-09-30"
+ran_at = "2026-09-30"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = "HL xyz taker 0.9 bps (formula-derived) + spread → 3.8 bps round trip on traded candle closes"
+uncertainty = "CI +43 … +174 bps with nights resampled; 36 events, one regime"
+incidents = []
+limitations = ["Rule chosen after ~100 variants (prior_search on the family).", "36 in-sample events in one regime; 6-K rows (no item codes) left out by the protocol.", "Entry delay of the in-sample figure (\"1–4 h\") not stated exactly.", "Generation UNKNOWN: outside tengu."]
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-06"
+to = "2026-09-30"
+scope = "22 HL xyz stock perps; EDGAR Item 2.02 post-market releases since March (36 events)"
+integrity = "CLEAN"
+
+[[results]]
+label = "E in-sample, 36 earnings events"
+class = "DEVELOPMENT"
+n = 36
+mean_net_bps = 110.0
+ci95_bps = [43.0, 174.0]
+evidence = "repo:docs/xmarket-feasibility-2026-09-30.md"
+note = "REPORTED. +67 bps without the 5 best trades; placebo nights −11 bps; ~15 events per earnings season in these 22 names."
+
+[verdict]
+value = "PASS"
+reason = "Verdict \"paper-test\" (confidence low), then refuted by the names holdout the same day (ext.holdout_names.rule_e.2026-09-30)."
+decided_at = "2026-09-30"
+decided_by = "feasibility study + operator decision 2026-09-30"
+
+[[evidence]]
+ref = "repo:docs/xmarket-feasibility-2026-09-30.md"
+role = "study report"
+class = "DEVELOPMENT"
+provenance = "REPORTED"

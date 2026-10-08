@@ -1,0 +1,43 @@
+id = "weekend_fade.crypto_strict"
+family = "weekend_overshoot_fade"
+title = "weekend_fade_strict — the weekend window on the 4 crypto perps, |s| ≥ 200 bps, entry hour ≥ 500 trades"
+parent = "weekend_fade"
+reason = "UNKNOWN"
+registered_at = "2026-10-01T17:06:37Z"
+order = 5
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "Name never in any committed config; who ran it and why is in no repo doc (its runs end 25 s before Architect turn 1's log was last written, 2026-10-01T17:07:14Z, a turn that ran \"its own inline spec\" — attribution UNKNOWN). The mechanism (closed underlying) does not hold for 24/7 crypto. Pre-fix runs 20261001T170637Z and 170649Z: n 42, −6.42 bps (CI −155.9 … +136.2); no verdict recorded."
+
+[spec]
+spec_sha256 = "ec75dbadaac4ea1c1472cd28c23f343468811273e7aa894782c64328e84ce10e"
+source = "run:xlab/20261001T170637Z-weekend_fade_strict"
+
+[[changed]]
+dim = "universe"
+from = "@xyz_stocks"
+to = "@crypto"
+
+[[changed]]
+dim = "min_abs_signal_bps"
+from = 0
+to = 200
+
+[[changed]]
+dim = "min_entry_trades"
+from = "none"
+to = 500
+
+[[evidence]]
+ref = "run:xlab/20261001T170637Z-weekend_fade_strict"
+role = "spec + result (pre-fix engine)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "c7aea0fbbcfcf88ad18b35cbcc31537b4bce4b0db03b997907bc3461b445dd38"
+
+[[evidence]]
+ref = "run:xlab/20261001T170649Z-weekend_fade_strict"
+role = "rerun (pre-fix engine)"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "6fdeb010d514f0229c3d63f7cbf0d299d5c90a491255d065378cce14a1dd34fc"

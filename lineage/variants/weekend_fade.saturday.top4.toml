@@ -1,0 +1,33 @@
+id = "weekend_fade.saturday.top4"
+family = "weekend_overshoot_fade"
+title = "Saturday entry, top 4 by |s| ≥ 50 bps (preregistered forward variant)"
+parent = "weekend_fade.top4"
+reason = "Does fading from a Sat 08:30 New York entry beat or match rule W's Sun 18:00 entry? History (24 weekends, 1h bars) read top 4 +198.9 bps vs Sunday +143.7."
+registered_at = "2026-10-03T12:36:41Z"
+order = 7
+preregistered = true
+status = "REGISTERED"
+notes = "Graded from recorded books (entry hl_book/1 sweep 2026-10-03T12:30Z, exit 2026-10-05T13:00Z) in fwd.saturday_fade.2026-10-03; the Monday grade was never saved (inc.2026-10-05.saturday-grading-unsaved) — status stays REGISTERED until `tengu evidence regrade`. Top 4 at registration (all SHORT): hyperliquid:xyz:CBRS, hyperliquid:xyz:BIRD, hyperliquid:xyz:CRWD, hyperliquid:xyz:MSTR."
+
+[spec]
+described = "s = ln(P_now / P_anchor), P = mkt_ctx/1 mid (else mark); anchor = the recorder row as of Fri 2026-10-02 20:00 New York (2026-10-03T00:00:00Z); entry = the hl_book/1 sweep of 2026-10-03T12:30Z, fill = book-walk VWAP for $25 and $100; exit = recorded books Mon 2026-10-05 13:00Z; costs = book fills + 0.9 bps taker per side + funding; the 4 largest |s| ≥ 50 bps, fade = −sign(s)."
+
+[[changed]]
+dim = "entry"
+from = "Sun 18:00 America/New_York"
+to = "Sat 08:30 America/New_York"
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+role = "prereg"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+sha256 = "b45f4c5138161d54f1d2034e03c0a156c12ddc958d9973e902f2813f278132e9"
+note = "The file as it is now (4943 B). The hash recorded at registration 2026-10-03T12:36:41Z, ea4d709b87a54b54b3b2a77a3469284d9cf3e394022f05db22eb00b9c88bc10e, is the sha256 of its first 4457 bytes = the body before the correction: rule unchanged since registration."
+
+[[evidence]]
+ref = "vault:w1-2026-10-06/xmarket/research/weekend-2026-10-02/prereg-saturday-fade.md"
+role = "prereg-correction"
+class = "NONE"
+provenance = "LIVE_RECORDED"
+note = "Correction appended 2026-10-03T12:56:02Z (bytes 4458–4943): the prior-evidence figures included KIOXIA's 2026-09-25 split weekend (+11,596 bps); figures restated without it, rule unchanged (inc.2026-10-03.prereg-kioxia-split)."

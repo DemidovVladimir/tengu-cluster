@@ -1,0 +1,104 @@
+id = "xlab.sol_eth_spread.2026-10-01"
+title = "SOL / ETH spread, time split 2026-07-01 — post-fix library run"
+family = "sol_eth_spread"
+variant = "sol_eth_spread.library"
+generation = "W1"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-01"
+ran_at = "2026-10-01T18:28:47Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:"]: taker 4.5 bps + ctx half-spread (fallback 1.0 bps) per side + funding per settlement hour; simple-return P&L; research arm $100 per candidate; capped arm = xlab [risk] + [paper] ($100 book, $25 orders)'''
+cost_pin = "config:xlab/backtest.costs"
+capabilities = ["capital.strategy.pair_spread", "intel.backtest"]
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; periods treated as independent (xlab § 11)"
+split_by = "TIME"
+incidents = []
+notes = "Post-fix library run (figures after xlab-fix-engine, db96cb25c0ffa1efa13f8d7c388e407dfb107d24; xlab doc § 14). CLI --split run: the holdout half is in the report but no holdout-reads.jsonl line (CLI reads are not counted). Earlier runs of this spec: xlab.library.prefix.2026-10-01 (INVALID)."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-07T08:00:00Z"
+to = "2026-10-01T18:28:47Z"
+scope = "legs hyperliquid:SOL, hyperliquid:ETH, 1h bars"
+integrity = "CLEAN"
+
+[[windows]]
+role = "DEVELOPMENT"
+from = "2026-03-07T08:00:00Z"
+to = "2026-07-01T00:00:00Z"
+scope = "legs hyperliquid:SOL, hyperliquid:ETH, 1h bars"
+integrity = "CLEAN"
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-07-01T00:00:00Z"
+to = "2026-10-01T18:28:47Z"
+scope = "legs hyperliquid:SOL, hyperliquid:ETH, 1h bars"
+integrity = "UNKNOWN"
+note = "No earlier tengu study of these perps is recorded; whoever wrote the library spec may have seen the period (LLM lookahead: xlab § 11)."
+
+[[results]]
+label = "research arm, whole window"
+arm = "research"
+class = "DEVELOPMENT"
+n = 38
+mean_net_bps = -31.63078086815891
+ci95_bps = [-75.368236975918, 10.75789261151783]
+net_usd = -12.019696729900383
+t_stat = -1.3792931207608332
+evidence = "run:xlab/20261001T182847Z-sol_eth_spread"
+extract = "arm:research"
+note = "In-sample + holdout together: not a holdout figure."
+
+[[results]]
+label = "research arm, in-sample (to 2026-07-01)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 21
+mean_net_bps = -47.63305788193433
+ci95_bps = [-105.97560131581285, 3.810380926401622]
+net_usd = -10.002942155206206
+t_stat = -1.6252288947252025
+evidence = "run:xlab/20261001T182847Z-sol_eth_spread"
+extract = "arm:research/in_sample"
+
+[[results]]
+label = "research arm, holdout (from 2026-07-01)"
+arm = "research"
+class = "HOLDOUT"
+n = 17
+mean_net_bps = -11.863262204083398
+ci95_bps = [-79.28854873403674, 59.55085893163987]
+net_usd = -2.0167545746941777
+t_stat = -0.32313000425941274
+evidence = "run:xlab/20261001T182847Z-sol_eth_spread"
+extract = "arm:research/holdout"
+
+[[results]]
+label = "capped arm ($100 [risk] book), whole window"
+arm = "capped"
+class = "DEVELOPMENT"
+n = 38
+mean_net_bps = -31.63078086815891
+ci95_bps = [-75.368236975918, 10.75789261151783]
+net_usd = -3.004924182475096
+t_stat = -1.3792931207608332
+evidence = "run:xlab/20261001T182847Z-sol_eth_spread"
+extract = "arm:capped"
+note = "Capped = research (n 38)."
+
+[verdict]
+value = "NO_GO"
+reason = "No-go after costs: −31.6 bps (CI −75.4 … +10.8, n 38), in-sample −47.6, holdout −11.9."
+decided_at = "2026-10-01"
+decided_by = "xlab doc § 14 verdict (repo:docs/xlab-2026-10-01.md)"
+
+[[evidence]]
+ref = "run:xlab/20261001T182847Z-sol_eth_spread"
+role = "run report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+sha256 = "bffaf6c9939eb576fe6baecfec350d296bddf94174c76f8f3f709a15c2950a05"
+note = "Backfilled history only (market.db, BACKFILLED); report.json carries both the in-sample and the holdout halves."

@@ -1,0 +1,11 @@
+id = "weekend_follow.base"
+family = "weekend_follow"
+title = "Follow the weekend move, every eligible name"
+parent = "ROOT"
+reason = "The placebo of rule W."
+registered_at = "2026-10-06"
+preregistered = false
+status = "REJECTED"
+
+[spec]
+described = "rule_w.all with direction = follow"
