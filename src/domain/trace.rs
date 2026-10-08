@@ -27,6 +27,9 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::domain::runtime::scrub_urls;
+use crate::domain::secrets::SecretRegistry;
+
 /// Version of the [`ExecutionEvent`] JSON shape.
 pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
 /// Largest payload a sink writes (serialized bytes); bigger ones lose whole
@@ -267,6 +270,42 @@ impl RunContext {
     }
 }
 
+/// Hide what must not leave the process in every string and object key of
+/// `v` (an event's keys are input like its values): registered secrets
+/// (`SecretRegistry::redact` → `[REDACTED]`), then URLs (`scrub_urls` →
+/// `<url>`: an RPC URL carries its key, and a `${VAR}` substituted into
+/// the config may not be a registered secret). The trace store applies it to
+/// every payload before the write, the Studio graph to every attr. Two keys
+/// that redact alike keep the last one's value.
+pub(crate) fn scrub_value(v: &mut Value, secrets: &SecretRegistry) {
+    match v {
+        Value::String(s) => {
+            if let Some(c) = scrub_str(s, secrets) {
+                *s = c;
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(|x| scrub_value(x, secrets)),
+        Value::Object(o) => {
+            for (k, mut x) in std::mem::take(o) {
+                scrub_value(&mut x, secrets);
+                o.insert(scrub_str(&k, secrets).unwrap_or(k), x);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `s` with registered secrets and URLs replaced; `None` = nothing to hide.
+fn scrub_str(s: &str, secrets: &SecretRegistry) -> Option<String> {
+    let redacted = secrets.redact(s);
+    let out = if redacted.contains("://") {
+        scrub_urls(&redacted)
+    } else {
+        redacted
+    };
+    (out != s).then_some(out)
+}
+
 fn json_len(v: &Value) -> usize {
     serde_json::to_string(v).map_or(0, |s| s.len())
 }
@@ -275,14 +314,16 @@ fn json_len(v: &Value) -> usize {
 /// not. Never cuts a string, an id or a number: an object loses whole
 /// top-level fields, largest first (ties by name), and gains `_dropped`
 /// (their names, sorted) + `_bytes` (the original size); any other value
-/// over the bound becomes `{"_dropped": ["payload"], "_bytes": n}`.
+/// over the bound — or an object whose list of dropped names alone is over
+/// it — becomes `{"_dropped": ["payload"], "_bytes": n}`.
 pub(crate) fn bound_payload(v: Value, max_bytes: usize) -> (Value, Option<usize>) {
     let size = json_len(&v);
     if size <= max_bytes {
         return (v, None);
     }
+    let whole = || (json!({"_dropped": ["payload"], "_bytes": size}), Some(size));
     let Value::Object(mut o) = v else {
-        return (json!({"_dropped": ["payload"], "_bytes": size}), Some(size));
+        return whole();
     };
     let mut by_size: Vec<(usize, String)> =
         o.iter().map(|(k, x)| (json_len(x), k.clone())).collect();
@@ -301,7 +342,12 @@ pub(crate) fn bound_payload(v: Value, max_bytes: usize) -> (Value, Option<usize>
         o.remove(&k);
         dropped.insert(k);
     }
-    (marked(&o, &dropped), Some(size))
+    let out = marked(&o, &dropped);
+    if json_len(&out) > max_bytes {
+        // Every field is gone and their names alone are too long to list.
+        return whole();
+    }
+    (out, Some(size))
 }
 
 /// Events in replay order: by run, then `seq` (never `ts_ms`: a replay
@@ -399,6 +445,13 @@ mod tests {
         // A non-object over the bound is replaced, never cut.
         let (s, n) = bound_payload(json!("z".repeat(100)), 10);
         assert_eq!(s, json!({"_dropped": ["payload"], "_bytes": n.unwrap()}));
+        // So is an object whose dropped names alone would not fit.
+        let many: serde_json::Map<String, Value> = (0..200)
+            .map(|i| (format!("field_with_a_long_name_{i:03}"), json!(i)))
+            .collect();
+        let (s, n) = bound_payload(Value::Object(many), 1024);
+        assert_eq!(s, json!({"_dropped": ["payload"], "_bytes": n.unwrap()}));
+        assert!(json_len(&s) <= 1024);
     }
 
     /// Replay order is the run's `seq`, whatever the clock or arrival order;

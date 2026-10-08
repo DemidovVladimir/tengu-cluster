@@ -3,8 +3,8 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | [`JsonlTraceSink::open`] | a fresh `run_id` (UUID v4) = a new file, first line `run.opened` (`{kind, pid}`); a restart never appends to an old run |
-//! | [`JsonlTraceSink::emit`](TraceSink::emit) | under one lock: next `seq`, stamp (`RunContext::stamp`), payload redacted — `SecretRegistry::redact_value`, then every string through `scrub_urls` — then bounded ([`MAX_PAYLOAD_BYTES`], whole fields dropped), one `write_all` on an append-mode file (`decision_loop::append_line`); a failed write keeps the `seq` (no gap) and only warns |
+//! | [`JsonlTraceSink::open`] | a fresh `run_id` (UUID v4) = a new file, first line `run.opened` (`{kind, pid}`; node `runtime:<sandbox>` for a `tengu run`, none for a decide — its `trigger.*` root names the trigger); a restart never appends to an old run |
+//! | [`JsonlTraceSink::emit`](TraceSink::emit) | under one lock: next `seq`, stamp (`RunContext::stamp`), payload redacted — `domain::trace::scrub_value`: every string and object key, secrets then URLs — then bounded ([`MAX_PAYLOAD_BYTES`], whole fields dropped), one `write_all` on an append-mode file (`decision_loop::append_line`); a failed write keeps the `seq` (no gap) and only warns |
 //! | [`JsonlTraceReader`] | one sandbox dir; a `run_id` must be a lowercase UUID (no path from a request reaches the disk); unparsable lines and a partial last line are skipped; `follow` tails the file every 250 ms into a bounded channel (256): a slow reader holds the tail, nothing is dropped, a reconnect resumes by `seq` |
 //!
 //! Nothing here deletes a run; `tengu prune` removes `<TENGU_HOME>/logs`
@@ -16,17 +16,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
+use serde_json::json;
 use tokio::sync::mpsc::{self, Receiver};
 use tracing::warn;
 
 use crate::application::decision_loop::append_line;
 use crate::domain::observation::now_ms;
-use crate::domain::runtime::scrub_urls;
 use crate::domain::secrets::SecretRegistry;
 use crate::domain::trace::{
-    bound_payload, order_events, Component, EventDraft, ExecutionEvent, RunContext, RunKind,
-    RunSummary, Status, MAX_PAYLOAD_BYTES, RUN_OPENED,
+    bound_payload, order_events, scrub_value, Component, EventDraft, ExecutionEvent, RunContext,
+    RunKind, RunSummary, Status, MAX_PAYLOAD_BYTES, RUN_OPENED,
 };
 use crate::ports::trace::{TraceReader, TraceSink};
 
@@ -69,25 +68,6 @@ pub(crate) fn run_file(root: &Path, sandbox: &str, run_id: &str) -> PathBuf {
     root.join(sandbox).join(format!("{run_id}.jsonl"))
 }
 
-/// Redact every string leaf: registered secrets, then URLs.
-fn redact_payload(v: &mut Value, secrets: &SecretRegistry) {
-    secrets.redact_value(v);
-    scrub(v);
-}
-
-fn scrub(v: &mut Value) {
-    match v {
-        Value::String(s) => {
-            if s.contains("://") {
-                *s = scrub_urls(s);
-            }
-        }
-        Value::Array(a) => a.iter_mut().for_each(scrub),
-        Value::Object(o) => o.values_mut().for_each(scrub),
-        _ => {}
-    }
-}
-
 /// One recording (module table).
 pub(crate) struct JsonlTraceSink {
     ctx: RunContext,
@@ -126,10 +106,11 @@ impl JsonlTraceSink {
             max_payload_bytes: MAX_PAYLOAD_BYTES,
             last_seq: Mutex::new(0),
         };
+        // A decide run's trigger node (`trigger:decide` or
+        // `trigger:map/<sha256>`) is named by its `trigger.*` root event.
         let node = match kind {
             RunKind::Run => Some(crate::domain::workflow::node_id::runtime(sandbox)),
-            RunKind::Decide => Some(crate::domain::workflow::node_id::trigger_decide()),
-            RunKind::Studio => None,
+            RunKind::Decide | RunKind::Studio => None,
         };
         let mut opened = EventDraft::new(Component::Runtime, RUN_OPENED, Status::Ok)
             .payload(json!({"kind": kind.as_str(), "pid": std::process::id()}));
@@ -147,7 +128,7 @@ impl JsonlTraceSink {
         let mut last = self.last_seq.lock().unwrap_or_else(|p| p.into_inner());
         let seq = *last + 1;
         let mut ev = self.ctx.stamp(seq, now_ms(), draft);
-        redact_payload(&mut ev.payload, &self.secrets);
+        scrub_value(&mut ev.payload, &self.secrets);
         ev.payload = bound_payload(std::mem::take(&mut ev.payload), self.max_payload_bytes).0;
         let line = format!("{}\n", serde_json::to_string(&ev)?);
         append_line(&self.path, &line)?;
@@ -312,6 +293,7 @@ impl TraceReader for JsonlTraceReader {
 mod tests {
     use super::*;
     use crate::domain::trace::EventDraft;
+    use serde_json::Value;
 
     fn sink(root: &Path, secrets: SecretRegistry) -> JsonlTraceSink {
         JsonlTraceSink::open(
@@ -441,7 +423,10 @@ mod tests {
                 .call("demo:tick:1:1")
                 .payload(json!({
                     "args": {"url": "https://rpc.example.com/?api-key=k-in-url", "note": "auth sk-trace-secret-42"},
-                    "event": ["see wss://feed.example/x?token=t1 now"],
+                    "event": [
+                        "see wss://feed.example/x?token=t1 now",
+                        {"sk-trace-secret-42": 1, "https://hook.example/?sig=s1": {"ok": "x"}}
+                    ],
                 })),
         )
         .unwrap();
@@ -451,6 +436,8 @@ mod tests {
             "k-in-url",
             "rpc.example.com",
             "token=t1",
+            "hook.example",
+            "sig=s1",
         ] {
             assert!(!raw.contains(leaked), "{leaked} in {raw}");
         }
@@ -458,6 +445,11 @@ mod tests {
         assert_eq!(last["payload"]["args"]["url"], json!("<url>"));
         assert_eq!(last["payload"]["args"]["note"], json!("auth [REDACTED]"));
         assert_eq!(last["payload"]["event"][0], json!("see <url> now"));
+        // Keys too: an event's keys are input like its values.
+        assert_eq!(
+            last["payload"]["event"][1],
+            json!({"[REDACTED]": 1, "<url>": {"ok": "x"}})
+        );
         assert_eq!(last["call_id"], json!("demo:tick:1:1"));
         // Bounded too: a huge payload is cut to whole fields.
         s.emit(step(2).payload(json!({"big": "b".repeat(10_000), "id": "keep"})))
@@ -552,6 +544,29 @@ mod tests {
         assert!(runs
             .iter()
             .all(|x| x.kind.as_deref() == Some("run") && x.events == 2));
+    }
+
+    /// `run.opened` names `runtime:<sandbox>` for a `tengu run`; a decide's
+    /// names no node (a `--map` run is not `trigger:decide`: its
+    /// `trigger.*` root names the trigger).
+    #[test]
+    fn run_opened_node_by_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let run = sink(tmp.path(), SecretRegistry::new());
+        let decide = JsonlTraceSink::open(
+            tmp.path(),
+            "control-loop-lab",
+            None,
+            None,
+            RunKind::Decide,
+            Arc::new(SecretRegistry::new()),
+        )
+        .unwrap();
+        let first = |s: &JsonlTraceSink| file_lines(s.path()).remove(0);
+        assert_eq!(first(&run)["node_id"], json!("runtime:control-loop-lab"));
+        assert_eq!(first(&decide)["node_id"], Value::Null);
+        assert_eq!(first(&decide)["payload"]["kind"], json!("decide"));
+        assert_eq!(first(&decide)["runtime_id"], Value::Null);
     }
 
     /// No request path reaches the disk: run ids and sandbox names are

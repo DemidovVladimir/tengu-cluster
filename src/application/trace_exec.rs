@@ -6,12 +6,13 @@
 //! | Piece | Rule |
 //! |---|---|
 //! | [`Cause`] · [`caused_by`] · [`cause`] | the event that caused what this task does now (its `parent_event_id`) + the session / correlation it belongs to; set around a loop event (`LoopDispatch`: `loop.started`), a decide run (`trigger.*`), a loop's tool call (`action.selected`), a feed's calls and tick (`feed.fired`). Read where the next event is written: `LoopDispatch::enqueue`, `DecisionLoop::run_event`, [`TracedExecutor`]. A task it spawns does not inherit it |
-//! | [`TracedExecutor`] | wraps one agent's executor (inside `egress::AttributedExecutor`, outside `SanitizedToolExecutor`: it sees redacted results): `tool.started` (`Running`, `{tool, args}`) → `tool.completed` (`Ok`) or `tool.failed` (`Failed`: the executor's error, or a typed result whose status is not usable) with `duration_ms`; `node_id` `tool:<agent>/<tool>`, `call_id` = `ToolCall.id`, parent / session / correlation = the [`cause`]; the result as a summary (`line1` of the text, a typed result's `key` / `status` / `headline`), never the whole text |
+//! | [`TracedExecutor`] | wraps one agent's executor (inside `egress::AttributedExecutor`, outside `SanitizedToolExecutor`: it sees redacted results): `tool.started` (`Running`, `{tool, args}`) → `tool.completed` (`Ok`) or `tool.failed` (`Failed`: the executor's error, a typed result whose status is not usable, or an `http_request` text whose status line is not 2xx — `reduce::http_ok`, the rule a loop's `ok` uses) with `duration_ms`; `node_id` `tool:<agent>/<tool>`, `call_id` = `ToolCall.id`, parent / session / correlation = the [`cause`]; the result as a summary (`line1` of the text, a typed result's `key` / `status` / `headline`), never the whole text |
 //!
-//! The decorator reports what the executor returned; what the caller makes
-//! of it — a loop's `ok`, a feed's error class and backoff — is the caller's
-//! own event (`action.completed`, `feed.failed` / `feed.retrying`), so no
-//! rule is computed twice.
+//! The decorator reports what the executor returned, judged by the shared
+//! pass / fail predicates (`ObsStatus::usable`, `reduce::http_ok`); what the
+//! caller makes of it — a loop's history entry, a feed's error class and
+//! backoff — is the caller's own event (`action.completed`, `feed.failed` /
+//! `feed.retrying`), so no rule is computed twice.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use crate::application::decision_loop::reduce::http_ok;
 use crate::domain::message::{Message, ToolCall};
 use crate::domain::trace::{Component, EventDraft, Status};
 use crate::domain::workflow::node_id;
@@ -151,7 +153,9 @@ impl TracedExecutor {
                     "text_bytes": out.text.len(),
                     "line1": line1,
                 });
-                let mut usable = true;
+                // Text: a non-2xx `http_request` status line fails the call,
+                // as it does a loop's `ok` and a feed's outcome.
+                let mut usable = http_ok(line1).unwrap_or(true);
                 if let (Some(o), Value::Object(m)) = (&out.observation, &mut p) {
                     usable = o.status.usable();
                     m.insert(
@@ -378,5 +382,40 @@ pub(crate) mod tests {
             json!("price_oracle/1:So11111111111111111111111111111111111111112")
         );
         assert_eq!(d[3].kind, "tool.completed");
+    }
+
+    /// An `http_request` text whose status line is not 2xx is `tool.failed`
+    /// — the verdict a loop's `ok` (`parse_tool_output`) gives it; a 2xx
+    /// status and plain text are `tool.completed`.
+    #[tokio::test]
+    async fn http_status_line_decides_text_results() {
+        let sink = Arc::new(MemTrace::default());
+        for text in [
+            "HTTP 503 https://api.example/x\n{\"error\":\"down\"}",
+            "HTTP 200 https://api.example/x\n{}",
+            "File 'out/marker.txt' written (12 bytes)",
+        ] {
+            let ex = TracedExecutor::new(
+                Arc::new(Fixed(Ok(ToolOutput::from(text.to_string())))),
+                sink.clone(),
+                "lab",
+                None,
+            );
+            let out = ex.execute_typed(&call("c", "http_request"), &[]).await;
+            let (ok, _) =
+                crate::application::decision_loop::reduce::parse_tool_output(&out.unwrap().text);
+            let finish = sink.all().pop().unwrap();
+            let want = if ok { "tool.completed" } else { "tool.failed" };
+            assert_eq!(finish.kind, want, "{text}");
+        }
+        let kinds = sink.kinds();
+        assert_eq!(
+            [&kinds[1], &kinds[3], &kinds[5]],
+            ["tool.failed", "tool.completed", "tool.completed"]
+        );
+        assert_eq!(
+            sink.all()[1].payload["line1"],
+            json!("HTTP 503 https://api.example/x")
+        );
     }
 }

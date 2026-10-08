@@ -14,7 +14,7 @@
 //! | health (`FeedWriter`) | a failed run reports its error first (`backoff` while retrying, else `down`), then one `item` per ok call (`live`) |
 //! | tick | `LoopDispatch::submit_tracked(target, event + ts_ms = slot, "<feed>:<slot ms>")`; an item per event sent |
 //! | stop | checked before every nap and every call; a call in progress finishes (bounded by `[runtime] shutdown_grace_secs`) |
-//! | trace (`FeedEnv::trace`) | node `feed:<name>`, session `<name>:<slot ms>`; a tool run: `feed.fired` (`Running`: `run` = slot / retry, the call indices) → its calls caused by it (`tool.*` from the agent's `TracedExecutor`; correlation `feed:<name>:<slot ms>`) → `feed.completed` (`Ok`) · `feed.retrying` (`Pending`: class, `retry_in_ms`) · `feed.failed` (`Failed`: class, not retried) — the same branch that writes the health row; a tick: `feed.fired` → `LoopDispatch` `loop.queued` / `loop.refused` caused by it → `feed.tick_sent` (`Ok`) · `feed.dropped` (`queue_full`) · `feed.failed` (`unknown_loop`) · `feed.skipped` (`shutting_down`); a skipped slot: `feed.dropped` (`late` · `previous_tick_running`) |
+//! | trace (`FeedEnv::trace`) | node `feed:<name>`, session `<name>:<slot ms>`; a tool run: `feed.fired` (`Running`: `run` = slot / retry, the call indices) → its calls caused by it (`tool.*` from the agent's `TracedExecutor`; correlation `feed:<name>:<slot ms>`) → `feed.completed` (`Ok`) · `feed.retrying` (`Pending`: class, `retry_in_ms`) · `feed.failed` (`Failed`: class, not retried) (each from the branch that writes the health row) · `feed.skipped` (`shutting_down`: a stop came before every call); a tick: `feed.fired` → `LoopDispatch` `loop.queued` / `loop.refused` caused by it → `feed.tick_sent` (`Ok`) · `feed.dropped` (`queue_full`) · `feed.failed` (`unknown_loop`) · `feed.skipped` (`shutting_down`); a skipped slot: `feed.dropped` (`late` · `previous_tick_running`) |
 
 use std::sync::Arc;
 
@@ -26,6 +26,7 @@ use tracing::{debug, warn};
 use super::health::FeedWriter;
 use super::loops::{LoopDispatch, Refused};
 use super::{stopped, StopRx};
+use crate::application::decision_loop::reduce::http_status;
 use crate::application::trace_exec::{self, Cause};
 use crate::domain::backoff::{next_delay, BackoffPolicy, Delay};
 use crate::domain::message::ToolCall;
@@ -437,6 +438,11 @@ impl FeedRunner {
             } else if ok > 0 {
                 let payload = json!({"ok": ok});
                 self.emit("feed.completed", Status::Ok, slot_ms, fired, payload);
+            } else {
+                // No call ran (stop requested before each): close the
+                // `feed.fired` so it does not read as running forever.
+                let payload = json!({"reason": "shutting_down", "skipped": results.len()});
+                self.emit("feed.skipped", Status::Skipped, slot_ms, fired, payload);
             }
         }
         for _ in 0..ok {
@@ -588,11 +594,7 @@ fn outcome(result: anyhow::Result<ToolOutput>) -> Outcome {
 /// Legacy text: failed only when line 1 is `HTTP <non-2xx>` (`http_request`).
 fn text_outcome(text: &str) -> Outcome {
     let line1 = text.lines().next().unwrap_or("");
-    let Some(status) = line1
-        .strip_prefix("HTTP ")
-        .and_then(|s| s.split_whitespace().next())
-        .and_then(|s| s.parse::<u16>().ok())
-    else {
+    let Some(status) = http_status(line1) else {
         return Outcome::Ok;
     };
     let class = match status {
@@ -1607,6 +1609,23 @@ mod tests {
         let fired = d.iter().rev().find(|e| e.kind == "feed.fired").unwrap();
         assert_eq!(fired.payload["run"], json!("retry"));
         assert_eq!(d.last().unwrap().kind, "feed.completed");
+
+        // Stop requested before the calls: nothing runs, the run's
+        // `feed.fired` is closed by `feed.skipped` (no health change).
+        let calls = exec.calls.lock().unwrap().len();
+        rig.stopper.stop("test stop", false);
+        let next = feed.next(t + 2 * MIN).unwrap();
+        feed.run(next.clone(), next.at_ms, &stop).await;
+        assert_eq!(exec.calls.lock().unwrap().len(), calls, "no call ran");
+        let d = sink.all();
+        let (fired, last) = (&d[d.len() - 2], d.last().unwrap());
+        assert_eq!(fired.kind, "feed.fired");
+        assert_eq!(
+            (last.kind.as_str(), last.status),
+            ("feed.skipped", Status::Skipped)
+        );
+        assert_eq!(last.parent_event_id, Some(MemTrace::id(d.len() - 2)));
+        assert_eq!(last.payload["reason"], json!("shutting_down"));
     }
 
     #[tokio::test]

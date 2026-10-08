@@ -109,7 +109,7 @@ Ticks every 20 s (+ one at start), probe every 30 s. One tick and one probe slot
 | # | Finding | Effect |
 |---|---|---|
 | 1 | The first tick of a fresh runtime reads `world.tick` **missing**: `feed.tick_sent` (and the health row) follow the submit | true to the code; later ticks read `ok` |
-| 2 | A decide run's `run.opened` names `trigger:decide` also for a map run (the store opens before the map is known); the root `trigger.map` names `trigger:map/<sha256>` | cosmetic; Studio keys on `trigger.*` |
+| 2 | A decide run's `run.opened` names `trigger:decide` also for a map run; the root `trigger.map` names `trigger:map/<sha256>` | cosmetic; Studio keys on `trigger.*`. Fixed after this run (review of ST-10..ST-12): a decide's `run.opened` names no node (`trace_store::tests::run_opened_node_by_kind`); the tables above show the build that ran |
 | 3 | `tool.*` `duration_ms` 0 for `read_file` / `write_file` (sub-millisecond); `runtime.stopped` drain 0 ms (SIGINT while idle) | real values |
 
 ## Cleanup

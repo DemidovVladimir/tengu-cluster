@@ -134,7 +134,7 @@
 
         <g class="pop badge" data-at="1"><rect x="190" y="18" width="210" height="22" rx="11"/><text x="295" y="33" text-anchor="middle">config_hash = 64 hex</text></g>
         <g class="pop badge" data-at="3"><rect x="190" y="180" width="200" height="22" rx="11"/><text x="290" y="195" text-anchor="middle">dropped action = grey</text></g>
-        <g class="pop badge" data-at="4"><rect x="640" y="160" width="210" height="22" rx="11"/><text x="745" y="175" text-anchor="middle">secrets → [REDACTED]</text></g>
+        <g class="pop badge" data-at="4"><rect x="640" y="160" width="210" height="22" rx="11"/><text x="745" y="175" text-anchor="middle">secrets, URLs hidden</text></g>
         <g class="pop badge" data-at="5"><rect x="200" y="226" width="220" height="22" rx="11"/><text x="310" y="241" text-anchor="middle">new run_id per process</text></g>
         <g class="pop badge" data-at="6"><rect x="200" y="350" width="220" height="22" rx="11"/><text x="310" y="365" text-anchor="middle">URLs → &lt;url&gt; · ≤ 4096 B</text></g>
         <g class="pop badge" data-at="8"><rect x="640" y="340" width="210" height="22" rx="11"/><text x="745" y="355" text-anchor="middle">resume by seq, no gap</text></g>
@@ -155,7 +155,7 @@
         <li><code>Config::load</code> hashes the raw sandbox file: the canonical JSON of the parsed TOML, so comments and layout do not count. That is the <code>config_hash</code> on the graph and on every event.</li>
         <li><code>build_graph</code> reads the validated config and each agent's catalog tools. It copies facts; it never re-decides what is legal. Nodes go in 8 columns, so a browser only draws.</li>
         <li>With <code>--map</code>, the loop is narrowed by <code>ExecutionMap::apply</code>, the same check <code>tengu decide --map</code> runs. Dropped actions stay as grey nodes; a wider map is refused with every reason.</li>
-        <li><code>tengu studio graph</code> prints the graph as JSON. Every attr passes the process secret registry first.</li>
+        <li><code>tengu studio graph</code> prints the graph as JSON. Every attr is scrubbed as a trace payload is: secrets become <code>[REDACTED]</code>, then every URL becomes <code>&lt;url&gt;</code> (a <code>${VAR}</code> in a URL may be a key that is not registered).</li>
         <li><code>tengu run</code> and <code>tengu decide</code> each open a new recording: a fresh <code>run_id</code>, a new file, first event <code>run.opened</code>. A restart never appends to an old run.</li>
         <li>Each event gets the next <code>seq</code> under one lock. Its payload is redacted (secrets, then URLs), cut to whole fields within 4096 bytes and written in one <code>write_all</code>.</li>
         <li>The loop's <code>decisions.jsonl</code> lines carry <code>runtime_id</code> (the lease holder of <code>tengu run</code>) and <code>run_id</code>. Both keys are new and optional, so old readers still work.</li>
@@ -242,7 +242,7 @@
         <tr><td><code>observation</code></td><td><code>observation.read</code> per <code>world</code> alias per step: ok, stale, missing or failed, with its age</td><td><code>loop.started</code> or the trigger</td></tr>
         <tr><td><code>jev</code></td><td><code>jev.completed</code> (answers, model, usage, the <b>legal set</b> offered) · <code>jev.failed</code></td><td><code>loop.started</code> or the trigger</td></tr>
         <tr><td><code>action</code></td><td><code>action.selected</code> → <code>completed</code> · <code>refused</code>; <code>escalated</code>, <code>rejected</code>; payload <code>outcome</code> = the loop's own result</td><td><code>selected</code> ← its <code>jev.completed</code></td></tr>
-        <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code>, with <code>duration_ms</code> and the call id</td><td><code>action.selected</code> or <code>feed.fired</code></td></tr>
+        <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code> (an error, an error row, or an HTTP status that is not 2xx — the loop's own test), with <code>duration_ms</code> and the call id</td><td><code>action.selected</code> or <code>feed.fired</code></td></tr>
       </tbody>
     </table>
   </div>
@@ -283,13 +283,13 @@
   <ul class="checks">
     <li><span><b>The graph never widens.</b> A map goes through <code>ExecutionMap::apply</code>; a mapped graph has no node or edge the base graph lacks, except the map trigger.</span></li>
     <li><span><b>The graph is deterministic.</b> It is normalized: the same config gives the same bytes (golden files for <code>control-loop-lab</code> and <code>lping</code>).</span></li>
-    <li><span><b>Redaction before the write.</b> Registered secrets become <code>[REDACTED]</code> and URLs become <code>&lt;url&gt;</code> in every payload string before the line is written.</span></li>
+    <li><span><b>Redaction before the write.</b> Registered secrets become <code>[REDACTED]</code> and URLs become <code>&lt;url&gt;</code> in every payload string and object key before the line is written.</span></li>
     <li><span><b>Bounded, never cut.</b> An oversize payload loses whole fields, largest first, and says which (<code>_dropped</code>, <code>_bytes</code>). Ids and strings are never shortened.</span></li>
     <li><span><b>One event, one line, in order.</b> <code>seq</code> is taken under the same lock as the write; a failed write reuses its <code>seq</code>, so there is no gap.</span></li>
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
-    <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read.</span></li>
+    <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read. Shared tests live in one place (<code>ObsStatus::usable</code>, <code>reduce::http_ok</code>, <code>DecisionLoopConfig::logs_only</code>), so the trace and the graph never judge differently from the loop.</span></li>
   </ul>
 </section>
 

@@ -1416,7 +1416,7 @@ impl Config {
                     for (an, action) in &dl.actions {
                         // A dry-run loop may name write tools that are not
                         // built yet — they are logged, never invoked.
-                        let never_runs = dl.dry_run && !action.read_only;
+                        let never_runs = dl.logs_only(action);
                         if let Some(tool) = action.tool.as_ref().filter(|_| !never_runs) {
                             if !agent.tools.contains(tool) {
                                 errors.push(format!(

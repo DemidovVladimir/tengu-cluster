@@ -15,9 +15,6 @@ use clap::Subcommand;
 
 use crate::ports::trace::TraceReader;
 
-/// Events per page when printing a whole run.
-const PAGE: usize = 1000;
-
 #[derive(Subcommand)]
 pub(super) enum TraceAction {
     /// List the sandbox's recorded runs (JSON lines, oldest first).
@@ -53,16 +50,9 @@ pub(super) async fn run_trace(sandbox: Option<String>, action: TraceAction) -> R
                 drop(out);
                 return follow_run(&reader, &run, after).await;
             }
-            let mut after = after;
-            loop {
-                let page = reader.events(&run, after, PAGE)?;
-                let Some(last) = page.last().map(|e| e.seq) else {
-                    break;
-                };
-                for ev in &page {
-                    writeln!(out, "{}", serde_json::to_string(ev)?)?;
-                }
-                after = last;
+            // One read of the file: the run as it stands now.
+            for ev in reader.events(&run, after, usize::MAX)? {
+                writeln!(out, "{}", serde_json::to_string(&ev)?)?;
             }
         }
     }
@@ -73,6 +63,10 @@ async fn follow_run(reader: &dyn TraceReader, run: &str, after: u64) -> Result<(
     // Fail fast on a run that does not exist (the tail would wait forever).
     reader.events(run, 0, 1)?;
     let mut rx = reader.follow(run, after)?;
+    // One listener for the whole tail: a Ctrl-C while a line is being
+    // written is not lost between two `select!`s.
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
     loop {
         tokio::select! {
             ev = rx.recv() => {
@@ -81,7 +75,7 @@ async fn follow_run(reader: &dyn TraceReader, run: &str, after: u64) -> Result<(
                 writeln!(out, "{}", serde_json::to_string(&ev)?)?;
                 out.flush()?;
             }
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+            _ = &mut ctrl_c => return Ok(()),
         }
     }
 }

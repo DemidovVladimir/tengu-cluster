@@ -17,7 +17,8 @@
 //! Attrs carry config values as validated (scope roots shown `~/…` like the
 //! TOML); the caller redacts them (`bootstrap::studio::workflow_graph`).
 //! `effect` of an action: `terminal` (no tool), `logged` (a write under
-//! `dry_run`: never run, `decision_loop/mod.rs`), else `runs`. `in_catalog`
+//! `dry_run`: never run — `DecisionLoopConfig::logs_only`, the rule the loop
+//! applies), else `runs`. `in_catalog`
 //! of a tool: it is one of the agent's catalog tools (`agent_base_tools`) —
 //! an `[[mcp_servers]]` or shell-skill tool shows `false`.
 
@@ -534,7 +535,7 @@ impl<'a> Builder<'a> {
 fn action_attrs(dl: &DecisionLoopConfig, a: &ActionConfig) -> BTreeMap<String, Value> {
     let effect = match &a.tool {
         None => "terminal",
-        Some(_) if dl.dry_run && !a.read_only => "logged",
+        Some(_) if dl.logs_only(a) => "logged",
         Some(_) => "runs",
     };
     let mut out = attrs([

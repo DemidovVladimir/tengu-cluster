@@ -536,7 +536,7 @@ impl DecisionLoop {
             };
         };
 
-        if self.cfg.dry_run && !action.read_only {
+        if self.cfg.logs_only(action) {
             self.push(
                 st,
                 HistoryEntry {

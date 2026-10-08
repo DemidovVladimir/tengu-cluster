@@ -250,6 +250,15 @@ pub(crate) enum SlotConfig {
 }
 
 impl DecisionLoopConfig {
+    /// Whether this loop only logs `action` instead of running it: a tool
+    /// action that is not `read_only` while `dry_run` is on. The one rule
+    /// the loop applies (`DecisionLoop::apply`), config validation skips
+    /// (such a tool need not be built yet) and the Studio graph shows
+    /// (`effect = "logged"`).
+    pub(crate) fn logs_only(&self, action: &ActionConfig) -> bool {
+        self.dry_run && action.tool.is_some() && !action.read_only
+    }
+
     /// Structural checks that need no other config section.
     pub(crate) fn validation_errors(&self, name: &str) -> Vec<String> {
         let mut errs = Vec::new();
@@ -487,6 +496,19 @@ caps = { size = 2.0 }
             "{:?}",
             c.validation_errors("x")
         );
+    }
+
+    /// Under `dry_run` only a write tool is logged instead of run; a
+    /// `read_only` tool and a terminal run as configured.
+    #[test]
+    fn logs_only_is_a_dry_run_write() {
+        let mut c = parse(MIN);
+        let only = |c: &DecisionLoopConfig, a: &str| c.logs_only(&c.actions[a]);
+        assert!(only(&c, "open"));
+        assert!(!only(&c, "fetch"), "read_only");
+        assert!(!only(&c, "hold"), "terminal");
+        c.dry_run = false;
+        assert!(!only(&c, "open"));
     }
 
     #[test]
