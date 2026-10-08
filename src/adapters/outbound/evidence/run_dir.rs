@@ -7,6 +7,7 @@
 //! | `report.json` | `run_id`, `strategy` |
 //! | `candidates.jsonl` · `trades-research.jsonl` | one `Candidate` / `Trade` per line; a bad line names its file and line |
 //! | `decisions.jsonl` | one JSON value per line (the gate's audit); absent ⇒ not a gated run, refused |
+//! | `trades-rules_capped.jsonl` · `trades-jev_capped.jsonl` | the capped books, when both are there (a run with `[risk]` + `[paper]`) |
 
 use std::path::{Path, PathBuf};
 
@@ -70,6 +71,17 @@ impl RunDirSource for FsRunDir {
             candidates: jsonl(&d.join("candidates.jsonl"))?,
             research: jsonl(&d.join("trades-research.jsonl"))?,
             decisions: jsonl(&decisions)?,
+            capped: {
+                let (rules, jev) = (
+                    d.join("trades-rules_capped.jsonl"),
+                    d.join("trades-jev_capped.jsonl"),
+                );
+                if rules.is_file() && jev.is_file() {
+                    Some((jsonl(&rules)?, jsonl(&jev)?))
+                } else {
+                    None
+                }
+            },
         })
     }
 

@@ -29,7 +29,7 @@
 | jev − hold per candidate | +14.66 [+3.0, +27.5] |
 | rules − hold per candidate | +50.45 [+15.7, +81.5] |
 
-Jev: **UNPROVEN**. Its picks are better per trade (CI spans 0), but it takes 18.5 % of candidates and leaves profit behind. "Take every candidate" is the uncapped research arm, which the $100 capped book cannot run, so worse-than-rules does not reject it. Brier 0.349. Cost $0.048889 for 1,500 calls.
+Jev: **UNPROVEN**. Its picks are better per trade (CI spans 0), but it takes 18.5 % of candidates and leaves profit behind. The capped $100 book confirms it: rules $+42.80 (116 trades) vs Jev $+29.32 (96), jev − rules per trade −25.39 [−113.5, +63.8] (the gate's capped figure, reproduced). Every CI spans 0 except per candidate, and only losing money against HOLD would reject. Brier 0.349. Cost $0.048889 for 1,500 calls.
 
 ## G6
 
@@ -40,4 +40,4 @@ Jev: **UNPROVEN**. Its picks are better per trade (CI spans 0), but it takes 18.
 | Jev represented as UNPROVEN until value is shown | PASS: verdict rule above; W1 = UNPROVEN |
 | Reproducible | PASS: seeded bootstrap; the test pins a 30-candidate fixture (`tests/fixtures/evidence/gated-run/`) |
 
-Open: the capped lens (`jev_capped` vs `rules_capped` per period, in USD) is still read from `report.md` (`−25.39 [−113.5, +63.8]` on W1). Next phase: P7 news / information.
+Capped lens (added 2026-10-08): `evaluate` reads `trades-rules_capped.jsonl` + `trades-jev_capped.jsonl` when present and prints both books' trades and USD plus jev − rules per trade.

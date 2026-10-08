@@ -375,13 +375,14 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         <tr><td>hold</td><td>0</td><td>0.00</td><td>—</td></tr>
         <tr><td>jev − rules</td><td></td><td>−35.79 [−61.9, −6.6]</td><td>+28.93 [−23.5, +81.6]</td></tr>
         <tr><td>jev − hold</td><td></td><td>+14.66 [+3.0, +27.5]</td><td></td></tr>
+        <tr><td>capped $100 book</td><td>rules 116 · jev 96</td><td>rules $+42.80 · jev $+29.32</td><td>−25.39 [−113.5, +63.8]</td></tr>
       </tbody>
     </table>
   </div>
   <div class="rules">
     <div class="card data"><h3>Common set</h3><p>Rows with an outcome (the research trade's net bps) and an answered Jev call. A failed call or a candidate with no trade is left out of all three.</p></div>
     <div class="card hands"><h3>Two lenses</h3><p>Per candidate: what each policy earned across all candidates, skips count 0. Per trade: how good Jev's picks are; this is the gate's own <code>jev − rules</code>, reproduced.</p></div>
-    <div class="card guard"><h3>Verdict</h3><p><code>PROVEN</code> only when Jev beats rules and HOLD per candidate (95 % CI above 0). <code>REJECTED</code> only when its takes lose money. Everything else stays <code>UNPROVEN</code>; W1's Jev is UNPROVEN.</p></div>
+    <div class="card guard"><h3>Verdict</h3><p><code>PROVEN</code> only when Jev beats rules and HOLD per candidate (95 % CI above 0). <code>REJECTED</code> only when its takes lose money. Everything else stays <code>UNPROVEN</code>; W1's Jev is UNPROVEN. The capped book prints beside it.</p></div>
   </div>
 </section>
 
@@ -447,7 +448,8 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 <span class="ln o"># summary, one row per selected leg (MISSING with the reason), then replay vs ledger per name</span>
 <span class="ln cmd"><span class="p">$ </span>tengu evidence evaluate ~/.tengu/state/evidence/w1-2026-10-06/xlab/backtests/20261001T182905Z-weekend_fade</span>
 <span class="ln o">jev − rules per trade: +28.93 bps, ci95 [-23.5, +81.6] over 29 periods (selection quality)</span>
-<span class="ln o">Jev: <span class="hl">UNPROVEN</span> — it skips winners: worse than taking every candidate, which a capped book cannot do — …</span></pre>
+<span class="ln o">capped books: rules 116 trades $+42.80 · jev 96 trades $+29.32 · jev − rules per trade -25.39 bps, ci95 [-113.5, +63.8]</span>
+<span class="ln o">Jev: <span class="hl">UNPROVEN</span> — it skips winners: worse than rules per candidate (not REJECTED: only losing money against hold rejects) — …</span></pre>
   </div>
 </section>
 
