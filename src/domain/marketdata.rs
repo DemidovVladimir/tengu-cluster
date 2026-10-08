@@ -9,6 +9,7 @@
 //! | [`Bar`] | its close, `t_open_ms + interval` — never earlier |
 //! | [`FundingPoint`] | its `t_ms` (HL settles hourly; `rate_1h` > 0 = longs pay) |
 //! | [`CtxPoint`] | its `t_ms` |
+//! | [`MarketEvent`] | its `published_ms` (an SEC filing: its acceptance time); [`EventCoverage`] says which spans a source read — a NOISE label needs one (Phase 7) |
 //!
 //! A series is ascending by time with one row per instant (the last one
 //! given wins); readers take prices only through [`BarSeries::close_at`] /
@@ -380,6 +381,83 @@ pub struct SplitAdjusted {
     /// closed after it): dropped. At most one on a bar grid — a day bar
     /// around an intraday split; none when the split is on the grid.
     pub dropped_open_ms: Vec<i64>,
+}
+
+/// The longest event title kept (chars).
+pub const EVENT_TITLE_MAX_CHARS: usize = 240;
+
+/// One dated information event of an instrument (roadmap Phase 7): an SEC
+/// filing, a split, a listing. Observable at `published_ms` — never earlier:
+/// a decision at `t` reads only events published at or before `t`. The
+/// fetch time is the store's (`fetched_at_ms`): a backfilled event was
+/// received long after it was public.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketEvent {
+    pub instrument: String,
+    /// Publication instant (SEC: the filing's `acceptanceDateTime`, UTC).
+    pub published_ms: i64,
+    /// `filing` · `split` · `listing`.
+    pub kind: String,
+    /// The source's own id, in full (SEC: the accession number).
+    pub id: String,
+    /// SEC form (`8-K`, `6-K`, `10-Q`, …), else the event's own label.
+    pub form: String,
+    /// One line (SEC: the 8-K items or the primary document's
+    /// description), at most [`EVENT_TITLE_MAX_CHARS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+impl MarketEvent {
+    /// The event kinds a store keeps.
+    pub const KINDS: [&'static str; 3] = ["filing", "split", "listing"];
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.instrument.is_empty() || self.id.is_empty() || self.form.is_empty() {
+            return Err(format!(
+                "event `{}` of `{}`: instrument, id and form are required",
+                self.id, self.instrument
+            ));
+        }
+        if !Self::KINDS.contains(&self.kind.as_str()) {
+            return Err(format!(
+                "event `{}` of `{}`: kind `{}` is none of {}",
+                self.id,
+                self.instrument,
+                self.kind,
+                Self::KINDS.join(", ")
+            ));
+        }
+        if self
+            .title
+            .as_ref()
+            .is_some_and(|t| t.chars().count() > EVENT_TITLE_MAX_CHARS)
+        {
+            return Err(format!(
+                "event `{}` of `{}`: title over {EVENT_TITLE_MAX_CHARS} chars",
+                self.id, self.instrument
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// What one source covers of one instrument: `[from_ms, to_ms)` was asked
+/// and read; `covered = false` ⇒ the source has nothing for the instrument
+/// at all (SEC: no CIK for the ticker) — its silence is no evidence of no
+/// news. Phase 7's labels read NOISE only inside a covered span.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventCoverage {
+    pub instrument: String,
+    pub source: String,
+    pub from_ms: i64,
+    pub to_ms: i64,
+    pub covered: bool,
+    /// Why not covered, or what the source mapped the instrument to (SEC:
+    /// `cik 0000320193 AAPL`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub fetched_at_ms: i64,
 }
 
 /// A share split (module table): from `at_ms` on, `ratio` new shares per old

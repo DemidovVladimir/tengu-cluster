@@ -11,6 +11,8 @@
 //! | `bars` | (instrument, interval, t_open_ms) | o, h, l, c, v, n (trades, nullable), source, fetched_at_ms |
 //! | `funding` | (instrument, t_ms) | rate_1h (HL per-hour rate; > 0 = longs pay), premium, source, fetched_at_ms |
 //! | `ctx` | (instrument, t_ms) | mark, oracle, mid, impact_bid, impact_ask, oi, day_ntl_vlm, funding_1h, premium, source |
+//! | `events` (Phase 7) | (instrument, source, id) | published_ms (indexed with the instrument), kind, form, title, fetched_at_ms — an SEC filing: its accession number and acceptance time |
+//! | `event_coverage` | (instrument, source) | from_ms, to_ms, covered, note, fetched_at_ms — the span the latest fetch read; `covered = 0`: the source has nothing for the instrument |
 //!
 //! | Call | Rule |
 //! |---|---|
@@ -29,7 +31,8 @@ use rusqlite::{params, Connection};
 use crate::config::sections::SandboxSections;
 use crate::config::xmarket::{market_db, MARKET_DB};
 use crate::domain::marketdata::{
-    Bar, BarSeries, CtxPoint, CtxSeries, FundingPoint, FundingSeries, Interval,
+    Bar, BarSeries, CtxPoint, CtxSeries, EventCoverage, FundingPoint, FundingSeries, Interval,
+    MarketEvent,
 };
 use crate::domain::observation::now_ms;
 use crate::ports::market_data::{CoverageRow, MarketDataStore};
@@ -47,7 +50,20 @@ CREATE TABLE IF NOT EXISTS funding (
 CREATE TABLE IF NOT EXISTS ctx (
   instrument TEXT NOT NULL, t_ms INTEGER NOT NULL, mark REAL, oracle REAL, mid REAL,
   impact_bid REAL, impact_ask REAL, oi REAL, day_ntl_vlm REAL, funding_1h REAL, premium REAL,
-  source TEXT NOT NULL, PRIMARY KEY (instrument, t_ms)) WITHOUT ROWID;";
+  source TEXT NOT NULL, PRIMARY KEY (instrument, t_ms)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS events (
+  instrument TEXT NOT NULL, source TEXT NOT NULL, id TEXT NOT NULL, published_ms INTEGER NOT NULL,
+  kind TEXT NOT NULL, form TEXT NOT NULL, title TEXT, fetched_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (instrument, source, id)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS events_by_time ON events(instrument, published_ms);
+CREATE TABLE IF NOT EXISTS event_coverage (
+  instrument TEXT NOT NULL, source TEXT NOT NULL, from_ms INTEGER NOT NULL, to_ms INTEGER NOT NULL,
+  covered INTEGER NOT NULL, note TEXT, fetched_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (instrument, source)) WITHOUT ROWID;";
+
+const PUT_EVENT_SQL: &str = "
+INSERT OR REPLACE INTO events(instrument, source, id, published_ms, kind, form, title,
+  fetched_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 
 const PUT_BAR_SQL: &str = "
 INSERT OR REPLACE INTO bars(instrument, interval, t_open_ms, o, h, l, c, v, n, source,
@@ -424,6 +440,115 @@ impl MarketDataStore for SqliteMarketData {
         })
         .await
     }
+
+    async fn put_events(&self, source: &str, events: &[MarketEvent]) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+        for e in events {
+            e.validate()
+                .map_err(|why| anyhow!("{source}: {why}; nothing written"))?;
+        }
+        let (source, events) = (source.to_string(), events.to_vec());
+        self.with_conn(move |conn| {
+            let at = now_ms();
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare(PUT_EVENT_SQL)?;
+                for e in &events {
+                    stmt.execute(params![
+                        e.instrument,
+                        source,
+                        e.id,
+                        e.published_ms,
+                        e.kind,
+                        e.form,
+                        e.title,
+                        at
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            Ok(events.len())
+        })
+        .await
+    }
+
+    async fn events(&self, instrument: &str, from_ms: i64, to_ms: i64) -> Result<Vec<MarketEvent>> {
+        let id = instrument.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT instrument, published_ms, kind, id, form, title FROM events \
+                 WHERE instrument = ?1 AND published_ms >= ?2 AND published_ms < ?3 \
+                 ORDER BY published_ms, id",
+            )?;
+            let rows = stmt.query_map(params![id, from_ms, to_ms], |r| {
+                Ok(MarketEvent {
+                    instrument: r.get(0)?,
+                    published_ms: r.get(1)?,
+                    kind: r.get(2)?,
+                    id: r.get(3)?,
+                    form: r.get(4)?,
+                    title: r.get(5)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    async fn put_event_coverage(&self, c: &EventCoverage) -> Result<()> {
+        if c.from_ms > c.to_ms {
+            bail!(
+                "{} {}: coverage from {} is after to {}",
+                c.instrument,
+                c.source,
+                c.from_ms,
+                c.to_ms
+            );
+        }
+        let c = c.clone();
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO event_coverage(instrument, source, from_ms, to_ms, \
+                 covered, note, fetched_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    c.instrument,
+                    c.source,
+                    c.from_ms,
+                    c.to_ms,
+                    c.covered,
+                    c.note,
+                    c.fetched_at_ms
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn event_coverage(&self, instrument: &str) -> Result<Vec<EventCoverage>> {
+        let id = instrument.to_string();
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT instrument, source, from_ms, to_ms, covered, note, fetched_at_ms \
+                 FROM event_coverage WHERE instrument = ?1 ORDER BY source",
+            )?;
+            let rows = stmt.query_map(params![id], |r| {
+                Ok(EventCoverage {
+                    instrument: r.get(0)?,
+                    source: r.get(1)?,
+                    from_ms: r.get(2)?,
+                    to_ms: r.get(3)?,
+                    covered: r.get(4)?,
+                    note: r.get(5)?,
+                    fetched_at_ms: r.get(6)?,
+                })
+            })?;
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -432,6 +557,68 @@ mod tests {
 
     const H: i64 = 3_600_000;
     const TSLA: &str = "hyperliquid:xyz:TSLA";
+
+    fn filing(id: &str, t: i64, form: &str) -> MarketEvent {
+        MarketEvent {
+            instrument: TSLA.into(),
+            published_ms: t,
+            kind: "filing".into(),
+            id: id.into(),
+            form: form.into(),
+            title: Some("Item 2.02 Results of Operations".into()),
+        }
+    }
+
+    /// Phase 7: events round-trip by publication time; a re-fetch replaces
+    /// by `(instrument, source, id)`; one bad event writes nothing;
+    /// coverage keeps the latest span per source.
+    #[tokio::test]
+    async fn events_and_their_coverage_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = SqliteMarketData::open(dir.path()).unwrap();
+        let a = filing("0001318605-26-000052", 10 * H, "8-K");
+        let b = filing("0001318605-26-000041", 2 * H, "10-Q");
+        assert_eq!(
+            s.put_events("sec", &[a.clone(), b.clone()]).await.unwrap(),
+            2
+        );
+        let mut a2 = a.clone();
+        a2.form = "8-K/A".into();
+        assert_eq!(s.put_events("sec", &[a2.clone()]).await.unwrap(), 1);
+        assert_eq!(
+            s.events(TSLA, 0, 24 * H).await.unwrap(),
+            vec![b.clone(), a2]
+        );
+        assert_eq!(
+            s.events(TSLA, 3 * H, 10 * H).await.unwrap(),
+            Vec::<MarketEvent>::new()
+        );
+        let mut bad = filing("x", H, "8-K");
+        bad.kind = "rumour".into();
+        let e = s
+            .put_events("sec", &[filing("y", H, "8-K"), bad])
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("kind `rumour`"), "{e}");
+        assert_eq!(s.events(TSLA, 0, 2 * H).await.unwrap().len(), 0);
+        let c = |to: i64| EventCoverage {
+            instrument: TSLA.into(),
+            source: "sec".into(),
+            from_ms: 0,
+            to_ms: to,
+            covered: true,
+            note: Some("cik 0001318605 TSLA".into()),
+            fetched_at_ms: to,
+        };
+        s.put_event_coverage(&c(5 * H)).await.unwrap();
+        s.put_event_coverage(&c(9 * H)).await.unwrap();
+        assert_eq!(s.event_coverage(TSLA).await.unwrap(), vec![c(9 * H)]);
+        assert!(s
+            .event_coverage("hyperliquid:xyz:SMSN")
+            .await
+            .unwrap()
+            .is_empty());
+    }
     const SOL_MINT: &str = "solana:So11111111111111111111111111111111111111112";
 
     fn bar(t: i64, c: f64) -> Bar {
