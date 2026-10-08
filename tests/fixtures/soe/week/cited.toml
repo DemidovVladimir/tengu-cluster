@@ -1,0 +1,37 @@
+# Example week (synthetic): the [[cited]] record views of the eval cases
+# `contradictory_sources`, `boundary_cash_exactly_cap` and
+# `good_high_ticket_integration` (decided 2026-09-21T18:00:00Z) — what
+# `tengu soe check|portfolio|sensitivity --cited` reads until the O2 as-of
+# view builds them. `synthetic:` ids, invented values.
+
+[[cited]]
+record_id = "synthetic:rule-draft-2026:702a6413ceed64f8f74956f6bfa927dffc7fde9561bf4c28f1fb7b7815f3a4c8"
+event_key = "synthetic:rule:filing-draft"
+kind = "FACT"
+knowable_at = "2026-09-10"
+contradicted_at = "2026-09-18"
+
+[[cited]]
+record_id = "synthetic:rule-final-2026:67a3e730da86512b1229a8aa84e379b00d91385d087b595b0e3d603b3113b9a7"
+event_key = "synthetic:rule:filing-final"
+kind = "FACT"
+knowable_at = "2026-09-12"
+contradicted_at = "2026-09-25T09:00:00Z"
+
+[[cited]]
+record_id = "synthetic:reseller-terms-2026:7bd8e451efdcf4a94c49b19f24a7ecbb19c53c5d63e4f5627b73d3fb0df65a37"
+event_key = "synthetic:filing:reseller-terms"
+kind = "FACT"
+knowable_at = "2026-09-15"
+
+[[cited]]
+record_id = "synthetic:tender-erp-link-1:423fde6e3f7894677ec5a0e0aeb4c72e6cb806e2299e01ee7cdaa14542fa3f62"
+event_key = "synthetic:notice:erp-link-a"
+kind = "DEMAND"
+knowable_at = "2026-09-15"
+
+[[cited]]
+record_id = "synthetic:tender-erp-link-2:9e43bf2963527fc88fe0eb35b53ee4388c6e08196fdb35f01fb7a94b2c6e9238"
+event_key = "synthetic:notice:erp-link-b"
+kind = "DEMAND"
+knowable_at = "2026-09-17"

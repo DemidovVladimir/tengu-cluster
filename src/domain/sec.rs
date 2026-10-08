@@ -434,8 +434,15 @@ pub fn json_clock(json_ms: i64, published_ms: i64) -> JsonClock {
     }
 }
 
-/// The event title (module table).
+/// The event title (module table): [`filing_title_full`] cut to
+/// `EVENT_TITLE_MAX_CHARS`.
 pub fn filing_title(f: &Filing) -> Option<String> {
+    filing_title_full(f).map(|t| clip(&t, EVENT_TITLE_MAX_CHARS))
+}
+
+/// The 8-K items with short names, else `primaryDocDescription` — whole (a
+/// source record keeps it uncut, `domain/source/sec_records.rs`).
+pub fn filing_title_full(f: &Filing) -> Option<String> {
     let items: Vec<String> = f
         .items
         .split(',')
@@ -451,7 +458,7 @@ pub fn filing_title(f: &Filing) -> Option<String> {
     } else {
         format!("items {}", items.join(" · "))
     };
-    (!title.is_empty()).then(|| clip(&title, EVENT_TITLE_MAX_CHARS))
+    (!title.is_empty()).then_some(title)
 }
 
 fn clip(s: &str, max: usize) -> String {

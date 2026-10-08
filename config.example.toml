@@ -59,6 +59,7 @@ default_lens = "eco"
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
 #   + xmarket risk (typed): risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade (private agent only) — needs [xmarket] + [risk] + [paper]; scope examples under "Risk + paper trading" below
 #   + xlab (typed, ttl 0): market_history, backtest — need [xmarket] (backtest also [backtest]); scope examples under "Backtests" below
+#   + sources (typed, ttl 0, read-only): source_evidence — needs [sources]; scope example under "Source registry" below
 #   `tengu tool list` (hidden) prints every catalog name.
 
 # OpenRouter model examples (just change the model line):
@@ -603,6 +604,68 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # env_reads = ["HL_API_URL", "GECKO_API_URL"]                    # optional API-base overrides
 # [default_scopes.backtest]
 # fs_roots = ["~/xlab-ws"]                  # no host, no env
+
+# --- Source registry (O2: approved external sources; sandboxes/soe) ---
+# One row per source. Records go to <TENGU_HOME>/state/<state>/sources.db
+# (append-only, never market.db). A row ships `enabled = false`; enabling it
+# needs license, terms_url, terms_sha256 (the reviewed terms page, 64 hex),
+# terms_reviewed_at and both retention periods. Hosts sit inside [egress]
+# allow_hosts; rate_limit names a [rate_limits.<name>]. Rules:
+# src/config/sources.rs; page docs/tutorial/source-evidence.html.
+# [sources]
+# state = "soe"                             # one dir name under <TENGU_HOME>/state/
+#
+# [sources.registry.sec_edgar]
+# kind = "sec_edgar"                        # | ted_search
+# class = "company_primary"                 # law_regulator | company_primary | registry_marketplace | customer_demand | independent_reporting | social_inference
+# trust = "primary"                         # | corroborating | trigger_only (the class must allow it)
+# revision = "immutable"                    # | in_place: when an edit becomes knowable
+# enabled = false
+# hosts = ["www.sec.gov", "data.sec.gov"]
+# auth = "user_agent_env:SEC_USER_AGENT"    # | none | api_key_env:<VAR>
+# rate_limit = "sec"
+# store_raw = true                          # keep raw bodies (snapshots)
+# jurisdiction = "US"                       # law_regulator: an ISO 3166 code or EU
+# language = "en"
+# forms = ["8-K", "8-K/A"]                  # sec_edgar only; absent = every kept form
+# entities = ["sec:cik:0000320193"]         # sec_edgar only (example CIK)
+# license = "public EDGAR data; SEC fair-access policy"
+# terms_url = "https://www.sec.gov/search-filings/edgar-application-programming-interfaces"
+# # terms_sha256 = "<64 hex>"               # required once enabled
+# # terms_reviewed_at = "2026-10-08"        # required once enabled
+# raw_retention_days = 0                    # 0 = forever
+# record_retention_days = 0
+#
+# [sources.registry.ted_search]
+# kind = "ted_search"
+# class = "law_regulator"
+# trust = "primary"
+# revision = "immutable"
+# enabled = false
+# hosts = ["api.ted.europa.eu"]
+# auth = "none"
+# rate_limit = "ted"
+# store_raw = true
+# jurisdiction = "EU"
+# language = "en"
+# query = "publication-date >= {from} AND publication-date <= {to}"   # ted_search only: {from} / {to} required, each replaced by the day read (YYYYMMDD)
+# # listing_max_age_days = 2                # registry_marketplace only (required there)
+
+# Each row's budget (src/config/rate_limits.rs) — sandboxes/soe:
+# [rate_limits.sec]                         # SEC fair access: ≤ 10 requests / s with a declared User-Agent
+# per_minute = 300
+# burst = 5
+# [rate_limits.ted]                         # TED publishes no limit: 1 / s assumed
+# per_minute = 60
+# burst = 2
+#
+# Only the operator fetches: `tengu sources --sandbox <s> list | fetch | import |
+# asof | terms | purge | disable | enable` (docs/source-evidence-2026-10-08.md).
+# Agents read through the opt-in tool source_evidence (the as-of evidence packet
+# of sources.db, no fetch argument); sources.db is its own state, outside every
+# fs root. Its scope: the workspace (observation store), no host, no env.
+# [default_scopes.source_evidence]
+# fs_roots = ["~/soe-ws"]                   # = the agent's workspace
 
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`

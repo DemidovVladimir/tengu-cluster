@@ -1,0 +1,88 @@
+# Example week (synthetic): a candidate of the eval case `contradictory_sources`
+# (tests/fixtures/soe/cases/contradictory_sources.toml), as a standalone opportunity file.
+# Invented example values — no real firm, person or figure.
+schema = "soe.opportunity/1"
+id = "draft-rule-automation"
+version = 1
+as_of = "2026-09-21"
+customer = "small accounting firms (synthetic example)"
+pain = "a changed filing format, re-keyed by hand"
+mechanism = "AUTOMATE"
+alternatives = ["PRODUCTIZE", "HOLD"]
+requires_skills = ["automation"]
+signals = ["synthetic:rule-draft-2026:702a6413ceed64f8f74956f6bfa927dffc7fde9561bf4c28f1fb7b7815f3a4c8"]
+
+[jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-09-18" }
+fixed_costs_per_month = { value = { low = "30.00", base = "40.00", high = "60.00" }, evidence = [], as_of = "2026-09-18" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 13 }, evidence = [], as_of = "2026-09-18" }
+ramp_months = { value = { low = 1, base = 2, high = 3 }, evidence = [], as_of = "2026-09-18" }
+
+[economics.revenue]
+kind = "RECURRING"
+leads_per_month = { value = { low = 7, base = 10, high = 14 }, evidence = ["url:https://example.org/synthetic-evidence"], as_of = "2026-09-18" }
+conversion = { value = { low = 1500, base = 2000, high = 2500 }, evidence = [], as_of = "2026-09-18" }
+churn_per_month = { value = { low = 300, base = 500, high = 900 }, evidence = [], as_of = "2026-09-18" }
+price_per_month = { value = { low = "450.00", base = "600.00", high = "750.00" }, evidence = [], as_of = "2026-09-18" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-09-18" }
+
+[economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+setup = { value = { low = "700.00", base = "900.00", high = "1400.00" }, evidence = [], as_of = "2026-09-18" }
+validation = { value = { low = "200.00", base = "300.00", high = "450.00" }, evidence = [], as_of = "2026-09-18" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, evidence = [], as_of = "2026-09-18" }
+
+[risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the filing portal", share = 7500 }]
+
+[risk.max_loss]
+cash = { low = "900.00", base = "1300.00", high = "2100.00" }
+owner_hours = { low = 25, base = 40, high = 70 }
+reputation = "a missed delivery for one pilot client"
+dependency = "the filing portal's format"
+
+[risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[experiment]
+hypothesis = "firms pay to stop re-keying filings"
+metric = "paid pilots"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-15"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[experiment.stages]]
+name = "pilot"
+cash = "750.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"

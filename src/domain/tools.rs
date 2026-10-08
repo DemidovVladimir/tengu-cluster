@@ -52,6 +52,12 @@ pub(crate) const BACKTEST: &str = "backtest";
 /// published ranking; its state is the state dir's (`strategy-rankings/`).
 pub(crate) const STRATEGY_RANKING: &str = "strategy_ranking";
 
+// Source family (O2, `adapters/outbound/tools/sources/`) — read-only typed
+// rows over the sandbox's source store (`<sources state dir>/sources.db`);
+// one `sources` plugin. Agents never fetch: the operator does
+// (`tengu sources fetch`).
+pub(crate) const SOURCE_EVIDENCE: &str = "source_evidence";
+
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
 /// transaction). Only a private agent may hold one — no `description`, not
@@ -140,6 +146,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     MARKET_HISTORY,
     BACKTEST,
     STRATEGY_RANKING,
+    SOURCE_EVIDENCE,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

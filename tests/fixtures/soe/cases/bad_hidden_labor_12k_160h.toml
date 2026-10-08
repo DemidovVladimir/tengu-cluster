@@ -1,0 +1,116 @@
+# Synthetic eval case: invented example values, `synthetic:` record ids — no
+# real firm, person or figure. Expectations hold for the profile
+# `synthetic-operator` (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.eval_case/1"
+id = "bad_hidden_labor_12k_160h"
+version = 1
+as_of = "2026-09-07T18:00:00Z"
+class = "BAD"
+synthetic = true
+profile = "synthetic-operator"
+note = "16000.00 x 75 % = 12000.00 collected clears the target in cash, but 160 owner hours x the shadow rate leave 800.00 time-adjusted: rejected (point estimates, so no upside path)."
+
+[[cited]]
+record_id = "synthetic:tender-warehouse-1:f36c2cae67d7d27889db7dd1a1e69aa342dbb94a5d0e06e3e56024388f49adad"
+event_key = "synthetic:notice:warehouse-a"
+kind = "DEMAND"
+knowable_at = "2026-09-02"
+
+[[cited]]
+record_id = "synthetic:tender-warehouse-2:e8ad72255a32444d114a442ffb3ed4080f21a16945161a0e69abaefc52168525"
+event_key = "synthetic:notice:warehouse-b"
+kind = "DEMAND"
+knowable_at = "2026-09-03"
+
+[expected]
+verdicts = { warehouse-delivery = "REJECT" }
+ranked = []
+next_information = []
+gates = { warehouse-delivery = ["CONTRIBUTION_BELOW_TARGET"] }
+
+[[candidates]]
+schema = "soe.opportunity/1"
+id = "warehouse-delivery"
+version = 1
+as_of = "2026-09-07"
+customer = "a regional wholesaler (synthetic example)"
+pain = "a warehouse system rebuilt by hand"
+mechanism = "HIGH_TICKET_DELIVERY"
+alternatives = ["REJECT"]
+requires_skills = ["integration"]
+signals = ["synthetic:tender-warehouse-1:f36c2cae67d7d27889db7dd1a1e69aa342dbb94a5d0e06e3e56024388f49adad", "synthetic:tender-warehouse-2:e8ad72255a32444d114a442ffb3ed4080f21a16945161a0e69abaefc52168525"]
+
+[candidates.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[candidates.economics]
+currency = "EUR"
+revenue_quality = "ONE_OFF"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-04" }
+fixed_costs_per_month = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-04" }
+owner_hours_per_month = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-04" }
+ramp_months = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-04" }
+
+[candidates.economics.revenue]
+kind = "ONE_OFF"
+contract_value = { value = { low = "16000.00", base = "16000.00", high = "16000.00" }, evidence = ["url:https://example.org/synthetic-evidence"], as_of = "2026-09-04" }
+win_probability = { value = { low = 7500, base = 7500, high = 7500 }, evidence = [], as_of = "2026-09-04" }
+delivery_weeks = { value = { low = 4, base = 4, high = 4 }, evidence = [], as_of = "2026-09-04" }
+owner_hours_total = { value = { low = 160, base = 160, high = 160 }, evidence = [], as_of = "2026-09-04" }
+collection_loss = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-04" }
+
+[candidates.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-04" }
+setup = { value = { low = "300.00", base = "300.00", high = "300.00" }, evidence = [], as_of = "2026-09-04" }
+validation = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-04" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-04" }
+
+[candidates.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the vendor API", share = 7500 }]
+
+[candidates.risk.max_loss]
+cash = { low = "300.00", base = "300.00", high = "2500.00" }
+owner_hours = { low = 160, base = 160, high = 220 }
+reputation = "a late go-live"
+dependency = "the wholesaler's IT staff"
+
+[candidates.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[candidates.experiment]
+hypothesis = "the wholesaler signs the rebuild"
+metric = "signed statements of work"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-09-30"
+expires_at = "2026-10-15"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[candidates.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[candidates.experiment.stages]]
+name = "pilot"
+cash = "300.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[candidates.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"

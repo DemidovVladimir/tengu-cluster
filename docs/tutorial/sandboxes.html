@@ -232,7 +232,7 @@
       <label for="r-sbx"><code>--sandbox</code>
         <select id="r-sbx">
           <option value="">(not given)</option>
-          <option>jev-exec</option><option selected>lping</option><option>storage-test</option><option>tor-check</option>
+          <option>jev-exec</option><option selected>lping</option><option>soe</option><option>storage-test</option><option>tor-check</option>
           <option>unlimited</option><option>xlab</option><option>xmarket</option><option>xmarket-weekend</option>
         </select>
       </label>
@@ -347,6 +347,12 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
       <p>Crypto research and Solana LP reads. No signer: write tools only simulate.</p>
       <div class="agents">lping · crypto_researcher · lp_executor</div>
     </div>
+    <div class="sbx" data-tags="open">
+      <h3>soe</h3>
+      <div class="tags"><span class="chip data">open · 3 hosts</span><span class="chip guard">closed world</span></div>
+      <p>Software Opportunity Engine sources: the <code>[sources]</code> registry (SEC EDGAR, EU TED), both rows off; the operator fetches with <code>tengu sources</code>; one read-only agent (<a href="source-evidence.html">Source evidence</a>).</p>
+      <div class="agents">soe_reader</div>
+    </div>
     <div class="sbx" data-tags="tor">
       <h3>storage-test</h3>
       <div class="tags"><span class="chip guard">tor (default)</span></div>
@@ -414,9 +420,9 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span><b>No silent typos.</b> <code>Config</code>, <code>AgentConfig</code> and <code>[agents.*.local]</code> deny unknown keys; the load fails.</span></li>
     <li><span><b>All issues at once.</b> Validation collects every problem into one <code>Config validation failed (N issues)</code> error.</span></li>
     <li><span><b>No merging.</b> <code>--sandbox</code> replaces the base config whole; an agent's own scope replaces the default whole.</span></li>
-    <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>doctor</code>, <code>decide</code>, <code>history</code>, <code>backtest</code> and <code>risk</code> with <code>--sandbox</code> log a warning and go on; any other command stops.</span></li>
+    <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>doctor</code>, <code>decide</code>, <code>history</code>, <code>backtest</code>, <code>risk</code> and <code>sources</code> with <code>--sandbox</code> log a warning and go on; any other command stops.</span></li>
     <li><span><b>Children see the same file.</b> <code>run-agent</code> reloads it by sandbox name; the bridge reads the absolute <code>TENGU_CONFIG</code>.</span></li>
-    <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, state dir and rate limits.</span></li>
+    <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, <code>[sources]</code>, state dirs and rate limits.</span></li>
     <li><span><b>Hardened means hardened.</b> With <code>[risk]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
     <li><span><b>Bound sandboxes stay in their generation.</b> With <code>[generation]</code>, every load checks the sandbox against <code>lineage/generations/&lt;id&gt;.toml</code>; xlab and xmarket-weekend bind W1.</span></li>
     <li><span><b>Ranking contracts fit the sandbox.</b> With <code>[strategy_ranking]</code>, every load refuses an unknown contract, one of another sandbox, or a contract strategy missing from <code>[backtest.strategies]</code> (<a href="strategy-ranking.html">Strategy ranking</a>).</span></li>
@@ -478,7 +484,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 /* page-only: the resolver, the agent-block anatomy, the sandbox filter */
 (function () {
   "use strict";
-  var NET = { "jev-exec": "open", "lping": "open", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
+  var NET = { "jev-exec": "open", "lping": "open", "soe": "open, allow_hosts: 3", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
     "unlimited": "open", "xlab": "open, allow_hosts: 2", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
   var sbx = document.getElementById("r-sbx"), cf = document.getElementById("r-c"), env = document.getElementById("r-env");
   var ex = document.getElementById("r-exists"), ok = document.getElementById("r-valid");

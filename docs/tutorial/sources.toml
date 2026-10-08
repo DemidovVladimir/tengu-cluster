@@ -410,6 +410,30 @@ sources = [
   "src/bootstrap/decision.rs",
 ]
 
+# ── Opportunities ─────────────────────────────────────────────────────────
+
+[pages.soe]
+sources = [
+  "src/domain/soe/",
+  "src/config/soe.rs",
+  "src/adapters/inbound/cli/soe.rs",
+  "tests/soe_cli.rs",
+  "tests/fixtures/soe/",
+  "docs/soe-2026-10-08.md",
+]
+
+[pages.source-evidence]
+sources = [
+  "src/domain/source/",
+  "src/domain/canonical.rs",
+  "src/config/sources.rs",
+  "src/ports/source_store.rs",
+  "src/adapters/outbound/sources/",
+  "src/adapters/outbound/tools/sources/",
+  "src/application/sources.rs",
+  "src/adapters/inbound/cli/sources.rs",
+]
+
 # ── Operate ───────────────────────────────────────────────────────────────
 
 [pages.ops]
