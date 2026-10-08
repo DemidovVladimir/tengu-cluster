@@ -653,4 +653,120 @@ mod tests {
         // The spec with its own costs and the pair with legs pass.
         assert!(!has("dex_move") && !has("sol_eth_spread"), "{e:?}");
     }
+
+    /// `[backtest]` of `sandboxes/<name>/config.toml`.
+    fn sandbox_backtest(name: &str) -> BacktestConfig {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = root.join(format!("sandboxes/{name}/config.toml"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        let v: toml::Value = toml::from_str(&text).unwrap();
+        v["backtest"].clone().try_into().unwrap()
+    }
+
+    /// Phase 7 (`labels`, 2026-10-08) changes no existing spec's hash: every
+    /// `[backtest.strategies]` spec of the frozen `sandboxes/xlab` keeps the
+    /// `spec_sha256` it had before (computed at 3ba881791442698b556449fd00f3350f1edcb4f2;
+    /// the nine W1 pins of `lineage/generations/W1.toml` among them), and so
+    /// do xlab-w2's copies; its four labelled specs differ from their bases
+    /// only in the `labels` table.
+    #[test]
+    fn spec_hashes_survive_the_labels_knob() {
+        use crate::domain::backtest::spec::spec_sha256;
+        let pinned = [
+            (
+                "crypto_funding_carry",
+                "b75ab5262ffca5dbad4cfd4d5ce873417ccc7da134722a8a9f42bd9f3291748e",
+            ),
+            (
+                "crypto_move_fade",
+                "90b61efa4a5e1fa016e4155c154a086c01bb5151012af47556f0893a27d937ad",
+            ),
+            (
+                "sol_eth_spread",
+                "c499e65d940cb5ddde04e660b066f67c4ad4e1841a3862940602f17c75f7b174",
+            ),
+            (
+                "weekend_fade",
+                "e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14",
+            ),
+            (
+                "weekend_fade_liquid",
+                "dabdf28465aeae58204da189d435cf5dd2840308050330932eb40f9be4881a7f",
+            ),
+            (
+                "weekend_fade_top4",
+                "aee630b88c13216bb1c812eb53e71dbc2249331f58fa6a9471ab78bb9b4bdf56",
+            ),
+            (
+                "weekend_follow",
+                "61b7c7b896b1e9444821a796754065024879ce5a92639facd243d2e461cbcb4f",
+            ),
+            (
+                "xyz_funding_carry",
+                "3a95e2149ac0551064ff778a5f9545b5155e0e06dc35c63af30520a304d29165",
+            ),
+            (
+                "xyz_overnight_follow",
+                "051791688d07b49900bf10d8a43aad668f735a7bae1f266f155ae13dc9ec711b",
+            ),
+            (
+                "xyz_weeknight_fade_top4",
+                "ad0981422f850136d5e072460d8b2f46f91cfa92c2359fcf902218c2556542d2",
+            ),
+            (
+                "xyz_weeknight_fade_top4_0400",
+                "0a429b9a4e41b02ab4ba329d15f2848deee90d72f4b1d4ca7494d36c35ef07c2",
+            ),
+        ];
+        let hash = |bt: &BacktestConfig, name: &str| {
+            let s = bt
+                .strategy(name)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            spec_sha256(&s.to_value())
+        };
+        let xlab = sandbox_backtest("xlab");
+        assert_eq!(
+            xlab.strategies
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            pinned.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            "every xlab strategy is pinned"
+        );
+        let w2 = sandbox_backtest("xlab-w2");
+        for (name, sha) in pinned {
+            assert_eq!(hash(&xlab, name), sha, "xlab {name}");
+            assert_eq!(hash(&w2, name), sha, "xlab-w2's copy of {name}");
+        }
+        // The labelled four: the base's value + `labels`, nothing else.
+        for (labelled, base, skip) in [
+            ("weekend_fade_skip_news", "weekend_fade", vec!["NEWS"]),
+            (
+                "weekend_fade_noise_only",
+                "weekend_fade",
+                vec!["NEWS", "UNCERTAIN"],
+            ),
+            (
+                "weekend_fade_top4_skip_news",
+                "weekend_fade_top4",
+                vec!["NEWS"],
+            ),
+            (
+                "weekend_fade_top4_noise_only",
+                "weekend_fade_top4",
+                vec!["NEWS", "UNCERTAIN"],
+            ),
+        ] {
+            let mut v = w2.strategy(labelled).unwrap().to_value();
+            let labels = v.as_object_mut().unwrap().remove("labels").unwrap();
+            assert_eq!(
+                labels,
+                serde_json::json!({"skip": skip, "lookback_mins": 240, "new_listing_days": 14}),
+                "{labelled}"
+            );
+            v["name"] = Value::from(base);
+            assert_eq!(v, w2.strategy(base).unwrap().to_value(), "{labelled}");
+            assert_ne!(hash(&w2, labelled), hash(&w2, base));
+        }
+    }
 }

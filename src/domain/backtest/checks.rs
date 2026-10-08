@@ -7,6 +7,7 @@
 //! | Time integrity — decisions (`docs/xlab-2026-10-01.md` § 39) | under every move, the candidates and skips decided at or before t are unchanged |
 //! | Time integrity — arms | under every move, per arm: what became of each candidate decided at or before t (admitted — traded or held as `missing_exit` —, refused by rule, dropped at the decision) is unchanged, and so are the trades closed at or before t (the research arm under the cut: those whose exit plan ends inside the cut data — a later horizon is censored) |
 //! | As-of | `data_asof_ms ≤ decided_at_ms` for every candidate and trade, every world and kind, both arms; entries fill at the decision's close |
+//! | Time integrity — labels (Phase 7, `labels.rs`) | the 1h world and its split twin with events, partial coverage and a configured split; three labelled `weekend_window` specs (label only · skip NEWS, `top_n` 1 · skip NEWS + UNCERTAIN, 600 min, 7-day listings, 8-Ks only); after every decision instant t: the bar moves above, events published after t deleted / moved to t + 1 ms / a flood every hour from t + 1 ms, coverage ending at t + 1 ms, `cut_after(t)` — candidates, labels and skips at or before t unchanged; every class and a `label_skipped` exercised; an event published exactly at t makes a NOISE name NEWS, one at t + 1 ms does not |
 //! | Splits | the split-adjusted series keeps no bar that opens before a split and closes after it; no candidate shows the split as a move |
 //! | Rule W golden (`assert_rule_w_golden`, also the W1 generation's replay check) | `weekend_window` on the 2026-09-26 golden candles (`weekend_fade::golden`, 5 m) with half the round-trip cost per side, no spread, slippage or funding = `weekend_fade::replay`: the same 74 names, prices, signals, sides and instants exactly; gross = side × (exit / entry − 1) exactly and = the replay's log gross through dir × (e^{dir × g / 10⁴} − 1) × 10⁴; net = gross − the round trip; the mean of the converted rows (+93.90 bps; the replay's log mean +95.46); the same 53 positive; `top_n` 4 / 50 bps = the replay's capped four |
 
@@ -19,11 +20,14 @@ use crate::domain::backtest::engine::{
     candidates, simulate, Arm, ArmResult, Candidate, CandidateSet, ExitPlan, MarketData, RiskCaps,
     RunParams, Skip, SkipReason, Trade,
 };
+use crate::domain::backtest::labels::InfoLabel;
 use crate::domain::backtest::spec::StrategySpec;
 use crate::domain::backtest::testkit::{
     aggregate, et, nyse, random_intraday, random_market, run_params, utc, H,
 };
-use crate::domain::marketdata::{fmt_time, Bar, BarSeries, Interval, StockSplit};
+use crate::domain::marketdata::{
+    fmt_time, Bar, BarSeries, EventCoverage, Interval, MarketEvent, StockSplit,
+};
 use crate::domain::xm::weekend_fade::{fade_window, golden, replay, FadeRule, Replay};
 
 const IDS: [&str; 3] = [
@@ -425,6 +429,231 @@ fn decisions_at_or_before_t_ignore_what_comes_after() {
         }
     }
     assert!(thin > 0, "no thin_entry skip: the filter went unchecked");
+}
+
+/// The 1h world (and its 2-for-1 split twin) with Phase 7 data (module
+/// table): an event every 29 h for the ids in turn (an 8-K, a 10-Q, a
+/// `split` event), AAA covered throughout, BBB from day 16, CCC by a source
+/// that has nothing for it (`covered = false`); the twin's configured BBB
+/// split (Sun 2026-09-20 13:00 UTC) sits inside that weekend's window.
+/// Specs: labels only; skip NEWS with `top_n` 1; skip NEWS + UNCERTAIN, a
+/// 600 min window, 7-day listings, `top_n` 2.
+fn labelled_worlds() -> Vec<World> {
+    [hourly(), split_hourly()]
+        .into_iter()
+        .map(|mut w| {
+            let t0 = utc("2026-08-31 00:00");
+            let end = t0 + 41 * DAY;
+            let forms = ["8-K", "10-Q", "split"];
+            for k in 0..34_i64 {
+                let id = IDS[(k % 3) as usize];
+                let form = forms[(k % 4).min(2) as usize];
+                w.raw
+                    .info
+                    .events
+                    .entry(id.into())
+                    .or_default()
+                    .push(MarketEvent {
+                        instrument: id.into(),
+                        published_ms: t0 + k * 29 * H + 17 * 60_000 + 13_000,
+                        kind: if form == "split" { "split" } else { "filing" }.into(),
+                        id: format!("0000000000-26-{k:06}"),
+                        form: form.into(),
+                        title: None,
+                    });
+            }
+            for (id, from, covered) in [
+                (IDS[0], t0, true),
+                (IDS[1], t0 + 16 * DAY, true),
+                (IDS[2], t0, false),
+            ] {
+                w.raw.info.coverage.insert(
+                    id.into(),
+                    vec![EventCoverage {
+                        instrument: id.into(),
+                        source: "sec".into(),
+                        from_ms: from,
+                        to_ms: end,
+                        covered,
+                        note: None,
+                        fetched_at_ms: end,
+                    }],
+                );
+            }
+            w.raw.info.splits = w.splits.clone();
+            w.specs = specs(vec![
+                json!({"kind": "weekend_window", "universe": IDS, "interval": "1h",
+                       "calendar": "us_equity", "direction": "fade", "labels": {}}),
+                json!({"kind": "weekend_window", "universe": IDS, "interval": "1h",
+                       "calendar": "us_equity", "direction": "fade", "top_n": 1,
+                       "labels": {"skip": ["NEWS"]}}),
+                json!({"kind": "weekend_window", "universe": IDS, "interval": "1h",
+                       "calendar": "us_equity", "direction": "follow", "top_n": 2,
+                       "labels": {"skip": ["NEWS", "UNCERTAIN"], "lookback_mins": 600,
+                                  "new_listing_days": 7, "forms": ["8-K"]}}),
+            ]);
+            w.samples = usize::MAX;
+            w
+        })
+        .collect()
+}
+
+/// What comes after t, for the labels (module table): events published
+/// after t deleted, moved to t + 1 ms, or a flood of events every hour from
+/// t + 1 ms for every id; coverage ending at t + 1 ms; `cut_after(t)`.
+#[derive(Debug, Clone, Copy)]
+enum EventMove {
+    Delete,
+    ToNext,
+    Flood,
+    CoverageEnds,
+    Cut,
+}
+
+fn events_moved(raw: &MarketData, t: i64, how: EventMove) -> MarketData {
+    let mut out = raw.clone();
+    let info = &mut out.info;
+    match how {
+        EventMove::Delete => {
+            for evs in info.events.values_mut() {
+                evs.retain(|e| e.published_ms <= t);
+            }
+        }
+        EventMove::ToNext => {
+            for e in info.events.values_mut().flat_map(|evs| evs.iter_mut()) {
+                if e.published_ms > t {
+                    e.published_ms = t + 1;
+                }
+            }
+        }
+        EventMove::Flood => {
+            for id in IDS {
+                let evs = info.events.entry(id.into()).or_default();
+                for k in 0..(20 * 24) {
+                    evs.push(MarketEvent {
+                        instrument: id.into(),
+                        published_ms: t + 1 + k * H,
+                        kind: "filing".into(),
+                        id: format!("flood-{k}"),
+                        form: "8-K".into(),
+                        title: None,
+                    });
+                }
+            }
+        }
+        EventMove::CoverageEnds => {
+            for c in info.coverage.values_mut().flat_map(|cs| cs.iter_mut()) {
+                c.to_ms = c.to_ms.min(t + 1);
+            }
+        }
+        EventMove::Cut => {
+            out.cut_after(t);
+        }
+    }
+    out
+}
+
+/// Phase 7 (§ 39 for the labels): no event published after t, no coverage
+/// past it and no bar after it changes a label, a skip or a candidate at or
+/// before t; an event published exactly at t counts (observable at its
+/// publication), one at t + 1 ms does not.
+#[test]
+fn labels_at_or_before_t_ignore_what_comes_after() {
+    let mut seen: BTreeSet<InfoLabel> = BTreeSet::new();
+    let mut label_skips = 0;
+    let mut at_t = 0;
+    for w in labelled_worlds() {
+        let md = w.md(&w.raw);
+        for s in &w.specs {
+            let base = candidates(s, &md, &w.p).unwrap();
+            assert!(!base.candidates.is_empty(), "{} decided nothing", w.name);
+            seen.extend(base.candidates.iter().filter_map(|c| c.info_label));
+            seen.extend(base.skipped.iter().filter_map(|k| k.info_label));
+            assert!(base.candidates.iter().all(|c| c.info_label.is_some()));
+            label_skips += base
+                .skipped
+                .iter()
+                .filter(|k| k.reason == SkipReason::LabelSkipped)
+                .count();
+            let mut future_read = false;
+            for t in instants(&base, w.samples) {
+                let mut variants: Vec<(String, MarketData)> = MOVES
+                    .iter()
+                    .map(|how| {
+                        let mut raw = moved(&w.raw, t, *how, Funding::Stamped);
+                        if matches!(how, Move::Cut) {
+                            raw.info.cut_after(t);
+                        }
+                        (format!("{how:?}"), raw)
+                    })
+                    .collect();
+                for how in [
+                    EventMove::Delete,
+                    EventMove::ToNext,
+                    EventMove::Flood,
+                    EventMove::CoverageEnds,
+                    EventMove::Cut,
+                ] {
+                    variants.push((format!("{how:?}"), events_moved(&w.raw, t, how)));
+                }
+                for (how, raw) in variants {
+                    let again = candidates(s, &w.md(&raw), &w.p).unwrap();
+                    assert_eq!(
+                        upto(&again, t),
+                        upto(&base, t),
+                        "{} labels at {} ({how})",
+                        w.name,
+                        fmt_time(t)
+                    );
+                    future_read |= again != base;
+                }
+                // Published exactly at t: NEWS; a millisecond later: not.
+                if s.labels().is_some_and(|l| l.skip.is_empty()) {
+                    for c in base
+                        .candidates
+                        .iter()
+                        .filter(|c| c.decided_at_ms == t && c.info_label == Some(InfoLabel::Noise))
+                    {
+                        let with = |p: i64| {
+                            let mut raw = w.raw.clone();
+                            raw.info
+                                .events
+                                .entry(c.instrument.clone())
+                                .or_default()
+                                .push(MarketEvent {
+                                    instrument: c.instrument.clone(),
+                                    published_ms: p,
+                                    kind: "filing".into(),
+                                    id: "at-t".into(),
+                                    form: "8-K".into(),
+                                    title: None,
+                                });
+                            let set = candidates(s, &w.md(&raw), &w.p).unwrap();
+                            set.candidates
+                                .into_iter()
+                                .find(|x| x.decided_at_ms == t && x.instrument == c.instrument)
+                                .and_then(|x| x.info_label)
+                        };
+                        assert_eq!(with(t), Some(InfoLabel::News), "{}", c.instrument);
+                        assert_eq!(with(t + 1), Some(InfoLabel::Noise), "{}", c.instrument);
+                        at_t += 1;
+                    }
+                }
+            }
+            assert!(
+                future_read,
+                "{}: moving the future changed no later decision — the check proves nothing",
+                w.name
+            );
+        }
+    }
+    assert_eq!(
+        seen,
+        BTreeSet::from(InfoLabel::ALL),
+        "every class exercised"
+    );
+    assert!(label_skips > 0, "no label_skipped: the skip went unchecked");
+    assert!(at_t > 0, "no NOISE candidate to publish an event at t for");
 }
 
 /// Caps that bind: two $25 positions, net one way, a $3 daily stop.

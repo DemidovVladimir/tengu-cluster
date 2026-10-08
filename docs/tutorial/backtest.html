@@ -285,7 +285,7 @@
     <p>Each kind has its own fields and bounds. Names below are xlab's library (<code>sandboxes/xlab</code>).</p>
   </div>
   <div class="grid">
-    <div class="card hands kind"><h3><code>weekend_window</code></h3><p>Rule W on any calendar: s = ln(entry / anchor), <code>fade</code> or <code>follow</code>, optional <code>top_n</code>. <code>weekend_fade</code>, <code>weekend_fade_top4</code>.</p></div>
+    <div class="card hands kind"><h3><code>weekend_window</code></h3><p>Rule W on any calendar: s = ln(entry / anchor), <code>fade</code> or <code>follow</code>, optional <code>top_n</code>. <code>weekend_fade</code>, <code>weekend_fade_top4</code>. Optional <code>labels</code>: each name NEWS / UNCERTAIN / NOISE from what was published in [anchor − 240 min, decision]; <code>skip</code> drops a class before <code>top_n</code> (<code>label_skipped</code>). <code>weekend_fade_noise_only</code> in <code>sandboxes/xlab-w2</code>.</p></div>
     <div class="card hands kind"><h3><code>daily_window</code></h3><p>Anchor, entry, exit as local <code>HH:MM</code>. <code>xyz_overnight_follow</code>: 16:00 → 20:00 → 09:00 New York.</p></div>
     <div class="card hands kind"><h3><code>move_trigger</code></h3><p>|move over a lookback| ≥ threshold, optional volume ratio, hold / TP / SL. <code>crypto_move_fade</code>: 4 bars, 300 bps.</p></div>
     <div class="card hands kind"><h3><code>funding_carry</code></h3><p>Take the side funding pays when APR ≥ min; exit below <code>exit_apr_pct</code> or after <code>hold_hours</code>. <code>xyz_funding_carry</code>.</p></div>
@@ -348,6 +348,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
   </div>
   <ul class="checks">
     <li><span><b>No look-ahead.</b> A candidate with <code>data_asof_ms &gt; decided_at_ms</code> is dropped (<code>future_data</code>). Tests scale, delete or cut every bar after t; nothing decided, admitted or closed by t changes.</span></li>
+    <li><span><b>Labels never read the future.</b> An event counts only when published at or before the decision; one at exactly t counts. NOISE needs one covered source span over the whole window, else UNCERTAIN. A spec without <code>labels</code> keeps its <code>spec_sha256</code>. The Jev gate never sees the label.</span></li>
     <li><span><b>Prices only at a close.</b> The bar ending exactly at the instant; missing ⇒ a skip, never interpolated.</span></li>
     <li><span><b>Simple return.</b> Gross = side × (exit / entry − 1) × 10⁴, never ln.</span></li>
     <li><span><b>No peeking at exits.</b> Capped admissions read the book as of the decision, never whether a later bar exists.</span></li>
@@ -391,6 +392,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
       <tbody>
         <tr><td><code>src/domain/backtest/spec.rs</code></td><td>the six kinds, fields, bounds, <code>SplitSpec</code>, <code>spec_sha256</code> (also a generation's <code>spec:</code> pin)</td></tr>
         <tr><td><code>src/domain/backtest/kinds.rs</code></td><td>each kind's decisions as of t, skips, data notes</td></tr>
+        <tr><td><code>src/domain/backtest/labels.rs</code></td><td>NEWS / UNCERTAIN / NOISE labels, the <code>labels</code> knob (<code>skip</code>, <code>lookback_mins</code> 240, <code>new_listing_days</code> 14, <code>forms</code>)</td></tr>
         <tr><td><code>src/domain/backtest/engine.rs</code></td><td><code>candidates</code>, <code>simulate</code>, research and capped arms</td></tr>
         <tr><td><code>src/domain/backtest/fills.rs</code> · <code>costs.rs</code></td><td>cost per side, half-spread models, funding, exits</td></tr>
         <tr><td><code>src/domain/backtest/features.rs</code></td><td>features as of t for the gate</td></tr>

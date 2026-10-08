@@ -8,7 +8,7 @@
 //! | `report.json` | the `BacktestReport` (`backtest/1:<run id>`), pretty JSON |
 //! | `report.md` | `render_markdown` |
 //! | `trades-<arm>.jsonl` | one `Trade` per line (legs, fills, costs, funding, exit reason), decision order — one file per arm |
-//! | `candidates.jsonl` | one `Candidate` per line: legs, side, signal, decided / data-as-of, exit plan, features as-of |
+//! | `candidates.jsonl` | one `Candidate` per line: legs, side, signal, decided / data-as-of, exit plan, features as-of; a labelled `weekend_window` spec's `info_label` (NEWS / UNCERTAIN / NOISE — absent otherwise, older files parse) |
 //! | `skips.json` | one compact JSON object (it lists every skip and refusal): `candidates` (skips by reason), `data_notes`, `skipped` (every skip); per arm `dropped_counts` / `dropped` (drops at the decision and unfilled exits, each with its candidate's `seq`) and `refusals_by_rule` / `refusals` (`[risk]` caps) |
 //! | `BacktestRun::extra_files` | e.g. the gate arm's `decisions.jsonl` |
 //!

@@ -9,10 +9,11 @@
 //! | Bar kinds | `move_trigger` per bar close (cooldown), `funding_carry` per funding row, `pair_spread` per close both legs have, `event_window` per event; `funding_carry` / `pair_spread` hold one position at a time (re-entry after the rule's own exit) |
 //! | A candidate | legs, side, signal, exit plan, period; the first leg's features as-of the decision (`features.rs`, with the cost model's half-spread at t); `data_asof_ms` = the latest observation read |
 //! | `min_entry_trades` | a would-be candidate whose entry bar (any leg's: the bar ending at the decision, observable then) counts fewer trades is a `thin_entry` skip — windows: before `top_n` ranking (the next liquid name moves up); `move_trigger`: no cooldown starts; `funding_carry` / `pair_spread`: no position opens; a bar without `n` passes |
+//! | `labels` (`weekend_window`, `labels.rs`) | after the price, cost and `thin_entry` checks each name is labelled over [anchor − `lookback_mins`, entry] (`MarketData::info`; first bar = the store's, else the series' first); a class in `skip` ⇒ `label_skipped` before `top_n` ranks the rest (the next name moves up); candidates and later skips (`below_min_signal`, `not_top_n`) carry `info_label`; one data note counts the classes (`labels::count_note`) |
 //! | Skips | per window and name (window / event kinds), per instrument (excluded, no costs) for the bar kinds; an instrument without bars or funding rows is a data note |
 //! | `max_candidates` | a run whose candidates pass `RunParams::max_candidates` stops with an error naming the guard and the kind's knobs to tighten — before features of the rest are computed |
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 
@@ -25,6 +26,7 @@ use crate::domain::backtest::fills::{
     apr_pct, ceil_grid, floor_grid, half_spread_bps, ln_bps, spread_points, walk_funding_exit,
     walk_spread_exit, HOUR_MS,
 };
+use crate::domain::backtest::labels::{count_note, InfoLabel, LabelSpec};
 use crate::domain::backtest::spec::{
     parse_rfc3339, DailyWindowParams, Days, Direction, EventWindowParams, FundingCarryParams,
     MoveTriggerParams, PairSpreadParams, StrategyKind, StrategySpec, Universe, WeekendWindowParams,
@@ -63,15 +65,19 @@ struct Draft {
     anchor_px: Option<f64>,
     exit: ExitPlan,
     label: Option<String>,
+    /// A labelled `weekend_window`'s class (`labels.rs`).
+    info_label: Option<InfoLabel>,
     /// The latest price / row time read for it.
     used_ms: i64,
 }
 
 /// One window's judging inputs (window kinds).
-struct WindowRule {
+struct WindowRule<'r> {
     direction: Direction,
     min_abs_bps: f64,
     top_n: Option<usize>,
+    /// `weekend_window`'s `labels` (module table).
+    labels: Option<&'r LabelSpec>,
 }
 
 struct Builder<'a> {
@@ -81,6 +87,8 @@ struct Builder<'a> {
     iv: i64,
     excluded: BTreeSet<&'a str>,
     out: CandidateSet,
+    /// Names labelled per class (the `labels` data note).
+    label_counts: BTreeMap<InfoLabel, usize>,
 }
 
 impl<'a> Builder<'a> {
@@ -143,13 +151,40 @@ impl<'a> Builder<'a> {
     }
 
     fn skip(&mut self, instrument: &str, decided_at_ms: i64, period: &str, reason: SkipReason) {
+        self.skip_labelled(instrument, decided_at_ms, period, reason, None);
+    }
+
+    /// A skip after labelling: it carries the name's class.
+    fn skip_labelled(
+        &mut self,
+        instrument: &str,
+        decided_at_ms: i64,
+        period: &str,
+        reason: SkipReason,
+        info_label: Option<InfoLabel>,
+    ) {
         self.out.skipped.push(Skip {
             instrument: instrument.to_string(),
             decided_at_ms,
             period: period.to_string(),
             reason,
             seq: None,
+            info_label,
         });
+    }
+
+    /// The class of `id` at `entry` on the window anchored at `anchor`
+    /// (`labels.rs`), counted for the data note.
+    fn label(&mut self, labels: &LabelSpec, id: &str, anchor: i64, entry: i64) -> InfoLabel {
+        let first_bar = self
+            .md
+            .bars
+            .get(id)
+            .and_then(|s| s.bars.first())
+            .map(|b| b.t_open_ms);
+        let l = labels.label_of(&self.md.info, id, anchor, entry, first_bar);
+        *self.label_counts.entry(l).or_insert(0) += 1;
+        l
     }
 
     fn note(&mut self, note: String) {
@@ -193,6 +228,7 @@ impl<'a> Builder<'a> {
             exit: d.exit,
             features: traced.features,
             label: d.label,
+            info_label: d.info_label,
         });
         Ok(())
     }
@@ -224,6 +260,7 @@ impl<'a> Builder<'a> {
         rule: &WindowRule,
     ) -> Result<(), String> {
         let mut signals = Vec::new();
+        let mut labels: BTreeMap<String, InfoLabel> = BTreeMap::new();
         for id in ids {
             let series = self.md.bars.get(id);
             let signal = signal_of(
@@ -241,7 +278,26 @@ impl<'a> Builder<'a> {
                 Ok(_) if self.thin_entry(id, entry) => {
                     self.skip(id, entry, period, SkipReason::ThinEntry)
                 }
-                Ok(s) => signals.push(s),
+                Ok(s) => {
+                    // Labels before the ranking too: a skipped class never
+                    // takes a top_n slot.
+                    let label = rule.labels.map(|l| (l, self.label(l, id, anchor, entry)));
+                    match label {
+                        Some((l, class)) if l.skips(class) => self.skip_labelled(
+                            id,
+                            entry,
+                            period,
+                            SkipReason::LabelSkipped,
+                            Some(class),
+                        ),
+                        _ => {
+                            if let Some((_, class)) = label {
+                                labels.insert(id.clone(), class);
+                            }
+                            signals.push(s)
+                        }
+                    }
+                }
             }
         }
         let chosen: BTreeSet<String> = match rule.top_n {
@@ -267,7 +323,8 @@ impl<'a> Builder<'a> {
                 } else {
                     SkipReason::NotTopN
                 };
-                self.skip(&s.instrument, entry, period, reason);
+                let class = labels.get(&s.instrument).copied();
+                self.skip_labelled(&s.instrument, entry, period, reason, class);
                 continue;
             }
             let side = match rule.direction {
@@ -287,7 +344,9 @@ impl<'a> Builder<'a> {
                 anchor_px: Some(s.anchor_px),
                 exit: ExitPlan::At { exit_ms: exit },
                 label: None,
-                // Both reads: the anchor's close and the entry's.
+                info_label: labels.get(&s.instrument).copied(),
+                // Both reads: the anchor's close and the entry's (a label
+                // reads events up to the entry, never past it).
                 used_ms: anchor.max(entry),
             })?;
         }
@@ -302,6 +361,7 @@ impl<'a> Builder<'a> {
             direction: p.direction,
             min_abs_bps: p.min_abs_signal_bps,
             top_n: p.top_n,
+            labels: p.labels.as_ref(),
         };
         let mut t = from;
         for _ in 0..MAX_STEPS {
@@ -327,6 +387,9 @@ impl<'a> Builder<'a> {
             }
             self.judge_window(&ids, &period, (anchor, entry, exit), &rule)?;
         }
+        if let Some(labels) = &p.labels {
+            self.note(count_note(labels, &self.label_counts));
+        }
         Ok(())
     }
 
@@ -351,6 +414,7 @@ impl<'a> Builder<'a> {
             direction: p.direction,
             min_abs_bps: p.min_abs_signal_bps,
             top_n: p.top_n,
+            labels: None,
         };
         let (from, to) = (self.p.from_ms, self.p.to_ms);
         let (Some(mut d), Some(last)) = (
@@ -477,6 +541,7 @@ impl<'a> Builder<'a> {
                         stop_loss_bps: p.stop_loss_bps,
                     },
                     label: None,
+                    info_label: None,
                     used_ms: t,
                 })?;
             }
@@ -539,6 +604,7 @@ impl<'a> Builder<'a> {
                         exit_apr_pct: p.exit_apr_pct,
                     },
                     label: None,
+                    info_label: None,
                     used_ms: d.max(pt.t_ms),
                 })?;
             }
@@ -615,6 +681,7 @@ impl<'a> Builder<'a> {
                     exit_z: p.exit_z,
                 },
                 label: None,
+                info_label: None,
                 used_ms: pt.t_ms,
             })?;
         }
@@ -698,6 +765,7 @@ impl<'a> Builder<'a> {
                 anchor_px: Some(anchor_px),
                 exit: ExitPlan::At { exit_ms: exit },
                 label: ev.label.clone(),
+                info_label: None,
                 used_ms: entry,
             })?;
         }
@@ -767,6 +835,7 @@ pub(crate) fn decide(
         iv: spec.interval.ms(),
         excluded: spec.exclude.iter().map(String::as_str).collect(),
         out: CandidateSet::default(),
+        label_counts: BTreeMap::new(),
     };
     match &spec.kind {
         StrategyKind::WeekendWindow(p) => b.weekend(p)?,
@@ -789,7 +858,7 @@ mod tests {
     use crate::domain::backtest::testkit::{
         et, funding, market, run_params, series, sparse, spec, utc, H,
     };
-    use crate::domain::marketdata::Interval;
+    use crate::domain::marketdata::{EventCoverage, Interval, MarketEvent};
 
     const A: &str = "hyperliquid:xyz:AAA";
     const B: &str = "hyperliquid:xyz:BBB";
@@ -1461,5 +1530,132 @@ mod tests {
         let set = candidates(&spec(min), &md, &p).unwrap();
         assert!(set.candidates.is_empty());
         assert_eq!(set.skipped[0].reason, SkipReason::BelowMinSignal);
+    }
+
+    /// `weekend_case` + Phase 7 data: an 8-K of A at Fri 16:30 New York
+    /// (after the close, inside the default window), SEC coverage of A and
+    /// B over the year, both listed in January.
+    fn labelled_case(labels: serde_json::Value) -> (StrategySpec, MarketData, RunParams) {
+        let (s, mut md, p) = weekend_case(json!({"labels": labels, "top_n": 1}));
+        let cover = |id: &str| EventCoverage {
+            instrument: id.into(),
+            source: "sec".into(),
+            from_ms: utc("2026-01-01 00:00"),
+            to_ms: utc("2026-10-08 00:00"),
+            covered: true,
+            note: None,
+            fetched_at_ms: utc("2026-10-08 00:00"),
+        };
+        md.info.events.insert(
+            A.into(),
+            vec![MarketEvent {
+                instrument: A.into(),
+                published_ms: et("2026-09-25 16:30"),
+                kind: "filing".into(),
+                id: "0001318605-26-000123".into(),
+                form: "8-K".into(),
+                title: Some("Item 2.02 Results of Operations".into()),
+            }],
+        );
+        for id in [A, B] {
+            md.info.coverage.insert(id.into(), vec![cover(id)]);
+            md.info.listed_ms.insert(id.into(), utc("2026-01-02 00:00"));
+        }
+        (s, md, p)
+    }
+
+    /// Labels come before `top_n`: label only, A (NEWS, the larger move)
+    /// trades and B (NOISE) is `not_top_n`; skipping NEWS skips A
+    /// (`label_skipped`, NEWS in the skip) and B moves up; an unlabelled
+    /// spec carries no `info_label` and writes none.
+    #[test]
+    fn labels_skip_before_top_n_and_every_candidate_carries_one() {
+        let classes = |set: &CandidateSet| -> Vec<(String, Option<InfoLabel>)> {
+            set.candidates
+                .iter()
+                .map(|c| (c.instrument.clone(), c.info_label))
+                .collect()
+        };
+        let reasons = |set: &CandidateSet| -> Vec<(String, SkipReason, Option<InfoLabel>)> {
+            set.skipped
+                .iter()
+                .map(|k| (k.instrument.clone(), k.reason, k.info_label))
+                .collect()
+        };
+        let (s, md, p) = labelled_case(json!({}));
+        let set = candidates(&s, &md, &p).unwrap();
+        assert_eq!(classes(&set), vec![(A.into(), Some(InfoLabel::News))]);
+        assert_eq!(
+            reasons(&set),
+            vec![
+                (B.into(), SkipReason::NotTopN, Some(InfoLabel::Noise)),
+                (C.into(), SkipReason::Excluded, None),
+                (D.into(), SkipReason::MissingAnchor, None),
+            ]
+        );
+        assert!(
+            set.notes.contains(&String::from(
+                "labels: NEWS 1 · UNCERTAIN 0 · NOISE 1 (window anchor − 240 min → decision; \
+                 new listing < 14 d; every filing) — nothing skipped"
+            )),
+            "{:?}",
+            set.notes
+        );
+        let line = serde_json::to_value(&set.candidates[0]).unwrap();
+        assert_eq!(line["info_label"], json!("NEWS"));
+
+        let (s, md, p) = labelled_case(json!({"skip": ["NEWS"]}));
+        let set = candidates(&s, &md, &p).unwrap();
+        assert_eq!(classes(&set), vec![(B.into(), Some(InfoLabel::Noise))]);
+        assert_eq!(
+            reasons(&set)[0],
+            (A.into(), SkipReason::LabelSkipped, Some(InfoLabel::News))
+        );
+        assert_eq!(set.skip_counts()["label_skipped:NEWS"], 1);
+        assert!(set
+            .notes
+            .iter()
+            .any(|n| n.ends_with("label_skipped: NEWS 1")));
+        // The skipped name never reaches the arms.
+        let r = simulate(&s, &md, &p, &set.candidates, Arm::Research);
+        assert_eq!(r.trades.len(), 1);
+        assert_eq!(r.trades[0].instrument, B);
+
+        // B without coverage: UNCERTAIN; skipping it too leaves nothing.
+        let (s, mut md, p) = labelled_case(json!({"skip": ["NEWS", "UNCERTAIN"]}));
+        md.info.coverage.remove(B);
+        let set = candidates(&s, &md, &p).unwrap();
+        assert!(set.candidates.is_empty());
+        assert_eq!(
+            reasons(&set)[..2],
+            [
+                (A.into(), SkipReason::LabelSkipped, Some(InfoLabel::News)),
+                (
+                    B.into(),
+                    SkipReason::LabelSkipped,
+                    Some(InfoLabel::Uncertain)
+                ),
+            ]
+        );
+
+        // The window opens at the anchor − lookback, the bound in: 210 min
+        // before Fri 20:00 is the 8-K's 16:30 (NEWS), 209 a minute after it.
+        let (s, md, p) = labelled_case(json!({"lookback_mins": 210}));
+        let set = candidates(&s, &md, &p).unwrap();
+        assert_eq!(classes(&set), vec![(A.into(), Some(InfoLabel::News))]);
+        let (s, md, p) = labelled_case(json!({"lookback_mins": 209}));
+        let set = candidates(&s, &md, &p).unwrap();
+        assert_eq!(classes(&set), vec![(A.into(), Some(InfoLabel::Noise))]);
+
+        // Unlabelled: no label anywhere, none written; an old line parses.
+        let (s, md, p) = weekend_case(json!({"top_n": 1}));
+        let set = candidates(&s, &md, &p).unwrap();
+        assert!(set.candidates.iter().all(|c| c.info_label.is_none()));
+        assert!(set.skipped.iter().all(|k| k.info_label.is_none()));
+        assert!(!set.notes.iter().any(|n| n.starts_with("labels:")));
+        let line = serde_json::to_value(&set.candidates[0]).unwrap();
+        assert!(line.get("info_label").is_none());
+        let back: Candidate = serde_json::from_value(line).unwrap();
+        assert_eq!(back, set.candidates[0]);
     }
 }

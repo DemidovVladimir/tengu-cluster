@@ -479,6 +479,52 @@ direction = "fade"
 min_abs_signal_bps = 50
 top_n = 4
 
+# W2 (Phase 7): rule W with point-in-time information labels (docs/xlab-2026-10-01.md
+# § 5, domain/backtest/labels.rs). A name is NEWS when a material event of it (an SEC
+# filing, a split) was published in [Fri 20:00 New York − 240 min, the Sun 18:00
+# decision] — the window reaches back to the Fri 16:00 close; UNCERTAIN when no
+# event source covers that window or the name was listed < 14 days before; else
+# NOISE. Each spec = its base above + the `labels` table only: the fade of noise
+# vs the fade of news. Events: `tengu history events` (SEC EDGAR) before the run.
+[backtest.strategies.weekend_fade_skip_news]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+labels = { skip = ["NEWS"], lookback_mins = 240, new_listing_days = 14 }
+
+[backtest.strategies.weekend_fade_noise_only]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 0
+labels = { skip = ["NEWS", "UNCERTAIN"], lookback_mins = 240, new_listing_days = 14 }
+
+# top_n ranks only the names the labels keep: a skipped NEWS name frees its slot.
+[backtest.strategies.weekend_fade_top4_skip_news]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+labels = { skip = ["NEWS"], lookback_mins = 240, new_listing_days = 14 }
+
+[backtest.strategies.weekend_fade_top4_noise_only]
+kind = "weekend_window"
+universe = "@xyz_stocks"
+interval = "1h"
+calendar = "us_equity"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+labels = { skip = ["NEWS", "UNCERTAIN"], lookback_mins = 240, new_listing_days = 14 }
+
 # Placebo: the same window, following the move instead of fading it.
 [backtest.strategies.weekend_follow]
 kind = "weekend_window"
