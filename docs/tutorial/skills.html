@@ -323,7 +323,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
     <div class="card guard"><h3><code>env_vars</code></h3><p>A list; <code>NAME?</code> is optional. A missing required one shows as <code>(missing: NAME)</code> in <code>/skills</code>. It does not block loading.</p></div>
     <div class="card heart"><h3><code>commands</code></h3><p>Slash commands. <code>/cmd args</code> in the TUI or Telegram becomes a turn that follows the skill's <code>## Commands</code>.</p></div>
   </div>
-  <p class="note warn"><b>Not read by the loader:</b> <code>editable_by_learner</code> and <code>metrics</code> (used by the writers and <a href="skill-lifecycle.html">evals</a>), and <code>requires_bins</code> / <code>requires_env</code> / <code>os</code>, which only <code>skills/skill-creator</code> describes. No code gates on them.</p>
+  <p class="note"><b>Load gate:</b> <code>requires_bins</code> (on <code>PATH</code>), <code>requires_env</code> (set) and <code>os</code> (<code>macos</code> / <code>linux</code> / <code>windows</code>; <code>darwin</code> is macos), inline <code>[a, b]</code> or a block list: a skill missing one is not loaded, and a log line names why. <code>editable_by_learner</code> and <code>metrics</code> are not read by the loader (the writers and <a href="skill-lifecycle.html">evals</a> use them).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-env">
@@ -485,7 +485,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>

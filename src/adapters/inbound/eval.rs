@@ -1318,6 +1318,14 @@ impl Default for RunSkillOptions {
     }
 }
 
+/// The `metrics.json` rolling window: `[skill_lifecycle] default_rolling_window`,
+/// else 10 (its default).
+fn rolling_window_of(cfg: &Config) -> u32 {
+    cfg.skill_lifecycle
+        .as_ref()
+        .map_or(10, |s| s.default_rolling_window)
+}
+
 pub async fn run_skill(
     skill: &SkillUnderTest,
     judge: Arc<dyn crate::ports::engine::Engine>,
@@ -1354,6 +1362,8 @@ pub async fn run_skill(
         .ok_or_else(|| anyhow::anyhow!("eval config has no agent"))?;
     let engine_id = agent.engine.clone();
     let agent_model = agent.model.clone();
+    // `[skill_lifecycle] default_rolling_window` of the eval config (10 without one).
+    let rolling_window = rolling_window_of(&cfg_probe);
 
     if concurrency > 1 {
         anyhow::bail!("concurrency > 1 not yet implemented in v1 — use --concurrency 1");
@@ -1409,7 +1419,6 @@ pub async fn run_skill(
                 }
             })
             .collect();
-        let rolling_window = 10u32; // TODO: read from [skill_lifecycle] config if present.
         if options.persist {
             finalize_run(
                 &skill.skill_dir,

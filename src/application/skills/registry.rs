@@ -122,6 +122,7 @@ enum ParsedSkill {
         context_body: String,
         env_vars: Vec<SkillEnvVar>,
         commands: Vec<SkillCommand>,
+        gate: SkillGate,
     },
 }
 
@@ -133,6 +134,79 @@ struct SkillFrontmatter {
     base_url: Option<String>,
     env_vars: Vec<SkillEnvVar>,
     commands: Vec<SkillCommand>,
+    gate: SkillGate,
+}
+
+/// A skill's load gate (frontmatter `requires_bins`, `requires_env`, `os`, as
+/// `skills/skill-creator/SKILL.md` documents): a skill whose prerequisites
+/// are missing is not loaded (a log line names why) — it would only fail.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SkillGate {
+    requires_bins: Vec<String>,
+    requires_env: Vec<String>,
+    os: Vec<String>,
+}
+
+impl SkillGate {
+    /// Why the skill may not load here, else `None`.
+    fn refusal(&self) -> Option<String> {
+        self.refusal_with(
+            bin_on_path,
+            |v| std::env::var_os(v).is_some(),
+            std::env::consts::OS,
+        )
+    }
+
+    fn refusal_with(
+        &self,
+        has_bin: impl Fn(&str) -> bool,
+        has_env: impl Fn(&str) -> bool,
+        current_os: &str,
+    ) -> Option<String> {
+        let os_name = |o: &str| match o.to_ascii_lowercase().as_str() {
+            "darwin" | "mac" | "osx" => "macos".to_string(),
+            other => other.to_string(),
+        };
+        if !self.os.is_empty() && !self.os.iter().any(|o| os_name(o) == current_os) {
+            return Some(format!("os {current_os} is none of {}", self.os.join(", ")));
+        }
+        if let Some(b) = self.requires_bins.iter().find(|b| !has_bin(b)) {
+            return Some(format!("binary `{b}` is not on PATH"));
+        }
+        if let Some(v) = self.requires_env.iter().find(|v| !has_env(v)) {
+            return Some(format!("env var {v} is not set"));
+        }
+        None
+    }
+}
+
+/// An executable file `name` in some `PATH` dir.
+fn bin_on_path(name: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| {
+        let f = dir.join(name);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::metadata(&f).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            f.is_file()
+        }
+    })
+}
+
+/// `[a, "b"]` or `a, b` → the trimmed, unquoted items.
+fn inline_list(v: &str) -> Vec<String> {
+    v.trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +245,7 @@ fn parse_skill_file(content: &str) -> Result<ParsedSkill> {
             context_body,
             env_vars: fm.env_vars,
             commands: fm.commands,
+            gate: fm.gate,
         })
     } else {
         parse_skill_markdown(content).map(ParsedSkill::Classic)
@@ -417,11 +492,15 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
     let mut base_url = None;
     let mut env_vars: Vec<SkillEnvVar> = Vec::new();
     let mut commands: Vec<SkillCommand> = Vec::new();
+    let mut gate = SkillGate::default();
 
     #[derive(PartialEq)]
     enum ListBlock {
         EnvVars,
         Commands,
+        RequiresBins,
+        RequiresEnv,
+        Os,
     }
     let mut current_block: Option<ListBlock> = None;
 
@@ -459,6 +538,15 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                             });
                         }
                     }
+                    ListBlock::RequiresBins | ListBlock::RequiresEnv | ListBlock::Os => {
+                        let item = line.trim_start_matches('-').trim();
+                        let list = match block {
+                            ListBlock::RequiresBins => &mut gate.requires_bins,
+                            ListBlock::RequiresEnv => &mut gate.requires_env,
+                            _ => &mut gate.os,
+                        };
+                        list.extend(inline_list(item));
+                    }
                 }
                 continue;
             }
@@ -481,6 +569,18 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
                 "commands" => {
                     if v.is_empty() {
                         current_block = Some(ListBlock::Commands);
+                    }
+                }
+                "requires_bins" | "requires_env" | "os" => {
+                    let (block, list) = match k {
+                        "requires_bins" => (ListBlock::RequiresBins, &mut gate.requires_bins),
+                        "requires_env" => (ListBlock::RequiresEnv, &mut gate.requires_env),
+                        _ => (ListBlock::Os, &mut gate.os),
+                    };
+                    if v.is_empty() {
+                        current_block = Some(block);
+                    } else {
+                        list.extend(inline_list(v));
                     }
                 }
                 _ => {}
@@ -506,6 +606,7 @@ fn try_parse_frontmatter(content: &str) -> Option<(SkillFrontmatter, String)> {
             base_url,
             env_vars,
             commands,
+            gate,
         },
         body.to_string(),
     ))
@@ -767,7 +868,12 @@ impl SkillRegistry {
                     context_body,
                     env_vars,
                     commands,
+                    gate,
                 }) => {
+                    if let Some(why) = gate.refusal() {
+                        tracing::info!(skill = %filename, "skill not loaded: {why}");
+                        continue;
+                    }
                     if validate_skill(&definition, &reserved_strs).is_err() {
                         tracing::warn!("Skipping invalid frontmatter skill '{}'", filename);
                         continue;
@@ -1373,6 +1479,67 @@ mod tests {
             },
             _ => panic!("expected ParsedSkill::Api"),
         }
+    }
+
+    /// The documented gate (`skills/skill-creator/SKILL.md`): `requires_bins`,
+    /// `requires_env`, `os` parse inline or as a block list; a skill whose
+    /// prerequisite is missing does not load, the rest do.
+    #[test]
+    fn gated_skills_load_only_where_their_prerequisites_are() {
+        let fm = |extra: &str| {
+            try_parse_frontmatter(&format!(
+                "---\nname: g\ndescription: Use when testing.\n{extra}---\n\nBody.\n"
+            ))
+            .unwrap()
+            .0
+            .gate
+        };
+        let inline =
+            fm("requires_bins: [\"git\", cargo]\nrequires_env: [API_KEY]\nos: [macos, linux]\n");
+        assert_eq!(inline.requires_bins, ["git", "cargo"]);
+        assert_eq!(inline.requires_env, ["API_KEY"]);
+        assert_eq!(inline.os, ["macos", "linux"]);
+        let block = fm("requires_bins:\n  - git\n  - jq\n");
+        assert_eq!(block.requires_bins, ["git", "jq"]);
+        assert_eq!(fm(""), SkillGate::default());
+
+        let yes = |_: &str| true;
+        assert_eq!(inline.refusal_with(yes, yes, "macos"), None);
+        assert_eq!(
+            inline.refusal_with(yes, yes, "windows").as_deref(),
+            Some("os windows is none of macos, linux")
+        );
+        assert_eq!(
+            inline
+                .refusal_with(|b| b != "cargo", yes, "linux")
+                .as_deref(),
+            Some("binary `cargo` is not on PATH")
+        );
+        assert_eq!(
+            inline.refusal_with(yes, |_| false, "linux").as_deref(),
+            Some("env var API_KEY is not set")
+        );
+        assert_eq!(fm("os: [darwin]\n").refusal_with(yes, yes, "macos"), None);
+
+        struct Gated;
+        impl SkillSourcePort for Gated {
+            fn discover_skill_files(&self) -> Vec<(String, String)> {
+                vec![
+                    (
+                        "needs_tool".into(),
+                        "---\nname: needs_tool\ndescription: Use when.\nrequires_bins: [tengu-no-such-binary-xyz]\n---\n\nBody.\n".into(),
+                    ),
+                    (
+                        "free".into(),
+                        "---\nname: free\ndescription: Use when.\n---\n\nBody.\n".into(),
+                    ),
+                ]
+            }
+        }
+        let mut r = SkillRegistry::new(Vec::new());
+        r.reload(&Gated);
+        let names: Vec<String> = r.list_all().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["free"]);
     }
 
     /// An agent that runs no shell (`[risk]` / signer sandbox) loads no

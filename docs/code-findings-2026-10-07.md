@@ -54,10 +54,10 @@ Each row was read in the code (file:line), not run. **Fix pass, same day:** the 
 | bug · fixed | the base config is loaded and validated even with `--sandbox`: a broken `~/.tengu/config.toml` breaks every sandbox command | `cli/mod.rs:496` |
 | bug · fixed | a misspelled name in `tools` is silently ignored (only `workspace_tools` is validated) — a load warning now, not an error: a shell skill's tool is a legal name | `bootstrap/tools.rs` |
 | bug · fixed | `persistent_store` is advertised without a memory backend; its plugin is not built, so a call fails | `tools/mod.rs` |
-| gap · open | `/agents` advertises `/team <goal>` — no handler; the `telegram.rs` header still describes inline approvals and `/team` | `telegram.rs:1766` |
+| gap · fixed 2026-10-08 | `/agents` advertises `/team <goal>` — no handler; the `telegram.rs` header still describes inline approvals and `/team` | `telegram.rs:1766` |
 | gap · open | `[scaffold]` is applied only by `tengu telegram` | `telegram.rs:579` |
 | gap · open | plan-step tool calls show no activity line on any surface (child uses a no-op adapter) | `cli/run_agent.rs` |
-| gap · open | an unset `${VAR}` stays literal in the TOML, no warning | `config/mod.rs:1550` |
+| gap · fixed 2026-10-08 (warns, comment lines skipped) | an unset `${VAR}` stays literal in the TOML, no warning | `config/mod.rs:1550` |
 | stale · fixed | CLAUDE.md: scope check on the "first line" of `execute` — the lint allows 30 lines | `tests/scope_lint.rs:86` |
 | stale · fixed | `WebhookEndpointConfig` doc "Payload (JSON):" — code sends "Payload (raw body, may be JSON):" | `webhooks.rs:425`, `config/mod.rs:795` |
 | stale · fixed | `resolve_tool_scopes` doc: no-shell fallback for "a `[solana]` signing sandbox" — applies to every hardened sandbox | `bootstrap/tools.rs:221-224` |
@@ -75,9 +75,9 @@ Each row was read in the code (file:line), not run. **Fix pass, same day:** the 
 | bug · fixed | `manage_skill` can write the managed tier (`~/.tengu/skills`) after only a workspace write check; `skill_distill` refuses it | `manage_skill/mod.rs:195`, `:956` |
 | bug · fixed | which skill body is dropped over the token budget depends on HashMap order | `skills/registry.rs:705`, `:893` |
 | bug · fixed | `view_skill` / `apply_improver_proposal` resolve tiers from the cwd, not the workspace | `view_skill/mod.rs:145`, `:239` |
-| gap · open | `requires_bins`, `requires_env`, `os` (skill-creator docs) — no code reads them | `skills/skill-creator/SKILL.md` |
+| gap · fixed 2026-10-08 (`SkillGate`: a skill missing one is not loaded) | `requires_bins`, `requires_env`, `os` (skill-creator docs) — no code reads them | `skills/skill-creator/SKILL.md` |
 | gap · open | no compact skill catalog + on-demand read: doc / API bodies go whole into the prompt (only `resources/` on demand) | `skills/registry.rs` |
-| gap · open | `[skill_lifecycle] default_rolling_window` is parsed, never read (window hard-coded 10) | `eval.rs:1373` |
+| gap · fixed 2026-10-08 | `[skill_lifecycle] default_rolling_window` is parsed, never read (window hard-coded 10) | `eval.rs:1373` |
 | gap · open | `--concurrency` > 1 is refused | `eval.rs:1319` |
 | bug · fixed | three different skill tier orders: registry, a plan step's body, the planner registry | `registry.rs:1027`, `run_agent.rs:748`, `shared_files.rs:298` |
 

@@ -85,7 +85,7 @@ metrics:                    # optional: accuracy metrics (below)
 | `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
 | `learner_facing` | written by `skill seed` / `manage_skill create` | marker; the per-learner state module (`skills/<name>/state/<learner_id>.json`, `lifecycle/learner_state.rs`) is landed but not wired |
 
-`requires_bins`, `requires_env`, `os` are not read — no gating happens at load.
+`requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading (2026-10-08): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
 
 ## Metrics & Evolution
 
