@@ -79,6 +79,10 @@ notional_usd = 100               # research arm: every candidate at $100
 bootstrap = 2000
 seed = 7
 gate = "xl_gate"
+# Keep every run dir: this sandbox is unbound (no [generation]), so retention
+# cannot see the runs lineage/ cites, and it shares the `xlab` state dir that
+# holds the W1-cited run dirs (`run:xlab/<id>`). 0 = never prune.
+keep_runs = 0
 
 # Costs per side, longest id prefix wins (§ 6). xyz: the feasibility study's
 # 3.8 bps round trip (0.9 fee growth mode + 1.0 half-spread); main-dex perps:
