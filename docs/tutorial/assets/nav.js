@@ -12,6 +12,7 @@ window.TUTORIAL = {
     { id: "runtime", kanji: "動", name: "Runtime", blurb: "Long-running loops, typed observations and the numbers they leave." },
     { id: "desk", kanji: "市", name: "Trading desk", blurb: "Solana LP tools and the paper desk with its risk gate." },
     { id: "research", kanji: "史", name: "Research", blurb: "History first: backfill public data, then backtest on it." },
+    { id: "opportunity", kanji: "機", name: "Opportunities", blurb: "Software opportunities: sourced evidence, exact money, HOLD as a real answer." },
     { id: "operate", kanji: "営", name: "Operate", blurb: "Diagnose, deploy and clean up." }
   ],
   pages: [
@@ -48,6 +49,8 @@ window.TUTORIAL = {
     { slug: "backtest", chapter: "research", title: "Backtests", blurb: "A pure engine that proves no future bar can change a past decision." },
     { slug: "evidence", chapter: "research", title: "Forward evidence", blurb: "Freeze what a forward run recorded, then grade it from the books it saw." },
     { slug: "lineage", chapter: "research", title: "Lineage and generations", blurb: "Every idea, run and verdict as a record; a frozen generation cannot drift." },
+
+    { slug: "soe", chapter: "opportunity", title: "Software opportunities", blurb: "Exact money, unknown-safe estimates and schema-tagged records for a weekly portfolio." },
 
     { slug: "ops", chapter: "operate", title: "Diagnose and deploy", blurb: "doctor, prune, Docker and the Tor proxy." }
   ]

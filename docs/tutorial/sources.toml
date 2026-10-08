@@ -394,6 +394,14 @@ sources = [
   "src/bootstrap/decision.rs",
 ]
 
+# ── Opportunities ─────────────────────────────────────────────────────────
+
+[pages.soe]
+sources = [
+  "src/domain/soe/",
+  "docs/soe-2026-10-08.md",
+]
+
 # ── Operate ───────────────────────────────────────────────────────────────
 
 [pages.ops]

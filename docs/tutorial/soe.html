@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Software opportunities · Tengu</title>
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, FX kept apart from the native amount, and schema-tagged records. Offline today.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
+  <h1>Software opportunities</h1>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Today it is the value layer: exact money, estimates that stay unknown when they are unknown, and records that name their schema. Nothing here reads the network or acts.</p>
+  <ul class="facts">
+    <li>money in <b>2</b> minor digits, never a float</li>
+    <li><b>7</b> currencies, a closed set</li>
+    <li>FX rates to <b>8</b> digits</li>
+    <li>shares in <b>0–10 000</b> bps</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, rounding</li>
+    <li><span class="chip data">data</span> values, records</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-values">
+  <div class="sec-head">
+    <span class="kicker">One value, one rule</span>
+    <h2 id="s-values">Values every SOE record is built from</h2>
+    <p>Each value parses from TOML text and prints back the same way. A value that breaks its rule is refused with a code, never repaired.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Value</th><th>Written as (example)</th><th>Rule</th><th>Refused as</th></tr></thead>
+      <tbody>
+        <tr><td><code>Minor</code></td><td><code>"41250.75"</code> · <code>2750</code></td><td>integer hundredths; at most 2 fraction digits; a whole number means whole units</td><td><code>invalid_amount</code></td></tr>
+        <tr><td><code>Currency</code></td><td><code>"EUR"</code></td><td>EUR, USD, GBP, CHF, KZT, RUB, CNY</td><td><code>invalid_currency</code></td></tr>
+        <tr><td><code>Money</code></td><td><code>{ amount = "250.00", currency = "EUR" }</code></td><td>adds, subtracts and compares within one currency only</td><td><code>currency_mismatch</code></td></tr>
+        <tr><td><code>Bps</code></td><td><code>250</code></td><td>an integer from 0 to 10 000</td><td><code>invalid_bps</code></td></tr>
+        <tr><td><code>FxRate</code></td><td><code>{ pair = "USD/EUR", rate = "0.92", source = "url:https://…", as_of = "2026-10-01" }</code></td><td>quote units per 1 base unit, &gt; 0; where and when it was read</td><td><code>invalid_rate</code></td></tr>
+        <tr><td><code>Converted</code></td><td><code>{ native, rate, converted }</code></td><td>native amount, rate and result kept apart; the result is the floor or ceil of the exact product</td><td><code>invalid_conversion</code></td></tr>
+        <tr><td><code>Est</code></td><td><code>"UNKNOWN: no price list"</code> · <code>{ low, base, high }</code></td><td>low ≤ base ≤ high</td><td><code>invalid_estimate</code> · <code>invalid_range</code></td></tr>
+        <tr><td><code>Assumption</code></td><td><code>{ value, evidence = [...], as_of, note }</code></td><td>an estimate with its evidence locators and time</td><td>unknown fields</td></tr>
+        <tr><td><code>SchemaTag</code></td><td><code>"soe.opportunity/1"</code></td><td>version 1 only</td><td><code>schema_unsupported</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-est">
+  <div class="sec-head">
+    <span class="kicker">Three scenarios from one range</span>
+    <h2 id="s-est">An estimate picks its end per scenario</h2>
+    <p>Revenue is better higher, cost is better lower. The downside takes each input's adverse end, the upside its favorable end. An unknown gives no value in any scenario.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Input (example)</th><th>Range</th><th>Downside</th><th>Base</th><th>Upside</th></tr></thead>
+      <tbody>
+        <tr><td>revenue · higher is better</td><td>10.00 · 15.00 · 25.00</td><td>10.00</td><td>15.00</td><td>25.00</td></tr>
+        <tr><td>cost · lower is better</td><td>3.00 · 4.00 · 9.00</td><td>9.00</td><td>4.00</td><td>3.00</td></tr>
+        <tr><td>price · <code>"UNKNOWN"</code></td><td>—</td><td>none</td><td>none</td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">range</span><span><b>known</b><code>{ low, base, high }</code>, ordered.</span></li>
+    <li><span class="chip warn">unknown</span><span><b>unknown</b><code>"UNKNOWN"</code> or <code>"UNKNOWN: &lt;reason&gt;"</code>; never read as 0.</span></li>
+    <li><span class="chip bad">refused</span><span><b>malformed</b>Out of order, another string, a bare number.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No float is money.</b> A TOML or JSON float is refused; <code>0.10 + 0.20</code> is exactly <code>0.30</code>.</span></li>
+    <li><span><b>Nothing is rounded on the way in.</b> A third fraction digit is refused, not rounded.</span></li>
+    <li><span><b>Rounding never flatters.</b> Inflows (revenue, contribution) round down; outflows (cost, exposure, capital) round up, negatives included.</span></li>
+    <li><span><b>No silent conversion.</b> A rate converts only its own base currency; money in two currencies never adds or compares.</span></li>
+    <li><span><b>An unknown currency stays unknown.</b> A source amount outside the closed set becomes <code>UNKNOWN</code> with the reason.</span></li>
+    <li><span><b>Unknown is not zero.</b> No scenario reads a value from an unknown estimate.</span></li>
+    <li><span><b>Versions are explicit.</b> A record tagged with a schema version other than 1 is refused.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Run the value tests</h2>
+    <p>No <code>tengu soe</code> command exists yet. The rules above are tested here.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe</span>
+<span class="ln o"># 12 tests: exact amounts, refusals, unknowns, ranges, FX rounding, schema tags</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/soe/mod.rs</code></td><td>the SOE domain's files and rules</td></tr>
+        <tr><td><code>src/domain/soe/value.rs</code></td><td><code>Minor</code>, <code>Money</code>, <code>Currency</code>, <code>Bps</code>, <code>FxRate</code>, <code>Converted</code>, <code>Flow</code>, <code>Est</code>, <code>Assumption</code>, <code>Scenario</code>, <code>SchemaTag</code></td></tr>
+        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>gates, the operator contract's field names, sources, threat model</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+</article>
+</main>
+</div>
+</body>
+</html>
