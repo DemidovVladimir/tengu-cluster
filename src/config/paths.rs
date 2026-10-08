@@ -13,6 +13,22 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// The inverse of [`expand_tilde`] for display: a path under the home
+/// directory as `~/…`, any other path as it is. The Studio graph shows
+/// folded scope roots this way — as the TOML wrote them, the same on every
+/// machine.
+pub fn contract_tilde(path: &Path) -> String {
+    if let Some(rest) = dirs_next::home_dir()
+        .filter(|h| h.as_os_str().len() > 1)
+        .and_then(|h| path.strip_prefix(h).ok().map(Path::to_path_buf))
+    {
+        if !rest.as_os_str().is_empty() {
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
+}
+
 /// The config file in effect for this process and its children (`run-agent`,
 /// `tengu mcp-bridge`): pinned by `cli::run` to the base config and by
 /// `load_sandbox_or` to the absolute sandbox file.
@@ -72,6 +88,18 @@ pub(crate) fn resolve_tengu_home() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `contract_tilde` undoes `expand_tilde`; other paths stay as they are.
+    #[test]
+    fn contract_tilde_inverts_expand_tilde() {
+        let ws = Path::new("~/tengu-lab/control-loop-lab");
+        assert_eq!(
+            contract_tilde(&expand_tilde(ws)),
+            "~/tengu-lab/control-loop-lab"
+        );
+        assert_eq!(contract_tilde(Path::new("/srv/ws")), "/srv/ws");
+        assert_eq!(contract_tilde(Path::new("./ws")), "./ws");
+    }
 
     #[test]
     fn absolute_path_is_canonical_or_cwd_joined() {

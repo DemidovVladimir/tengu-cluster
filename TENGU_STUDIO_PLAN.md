@@ -270,6 +270,11 @@ echo '{"scenario":"act"}' \
 # Long-running scheduler and health.
 target/release/tengu run --sandbox control-loop-lab
 target/release/tengu doctor --sandbox control-loop-lab --live
+
+# Read model + trace (ST-10 / ST-11; logs on stderr, stdout = JSON).
+target/release/tengu studio graph --sandbox control-loop-lab [--map sandboxes/control-loop-lab/scenarios/uncertain.map.json]
+target/release/tengu trace runs --sandbox control-loop-lab
+target/release/tengu trace show --sandbox control-loop-lab --run <run_id> [--after <seq>] [--follow]
 ```
 
 Required env (names only): `TENGU_HOME` (the lab home above), `OPENROUTER_API_KEY` (Jev); optional `OPENROUTER_BASE_URL`. Export `TENGU_HOME` before anything else: tengu also loads the nearest `.env` above the cwd, and a worktree's parent `.env` sets `~/.tengu`. Every scenario, expected output, troubleshooting row and the guarded cleanup: `docs/control-loop-lab-2026-10-08.md` (acceptance matrix A0–A15). The recorded real-Jev run of all of it: `docs/control-loop-lab-baseline-2026-10-08.md`.

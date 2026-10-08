@@ -40,6 +40,7 @@ window.TUTORIAL = {
     { slug: "observations", chapter: "runtime", title: "Typed observations", blurb: "Tool results with status, age and features, cached and recorded." },
     { slug: "runtime", chapter: "runtime", title: "tengu run", blurb: "One long-running process per sandbox: feeds, loops, leases, heartbeat." },
     { slug: "metrics", chapter: "runtime", title: "Metrics and audit trails", blurb: "Every model call leaves a record; every risky action leaves a line." },
+    { slug: "studio", chapter: "runtime", title: "Studio graph and trace", blurb: "A sandbox as a graph from its config; every run as an ordered, redacted event file." },
 
     { slug: "solana", chapter: "desk", title: "Solana LP tools", blurb: "Read pools and positions; simulate or send writes behind a lease." },
     { slug: "paper-desk", chapter: "desk", title: "Paper desk and risk gate", blurb: "Every order passes the risk gate inside the tool, then fills on paper." },

@@ -40,6 +40,7 @@ pub(crate) async fn run_runtime(config: Config, secrets: Arc<SecretRegistry>) ->
     info!(
         sandbox = %rt.sandbox(),
         holder = %rt.holder(),
+        run_id = rt.trace().run_id().unwrap_or("none"),
         state_dir = %rt.state_dir().display(),
         loops = ?rt.loops().names(),
         feeds = ?config.feeds.keys().collect::<Vec<_>>(),

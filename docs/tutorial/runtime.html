@@ -364,6 +364,7 @@
     <li><span><b>Readers never see half a heartbeat.</b> It is written to a temp file, then renamed.</span></li>
     <li><span><b>No URLs in health.</b> Heartbeats and <code>loop/1</code> / <code>feed/1</code> rows replace every URL with <code>&lt;url&gt;</code>.</span></li>
     <li><span><b>Shutdown is bounded.</b> <code>shutdown_grace_secs</code> ≤ 3600; a second signal exits 130 at once.</span></li>
+    <li><span><b>Each start is its own recording.</b> A new trace <code>run_id</code> per process; every loop audit line carries it and the lease holder as <code>runtime_id</code> (<a href="studio.html">Studio graph and trace</a>).</span></li>
   </ul>
 </section>
 
@@ -375,7 +376,7 @@
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu run --sandbox xmarket</span>
-<span class="ln o">INFO tengu run started sandbox=xmarket holder=&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt; feeds=["hl_book", "hl_ctx", "risk_day", "xm_exits"]</span>
+<span class="ln o">INFO tengu run started sandbox=xmarket holder=&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt; run_id="&lt;uuid&gt;" feeds=["hl_book", "hl_ctx", "risk_day", "xm_exits"]</span>
 <span class="ln cmd"><span class="p">$ </span>tengu run --sandbox xmarket        <span class="o"># a second terminal</span></span>
 <span class="ln er">Error: sandbox `xmarket` is already running: lease `runtime:xmarket` in ~/.tengu/state/xmarket/runtime.db</span>
 <span class="ln er">is held by `&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt;` for 24 s more. Stop that `tengu run` / `tengu webhooks` first …</span>
@@ -416,7 +417,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>

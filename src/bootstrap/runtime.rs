@@ -5,6 +5,7 @@
 //! |---|---|
 //! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else `<TENGU_HOME>/state`; `runtime.db` lives there |
 //! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
+//! | trace | [`start`] opens this process's recording (`bootstrap::trace::open_sink`, `RunKind::Run`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, `runtime_id` = the lease holder; every loop's `decisions.jsonl` lines carry both ids ([`Runtime::trace`]) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
 //! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's) |
@@ -23,6 +24,7 @@ use tracing::{info, warn};
 
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
+use crate::adapters::outbound::noop::NoopTrace;
 use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::rate_limit::jitter01;
 use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
@@ -41,6 +43,7 @@ use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
 use crate::ports::runtime::RuntimeStore;
+use crate::ports::trace::TraceSink;
 
 /// Runner name: the `--sandbox` name, else `default`.
 pub(crate) fn runner_name(config: &Config) -> String {
@@ -276,11 +279,16 @@ pub(crate) struct Runtime {
     supervisor: Supervisor,
     loops: Arc<LoopDispatch>,
     health: Arc<HealthBoard>,
+    /// This process's trace recording (`bootstrap::trace::open_sink`);
+    /// `NoopTrace` until [`start`] opens it.
+    trace: Arc<dyn TraceSink>,
 }
 
-/// Take the lease, build every decision loop, start the lease keeper and
-/// the heartbeat. `escalator` comes from the inbound side (the webhook
-/// listener's orchestrator escalator when built with `--features webhooks`).
+/// Take the lease, open the trace recording (`run_id`; `runtime_id` = the
+/// lease holder), build every decision loop (their audit lines carry both
+/// ids), start the lease keeper and the heartbeat. `escalator` comes from
+/// the inbound side (the webhook listener's orchestrator escalator when
+/// built with `--features webhooks`).
 pub(crate) async fn start(
     config: &Config,
     secrets: Arc<SecretRegistry>,
@@ -292,7 +300,14 @@ pub(crate) async fn start(
         LeaseTiming::default(),
     )
     .await?;
-    let started = build_loops(config, Arc::clone(&secrets), escalator).and_then(|(h, s)| {
+    rt.trace = crate::bootstrap::trace::open_sink(
+        config,
+        Some(rt.holder()),
+        crate::domain::trace::RunKind::Run,
+        &secrets,
+    );
+    let ids = crate::bootstrap::trace::run_ids(&*rt.trace, Some(rt.holder()));
+    let started = build_loops(config, Arc::clone(&secrets), escalator, ids).and_then(|(h, s)| {
         rt.launch(h, s);
         start_feeds(config, &mut rt, &secrets, Arc::new(SystemClock))
     });
@@ -452,6 +467,7 @@ fn build_loops(
     config: &Config,
     secrets: Arc<SecretRegistry>,
     escalator: Option<Arc<dyn Escalator>>,
+    ids: crate::domain::trace::RunIds,
 ) -> Result<BuiltLoops> {
     let (mut handlers, mut stores): BuiltLoops = Default::default();
     let mut names: Vec<&String> = config.decision_loops.keys().collect();
@@ -462,6 +478,7 @@ fn build_loops(
             name,
             escalator.clone(),
             Arc::clone(&secrets),
+            ids.clone(),
         )
         .with_context(|| format!("build [decision_loops.{name}]"))?;
         handlers.insert(name.clone(), dl as Arc<dyn LoopHandler>);
@@ -537,7 +554,14 @@ impl Runtime {
             supervisor,
             loops,
             health,
+            trace: Arc::new(NoopTrace),
         })
+    }
+
+    /// This process's trace recording (`NoopTrace` before [`start`] opens
+    /// one, or when the trace dir cannot be written).
+    pub(crate) fn trace(&self) -> Arc<dyn TraceSink> {
+        Arc::clone(&self.trace)
     }
 
     /// Install the loop handlers (+ each loop agent's observation store for

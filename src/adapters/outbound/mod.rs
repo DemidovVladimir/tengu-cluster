@@ -28,3 +28,4 @@ pub(crate) mod shell;
 pub(crate) mod solana;
 pub(crate) mod subprocess_runner;
 pub(crate) mod tools;
+pub(crate) mod trace_store;

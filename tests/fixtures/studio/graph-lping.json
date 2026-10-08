@@ -1,0 +1,1679 @@
+{
+  "schema_version": 1,
+  "sandbox": "lping",
+  "config_hash": "05501cb28a4a702f07069902867919927a2e334bf1ebe2f32510152e4a71c816",
+  "nodes": [
+    {
+      "id": "runtime:lping",
+      "kind": "runtime",
+      "label": "tengu run",
+      "layer": 0,
+      "order": 0,
+      "attrs": {
+        "heartbeat_secs": 5,
+        "heartbeat_stale_secs": 30,
+        "max_decisions_in_flight": 4,
+        "max_queued_per_loop": 64,
+        "shutdown_grace_secs": 20
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "trigger:decide",
+      "kind": "trigger",
+      "label": "tengu decide",
+      "layer": 1,
+      "order": 0,
+      "attrs": {
+        "command": "tengu decide --loop <name> | --map <file>"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "trigger:webhook/helius",
+      "kind": "trigger",
+      "label": "/webhooks/helius",
+      "layer": 1,
+      "order": 1,
+      "attrs": {
+        "auth": "header",
+        "enabled": true,
+        "loop": "lp_watch"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "loop:hedge_exec",
+      "kind": "loop",
+      "label": "hedge_exec",
+      "layer": 2,
+      "order": 0,
+      "attrs": {
+        "act_at": 0.8,
+        "agent": "lp_executor",
+        "dry_run": false,
+        "escalate": true,
+        "goal": "Bring the operator wallet's Jupiter perps hedge to what the hedge controller decides — the controller is the judge, not this loop. The loop offers one step at a time: snapshot (always first, even when world.snap is fresh — it is then served from the cache), decide_hedge, then order only when the decision carries one. Take the offered step; hold only when hold is the only choice. Orders are simulated, never sent.",
+        "history": 8,
+        "max_steps": 4,
+        "model": "~typesafe/jev-latest",
+        "sequence": [
+          "snapshot",
+          "decide_hedge",
+          "order?"
+        ],
+        "timeout_secs": 20,
+        "world_max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "agent:lp_executor",
+      "kind": "agent",
+      "label": "lp_executor",
+      "layer": 2,
+      "order": 1,
+      "attrs": {
+        "engine": "openrouter",
+        "model": "anthropic/claude-sonnet-4-6",
+        "workspace": "~/lping-workspace"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "loop:hedge_watch",
+      "kind": "loop",
+      "label": "hedge_watch",
+      "layer": 2,
+      "order": 2,
+      "attrs": {
+        "act_at": 0.8,
+        "agent": "lp_executor",
+        "dry_run": true,
+        "escalate": true,
+        "goal": "Keep the operator wallet's SOL/USDC DLMM LP and its Jupiter perps hedge under watch. Every event runs exactly this sequence: 1) snapshot — always first, even when world.snap is fresh (it is then served from the cache), 2) decide_hedge, 3) decide_lp, 4) hold. Read-only: the decisions are logged, nothing is ever signed or sent.",
+        "history": 8,
+        "max_steps": 4,
+        "model": "~typesafe/jev-latest",
+        "timeout_secs": 20,
+        "world_max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "loop:lp_exec",
+      "kind": "loop",
+      "label": "lp_exec",
+      "layer": 2,
+      "order": 3,
+      "attrs": {
+        "act_at": 0.8,
+        "agent": "lp_executor",
+        "dry_run": false,
+        "escalate": true,
+        "event_reduce": {
+          "target_sol": "/target_sol",
+          "target_usdc": "/target_usdc"
+        },
+        "goal": "Fund and open the LP position the event asks for (target_sol SOL + target_usdc USDC) in pool 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6. The loop offers one step at a time: snapshot (always first, even when world.snap is fresh), plan_swap, swap + refresh only when the plan has a route, open only when the plan is feasible. Take each offered step; hold when only hold is offered or the state shows a problem. Everything is simulated, never sent.",
+        "history": 8,
+        "max_steps": 6,
+        "model": "~typesafe/jev-latest",
+        "sequence": [
+          "snapshot",
+          "plan_swap",
+          "swap?",
+          "refresh?",
+          "open"
+        ],
+        "timeout_secs": 20,
+        "world_max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "loop:lp_watch",
+      "kind": "loop",
+      "label": "lp_watch",
+      "layer": 2,
+      "order": 4,
+      "attrs": {
+        "act_at": 0.8,
+        "agent": "lp_executor",
+        "dry_run": true,
+        "escalate": true,
+        "event_reduce": {
+          "txs": "/*/{signature,type,source,description,timestamp}"
+        },
+        "goal": "Pick the Meteora DLMM SOL/USDC pool for a new position of at most 2 SOL. Every event, in this order: refresh_price, then fetch_pools (both are cached reads, cheap to repeat), then open_position in the pool with the best 24h fee/TVL among pools with TVL above $100k (dry run: it is only logged), then hold. No position is open yet.",
+        "history": 8,
+        "max_steps": 4,
+        "model": "~typesafe/jev-latest",
+        "timeout_secs": 20,
+        "world_max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "world:hedge_exec/snap",
+      "kind": "world",
+      "label": "snap",
+      "layer": 3,
+      "order": 0,
+      "attrs": {
+        "key": "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+        "max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "world:hedge_watch/snap",
+      "kind": "world",
+      "label": "snap",
+      "layer": 3,
+      "order": 1,
+      "attrs": {
+        "key": "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+        "max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "world:lp_exec/snap",
+      "kind": "world",
+      "label": "snap",
+      "layer": 3,
+      "order": 2,
+      "attrs": {
+        "key": "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+        "max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "world:lp_watch/price",
+      "kind": "world",
+      "label": "price",
+      "layer": 3,
+      "order": 3,
+      "attrs": {
+        "key": "price_oracle/1:So11111111111111111111111111111111111111112",
+        "max_age_secs": 30
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "jev:hedge_exec",
+      "kind": "jev",
+      "label": "~typesafe/jev-latest",
+      "layer": 4,
+      "order": 0,
+      "attrs": {
+        "history": 8,
+        "model": "~typesafe/jev-latest",
+        "timeout_secs": 20
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:hedge_exec/act_at",
+      "kind": "gate",
+      "label": "act_at 0.8",
+      "layer": 4,
+      "order": 1,
+      "attrs": {
+        "act_at": 0.8,
+        "escalate": true
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "jev:hedge_watch",
+      "kind": "jev",
+      "label": "~typesafe/jev-latest",
+      "layer": 4,
+      "order": 2,
+      "attrs": {
+        "history": 8,
+        "model": "~typesafe/jev-latest",
+        "timeout_secs": 20
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:hedge_watch/act_at",
+      "kind": "gate",
+      "label": "act_at 0.8",
+      "layer": 4,
+      "order": 3,
+      "attrs": {
+        "act_at": 0.8,
+        "escalate": true
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "jev:lp_exec",
+      "kind": "jev",
+      "label": "~typesafe/jev-latest",
+      "layer": 4,
+      "order": 4,
+      "attrs": {
+        "history": 8,
+        "model": "~typesafe/jev-latest",
+        "timeout_secs": 20
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:lp_exec/act_at",
+      "kind": "gate",
+      "label": "act_at 0.8",
+      "layer": 4,
+      "order": 5,
+      "attrs": {
+        "act_at": 0.8,
+        "escalate": true
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "jev:lp_watch",
+      "kind": "jev",
+      "label": "~typesafe/jev-latest",
+      "layer": 4,
+      "order": 6,
+      "attrs": {
+        "history": 8,
+        "model": "~typesafe/jev-latest",
+        "timeout_secs": 20
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:lp_watch/act_at",
+      "kind": "gate",
+      "label": "act_at 0.8",
+      "layer": 4,
+      "order": 7,
+      "attrs": {
+        "act_at": 0.8,
+        "escalate": true
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "escalation:hedge_exec",
+      "kind": "escalation",
+      "label": "escalation",
+      "layer": 5,
+      "order": 0,
+      "attrs": {},
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_exec/snapshot",
+      "kind": "action",
+      "label": "snapshot",
+      "layer": 5,
+      "order": 1,
+      "attrs": {
+        "args": {
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Read the wallet x pool snapshot (cached 10 s)",
+        "effect": "runs",
+        "optional": false,
+        "read_only": true,
+        "step": 1,
+        "tool": "lp_snapshot"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_exec/decide_hedge",
+      "kind": "action",
+      "label": "decide_hedge",
+      "layer": 5,
+      "order": 2,
+      "attrs": {
+        "args": {
+          "commit": false,
+          "knobs": {
+            "band_bins": 8,
+            "bin_count": 28,
+            "cap_mult": 1.25,
+            "carry_cap_bps": 5000.0,
+            "cooldown_ms": 600000,
+            "delta_threshold_sol": 0.25,
+            "include_wallet_sol": true,
+            "lp_input": "midpoint",
+            "max_divergence_bps": 50.0,
+            "max_notional_usd": 0.0,
+            "max_snapshot_age_secs": 30,
+            "min_collateral_ratio": 0.15,
+            "min_wallet_sol": 0.2,
+            "no_lp_grace_ms": 300000,
+            "rent_reserve_sol": 0.1,
+            "target_collateral_ratio": 0.33,
+            "target_delta_sol": 0.0,
+            "trend_confirm_ms": 600000
+          },
+          "lp_knobs": {
+            "bin_count": 28,
+            "imbalance_threshold": 0.92,
+            "max_divergence_bps": 50.0,
+            "max_snapshot_age_secs": 30,
+            "min_wallet_sol": 0.2,
+            "reentry_confirm_ms": 7200000,
+            "reentry_tol_frac": 0.2,
+            "rent_reserve_sol": 0.1,
+            "storm_pct_5m": 2.0,
+            "trend_confirm_ms": 600000
+          },
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Hedge decision on the fresh snapshot (pure): none, blocked, or an order",
+        "effect": "runs",
+        "optional": false,
+        "read_only": true,
+        "reduce": {
+          "action": "/features/action",
+          "guard": "/features/guard",
+          "order": "/data/order"
+        },
+        "requires": {
+          "snap": 30
+        },
+        "step": 2,
+        "tool": "hedge_decide"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_exec/order",
+      "kind": "action",
+      "label": "order",
+      "layer": 5,
+      "order": 3,
+      "attrs": {
+        "args": {
+          "action": "{kind}",
+          "collateral": "{collateral}",
+          "max_notional_usd": "{max_notional_usd}",
+          "mode": "simulate",
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "side": "{side}",
+          "size_usd": "{size_usd}",
+          "slippage_bps": 50,
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Place the decided Jupiter perps order (simulated)",
+        "effect": "runs",
+        "optional": true,
+        "read_only": false,
+        "requires": {
+          "snap": 30
+        },
+        "slots": {
+          "collateral": {
+            "from": "decide_hedge",
+            "path": "/order/collateral",
+            "top": 5
+          },
+          "kind": {
+            "from": "decide_hedge",
+            "path": "/order/action",
+            "top": 5
+          },
+          "max_notional_usd": {
+            "from": "decide_hedge",
+            "path": "/order/max_notional_usd",
+            "top": 5
+          },
+          "side": {
+            "from": "decide_hedge",
+            "path": "/order/side",
+            "top": 5
+          },
+          "size_usd": {
+            "from": "decide_hedge",
+            "path": "/order/size_usd",
+            "top": 5
+          }
+        },
+        "step": 3,
+        "tool": "jup_perps_order"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_exec/hold",
+      "kind": "action",
+      "label": "hold",
+      "layer": 5,
+      "order": 4,
+      "attrs": {
+        "description": "Nothing (more) to do for this event",
+        "effect": "terminal",
+        "read_only": false
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "escalation:hedge_watch",
+      "kind": "escalation",
+      "label": "escalation",
+      "layer": 5,
+      "order": 5,
+      "attrs": {},
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_watch/decide_hedge",
+      "kind": "action",
+      "label": "decide_hedge",
+      "layer": 5,
+      "order": 6,
+      "attrs": {
+        "args": {
+          "commit": true,
+          "knobs": {
+            "band_bins": 8,
+            "bin_count": 28,
+            "cap_mult": 1.25,
+            "carry_cap_bps": 5000.0,
+            "cooldown_ms": 600000,
+            "delta_threshold_sol": 0.25,
+            "include_wallet_sol": true,
+            "lp_input": "midpoint",
+            "max_divergence_bps": 50.0,
+            "max_notional_usd": 0.0,
+            "max_snapshot_age_secs": 30,
+            "min_collateral_ratio": 0.15,
+            "min_wallet_sol": 0.2,
+            "no_lp_grace_ms": 300000,
+            "rent_reserve_sol": 0.1,
+            "target_collateral_ratio": 0.33,
+            "target_delta_sol": 0.0,
+            "trend_confirm_ms": 600000
+          },
+          "lp_knobs": {
+            "bin_count": 28,
+            "imbalance_threshold": 0.92,
+            "max_divergence_bps": 50.0,
+            "max_snapshot_age_secs": 30,
+            "min_wallet_sol": 0.2,
+            "reentry_confirm_ms": 7200000,
+            "reentry_tol_frac": 0.2,
+            "rent_reserve_sol": 0.1,
+            "storm_pct_5m": 2.0,
+            "trend_confirm_ms": 600000
+          },
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Hedge decision on the fresh snapshot (pure): none, blocked with a guard, or increase / decrease long / short",
+        "effect": "runs",
+        "read_only": true,
+        "requires": {
+          "snap": 30
+        },
+        "tool": "hedge_decide"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_watch/decide_lp",
+      "kind": "action",
+      "label": "decide_lp",
+      "layer": 5,
+      "order": 7,
+      "attrs": {
+        "args": {
+          "commit": true,
+          "knobs": {
+            "bin_count": 28,
+            "imbalance_threshold": 0.92,
+            "max_divergence_bps": 50.0,
+            "max_snapshot_age_secs": 30,
+            "min_wallet_sol": 0.2,
+            "reentry_confirm_ms": 7200000,
+            "reentry_tol_frac": 0.2,
+            "rent_reserve_sol": 0.1,
+            "storm_pct_5m": 2.0,
+            "trend_confirm_ms": 600000
+          },
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "LP decision on the fresh snapshot (pure): hold, recenter, wait for the trend, paused, re-entry wait, or open a range",
+        "effect": "runs",
+        "read_only": true,
+        "requires": {
+          "snap": 30
+        },
+        "tool": "lp_decide"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_watch/hold",
+      "kind": "action",
+      "label": "hold",
+      "layer": 5,
+      "order": 8,
+      "attrs": {
+        "description": "Nothing to do for this event",
+        "effect": "terminal",
+        "read_only": false
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:hedge_watch/snapshot",
+      "kind": "action",
+      "label": "snapshot",
+      "layer": 5,
+      "order": 9,
+      "attrs": {
+        "args": {
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Read the wallet x pool snapshot: positions, perps hedge, balances, oracle (cached 10 s)",
+        "effect": "runs",
+        "read_only": true,
+        "tool": "lp_snapshot"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "escalation:lp_exec",
+      "kind": "escalation",
+      "label": "escalation",
+      "layer": 5,
+      "order": 10,
+      "attrs": {},
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_exec/snapshot",
+      "kind": "action",
+      "label": "snapshot",
+      "layer": 5,
+      "order": 11,
+      "attrs": {
+        "args": {
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Read the wallet x pool snapshot (cached 10 s)",
+        "effect": "runs",
+        "optional": false,
+        "read_only": true,
+        "step": 1,
+        "tool": "lp_snapshot"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_exec/plan_swap",
+      "kind": "action",
+      "label": "plan_swap",
+      "layer": 5,
+      "order": 12,
+      "attrs": {
+        "args": {
+          "context": "initial_position",
+          "current_price": "{current_price}",
+          "permanent_minimum_sol": 0.2,
+          "position_rent_sol": 0.0575,
+          "rent_reserve_sol": 0.1,
+          "reserve_usdc": 0,
+          "slippage_buffer_pct": 0.02,
+          "target_sol": "{target_sol}",
+          "target_usdc": "{target_usdc}",
+          "wallet_sol": "{wallet_sol}",
+          "wallet_usdc": "{wallet_usdc}"
+        },
+        "caps": {
+          "target_sol": 2.0,
+          "target_usdc": 250.0
+        },
+        "description": "Plan the swap that funds the deposit (pure): no swap, one route, or blocked",
+        "effect": "runs",
+        "optional": false,
+        "read_only": true,
+        "reduce": {
+          "blocked": "/features/blocked",
+          "deposit": "/data/deposit",
+          "feasible": "/features/feasible",
+          "swaps": "/data/swaps"
+        },
+        "requires": {
+          "snap": 30
+        },
+        "slots": {
+          "current_price": {
+            "observation": "snap",
+            "path": "/data/oracle/usd",
+            "top": 5
+          },
+          "target_sol": {
+            "event": "/target_sol",
+            "top": 5
+          },
+          "target_usdc": {
+            "event": "/target_usdc",
+            "top": 5
+          },
+          "wallet_sol": {
+            "observation": "snap",
+            "path": "/data/wallet_balances/native_sol/value",
+            "top": 5
+          },
+          "wallet_usdc": {
+            "observation": "snap",
+            "path": "/data/wallet_balances/quote/value/ui",
+            "top": 5
+          }
+        },
+        "step": 2,
+        "tool": "lp_swap_plan"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_exec/swap",
+      "kind": "action",
+      "label": "swap",
+      "layer": 5,
+      "order": 13,
+      "attrs": {
+        "args": {
+          "amount": "{amount}",
+          "input_mint": "{input_mint}",
+          "mode": "simulate",
+          "oracle_gate_bps": 50,
+          "output_mint": "{output_mint}",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Swap along the plan's route through Jupiter (simulated)",
+        "effect": "runs",
+        "optional": true,
+        "read_only": false,
+        "requires": {
+          "snap": 30
+        },
+        "slots": {
+          "amount": {
+            "from": "plan_swap",
+            "path": "/swaps/0/amount",
+            "top": 5
+          },
+          "input_mint": {
+            "from": "plan_swap",
+            "path": "/swaps/0/input_mint",
+            "top": 5
+          },
+          "output_mint": {
+            "from": "plan_swap",
+            "path": "/swaps/0/output_mint",
+            "top": 5
+          }
+        },
+        "step": 3,
+        "tool": "jupiter_swap"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_exec/refresh",
+      "kind": "action",
+      "label": "refresh",
+      "layer": 5,
+      "order": 14,
+      "attrs": {
+        "args": {
+          "max_age_secs": 0,
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "description": "Re-read the snapshot live after the swap (balances changed)",
+        "effect": "runs",
+        "optional": true,
+        "read_only": true,
+        "slots": {
+          "swapped": {
+            "from": "swap",
+            "path": "/status",
+            "top": 5
+          }
+        },
+        "step": 4,
+        "tool": "lp_snapshot"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_exec/open",
+      "kind": "action",
+      "label": "open",
+      "layer": 5,
+      "order": 15,
+      "attrs": {
+        "args": {
+          "amount_x": "{amount_x}",
+          "amount_y": "{amount_y}",
+          "bin_count": 28,
+          "max_active_bin_slippage": 1,
+          "max_divergence_bps": 50,
+          "max_new_bin_arrays": 1,
+          "min_wallet_sol": 0.2,
+          "mode": "simulate",
+          "pool": "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+          "strategy": "spot",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "caps": {
+          "amount_x": 2.0,
+          "amount_y": 250.0
+        },
+        "description": "Open the DLMM position with the plan's deposit (simulated)",
+        "effect": "runs",
+        "optional": false,
+        "read_only": false,
+        "requires": {
+          "snap": 30
+        },
+        "slots": {
+          "amount_x": {
+            "from": "plan_swap",
+            "path": "/deposit/sol",
+            "top": 5
+          },
+          "amount_y": {
+            "from": "plan_swap",
+            "path": "/deposit/usdc",
+            "top": 5
+          }
+        },
+        "step": 5,
+        "tool": "dlmm_open_position"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_exec/hold",
+      "kind": "action",
+      "label": "hold",
+      "layer": 5,
+      "order": 16,
+      "attrs": {
+        "description": "Nothing (more) to do for this event",
+        "effect": "terminal",
+        "read_only": false
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "escalation:lp_watch",
+      "kind": "escalation",
+      "label": "escalation",
+      "layer": 5,
+      "order": 17,
+      "attrs": {},
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_watch/fetch_pools",
+      "kind": "action",
+      "label": "fetch_pools",
+      "layer": 5,
+      "order": 18,
+      "attrs": {
+        "args": {
+          "limit": 10,
+          "min_tvl_usd": 100000,
+          "query": "{pair}"
+        },
+        "description": "Fetch Meteora DLMM pools for the pair (TVL, 24h fee/TVL, bin step; cached 60 s)",
+        "effect": "runs",
+        "read_only": true,
+        "reduce": {
+          "pools": "/data/pools/*/{address,name,tvl_usd,fee_tvl_24h_pct,bin_step}"
+        },
+        "slots": {
+          "pair": [
+            "SOL-USDC"
+          ]
+        },
+        "tool": "dlmm_pools"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_watch/hold",
+      "kind": "action",
+      "label": "hold",
+      "layer": 5,
+      "order": 19,
+      "attrs": {
+        "description": "Nothing useful left to do for this event",
+        "effect": "terminal",
+        "read_only": false
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_watch/open_position",
+      "kind": "action",
+      "label": "open_position",
+      "layer": 5,
+      "order": 20,
+      "attrs": {
+        "args": {
+          "amount_x": "{size_sol}",
+          "amount_y": 0,
+          "bin_count": 28,
+          "max_active_bin_slippage": 1,
+          "max_divergence_bps": 50,
+          "max_new_bin_arrays": 1,
+          "min_wallet_sol": 0.2,
+          "mode": "simulate",
+          "pool": "{pool}",
+          "strategy": "spot",
+          "wallet": "F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S"
+        },
+        "caps": {
+          "size_sol": 2.0
+        },
+        "description": "Open a DLMM LP position in one of the fetched pools",
+        "effect": "logged",
+        "read_only": false,
+        "requires": {
+          "price": 30
+        },
+        "slots": {
+          "pool": {
+            "from": "fetch_pools",
+            "items": "/pools/*",
+            "top": 5,
+            "value": "address"
+          },
+          "size_sol": [
+            0.5,
+            1,
+            2,
+            3
+          ]
+        },
+        "tool": "dlmm_open_position"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "action:lp_watch/refresh_price",
+      "kind": "action",
+      "label": "refresh_price",
+      "layer": 5,
+      "order": 21,
+      "attrs": {
+        "args": {
+          "mint": "So11111111111111111111111111111111111111112"
+        },
+        "description": "Refresh the SOL/USD oracle price (Jupiter price v3; cached 10 s)",
+        "effect": "runs",
+        "read_only": true,
+        "tool": "sol_price"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/lp_snapshot",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 0,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/hedge_decide",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 1,
+      "attrs": {
+        "fs_roots": [
+          "~/lping-workspace"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/jup_perps_order",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 2,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/lp_decide",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 3,
+      "attrs": {
+        "fs_roots": [
+          "~/lping-workspace"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:lp_exec/plan_swap/caps",
+      "kind": "gate",
+      "label": "caps",
+      "layer": 6,
+      "order": 4,
+      "attrs": {
+        "caps": {
+          "target_sol": 2.0,
+          "target_usdc": 250.0
+        }
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/jupiter_swap",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 5,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:lp_exec/open/caps",
+      "kind": "gate",
+      "label": "caps",
+      "layer": 6,
+      "order": 6,
+      "attrs": {
+        "caps": {
+          "amount_x": 2.0,
+          "amount_y": 250.0
+        }
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/dlmm_open_position",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 7,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/dlmm_pools",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 8,
+      "attrs": {
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "dlmm.datapi.meteora.ag"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "gate:lp_watch/open_position/caps",
+      "kind": "gate",
+      "label": "caps",
+      "layer": 6,
+      "order": 9,
+      "attrs": {
+        "caps": {
+          "size_sol": 2.0
+        }
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "scope:lp_executor/sol_price",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 10,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "lite-api.jup.ag",
+          "hermes.pyth.network",
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/lp_snapshot",
+      "kind": "tool",
+      "label": "lp_snapshot",
+      "layer": 7,
+      "order": 0,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "lp_snapshot"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/hedge_decide",
+      "kind": "tool",
+      "label": "hedge_decide",
+      "layer": 7,
+      "order": 1,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "hedge_decide"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/jup_perps_order",
+      "kind": "tool",
+      "label": "jup_perps_order",
+      "layer": 7,
+      "order": 2,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "jup_perps_order"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/lp_decide",
+      "kind": "tool",
+      "label": "lp_decide",
+      "layer": 7,
+      "order": 3,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "lp_decide"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/lp_swap_plan",
+      "kind": "tool",
+      "label": "lp_swap_plan",
+      "layer": 7,
+      "order": 4,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "lp_swap_plan"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/jupiter_swap",
+      "kind": "tool",
+      "label": "jupiter_swap",
+      "layer": 7,
+      "order": 5,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "jupiter_swap"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/dlmm_open_position",
+      "kind": "tool",
+      "label": "dlmm_open_position",
+      "layer": 7,
+      "order": 6,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "dlmm_open_position"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/dlmm_pools",
+      "kind": "tool",
+      "label": "dlmm_pools",
+      "layer": 7,
+      "order": 7,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "dlmm_pools"
+      },
+      "narrowed_out": false
+    },
+    {
+      "id": "tool:lp_executor/sol_price",
+      "kind": "tool",
+      "label": "sol_price",
+      "layer": 7,
+      "order": 8,
+      "attrs": {
+        "agent": "lp_executor",
+        "in_catalog": true,
+        "tool": "sol_price"
+      },
+      "narrowed_out": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "action:hedge_exec/decide_hedge",
+      "to": "action:hedge_exec/order",
+      "kind": "binds"
+    },
+    {
+      "from": "action:hedge_exec/decide_hedge",
+      "to": "action:hedge_exec/order",
+      "kind": "next"
+    },
+    {
+      "from": "action:hedge_exec/decide_hedge",
+      "to": "tool:lp_executor/hedge_decide",
+      "kind": "calls"
+    },
+    {
+      "from": "action:hedge_exec/order",
+      "to": "tool:lp_executor/jup_perps_order",
+      "kind": "calls"
+    },
+    {
+      "from": "action:hedge_exec/snapshot",
+      "to": "action:hedge_exec/decide_hedge",
+      "kind": "next"
+    },
+    {
+      "from": "action:hedge_exec/snapshot",
+      "to": "tool:lp_executor/lp_snapshot",
+      "kind": "calls"
+    },
+    {
+      "from": "action:hedge_watch/decide_hedge",
+      "to": "tool:lp_executor/hedge_decide",
+      "kind": "calls"
+    },
+    {
+      "from": "action:hedge_watch/decide_lp",
+      "to": "tool:lp_executor/lp_decide",
+      "kind": "calls"
+    },
+    {
+      "from": "action:hedge_watch/snapshot",
+      "to": "tool:lp_executor/lp_snapshot",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_exec/open",
+      "to": "tool:lp_executor/dlmm_open_position",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_exec/plan_swap",
+      "to": "action:lp_exec/open",
+      "kind": "binds"
+    },
+    {
+      "from": "action:lp_exec/plan_swap",
+      "to": "action:lp_exec/swap",
+      "kind": "binds"
+    },
+    {
+      "from": "action:lp_exec/plan_swap",
+      "to": "action:lp_exec/swap",
+      "kind": "next"
+    },
+    {
+      "from": "action:lp_exec/plan_swap",
+      "to": "tool:lp_executor/lp_swap_plan",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_exec/refresh",
+      "to": "action:lp_exec/open",
+      "kind": "next"
+    },
+    {
+      "from": "action:lp_exec/refresh",
+      "to": "tool:lp_executor/lp_snapshot",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_exec/snapshot",
+      "to": "action:lp_exec/plan_swap",
+      "kind": "next"
+    },
+    {
+      "from": "action:lp_exec/snapshot",
+      "to": "tool:lp_executor/lp_snapshot",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_exec/swap",
+      "to": "action:lp_exec/refresh",
+      "kind": "binds"
+    },
+    {
+      "from": "action:lp_exec/swap",
+      "to": "action:lp_exec/refresh",
+      "kind": "next"
+    },
+    {
+      "from": "action:lp_exec/swap",
+      "to": "tool:lp_executor/jupiter_swap",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_watch/fetch_pools",
+      "to": "action:lp_watch/open_position",
+      "kind": "binds"
+    },
+    {
+      "from": "action:lp_watch/fetch_pools",
+      "to": "tool:lp_executor/dlmm_pools",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_watch/open_position",
+      "to": "tool:lp_executor/dlmm_open_position",
+      "kind": "calls"
+    },
+    {
+      "from": "action:lp_watch/refresh_price",
+      "to": "tool:lp_executor/sol_price",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:lp_executor",
+      "to": "loop:hedge_exec",
+      "kind": "owns"
+    },
+    {
+      "from": "agent:lp_executor",
+      "to": "loop:hedge_watch",
+      "kind": "owns"
+    },
+    {
+      "from": "agent:lp_executor",
+      "to": "loop:lp_exec",
+      "kind": "owns"
+    },
+    {
+      "from": "agent:lp_executor",
+      "to": "loop:lp_watch",
+      "kind": "owns"
+    },
+    {
+      "from": "gate:hedge_exec/act_at",
+      "to": "escalation:hedge_exec",
+      "kind": "escalates"
+    },
+    {
+      "from": "gate:hedge_exec/act_at",
+      "to": "jev:hedge_exec",
+      "kind": "guards"
+    },
+    {
+      "from": "gate:hedge_watch/act_at",
+      "to": "escalation:hedge_watch",
+      "kind": "escalates"
+    },
+    {
+      "from": "gate:hedge_watch/act_at",
+      "to": "jev:hedge_watch",
+      "kind": "guards"
+    },
+    {
+      "from": "gate:lp_exec/act_at",
+      "to": "escalation:lp_exec",
+      "kind": "escalates"
+    },
+    {
+      "from": "gate:lp_exec/act_at",
+      "to": "jev:lp_exec",
+      "kind": "guards"
+    },
+    {
+      "from": "gate:lp_exec/open/caps",
+      "to": "action:lp_exec/open",
+      "kind": "guards"
+    },
+    {
+      "from": "gate:lp_exec/plan_swap/caps",
+      "to": "action:lp_exec/plan_swap",
+      "kind": "guards"
+    },
+    {
+      "from": "gate:lp_watch/act_at",
+      "to": "escalation:lp_watch",
+      "kind": "escalates"
+    },
+    {
+      "from": "gate:lp_watch/act_at",
+      "to": "jev:lp_watch",
+      "kind": "guards"
+    },
+    {
+      "from": "gate:lp_watch/open_position/caps",
+      "to": "action:lp_watch/open_position",
+      "kind": "guards"
+    },
+    {
+      "from": "jev:hedge_exec",
+      "to": "action:hedge_exec/decide_hedge",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_exec",
+      "to": "action:hedge_exec/hold",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_exec",
+      "to": "action:hedge_exec/order",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_exec",
+      "to": "action:hedge_exec/snapshot",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_watch",
+      "to": "action:hedge_watch/decide_hedge",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_watch",
+      "to": "action:hedge_watch/decide_lp",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_watch",
+      "to": "action:hedge_watch/hold",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:hedge_watch",
+      "to": "action:hedge_watch/snapshot",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_exec",
+      "to": "action:lp_exec/hold",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_exec",
+      "to": "action:lp_exec/open",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_exec",
+      "to": "action:lp_exec/plan_swap",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_exec",
+      "to": "action:lp_exec/refresh",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_exec",
+      "to": "action:lp_exec/snapshot",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_exec",
+      "to": "action:lp_exec/swap",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_watch",
+      "to": "action:lp_watch/fetch_pools",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_watch",
+      "to": "action:lp_watch/hold",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_watch",
+      "to": "action:lp_watch/open_position",
+      "kind": "chooses"
+    },
+    {
+      "from": "jev:lp_watch",
+      "to": "action:lp_watch/refresh_price",
+      "kind": "chooses"
+    },
+    {
+      "from": "loop:hedge_exec",
+      "to": "jev:hedge_exec",
+      "kind": "asks"
+    },
+    {
+      "from": "loop:hedge_exec",
+      "to": "world:hedge_exec/snap",
+      "kind": "reads"
+    },
+    {
+      "from": "loop:hedge_watch",
+      "to": "jev:hedge_watch",
+      "kind": "asks"
+    },
+    {
+      "from": "loop:hedge_watch",
+      "to": "world:hedge_watch/snap",
+      "kind": "reads"
+    },
+    {
+      "from": "loop:lp_exec",
+      "to": "jev:lp_exec",
+      "kind": "asks"
+    },
+    {
+      "from": "loop:lp_exec",
+      "to": "world:lp_exec/snap",
+      "kind": "reads"
+    },
+    {
+      "from": "loop:lp_watch",
+      "to": "jev:lp_watch",
+      "kind": "asks"
+    },
+    {
+      "from": "loop:lp_watch",
+      "to": "world:lp_watch/price",
+      "kind": "reads"
+    },
+    {
+      "from": "scope:lp_executor/dlmm_open_position",
+      "to": "tool:lp_executor/dlmm_open_position",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/dlmm_pools",
+      "to": "tool:lp_executor/dlmm_pools",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/hedge_decide",
+      "to": "tool:lp_executor/hedge_decide",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/jup_perps_order",
+      "to": "tool:lp_executor/jup_perps_order",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/jupiter_swap",
+      "to": "tool:lp_executor/jupiter_swap",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/lp_decide",
+      "to": "tool:lp_executor/lp_decide",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/lp_snapshot",
+      "to": "tool:lp_executor/lp_snapshot",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:lp_executor/sol_price",
+      "to": "tool:lp_executor/sol_price",
+      "kind": "guards"
+    },
+    {
+      "from": "trigger:decide",
+      "to": "loop:hedge_exec",
+      "kind": "fires"
+    },
+    {
+      "from": "trigger:decide",
+      "to": "loop:hedge_watch",
+      "kind": "fires"
+    },
+    {
+      "from": "trigger:decide",
+      "to": "loop:lp_exec",
+      "kind": "fires"
+    },
+    {
+      "from": "trigger:decide",
+      "to": "loop:lp_watch",
+      "kind": "fires"
+    },
+    {
+      "from": "trigger:webhook/helius",
+      "to": "loop:lp_watch",
+      "kind": "fires"
+    },
+    {
+      "from": "world:hedge_exec/snap",
+      "to": "action:hedge_exec/decide_hedge",
+      "kind": "guards"
+    },
+    {
+      "from": "world:hedge_exec/snap",
+      "to": "action:hedge_exec/order",
+      "kind": "guards"
+    },
+    {
+      "from": "world:hedge_watch/snap",
+      "to": "action:hedge_watch/decide_hedge",
+      "kind": "guards"
+    },
+    {
+      "from": "world:hedge_watch/snap",
+      "to": "action:hedge_watch/decide_lp",
+      "kind": "guards"
+    },
+    {
+      "from": "world:lp_exec/snap",
+      "to": "action:lp_exec/open",
+      "kind": "guards"
+    },
+    {
+      "from": "world:lp_exec/snap",
+      "to": "action:lp_exec/plan_swap",
+      "kind": "binds"
+    },
+    {
+      "from": "world:lp_exec/snap",
+      "to": "action:lp_exec/plan_swap",
+      "kind": "guards"
+    },
+    {
+      "from": "world:lp_exec/snap",
+      "to": "action:lp_exec/swap",
+      "kind": "guards"
+    },
+    {
+      "from": "world:lp_watch/price",
+      "to": "action:lp_watch/open_position",
+      "kind": "guards"
+    }
+  ]
+}

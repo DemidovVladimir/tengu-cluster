@@ -8,4 +8,6 @@ pub(crate) mod memory;
 pub(crate) mod orchestrator;
 pub(crate) mod runtime;
 pub(crate) mod sandbox;
+pub(crate) mod studio;
 pub(crate) mod tools;
+pub(crate) mod trace;

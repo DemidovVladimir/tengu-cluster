@@ -418,7 +418,8 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 <span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"crypto_price"}, {"outcome":"stopped","action":"done"} ], … }</span>
 <span class="ln o"># the safe lab (no money, no shell; runbook docs/control-loop-lab-2026-10-08.md) — export TENGU_HOME="$HOME/tengu-lab/home" first</span>
 <span class="ln cmd"><span class="p">$ </span>echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event -</span>
-<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"write_marker"}, {"outcome":"stopped","action":"hold"} ], … }</span></pre>
+<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"write_marker"}, {"outcome":"stopped","action":"hold"} ], "run_id": "&lt;uuid&gt;", "trace": "…/logs/trace/control-loop-lab/&lt;uuid&gt;.jsonl", … }</span>
+<span class="ln o"># stdout is the JSON alone (logs on stderr); every audit line of the run carries that run_id — <a href="studio.html">Studio graph and trace</a></span></pre>
   </div>
 </section>
 

@@ -36,6 +36,7 @@ use crate::application::decision_loop::{AuditLog, DecisionLoop};
 use crate::config::decision_loop::DecisionLoopConfig;
 use crate::config::{AgentConfig, Config};
 use crate::domain::secrets::SecretRegistry;
+use crate::domain::trace::RunIds;
 use crate::ports::clock::{Clock, SimClock};
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
@@ -84,18 +85,21 @@ pub(crate) fn agent_tool_executor(
 }
 
 /// `secrets` is the process registry: tool text and typed observations are
-/// redacted with it before they reach history, the audit log or Jev.
+/// redacted with it before they reach history, the audit log or Jev. `ids`:
+/// the recording every audit line names (`bootstrap::trace::run_ids`;
+/// default = none).
 pub(crate) fn build_decision_loop(
     config: &Config,
     name: &str,
     escalator: Option<Arc<dyn Escalator>>,
     secrets: Arc<SecretRegistry>,
+    ids: RunIds,
 ) -> Result<Arc<DecisionLoop>> {
     let dl = config
         .decision_loops
         .get(name)
         .ok_or_else(|| anyhow!("no [decision_loops.{name}] block in this config"))?;
-    build_loop(config, name, dl.clone(), escalator, secrets, None)
+    build_loop(config, name, dl.clone(), escalator, secrets, None, ids)
 }
 
 /// `[decision_loops.<name>]` narrowed by an execution map
@@ -108,8 +112,9 @@ pub(crate) fn build_mapped_loop(
     dl: DecisionLoopConfig,
     trigger: String,
     secrets: Arc<SecretRegistry>,
+    ids: RunIds,
 ) -> Result<Arc<DecisionLoop>> {
-    build_loop(config, name, dl, None, secrets, Some(trigger))
+    build_loop(config, name, dl, None, secrets, Some(trigger), ids)
 }
 
 fn build_loop(
@@ -119,6 +124,7 @@ fn build_loop(
     escalator: Option<Arc<dyn Escalator>>,
     secrets: Arc<SecretRegistry>,
     trigger: Option<String>,
+    ids: RunIds,
 ) -> Result<Arc<DecisionLoop>> {
     let dl = &dl;
     let agent = config.agents.get(&dl.agent).ok_or_else(|| {
@@ -167,6 +173,7 @@ fn build_loop(
             path: audit_path(),
             sandbox: config.sandbox_name.clone(),
             trigger,
+            ids,
         }),
     )))
 }
@@ -219,6 +226,7 @@ pub(crate) fn build_replay_loop(
         path: audit_path.to_path_buf(),
         sandbox: config.sandbox_name.clone(),
         trigger: Some(REPLAY_TRIGGER.to_string()),
+        ids: Default::default(),
     };
     let tools: Arc<dyn ToolExecutor> = Arc::new(NoopRuntimeToolExecutor);
     Ok(Arc::new(

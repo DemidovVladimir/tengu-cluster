@@ -38,7 +38,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 
 | Concern | File(s) |
 |---|---|
-| CLI subcommands (`chat status doctor telegram webhooks run decide history backtest risk eval secret prune mcp-bridge agentic-memory-server skill run-agent`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor,history,backtest,risk}.rs` |
+| CLI subcommands (`chat status doctor telegram webhooks run decide studio trace history backtest risk eval secret prune mcp-bridge agentic-memory-server skill run-agent`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor,decide,studio,trace,history,backtest,risk}.rs`; `decide` / `doctor` / `studio` / `history` / `risk` / `backtest` log to stderr (`stdout_is_data`) |
 | Hidden test commands `tengu tool list` (catalog names) · `tengu tool call` (one or a `--batch` of calls through the executor a `run-agent` child builds, `--transcript` = the conversation: bridge conformance) · `tengu tool turn` (one engine turn as any agent, private exec agents included — the `@<agent>` chat path; Claude Code tools through the real bridge: engine-matrix xm legs) | `src/adapters/inbound/cli/tool.rs` |
 | Config schema, defaults, validation, loading | `src/config/mod.rs` (`Config`, `AgentConfig`, `impl Default for Config`, `default_*` fns, `validation_errors`, `validate_agent`, `Config::load`) |
 | `[egress]` schema / runtime policy | `src/config/egress.rs` / `src/adapters/outbound/egress.rs` |
@@ -63,6 +63,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | Secrets vault / redaction | `src/adapters/outbound/secrets.rs` / `src/domain/secrets.rs` |
 | Metrics records / bus | `src/domain/metrics.rs` / `src/application/metrics.rs` |
 | Decision loop (Jev picks, tools execute) | `src/application/decision_loop/` · safe reference run `sandboxes/control-loop-lab/` (runbook `docs/control-loop-lab-2026-10-08.md`) · config `src/config/decision_loop.rs` · execution maps `src/config/execution_map.rs` (skill `skills/execution-map/`) · client `src/adapters/outbound/decisions.rs` · wiring `src/bootstrap/decision.rs` · replay (`SimClock`, terminal-only loop, `Verdict`) + decision cache `src/adapters/outbound/decision_cache.rs` · backtest gate arm `src/application/backtest/gate.rs` + `src/domain/backtest/gate.rs` (`build_gate`; `docs/xlab-2026-10-01.md` § 7) |
+| Studio read model — workflow graph + execution trace (`tengu studio graph`, `tengu trace`) | graph `src/domain/workflow.rs` + `src/application/studio/graph.rs` (`build_graph`: config + catalog tools + an optional execution map, narrow only) + `src/bootstrap/studio.rs` (catalog inputs, redaction) · goldens `tests/fixtures/studio/` (`TENGU_REGEN_GOLDEN=1`) · event envelope `src/domain/trace.rs` · port `src/ports/trace.rs` · JSONL store `src/adapters/outbound/trace_store.rs` (`<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`) · who records `src/bootstrap/trace.rs` (`tengu run`, `tengu decide`) · CLI `src/adapters/inbound/cli/{studio,trace}.rs` · `config_hash` = `Config::source_sha256` · plan `TENGU_STUDIO_PLAN.md` |
 | Typed tool observations + TTL cache | `src/domain/observation.rs` (`Observation`, `Observed`, `Field`, `CachePolicy`) · port `src/ports/observation.rs` · `src/application/observe.rs` (`observe`) · store `src/adapters/outbound/observations.rs` (`<workspace>/.tengu/observations.db`) · loop `world` `src/application/decision_loop/world.rs` |
 | Solana LP tools (`sol_price` … `lp_swap_plan` … `lp_decide`; live-capable writes `solana_close_token_accounts` …) | interfaces `src/adapters/outbound/tools/solana/defs.rs` · plugin + families `src/adapters/outbound/tools/solana/` · RPC / accounts `src/adapters/outbound/solana/` · pure types + policy `src/domain/solana.rs`, `src/domain/lp/` · tx wire format `src/domain/solana_tx.rs` |
 | `tengu run` (loops, feeds, lease, heartbeat, `doctor --live`) | `src/adapters/inbound/run.rs` · `src/bootstrap/runtime.rs` · `src/application/runtime/{mod,loops,health,feeds}.rs` · `src/domain/runtime.rs` · fire times `src/domain/schedule.rs` · lease `src/adapters/outbound/runtime_store.rs` · `[runtime]` `src/config/runtime.rs` · `[feeds.<n>]` `src/config/feeds.rs` · doc `docs/runtime-2026-09-30.md` |
@@ -188,7 +189,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `<TENGU_HOME>/config.toml` | you | base config |
 | `<TENGU_HOME>/secrets.vault` | `tengu secret` | AES-GCM vault, loaded into env at start |
 | `<TENGU_HOME>/logs/egress.jsonl` | `outbound/egress.rs` | network audit; `agent` / `session` / `call_id` of the call (a `tengu run` feed or loop call: `AttributedExecutor`) |
-| `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at`, `call_id` of a tool step (`outcome = "refused"` when the risk gate denied it) |
+| `<TENGU_HOME>/logs/decisions.jsonl` | `application/decision_loop/mod.rs` | one line per Jev decisions call — failed calls too (`outcome = "error"`); one `write_all` per line; `ts_ms`, `latency_ms`, `sandbox`, `act_at`, `call_id` of a tool step (`outcome = "refused"` when the risk gate denied it); `runtime_id` + `run_id` of the trace recording (`tengu run`, `tengu decide`) |
+| `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` | `outbound/trace_store.rs` (`tengu run`, `tengu decide`) | one file per recording: versioned `ExecutionEvent` lines in `seq` order (first `run.opened`), payload redacted (secrets, URLs) and ≤ 4096 bytes; read with `tengu trace runs\|show` (`domain/trace.rs`) |
 | `<state dir>/backtests/<YYYYMMDDTHHMMSSZ>-<strategy>[-N]/` | `application/backtest/run_dir.rs` (`tengu backtest`) | one run: `report.json` (`backtest/1:<run id>`), `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json`, the gate's `decisions.jsonl`; the id claimed with `create_dir` |
 | `<state dir>/backtests/decision-cache.db` | `outbound/decision_cache.rs` | replay-deterministic Jev answers (key = sha256 hex of the canonical `{model, state, questions}`); only misses call Jev. A replay's audit lines go to the run's `decisions.jsonl` (`trigger = "backtest"`, `ts_ms` = the simulated decision time), never `logs/decisions.jsonl` |
 | `<TENGU_HOME>/logs/risk.jsonl` | `outbound/paper_store.rs` | one line per risk verdict — mirror of `ledger.db` `risk_decisions` (canonical); joins `decisions.jsonl` by `call_id` (`docs/xmarket-risk-paper-2026-09-30.md` § Audit) |
@@ -241,7 +243,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (60 files)
+### domain — data + pure policy (62 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -316,8 +318,10 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/solana_write.rs` | 485 | Write results + send policy — `WriteResult` (`write/1`, never cached), `WriteStatus` → obs status, `TxReport`, `Check`, `Lease`, `PendingSend`, CU limit / price rules. |
 | `src/domain/token.rs` | 43 | Shared token-estimation helpers. |
 | `src/domain/tools.rs` | 136 | Names of the opt-in workspace tools (incl. the Solana LP observe/plan and live-write tools) — the values `[agents.<name>]` |
+| `src/domain/trace.rs` | 473 | Execution trace (Studio): the versioned `ExecutionEvent` envelope (`event_id` = `<run_id>:<seq>`, runtime / run / session / correlation / call ids, component, kind, node id, status, bounded payload, artifact ref), `EventDraft` + `RunContext::stamp`, `bound_payload` (whole fields dropped, never cut), `order_events`, `RunSummary`, `RunIds`. |
 | `src/domain/tz.rs` | 277 | Civil time in `America/New_York` / `Europe/Paris` / UTC with hand-rolled DST rules (xmarket clocks, calendars). |
 | `src/domain/usage.rs` | 34 | Token-usage bookkeeping from engine `StreamEvent::Usage` frames: per-turn |
+| `src/domain/workflow.rs` | 328 | Workflow graph (Studio read model): `WorkflowGraph` / `Node` / `Edge`, 8 layout columns, `node_id` helpers (names in full), `normalize`. |
 | `src/domain/xm/mod.rs` | 25 | xmarket pure policy — costs, ledger, gate, paper fills, exits, strategies. |
 | `src/domain/xm/cost.rs` | 915 | HL price / size rules + rounding, fee schedules (tiers, staking, HIP-3 deployer scale, growth mode), funding carry, gas, round-trip cost, edge after costs. |
 | `src/domain/xm/exec.rs` | 869 | Exec-tool orders (pure): `client_order_id` rule (arg else call id, never random; an arg never takes a reserved prefix `exit:` `fade:` `fade-shadow:` `feed:` `mcp:` `chat:`), the request `order_fingerprint` a replay must match, the exit IOC ceiling `MAX_EXIT_SLIPPAGE_BPS` (500), venue facts from `mkt_instrument/1` + `mkt_ctx/1` (HL perp, `sz_decimals`, the paper fee) and the facts a close keeps (`HeldFacts`, `order_venue_facts`: a reduce-only order falls back to them without the row), rows `paper_fill/1:<account>:<client_order_id>` and `paper_close/1` (close all). |
@@ -330,7 +334,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/xm/weekend_fade.rs` | 1958 | Weekend-fade rule W (pure): the Sat + Sun window (`fade_window`, DST-safe, a mid-week holiday skipped), `mkt_ctx/1` mid-else-mark prices, signal / fade side / eligibility, `select_capped`, the order ids, the 5 m candle `replay` (golden in `tests/fixtures/xmarket/`; test module `golden` shared with the weekend sandbox test), rows `xm_weekend/1:<anchor date>` (phases, snapshot, P&L once flat with funding booked) and `xm_weekend_signal/1:<anchor date>:<id>`. |
 | `src/domain/xm/risk_state.rs` | 671 | Account risk state (pure): halts (`daily_loss` clears 00:00 UTC; `total_loss` / `operator` / `file` only by resume), UTC day roll + day-start equity, `valuation_trips`, `RiskStatus` → `risk_state/1:<account>`. |
 
-### ports — traits (18 files)
+### ports — traits (19 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -354,6 +358,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/solana_writes.rs` | 35 | `SolanaWriteStore` — per-wallet lease, in-flight send record, write fence (shared by every process). |
 | `src/ports/tool.rs` | 141 | Tool port — the per-tool trait, plugin grouping, `ToolOutput { text, observation }`, and the borrowed contexts |
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
+| `src/ports/trace.rs` | 34 | Execution-trace ports: `TraceSink` (stamp, redact, bound, write once; fail-soft) and `TraceReader` (runs, page after a `seq`, bounded follow). |
 
 ### config — TOML schema (15 files)
 
@@ -368,7 +373,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/lineage_tests.rs` | 379 | Tests of `config/lineage.rs`: the loader on the fixture and broken copies; the `[generation]` binding (W1 loads, W2-only tools / kinds / loops / feeds refused naming the capability, unlisted sandboxes, frozen drift, W2-SIM leaves W1's manifest, lock, spec pin and rule-W golden replay unchanged). |
 | `src/config/hardening.rs` | 586 | Hardened sandboxes (`[solana]` signer or `[risk]`, one code path): `claude_code` agents only with `builtin_tools_profile = "none"` (that CLI runs without settings files, hooks, plugins, skills, CLAUDE.md), no `[[mcp_servers]]`, no shell scope, the signer key / `<TENGU_HOME>/state` / kill-switch file / the config file outside every fs root and workspace; no-shell fallback; a plan step's `compose` only narrows. |
 | `src/config/mod.rs` | 2339 | Config layer — the TOML schema (`sandboxes/<name>/config.toml`), its |
-| `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default config file, `~` expansion; `sandbox_of_config_file` (`sandboxes/<name>/config.toml` → `<name>`, the ledger owner) |
+| `src/config/paths.rs` | 37 | Filesystem locations the config layer resolves: `TENGU_HOME`, the default config file, `~` expansion and its display inverse `contract_tilde`; `sandbox_of_config_file` (`sandboxes/<name>/config.toml` → `<name>`, the ledger owner) |
 | `src/config/rate_limits.rs` | 166 | `[rate_limits.<name>]` — request budgets (per_minute, burst, reserve), validated; reach tools via `AgentConfig::sandbox`; a test keeps xlab's HL bucket inside HL's per-IP 1200 / min next to the xmarket runs. |
 | `src/config/recorder.rs` | 209 | `[recorder]` — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention; needs `[xmarket]`. |
 | `src/config/risk.rs` | 1078 | `[risk]` + `[paper]` — the $100 paper budget's limits (every field required), `[risk.exits]` (take-profit / stop-loss bps, max hold) and the paper fill engine's knobs; load rules. |
@@ -378,7 +383,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/sections.rs` | 44 | `SandboxSections` — sandbox-level sections tools read at call time, shared by every agent via `AgentConfig::sandbox`; `owner()` = the sandbox of the config file (else `default`); `generation` = the `[generation]` scope (`config/lineage.rs`). |
 | `src/config/xmarket.rs` | 1566 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` and its layout (`ledger_db`, `runtime_db`, `history_dir`, reserved store names) + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`) + `[xmarket.weekend_fade]` (`WeekendFadeConfig`, its load rules against `[risk]`, `[recorder]` and the agents); xmarket load rules: `[risk]` needs `[xmarket]`, one shared workspace for feed / loop / xmarket-tool agents (`XM_TOOLS`), with `[risk]` a workspace on every agent, the state dir outside every fs root and workspace. |
 
-### application — use cases (54 files)
+### application — use cases (56 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -400,7 +405,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/memory/mod.rs` | 33 | Harness-owned memory subsystem — the **in-process, file/disk** layer. |
 | `src/application/memory/writer.rs` | 67 | Post-turn memory writes — spawned, non-blocking. |
 | `src/application/metrics.rs` | 90 | Metrics sink — the process-global broadcast bus every LLM / embedding |
-| `src/application/decision_loop/mod.rs` | 2366 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`; `trigger` when set); time from an optional `Clock` (`with_clock`); `decide_terminal` → `Verdict` (replay). |
+| `src/application/decision_loop/mod.rs` | 2366 | Decision loop — Jev picks action + slot args, tools execute (typed via `execute_typed`), history feeds back; `requires` gate / dry-run / escalate / audit (`call_id` per tool step; a `[risk]` denial is outcome `refused`; `trigger`, `runtime_id`, `run_id` when set); time from an optional `Clock` (`with_clock`); `decide_terminal` → `Verdict` (replay). |
 | `src/application/decision_loop/reduce.rs` | 164 | Reducers — JSON path projection (`/data/*/{a,b}`) + tool output parsing for loop state. |
 | `src/application/decision_loop/slots.rs` | 443 | Argument slots — static / history- / observation- / event-sourced candidates (lists, or one bound value: no question, unresolved ⇒ illegal), caps, `{slot}` arg rendering. |
 | `src/application/decision_loop/world.rs` | 232 | `state.world` — `world` aliases read from the observation store; fresh / stale / missing / error rendering. |
@@ -439,10 +444,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/skills/lifecycle/storage.rs` | 504 | Metric storage: rolling `metrics.json`, append-only `history.jsonl`, per-run reports. |
 | `src/application/skills/mod.rs` | 5 | Skills — registry + system-prompt assembly (`registry`) and the |
 | `src/application/skills/registry.rs` |  | Skill subsystem — types, parsing, registry, filesystem discovery, |
+| `src/application/studio/mod.rs` | 9 | Tengu Studio use cases — read models over the validated config and the trace. |
+| `src/application/studio/graph.rs` | 803 | `build_graph` — config + each agent's catalog tools (+ an execution map via `ExecutionMap::apply`) → `WorkflowGraph`; dropped actions `narrowed_out`, changed knobs `map_changes`; goldens `golden_control_loop_lab`, `golden_lping`. |
 | `src/application/tools/mod.rs` | 4 | Tool dispatch — `ToolRegistry` + `PluginToolExecutor` (the `ToolExecutor` |
 | `src/application/tools/registry.rs` | 292 | Tool registry + `PluginToolExecutor` — dispatches a model's tool call to |
 
-### bootstrap — composition root (7 files)
+### bootstrap — composition root (9 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -450,11 +457,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/bootstrap/decision.rs` | 523 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's) + observation store → `DecisionLoop`; audit path. Replay: `build_replay_loop` (terminal-only, no history, caller's clock, run-dir audit, no tools / store / escalator), `cached_decision_engine` (`<state dir>/backtests/decision-cache.db` over `JevClient`, or offline), `build_gate` (the gate arm: cached engine + K replay loops, each on its own `SimClock`). |
 | `src/bootstrap/mod.rs` | 10 | Bootstrap — the composition root. Builds concrete adapters and hands them |
 | `src/bootstrap/orchestrator.rs` | 496 | Orchestrator wiring — the `ChatServiceFactory` that runs one agent turn, |
-| `src/bootstrap/runtime.rs` | 833 | `tengu run` composition — the leases (`LeasePlan` / `OwnerLeases`: `runtime:<sandbox>` + `state:<dir>` for an `[xmarket]` state dir; `tengu webhooks` takes the same), every `[decision_loops.*]` built once, every `[feeds.*]` started (`start_feeds`, `SystemClock`, executors under `egress::AttributedExecutor`), webhook routes via `Runtime::spawn`. |
+| `src/bootstrap/runtime.rs` | 833 | `tengu run` composition — the leases (`LeasePlan` / `OwnerLeases`: `runtime:<sandbox>` + `state:<dir>` for an `[xmarket]` state dir; `tengu webhooks` takes the same), every `[decision_loops.*]` built once, every `[feeds.*]` started (`start_feeds`, `SystemClock`, executors under `egress::AttributedExecutor`), webhook routes via `Runtime::spawn`; opens the trace recording (`Runtime::trace`, `runtime_id` = the holder). |
 | `src/bootstrap/sandbox.rs` | 39 | Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base |
+| `src/bootstrap/studio.rs` | 81 | Studio wiring — each agent's catalog tools (`agent_base_tools`) as graph inputs; the graph with every attr redacted (`workflow_graph`). |
 | `src/bootstrap/tools.rs` | 724 | Tool wiring — builds the `PluginToolExecutor` an agent runs with (catalog, shell skills, `[[mcp_servers]]`, scopes); `within_generation`: no tool outside a bound `[generation]` is registered or advertised (warned). |
+| `src/bootstrap/trace.rs` | 80 | Trace wiring — `open_sink` (a new recording under `<TENGU_HOME>/logs/trace/`, `NoopTrace` when unwritable), `run_ids` for audit lines, the sandbox's reader. |
 
-### adapters/outbound — driven adapters (110 files)
+### adapters/outbound — driven adapters (111 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -497,7 +506,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/memory/embedder.rs` | 220 | Text embedding client. |
 | `src/adapters/outbound/memory/mod.rs` | 9 | Memory adapters — `BuiltinMemoryProvider` (MEMORY.md, identity files, |
 | `src/adapters/outbound/mod.rs` | 28 | Outbound (driven) adapters — implementations of `crate::ports` and the |
-| `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors. |
+| `src/adapters/outbound/noop.rs` | 37 | Shared no-op implementations of small ports / executors; `NoopTrace` (records nothing). |
 | `src/adapters/outbound/observations.rs` | 774 | `SqliteObservationStore` — `<workspace>/.tengu/observations.db`; slot-monotonic upsert, `Error` rows never stored, 7-day purge. |
 | `src/adapters/outbound/paper_store.rs` | 2658 | `SqlitePaperLedger` — `<xm_state_dir>/ledger.db` (WAL, `BEGIN IMMEDIATE` per order): accounts, cash journal, positions (+ exit deadline, kept venue facts, fired TP / SL), orders `UNIQUE(account, client_order_id)` + request `fingerprint` (a replay asking for another order is refused), the order rate counting entries only, fills, funding + `funding_owed` (settled before every fill at the size held), `risk_decisions` (+ call id, tool, session id; older ledgers gain added columns and tables on open), each verdict mirrored to `<TENGU_HOME>/logs/risk.jsonl` (one `write_all` per line); `accounts.sandbox` = the owner (every write claims an unowned account, refuses another sandbox's: `account_owner_mismatch`); refused without `[xmarket]`. |
 | `src/adapters/outbound/prune.rs` | 343 | `tengu prune` — wipe all cached/ephemeral state while preserving config, secrets, skills and project files; never `<TENGU_HOME>/state` beyond `state/flows`. |
@@ -581,8 +590,9 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/workspace/run_command.rs` | 117 | `run_command` tool — execute a shell command in the workspace. |
 | `src/adapters/outbound/tools/workspace/test_support.rs` | 79 | Shared test harness for workspace tool unit tests. |
 | `src/adapters/outbound/tools/workspace/write_file.rs` | 135 | `write_file` tool — write content to a file in the workspace. |
+| `src/adapters/outbound/trace_store.rs` | 556 | JSONL trace store — `JsonlTraceSink` (new `run_id` + file per recording, `run.opened` first; `seq` under one lock, redact secrets + URLs, bound payload, one `write_all`) and `JsonlTraceReader` (runs, page, follow 250 ms into a bounded channel; ids checked before any path). |
 
-### adapters/inbound — driving adapters (21 files)
+### adapters/inbound — driving adapters (23 files)
 
 | File | Lines | What it is |
 |---|---:|---|
@@ -591,14 +601,16 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/inbound/cli/doctor.rs` | 557 | `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live` runner health, `--engines` smoke turn per agent: `list_directory` + `read_file` on its own engine + model; a loopback `local` agent on macOS is skipped, never contacted). |
 | `src/adapters/inbound/cli/evidence.rs` | 893 | `tengu evidence snapshot\|verify\|coverage\|grade\|regrade\|evaluate` — preserve and grade forward evidence (lineage P0): no config, no network, read-only readers, the new vault the only write; `--format text\|json`; exit 1 on a failed verify / reconciliation. |
 | `src/adapters/inbound/cli/backtest.rs` | 578 | `tengu backtest --sandbox <s> (--strategy <name> \| --spec <file.json>) [--from] [--to] [--split time:… \| instruments:…] [--format table\|json] [--fetch] [--gate [<loop>] [--max-decisions 500] [--concurrency 4] [--offline]]` — the rules arms on `market.db`: compact summary + run dir, or `report.json`; `--fetch` = `history::backfill` of the run's HL instruments first; `--gate` = the Jev gate arm (`build_gate` before any work, `run_gate`, `evaluate_gated`; no value = `[backtest] gate`; failed calls on stderr). |
-| `src/adapters/inbound/cli/decide.rs` | 119 | `tengu decide --sandbox <s> --loop <name> [--event f.json]` — one event through a decision loop; `--map <file\|->` runs an execution map (kept in `<TENGU_HOME>/logs/maps/`, audit `trigger = "map:<sha256>"`). |
+| `src/adapters/inbound/cli/decide.rs` | 119 | `tengu decide --sandbox <s> --loop <name> [--event f.json]` — one event through a decision loop; `--map <file\|->` runs an execution map (kept in `<TENGU_HOME>/logs/maps/`, audit `trigger = "map:<sha256>"`). Each run is a trace recording (`run_id`, `trace` in the output and on every audit line); stdout = the JSON alone. |
 | `src/adapters/inbound/cli/lineage.rs` | 584 | `tengu lineage verify [--pins] [--evidence] \| show \| trace \| family \| attempts \| report <family> --forward <x> \| capabilities \| generation \| seal` — no config or secrets; `--registry` (default `lineage`), `--format text\|json`; verify exits 1 on an Error. |
 | `src/adapters/inbound/cli/history.rs` | 697 | `tengu history range\|asof` (recorder day files) and the `market.db` commands `backfill` (HL bars + funding, Gecko pool bars; `@<universe>`, `<id>@<pool>`; resumes; run table, exit 1 on a failed row; `backfill` is also `tengu backtest --fetch`'s), `events` (SEC EDGAR filings of `hyperliquid:xyz:<TICKER>` ids → `events` + `event_coverage`; `$SEC_USER_AGENT`; run table, exit 1 on a failed row), `import-hl-archive`, `import-json`, `coverage` — no LLM; traffic through the installed `[egress]` policy. |
 | `src/adapters/inbound/cli/risk.rs` | 642 | `tengu risk status|halt|resume` — ledger risk state (no LLM; verdict lines name the exec tool and call id; positions with a fired TP / SL; funding owed; each account's owner); halt / resume only at a TTY and never under `TENGU_AGENT_IPC` / `TENGU_AGENT_NAME`; resume asks for the account name (+ the secret of an optional 0600 `TENGU_RISK_RESUME_SECRET_FILE`), refused while the kill-switch file exists. |
 | `src/adapters/inbound/cli/mod.rs` | 716 | `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls |
 | `src/adapters/inbound/cli/run_agent.rs` | 655 | `tengu run-agent` — the plan-step subprocess. Reads `AgentIpcInput` from stdin; one workspace per step (the agent's, else a temp dir: `bootstrap::tools::workspace_or_temp`); results capped / compacted as in chat |
 | `src/adapters/inbound/cli/skill.rs` | 1125 | `tengu skill …` — list, doctor, install, remove, export, seed, eval, evolve. |
+| `src/adapters/inbound/cli/studio.rs` | 48 | `tengu studio graph --sandbox <s> [--map <file\|->]` — the workflow graph as JSON (redacted). |
 | `src/adapters/inbound/cli/tool.rs` | 394 | Hidden `tengu tool list|call|turn` — catalog names; one or a `--batch` of tool calls through the executor a `run-agent` child builds, `--transcript` the conversation (bridge conformance harness); one engine turn as any agent, private ones included (engine matrix xm set). |
+| `src/adapters/inbound/cli/trace.rs` | 87 | `tengu trace runs\|show --sandbox <s> [--run <id>] [--after <seq>] [--follow]` — the recorded trace as JSON lines; no config, read-only. |
 | `src/adapters/inbound/eval.rs` | 2673 | Skill eval runner — `tengu eval <skill>`. |
 | `src/adapters/inbound/evolve.rs` | 444 | `tengu skill evolve` — the evolve loop driver: baseline eval, improver |
 | `src/adapters/inbound/mcp_bridge.rs` | 1640 | Stdio MCP bridge — exposes Tengu tools to Claude Code via the MCP protocol; each call gets the run's conversation (`call_conversation`), `[[mcp_servers]]` by name from the loaded config. |

@@ -34,6 +34,8 @@ pub(crate) mod solana_tx;
 pub(crate) mod solana_write;
 pub(crate) mod token;
 pub(crate) mod tools;
+pub(crate) mod trace;
 pub(crate) mod tz;
 pub(crate) mod usage;
+pub(crate) mod workflow;
 pub(crate) mod xm;

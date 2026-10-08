@@ -331,6 +331,21 @@ sources = [
   "src/bootstrap/orchestrator.rs",
 ]
 
+[pages.studio]
+sources = [
+  "src/domain/workflow.rs",
+  "src/domain/trace.rs",
+  "src/ports/trace.rs",
+  "src/application/studio/",
+  "src/bootstrap/studio.rs",
+  "src/bootstrap/trace.rs",
+  "src/adapters/outbound/trace_store.rs",
+  "src/adapters/inbound/cli/studio.rs",
+  "src/adapters/inbound/cli/trace.rs",
+  "sandboxes/control-loop-lab/config.toml",
+  "tests/fixtures/studio/",
+]
+
 # ── Trading desk ──────────────────────────────────────────────────────────
 
 [pages.solana]

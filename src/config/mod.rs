@@ -278,6 +278,16 @@ pub struct Config {
     /// the file, the MCP bridge included. `None` for a config built in code.
     #[serde(skip)]
     pub loaded_from: Option<PathBuf>,
+
+    /// Runtime (never in TOML): sha256 of the file `Config::load` read —
+    /// `domain::lineage::pins::toml_digest` of its raw text (canonical JSON
+    /// of the parsed TOML: comments and layout do not count, `${VAR}` not
+    /// substituted), 64 hex, the hash family of the W1 pins. The
+    /// `config_hash` of the Studio graph (`domain/workflow.rs`) and of every
+    /// trace event (`domain/trace.rs`). `None` for a config built in code,
+    /// or when the raw text is not TOML before substitution.
+    #[serde(skip)]
+    pub source_sha256: Option<String>,
 }
 
 /// A single external MCP server that tengu connects to as a client.
@@ -1177,6 +1187,7 @@ impl Config {
         }
         config.generation_scope = scope.map(std::sync::Arc::new);
         config.loaded_from = Some(path.to_path_buf());
+        config.source_sha256 = crate::domain::lineage::pins::toml_digest(&raw).ok();
         config.fold_default_scopes();
         Ok(config)
     }
@@ -1700,6 +1711,7 @@ impl Default for Config {
             generation_scope: None,
             sandbox_name: None,
             loaded_from: None,
+            source_sha256: None,
         }
     }
 }
@@ -2121,6 +2133,28 @@ ttl_days = 7
         let mut c = Config::default();
         c.fold_default_scopes();
         assert_eq!(c.agents["main"].sandbox.owner(), "default");
+    }
+
+    /// `source_sha256` = `toml_digest` of the raw file: 64 hex, blind to
+    /// comments and layout, changed by any value; `None` built in code.
+    #[test]
+    fn load_records_the_source_sha256() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("config.toml");
+        let toml = "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n";
+        std::fs::write(&path, toml).unwrap();
+        let a = Config::load(&path).unwrap().source_sha256.unwrap();
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            Some(a.clone()),
+            crate::domain::lineage::pins::toml_digest(toml).ok()
+        );
+        std::fs::write(&path, format!("# a comment\n\n{toml}")).unwrap();
+        assert_eq!(Config::load(&path).unwrap().source_sha256, Some(a.clone()));
+        std::fs::write(&path, toml.replace("\"m\"", "\"m2\"")).unwrap();
+        assert_ne!(Config::load(&path).unwrap().source_sha256, Some(a));
+        assert_eq!(Config::default().source_sha256, None);
     }
 
     #[test]

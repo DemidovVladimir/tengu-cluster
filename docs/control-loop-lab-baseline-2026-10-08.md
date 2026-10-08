@@ -148,12 +148,23 @@ $ kill -INT 74815                              # A11 (= Ctrl-C)
 (process exit 0)
 ```
 
+## ST-10 / ST-11 smoke (2026-10-08 19:56–19:57Z, debug build of `feature/studio`, same lab home)
+
+| Check | Result |
+|---|---|
+| G1 `studio graph` | `config_hash` `a68882899f1aacfe0dde95eb5c6c1a9490750886c5af79b11255437044b4b40f` · 16 nodes · 17 edges (= golden) · stderr 4 log lines, stdout JSON only |
+| G2 `--map uncertain.map.json` | `map.sha256` `1a97d5793e4abfd1a53fb717c34b1a9fbfa1dc49b7ef6dd4ec165813cac5a1ef` · `act_at` 0.8 → 1.0 · `dry_run` false → true · `{"loop":"demo","act_at":0.5}` → exit 1 `execution map.act_at = 0.5 must be in [0.8, 1] — a map may only raise it` |
+| A2 `decide` (real Jev) | stdout parsed by `jq` with no filter · `write_marker` executed, `hold` · model `typesafe/jev-1.13-20260917` · `run_id` `0c6f502e-c8db-48f4-bf4f-9843c0836fc1` on both audit lines, `runtime_id` null · `trace` = `$HOME/tengu-lab/home/logs/trace/control-loop-lab/0c6f502e-c8db-48f4-bf4f-9843c0836fc1.jsonl` |
+| A7 `run` 26 s + SIGINT | holder `Vladimirs-MacBook-Pro-2.local:96248:d657d420-589f-40a7-8f35-0891e6b16e79` · log `trace recording run_id="648f7ea2-4a6f-4c6d-a920-8cbe6922b3da"` · `tengu run started … run_id="648f7ea2-4a6f-4c6d-a920-8cbe6922b3da"` · 2 tick lines (`tick:1791489426965`, `tick:1791489440000`) carry that holder + run id · `doctor --live` exit 0 `=> live` (report on stdout, 4 log lines on stderr) · stopped `lease_released=true`, exit 0 |
+| G3 `trace runs` | `0c6f502e-c8db-48f4-bf4f-9843c0836fc1` `kind` `decide` · `648f7ea2-4a6f-4c6d-a920-8cbe6922b3da` `kind` `run`, `runtime_id` = the holder · 1 event each (`run.opened`; ST-12 adds the rest) |
+| G4 refusal | `trace show --run ../../etc` → exit 1, "not a run id (a lowercase UUID …)" · `trace runs` without `--sandbox` → exit 1, "--sandbox <name> is required" |
+
 ## Corrections (the run vs the ST-02 runbook)
 
 | # | Finding | Evidence | Change |
 |---|---|---|---|
 | 1 | "A worktree has no `.env`" is wrong: dotenvy walks up from the cwd, so a worktree under `.claude/worktrees/` loads the main checkout's `.env` (`TENGU_HOME=~/.tengu`, `RUST_LOG`, keys) | `dotenvy-0.15.7/src/find.rs` · `adapters/inbound/cli/mod.rs:368` | runbook setup rows + troubleshooting row, `config.toml` quickstart comment: export `TENGU_HOME` first |
-| 2 | `decide` / `doctor` print `tengu=info` log lines on stdout before their output; `RUST_LOG=warn` does not silence them (`tengu=info` always added) | `cli/mod.rs:524-531` (default subscriber → stdout) · `RUST_LOG=warn … doctor` still prints INFO | runbook `J()` helper (`sed -n '/^{/,$p'`) + troubleshooting row. The code fix (logs → stderr, like `history` / `risk`) is left for ST-11 / ST-90 |
+| 2 | `decide` / `doctor` print `tengu=info` log lines on stdout before their output; `RUST_LOG=warn` does not silence them (`tengu=info` always added) | `cli/mod.rs:524-531` (default subscriber → stdout) · `RUST_LOG=warn … doctor` still prints INFO | runbook `J()` helper (`sed -n '/^{/,$p'`) + troubleshooting row. **Fixed in ST-11**: `cli/mod.rs::stdout_is_data` sends `decide` / `doctor` / `studio` logs to stderr (test `data_commands_log_to_stderr`; § ST-10 / ST-11 smoke: `decide` stdout parses with `jq` directly) |
 | 3 | The first log lines show a Tor policy (`socks5h://127.0.0.1:9050`) from the base defaults, then `--sandbox` installs `direct` | every A0–A14 log head | troubleshooting row (harmless) |
 | 4 | An escalated step's audit line has `t 0`; Jev held "uncertain" at 0.94–0.95 — only the map's `act_at 1.0` escalates it | A4 lines | matrix A4 |
 | 5 | doctor lists feeds in name order (probe first); an optional feed stays `ok` past its stale limit | A8 | matrix A8 |

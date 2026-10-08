@@ -37,6 +37,8 @@
 //! never interleave inside it. A step that ran a tool carries its `call_id`
 //! (`{loop}:{session_id}:{t}`), which the exec tools' risk verdicts carry
 //! too (`ledger.db` `risk_decisions`, `<TENGU_HOME>/logs/risk.jsonl`).
+//! Lines of a traced process also name its recording: `runtime_id` (the
+//! `tengu run` lease holder) and `run_id` (`AuditLog::ids`, additive keys).
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
 //!
@@ -104,6 +106,11 @@ pub(crate) struct AuditLog {
     /// `trigger` on every line when set (`backtest` for replay); `None` =
     /// no `trigger` key (live lines keep their shape).
     pub trigger: Option<String>,
+    /// The recording the line belongs to (`domain::trace::RunIds`):
+    /// `runtime_id` (the `tengu run` lease holder) and `run_id` (its trace
+    /// file, `tengu trace show --run`) on every line when set — additive
+    /// keys, absent otherwise (replay lines keep their shape).
+    pub ids: crate::domain::trace::RunIds,
 }
 
 #[derive(Default)]
@@ -612,8 +619,10 @@ impl DecisionLoop {
     /// (`outcome = "error"`, no answers). `ts` (unix s) stays for old
     /// readers; `ts_ms`, `latency_ms` (the decisions call), `sandbox` and
     /// `act_at` join it; `call_id` when the step ran a tool (`Executed` /
-    /// `Refused`) — the key its risk verdict carries; `trigger` when the
-    /// `AuditLog` sets one. `ts` / `ts_ms` come from the loop's clock.
+    /// `Refused`) — the key its risk verdict carries; `trigger`,
+    /// `runtime_id` and `run_id` when the `AuditLog` sets them (the trace
+    /// recording of `tengu run` / `tengu decide`, `bootstrap/trace.rs`).
+    /// `ts` / `ts_ms` come from the loop's clock.
     /// Fail-soft: audit errors only warn.
     fn audit(
         &self,
@@ -653,8 +662,16 @@ impl DecisionLoop {
             // Typed result meta (key / status / source / age / slot).
             "obs": entry.and_then(|e| e.obs.as_ref()),
         });
-        if let (Some(trigger), Value::Object(o)) = (&audit.trigger, &mut line) {
-            o.insert("trigger".into(), json!(trigger));
+        if let Value::Object(o) = &mut line {
+            for (k, v) in [
+                ("trigger", &audit.trigger),
+                ("runtime_id", &audit.ids.runtime_id),
+                ("run_id", &audit.ids.run_id),
+            ] {
+                if let Some(v) = v {
+                    o.insert(k.into(), json!(v));
+                }
+            }
         }
         if let Err(e) = append_line(&audit.path, &format!("{line}\n")) {
             warn!(path = %audit.path.display(), error = %e, "decision audit write failed");
@@ -1697,6 +1714,7 @@ tool = "broken"
                 path: path.to_path_buf(),
                 sandbox: Some("xmarket".into()),
                 trigger: None,
+                ids: Default::default(),
             }),
         )
     }
@@ -1753,6 +1771,48 @@ tool = "broken"
             ts.sort_unstable();
             assert_eq!(ts, (0..500).collect::<Vec<u64>>(), "{name}");
         }
+    }
+
+    /// `runtime_id` / `run_id` join a line only when the `AuditLog` names
+    /// them (additive keys: a line without them keeps its old shape).
+    #[tokio::test]
+    async fn audit_lines_carry_runtime_and_run_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let runtime_id = "host:4242:0f0e0d0c-0b0a-4908-8706-050403020100";
+        let run_id = "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e";
+        let mut traced = audited(
+            "t",
+            Arc::new(Scripted::new(vec![pick(&[("next_action", "hold", 0.99)])])),
+            &path,
+        );
+        if let Some(a) = traced.audit.as_mut() {
+            a.ids = crate::domain::trace::RunIds {
+                runtime_id: Some(runtime_id.into()),
+                run_id: Some(run_id.into()),
+            };
+        }
+        traced.handle_event(&json!({}), "tick:1").await.unwrap();
+        let plain = Arc::new(Scripted::new(vec![pick(&[("next_action", "hold", 0.99)])]));
+        audited("t", plain, &path)
+            .handle_event(&json!({}), "s2")
+            .await
+            .unwrap();
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["runtime_id"], json!(runtime_id));
+        assert_eq!(lines[0]["run_id"], json!(run_id));
+        assert_eq!(lines[0]["session_id"], json!("tick:1"));
+        assert!(lines[1].get("runtime_id").is_none() && lines[1].get("run_id").is_none());
+        assert!(render_audit(&lines[0]).is_some());
+        assert_eq!(
+            render_audit(&lines[0]),
+            render_audit(&lines[1]),
+            "the TUI feed renders both alike"
+        );
     }
 
     /// Old keys stay, ms fields join; a failed decisions call leaves one
@@ -1922,6 +1982,7 @@ args = {}
                 path: path.clone(),
                 sandbox: None,
                 trigger: None,
+                ids: Default::default(),
             }),
         );
         let out = l.handle_event(&json!({}), "s").await.unwrap();
@@ -2007,6 +2068,7 @@ args = {}
                 path: path.clone(),
                 sandbox: Some("xmarket".into()),
                 trigger: None,
+                ids: Default::default(),
             }),
         );
         let out = l
@@ -2192,6 +2254,7 @@ args = {}
                 path: path.clone(),
                 sandbox: Some("xlab".into()),
                 trigger: Some("backtest".into()),
+                ids: Default::default(),
             }),
         )
         .with_clock(clock);
@@ -2353,6 +2416,7 @@ description = "Unsure: hand it to the architect"
                 path: path.clone(),
                 sandbox: None,
                 trigger: Some("backtest".into()),
+                ids: Default::default(),
             }),
         )
         .with_clock(Arc::new(SimClock::at(T0)));
