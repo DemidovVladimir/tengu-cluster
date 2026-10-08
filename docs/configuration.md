@@ -51,6 +51,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 | `[runtime]` | `RuntimeConfig` (`runtime.rs`) | defaults | **error** |
 | `[recorder]` | `RecorderConfig` (`recorder.rs`) | off | **error** |
 | `[backtest]` | `BacktestConfig` (`backtest.rs`) | no backtests | **error** (costs and `half_spread` too) |
+| `[strategy_ranking]` | `StrategyRankingConfig` (`strategy_ranking.rs`) | no rankings (`no_strategy_ranking`) | **error** |
 | `[feeds.<n>]` | `FeedConfig` (`feeds.rs`) | no feeds | **error** |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`skill_lifecycle.rs`) | `tengu skill evolve` refuses | ignored |
 
@@ -360,7 +361,7 @@ Needs `[xmarket]` (`market.db` and run dirs live in its state dir). Doc: `docs/x
 | `seed` | 7 | a rerun prints the same numbers |
 | `gate` | none | a `[decision_loops.<name>]` — the Jev gate arm of `tengu backtest --gate` |
 | `max_candidates` | 50 000 | 1–1 000 000; a run past it stops before any arm or file |
-| `keep_runs` | 100 | 0 (keep all) or ≥ 10 run dirs under `<state dir>/backtests/`; the decision cache is never pruned, nor a run the bound generation's lineage registry cites |
+| `keep_runs` | 100 | 0 (keep all) or ≥ 10 run dirs under `<state dir>/backtests/`; the decision cache is never pruned, nor a run the bound generation's or the `[strategy_ranking]` lineage registry cites, nor a run a `<state dir>/strategy-rankings/*/latest.json` names |
 | `costs."<prefix>"` | — | `taker_fee_bps` (required), `half_spread` (`{ model = "fixed", bps }` default 0 \| `{ model = "abdi_ranaldo", window_bars, floor_bps }` \| `{ model = "ctx", fallback_bps }`), `slippage_bps` (0), `funding` (`true`); bps 0–10 000; longest id prefix wins |
 | `universes.<name>` | — | non-empty full instrument ids; `@<name>` in specs and on the CLI; names `[a-z0-9_]`, 1–48 |
 | `splits."<full id>"` | — | `[{ at = "<RFC 3339>", ratio = <new shares per old> }]`: ratio finite, > 0, ≠ 1; sorted by `at` |
@@ -371,6 +372,21 @@ Needs `[xmarket]` (`market.db` and run dirs live in its state dir). Doc: `docs/x
 | every strategy parses and validates (kind, fields, bounds; unknown keys refused) | |
 | its `@universe` exists; its calendar (`weekend_window`, `daily_window` with `days = "trading"`) is an `exchange` `[xmarket.calendars.<id>]` | |
 | every id it trades has a `costs` prefix (unless the spec sets its own `costs`) | |
+
+## Strategy ranking — `[strategy_ranking]` (xlab-w2)
+
+The ranking contracts a sandbox runs (`lineage/rankings/<id>.toml`); `tengu ranking run`, the `strategy_ranking` tool and its feeds read it. Doc: `docs/strategy-ranking-automation-2026-10-08.md`.
+
+| Field | Rules |
+|---|---|
+| `registry` | the lineage registry dir, relative to this config file (`"../../lineage"`) |
+| `contracts` | non-empty, no id twice; each `<registry>/rankings/<id>.toml` |
+
+| Load rule (`config/strategy_ranking.rs::section_errors`) | |
+|---|---|
+| the registry loads; the config is a `sandboxes/<name>/config.toml` and each contract's `sandbox` is `<name>` | |
+| `[backtest]` present; every contract strategy is a `[backtest.strategies.<name>]` | |
+| no Error finding on a contract (shape: `invalid_field`) — `seal_mismatch` excepted: an unsealed or changed contract loads, the publisher refuses it at run time | |
 
 ## Feeds — `[feeds.<n>]` (`tengu run`)
 
@@ -466,7 +482,7 @@ tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
 | no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
 | `workspace_tools` outside `WORKSPACE_TOOLS` | `[telegram] tool_approvals` / `approve_only` set (not implemented) |
-| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[feeds]`, `[decision_loops]` rules (sections above) | |
+| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[strategy_ranking]`, `[feeds]`, `[decision_loops]` rules (sections above) | |
 
 ## Reset
 

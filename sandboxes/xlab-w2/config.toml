@@ -935,8 +935,8 @@ instrument = [
     "hyperliquid:BTC", "hyperliquid:ETH", "hyperliquid:SOL", "hyperliquid:HYPE",
 ]
 
-# The daily ranking: yesterday's date (cutoff 00:00 New York), an hour after
-# the refresh. A published date is a no-op; INCOMPLETE is an error (feed down,
+# The daily ranking: today's date (cutoff 00:00 New York: data through the end
+# of yesterday), an hour after the refresh. A published date is a no-op; INCOMPLETE is an error (feed down,
 # `tengu doctor --live` names it). Stale after two days without a COMPLETE run.
 [feeds.strategy_ranking_daily]
 kind = "tool"

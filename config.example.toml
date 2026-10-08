@@ -544,6 +544,11 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # missing from [backtest.strategies] and a contract shape error; an unsealed or
 # changed contract loads (the publisher refuses it). Run-dir retention keeps
 # every run this registry cites, bound to a generation or not.
+# Callers: `tengu ranking run|show --sandbox <s> [--contract <id>]` (a cron
+# entry), the opt-in tool `strategy_ranking` (`action` run | latest) and a
+# `kind = "tool"` feed on a private agent (sandboxes/xlab-w2: history_refresh
+# 05:00, then strategy_ranking_daily 06:00 New York). Output:
+# <state dir>/strategy-rankings/<contract id>/<YYYY-MM-DD>/ + latest.{md,json}.
 # [strategy_ranking]
 # registry = "../../lineage"                # relative to this config file
 # contracts = ["rank.xlab-w2.daily.v1"]

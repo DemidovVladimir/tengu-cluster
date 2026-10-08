@@ -277,7 +277,9 @@ sources = [
   "src/adapters/inbound/cli/ranking.rs",
   "src/adapters/outbound/tools/xlab/rank.rs",
   "lineage/rankings/",
+  "lineage/capabilities/intel.strategy_ranking.toml",
   "sandboxes/xlab-w2/config.toml",
+  "tests/strategy_ranking.rs",
 ]
 
 # ── Runtime ───────────────────────────────────────────────────────────────

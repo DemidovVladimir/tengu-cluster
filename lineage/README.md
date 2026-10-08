@@ -1,4 +1,4 @@
-# lineage/ — the experiment, variant, Experience, capability and generation registry
+# lineage/ — the experiment, variant, Experience, capability, generation and ranking-contract registry
 
 One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage-2026-10-06.md`.
 
@@ -32,6 +32,10 @@ One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage
 ## Bind a sandbox to a generation
 
 `[generation] id = "W1"`, `registry = "../../lineage"` in `sandboxes/<name>/config.toml`; the generation lists `<name>` in `sandboxes`. Every load then refuses a tool or strategy kind outside its capabilities, and a FROZEN generation whose lock or `config:` / `spec:` pins changed.
+
+## Run a ranking contract
+
+`[strategy_ranking] registry = "../../lineage"`, `contracts = ["<id>"]` in `sandboxes/<name>/config.toml` (the contract's `sandbox` = `<name>`). `tengu ranking run --sandbox <name>` (or the `strategy_ranking` tool, a feed) refuses the contract until `tengu lineage seal ranking:<id>` and after any later edit (`contract_changed`): a changed policy is a new id (`….v2`). Retention keeps every run the registry cites, bound or not. Doc: `docs/strategy-ranking-automation-2026-10-08.md`.
 
 ## Verify
 
