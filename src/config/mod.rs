@@ -17,6 +17,7 @@ pub(crate) mod runtime;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
+pub(crate) mod sources;
 pub(crate) mod xmarket;
 
 use serde::{Deserialize, Serialize};
@@ -239,6 +240,12 @@ pub struct Config {
     /// Absent = no feeds.
     #[serde(default)]
     pub feeds: std::collections::BTreeMap<String, feeds::FeedConfig>,
+
+    /// `[sources]` — the source registry (O2, `config/sources.rs`): one row per
+    /// approved external source (SEC EDGAR, EU TED) and the state dir of
+    /// `sources.db`. Absent = no source layer.
+    #[serde(default)]
+    pub sources: Option<sources::SourcesConfig>,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1239,6 +1246,8 @@ impl Config {
             weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
             backtest: self.backtest.clone(),
             generation: self.generation_scope.clone(),
+            sources: self.sources.clone().map(std::sync::Arc::new),
+            sources_state_dir: self.sources.as_ref().map(|s| s.state_dir(&home)),
         }
     }
 
@@ -1389,6 +1398,9 @@ impl Config {
             }
         }
         for issue in feeds::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in sources::validation_errors(self) {
             errors.push(issue);
         }
 
@@ -1695,6 +1707,7 @@ impl Default for Config {
             recorder: recorder::RecorderConfig::default(),
             backtest: None,
             feeds: Default::default(),
+            sources: None,
             skill_lifecycle: None,
             generation: None,
             generation_scope: None,

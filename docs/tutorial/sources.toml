@@ -398,6 +398,7 @@ sources = [
 sources = [
   "src/domain/source/",
   "src/domain/canonical.rs",
+  "src/config/sources.rs",
 ]
 
 # ── Operate ───────────────────────────────────────────────────────────────

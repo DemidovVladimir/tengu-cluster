@@ -10,7 +10,7 @@
 //! | `jurisdiction`, `language`, `currency?` | same names; `currency` = the fact's amount currency when it has one |
 //! | `content_hash`, `parser_version` | sha256 of the record's content ([`SourceRecord::content_hash_now`]); `parser_version` = `<parser>/<n>` (`sec-submissions/1`) |
 //! | `license_or_terms`, `access_method` | same names + `terms_sha256` (the reviewed terms page) |
-//! | `fact` | [`Fact`], typed per source; [`Fact::Unparsed`] when the parse failed |
+//! | `fact` | [`Fact`], typed per source; [`Fact::Unparsed`] when the parse failed; [`Fact::Withdrawn`] when the item left the source |
 //! | `inference` | never in a record: [`Inference`] is its own type with no path into a [`Fact`] |
 //! | `confidence`, `contradictions[]` | computed over many records by the as-of view, never stored on one |
 //!
@@ -21,11 +21,12 @@
 //! | Content hash | sha256 of the canonical JSON of what the source said: `source_id`, `native_id`, `event_key`, `entities`, `url`, `published_ms`, `valid_from_ms`, `valid_until_ms`, `jurisdiction`, `language`, `currency`, `fact`, `origin`, `supersedes` — never the fetch / parse metadata (clocks, snapshots, parser, terms, class, trust) |
 //! | Ids | `source_id` `[a-z0-9_]+`; `native_id` no whitespace (accession, publication number, in full); `event_key` / entities `<scheme>:<kind>:<id>` (`sec:filing:<accession>`, `sec:cik:<10 digits>`, `ted:procedure:<id>`, `ted:buyer:<country>:<id>`) |
 //! | Correction | a new record with `supersedes = <old record_id>`; the old record stays |
+//! | Withdrawal | an item an earlier read had is gone or moved: a new version of the same native id with fact [`Fact::Withdrawn`] (`how`, `http_status?`, `moved_to?`, `reason`) — [`SourceRecord::withdrawal`]; the earlier versions stay |
 //! | Syndication | `origin` names the source a copy came from (`derived_from`); the as-of view counts copies once |
 //! | Money | [`NativeAmount`]: the amount as written (plain decimal text) + an ISO 4217 code; O2 never converts (`domain/soe/value.rs` does) |
 //! | Places | [`Place`]: role (buyer · performance · legal · delivery) × scheme (ISO 3166 · NUTS) — never one folded field |
 //! | Trust by class (PRD §5.1) | `independent_reporting` never `primary`; `social_inference` only `trigger_only` |
-//! | Parse | `ok` ⇒ no errors + a typed fact; `partial` ⇒ errors + a typed fact; `error` ⇒ errors + `Unparsed` |
+//! | Parse | `ok` ⇒ no errors + a typed fact (`withdrawn` included); `partial` ⇒ errors + a typed fact; `error` ⇒ errors + `Unparsed` |
 //! | Clocks | `parsed_ms ≥ observed_ms`; `valid_until_ms > valid_from_ms` |
 
 // Consumers (as-of view, store, parsers, `domain/soe/`) land with the next
@@ -206,6 +207,17 @@ pub enum PlaceRole {
     Delivery,
 }
 
+impl PlaceRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlaceRole::Buyer => "buyer",
+            PlaceRole::Performance => "performance",
+            PlaceRole::Legal => "legal",
+            PlaceRole::Delivery => "delivery",
+        }
+    }
+}
+
 /// The code system of a place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -214,6 +226,15 @@ pub enum PlaceScheme {
     Iso3166,
     /// EU NUTS: a two-letter country + up to three levels (`DE`, `DE2`, `DE21`, `DE212`).
     Nuts,
+}
+
+impl PlaceScheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlaceScheme::Iso3166 => "iso3166",
+            PlaceScheme::Nuts => "nuts",
+        }
+    }
 }
 
 /// One place of a fact (module table: places).
@@ -299,6 +320,42 @@ pub struct TedNotice {
     pub value: Option<NativeAmount>,
 }
 
+/// How an item left its source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WithdrawnHow {
+    /// No longer served (404 / 410, or dropped from the source's listing).
+    Gone,
+    /// The source points somewhere else now.
+    Moved,
+}
+
+impl WithdrawnHow {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WithdrawnHow::Gone => "gone",
+            WithdrawnHow::Moved => "moved",
+        }
+    }
+}
+
+/// A read found an item gone or moved that an earlier read had (module
+/// table: withdrawal) — its own version of the same native id, so the loss
+/// is a record, never a silent drop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Withdrawn {
+    pub how: WithdrawnHow,
+    /// The HTTP status of the read, when it had one (300–599).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    /// `moved` only: where the source points now (an http(s) URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
+    /// What the read saw. External data, never instructions.
+    pub reason: String,
+}
+
 /// What the source said, typed per source. There is no inference variant:
 /// an [`Inference`] never becomes a fact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +367,8 @@ pub enum Fact {
     Unparsed {
         reason: String,
     },
+    /// The item is gone or moved upstream ([`SourceRecord::withdrawal`]).
+    Withdrawn(Withdrawn),
 }
 
 impl Fact {
@@ -318,7 +377,13 @@ impl Fact {
             Fact::SecFiling(_) => "sec_filing",
             Fact::TedNotice(_) => "ted_notice",
             Fact::Unparsed { .. } => "unparsed",
+            Fact::Withdrawn(_) => "withdrawn",
         }
+    }
+
+    /// A fact about the item itself (not `unparsed`, not `withdrawn`).
+    pub fn is_typed(&self) -> bool {
+        matches!(self, Fact::SecFiling(_) | Fact::TedNotice(_))
     }
 
     /// The currency of the fact's amount, when it has one.
@@ -386,6 +451,26 @@ impl Fact {
             Fact::Unparsed { reason } => {
                 if reason.trim().is_empty() {
                     out.push("fact.reason: empty".into());
+                }
+            }
+            Fact::Withdrawn(w) => {
+                if w.reason.trim().is_empty() {
+                    out.push("fact.reason: empty".into());
+                }
+                match (w.how, w.moved_to.as_deref()) {
+                    (WithdrawnHow::Moved, None) => {
+                        out.push("fact.moved_to: required when `how = moved`".into())
+                    }
+                    (WithdrawnHow::Gone, Some(_)) => {
+                        out.push("fact.moved_to: only when `how = moved`".into())
+                    }
+                    (_, Some(u)) if !valid_url(u) => {
+                        out.push(format!("fact.moved_to: `{u}` is not an http(s) URL"))
+                    }
+                    _ => {}
+                }
+                if let Some(s) = w.http_status.filter(|s| !(300..=599).contains(s)) {
+                    out.push(format!("fact.http_status: {s} is not 300–599"));
                 }
             }
         }
@@ -529,6 +614,35 @@ impl SourceRecord {
         self
     }
 
+    /// The version saying this item is gone or moved (module table:
+    /// withdrawal): the same source, native id, event, entities, url and
+    /// clocks of publication; the fact [`Fact::Withdrawn`], read from
+    /// `snapshot` at `observed_ms`. What the source said before stays in its
+    /// own record. Reading the same withdrawal again gives the same
+    /// `record_id` (the read times are not content).
+    pub fn withdrawal(
+        &self,
+        withdrawn: Withdrawn,
+        snapshot: String,
+        observed_ms: i64,
+        parsed_ms: i64,
+    ) -> SourceRecord {
+        SourceRecord {
+            record_id: String::new(),
+            content_hash: String::new(),
+            currency: None,
+            observed_ms,
+            parsed_ms,
+            snapshots: vec![snapshot],
+            parse: ParseStatus::Ok,
+            parse_errors: Vec::new(),
+            fact: Fact::Withdrawn(withdrawn),
+            supersedes: None,
+            ..self.clone()
+        }
+        .with_identity()
+    }
+
     /// Every rule of the module tables; each problem `<field>: …`.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut out = Vec::new();
@@ -559,9 +673,7 @@ impl SourceRecord {
         if let Some(e) = first_duplicate(&self.entities) {
             out.push(format!("entities: `{e}` listed twice"));
         }
-        if !(valid_token(&self.url)
-            && (self.url.starts_with("https://") || self.url.starts_with("http://")))
-        {
+        if !valid_url(&self.url) {
             out.push(format!("url: `{}` is not an http(s) URL", self.url));
         }
         if self.parsed_ms < self.observed_ms {
@@ -753,6 +865,11 @@ pub fn valid_source_id(s: &str) -> bool {
 /// Non-empty, no whitespace or control character.
 fn valid_token(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// A token starting `https://` or `http://`.
+fn valid_url(s: &str) -> bool {
+    valid_token(s) && (s.starts_with("https://") || s.starts_with("http://"))
 }
 
 /// `<scheme>:<kind>:<id>` — at least three non-empty `:` parts, no whitespace.
@@ -1192,6 +1309,84 @@ mod tests {
         r.parse = ParseStatus::Ok;
         r.parse_errors.clear();
         refused(r, "parse");
+    }
+
+    /// Critic U8: an item an earlier read had and a later read does not is a
+    /// visible version of its own, never a dropped row.
+    #[test]
+    fn a_withdrawal_is_its_own_version() {
+        let r = sec_record();
+        let gone = Withdrawn {
+            how: WithdrawnHow::Gone,
+            http_status: Some(404),
+            moved_to: None,
+            reason: "index page returned 404".into(),
+        };
+        let w = r.withdrawal(
+            gone.clone(),
+            h("404 body"),
+            r.observed_ms + 86_400_000,
+            r.observed_ms + 86_400_500,
+        );
+        assert_eq!(w.validate(), Ok(()));
+        assert_eq!(
+            (w.source_id.as_str(), w.native_id.as_str()),
+            (r.source_id.as_str(), r.native_id.as_str())
+        );
+        assert_eq!(
+            (w.event_key.as_str(), w.published_ms),
+            (r.event_key.as_str(), r.published_ms)
+        );
+        assert_ne!(w.record_id, r.record_id);
+        assert_eq!(w.fact.kind(), "withdrawn");
+        assert!(!w.fact.is_typed() && r.fact.is_typed());
+        // Read again a day later: the same record.
+        let again = r.withdrawal(
+            gone,
+            h("404 body, later"),
+            w.observed_ms + 86_400_000,
+            w.parsed_ms + 86_400_000,
+        );
+        assert_eq!(again.record_id, w.record_id);
+        // The wire form, and its own refusals.
+        let text = serde_json::to_string(&w).unwrap();
+        assert!(
+            text.contains(r#""fact":{"kind":"withdrawn","how":"gone","http_status":404"#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<SourceRecord>(&text).unwrap(), w);
+        let mut v = serde_json::to_value(&w).unwrap();
+        v["fact"]["note"] = json!("x");
+        assert!(serde_json::from_value::<SourceRecord>(v).is_err());
+        let moved = |to: Option<&str>, how, status| Withdrawn {
+            how,
+            http_status: status,
+            moved_to: to.map(String::from),
+            reason: "redirected".into(),
+        };
+        let ok = r.withdrawal(
+            moved(
+                Some("https://www.sec.gov/new/place"),
+                WithdrawnHow::Moved,
+                Some(301),
+            ),
+            h("301 body"),
+            r.observed_ms + 1,
+            r.observed_ms + 2,
+        );
+        assert_eq!(ok.validate(), Ok(()));
+        for bad in [
+            moved(None, WithdrawnHow::Moved, Some(301)),
+            moved(Some("https://x.example/y"), WithdrawnHow::Gone, Some(404)),
+            moved(Some("ftp://x.example/y"), WithdrawnHow::Moved, None),
+            moved(Some("https://x.example/y"), WithdrawnHow::Moved, Some(200)),
+        ] {
+            let w = r.withdrawal(bad.clone(), h("b"), r.observed_ms + 1, r.observed_ms + 2);
+            assert!(
+                problems(&w).iter().any(|p| p.starts_with("fact.")),
+                "{bad:?} accepted"
+            );
+        }
     }
 
     #[test]

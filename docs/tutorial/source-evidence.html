@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Source evidence · Tengu</title>
-<meta name="description" content="Source records: one row per thing an approved source published, with its full provenance, kept lossless — ids, hashes and amounts as written; inferences never become facts.">
+<meta name="description" content="Source records: one row per thing an approved source published, with its full provenance, read as of any instant without lookahead; inferences never become facts and source text stays fenced.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -28,24 +28,127 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Sources</div>
   <h1>Source evidence</h1>
-  <p class="lede">A fact read from an approved source (SEC EDGAR, EU TED) becomes one source record: the fact plus where, when and under which terms it was read. Nothing is shortened or rounded, and a model's reading is never stored as a fact.</p>
+  <p class="lede">A fact read from an approved source (SEC EDGAR, EU TED) becomes one source record with its full provenance. The as-of view answers "what did the sources say at t?" without ever reading what came later, and keeps source text fenced off as data.</p>
   <ul class="facts">
-    <li>schema <b>source_record/1</b></li>
-    <li><b>6</b> source classes</li>
-    <li><b>3</b> trust levels</li>
-    <li>hashes <b>64</b> hex, whole</li>
+    <li>record <b>source_record/1</b></li>
+    <li>packet <b>source_asof/1</b></li>
+    <li><b>2</b> clocks: captured · knowable</li>
+    <li>registry rows ship <b>disabled</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
-    <li><span class="chip data">data</span> records</li>
-    <li><span class="chip guard"><span class="k">守</span> guard</span> checks</li>
+    <li><span class="chip data">data</span> records, packet</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> rules and checks</li>
+    <li><span class="chip heart"><span class="k">心</span> heart</span> the LLM reading it</li>
   </ul>
 </header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">The picture</span>
+    <h2 id="s-flow">From records to an evidence packet at t</h2>
+    <p>Pure code in <code>src/domain/source/</code>. The store, the fetchers, the CLI and the tool come with the next O2 steps.</p>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 430" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Source records with their clocks pass a visibility cut at t, then per item the newest version, corrections, per-class rules and event grading; the packet adds freshness from coverage and purges; its text fences every free text before the LLM reads it.</title>
+        <path class="e" id="p-rec-cut" d="M190 89 C215 89 215 89 238 89" data-at="1-2"/>
+        <path class="e" id="p-cut-ver" d="M410 89 C430 89 430 89 448 89" data-at="3"/>
+        <path class="e" id="p-ver-fix" d="M620 89 C640 89 640 89 658 89" data-at="4"/>
+        <path class="e" id="p-fix-rule" d="M745 120 C745 160 745 170 745 188" data-at="5"/>
+        <path class="e" id="p-rule-ev" d="M658 219 C640 219 640 219 620 219" data-at="6"/>
+        <path class="e" id="p-ev-pk" d="M534 250 C534 280 480 300 448 318" data-at="7"/>
+        <path class="e" id="p-cov-pk" d="M190 349 L278 349" data-at="7"/>
+        <path class="e" id="p-pk-llm" d="M450 349 L658 349" data-at="8"/>
+
+        <g class="n data" data-at="1">
+          <rect x="20" y="50" width="170" height="78" rx="10"/>
+          <text x="105" y="76" text-anchor="middle" class="t-title">Source records</text>
+          <text x="105" y="96" text-anchor="middle" class="t-small">published · read</text>
+          <text x="105" y="113" text-anchor="middle" class="t-small">· parsed</text>
+        </g>
+        <g class="n guard" data-at="2">
+          <rect x="240" y="50" width="170" height="78" rx="10"/>
+          <text x="325" y="74" text-anchor="middle" class="t-kanji k">守</text>
+          <text x="325" y="94" text-anchor="middle" class="t-title">Visible at t?</text>
+          <text x="325" y="112" text-anchor="middle" class="t-small">captured · knowable</text>
+        </g>
+        <g class="n data" data-at="3">
+          <rect x="450" y="50" width="170" height="78" rx="10"/>
+          <text x="535" y="80" text-anchor="middle" class="t-title">Current version</text>
+          <text x="535" y="100" text-anchor="middle" class="t-small">newest read per item</text>
+        </g>
+        <g class="n guard" data-at="4">
+          <rect x="660" y="50" width="180" height="78" rx="10"/>
+          <text x="750" y="80" text-anchor="middle" class="t-title">Corrections</text>
+          <text x="750" y="100" text-anchor="middle" class="t-small">supersedes, same event</text>
+        </g>
+        <g class="n guard" data-at="5">
+          <rect x="660" y="190" width="180" height="62" rx="8"/>
+          <text x="750" y="215" text-anchor="middle" class="t-title">Class rules</text>
+          <text x="750" y="234" text-anchor="middle" class="t-small">PRD §5.1 → issues</text>
+        </g>
+        <g class="n data" data-at="6">
+          <rect x="450" y="190" width="170" height="62" rx="8"/>
+          <text x="535" y="215" text-anchor="middle" class="t-title">Events graded</text>
+          <text x="535" y="234" text-anchor="middle" class="t-small">copies count once</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="20" y="320" width="170" height="58" rx="8"/>
+          <text x="105" y="344" text-anchor="middle" class="t-title">Coverage · purges</text>
+          <text x="105" y="363" text-anchor="middle" class="t-small">only those at or before t</text>
+        </g>
+        <g class="n data" data-at="7-8">
+          <rect x="280" y="320" width="170" height="58" rx="8"/>
+          <text x="365" y="344" text-anchor="middle" class="t-title t-mono">source_asof/1</text>
+          <text x="365" y="363" text-anchor="middle" class="t-small">the evidence packet</text>
+        </g>
+        <g class="n heart" data-at="8">
+          <rect x="660" y="320" width="180" height="58" rx="8"/>
+          <text x="750" y="344" text-anchor="middle" class="t-title">LLM reads text</text>
+          <text x="750" y="363" text-anchor="middle" class="t-small">free text fenced</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">record_id = source:native id:content hash</text></g>
+        <g class="pop badge" data-at="2"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">visible exactly at t: in · at t + 1 ms: out</text></g>
+        <g class="pop badge" data-at="3"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">older versions: superseded by revision</text></g>
+        <g class="pop badge" data-at="4"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">the corrected record stays; it is never rewritten</text></g>
+        <g class="pop badge" data-at="5"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">a broken rule flags the record, never drops it</text></g>
+        <g class="pop badge" data-at="6"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">confirmed · corroborated · single · trigger only</text></g>
+        <g class="pop badge" data-at="7"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">gaps, failed fetches and purges are shown</text></g>
+        <g class="pop badge" data-at="8"><rect x="240" y="16" width="380" height="22" rx="11"/><text x="430" y="31" text-anchor="middle">source text is data, not instructions</text></g>
+
+        <circle class="tok" r="6" data-path="p-rec-cut" data-at="1"/>
+        <circle class="tok guard" r="6" data-path="p-rec-cut" data-at="2" data-reverse/>
+        <circle class="tok" r="6" data-path="p-cut-ver" data-at="3"/>
+        <circle class="tok guard" r="6" data-path="p-ver-fix" data-at="4"/>
+        <circle class="tok guard" r="6" data-path="p-fix-rule" data-at="5"/>
+        <circle class="tok" r="6" data-path="p-rule-ev" data-at="6"/>
+        <circle class="tok" r="6" data-path="p-ev-pk" data-at="7"/>
+        <circle class="tok" r="6" data-path="p-cov-pk" data-at="7" data-delay="300"/>
+        <circle class="tok heart" r="6" data-path="p-pk-llm" data-at="8"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>Each record carries three clocks: when the source published it, when we read the raw bytes, and when the parser turned them into a record.</li>
+        <li>A record counts at t only once it is visible. Captured mode waits for publish, read and parse. Knowable mode back-dates what an immutable source could already show at publication.</li>
+        <li>Per item (source + native id) the newest read wins; on the same bytes, the higher parser version wins. Older versions are listed as superseded by <code>revision</code>.</li>
+        <li>A record naming another in <code>supersedes</code> replaces it, but only inside the same event and only when both are visible at t. Anything else becomes an issue.</li>
+        <li>PRD §5.1 class rules run on every current record: a law or regulator fact needs a real jurisdiction, a registry listing a recent read. A miss is an issue.</li>
+        <li>Per event the view counts independent origins. A copy counts as its origin, so ten wire copies of one filing are still one source.</li>
+        <li>The packet adds per-source freshness: the last complete fetch, its age, gaps, failed fetches, parse failures and purges, all as of t.</li>
+        <li><code>render_text</code> prints typed fields as lines and every free text (titles, buyer names, reasons) inside one fence, after one system note.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
 
 <section class="sec" aria-labelledby="s-record">
   <div class="sec-head">
     <span class="kicker">One record</span>
     <h2 id="s-record">The fact and its provenance</h2>
-    <p>Every field the opportunity PRD asks of a factual observation (§5.2) is on the record. Confidence and contradictions need many records, so they are computed later, never stored on one.</p>
+    <p>Every field the opportunity PRD asks of a factual observation (§5.2) is on the record. Confidence and contradictions need many records, so the as-of view computes them; no record stores them.</p>
   </div>
   <div class="grid two">
     <div class="card data">
@@ -58,7 +161,7 @@
         <dt>published_ms</dt><dd>when the source made it public</dd>
         <dt>observed_ms</dt><dd>fetch time of the newest raw snapshot it rests on</dd>
         <dt>parsed_ms</dt><dd>when the parser produced it; never before <code>observed_ms</code></dd>
-        <dt>valid_from_ms · valid_until_ms</dt><dd>when the fact applies; the end is optional and after the start</dd>
+        <dt>valid_from_ms · valid_until_ms</dt><dd>when the fact applies (a law's effective date, a tender's deadline); the end is optional and after the start</dd>
       </dl>
     </div>
     <div class="card guard">
@@ -77,35 +180,120 @@
   </div>
 </section>
 
-<section class="sec" aria-labelledby="s-class">
+<section class="sec" aria-labelledby="s-clocks">
   <div class="sec-head">
-    <span class="kicker">PRD §5.1</span>
-    <h2 id="s-class">Classes and trust</h2>
-    <p>A trust level says how far one record counts: <code>primary</code> establishes a fact, <code>corroborating</code> counts toward two independent confirmations, <code>trigger_only</code> only starts a search.</p>
+    <span class="kicker">Two clocks</span>
+    <h2 id="s-clocks">When a record becomes visible</h2>
+    <p>The registry row's <code>revision</code> tells the view whether a source can change an item after publishing it.</p>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Class</th><th>May be</th></tr></thead>
+      <thead><tr><th>Record</th><th>Captured: what we had read by t</th><th>Knowable: what could be known at t</th></tr></thead>
       <tbody>
-        <tr><td><code>law_regulator</code> · <code>company_primary</code> · <code>registry_marketplace</code> · <code>customer_demand</code></td><td>any trust level</td></tr>
-        <tr><td><code>independent_reporting</code></td><td><code>corroborating</code> or <code>trigger_only</code>, never <code>primary</code></td></tr>
-        <tr><td><code>social_inference</code></td><td><code>trigger_only</code> only</td></tr>
+        <tr><td>first read of an <code>immutable</code> item (SEC accession, TED notice), or a reparse of its bytes</td><td><code>max(published, read, parsed)</code></td><td><code>published</code></td></tr>
+        <tr><td>new bytes under the same id (an edit), any <code>in_place</code> item (a page, a repository)</td><td><code>max(published, read, parsed)</code></td><td><code>max(published, read)</code></td></tr>
+        <tr><td>a withdrawal (the item is gone or moved)</td><td><code>max(published, read, parsed)</code></td><td><code>max(published, read)</code>, never back-dated</td></tr>
       </tbody>
     </table>
   </div>
+  <p class="note">Captured mode ignores everything after t. Knowable mode ignores everything published after t and every edit read after t, but a reparse after t changes it on purpose: it re-reads bytes that already existed.</p>
 </section>
 
-<section class="sec" aria-labelledby="s-parse">
+<section class="sec" aria-labelledby="s-states">
   <div class="sec-head">
-    <span class="kicker">Parse status</span>
-    <h2 id="s-parse">A failed parse still leaves a record</h2>
-    <p>The fact is typed per source: <code>sec_filing</code>, <code>ted_notice</code>, or <code>unparsed</code> with a reason. Errors are listed per field, never dropped.</p>
+    <span class="kicker">States at t</span>
+    <h2 id="s-states">Where each current record stands</h2>
   </div>
   <ul class="states">
-    <li><span class="chip ok">ok</span><span><b>ok</b>A typed fact, no errors.</span></li>
-    <li><span class="chip warn">part</span><span><b>partial</b>A typed fact plus at least one field error.</span></li>
-    <li><span class="chip bad">err</span><span><b>error</b>An <code>unparsed</code> fact plus at least one field error.</span></li>
+    <li><span class="chip ok">fact</span><span><b>in force</b>A typed fact whose validity window holds t.</span></li>
+    <li><span class="chip warn">pend</span><span><b>pending</b>Visible, but in force only from <code>valid_from_ms</code>: a rule not yet effective.</span></li>
+    <li><span class="chip warn">exp</span><span><b>expired</b>Past <code>valid_until_ms</code>, such as a tender after its deadline.</span></li>
+    <li><span class="chip bad">gone</span><span><b>withdrawn</b>The newest read found the item gone (404) or moved (301). Its last typed version is named.</span></li>
+    <li><span class="chip bad">err</span><span><b>unparsed</b>The newest read did not parse. The errors and the last typed version are shown.</span></li>
   </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-class">
+  <div class="sec-head">
+    <span class="kicker">PRD §5.1</span>
+    <h2 id="s-class">Classes, trust and their rules</h2>
+    <p>A trust level says how far one record counts: <code>primary</code> establishes a fact, <code>corroborating</code> counts toward two independent origins, <code>trigger_only</code> only starts a search.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Class</th><th>May be</th><th>Rule in the view</th></tr></thead>
+      <tbody>
+        <tr><td><code>law_regulator</code></td><td>any trust level</td><td>jurisdiction an ISO 3166 code or <code>EU</code>, else issue <code>jurisdiction_missing</code>; not in force before its effective date (<code>pending</code>)</td></tr>
+        <tr><td><code>company_primary</code></td><td>any trust level</td><td>publication and read times kept on every record</td></tr>
+        <tr><td><code>registry_marketplace</code></td><td>any trust level</td><td>a read within the row's <code>listing_max_age_days</code>, else issue <code>listing_stale</code></td></tr>
+        <tr><td><code>customer_demand</code></td><td>any trust level</td><td>one post is not demand: <code>single_signal</code> below 2 distinct events, <code>aggregate</code> from 2</td></tr>
+        <tr><td><code>independent_reporting</code></td><td><code>corroborating</code> or <code>trigger_only</code>, never <code>primary</code></td><td>a trigger until primary evidence is found</td></tr>
+        <tr><td><code>social_inference</code></td><td><code>trigger_only</code> only</td><td>never sufficient on its own</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid two">
+    <div class="card data">
+      <h3>Event confidence</h3>
+      <dl class="kv">
+        <dt>confirmed</dt><dd>at least one counted <code>primary</code> record</dd>
+        <dt>corroborated</dt><dd>two or more independent origins, none primary</dd>
+        <dt>single</dt><dd>one origin (ten copies of one filing are one origin)</dd>
+        <dt>trigger_only</dt><dd>only trigger-level or issue-flagged records</dd>
+        <dt>none</dt><dd>no typed record: only withdrawn or unparsed</dd>
+      </dl>
+    </div>
+    <div class="card guard">
+      <h3>Conflicts</h3>
+      <dl class="kv">
+        <dt>compared</dt><dd>current facts of one event, same kind and stage</dd>
+        <dt>SEC</dt><dd><code>cik</code>, <code>form</code>, <code>items</code></dd>
+        <dt>TED</dt><dd><code>value</code> as a number (<code>150000</code> = <code>150000.00</code>), <code>deadline_ms</code>, <code>cpv</code> — only between notices of the same type and the same lot set</dd>
+        <dt>never</dt><dd>across distinct lots, or a notice against its award</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-registry">
+  <div class="sec-head">
+    <span class="kicker">The registry</span>
+    <h2 id="s-registry"><code>[sources]</code> and the soe sandbox</h2>
+    <p>One row per approved source, as data in the sandbox config. <code>sandboxes/soe</code> ships both rows switched off and holds one read-only agent.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Load rule</th><th>Fails when</th></tr></thead>
+      <tbody>
+        <tr><td>reviewed terms before any fetch</td><td>an <code>enabled</code> row lacks <code>license</code>, <code>terms_url</code>, <code>terms_sha256</code>, <code>terms_reviewed_at</code> or either retention period</td></tr>
+        <tr><td>inside the egress ceiling</td><td>a row's host is outside <code>[egress] allow_hosts</code> or inside <code>deny_hosts</code></td></tr>
+        <tr><td>a budget per source</td><td><code>rate_limit</code> names no <code>[rate_limits.&lt;name&gt;]</code></td></tr>
+        <tr><td>PRD §5.1</td><td>the class forbids the trust; a law / regulator row without a code jurisdiction; a registry row without <code>listing_max_age_days</code></td></tr>
+        <tr><td>one shape per kind</td><td><code>sec_edgar</code>: auth <code>user_agent_env</code>, kept <code>forms</code>, <code>sec:cik:</code> entities; <code>ted_search</code>: a <code>query</code> with <code>{from}</code> and <code>{to}</code></td></tr>
+        <tr><td>the store out of reach</td><td>the state dir sits inside an <code>fs_roots</code> entry or an agent workspace</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid two">
+    <div class="card data">
+      <h3><code>sec_edgar</code></h3>
+      <dl class="kv">
+        <dt>class · trust</dt><dd><code>company_primary</code> · <code>primary</code></dd>
+        <dt>revision</dt><dd><code>immutable</code>: an amendment is its own accession</dd>
+        <dt>hosts</dt><dd><code>www.sec.gov</code>, <code>data.sec.gov</code></dd>
+        <dt>budget</dt><dd><code>[rate_limits.sec]</code> 300 / min, burst 5</dd>
+      </dl>
+    </div>
+    <div class="card data">
+      <h3><code>ted_search</code></h3>
+      <dl class="kv">
+        <dt>class · trust</dt><dd><code>law_regulator</code> · <code>primary</code>, jurisdiction <code>EU</code></dd>
+        <dt>revision</dt><dd><code>immutable</code>: a corrigendum is its own notice</dd>
+        <dt>hosts</dt><dd><code>api.ted.europa.eu</code></dd>
+        <dt>budget</dt><dd><code>[rate_limits.ted]</code> 60 / min, burst 2 (assumed)</dd>
+      </dl>
+    </div>
+  </div>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -114,13 +302,33 @@
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>Unknown keys are refused.</b> At every level: the record, its fact, amounts, places, origin, parse errors.</span></li>
-    <li><span><b>An inference is never a fact.</b> <code>Inference</code> (text, model, prompt sha256, generation, as-of) is its own type; no record field and no fact kind takes it.</span></li>
-    <li><span><b>Money is text as written.</b> <code>NativeAmount</code> keeps <code>150000.00</code> as <code>150000.00</code> with an ISO 4217 code; a JSON number, <code>1e5</code> or <code>1,000</code> is refused. Nothing is converted here.</span></li>
-    <li><span><b>Places keep their role.</b> Buyer, performance, legal or delivery, each in ISO 3166 or NUTS: never one folded field.</span></li>
-    <li><span><b>Identity is checked.</b> <code>validate</code> recomputes the content hash and the record id; a tampered fact or id fails.</span></li>
+    <li><span><b>No lookahead.</b> Split-world checks over three worlds: delete, move to t + 1 ms or flood everything after t, add fetches, reparses or purges after t; the packet at t stays byte-identical (knowable mode: all but the reparse).</span></li>
+    <li><span><b>Exactly at t is in.</b> Every record is visible from its own instant on and not 1 ms before.</span></li>
+    <li><span><b>Corrections append.</b> A correction adds a record; the one it corrects stays byte-identical and is listed as superseded.</span></li>
+    <li><span><b>Loss is visible.</b> A withdrawn item, an unparsed read, a coverage gap, a failed fetch and a purge each show in the packet.</span></li>
+    <li><span><b>Source text stays data.</b> Every free text is inside one fence; nested fence tags and copies of the note are removed until none is left.</span></li>
+    <li><span><b>An inference is never a fact.</b> <code>Inference</code> has no record field, no fact kind and no packet row; it sits in its own list and counts toward nothing.</span></li>
+    <li><span><b>Unknown keys are refused.</b> Records, facts, amounts, places, packets and every <code>[sources]</code> row.</span></li>
+    <li><span><b>Money is text as written.</b> <code>NativeAmount</code> keeps <code>150000.00</code> with an ISO 4217 code; nothing is converted here.</span></li>
     <li><span><b>Ids stay whole.</b> Accessions, CIKs with their leading zeros, procedure ids and every hash round-trip unchanged.</span></li>
   </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Run the checks</h2>
+    <p>No CLI yet: <code>tengu sources</code> and the <code>source_evidence</code> tool land with the next O2 steps.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::checks</span>
+<span class="ln o">test domain::source::checks::knowable_mode_never_reads_in_place_edits_early ... ok</span>
+<span class="ln o">test domain::source::checks::coverage_and_purges_after_t_change_nothing_at_t ... ok</span>
+<span class="ln o">test domain::source::checks::corrections_after_t_append_and_never_rewrite ... ok</span>
+<span class="ln o">test domain::source::checks::packets_at_t_ignore_everything_after_t ... ok</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu config::sources</span>
+<span class="ln o"># <span class="hl">soe_sandbox_is_a_closed_world</span>, enabled rows need reviewed terms, hosts inside the egress ceiling, …</span></pre>
+  </div>
 </section>
 
 <section class="sec" aria-labelledby="s-where">
@@ -133,8 +341,14 @@
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/domain/source/mod.rs</code></td><td>the source layer's module table and re-exports</td></tr>
-        <tr><td><code>src/domain/source/record.rs</code></td><td><code>SourceRecord</code>, <code>Fact</code>, <code>NativeAmount</code>, <code>Place</code>, <code>Origin</code>, <code>Inference</code>, <code>SourceClass</code>, <code>Trust</code>; <code>validate</code>, <code>with_identity</code></td></tr>
-        <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 behind the content hash</td></tr>
+        <tr><td><code>src/domain/source/record.rs</code></td><td><code>SourceRecord</code>, <code>Fact</code> (with <code>withdrawn</code>), <code>NativeAmount</code>, <code>Place</code>, <code>Origin</code>, <code>Inference</code>, <code>SourceClass</code>, <code>Trust</code>; <code>validate</code>, <code>with_identity</code>, <code>withdrawal</code></td></tr>
+        <tr><td><code>src/domain/source/rules.rs</code></td><td>PRD §5.1 class rules as issues, <code>Revision</code>, <code>SourcePolicy</code>, demand status</td></tr>
+        <tr><td><code>src/domain/source/asof.rs</code></td><td>the two clocks, current versions, corrections, states, event confidence, conflicts</td></tr>
+        <tr><td><code>src/domain/source/packet.rs</code></td><td><code>EvidencePacket</code> <code>source_asof/1</code>, freshness, citations, the fence</td></tr>
+        <tr><td><code>src/domain/source/checks.rs</code> · <code>testkit.rs</code></td><td>tests only: the split-world worlds and checks</td></tr>
+        <tr><td><code>src/config/sources.rs</code></td><td><code>[sources]</code>: the registry rows and their load rules</td></tr>
+        <tr><td><code>sandboxes/soe/config.toml</code></td><td>the unbound, closed-world SOE sandbox; rows disabled</td></tr>
+        <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 behind the content hash and the byte-identity checks</td></tr>
         <tr><td><code>src/domain/sec.rs</code></td><td>SEC EDGAR decoders a filing record is built from (see <a href="history.html">Market history</a>)</td></tr>
       </tbody>
     </table>
