@@ -18,5 +18,6 @@ pub(crate) mod shell;
 pub(crate) mod skill_source;
 pub(crate) mod solana_signer;
 pub(crate) mod solana_writes;
+pub(crate) mod source_store;
 pub(crate) mod tool;
 pub(crate) mod tool_activity;

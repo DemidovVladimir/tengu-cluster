@@ -1,0 +1,4135 @@
+{
+  "schema": "source_eval/1",
+  "about": "Source-level evaluation set (O2 exit): 12 dated cases replayed from this file alone — src/domain/source/eval.rs. Records come from the captures under tests/fixtures/sec and tests/fixtures/ted (public filings and notices; no contact field) or from synthetic testkit sources (`synthetic`). Regenerate with TENGU_REGEN_SOURCE_EVAL=1.",
+  "cases": [
+    {
+      "id": "01_fresh_filing",
+      "date": "2026-07-30T21:00:00Z",
+      "about": "A filing read 5 min after its acceptance is one fact, confirmed by its primary source.",
+      "inputs": "sec/CIK0000320193.json + sec/0000320193-26-000018-index.htm",
+      "synthetic": false,
+      "at_ms": 1785445200000,
+      "mode": "captured",
+      "query": {
+        "entity": "sec:cik:0000320193"
+      },
+      "policies": {
+        "sec_edgar": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "source_id": "sec_edgar",
+          "source_class": "company_primary",
+          "trust": "primary",
+          "native_id": "0000320193-26-000018",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm",
+          "published_ms": 1785443428000,
+          "observed_ms": 1785443700000,
+          "parsed_ms": 1785443701000,
+          "valid_from_ms": 1785443428000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "snapshots": [
+            "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+            "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "sec_edgar",
+          "query_key": "cik:0000320193",
+          "fetched_ms": 1785443700000,
+          "from_ms": 1782864000000,
+          "to_ms": 1785443700000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "0000320193-26-000018 read=2026-07-30T20:35:00Z"
+        ],
+        "events": [
+          "sec:filing:0000320193-26-000018 confirmed origins=sec_edgar"
+        ],
+        "freshness": [
+          "sec_edgar failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "sec_edgar cik:0000320193 last_fetch=2026-07-30T20:35:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1785445200000,
+        "citations": [
+          {
+            "access_method": "http_get",
+            "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "snapshots": [
+              "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+              "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "sec:filing:0000320193-26-000018",
+            "origins": [
+              "sec_edgar"
+            ],
+            "primary": 1,
+            "records": [
+              "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "sec:cik:0000320193"
+            ],
+            "event_key": "sec:filing:0000320193-26-000018",
+            "fact": {
+              "cik": "0000320193",
+              "form": "8-K",
+              "items": [
+                "2.02",
+                "9.01"
+              ],
+              "kind": "sec_filing",
+              "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "0000320193-26-000018",
+            "observed_ms": 1785443700000,
+            "parse": "ok",
+            "published_ms": 1785443428000,
+            "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "source_class": "company_primary",
+            "source_id": "sec_edgar",
+            "trust": "primary",
+            "valid_from_ms": 1785443428000,
+            "visible_ms": 1785443701000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 1500000,
+                "covered_from_ms": 1782864000000,
+                "covered_to_ms": 1785443700000,
+                "last_fetch_ms": 1785443700000,
+                "query_key": "cik:0000320193"
+              }
+            ],
+            "source_id": "sec_edgar"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "entity": "sec:cik:0000320193"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "02_amendment_after_t",
+      "date": "2026-08-15T00:00:00Z",
+      "about": "An 8-K/A accepted after t is not in the knowable view at t: only the 8-K it amends.",
+      "inputs": "sec/CIK0000320193.json + the index pages of 0000320193-26-000018 and 0001140361-26-035325",
+      "synthetic": false,
+      "at_ms": 1786752000000,
+      "mode": "knowable",
+      "query": {
+        "entity": "sec:cik:0000320193"
+      },
+      "policies": {
+        "sec_edgar": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "source_id": "sec_edgar",
+          "source_class": "company_primary",
+          "trust": "primary",
+          "native_id": "0000320193-26-000018",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm",
+          "published_ms": 1785443428000,
+          "observed_ms": 1785443700000,
+          "parsed_ms": 1785443701000,
+          "valid_from_ms": 1785443428000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "snapshots": [
+            "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+            "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "sec_edgar:0001140361-26-035325:2054aeaf55c8a6f1f5b26ccaee1d7864e2c88f2dea03cc316bb2da4125dfc737",
+          "source_id": "sec_edgar",
+          "source_class": "company_primary",
+          "trust": "primary",
+          "native_id": "0001140361-26-035325",
+          "event_key": "sec:filing:0001140361-26-035325",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://www.sec.gov/Archives/edgar/data/320193/000114036126035325/0001140361-26-035325-index.htm",
+          "published_ms": 1788294635000,
+          "observed_ms": 1788295200000,
+          "parsed_ms": 1788295201000,
+          "valid_from_ms": 1788294635000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "2054aeaf55c8a6f1f5b26ccaee1d7864e2c88f2dea03cc316bb2da4125dfc737",
+          "snapshots": [
+            "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+            "3d5cd809db238e3004c9623cc3645c549ece17ea83b1cd6e17d62886ca0e3ad5"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K/A",
+            "items": [
+              "5.02"
+            ],
+            "title": "items 5.02 Officers or directors"
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "sec_edgar",
+          "query_key": "cik:0000320193",
+          "fetched_ms": 1785443700000,
+          "from_ms": 1782864000000,
+          "to_ms": 1785443700000,
+          "complete": true
+        },
+        {
+          "source_id": "sec_edgar",
+          "query_key": "cik:0000320193",
+          "fetched_ms": 1788295200000,
+          "from_ms": 1785443700000,
+          "to_ms": 1788295200000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "0000320193-26-000018 read=2026-07-30T20:35:00Z"
+        ],
+        "events": [
+          "sec:filing:0000320193-26-000018 confirmed origins=sec_edgar"
+        ],
+        "freshness": [
+          "sec_edgar failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "sec_edgar cik:0000320193 last_fetch=2026-07-30T20:35:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1786752000000,
+        "citations": [
+          {
+            "access_method": "http_get",
+            "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "snapshots": [
+              "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+              "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "sec:filing:0000320193-26-000018",
+            "origins": [
+              "sec_edgar"
+            ],
+            "primary": 1,
+            "records": [
+              "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "sec:cik:0000320193"
+            ],
+            "event_key": "sec:filing:0000320193-26-000018",
+            "fact": {
+              "cik": "0000320193",
+              "form": "8-K",
+              "items": [
+                "2.02",
+                "9.01"
+              ],
+              "kind": "sec_filing",
+              "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "0000320193-26-000018",
+            "observed_ms": 1785443700000,
+            "parse": "ok",
+            "published_ms": 1785443428000,
+            "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "source_class": "company_primary",
+            "source_id": "sec_edgar",
+            "trust": "primary",
+            "valid_from_ms": 1785443428000,
+            "visible_ms": 1785443428000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 1308300000,
+                "covered_from_ms": 1782864000000,
+                "covered_to_ms": 1785443700000,
+                "last_fetch_ms": 1785443700000,
+                "query_key": "cik:0000320193"
+              }
+            ],
+            "source_id": "sec_edgar"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "knowable",
+        "pending": [],
+        "query": {
+          "entity": "sec:cik:0000320193"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "03_ted_change_notice_after_t",
+      "date": "2026-09-30T00:00:00Z",
+      "about": "A change notice published after t (both notices read later) is not knowable at t: the original stands, nothing is superseded.",
+      "inputs": "ted/search_change_notice.json",
+      "synthetic": false,
+      "at_ms": 1790726400000,
+      "mode": "knowable",
+      "query": {
+        "source": "ted_search"
+      },
+      "policies": {
+        "ted_search": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "657981-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/657981-2026",
+          "published_ms": 1790287200000,
+          "observed_ms": 1790928000000,
+          "parsed_ms": 1790928001000,
+          "valid_from_ms": 1790287200000,
+          "valid_until_ms": 1793264400000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+          "snapshots": [
+            "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793264400000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674231-2026:597c697334b0a8ace69fb449d04c17e9ea3aaec2b412f8b8813d6cf615830b0a",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674231-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790928000000,
+          "parsed_ms": 1790928001000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793782800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "597c697334b0a8ace69fb449d04c17e9ea3aaec2b412f8b8813d6cf615830b0a",
+          "snapshots": [
+            "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793782800000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          },
+          "supersedes": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6"
+        }
+      ],
+      "coverage": [],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "657981-2026 read=2026-10-02T08:00:00Z"
+        ],
+        "events": [
+          "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 confirmed origins=ted_search"
+        ],
+        "freshness": [
+          "ted_search failed=0 parse_failures=0 partial_parses=0 purges=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1790726400000,
+        "citations": [
+          {
+            "access_method": "http_post",
+            "content_hash": "8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "snapshots": [
+              "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/657981-2026"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "ted:buyer:CZE:60457856"
+            ],
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "fact": {
+              "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+              "cpv": [
+                "48730000",
+                "72268000",
+                "72261000",
+                "72253200",
+                "72800000"
+              ],
+              "deadline_ms": 1793264400000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "CZE",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZE",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZ010",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+              "value": {
+                "amount": "5300000",
+                "currency": "CZK"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "657981-2026",
+            "observed_ms": 1790928000000,
+            "parse": "ok",
+            "published_ms": 1790287200000,
+            "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790287200000,
+            "valid_until_ms": 1793264400000,
+            "visible_ms": 1790287200000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [],
+            "source_id": "ted_search"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "knowable",
+        "pending": [],
+        "query": {
+          "source": "ted_search"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "04_duplicate_notice_two_pages",
+      "date": "2026-10-02T12:00:00Z",
+      "about": "A notice served on two pages of one day's search is one record: listed once, cited with its first read.",
+      "inputs": "ted/search_page_1.json; page 2 re-serving 674231-2026 built from it",
+      "synthetic": false,
+      "at_ms": 1790942400000,
+      "mode": "captured",
+      "query": {
+        "source": "ted_search"
+      },
+      "policies": {
+        "ted_search": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674231-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793782800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793782800000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674236-2026",
+          "event_key": "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+          "entities": [
+            "ted:buyer:POL:5840203593"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674236-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793610000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "PLN",
+          "content_hash": "0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Politechnika Gdańska",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "POL"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "POL"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "PL633"
+              }
+            ],
+            "cpv": [
+              "48822000",
+              "48820000",
+              "30213000",
+              "30213300",
+              "30231300",
+              "30237200"
+            ],
+            "deadline_ms": 1793610000000,
+            "value": {
+              "amount": "401698.9",
+              "currency": "PLN"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674237-2026",
+          "event_key": "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+          "entities": [
+            "ted:buyer:SVN:5268923000"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674237-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "content_hash": "b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "veat",
+            "procedure_id": "372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+            "lot_ids": [
+              "LOT-0000"
+            ],
+            "buyer_name": "MINISTRSTVO ZA OBRAMBO",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "SVN"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "SVN"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "SI041"
+              }
+            ],
+            "cpv": [
+              "72320000"
+            ]
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674254-2026",
+          "event_key": "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785",
+          "entities": [
+            "ted:buyer:ITA:05359681003"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674254-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793800800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "EUR",
+          "content_hash": "96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "2a05304d-00df-4fc5-a5c2-29ef49686785",
+            "lot_ids": [
+              "LOT-0001",
+              "LOT-0002",
+              "LOT-0003",
+              "LOT-0004"
+            ],
+            "buyer_name": "CONSIP SPA",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "ITA"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "ITA"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "ITI43"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "30200000"
+            ],
+            "deadline_ms": 1793800800000,
+            "value": {
+              "amount": "456379200",
+              "currency": "EUR"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674231-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920860000,
+          "parsed_ms": 1790920861000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793782800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "snapshots": [
+            "a68ebb0616e07f255d20ada3d31202e421a22ba816f8d649cef614fc656bcb27"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793782800000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790920800000,
+          "from_ms": 1790805600000,
+          "to_ms": 1790892000000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "674231-2026 read=2026-10-02T06:00:00Z",
+          "674236-2026 read=2026-10-02T06:00:00Z",
+          "674237-2026 read=2026-10-02T06:00:00Z",
+          "674254-2026 read=2026-10-02T06:00:00Z"
+        ],
+        "events": [
+          "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785 confirmed origins=ted_search",
+          "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9 confirmed origins=ted_search",
+          "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114 confirmed origins=ted_search",
+          "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 confirmed origins=ted_search"
+        ],
+        "freshness": [
+          "ted_search failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "ted_search query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041 last_fetch=2026-10-02T06:00:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1790942400000,
+        "citations": [
+          {
+            "access_method": "http_post",
+            "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674236-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674237-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674254-2026"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "ted:buyer:CZE:60457856"
+            ],
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "fact": {
+              "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+              "cpv": [
+                "48730000",
+                "72268000",
+                "72261000",
+                "72253200",
+                "72800000"
+              ],
+              "deadline_ms": 1793782800000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "CZE",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZE",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZ010",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+              "value": {
+                "amount": "5300000",
+                "currency": "CZK"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674231-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793782800000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:POL:5840203593"
+            ],
+            "event_key": "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+            "fact": {
+              "buyer_name": "Politechnika Gdańska",
+              "cpv": [
+                "48822000",
+                "48820000",
+                "30213000",
+                "30213300",
+                "30231300",
+                "30237200"
+              ],
+              "deadline_ms": 1793610000000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "POL",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "POL",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "PL633",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+              "value": {
+                "amount": "401698.9",
+                "currency": "PLN"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674236-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793610000000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:SVN:5268923000"
+            ],
+            "event_key": "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+            "fact": {
+              "buyer_name": "MINISTRSTVO ZA OBRAMBO",
+              "cpv": [
+                "72320000"
+              ],
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0000"
+              ],
+              "notice_type": "veat",
+              "places": [
+                {
+                  "code": "SVN",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "SVN",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "SI041",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9"
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674237-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:ITA:05359681003"
+            ],
+            "event_key": "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785",
+            "fact": {
+              "buyer_name": "CONSIP SPA",
+              "cpv": [
+                "48730000",
+                "30200000"
+              ],
+              "deadline_ms": 1793800800000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001",
+                "LOT-0002",
+                "LOT-0003",
+                "LOT-0004"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "ITA",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "ITA",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "ITI43",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "2a05304d-00df-4fc5-a5c2-29ef49686785",
+              "value": {
+                "amount": "456379200",
+                "currency": "EUR"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674254-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793800800000,
+            "visible_ms": 1790920801000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 21600000,
+                "covered_from_ms": 1790805600000,
+                "covered_to_ms": 1790892000000,
+                "last_fetch_ms": 1790920800000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041"
+              }
+            ],
+            "source_id": "ted_search"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "source": "ted_search"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "05_syndicated_copy",
+      "date": "2026-07-31T00:00:00Z",
+      "about": "An outlet's report of a filing and two wire copies of it are one origin: single, never corroborated.",
+      "inputs": "synthetic (testkit trade_daily, news_wire) shaped as the 8-K 0000320193-26-000018",
+      "synthetic": true,
+      "at_ms": 1785456000000,
+      "mode": "captured",
+      "query": {
+        "event_key": "sec:filing:0000320193-26-000018"
+      },
+      "policies": {
+        "news_wire": {
+          "revision": "in_place"
+        },
+        "trade_daily": {
+          "revision": "in_place"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "trade_daily:daily-2026-07-30-0001:575a7f9856360e3a305e0865a84b834aadb96e94571738b57eaa73e49f5905ab",
+          "source_id": "trade_daily",
+          "source_class": "independent_reporting",
+          "trust": "corroborating",
+          "native_id": "daily-2026-07-30-0001",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://example.org/trade_daily/daily-2026-07-30-0001",
+          "published_ms": 1785444600000,
+          "observed_ms": 1785444900000,
+          "parsed_ms": 1785444901000,
+          "valid_from_ms": 1785444600000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "575a7f9856360e3a305e0865a84b834aadb96e94571738b57eaa73e49f5905ab",
+          "snapshots": [
+            "c5852a5c5c814a43cdca6263396e6cb54564b6586ff7fb656020f650f67dd172"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "news_wire:wire-2026-07-30-0001:a65cc5789cccc5199d233c121d27635b44458495bec12b1e20cbffffeff665d1",
+          "source_id": "news_wire",
+          "source_class": "independent_reporting",
+          "trust": "corroborating",
+          "native_id": "wire-2026-07-30-0001",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://example.org/news_wire/wire-2026-07-30-0001",
+          "published_ms": 1785445200000,
+          "observed_ms": 1785445500000,
+          "parsed_ms": 1785445500000,
+          "valid_from_ms": 1785445200000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "a65cc5789cccc5199d233c121d27635b44458495bec12b1e20cbffffeff665d1",
+          "snapshots": [
+            "79c78de0b6b75ce301340223c21c8f431568f7d96310e9215eafc8f0223b854b"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          },
+          "origin": {
+            "source_id": "trade_daily",
+            "native_id": "daily-2026-07-30-0001"
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "news_wire:wire-2026-07-30-0002:87140f393f0631f143f355a4fde04acdd6a4272a5b8da0497f74730a5f5aff67",
+          "source_id": "news_wire",
+          "source_class": "independent_reporting",
+          "trust": "corroborating",
+          "native_id": "wire-2026-07-30-0002",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://example.org/news_wire/wire-2026-07-30-0002",
+          "published_ms": 1785445800000,
+          "observed_ms": 1785446100000,
+          "parsed_ms": 1785446100000,
+          "valid_from_ms": 1785445800000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "87140f393f0631f143f355a4fde04acdd6a4272a5b8da0497f74730a5f5aff67",
+          "snapshots": [
+            "6096357fe74d32a2be1afcf3a02aefeb176845de79386270a655e93cf4a5a6d6"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          },
+          "origin": {
+            "source_id": "trade_daily",
+            "native_id": "daily-2026-07-30-0001"
+          }
+        }
+      ],
+      "coverage": [],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "daily-2026-07-30-0001 read=2026-07-30T20:55:00Z",
+          "wire-2026-07-30-0001 read=2026-07-30T21:05:00Z",
+          "wire-2026-07-30-0002 read=2026-07-30T21:15:00Z"
+        ],
+        "events": [
+          "sec:filing:0000320193-26-000018 single origins=trade_daily"
+        ],
+        "freshness": [
+          "news_wire failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "trade_daily failed=0 parse_failures=0 partial_parses=0 purges=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1785456000000,
+        "citations": [
+          {
+            "access_method": "http_get",
+            "content_hash": "a65cc5789cccc5199d233c121d27635b44458495bec12b1e20cbffffeff665d1",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "news_wire:wire-2026-07-30-0001:a65cc5789cccc5199d233c121d27635b44458495bec12b1e20cbffffeff665d1",
+            "snapshots": [
+              "79c78de0b6b75ce301340223c21c8f431568f7d96310e9215eafc8f0223b854b"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://example.org/news_wire/wire-2026-07-30-0001"
+          },
+          {
+            "access_method": "http_get",
+            "content_hash": "87140f393f0631f143f355a4fde04acdd6a4272a5b8da0497f74730a5f5aff67",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "news_wire:wire-2026-07-30-0002:87140f393f0631f143f355a4fde04acdd6a4272a5b8da0497f74730a5f5aff67",
+            "snapshots": [
+              "6096357fe74d32a2be1afcf3a02aefeb176845de79386270a655e93cf4a5a6d6"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://example.org/news_wire/wire-2026-07-30-0002"
+          },
+          {
+            "access_method": "http_get",
+            "content_hash": "575a7f9856360e3a305e0865a84b834aadb96e94571738b57eaa73e49f5905ab",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "trade_daily:daily-2026-07-30-0001:575a7f9856360e3a305e0865a84b834aadb96e94571738b57eaa73e49f5905ab",
+            "snapshots": [
+              "c5852a5c5c814a43cdca6263396e6cb54564b6586ff7fb656020f650f67dd172"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://example.org/trade_daily/daily-2026-07-30-0001"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "single",
+            "event_key": "sec:filing:0000320193-26-000018",
+            "origins": [
+              "trade_daily"
+            ],
+            "primary": 0,
+            "records": [
+              "news_wire:wire-2026-07-30-0001:a65cc5789cccc5199d233c121d27635b44458495bec12b1e20cbffffeff665d1",
+              "news_wire:wire-2026-07-30-0002:87140f393f0631f143f355a4fde04acdd6a4272a5b8da0497f74730a5f5aff67",
+              "trade_daily:daily-2026-07-30-0001:575a7f9856360e3a305e0865a84b834aadb96e94571738b57eaa73e49f5905ab"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "sec:cik:0000320193"
+            ],
+            "event_key": "sec:filing:0000320193-26-000018",
+            "fact": {
+              "cik": "0000320193",
+              "form": "8-K",
+              "items": [
+                "2.02",
+                "9.01"
+              ],
+              "kind": "sec_filing",
+              "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "wire-2026-07-30-0001",
+            "observed_ms": 1785445500000,
+            "origin": {
+              "native_id": "daily-2026-07-30-0001",
+              "source_id": "trade_daily"
+            },
+            "parse": "ok",
+            "published_ms": 1785445200000,
+            "record_id": "news_wire:wire-2026-07-30-0001:a65cc5789cccc5199d233c121d27635b44458495bec12b1e20cbffffeff665d1",
+            "source_class": "independent_reporting",
+            "source_id": "news_wire",
+            "trust": "corroborating",
+            "valid_from_ms": 1785445200000,
+            "visible_ms": 1785445500000
+          },
+          {
+            "entities": [
+              "sec:cik:0000320193"
+            ],
+            "event_key": "sec:filing:0000320193-26-000018",
+            "fact": {
+              "cik": "0000320193",
+              "form": "8-K",
+              "items": [
+                "2.02",
+                "9.01"
+              ],
+              "kind": "sec_filing",
+              "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "wire-2026-07-30-0002",
+            "observed_ms": 1785446100000,
+            "origin": {
+              "native_id": "daily-2026-07-30-0001",
+              "source_id": "trade_daily"
+            },
+            "parse": "ok",
+            "published_ms": 1785445800000,
+            "record_id": "news_wire:wire-2026-07-30-0002:87140f393f0631f143f355a4fde04acdd6a4272a5b8da0497f74730a5f5aff67",
+            "source_class": "independent_reporting",
+            "source_id": "news_wire",
+            "trust": "corroborating",
+            "valid_from_ms": 1785445800000,
+            "visible_ms": 1785446100000
+          },
+          {
+            "entities": [
+              "sec:cik:0000320193"
+            ],
+            "event_key": "sec:filing:0000320193-26-000018",
+            "fact": {
+              "cik": "0000320193",
+              "form": "8-K",
+              "items": [
+                "2.02",
+                "9.01"
+              ],
+              "kind": "sec_filing",
+              "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "daily-2026-07-30-0001",
+            "observed_ms": 1785444900000,
+            "parse": "ok",
+            "published_ms": 1785444600000,
+            "record_id": "trade_daily:daily-2026-07-30-0001:575a7f9856360e3a305e0865a84b834aadb96e94571738b57eaa73e49f5905ab",
+            "source_class": "independent_reporting",
+            "source_id": "trade_daily",
+            "trust": "corroborating",
+            "valid_from_ms": 1785444600000,
+            "visible_ms": 1785444901000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [],
+            "source_id": "news_wire"
+          },
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [],
+            "source_id": "trade_daily"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "event_key": "sec:filing:0000320193-26-000018"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "06_stale_coverage",
+      "date": "2026-10-06T00:00:00Z",
+      "about": "The newest complete fetch is days old, one publication day was never covered and two later fetches failed: the facts stand, the packet is partial.",
+      "inputs": "ted/search_page_1.json; coverage rows synthetic",
+      "synthetic": false,
+      "at_ms": 1791244800000,
+      "mode": "captured",
+      "query": {
+        "source": "ted_search"
+      },
+      "policies": {
+        "ted_search": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674231-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793782800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793782800000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674236-2026",
+          "event_key": "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+          "entities": [
+            "ted:buyer:POL:5840203593"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674236-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793610000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "PLN",
+          "content_hash": "0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Politechnika Gdańska",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "POL"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "POL"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "PL633"
+              }
+            ],
+            "cpv": [
+              "48822000",
+              "48820000",
+              "30213000",
+              "30213300",
+              "30231300",
+              "30237200"
+            ],
+            "deadline_ms": 1793610000000,
+            "value": {
+              "amount": "401698.9",
+              "currency": "PLN"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674237-2026",
+          "event_key": "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+          "entities": [
+            "ted:buyer:SVN:5268923000"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674237-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "content_hash": "b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "veat",
+            "procedure_id": "372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+            "lot_ids": [
+              "LOT-0000"
+            ],
+            "buyer_name": "MINISTRSTVO ZA OBRAMBO",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "SVN"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "SVN"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "SI041"
+              }
+            ],
+            "cpv": [
+              "72320000"
+            ]
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674254-2026",
+          "event_key": "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785",
+          "entities": [
+            "ted:buyer:ITA:05359681003"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674254-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793800800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "EUR",
+          "content_hash": "96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "2a05304d-00df-4fc5-a5c2-29ef49686785",
+            "lot_ids": [
+              "LOT-0001",
+              "LOT-0002",
+              "LOT-0003",
+              "LOT-0004"
+            ],
+            "buyer_name": "CONSIP SPA",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "ITA"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "ITA"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "ITI43"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "30200000"
+            ],
+            "deadline_ms": 1793800800000,
+            "value": {
+              "amount": "456379200",
+              "currency": "EUR"
+            }
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790748000000,
+          "from_ms": 1790632800000,
+          "to_ms": 1790719200000,
+          "complete": true
+        },
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790920800000,
+          "from_ms": 1790805600000,
+          "to_ms": 1790892000000,
+          "complete": true
+        },
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1791007200000,
+          "from_ms": 1790892000000,
+          "to_ms": 1790978400000,
+          "complete": false,
+          "error_class": "transient"
+        },
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1791093600000,
+          "from_ms": 1790978400000,
+          "to_ms": 1791064800000,
+          "complete": false,
+          "error_class": "rate_limited"
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "partial",
+        "facts": [
+          "674231-2026 read=2026-10-02T06:00:00Z",
+          "674236-2026 read=2026-10-02T06:00:00Z",
+          "674237-2026 read=2026-10-02T06:00:00Z",
+          "674254-2026 read=2026-10-02T06:00:00Z"
+        ],
+        "events": [
+          "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785 confirmed origins=ted_search",
+          "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9 confirmed origins=ted_search",
+          "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114 confirmed origins=ted_search",
+          "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 confirmed origins=ted_search"
+        ],
+        "freshness": [
+          "ted_search failed=2 parse_failures=0 partial_parses=0 purges=0",
+          "ted_search query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041 last_fetch=2026-10-02T06:00:00Z gaps=1"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1791244800000,
+        "citations": [
+          {
+            "access_method": "http_post",
+            "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674236-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674237-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674254-2026"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "ted:buyer:CZE:60457856"
+            ],
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "fact": {
+              "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+              "cpv": [
+                "48730000",
+                "72268000",
+                "72261000",
+                "72253200",
+                "72800000"
+              ],
+              "deadline_ms": 1793782800000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "CZE",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZE",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZ010",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+              "value": {
+                "amount": "5300000",
+                "currency": "CZK"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674231-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793782800000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:POL:5840203593"
+            ],
+            "event_key": "ted:procedure:40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+            "fact": {
+              "buyer_name": "Politechnika Gdańska",
+              "cpv": [
+                "48822000",
+                "48820000",
+                "30213000",
+                "30213300",
+                "30231300",
+                "30237200"
+              ],
+              "deadline_ms": 1793610000000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "POL",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "POL",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "PL633",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+              "value": {
+                "amount": "401698.9",
+                "currency": "PLN"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674236-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674236-2026:0eb3f8dc3b33ceabf10905d1b25e0a37c44ffc5f04acb418d98052c7ddf3e6b0",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793610000000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:SVN:5268923000"
+            ],
+            "event_key": "ted:procedure:372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+            "fact": {
+              "buyer_name": "MINISTRSTVO ZA OBRAMBO",
+              "cpv": [
+                "72320000"
+              ],
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0000"
+              ],
+              "notice_type": "veat",
+              "places": [
+                {
+                  "code": "SVN",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "SVN",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "SI041",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9"
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674237-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674237-2026:b55a55760ebdb2bc473880e93686eff92618a868a9ab9b5d08b72e183f7c8e1e",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:ITA:05359681003"
+            ],
+            "event_key": "ted:procedure:2a05304d-00df-4fc5-a5c2-29ef49686785",
+            "fact": {
+              "buyer_name": "CONSIP SPA",
+              "cpv": [
+                "48730000",
+                "30200000"
+              ],
+              "deadline_ms": 1793800800000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001",
+                "LOT-0002",
+                "LOT-0003",
+                "LOT-0004"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "ITA",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "ITA",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "ITI43",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "2a05304d-00df-4fc5-a5c2-29ef49686785",
+              "value": {
+                "amount": "456379200",
+                "currency": "EUR"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674254-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674254-2026:96a6cd447054cd8f07190485087a6dadcc76f2d21582dfc09e91997d80705495",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793800800000,
+            "visible_ms": 1790920801000
+          }
+        ],
+        "freshness": [
+          {
+            "failed": [
+              {
+                "complete": false,
+                "error_class": "transient",
+                "fetched_ms": 1791007200000,
+                "from_ms": 1790892000000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+                "source_id": "ted_search",
+                "to_ms": 1790978400000
+              },
+              {
+                "complete": false,
+                "error_class": "rate_limited",
+                "fetched_ms": 1791093600000,
+                "from_ms": 1790978400000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+                "source_id": "ted_search",
+                "to_ms": 1791064800000
+              }
+            ],
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 324000000,
+                "covered_from_ms": 1790632800000,
+                "covered_to_ms": 1790892000000,
+                "gaps": [
+                  {
+                    "from_ms": 1790719200000,
+                    "to_ms": 1790805600000
+                  }
+                ],
+                "last_fetch_ms": 1790920800000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041"
+              }
+            ],
+            "source_id": "ted_search"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "source": "ted_search"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "07_parse_failure",
+      "date": "2026-10-02T12:00:00Z",
+      "about": "A notice without a type is unparsed, one with an unreadable date is partial (its read time as publication), one without a publication number has no record: visible, never dropped silently.",
+      "inputs": "ted/search_bad_notice.json (hand-edited capture)",
+      "synthetic": false,
+      "at_ms": 1790942400000,
+      "mode": "captured",
+      "query": {
+        "source": "ted_search"
+      },
+      "policies": {
+        "ted_search": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674677-2026:b591aa00cccb0ef75052951460cb47e25b3dbea7d00227606fca6ead647a8a9d",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674677-2026",
+          "event_key": "ted:notice:674677-2026",
+          "entities": [
+            "ted:buyer:FIN:0952029-9"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674677-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "EUR",
+          "content_hash": "b591aa00cccb0ef75052951460cb47e25b3dbea7d00227606fca6ead647a8a9d",
+          "snapshots": [
+            "139d2deb3e2f6c58bc458906a530ed93a7a27259fc14012eee1ce75536a6e952"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "pmc",
+            "lot_ids": [
+              "LOT-0000"
+            ],
+            "buyer_name": "Puolustusvoimien logistiikkalaitos",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "FIN"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "FIN"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "FI19B"
+              }
+            ],
+            "cpv": [
+              "72000000"
+            ],
+            "value": {
+              "amount": "50000000",
+              "currency": "EUR"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674429-2026:ff10cff36a8dc9344b396700e3e6c7b3c048a81b9c095dc74596917351909125",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674429-2026",
+          "event_key": "ted:procedure:7df1ac9e-fad5-4c0c-9e16-f71db26503a5",
+          "entities": [
+            "ted:buyer:IRL:123456IE"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674429-2026",
+          "published_ms": 1790920800000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790920800000,
+          "valid_until_ms": 1793880000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "content_hash": "ff10cff36a8dc9344b396700e3e6c7b3c048a81b9c095dc74596917351909125",
+          "snapshots": [
+            "139d2deb3e2f6c58bc458906a530ed93a7a27259fc14012eee1ce75536a6e952"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "partial",
+          "parse_errors": [
+            {
+              "field": "publication-date",
+              "message": "`01.10.2026` is not YYYY-MM-DD with an offset: the read time stands in"
+            },
+            {
+              "field": "estimated-value-proc",
+              "message": "a JSON number, not the amount as written"
+            }
+          ],
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "7df1ac9e-fad5-4c0c-9e16-f71db26503a5",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Croí na nÓg",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "IRL"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "IRL"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "IE052"
+              }
+            ],
+            "cpv": [
+              "79311400",
+              "72221000",
+              "79300000",
+              "71241000"
+            ],
+            "deadline_ms": 1793880000000
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674295-2026:c751020c7c068d15b8c36918334cad3f09efc5de40c85aa617e4247a234d470f",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674295-2026",
+          "event_key": "ted:procedure:78d76088-524a-4903-a15c-b1c3408f47a9",
+          "entities": [
+            "ted:buyer:FIN:2705965-1",
+            "ted:buyer:FIN:3251568-2"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674295-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "content_hash": "c751020c7c068d15b8c36918334cad3f09efc5de40c85aa617e4247a234d470f",
+          "snapshots": [
+            "139d2deb3e2f6c58bc458906a530ed93a7a27259fc14012eee1ce75536a6e952"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "error",
+          "parse_errors": [
+            {
+              "field": "notice-type",
+              "message": "missing"
+            }
+          ],
+          "fact": {
+            "kind": "unparsed",
+            "reason": "no readable notice-type: the notice is not typed"
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790920800000,
+          "from_ms": 1790805600000,
+          "to_ms": 1790892000000,
+          "complete": false,
+          "error_class": "decode"
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "partial",
+        "facts": [
+          "674429-2026 read=2026-10-02T06:00:00Z",
+          "674677-2026 read=2026-10-02T06:00:00Z"
+        ],
+        "unparsed": [
+          "674295-2026 read=2026-10-02T06:00:00Z"
+        ],
+        "events": [
+          "ted:notice:674677-2026 confirmed origins=ted_search",
+          "ted:procedure:78d76088-524a-4903-a15c-b1c3408f47a9 none origins=-",
+          "ted:procedure:7df1ac9e-fad5-4c0c-9e16-f71db26503a5 confirmed origins=ted_search"
+        ],
+        "freshness": [
+          "ted_search failed=1 parse_failures=1 partial_parses=1 purges=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1790942400000,
+        "citations": [
+          {
+            "access_method": "http_post",
+            "content_hash": "c751020c7c068d15b8c36918334cad3f09efc5de40c85aa617e4247a234d470f",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674295-2026:c751020c7c068d15b8c36918334cad3f09efc5de40c85aa617e4247a234d470f",
+            "snapshots": [
+              "139d2deb3e2f6c58bc458906a530ed93a7a27259fc14012eee1ce75536a6e952"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674295-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "ff10cff36a8dc9344b396700e3e6c7b3c048a81b9c095dc74596917351909125",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674429-2026:ff10cff36a8dc9344b396700e3e6c7b3c048a81b9c095dc74596917351909125",
+            "snapshots": [
+              "139d2deb3e2f6c58bc458906a530ed93a7a27259fc14012eee1ce75536a6e952"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674429-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "b591aa00cccb0ef75052951460cb47e25b3dbea7d00227606fca6ead647a8a9d",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674677-2026:b591aa00cccb0ef75052951460cb47e25b3dbea7d00227606fca6ead647a8a9d",
+            "snapshots": [
+              "139d2deb3e2f6c58bc458906a530ed93a7a27259fc14012eee1ce75536a6e952"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674677-2026"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:notice:674677-2026",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674677-2026:b591aa00cccb0ef75052951460cb47e25b3dbea7d00227606fca6ead647a8a9d"
+            ]
+          },
+          {
+            "confidence": "none",
+            "event_key": "ted:procedure:78d76088-524a-4903-a15c-b1c3408f47a9",
+            "origins": [],
+            "primary": 0,
+            "records": [
+              "ted_search:674295-2026:c751020c7c068d15b8c36918334cad3f09efc5de40c85aa617e4247a234d470f"
+            ]
+          },
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:7df1ac9e-fad5-4c0c-9e16-f71db26503a5",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:674429-2026:ff10cff36a8dc9344b396700e3e6c7b3c048a81b9c095dc74596917351909125"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "ted:buyer:IRL:123456IE"
+            ],
+            "event_key": "ted:procedure:7df1ac9e-fad5-4c0c-9e16-f71db26503a5",
+            "fact": {
+              "buyer_name": "Croí na nÓg",
+              "cpv": [
+                "79311400",
+                "72221000",
+                "79300000",
+                "71241000"
+              ],
+              "deadline_ms": 1793880000000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "IRL",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "IRL",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "IE052",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "7df1ac9e-fad5-4c0c-9e16-f71db26503a5"
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674429-2026",
+            "observed_ms": 1790920800000,
+            "parse": "partial",
+            "parse_errors": [
+              {
+                "field": "publication-date",
+                "message": "`01.10.2026` is not YYYY-MM-DD with an offset: the read time stands in"
+              },
+              {
+                "field": "estimated-value-proc",
+                "message": "a JSON number, not the amount as written"
+              }
+            ],
+            "published_ms": 1790920800000,
+            "record_id": "ted_search:674429-2026:ff10cff36a8dc9344b396700e3e6c7b3c048a81b9c095dc74596917351909125",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790920800000,
+            "valid_until_ms": 1793880000000,
+            "visible_ms": 1790920801000
+          },
+          {
+            "entities": [
+              "ted:buyer:FIN:0952029-9"
+            ],
+            "event_key": "ted:notice:674677-2026",
+            "fact": {
+              "buyer_name": "Puolustusvoimien logistiikkalaitos",
+              "cpv": [
+                "72000000"
+              ],
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0000"
+              ],
+              "notice_type": "pmc",
+              "places": [
+                {
+                  "code": "FIN",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "FIN",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "FI19B",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "value": {
+                "amount": "50000000",
+                "currency": "EUR"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674677-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674677-2026:b591aa00cccb0ef75052951460cb47e25b3dbea7d00227606fca6ead647a8a9d",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "visible_ms": 1790920801000
+          }
+        ],
+        "freshness": [
+          {
+            "failed": [
+              {
+                "complete": false,
+                "error_class": "decode",
+                "fetched_ms": 1790920800000,
+                "from_ms": 1790805600000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+                "source_id": "ted_search",
+                "to_ms": 1790892000000
+              }
+            ],
+            "parse_failures": 1,
+            "partial_parses": 1,
+            "queries": [],
+            "source_id": "ted_search"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "source": "ted_search"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [
+          {
+            "event_key": "ted:procedure:78d76088-524a-4903-a15c-b1c3408f47a9",
+            "native_id": "674295-2026",
+            "observed_ms": 1790920800000,
+            "parse_errors": [
+              {
+                "field": "notice-type",
+                "message": "missing"
+              }
+            ],
+            "reason": "no readable notice-type: the notice is not typed",
+            "record_id": "ted_search:674295-2026:c751020c7c068d15b8c36918334cad3f09efc5de40c85aa617e4247a234d470f",
+            "source_id": "ted_search",
+            "visible_ms": 1790920801000
+          }
+        ],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "08_purged_raw",
+      "date": "2026-08-02T00:00:00Z",
+      "about": "A raw-retention purge deletes bodies, never the record: the fact keeps its snapshot hashes and the tombstone shows.",
+      "inputs": "sec/CIK0000320193.json + sec/0000320193-26-000018-index.htm; the tombstone synthetic",
+      "synthetic": false,
+      "at_ms": 1785628800000,
+      "mode": "captured",
+      "query": {
+        "entity": "sec:cik:0000320193"
+      },
+      "policies": {
+        "sec_edgar": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "source_id": "sec_edgar",
+          "source_class": "company_primary",
+          "trust": "primary",
+          "native_id": "0000320193-26-000018",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm",
+          "published_ms": 1785443428000,
+          "observed_ms": 1785443700000,
+          "parsed_ms": 1785443701000,
+          "valid_from_ms": 1785443428000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "snapshots": [
+            "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+            "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "sec_edgar",
+          "query_key": "cik:0000320193",
+          "fetched_ms": 1785443700000,
+          "from_ms": 1782864000000,
+          "to_ms": 1785443700000,
+          "complete": true
+        }
+      ],
+      "purges": [
+        {
+          "source_id": "sec_edgar",
+          "purged_ms": 1785542400000,
+          "raw_before_ms": 1785456000000,
+          "snapshots": 2,
+          "records": 0,
+          "reason": "retention: raw_retention_days = 1, record_retention_days = 0 (forever) (tengu sources purge)"
+        }
+      ],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "0000320193-26-000018 read=2026-07-30T20:35:00Z"
+        ],
+        "events": [
+          "sec:filing:0000320193-26-000018 confirmed origins=sec_edgar"
+        ],
+        "freshness": [
+          "sec_edgar failed=0 parse_failures=0 partial_parses=0 purges=1",
+          "sec_edgar cik:0000320193 last_fetch=2026-07-30T20:35:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1785628800000,
+        "citations": [
+          {
+            "access_method": "http_get",
+            "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "snapshots": [
+              "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+              "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "sec:filing:0000320193-26-000018",
+            "origins": [
+              "sec_edgar"
+            ],
+            "primary": 1,
+            "records": [
+              "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "sec:cik:0000320193"
+            ],
+            "event_key": "sec:filing:0000320193-26-000018",
+            "fact": {
+              "cik": "0000320193",
+              "form": "8-K",
+              "items": [
+                "2.02",
+                "9.01"
+              ],
+              "kind": "sec_filing",
+              "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "0000320193-26-000018",
+            "observed_ms": 1785443700000,
+            "parse": "ok",
+            "published_ms": 1785443428000,
+            "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+            "source_class": "company_primary",
+            "source_id": "sec_edgar",
+            "trust": "primary",
+            "valid_from_ms": 1785443428000,
+            "visible_ms": 1785443701000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "purges": [
+              {
+                "purged_ms": 1785542400000,
+                "raw_before_ms": 1785456000000,
+                "reason": "retention: raw_retention_days = 1, record_retention_days = 0 (forever) (tengu sources purge)",
+                "records": 0,
+                "snapshots": 2,
+                "source_id": "sec_edgar"
+              }
+            ],
+            "queries": [
+              {
+                "age_ms": 185100000,
+                "covered_from_ms": 1782864000000,
+                "covered_to_ms": 1785443700000,
+                "last_fetch_ms": 1785443700000,
+                "query_key": "cik:0000320193"
+              }
+            ],
+            "source_id": "sec_edgar"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "entity": "sec:cik:0000320193"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "09_expired_tender",
+      "date": "2026-10-30T00:00:00Z",
+      "about": "A tender past its deadline (2026-10-29T09:00Z) is expired, not in force; the event still happened.",
+      "inputs": "ted/search_change_notice.json (657981-2026 only)",
+      "synthetic": false,
+      "at_ms": 1793318400000,
+      "mode": "captured",
+      "query": {
+        "source": "ted_search"
+      },
+      "policies": {
+        "ted_search": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "657981-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/657981-2026",
+          "published_ms": 1790287200000,
+          "observed_ms": 1790316000000,
+          "parsed_ms": 1790316001000,
+          "valid_from_ms": 1790287200000,
+          "valid_until_ms": 1793264400000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+          "snapshots": [
+            "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793264400000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790316000000,
+          "from_ms": 1790200800000,
+          "to_ms": 1790287200000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "expired": [
+          "657981-2026 read=2026-09-25T06:00:00Z"
+        ],
+        "events": [
+          "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 confirmed origins=ted_search"
+        ],
+        "freshness": [
+          "ted_search failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "ted_search query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041 last_fetch=2026-09-25T06:00:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1793318400000,
+        "citations": [
+          {
+            "access_method": "http_post",
+            "content_hash": "8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "snapshots": [
+              "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/657981-2026"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 1,
+            "records": [
+              "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6"
+            ]
+          }
+        ],
+        "expired": [
+          {
+            "entities": [
+              "ted:buyer:CZE:60457856"
+            ],
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "fact": {
+              "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+              "cpv": [
+                "48730000",
+                "72268000",
+                "72261000",
+                "72253200",
+                "72800000"
+              ],
+              "deadline_ms": 1793264400000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "CZE",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZE",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZ010",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+              "value": {
+                "amount": "5300000",
+                "currency": "CZK"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "657981-2026",
+            "observed_ms": 1790316000000,
+            "parse": "ok",
+            "published_ms": 1790287200000,
+            "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790287200000,
+            "valid_until_ms": 1793264400000,
+            "visible_ms": 1790316001000
+          }
+        ],
+        "facts": [],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 3002400000,
+                "covered_from_ms": 1790200800000,
+                "covered_to_ms": 1790287200000,
+                "last_fetch_ms": 1790316000000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041"
+              }
+            ],
+            "source_id": "ted_search"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "source": "ted_search"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "10_conflicting_values",
+      "date": "2026-10-03T00:00:00Z",
+      "about": "A change notice read before the notice it changes was stored carries no supersedes link: both stand and their deadlines conflict — shown, never resolved by guess.",
+      "inputs": "ted/search_page_1.json (674231-2026) + ted/search_change_notice.json (657981-2026, read later)",
+      "synthetic": false,
+      "at_ms": 1790985600000,
+      "mode": "captured",
+      "query": {
+        "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1"
+      },
+      "policies": {
+        "ted_search": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "674231-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026",
+          "published_ms": 1790892000000,
+          "observed_ms": 1790920800000,
+          "parsed_ms": 1790920801000,
+          "valid_from_ms": 1790892000000,
+          "valid_until_ms": 1793782800000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+          "snapshots": [
+            "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793782800000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+          "source_id": "ted_search",
+          "source_class": "law_regulator",
+          "trust": "primary",
+          "native_id": "657981-2026",
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+          "entities": [
+            "ted:buyer:CZE:60457856"
+          ],
+          "url": "https://ted.europa.eu/en/notice/-/detail/657981-2026",
+          "published_ms": 1790287200000,
+          "observed_ms": 1790928000000,
+          "parsed_ms": 1790928001000,
+          "valid_from_ms": 1790287200000,
+          "valid_until_ms": 1793264400000,
+          "jurisdiction": "EU",
+          "language": "en",
+          "currency": "CZK",
+          "content_hash": "8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+          "snapshots": [
+            "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+          ],
+          "parser_version": "ted-search/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_post",
+          "parse": "ok",
+          "fact": {
+            "kind": "ted_notice",
+            "notice_type": "cn-standard",
+            "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "lot_ids": [
+              "LOT-0001"
+            ],
+            "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+            "places": [
+              {
+                "role": "buyer",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "iso3166",
+                "code": "CZE"
+              },
+              {
+                "role": "performance",
+                "scheme": "nuts",
+                "code": "CZ010"
+              }
+            ],
+            "cpv": [
+              "48730000",
+              "72268000",
+              "72261000",
+              "72253200",
+              "72800000"
+            ],
+            "deadline_ms": 1793264400000,
+            "value": {
+              "amount": "5300000",
+              "currency": "CZK"
+            }
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790920800000,
+          "from_ms": 1790805600000,
+          "to_ms": 1790892000000,
+          "complete": true
+        },
+        {
+          "source_id": "ted_search",
+          "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041",
+          "fetched_ms": 1790928000000,
+          "from_ms": 1790200800000,
+          "to_ms": 1790287200000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "partial",
+        "facts": [
+          "657981-2026 read=2026-10-02T08:00:00Z",
+          "674231-2026 read=2026-10-02T06:00:00Z"
+        ],
+        "events": [
+          "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 confirmed origins=ted_search"
+        ],
+        "conflicts": [
+          "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 deadline_ms lots=LOT-0001"
+        ],
+        "freshness": [
+          "ted_search failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "ted_search query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041 last_fetch=2026-10-02T08:00:00Z gaps=1"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1790985600000,
+        "citations": [
+          {
+            "access_method": "http_post",
+            "content_hash": "8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "snapshots": [
+              "1b7e35f83d428c2063ca71b2c103e013a1a53f17386a14cb64712c4203d8e86c"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/657981-2026"
+          },
+          {
+            "access_method": "http_post",
+            "content_hash": "50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "license_or_terms": "synthetic eval terms",
+            "parser_version": "ted-search/1",
+            "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "snapshots": [
+              "6934935248a6d41acfd82e6ad9522a723ff5c07e74f0b5e0683b1ed237c603c5"
+            ],
+            "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+            "url": "https://ted.europa.eu/en/notice/-/detail/674231-2026"
+          }
+        ],
+        "conflicts": [
+          {
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "field": "deadline_ms",
+            "lots": [
+              "LOT-0001"
+            ],
+            "record_ids": [
+              "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+              "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2"
+            ]
+          }
+        ],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "origins": [
+              "ted_search"
+            ],
+            "primary": 2,
+            "records": [
+              "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+              "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "ted:buyer:CZE:60457856"
+            ],
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "fact": {
+              "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+              "cpv": [
+                "48730000",
+                "72268000",
+                "72261000",
+                "72253200",
+                "72800000"
+              ],
+              "deadline_ms": 1793264400000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "CZE",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZE",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZ010",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+              "value": {
+                "amount": "5300000",
+                "currency": "CZK"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "657981-2026",
+            "observed_ms": 1790928000000,
+            "parse": "ok",
+            "published_ms": 1790287200000,
+            "record_id": "ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790287200000,
+            "valid_until_ms": 1793264400000,
+            "visible_ms": 1790928001000
+          },
+          {
+            "entities": [
+              "ted:buyer:CZE:60457856"
+            ],
+            "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1",
+            "fact": {
+              "buyer_name": "Středisko společných činností AV ČR, v. v. i.",
+              "cpv": [
+                "48730000",
+                "72268000",
+                "72261000",
+                "72253200",
+                "72800000"
+              ],
+              "deadline_ms": 1793782800000,
+              "kind": "ted_notice",
+              "lot_ids": [
+                "LOT-0001"
+              ],
+              "notice_type": "cn-standard",
+              "places": [
+                {
+                  "code": "CZE",
+                  "role": "buyer",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZE",
+                  "role": "performance",
+                  "scheme": "iso3166"
+                },
+                {
+                  "code": "CZ010",
+                  "role": "performance",
+                  "scheme": "nuts"
+                }
+              ],
+              "procedure_id": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+              "value": {
+                "amount": "5300000",
+                "currency": "CZK"
+              }
+            },
+            "jurisdiction": "EU",
+            "language": "en",
+            "native_id": "674231-2026",
+            "observed_ms": 1790920800000,
+            "parse": "ok",
+            "published_ms": 1790892000000,
+            "record_id": "ted_search:674231-2026:50965ade292f56ecca2e1a0bf11b9a56fbfb2926f544eea3231ed17e9ea7dfc2",
+            "source_class": "law_regulator",
+            "source_id": "ted_search",
+            "trust": "primary",
+            "valid_from_ms": 1790892000000,
+            "valid_until_ms": 1793782800000,
+            "visible_ms": 1790920801000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 57600000,
+                "covered_from_ms": 1790200800000,
+                "covered_to_ms": 1790892000000,
+                "gaps": [
+                  {
+                    "from_ms": 1790287200000,
+                    "to_ms": 1790805600000
+                  }
+                ],
+                "last_fetch_ms": 1790928000000,
+                "query_key": "query:0de909b011b0136ffc1a986ecd12adb4df3e3b1ab3710b4970580b52e91d2041"
+              }
+            ],
+            "source_id": "ted_search"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "event_key": "ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "11_in_place_edit",
+      "date": "2026-10-01T12:00:00Z",
+      "about": "An in-place listing edited and re-read after t: knowable at t is the first read only — an edit counts from its read, never from the listing's publication.",
+      "inputs": "synthetic (testkit repo_listing)",
+      "synthetic": true,
+      "at_ms": 1790856000000,
+      "mode": "knowable",
+      "query": {
+        "entity": "repo:owner:example"
+      },
+      "policies": {
+        "repo_listing": {
+          "revision": "in_place",
+          "listing_max_age_ms": 172800000
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "repo_listing:repo-item-1:caf9259665cb1688ff9c405253b2be3a4f16099b24eaf32bdba4c1c779615e1f",
+          "source_id": "repo_listing",
+          "source_class": "registry_marketplace",
+          "trust": "primary",
+          "native_id": "repo-item-1",
+          "event_key": "repo:item:repo-item-1",
+          "entities": [
+            "repo:owner:example"
+          ],
+          "url": "https://example.org/repo_listing/repo-item-1",
+          "published_ms": 1790769600000,
+          "observed_ms": 1790812800000,
+          "parsed_ms": 1790812801000,
+          "valid_from_ms": 1790769600000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "caf9259665cb1688ff9c405253b2be3a4f16099b24eaf32bdba4c1c779615e1f",
+          "snapshots": [
+            "105027f3e92e0db0d2e7dcacf406276026fda7202008a2dc4ba8195c1f5d5e59"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic test terms",
+          "terms_sha256": "572389edd0bc5b88620c9c0359fc88941c52b75964d07afd1962755dc3a37206",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000000009",
+            "form": "listing",
+            "items": [],
+            "title": "release r0"
+          }
+        },
+        {
+          "schema": "source_record/1",
+          "record_id": "repo_listing:repo-item-1:53357f7705a6c02337d058a108d8449e1911e9ff8fa746e952758c08fdd22e1c",
+          "source_id": "repo_listing",
+          "source_class": "registry_marketplace",
+          "trust": "primary",
+          "native_id": "repo-item-1",
+          "event_key": "repo:item:repo-item-1",
+          "entities": [
+            "repo:owner:example"
+          ],
+          "url": "https://example.org/repo_listing/repo-item-1",
+          "published_ms": 1790769600000,
+          "observed_ms": 1790899200000,
+          "parsed_ms": 1790899201000,
+          "valid_from_ms": 1790769600000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "53357f7705a6c02337d058a108d8449e1911e9ff8fa746e952758c08fdd22e1c",
+          "snapshots": [
+            "3fdfd642cc34d3d752da684d343f559c54a646d7dbe44e409da1e18e112837dc"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic test terms",
+          "terms_sha256": "572389edd0bc5b88620c9c0359fc88941c52b75964d07afd1962755dc3a37206",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000000009",
+            "form": "listing",
+            "items": [],
+            "title": "release r1"
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "repo_listing",
+          "query_key": "repo:owner:example",
+          "fetched_ms": 1790812800000,
+          "from_ms": 1790208000000,
+          "to_ms": 1790812800000,
+          "complete": true
+        },
+        {
+          "source_id": "repo_listing",
+          "query_key": "repo:owner:example",
+          "fetched_ms": 1790899200000,
+          "from_ms": 1790812800000,
+          "to_ms": 1790899200000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "ok",
+        "facts": [
+          "repo-item-1 read=2026-10-01T00:00:00Z"
+        ],
+        "events": [
+          "repo:item:repo-item-1 confirmed origins=repo_listing"
+        ],
+        "freshness": [
+          "repo_listing failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "repo_listing repo:owner:example last_fetch=2026-10-01T00:00:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1790856000000,
+        "citations": [
+          {
+            "access_method": "http_get",
+            "content_hash": "caf9259665cb1688ff9c405253b2be3a4f16099b24eaf32bdba4c1c779615e1f",
+            "license_or_terms": "synthetic test terms",
+            "parser_version": "sec-submissions/1",
+            "record_id": "repo_listing:repo-item-1:caf9259665cb1688ff9c405253b2be3a4f16099b24eaf32bdba4c1c779615e1f",
+            "snapshots": [
+              "105027f3e92e0db0d2e7dcacf406276026fda7202008a2dc4ba8195c1f5d5e59"
+            ],
+            "terms_sha256": "572389edd0bc5b88620c9c0359fc88941c52b75964d07afd1962755dc3a37206",
+            "url": "https://example.org/repo_listing/repo-item-1"
+          }
+        ],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [
+          {
+            "confidence": "confirmed",
+            "event_key": "repo:item:repo-item-1",
+            "origins": [
+              "repo_listing"
+            ],
+            "primary": 1,
+            "records": [
+              "repo_listing:repo-item-1:caf9259665cb1688ff9c405253b2be3a4f16099b24eaf32bdba4c1c779615e1f"
+            ]
+          }
+        ],
+        "expired": [],
+        "facts": [
+          {
+            "entities": [
+              "repo:owner:example"
+            ],
+            "event_key": "repo:item:repo-item-1",
+            "fact": {
+              "cik": "0000000009",
+              "form": "listing",
+              "items": [],
+              "kind": "sec_filing",
+              "title": "release r0"
+            },
+            "jurisdiction": "US",
+            "language": "en",
+            "native_id": "repo-item-1",
+            "observed_ms": 1790812800000,
+            "parse": "ok",
+            "published_ms": 1790769600000,
+            "record_id": "repo_listing:repo-item-1:caf9259665cb1688ff9c405253b2be3a4f16099b24eaf32bdba4c1c779615e1f",
+            "source_class": "registry_marketplace",
+            "source_id": "repo_listing",
+            "trust": "primary",
+            "valid_from_ms": 1790769600000,
+            "visible_ms": 1790812800000
+          }
+        ],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 43200000,
+                "covered_from_ms": 1790208000000,
+                "covered_to_ms": 1790812800000,
+                "last_fetch_ms": 1790812800000,
+                "query_key": "repo:owner:example"
+              }
+            ],
+            "source_id": "repo_listing"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "knowable",
+        "pending": [],
+        "query": {
+          "entity": "repo:owner:example"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    },
+    {
+      "id": "12_no_evidence_hold",
+      "date": "2026-07-31T00:00:00Z",
+      "about": "The queried company was fetched and filed nothing in the window: no row, absent — no evidence means HOLD, never a zero.",
+      "inputs": "sec/CIK0000320193.json + sec/0000320193-26-000018-index.htm (another CIK's filing); coverage synthetic",
+      "synthetic": false,
+      "at_ms": 1785456000000,
+      "mode": "captured",
+      "query": {
+        "entity": "sec:cik:0001318605"
+      },
+      "policies": {
+        "sec_edgar": {
+          "revision": "immutable"
+        }
+      },
+      "records": [
+        {
+          "schema": "source_record/1",
+          "record_id": "sec_edgar:0000320193-26-000018:25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "source_id": "sec_edgar",
+          "source_class": "company_primary",
+          "trust": "primary",
+          "native_id": "0000320193-26-000018",
+          "event_key": "sec:filing:0000320193-26-000018",
+          "entities": [
+            "sec:cik:0000320193"
+          ],
+          "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019326000018/0000320193-26-000018-index.htm",
+          "published_ms": 1785443428000,
+          "observed_ms": 1785443700000,
+          "parsed_ms": 1785443701000,
+          "valid_from_ms": 1785443428000,
+          "jurisdiction": "US",
+          "language": "en",
+          "content_hash": "25d7d4f65a27f2a689c9f563ec07f46e7b9a2ccefaf7b02c41a622756d24e645",
+          "snapshots": [
+            "200a6015e8d84fa79829300781cddfa92bb6c085fd12a8988e1547bbe5077193",
+            "5f901f0c2d9f472371322867a64a7dff2c9e2b50ed3ff6ba6caf0c2311ce265c"
+          ],
+          "parser_version": "sec-submissions/1",
+          "license_or_terms": "synthetic eval terms",
+          "terms_sha256": "cfe0fd2491410b1e1d506e2579e59f25593c19e1b8bffb43f2cb99396a42cce4",
+          "access_method": "http_get",
+          "parse": "ok",
+          "fact": {
+            "kind": "sec_filing",
+            "cik": "0000320193",
+            "form": "8-K",
+            "items": [
+              "2.02",
+              "9.01"
+            ],
+            "title": "items 2.02 Results of operations · 9.01 Financial statements and exhibits"
+          }
+        }
+      ],
+      "coverage": [
+        {
+          "source_id": "sec_edgar",
+          "query_key": "cik:0000320193",
+          "fetched_ms": 1785443700000,
+          "from_ms": 1782864000000,
+          "to_ms": 1785443700000,
+          "complete": true
+        },
+        {
+          "source_id": "sec_edgar",
+          "query_key": "cik:0001318605",
+          "fetched_ms": 1785445200000,
+          "from_ms": 1782864000000,
+          "to_ms": 1785445200000,
+          "complete": true
+        }
+      ],
+      "purges": [],
+      "expect": {
+        "status": "absent",
+        "freshness": [
+          "sec_edgar failed=0 parse_failures=0 partial_parses=0 purges=0",
+          "sec_edgar cik:0000320193 last_fetch=2026-07-30T20:35:00Z gaps=0",
+          "sec_edgar cik:0001318605 last_fetch=2026-07-30T21:00:00Z gaps=0"
+        ]
+      },
+      "packet": {
+        "as_of_ms": 1785456000000,
+        "citations": [],
+        "conflicts": [],
+        "demand": {
+          "events": 0,
+          "origins": [],
+          "records": [],
+          "status": "none"
+        },
+        "events": [],
+        "expired": [],
+        "facts": [],
+        "freshness": [
+          {
+            "parse_failures": 0,
+            "partial_parses": 0,
+            "queries": [
+              {
+                "age_ms": 12300000,
+                "covered_from_ms": 1782864000000,
+                "covered_to_ms": 1785443700000,
+                "last_fetch_ms": 1785443700000,
+                "query_key": "cik:0000320193"
+              },
+              {
+                "age_ms": 10800000,
+                "covered_from_ms": 1782864000000,
+                "covered_to_ms": 1785445200000,
+                "last_fetch_ms": 1785445200000,
+                "query_key": "cik:0001318605"
+              }
+            ],
+            "source_id": "sec_edgar"
+          }
+        ],
+        "inferences": [],
+        "issues": [],
+        "mode": "captured",
+        "pending": [],
+        "query": {
+          "entity": "sec:cik:0001318605"
+        },
+        "schema": "source_asof/1",
+        "superseded": [],
+        "unparsed": [],
+        "withdrawn": []
+      }
+    }
+  ]
+}

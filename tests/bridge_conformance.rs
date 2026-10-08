@@ -45,7 +45,11 @@
 //! its read mode (`run_id`) reads a stored run seeded by `.home_file(..)` (a
 //! file under the side's `TENGU_HOME`) from `tests/fixtures/xlab/run_conf_rows/`.
 //! `.row(..)` seeds the workspace observation store (the opportunity row a
-//! paper entry names).
+//! paper entry names). `.setup(..)` runs a `tengu` CLI on each side before
+//! the first step: `source_evidence` reads a `sources.db` filled by `tengu
+//! sources import` of the captured TED pair `ted/search_change_notice.json`
+//! (`<TENGU_HOME>/state/conf/sources.db`), as of before and after the change
+//! notice.
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -168,6 +172,10 @@ struct Case {
     home_files: Vec<(String, String)>,
     /// Observation rows seeded into the workspace store, stamped now.
     rows: Vec<Value>,
+    /// `.setup(..)`: `tengu -c <side config> <args>` run on each side before
+    /// the first step (`{fixtures}`, `{ws}`, `{root}` expanded) — the CLI an
+    /// operator runs to fill a store (`tengu sources import`); exit 0.
+    setup: Vec<Vec<String>>,
     routes: Vec<Route>,
     /// `TENGU_BRIDGE_MCP_SERVERS` handed to the bridge — server names, as
     /// the Claude Code engine writes them (the bridge takes each from the
@@ -208,6 +216,7 @@ fn case(tool: &str, args: Value) -> Case {
         files: Vec::new(),
         home_files: Vec::new(),
         rows: Vec::new(),
+        setup: Vec::new(),
         routes: Vec::new(),
         mcp_servers: None,
         transcript: None,
@@ -299,6 +308,12 @@ impl Case {
     /// (`observed_at_ms` = now).
     fn row(mut self, observation: Value) -> Self {
         self.rows.push(observation);
+        self
+    }
+    /// A `tengu` CLI run on each side before the first step (`Case::setup`).
+    fn setup(mut self, args: &[&str]) -> Self {
+        self.setup
+            .push(args.iter().map(|a| a.to_string()).collect());
         self
     }
     fn route(mut self, r: Route) -> Self {
@@ -717,6 +732,72 @@ fn backtest_rows() -> Case {
             json!({"run_id": "20200101T000000Z-nope", "view": "notes"}),
         )
         .err("no run `<TIME>-nope` in the state dir's backtests/ (the newest: <TIME>-conf_rows)")
+}
+
+/// `[sources]` with one enabled `ted_search` row (synthetic reviewed terms;
+/// its host the loopback the fixture egress allows — nothing is fetched)
+/// and `source_evidence`'s workspace scope: `sources.db` lands in
+/// `<TENGU_HOME>/state/conf/`.
+const SOURCES_TOML: &str = r#"
+[sources]
+state = "conf"
+
+[sources.registry.ted_search]
+kind = "ted_search"
+class = "law_regulator"
+trust = "primary"
+revision = "immutable"
+enabled = true
+hosts = ["127.0.0.1"]
+auth = "none"
+rate_limit = "ted"
+store_raw = true
+jurisdiction = "EU"
+language = "en"
+query = "publication-date >= {from} AND publication-date <= {to}"
+license = "synthetic conformance terms"
+terms_url = "https://example.org/terms"
+terms_sha256 = "6e81b3dc57dee4be066314f20ab0be61c23469c5ad56743239ee1bd399d8899a"
+terms_reviewed_at = "2026-10-08"
+raw_retention_days = 90
+record_retention_days = 0
+
+[rate_limits.ted]
+per_minute = 60
+burst = 2
+
+[default_scopes.source_evidence]
+fs_roots = ["{ws}"]
+"#;
+
+/// `source_evidence` on the captured TED pair of `ted/search_change_notice.json`
+/// (657981-2026 and its change notice 674231-2026), imported into each
+/// side's `sources.db` by `tengu sources import` (the operator's CLI) as read
+/// 2026-10-02: knowable at 2026-09-30 the original stands; at 2026-10-03 the
+/// change supersedes it (`correction`). No fetch argument exists.
+fn source_evidence_asof() -> Case {
+    let at = |day: &str| json!({"at": day, "mode": "knowable", "source": "ted_search"});
+    case("source_evidence", at("2026-09-30"))
+        .named("asof")
+        .toml(SOURCES_TOML)
+        .setup(&[
+            "sources",
+            "import",
+            "--source",
+            "ted_search",
+            "--file",
+            "{fixtures}/ted/search_change_notice.json",
+            "--observed-at",
+            "2026-10-02T08:00:00Z",
+        ])
+        .ok("source_asof <TIME> knowable: 1 facts · 0 pending")
+        .then("source_evidence", at("2026-10-03"))
+        .ok("\nsuperseded ted_search:657981-2026:")
+        .then(
+            "source_evidence",
+            json!({"at": "2026-10-03", "fetch": true}),
+        )
+        .err("unknown argument(s) [\"fetch\"]")
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -1285,6 +1366,12 @@ fn cases() -> Vec<Case> {
             .named("no_backtest")
             .toml(XLAB_TOML)
             .err("backtest_config_missing: backtests unavailable: no [backtest] section"),
+        // ── O2 source evidence: `[sources]` → `sources.db` in the state dir
+        source_evidence_asof(),
+        // Without `[sources]` there is no source store: refused alike.
+        case("source_evidence", json!({}))
+            .named("no_sources")
+            .err("sources_state_missing: no [sources] section"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))
@@ -1669,6 +1756,32 @@ impl Side {
         cmd
     }
 
+    /// Each `Case::setup` run, with this side's config and env; exit 0.
+    fn setup(&self, case: &Case, mock: &str) -> Result<(), String> {
+        for args in &case.setup {
+            let args: Vec<String> = args
+                .iter()
+                .map(|a| expand(a, &self.root, &self.ws, mock))
+                .collect();
+            let out = self
+                .command(case, mock)
+                .arg("-c")
+                .arg(&self.config)
+                .args(&args)
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|e| format!("spawn tengu {args:?}: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "setup tengu {args:?} failed:\n{}\n{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    tail(&String::from_utf8_lossy(&out.stderr))
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn args(&self, step: &Step, mock: &str) -> Value {
         serde_json::from_str(&expand(&step.args.to_string(), &self.root, &self.ws, mock))
             .expect("args stay JSON")
@@ -2018,6 +2131,8 @@ fn run_case(case: &Case) -> Result<(), String> {
     let mock = Mock::start(case.routes.clone());
     let local = Side::new(case, &mock.base);
     let bridged = Side::new(case, &mock.base);
+    local.setup(case, &mock.base)?;
+    bridged.setup(case, &mock.base)?;
 
     let a = run_in_process(&local, case, &mock.base)?;
     let split = mock.requests().len();

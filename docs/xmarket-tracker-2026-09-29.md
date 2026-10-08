@@ -241,7 +241,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ✅ 1e6c3721a619c883900fcee2df0304641b04b60b | `hl-book-tool` | `hl_book`: executable bid / ask, depth, imbalance, VWAP slippage for a notional | §20 §21 §25 §31 | M | rust |
 | ☐ | `info-fetch` | Egress-gated feed fetcher on the shared limiter: headers + User-Agent, conditional GET (`[feeds] kind = "poll"`) | §15 | M | rust |
 | ☐ | `info-parsers` | Atom parser for EDGAR `getcurrent` (RSS 2.0, JSON mapping, `t.me/s`, HTML → text move to `info-parsers-ext`, M2) | §15 | S | rust |
-| ☐ | `info-edgar` | EDGAR adapter: `$SEC_USER_AGENT`, ≤ 10 req/s, accession ids, 8-K item codes, CIK → ticker; M0 feed scoped to the allow-listed CIK (Tesla `0001318605`); Ex-99.1 text in M4 | §15 §16 | S | rust |
+| 🟡 | `info-edgar` | EDGAR adapter: `$SEC_USER_AGENT`, ≤ 10 req/s, accession ids, 8-K item codes, CIK → ticker; M0 feed scoped to the allow-listed CIK (Tesla `0001318605`); Ex-99.1 text in M4 — **2026-10-08:** the adapter is built (P7 `outbound/backfill/sec.rs::SecClient`: User-Agent, `[rate_limits.sec]`, accessions, 8-K items, ticker → CIK; `tengu history events` → `market.db`) and reused by the O2 source layer (`sec_edgar` rows keyed by CIK → append-only `sources.db`, `docs/source-evidence-2026-10-08.md`); open: the M0 feed (`getcurrent`, needs `info-fetch`) and Ex-99.1 text | §15 §16 | S | rust |
 | ☐ | `jev-event-key` | Event key ⇒ session id, dedupe window, audit key (M0: EDGAR accession) | §18 §27 §32 | S | rust |
 | ☐ | `jev-event-templating` | `{event:/pointer}` in args and world keys + `FromEvent` slots | §22 §23 | M | rust |
 | ✅ 21e093633248a936a73c4b9555278a6dec51500b | `risk-config-schema` | `[risk]` + `[paper]` sections: every limit required, no defaults, fail closed; `Config::load` rejects unknown top-level keys | §28 §29 §31 | S | rust |
@@ -349,7 +349,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | | Id | Item | PRD | Size | Kind |
 |---|---|---|---|---|---|
 | ☐ | `info-config` | `[feeds.<n>] news = {…}` source metadata (tier, org, reliability prior, mapping) + `[news.filter]`, `[news.dedup]`, `[news.extract]` | §15 §16 §18 | M | rust |
-| ☐ | `info-store` | Canonical event store: SQLite `events.db` behind `NewsStore` (`UNIQUE(source, source_item_id)`, simhash64, 48 h cosine) | §16 §17 §18 §32 | L | rust |
+| ☐ | `info-store` | Canonical event store: SQLite `events.db` behind `NewsStore` (`UNIQUE(source, source_item_id)`, simhash64, 48 h cosine) — 2026-10-08: `events.db` still unbuilt (reserved name, `config/xmarket.rs::EVENTS_DB`); P7 SEC events went to `market.db`, O2 source records to `<sources.state>/sources.db` (`docs/source-evidence-2026-10-08.md`) — decide whether `info-store` reuses `domain::source` | §16 §17 §18 §32 | L | rust |
 | ☐ | `info-dedup` | URL canonicalisation, SimHash, windowed embedding clustering | §17 §18 | M | rust |
 | ☐ | `info-prefilter` | Entity / alias dictionary + keyword / form rules (no LLM) | §3 §6 §15 | M | rust |
 | ☐ | `info-taxonomy-skill` | SKILL.md: §16 taxonomy, §17 states, §7 levels, extraction schema + evals | §7 §16 §17 | S | skill |

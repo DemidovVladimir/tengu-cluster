@@ -383,7 +383,7 @@
         <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 (spec ids, cache keys)</td></tr>
         <tr><td><code>src/ports/market_data.rs</code></td><td>the <code>MarketDataStore</code> port, coverage rows</td></tr>
         <tr><td><code>src/adapters/outbound/market_data.rs</code></td><td><code>market.db</code>: tables, upserts, coverage</td></tr>
-        <tr><td><code>src/adapters/outbound/backfill/</code></td><td><code>hl</code>, <code>gecko</code>, <code>sec</code>, <code>hl_archive</code>, <code>json</code>; retry, resume</td></tr>
+        <tr><td><code>src/adapters/outbound/backfill/</code></td><td><code>hl</code>, <code>gecko</code>, <code>sec</code>, <code>hl_archive</code>, <code>json</code>; retry, resume; the SEC client is shared with the source store (<a href="source-evidence.html">Source evidence</a>)</td></tr>
         <tr><td><code>src/adapters/inbound/cli/history.rs</code></td><td><code>tengu history backfill | events | import-hl-archive | import-json | coverage</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/xlab/history.rs</code></td><td>the <code>market_history</code> tool</td></tr>
       </tbody>

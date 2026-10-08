@@ -52,6 +52,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 | `[recorder]` | `RecorderConfig` (`recorder.rs`) | off | **error** |
 | `[backtest]` | `BacktestConfig` (`backtest.rs`) | no backtests | **error** (costs and `half_spread` too) |
 | `[feeds.<n>]` | `FeedConfig` (`feeds.rs`) | no feeds | **error** |
+| `[sources]` | `SourcesConfig` (`sources.rs`) | no source registry (`tengu sources` and `source_evidence` refuse: `sources_state_missing`) | **error** (every registry row too) |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`skill_lifecycle.rs`) | `tengu skill evolve` refuses | ignored |
 
 ## Agents — `[agents.<id>]`
@@ -322,7 +323,7 @@ Source: `src/config/hardening.rs`.
 | `burst` | `per_minute` | ≥ 1 |
 | `exec_reserve` | 0 | < burst; weight reads leave for order calls |
 
-Names `[a-z0-9_-]+`; used: `hyperliquid`, `geckoterminal`. One bucket per name per process — two processes each get the full budget.
+Names `[a-z0-9_-]+`; used: `hyperliquid`, `geckoterminal`, `sec` (SEC EDGAR: `tengu history events`, a `sec_edgar` source row), `ted` (a `ted_search` source row) — a `[sources]` row names its own in `rate_limit`. One bucket per name per process — two processes each get the full budget.
 
 ## Runtime — `[runtime]` (`tengu run`)
 
@@ -372,6 +373,28 @@ Needs `[xmarket]` (`market.db` and run dirs live in its state dir). Doc: `docs/x
 | its `@universe` exists; its calendar (`weekend_window`, `daily_window` with `days = "trading"`) is an `exchange` `[xmarket.calendars.<id>]` | |
 | every id it trades has a `costs` prefix (unless the spec sets its own `costs`) | |
 
+## Sources — `[sources]` (O2 source registry)
+
+One row per approved external source; records go to the append-only `<TENGU_HOME>/state/<state>/sources.db` (never `market.db`). Read by `tengu sources` (the operator's fetch / import / asof / purge / kill switch) and the read-only `source_evidence` tool. Doc: `docs/source-evidence-2026-10-08.md`; example: `sandboxes/soe/config.toml`.
+
+| Field | Default | Rules |
+|---|---|---|
+| `state` | required | one directory name under `<TENGU_HOME>/state/` (the `[xmarket] state` rule); the dir outside every `fs_roots` entry and agent `workspace` |
+| `registry.<id>` | — | row id `[a-z0-9_]+` (the records' `source_id`) |
+| `kind` · `class` · `trust` · `revision` | required | `sec_edgar` \| `ted_search` · `law_regulator` \| `company_primary` \| `registry_marketplace` \| `customer_demand` \| `independent_reporting` \| `social_inference` · `primary` \| `corroborating` \| `trigger_only` (the class must allow it: `independent_reporting` never `primary`, `social_inference` only `trigger_only`) · `immutable` \| `in_place` |
+| `enabled` · `store_raw` | required | `false` = listed, never fetched · keep raw bodies |
+| `hosts` | required | bare hosts, each inside `[egress] allow_hosts` (when set), none in `deny_hosts` |
+| `auth` | required | `none` \| `user_agent_env:<VAR>` \| `api_key_env:<VAR>`; `sec_edgar` needs `user_agent_env` |
+| `rate_limit` | required | names a `[rate_limits.<name>]` |
+| `jurisdiction` · `language` | required | non-empty; `law_regulator`: an ISO 3166 code or `EU` |
+| `license` · `terms_url` · `terms_sha256` · `terms_reviewed_at` | none | required when `enabled`: reuse terms, an https URL, sha256 of the reviewed terms page (64 lowercase hex), `YYYY-MM-DD` |
+| `raw_retention_days` · `record_retention_days` | none | required when `enabled`; `0` = forever |
+| `listing_max_age_days` | none | `registry_marketplace` only, required there, ≥ 1 |
+| `forms` · `entities` | all kept forms · none | `sec_edgar` only: SEC forms, no repeat · `sec:cik:<10 digits>` (the CIKs `fetch` reads without `--ciks`) |
+| `query` | none | `ted_search` only, required: TED Search syntax with `{from}` and `{to}` (each replaced by the day read, `YYYYMMDD`) |
+
+The kill switch is not TOML: `tengu sources disable` appends a row to `sources.db` that refuses every fetch and import at once; `enable` lifts only that.
+
 ## Feeds — `[feeds.<n>]` (`tengu run`)
 
 | Key | Kind | Default | Meaning |
@@ -403,13 +426,14 @@ At least one of `every_secs`, `windows`, `at`; names `[a-z0-9_-]+`. Call ids `fe
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Eight today: `jev-exec`, `lping`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab` — purposes and networks in the README § Sandboxes. Every one and `config.example.toml` must load (`config::risk::tests::every_sandbox_and_the_example_load`).
+`sandboxes/<name>/config.toml`, run from the repo root. Ten today: `jev-exec`, `lping`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes (`soe`: the O2 source registry, rows off, one read-only agent — `docs/source-evidence-2026-10-08.md`). Every one and `config.example.toml` must load (`config::risk::tests::every_sandbox_and_the_example_load`).
 
 ```bash
 tengu chat --sandbox lping
 cargo run --features claude_code -- chat --sandbox xlab   # xlab's agents use engine = "claude_code"
 tengu run --sandbox xmarket                               # long-running: feeds, loops, webhooks
 tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
+tengu sources --sandbox soe list                          # the source registry; fetch needs an enabled, reviewed row
 ```
 
 ## Environment variables
@@ -434,6 +458,7 @@ tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 | `TENGU_TOR_PROXY` | `config/egress.rs::EgressConfig::resolved` | `socks5h://127.0.0.1:9050` | Tor proxy when `[egress].proxy` is unset (`docker-compose.tor.yml`: `socks5h://tor:9050`) |
 | `HL_API_URL` | `outbound/hyperliquid/info.rs`, `outbound/backfill/hl.rs` | `https://api.hyperliquid.xyz` | Hyperliquid API base (testnet `https://api.hyperliquid-testnet.xyz`); tools read it only through `env_reads`, operator commands (`history backfill`, `backtest --fetch`) directly |
 | `GECKO_API_URL` | `outbound/backfill/gecko.rs` | `https://api.geckoterminal.com/api/v2` | GeckoTerminal base; same rule as `HL_API_URL` |
+| `SEC_USER_AGENT` | `outbound/backfill/sec.rs`; a `[sources]` `sec_edgar` row names its own variable (`auth = "user_agent_env:<VAR>"`, `outbound/sources/sec.rs`) | — (required for SEC) | the declared `User-Agent` SEC fair access asks for ("Name email"); a request header only, never stored or logged |
 | `SOLANA_RPC_URL` | `outbound/solana/rpc.rs` | `https://api.mainnet-beta.solana.com` | Solana RPC; through `env_reads` only (else the public RPC, silently) |
 | `TENGU_RISK_RESUME_SECRET_FILE` | `cli/risk.rs` | unset = no guard | `tengu risk resume` also asks for this file's content; refused when the file is missing, not 0600, over 4 KiB, empty, or inside an agent's `fs_roots` / `workspace` |
 | `CHAIN_ID` · `EVM_RPC_URL` | `tools/crypto/helpers.rs` | `1` · `https://ethereum-rpc.publicnode.com` | Privy tools: chain id when a call omits it · JSON-RPC for receipts |
@@ -447,7 +472,7 @@ tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 | Claude CLI child env | `engines/claude_code.rs` | — | strips a parent Claude Code session's vars (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_*` but auth / provider) and `ANTHROPIC_API_KEY` |
 | `LYREBIRD_RS_DIR` · `NETWORK` · `SANDBOX` | `Makefile` | `../lyrebird-rs` · the config's `[egress] network` · none | Tor image source · compose network · sandbox config to mount |
 | `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `openrouter,telegram` · 7080 | image features · host port |
-| Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_CAPTURE_FIXTURES` |
+| Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_REGEN_SOURCE_EVAL` (the source eval set), `TENGU_CAPTURE_FIXTURES` |
 
 ## Feature flags
 
@@ -466,7 +491,7 @@ tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
 | no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
 | `workspace_tools` outside `WORKSPACE_TOOLS` | `[telegram] tool_approvals` / `approve_only` set (not implemented) |
-| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[feeds]`, `[decision_loops]` rules (sections above) | |
+| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[sources]`, `[feeds]`, `[decision_loops]` rules (sections above) | |
 
 ## Reset
 
@@ -478,7 +503,7 @@ tengu prune --sandbox <name> --hard      # empties each workspace root (every ch
 
 | Fact | Detail |
 |---|---|
-| Never pruned | `<TENGU_HOME>/state` beyond `state/flows` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`) and `solana-writes.db`; the sandbox config, secrets, managed skills |
+| Never pruned | `<TENGU_HOME>/state` beyond `state/flows` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`), the `[sources]` state dir (`sources.db`) and `solana-writes.db`; the sandbox config, secrets, managed skills |
 | `--hard` | needs `--sandbox` (without it: global state only, with a note); the workspaces are the agents' `workspace` dirs — an xmarket workspace loses its `.tengu/observations.db`; does not clear the Postgres `agentic_memory` store — `make clean` does (global, destructive) |
 | Logs | every prune deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts) |
 | Manual | `rm -rf ~/.tengu` wipes everything, the paper ledgers and `market.db` included |
@@ -486,4 +511,4 @@ tengu prune --sandbox <name> --hard      # empties each workspace root (every ch
 ## Related
 - `docs/architecture-2026-04-27.md` (canonical) · `docs/code-map.md` §3
 - `docs/engine-backends.md` · `docs/skills.md` · `docs/tools.md` · `docs/webhooks-2026-05-11.md`
-- `docs/runtime-2026-09-30.md` · `docs/xmarket-risk-paper-2026-09-30.md` · `docs/xlab-2026-10-01.md`
+- `docs/runtime-2026-09-30.md` · `docs/xmarket-risk-paper-2026-09-30.md` · `docs/xlab-2026-10-01.md` · `docs/source-evidence-2026-10-08.md`

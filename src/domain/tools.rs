@@ -48,6 +48,12 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 pub(crate) const MARKET_HISTORY: &str = "market_history";
 pub(crate) const BACKTEST: &str = "backtest";
 
+// Source family (O2, `adapters/outbound/tools/sources/`) — read-only typed
+// rows over the sandbox's source store (`<sources state dir>/sources.db`);
+// one `sources` plugin. Agents never fetch: the operator does
+// (`tengu sources fetch`).
+pub(crate) const SOURCE_EVIDENCE: &str = "source_evidence";
+
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
 /// transaction). Only a private agent may hold one — no `description`, not
@@ -135,6 +141,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
     BACKTEST,
+    SOURCE_EVIDENCE,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

@@ -34,6 +34,7 @@ pub(crate) mod skill;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod skill_resource;
 pub(crate) mod solana;
+pub(crate) mod sources;
 pub(crate) mod view_skill;
 pub(crate) mod workspace;
 pub(crate) mod xlab;
@@ -323,6 +324,14 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: || xlab::defs_named(names::BACKTEST),
             plugin: |_| Box::new(xlab::XlabPlugin),
+        },
+        // Source family (O2): read-only evidence over `sources.db`
+        // (interfaces in `sources/defs.rs`); agents never fetch.
+        ToolEntry {
+            opt_in: Some(names::SOURCE_EVIDENCE),
+            needs_memory: false,
+            defs: || sources::defs_named(names::SOURCE_EVIDENCE),
+            plugin: |_| Box::new(sources::SourcesPlugin),
         },
     ]);
     rows
