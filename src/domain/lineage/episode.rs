@@ -252,23 +252,29 @@ pub struct Episode {
     pub evidence: Vec<EvidenceRef>,
 }
 
-impl Episode {
-    /// Module table: decision quality × outcome.
-    pub fn quadrant(&self) -> Quadrant {
-        match (self.quality.decision, self.quality.outcome) {
-            (DecisionQuality::Supported, OutcomeQuality::Favorable) => {
-                Quadrant::GoodDecisionGoodOutcome
-            }
-            (DecisionQuality::Supported, OutcomeQuality::Unfavorable) => {
-                Quadrant::GoodDecisionBadOutcome
-            }
-            (DecisionQuality::Unsupported, OutcomeQuality::Favorable) => {
-                Quadrant::BadDecisionGoodOutcome
-            }
-            (DecisionQuality::Unsupported, OutcomeQuality::Unfavorable) => {
-                Quadrant::BadDecisionBadOutcome
-            }
-            _ => Quadrant::Unknown,
+/// Module table: decision quality × outcome — the one rule every episode
+/// shape reads (this record, the SOE `OpportunityEpisode`).
+pub fn quadrant_of(decision: DecisionQuality, outcome: OutcomeQuality) -> Quadrant {
+    match (decision, outcome) {
+        (DecisionQuality::Supported, OutcomeQuality::Favorable) => {
+            Quadrant::GoodDecisionGoodOutcome
         }
+        (DecisionQuality::Supported, OutcomeQuality::Unfavorable) => {
+            Quadrant::GoodDecisionBadOutcome
+        }
+        (DecisionQuality::Unsupported, OutcomeQuality::Favorable) => {
+            Quadrant::BadDecisionGoodOutcome
+        }
+        (DecisionQuality::Unsupported, OutcomeQuality::Unfavorable) => {
+            Quadrant::BadDecisionBadOutcome
+        }
+        _ => Quadrant::Unknown,
+    }
+}
+
+impl Episode {
+    /// Module table: decision quality × outcome ([`quadrant_of`]).
+    pub fn quadrant(&self) -> Quadrant {
+        quadrant_of(self.quality.decision, self.quality.outcome)
     }
 }

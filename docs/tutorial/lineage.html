@@ -490,7 +490,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
       <tbody>
         <tr><td><code>src/domain/lineage/mod.rs</code></td><td><code>Finding</code>, <code>Severity</code>, the table of codes</td></tr>
         <tr><td><code>src/domain/lineage/value.rs</code></td><td>ids, <code>Time</code>, <code>Count</code>, locators, pin targets, bindings</td></tr>
-        <tr><td class="wrap"><code>src/domain/lineage/{family,variant,experiment,episode,incident,capability,generation,locks}.rs</code></td><td>one record type each; the episode quadrant; <code>GenerationScope</code></td></tr>
+        <tr><td class="wrap"><code>src/domain/lineage/{family,variant,experiment,episode,incident,capability,generation,locks}.rs</code></td><td>one record type each; the episode quadrant (<code>quadrant_of</code>, also read by the SOE episode); <code>GenerationScope</code></td></tr>
         <tr><td><code>src/domain/lineage/registry.rs</code></td><td><code>Registry</code>, <code>frozen_digest</code>, first outcome, every locator a record names</td></tr>
         <tr><td><code>src/domain/lineage/validate.rs</code></td><td>every always-on <code>verify</code> code</td></tr>
         <tr><td><code>src/domain/lineage/query.rs</code></td><td><code>trace</code>, <code>family_report</code> (search accounting), <code>attempt_rows</code></td></tr>
@@ -516,7 +516,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
 </div>
 
 <script>
-/* page-only: quadrant (domain/lineage/episode.rs Episode::quadrant),
+/* page-only: quadrant (domain/lineage/episode.rs quadrant_of, read by Episode::quadrant),
    time order (domain/lineage/value.rs Time::order, validate.rs future_leakage),
    load errors (config/lineage.rs binding_errors, config/mod.rs fail_on),
    code filter */

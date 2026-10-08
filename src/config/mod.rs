@@ -16,6 +16,7 @@ pub(crate) mod risk;
 pub(crate) mod runtime;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
+pub(crate) mod soe;
 pub(crate) mod solana;
 pub(crate) mod xmarket;
 

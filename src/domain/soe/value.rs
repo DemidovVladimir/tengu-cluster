@@ -51,6 +51,18 @@ pub mod codes {
     pub const SCHEMA_UNSUPPORTED: &str = "schema_unsupported";
     pub const SCHEMA_MISMATCH: &str = "schema_mismatch";
     pub const OVERFLOW: &str = "overflow";
+    // Records (`record.rs` and the record files).
+    pub const INVALID_RECORD: &str = "invalid_record";
+    pub const INVALID_ID: &str = "invalid_id";
+    pub const INVALID_VERSION: &str = "invalid_version";
+    pub const INVALID_FIELD: &str = "invalid_field";
+    pub const INVALID_TIME: &str = "invalid_time";
+    pub const DUPLICATE: &str = "duplicate";
+    pub const FUTURE_LEAKAGE: &str = "future_leakage";
+    pub const FAKE_RECURRING: &str = "fake_recurring";
+    pub const REVENUE_MODEL_MISMATCH: &str = "revenue_model_mismatch";
+    pub const DEAL_REVIEW_MISSING: &str = "deal_review_missing";
+    pub const PRIVATE_LOCATOR: &str = "private_locator";
 }
 
 /// A refused value: a [`codes`] entry + what was wrong.
@@ -61,7 +73,7 @@ pub struct ValueError {
 }
 
 impl ValueError {
-    fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         ValueError {
             code,
             message: message.into(),

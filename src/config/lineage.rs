@@ -87,8 +87,8 @@ fn skipped(name: &str) -> bool {
 }
 
 /// The `.toml` files of `dir`, sorted, as `(path, stem)`; other entries are
-/// errors (module table).
-fn toml_files(dir: &Path, errors: &mut Vec<String>) -> Vec<(PathBuf, String)> {
+/// errors (module table; also the SOE record dirs, `config/soe.rs`).
+pub(crate) fn toml_files(dir: &Path, errors: &mut Vec<String>) -> Vec<(PathBuf, String)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -111,8 +111,9 @@ fn toml_files(dir: &Path, errors: &mut Vec<String>) -> Vec<(PathBuf, String)> {
     out
 }
 
-/// One record file parsed, its id checked against the stem, its digest.
-fn parse<T: DeserializeOwned>(
+/// One record file parsed, its id checked against the stem, its digest
+/// (also `config/soe.rs`).
+pub(crate) fn parse<T: DeserializeOwned>(
     path: &Path,
     stem: &str,
     id_of: impl Fn(&T) -> &str,

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, FX kept apart from the native amount, and schema-tagged records. Offline today.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, FX kept apart from the native amount, typed versioned records and a private signed operator profile. Offline today.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,12 +22,12 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
   <h1>Software opportunities</h1>
-  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Today it is the value layer: exact money, estimates that stay unknown when they are unknown, and records that name their schema. Nothing here reads the network or acts.</p>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Today it is the value layer and the typed records: exact money, estimates that stay unknown, and a private signed profile. Nothing here reads the network or acts.</p>
   <ul class="facts">
     <li>money in <b>2</b> minor digits, never a float</li>
     <li><b>7</b> currencies, a closed set</li>
-    <li>FX rates to <b>8</b> digits</li>
     <li>shares in <b>0–10 000</b> bps</li>
+    <li><b>5</b> record schemas, version <b>1</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, rounding</li>
@@ -82,6 +82,64 @@
   </ul>
 </section>
 
+<section class="sec" aria-labelledby="s-records">
+  <div class="sec-head">
+    <span class="kicker">Typed, versioned, strict</span>
+    <h2 id="s-records">The records</h2>
+    <p>Every record starts with <code>schema</code>, <code>id</code> and <code>version</code>. An unknown key is refused at every level, and every rule problem is listed with its field.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Record</th><th>Schema</th><th>Holds</th><th>Kept</th></tr></thead>
+      <tbody>
+        <tr><td><code>OperatorProfile</code></td><td><code>soe.operator_profile/1</code></td><td>caps, target, shadow hourly rate, payback, hours, tranche, delivery length, allow-lists, rank order, capabilities</td><td>private, signed</td></tr>
+        <tr><td><code>Opportunity</code></td><td><code>soe.opportunity/1</code></td><td>customer, pain, mechanism, source record ids, economic inputs, risk, experiment, deal review</td><td>case files</td></tr>
+        <tr><td><code>OpportunityEpisode</code></td><td><code>soe.opportunity_episode/1</code></td><td>verdict, actions, spend, hours, forecast vs actual, lineage quality and lesson</td><td>private</td></tr>
+        <tr><td><code>WeeklyPortfolio</code></td><td><code>soe.weekly_portfolio/1</code></td><td>ranked, held and rejected rows with an action; allocation; <code>HOLD</code> rationale</td><td>private</td></tr>
+        <tr><td><code>PublicBrief</code></td><td><code>soe.public_brief/1</code></td><td>facts with <code>url:</code> links, thesis, disclosed assumptions</td><td>the only public one</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Mechanism (12)</th><th>Revenue model it takes</th></tr></thead>
+      <tbody>
+        <tr><td><code>HIGH_TICKET_DELIVERY</code></td><td>never <code>RECURRING</code> (<code>fake_recurring</code>)</td></tr>
+        <tr><td><code>PARTNER_REVSHARE</code></td><td><code>REVENUE_SHARE</code> (<code>revenue_model_mismatch</code>)</td></tr>
+        <tr><td><code>ACQUIRE_TRANSFORM</code></td><td><code>ACQUISITION</code> and a <code>[deal]</code> review (<code>deal_review_missing</code>)</td></tr>
+        <tr><td><code>AUTOMATE</code> · <code>INTEGRATE</code> · <code>RESCUE_MIGRATE</code> · <code>PRODUCTIZE</code> · <code>BUILD_ADJACENT</code> · <code>WHITE_LABEL</code> · <code>LICENSE</code> · <code>HOLD</code> · <code>REJECT</code></td><td>any of <code>RECURRING</code> · <code>ONE_OFF</code> · <code>ACQUISITION</code> · <code>REVENUE_SHARE</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">CHEAP_TEST</span><span><b>ranked or held</b>A bounded test: <code>max_cash</code>, <code>max_hours</code>.</span></li>
+    <li><span class="chip ok">CONTINUE_ACTIVE</span><span><b>ranked</b>Keep a running test going.</span></li>
+    <li><span class="chip warn">HOLD · DILIGENCE</span><span><b>held</b>Wait, or answer the listed questions within a tranche.</span></li>
+    <li><span class="chip bad">REPRICE · REJECT</span><span><b>rejected</b>Only at a minimum price, or not at all. There is no launch action.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-profile">
+  <div class="sec-head">
+    <span class="kicker">The operator's numbers stay private</span>
+    <h2 id="s-profile">Loading the operator profile</h2>
+    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. Each check refuses with a code. The code never falls back to a built-in value.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Check, in order</th><th>Refused as</th></tr></thead>
+      <tbody>
+        <tr><td>the file exists</td><td><code>operator_profile_missing</code></td></tr>
+        <tr><td>every field is present, known and in range; no unknown key</td><td><code>invalid_profile</code> (lists every problem)</td></tr>
+        <tr><td><code>synthetic = true</code> only when the caller allows test fixtures</td><td><code>synthetic_profile_refused</code></td></tr>
+        <tr><td>a real profile sits outside every git work tree</td><td><code>profile_in_repo</code></td></tr>
+        <tr><td>a real profile has no group or other permission bit</td><td><code>profile_mode</code> (<code>chmod 600</code>)</td></tr>
+        <tr><td>signed: <code>signed_by</code> is not <code>UNSIGNED</code></td><td><code>operator_profile_unsigned</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="sec" aria-labelledby="s-rules">
   <div class="sec-head">
     <span class="kicker">Enforced in code</span>
@@ -95,18 +153,25 @@
     <li><span><b>An unknown currency stays unknown.</b> A source amount outside the closed set becomes <code>UNKNOWN</code> with the reason.</span></li>
     <li><span><b>Unknown is not zero.</b> No scenario reads a value from an unknown estimate.</span></li>
     <li><span><b>Versions are explicit.</b> A record tagged with a schema version other than 1 is refused.</span></li>
+    <li><span><b>No built-in operator parameter.</b> No profile field has a default; a missing one fails the parse. There is no salary field.</span></li>
+    <li><span><b>No unknown keys.</b> Every record table refuses a key it does not define, at every depth.</span></li>
+    <li><span><b>No look-ahead.</b> An economic assumption dated after the opportunity's <code>as_of</code> is refused (<code>future_leakage</code>).</span></li>
+    <li><span><b>One quadrant rule.</b> An opportunity episode's decision × outcome quadrant is the lineage rule (<code>quadrant_of</code>).</span></li>
+    <li><span><b>A public brief cites public links only.</b> A <code>repo:</code>, <code>state:</code>, <code>vault:</code> or <code>run:</code> locator is refused (<code>private_locator</code>).</span></li>
   </ul>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
   <div class="sec-head">
     <span class="kicker">Try it</span>
-    <h2 id="s-try">Run the value tests</h2>
+    <h2 id="s-try">Run the SOE tests</h2>
     <p>No <code>tengu soe</code> command exists yet. The rules above are tested here.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe</span>
-<span class="ln o"># 12 tests: exact amounts, refusals, unknowns, ranges, FX rounding, schema tags</span></pre>
+<span class="ln o"># 30 tests: values, record headers, profile knobs, mechanisms, risk, stages, episodes, portfolio, public brief</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu config::soe</span>
+<span class="ln o"># 4 tests: missing, synthetic, in-repo and loose-mode profiles; record dirs</span></pre>
   </div>
 </section>
 
@@ -121,6 +186,13 @@
       <tbody>
         <tr><td><code>src/domain/soe/mod.rs</code></td><td>the SOE domain's files and rules</td></tr>
         <tr><td><code>src/domain/soe/value.rs</code></td><td><code>Minor</code>, <code>Money</code>, <code>Currency</code>, <code>Bps</code>, <code>FxRate</code>, <code>Converted</code>, <code>Flow</code>, <code>Est</code>, <code>Assumption</code>, <code>Scenario</code>, <code>SchemaTag</code></td></tr>
+        <tr><td><code>src/domain/soe/record.rs</code></td><td><code>SoeRecord</code> header, <code>from_toml</code>, <code>validate</code>, <code>Problems</code>, <code>Tier</code>, <code>Verdict</code></td></tr>
+        <tr><td><code>src/domain/soe/profile.rs</code></td><td><code>OperatorProfile</code>, <code>OperatorCapability</code>, <code>RankKey</code></td></tr>
+        <tr><td><code>src/domain/soe/opportunity.rs</code></td><td><code>Opportunity</code>, <code>Mechanism</code>, <code>RevenueModel</code>, <code>EconomicInputs</code>, <code>DealReview</code></td></tr>
+        <tr><td><code>src/domain/soe/risk.rs</code> · <code>experiment.rs</code></td><td><code>RiskAssessment</code> · <code>ExperimentSpec</code>, <code>ApprovalKind</code></td></tr>
+        <tr><td><code>src/domain/soe/episode.rs</code></td><td><code>OpportunityEpisode</code></td></tr>
+        <tr><td><code>src/domain/soe/portfolio.rs</code></td><td><code>WeeklyPortfolio</code>, <code>PortfolioAction</code>, <code>IsoWeek</code>, <code>PublicBrief</code></td></tr>
+        <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code></td></tr>
         <tr><td><code>docs/soe-2026-10-08.md</code></td><td>gates, the operator contract's field names, sources, threat model</td></tr>
       </tbody>
     </table>
