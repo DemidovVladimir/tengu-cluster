@@ -8,6 +8,7 @@
 //! | [`verify`] | re-hash the vault: the manifest bytes vs `manifest_sha256`; every manifest file; every item recomputed from the fresh hashes vs the record (an empty DIR item present as a dir: the empty tree hash) — `MATCH` · `MISMATCH` · `ABSENT`, and `EXTRA` for a vault file the manifest does not list |
 //! | [`coverage`] | `domain::evidence_coverage` over the `ok` / `partial` instants of one schema in recorder day files (+ `market.db` bars as the second source) |
 //! | [`grade`] | `domain::xm::grade::grade_account` per account of a ledger (all by default) |
+//! | [`evaluate`] | `domain::backtest::evaluation` over a gated run dir: the gate's audit lines of the run's strategy → calls by `seq`, joined with the candidates and research trades, scored (rules · Jev · HOLD); refused when no line is a gate decision of the strategy |
 //! | [`regrade`] | `domain::xm::regrade` over rows read around each instant: `mkt_ctx/1` at the anchor, entry, exit and every funding hour; `hl_book/1` (with data) at entry and exit; `market.db` funding + 1 m bars; the universe = the given ids, else every instrument with a `mkt_ctx/1` row at the anchor or the signal ([`regrade_universe`]; a selected name without a usable book is a MISSING leg); a signal after the entry (look-ahead) refused unless allowed, then flagged |
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::backtest::evaluation::{join, summarize, EvalRow, EvalSummary, JevCall};
 use crate::domain::book::L2Book;
 use crate::domain::canonical::sha256_hex;
 use crate::domain::evidence::{tree_hash, EvidenceRecord, ItemKind, ManifestEntry};
@@ -25,7 +27,7 @@ use crate::domain::xm::regrade::{
     self, BarClose, BookSample, CtxSample, FundingRate, Instants, LegData, Limits, Regrade,
     RegradeRule,
 };
-use crate::ports::evidence::{BackfillSource, LedgerSource, RecordedHistory, Vault};
+use crate::ports::evidence::{BackfillSource, LedgerSource, RecordedHistory, RunDirSource, Vault};
 
 const HOUR_MS: i64 = 3_600_000;
 const CTX_SCHEMA: &str = "mkt_ctx/1";
@@ -375,6 +377,34 @@ pub(crate) fn grade(ledger: &dyn LedgerSource, accounts: &[String]) -> Result<Ve
         .iter()
         .map(|a| grade_account(&rows, a).map_err(anyhow::Error::msg))
         .collect()
+}
+
+// ── evaluate ───────────────────────────────────────────────────────
+
+/// The module table's `evaluate`: the run id, its rows and the summary.
+pub(crate) fn evaluate(
+    run: &dyn RunDirSource,
+    bootstrap: u32,
+    seed: u64,
+) -> Result<(String, Vec<EvalRow>, EvalSummary)> {
+    let files = run.read()?;
+    let calls: BTreeMap<usize, JevCall> = files
+        .decisions
+        .iter()
+        .filter_map(|l| JevCall::from_audit_line(&files.strategy, l))
+        .collect();
+    if calls.is_empty() {
+        bail!(
+            "{}: no line of decisions.jsonl is a gate decision of `{}` (session \
+             `backtest:{}:<seq>`)",
+            run.describe(),
+            files.strategy,
+            files.strategy
+        );
+    }
+    let rows = join(&files.candidates, &files.research, &calls);
+    let summary = summarize(&rows, bootstrap, seed);
+    Ok((files.run_id, rows, summary))
 }
 
 // ── regrade ────────────────────────────────────────────────────────
@@ -904,5 +934,43 @@ mod tests {
         let vault = FsVault::new(tmp.path(), "t");
         assert!(snapshot(&plan, &vault, "x").is_err());
         assert!(!vault.exists());
+    }
+
+    /// Phase 6 (G6): every 50th candidate of W1's gate run
+    /// `20261001T182905Z-weekend_fade` (vault copy) — the three policies on the
+    /// same 30 candidates, the gate's classes, a verdict that keeps Jev
+    /// UNPROVEN while a CI spans 0; a dir without `decisions.jsonl` refused.
+    #[test]
+    fn a_gated_run_dir_is_evaluated_on_the_same_candidates() {
+        use crate::adapters::outbound::evidence::run_dir::FsRunDir;
+        use crate::domain::backtest::evaluation::JevStatus;
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/evidence/gated-run");
+        let (run_id, rows, s) = evaluate(&FsRunDir::new(&dir), 2_000, 7).unwrap();
+        assert_eq!(run_id, "20261001T182905Z-weekend_fade");
+        assert_eq!(rows.len(), 30);
+        assert!(rows.windows(2).all(|w| w[0].seq < w[1].seq));
+        assert_eq!((s.candidates, s.common, s.errors), (30, 30, 0));
+        assert_eq!((s.classes["take"], s.classes["skip"]), (9, 21));
+        let trades: Vec<usize> = s.policies.iter().map(|p| p.trades).collect();
+        assert_eq!(trades, vec![30, 9, 0]);
+        assert_eq!(format!("{:.1}", s.policies[0].sum_bps), "1252.3");
+        assert_eq!(format!("{:.1}", s.policies[1].sum_bps), "-795.5");
+        let d = s.jev_minus_rules.as_ref().unwrap();
+        assert_eq!(
+            format!(
+                "{:+.2} [{:+.1}, {:+.1}] {}",
+                d.diff_bps, d.lo_bps, d.hi_bps, d.n_periods
+            ),
+            "-68.26 [-181.6, +26.3] 26"
+        );
+        assert_eq!(s.jev_status, JevStatus::Unproven);
+        let none = tempfile::tempdir().unwrap();
+        let e = evaluate(&FsRunDir::new(none.path()), 2_000, 7)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.ends_with("no decisions.jsonl — not a gated run (tengu backtest --gate writes it)"),
+            "{e}"
+        );
     }
 }

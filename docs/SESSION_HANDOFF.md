@@ -17,7 +17,8 @@
 | Next | Phase 6 decision evaluation: first D1 (`data_asof` in reports), D2 (count CLI holdout reads), D3 (never prune a registered run), D11 (late funding from HL history) — `TENGU_ROADMAP.md` § Phase 6, gate G6 |
 | P6 fixes (2026-10-08) | D2 `tengu backtest --split` counts its holdout reads (`via = "cli"`) · D3 retention never prunes a run the registry cites (`GenerationScope::cited_runs`) · D1 every report records `data_through_ms`, `--data-through` reruns on the same data (the warehouse-growth problem; named apart from the per-candidate `data_asof_ms`) · W1 pins re-verified: 37 OK, 0 errors |
 | D11 → Phase 9 (operator 2026-10-08) | late funding from HL `fundingHistory` needs a new opt-in tool (`hl_ctx` schema is W1-pinned, exec tools have no network); ≈ $0.015 a weekend — built with the P9 cost model |
-| P6 core (next) | one candidate table per run: rules · Jev p(take) / choice · HOLD · outcome, from `candidates.jsonl` + `trades-*.jsonl` + `decisions.jsonl`; selection rate, net vs rules, calibration, latency, cost — gate G6 |
+| P6 core (done 2026-10-08) | `tengu evidence evaluate <run dir>` (`domain/backtest/evaluation.rs`): rules · Jev · HOLD on the same candidates, per candidate + per trade, calibration, latency, cost, verdict. W1 gate run: per trade +28.93 [−23.5, +81.6] (reproduced), per candidate −35.79 [−61.9, −6.6], jev − hold +14.66 [+3.0, +27.5] ⇒ Jev UNPROVEN; G6 PASS — `docs/p6-decision-evaluation-2026-10-08.md` |
+| Next | Phase 7 news / information (review § 16); open: the capped lens in `evaluate` |
 
 ## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
 

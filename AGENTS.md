@@ -359,6 +359,9 @@ These are not preferences. They're load-bearing.
   The operator's `tengu backtest --split` counts its reads too (`via = "cli"`).
   Every report records `data_through_ms` (the newest row it read); `tengu backtest
   --data-through <it>` reruns on the same data after `market.db` grew.
+  Judge a Jev gate with `tengu evidence evaluate <run dir>` (rules · Jev · HOLD on
+  the same candidates): Jev is PROVEN only when it beats rules and HOLD per
+  candidate — W1's is UNPROVEN (`docs/p6-decision-evaluation-2026-10-08.md`).
 - **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
   in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
   the Solana, Hyperliquid and xmarket families — read the list there, don't

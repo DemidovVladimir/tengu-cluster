@@ -360,6 +360,31 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
   </div>
 </section>
 
+<section class="sec" aria-labelledby="s-eval">
+  <div class="sec-head">
+    <span class="kicker">Phase 6 · decision evaluation</span>
+    <h2 id="s-eval">Evaluate: rules, Jev and HOLD on the same candidates</h2>
+    <p>One row per candidate of a gated backtest run, joined by <code>seq</code>. Each policy is scored on the same candidates: rules take all, Jev takes what it calls <code>take</code>, HOLD takes none. Below: W1's gate run <code>20261001T182905Z-weekend_fade</code>, read from its vault copy.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>policy</th><th>trades</th><th>bps per candidate</th><th>bps per trade</th></tr></thead>
+      <tbody>
+        <tr><td>rules</td><td>1500</td><td>+50.45</td><td>+50.45</td></tr>
+        <tr><td>jev</td><td>277</td><td>+14.66</td><td>+79.38</td></tr>
+        <tr><td>hold</td><td>0</td><td>0.00</td><td>—</td></tr>
+        <tr><td>jev − rules</td><td></td><td>−35.79 [−61.9, −6.6]</td><td>+28.93 [−23.5, +81.6]</td></tr>
+        <tr><td>jev − hold</td><td></td><td>+14.66 [+3.0, +27.5]</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="rules">
+    <div class="card data"><h3>Common set</h3><p>Rows with an outcome (the research trade's net bps) and an answered Jev call. A failed call or a candidate with no trade is left out of all three.</p></div>
+    <div class="card hands"><h3>Two lenses</h3><p>Per candidate: what each policy earned across all candidates, skips count 0. Per trade: how good Jev's picks are; this is the gate's own <code>jev − rules</code>, reproduced.</p></div>
+    <div class="card guard"><h3>Verdict</h3><p><code>PROVEN</code> only when Jev beats rules and HOLD per candidate (95 % CI above 0). <code>REJECTED</code> only when its takes lose money. Everything else stays <code>UNPROVEN</code>; W1's Jev is UNPROVEN.</p></div>
+  </div>
+</section>
+
 <section class="sec" aria-labelledby="s-out">
   <div class="sec-head">
     <span class="kicker">Verdicts and exit codes</span>
@@ -419,7 +444,10 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 <span class="ln cmd">    --top-n 4 --min-abs-signal-bps 50 --notional-usd 25 --fees recorded --fill-book next \</span>
 <span class="ln cmd">    --market-db ~/.tengu/state/evidence/w1-2026-10-06/xlab/market.db \</span>
 <span class="ln cmd">    --compare-ledger ~/.tengu/state/evidence/w1-2026-10-06/xmarket-weekend/ledger.db --compare-account xmarket-weekend</span>
-<span class="ln o"># summary, one row per selected leg (MISSING with the reason), then replay vs ledger per name</span></pre>
+<span class="ln o"># summary, one row per selected leg (MISSING with the reason), then replay vs ledger per name</span>
+<span class="ln cmd"><span class="p">$ </span>tengu evidence evaluate ~/.tengu/state/evidence/w1-2026-10-06/xlab/backtests/20261001T182905Z-weekend_fade</span>
+<span class="ln o">jev − rules per trade: +28.93 bps, ci95 [-23.5, +81.6] over 29 periods (selection quality)</span>
+<span class="ln o">Jev: <span class="hl">UNPROVEN</span> — it skips winners: worse than taking every candidate, which a capped book cannot do — …</span></pre>
   </div>
 </section>
 
@@ -436,12 +464,14 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         <tr><td><code>src/domain/evidence_coverage.rs</code></td><td>slots, sweep and key gaps, the second source, the timeline</td></tr>
         <tr><td><code>src/domain/xm/grade.rs</code></td><td>ledger rows → trades, totals, verdicts, the 12 checks</td></tr>
         <tr><td><code>src/domain/xm/regrade.rs</code></td><td>price and book picks, depth walks, fees, funding, look-ahead flag, cross-checks</td></tr>
-        <tr><td><code>src/ports/evidence.rs</code></td><td><code>Vault</code>, <code>LedgerSource</code>, <code>RecordedHistory</code>, <code>BackfillSource</code></td></tr>
-        <tr><td><code>src/application/evidence.rs</code></td><td>the use cases: snapshot, verify, coverage, grade, regrade</td></tr>
+        <tr><td><code>src/domain/backtest/evaluation.rs</code></td><td>the candidate rows, the three policies, both lenses, the Jev verdict</td></tr>
+        <tr><td><code>src/ports/evidence.rs</code></td><td><code>Vault</code>, <code>LedgerSource</code>, <code>RunDirSource</code>, <code>RecordedHistory</code>, <code>BackfillSource</code></td></tr>
+        <tr><td><code>src/application/evidence.rs</code></td><td>the use cases: snapshot, verify, coverage, grade, regrade, evaluate</td></tr>
         <tr><td><code>src/adapters/outbound/evidence/mod.rs</code></td><td>the immutable read-only SQLite open; the live-WAL refusal</td></tr>
         <tr><td><code>src/adapters/outbound/evidence/vault.rs</code></td><td><code>FsVault</code>: create once, copy and hash, manifest, seal</td></tr>
-        <tr><td><code>src/adapters/outbound/evidence/ledger_reader.rs</code></td><td>a paper <code>ledger.db</code>, binary 6fcb455's schema or later</td></tr>
+        <tr><td><code>src/adapters/outbound/evidence/ledger_reader.rs</code></td><td>a paper <code>ledger.db</code>, binary 6fcb455bae5553e2d51390e4cedd334779ca0d9c's schema or later</td></tr>
         <tr><td><code>src/adapters/outbound/evidence/recorded.rs</code></td><td>recorder day files; <code>market.db</code> bars and funding</td></tr>
+        <tr><td><code>src/adapters/outbound/evidence/run_dir.rs</code></td><td>a gated backtest run dir: <code>report.json</code> and the three <code>.jsonl</code> files, read only</td></tr>
         <tr><td><code>src/adapters/inbound/cli/evidence.rs</code></td><td><code>tengu evidence</code> flags, text and JSON output, exit codes</td></tr>
         <tr><td><code>lineage/evidence/</code></td><td>the committed records: <code>w1-2026-10-06.toml</code></td></tr>
       </tbody>

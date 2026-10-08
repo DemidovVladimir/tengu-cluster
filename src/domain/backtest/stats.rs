@@ -16,6 +16,7 @@
 //! | best-2-period share | Σ net USD of the 2 best periods ÷ Σ net USD (total > 0) |
 //! | per instrument | n, mean net bps, Σ net USD, hit rate per instrument key |
 //! | [`paired_diff_ci`] | mean net bps of arm A − arm B, resampling the union of their periods; only when each arm has trades in ≥ 2 periods and ≥ 99 % of the resamples hold trades of both — else none: a CI from the resamples that happen to keep a thin arm is the other arm's spread alone (a 1-trade jev arm read −553.8 [−695.4, −412.3]) |
+//! | [`per_candidate_diff_ci`] | two policies on the same candidates (0 for one not taken — HOLD takes none): mean of a − b per candidate, resampling periods; ≥ 2 periods (decision evaluation, `evaluation.rs`) |
 //! | [`calibration`] | equal-width bins of p over [0, 1]: n, mean p, hit rate; Brier = mean (p − win)² |
 //!
 //! A figure that cannot be computed (too few trades / periods, sd 0) is
@@ -413,13 +414,26 @@ pub const MIN_PAIRED_COVERAGE: f64 = 0.99;
 /// resamples hold trades of both arms (the rest would condition the CI on
 /// the thin arm being drawn).
 pub fn paired_diff_ci(a: &[Trade], b: &[Trade], bootstrap: u32, seed: u64) -> Option<DiffCi> {
-    let net = |ts: &[Trade]| ts.iter().map(|t| t.net_bps).collect::<Vec<_>>();
+    let cells = |ts: &[Trade]| -> Vec<(String, f64)> {
+        ts.iter().map(|t| (t.period.clone(), t.net_bps)).collect()
+    };
+    paired_diff_ci_of(&cells(a), &cells(b), bootstrap, seed)
+}
+
+/// [`paired_diff_ci`] over (period, net bps) per trade.
+pub fn paired_diff_ci_of(
+    a: &[(String, f64)],
+    b: &[(String, f64)],
+    bootstrap: u32,
+    seed: u64,
+) -> Option<DiffCi> {
+    let net = |ts: &[(String, f64)]| ts.iter().map(|t| t.1).collect::<Vec<_>>();
     let diff = mean(&net(a))? - mean(&net(b))?;
     let mut per: BTreeMap<&str, [Cell; 2]> = BTreeMap::new();
     for (arm, trades) in [a, b].into_iter().enumerate() {
-        for t in trades {
-            let c = &mut per.entry(t.period.as_str()).or_default()[arm];
-            c.sum_bps += t.net_bps;
+        for (period, net_bps) in trades {
+            let c = &mut per.entry(period.as_str()).or_default()[arm];
+            c.sum_bps += net_bps;
             c.n += 1;
         }
     }
@@ -447,6 +461,52 @@ pub fn paired_diff_ci(a: &[Trade], b: &[Trade], bootstrap: u32, seed: u64) -> Op
     if (diffs.len() as f64) < MIN_PAIRED_COVERAGE * f64::from(bootstrap) {
         return None;
     }
+    diffs.sort_by(f64::total_cmp);
+    Some(DiffCi {
+        diff_bps: diff,
+        lo_bps: quantile(&diffs, 0.025)?,
+        hi_bps: quantile(&diffs, 0.975)?,
+        n_periods: k,
+        resamples: diffs.len(),
+    })
+}
+
+/// The module table's per-candidate difference: `cells` = (period, a, b)
+/// per candidate — what two policies earned on the same candidate (bps; 0
+/// for one not taken) — mean of a − b per candidate, with a paired
+/// bootstrap over periods; `None` with fewer than 2 periods.
+pub fn per_candidate_diff_ci(
+    cells: &[(&str, f64, f64)],
+    bootstrap: u32,
+    seed: u64,
+) -> Option<DiffCi> {
+    #[derive(Clone, Copy, Default)]
+    struct Period {
+        a: f64,
+        b: f64,
+        n: usize,
+    }
+    let mut per: BTreeMap<&str, Period> = BTreeMap::new();
+    for &(period, a, b) in cells {
+        let p = per.entry(period).or_default();
+        p.a += a;
+        p.b += b;
+        p.n += 1;
+    }
+    let periods: Vec<Period> = per.into_values().collect();
+    if periods.len() < 2 {
+        return None;
+    }
+    let diff_of = |ps: &mut dyn Iterator<Item = Period>| {
+        let (a, b, n) = ps.fold((0.0, 0.0, 0), |(a, b, n), p| (a + p.a, b + p.b, n + p.n));
+        (n > 0).then(|| (a - b) / n as f64)
+    };
+    let diff = diff_of(&mut periods.iter().copied())?;
+    let mut rng = SplitMix64::new(seed);
+    let k = periods.len();
+    let mut diffs: Vec<f64> = (0..bootstrap)
+        .filter_map(|_| diff_of(&mut (0..k).map(|_| periods[rng.below(k)])))
+        .collect();
     diffs.sort_by(f64::total_cmp);
     Some(DiffCi {
         diff_bps: diff,

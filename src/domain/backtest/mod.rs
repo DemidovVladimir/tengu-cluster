@@ -14,6 +14,7 @@
 //! | `costs.rs` | the cost model a spec or `[backtest.costs]` sets: taker fee, half-spread (fixed / Abdi–Ranaldo / archive ctx), slippage, funding on or off |
 //! | `features.rs` | features as-of t (returns, vol, volume ratio, trades, funding APR, half-spread, hour of week) for the Jev gate |
 //! | `gate.rs` | the Jev gate arm's pure half: the event a candidate shows Jev, `GateClass` of a verdict, p(take), `GateSummary` (counts, cache, cost, calibration, jev − rules) + its `report.md` section and row features |
+//! | `evaluation.rs` | decision evaluation (Phase 6): one row per candidate of a gated run — rules · Jev · HOLD on the same candidates, paired per-candidate CIs, the Jev verdict (`tengu evidence evaluate`) |
 //! | `stats.rs` | `Summary` (mean / median / t / hit, USD, drawdown, Sharpe, seeded cluster-bootstrap CI, robustness), paired arm difference, calibration |
 //! | `report.rs` | `BacktestReport` = `report.json` + row `backtest/1:<run id>`, `report.md`, compact CLI / tool text |
 //! | `testkit.rs` · `checks.rs` | tests only: fixtures; time integrity (§ 39) + the rule W golden |
@@ -22,6 +23,7 @@
 pub(crate) mod checks;
 pub(crate) mod costs;
 pub(crate) mod engine;
+pub(crate) mod evaluation;
 pub(crate) mod features;
 pub(crate) mod fills;
 pub(crate) mod gate;

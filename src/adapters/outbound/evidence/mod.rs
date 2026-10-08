@@ -10,9 +10,11 @@
 //! | `vault.rs` | `Vault` — `<TENGU_HOME>/state/evidence/<vault>/` |
 //! | `ledger_reader.rs` | `LedgerSource` — a paper `ledger.db`, old schema tolerated |
 //! | `recorded.rs` | `RecordedHistory` (recorder day files) · `BackfillSource` (`market.db`) |
+//! | `run_dir.rs` | `RunDirSource` — a gated backtest run dir (plain files, read only) |
 
 pub(crate) mod ledger_reader;
 pub(crate) mod recorded;
+pub(crate) mod run_dir;
 pub(crate) mod vault;
 
 use std::path::Path;
