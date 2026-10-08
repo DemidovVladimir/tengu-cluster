@@ -4,6 +4,7 @@
 //! |---|---|---|
 //! | `range <key> --from --to` · `asof <keys…> --at` | recorder day files (`[recorder]`, `<state dir>/history/`) | JSON lines with full keys; a `SqliteHistoryStore::reader` creates and deletes nothing |
 //! | `backfill --instruments <items> [--source hl\|gecko] [--interval 1h] --from [--to] [--funding] [--no-bars]` | `<state dir>/market.db` (xlab) | HL bars (+ funding) or GeckoTerminal pool bars (`outbound/backfill/`); resumes; prints the run table; exit 1 when any row failed |
+//! | `events --instruments <items> --from [--to]` | `market.db` `events` + `event_coverage` | SEC EDGAR filings (8-K, 6-K, 10-Q, 10-K, 20-F, 40-F + amendments; `outbound/backfill/sec.rs`) of `hyperliquid:xyz:<TICKER>` ids, published = the index page's acceptance time; a ticker without a CIK is recorded as not covered; needs `$SEC_USER_AGENT`; prints the run table; exit 1 when any row failed |
 //! | `import-hl-archive --dir <dir>` | `market.db` `ctx` | HL S3 `asset_ctxs` files (`*.csv.lz4`, `*.csv`) |
 //! | `import-json --file <path>` | `market.db` `bars` / `funding` | a JSON dataset file |
 //! | `coverage [--instrument <id>]` | `market.db` | instrument, kind, interval, first, last, rows, sources (full ids) |
@@ -12,7 +13,7 @@
 //! |---|---|
 //! | Times | epoch ms, RFC 3339 or `YYYY-MM-DD` (`domain::marketdata::parse_time`) |
 //! | Items | comma-separated full ids; `@<name>` = `[backtest.universes.<name>]`; Gecko: `<id>@<pool address>` |
-//! | Network | the process's installed `[egress]` policy (`cli/mod.rs` installs the sandbox's): proxy, `allow_hosts`, audit lines attributed `agent = cli`, `session = history-backfill:<start ms>`, `call_id = <instrument>` |
+//! | Network | the process's installed `[egress]` policy (`cli/mod.rs` installs the sandbox's): proxy, `allow_hosts`, audit lines attributed `agent = cli`, `session = history-backfill:<start ms>` (`events`: `history-events:<start ms>`), `call_id = <instrument>` (the SEC ticker map: `sec:company_tickers`) |
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +27,9 @@ use crate::adapters::outbound::backfill::gecko::{
 use crate::adapters::outbound::backfill::hl::{hl_bars, hl_funding_history, operator_hl, HlPlan};
 use crate::adapters::outbound::backfill::hl_archive::import_hl_archive;
 use crate::adapters::outbound::backfill::json::import_json;
+use crate::adapters::outbound::backfill::sec::{
+    operator_sec, sec_filings, sec_ticker_map, SecPlan,
+};
 use crate::adapters::outbound::backfill::{text_table, BackfillReport, Retry};
 use crate::adapters::outbound::egress::{audited_as, CallScope};
 use crate::adapters::outbound::history_sqlite::SqliteHistoryStore;
@@ -39,6 +43,7 @@ use crate::domain::market::InstrumentId;
 use crate::domain::marketdata::{fmt_time, parse_time, Interval};
 use crate::domain::marketdata_decode::hl_coin;
 use crate::domain::observation::now_ms;
+use crate::domain::sec::sec_ticker;
 use crate::ports::history::HistoryStore;
 
 #[derive(Subcommand)]
@@ -90,6 +95,22 @@ pub(super) enum HistoryAction {
         /// Skip bars (with --funding: funding only).
         #[arg(long)]
         no_bars: bool,
+    },
+    /// Fill <state dir>/market.db events from SEC EDGAR filings (8-K, 6-K,
+    /// 10-Q, 10-K, 20-F, 40-F + amendments) of xyz stocks, published at the
+    /// filing's acceptance time, + one event-coverage row per instrument.
+    /// Needs SEC_USER_AGENT ("Name email").
+    Events {
+        /// Comma-separated hyperliquid:xyz:<TICKER> ids, `@<name>` =
+        /// [backtest.universes.<name>].
+        #[arg(long)]
+        instruments: String,
+        /// Start, inclusive: epoch ms, RFC 3339 or a UTC date (2026-03-01).
+        #[arg(long)]
+        from: String,
+        /// End, exclusive; default (and at most) now.
+        #[arg(long)]
+        to: Option<String>,
     },
     /// Import HL S3 archive asset contexts (`*.csv.lz4`, `*.csv` under --dir,
     /// downloaded with `aws s3 cp --request-payer requester`) into market.db.
@@ -163,6 +184,26 @@ pub(super) async fn run_history(config: &Config, action: HistoryAction) -> Resul
             let targets = targets(&instruments, source, sections.backtest.as_ref())?;
             req.check()?;
             let report = backfill(&sections, &req, &targets, now).await?;
+            finish(report)?;
+        }
+        HistoryAction::Events {
+            instruments,
+            from,
+            to,
+        } => {
+            let now = now_ms();
+            let from_ms = time(&from)?;
+            let to_ms = to.as_deref().map(time).transpose()?.unwrap_or(now).min(now);
+            if from_ms >= to_ms {
+                bail!(
+                    "--from {} is not before --to {} (at most now)",
+                    fmt_time(from_ms),
+                    fmt_time(to_ms)
+                );
+            }
+            let sections = sections(config);
+            let ids = event_targets(&instruments, sections.backtest.as_ref())?;
+            let report = events(&sections, &ids, from_ms, to_ms, now).await?;
             finish(report)?;
         }
         HistoryAction::ImportHlArchive { dir } => {
@@ -294,19 +335,8 @@ fn targets(
     source: BackfillSource,
     backtest: Option<&BacktestConfig>,
 ) -> Result<Vec<Target>> {
-    let mut expanded: Vec<String> = Vec::new();
-    for item in items.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-        if let Some(name) = item.strip_prefix('@') {
-            let bt = backtest.ok_or_else(|| {
-                anyhow!("`{item}` needs [backtest.universes.{name}]: the sandbox has no [backtest]")
-            })?;
-            expanded.extend(bt.resolve_universe(item).map_err(|e| anyhow!(e))?);
-        } else {
-            expanded.push(item.to_string());
-        }
-    }
     let mut out: Vec<Target> = Vec::new();
-    for item in expanded {
+    for item in expand_items(items, backtest)? {
         let target = match source {
             BackfillSource::Hl => {
                 hl_coin(&item).map_err(|e| anyhow!(e))?;
@@ -338,6 +368,82 @@ fn targets(
         bail!("--instruments names no instrument");
     }
     Ok(out)
+}
+
+/// `--instruments` items, in order, `@<name>` universes expanded.
+fn expand_items(items: &str, backtest: Option<&BacktestConfig>) -> Result<Vec<String>> {
+    let mut expanded: Vec<String> = Vec::new();
+    for item in items.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(name) = item.strip_prefix('@') {
+            let bt = backtest.ok_or_else(|| {
+                anyhow!("`{item}` needs [backtest.universes.{name}]: the sandbox has no [backtest]")
+            })?;
+            expanded.extend(bt.resolve_universe(item).map_err(|e| anyhow!(e))?);
+        } else {
+            expanded.push(item.to_string());
+        }
+    }
+    Ok(expanded)
+}
+
+/// `events --instruments` → xyz stock ids, in order, without repeats; each
+/// checked (`hyperliquid:xyz:<TICKER>`) before any request.
+fn event_targets(items: &str, backtest: Option<&BacktestConfig>) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for id in expand_items(items, backtest)? {
+        sec_ticker(&id).map_err(|e| anyhow!(e))?;
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    if out.is_empty() {
+        bail!("--instruments names no instrument");
+    }
+    Ok(out)
+}
+
+/// SEC EDGAR filings of `ids` over `[from_ms, to_ms)` → `market.db`
+/// (`outbound/backfill/sec.rs`): the ticker map once, then one row per id.
+async fn events(
+    sections: &SandboxSections,
+    ids: &[String],
+    from_ms: i64,
+    to_ms: i64,
+    now: i64,
+) -> Result<BackfillReport> {
+    // Refused without $SEC_USER_AGENT before anything is opened or sent.
+    let sec = operator_sec(sections)?;
+    let store = open_market_data(sections)?;
+    let retry = Retry::BACKFILL;
+    let session = format!("history-events:{now}");
+    let scope = |call_id: &str| CallScope {
+        agent: "cli".to_string(),
+        session: session.clone(),
+        call_id: call_id.to_string(),
+    };
+    let ciks = audited_as(scope("sec:company_tickers"), sec_ticker_map(&sec, &retry))
+        .await
+        .map_err(|e| anyhow!("SEC ticker map (www.sec.gov/files/company_tickers.json): {e:#}"))?;
+    let mut report = BackfillReport::default();
+    report.notes.push(format!(
+        "SEC ticker map: {} tickers; published = each filing's acceptance time (index page, New York → UTC)",
+        ciks.len()
+    ));
+    for id in ids {
+        let plan = SecPlan {
+            instrument: id.clone(),
+            from_ms,
+            to_ms,
+        };
+        let row = audited_as(
+            scope(id),
+            sec_filings(&sec, store.as_ref(), &ciks, &plan, &retry, now),
+        )
+        .await;
+        progress(&row);
+        report.rows.push(row);
+    }
+    Ok(report)
 }
 
 /// Fill `market.db` for `targets` per `req` (module table); also `tengu
@@ -514,6 +620,37 @@ mod tests {
                 .contains("no [backtest.universes] entry `nope`"),
             "{e}"
         );
+    }
+
+    #[test]
+    fn event_items_are_xyz_stocks() {
+        let bt: BacktestConfig = toml::from_str(
+            r#"
+            [universes]
+            stocks = ["hyperliquid:xyz:AAPL", "hyperliquid:xyz:TSLA"]
+            crypto = ["hyperliquid:BTC"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            event_targets("hyperliquid:xyz:TSLA, @stocks", Some(&bt)).unwrap(),
+            vec!["hyperliquid:xyz:TSLA", "hyperliquid:xyz:AAPL"],
+            "order kept, no repeats"
+        );
+        let e = event_targets("@crypto", Some(&bt)).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("`hyperliquid:BTC` is not an xyz stock"),
+            "{e}"
+        );
+        assert!(event_targets(" , ", Some(&bt))
+            .unwrap_err()
+            .to_string()
+            .contains("names no instrument"));
+        assert!(event_targets("@stocks", None)
+            .unwrap_err()
+            .to_string()
+            .contains("has no [backtest]"));
     }
 
     #[test]

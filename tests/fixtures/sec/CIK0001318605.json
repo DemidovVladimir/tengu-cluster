@@ -1,0 +1,103 @@
+{
+  "cik": "0001318605",
+  "entityType": "operating",
+  "name": "Tesla, Inc.",
+  "tickers": [
+    "TSLA"
+  ],
+  "exchanges": [
+    "Nasdaq"
+  ],
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001104659-26-106432",
+        "0001628280-26-049270",
+        "0001628280-26-049213"
+      ],
+      "filingDate": [
+        "2026-09-09",
+        "2026-07-23",
+        "2026-07-22"
+      ],
+      "reportDate": [
+        "2026-09-05",
+        "2026-06-30",
+        "2026-07-22"
+      ],
+      "acceptanceDateTime": [
+        "2026-09-09T23:00:10.000Z",
+        "2026-07-23T01:02:31.000Z",
+        "2026-07-22T20:35:52.000Z"
+      ],
+      "act": [
+        "",
+        "34",
+        "34"
+      ],
+      "form": [
+        "4",
+        "10-Q",
+        "8-K"
+      ],
+      "fileNumber": [
+        "",
+        "001-34756",
+        "001-34756"
+      ],
+      "filmNumber": [
+        "",
+        "261194921",
+        "261194091"
+      ],
+      "items": [
+        "",
+        "",
+        "2.02,9.01"
+      ],
+      "core_type": [
+        "4",
+        "XBRL",
+        "XBRL"
+      ],
+      "size": [
+        10270,
+        8824722,
+        5540214
+      ],
+      "isXBRL": [
+        0,
+        1,
+        1
+      ],
+      "isInlineXBRL": [
+        0,
+        1,
+        1
+      ],
+      "isXBRLNumeric": [
+        0,
+        1,
+        0
+      ],
+      "primaryDocument": [
+        "xslF345X06/tm2625055d1_4seq1.xml",
+        "tsla-20260630.htm",
+        "tsla-20260722.htm"
+      ],
+      "primaryDocDescription": [
+        "OWNERSHIP DOCUMENT",
+        "10-Q",
+        "8-K"
+      ]
+    },
+    "files": [
+      {
+        "name": "CIK0001318605-submissions-001.json",
+        "filingCount": 752,
+        "filingFrom": "2005-02-17",
+        "filingTo": "2018-05-13"
+      }
+    ]
+  }
+}

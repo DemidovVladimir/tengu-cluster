@@ -4,11 +4,12 @@
 //! (tool client, `check_url` = `[egress] allow_hosts`, audit line) and a
 //! `[rate_limits.<name>]` budget; a 429 / 5xx / timeout is retried per
 //! [`Retry`] (`domain::backoff::next_delay`, `Retry-After` respected). Rows go
-//! through the pure decoders of `domain/marketdata_decode.rs`. Each run
-//! returns a [`BackfillReport`] (full ids).
+//! through the pure decoders of `domain/marketdata_decode.rs` (SEC:
+//! `domain/sec.rs`). Each run returns a [`BackfillReport`] (full ids).
 //!
 //! | File | Reads | Writes (`source`) | Resume |
 //! |---|---|---|---|
+//! | `sec.rs` | SEC EDGAR `company_tickers.json`, `submissions/CIK##########.json` (+ older pages), one filing index page per filing (`Accepted`, New York → UTC) | `events` (`sec`, kind `filing`), `event_coverage` (one per instrument; no CIK ⇒ not covered) | a stored accession keeps its time (no index read); coverage joins a touching stored span |
 //! | `hl.rs` | HL `candleSnapshot` (newest 5 000 bars / interval: an older start is clamped, noted), `fundingHistory` (≤ 500 rows / reply) via `HlInfo` | `bars`, `funding` (`hl`; `hl:<host>` off mainnet) | [`missing_ranges`]: from the bar after the last stored one / after the last stored `t_ms`; a `from` ≥ one bar (funding: 1 h) before the first stored row also fetches that head |
 //! | `gecko.rs` | GeckoTerminal `/networks/<network>/pools/<pool>/ohlcv/<timeframe>` (≤ 1 000 bars / reply, newest first, paged backwards) | `bars` (`gecko:<network>:<pool>`) | as HL bars |
 //! | `hl_archive.rs` | local `asset_ctxs` files (`*.csv.lz4` LZ4 frame, `*.csv`) under a dir | `ctx` (`hl-archive:asset_ctxs`) | a re-import replaces |
@@ -24,6 +25,7 @@ pub(crate) mod gecko;
 pub(crate) mod hl;
 pub(crate) mod hl_archive;
 pub(crate) mod json;
+pub(crate) mod sec;
 
 use std::future::Future;
 use std::time::Duration;
@@ -112,17 +114,18 @@ impl Retry {
 pub(crate) struct ReportRow {
     /// Full instrument id.
     pub instrument: String,
-    /// `bars` | `funding` | `ctx`.
+    /// `bars` | `funding` | `ctx` | `filings` (SEC events).
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interval: Option<Interval>,
     pub source: String,
     /// Rows upserted.
     pub rows: usize,
-    /// Requests attempted (HL, Gecko: retries and an egress denial count
-    /// once) or files read (archive, JSON).
+    /// Requests attempted (HL, Gecko, SEC: retries and an egress denial
+    /// count once) or files read (archive, JSON).
     pub reads: u32,
-    /// Earliest / latest written row time (bars: `t_open_ms`).
+    /// Earliest / latest written row time (bars: `t_open_ms`; filings:
+    /// `published_ms`).
     pub first_ms: Option<i64>,
     pub last_ms: Option<i64>,
     /// Clamped start, resume, up to date.
