@@ -319,7 +319,7 @@
   <div class="sec-head">
     <span class="kicker">The store</span>
     <h2 id="s-store"><code>sources.db</code>: append-only</h2>
-    <p>One SQLite file per <code>[sources] state</code>, at <code>&lt;TENGU_HOME&gt;/state/&lt;state&gt;/sources.db</code>, mode 0600, never <code>market.db</code>. One commit writes snapshots, records, coverage and the cursor together, or nothing.</p>
+    <p>One SQLite file per <code>[sources] state</code>, at <code>&lt;TENGU_HOME&gt;/state/&lt;state&gt;/sources.db</code>, mode 0600 (its WAL and WAL index too: the file is created 0600 before SQLite opens it), never <code>market.db</code>. One commit writes snapshots, records, coverage and the cursor together, or nothing.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -330,7 +330,7 @@
         <tr><td><code>coverage</code></td><td>one row per fetch of a query: span, complete, error class</td><td>appended</td></tr>
         <tr><td><code>cursors</code></td><td>where a query resumes (SEC: the newest accession of a CIK; TED: the newest publication day read whole)</td><td>the one mutable row, moved only inside a committed batch</td></tr>
         <tr><td><code>purges</code></td><td>tombstones: what a retention purge removed, when and why</td><td>appended in the purge's own transaction</td></tr>
-        <tr><td><code>switches</code></td><td>the runtime kill switch: source, off or on, when, why</td><td>appended; the newest row per source wins</td></tr>
+        <tr><td><code>switches</code></td><td>the runtime kill switch: source, off or on, when, why</td><td>appended; the last appended row per source wins (append order, never the clock)</td></tr>
       </tbody>
     </table>
   </div>
@@ -413,7 +413,7 @@
         <tr><td>kill switch</td><td><code>tengu sources disable</code> refuses every fetch and import of the source from the next call; <code>enable</code> lifts only that switch</td></tr>
         <tr><td>contact data</td><td>TED requests ask for no contact field (person, email, phone, address) and the decoder reads only its allow-list; buyers are organisations</td></tr>
         <tr><td>credentials</td><td>SEC's User-Agent is a request header only: never in a snapshot, record, report or audit line. TED is anonymous.</td></tr>
-        <tr><td>reach</td><td><code>sources.db</code> is mode 0600 in a state dir outside every <code>fs_roots</code> entry and workspace; agents read it only through <code>source_evidence</code></td></tr>
+        <tr><td>reach</td><td><code>sources.db</code> (with its <code>-wal</code> and <code>-shm</code>) is mode 0600 in a state dir outside every <code>fs_roots</code> entry and workspace; agents read it only through <code>source_evidence</code></td></tr>
       </tbody>
     </table>
   </div>

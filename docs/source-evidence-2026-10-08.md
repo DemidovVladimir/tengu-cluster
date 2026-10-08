@@ -55,7 +55,7 @@ Facts read from approved public sources become **source records** with full prov
 | `coverage` (one row per fetch: span, complete, error class) · `cursors` | appended · the one mutable row, moved only inside a committed batch |
 | `purges` (tombstones) · `switches` (runtime kill switch) | appended |
 
-One `commit` = snapshots + records + coverage + cursor in one transaction: every record validated, every named snapshot known, every body hashing to its sha256 — or nothing. File mode 0600, WAL, `user_version` 2. A read at t seeds `min(published, observed) ≤ t`, then adds every version of each item and every record of each event (the knowable clock needs an item's first read; a correction may lack the entity).
+One `commit` = snapshots + records + coverage + cursor in one transaction: every record validated, every named snapshot known, every body hashing to its sha256 — or nothing. Mode 0600 for the file, its WAL and WAL index (created 0600 before SQLite opens it), `user_version` 2. Kill switch: the last appended `switches` row per source wins — append order, never the clock. A read at t seeds `min(published, observed) ≤ t`, then adds every version of each item and every record of each event (the knowable clock needs an item's first read; a correction may lack the entity).
 
 ## 4. As-of view — two clocks (`src/domain/source/asof.rs`)
 
@@ -131,7 +131,7 @@ Hosts, audit (`sec_edgar` / `ted_search`) and attribution: [`egress-2026-09-16.m
 | Kill switch | `tengu sources disable` appends a `switches` row; the TOML stays the ceiling |
 | Contact data | TED asks for no contact field (person, email, phone, address) and the decoder reads only its allow-list; buyers are organisations |
 | Credentials | SEC's User-Agent is a request header only — never in a snapshot, record, report or audit line; TED is anonymous |
-| Reach | `sources.db` 0600, its dir outside every fs root and workspace; agents read it only through `source_evidence` |
+| Reach | `sources.db` (+ `-wal`, `-shm`) 0600, its dir outside every fs root and workspace; agents read it only through `source_evidence` |
 
 ## 10. Tests
 
