@@ -18,9 +18,6 @@
 //! The opportunity's fit is its weakest skill's level; `UNSTATED` when it
 //! lists no `requires_skills` (ranks as unknown — last — never as a fit).
 
-// Consumers land with `tengu soe` (O1 W7) and the O3 allocation.
-#![allow(dead_code)]
-
 use serde::Serialize;
 
 use super::opportunity::Opportunity;

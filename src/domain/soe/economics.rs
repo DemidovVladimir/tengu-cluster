@@ -13,14 +13,14 @@
 //! | `owner_hours_per_month` · `owner_time_cost` | `owner_hours_per_month` (+ ONE_OFF ⌈`owner_hours_total` / occ⌉) · those hours × `shadow_hourly_rate` |
 //! | `time_adjusted_contribution` | cash contribution − owner time cost |
 //! | `initial_capital` | acquisition + setup + validation + working capital |
-//! | `payback` · `payback_time_adjusted` | the first month the running sum of the month's cash · time-adjusted contribution covers the initial capital; fixed costs and owner hours run from month 1, revenue after the ramp; ONE_OFF stops after ramp + occ; none within [`PAYBACK_SCAN_MONTHS`] ⇒ `NOT_REACHED`; no initial capital ⇒ 0. The cash one is a native ratio (needs no rate) |
+//! | `payback` · `payback_time_adjusted` | the first month the running sum of the month's cash · time-adjusted contribution covers the initial capital; fixed costs and owner hours run from month 1, revenue after the ramp; ONE_OFF stops after ramp + occ; none within [`PAYBACK_SCAN_MONTHS`] (any model, any ramp) ⇒ `NOT_REACHED`; no initial capital ⇒ 0. The cash one is a native ratio (needs no rate) |
 //! | `expected_loss` ([`Scenarios`]) | Σ probability × impact per risk: low ends floored .. high ends ceiled — a range, never a point |
 //! | currency | native = `economics.currency`; another profile currency converts through `economics.fx` (`<native>/<profile>`; inflows floor, outflows ceil); no such rate ⇒ every money figure needs `economics.fx` |
 //! | basis | `PRE_TAX` — v1 has no tax model; the gates hold a `POST_TAX` profile's passing figures |
 //! | scenarios | downside = each input's adverse end, upside its favorable end ([`Est::pick`]); a ONE_OFF figure takes the delivery length that is worse (downside) · better (upside) for that figure |
 //! | `inputs_sha256` | canonical sha256 of [`ECONOMICS_VERSION`] + `economics` + `risk` + the profile knobs read (`currency`, `shadow_hourly_rate`, `max_payback_months`) |
 
-// Consumers land with the gates, ranking and `tengu soe` (O1 W4–W7).
+// `Scenarios::get` and `Metric::fields` are read by tests only until O3.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
@@ -684,7 +684,9 @@ fn cash_of(revenue: i128, variable: i128, fixed: i128) -> Result<i128, ValueErro
     Ok(revenue - div_ceil(mul(revenue, variable)?, FULL) - fixed)
 }
 
-/// The first month the running sum covers `initial` (module table).
+/// The first month the running sum covers `initial` (module table); only
+/// the first [`PAYBACK_SCAN_MONTHS`] count, whatever the ramp or delivery
+/// length.
 fn payback(
     monthly: impl IntoIterator<Item = Result<i128, ValueError>>,
     initial: i128,
@@ -693,7 +695,8 @@ fn payback(
         return Ok(Payback::Months(0));
     }
     let mut sum = 0i128;
-    for (i, c) in monthly.into_iter().enumerate() {
+    let scan = monthly.into_iter().take(PAYBACK_SCAN_MONTHS as usize);
+    for (i, c) in scan.enumerate() {
         sum = add(sum, c?)?;
         if sum >= initial {
             return Ok(Payback::Months(i as u32 + 1));
@@ -709,6 +712,7 @@ fn run_rate(
     k: &Knobs,
     s: Scenario,
 ) -> Result<ScenarioMetrics, ValueError> {
+    // The profile keeps `horizon` ≤ PAYBACK_SCAN_MONTHS (`profile.rs`).
     let months = k.horizon.max(PAYBACK_SCAN_MONTHS);
     let h = k.horizon as usize - 1;
     let revenue: Need<Vec<i128>> = need(|c| {
@@ -1206,6 +1210,24 @@ transition = { status = "VERIFIED", evidence = ["url:https://example.org/handove
         let mut big = opp.clone();
         big.economics.initial.setup.value = Est::point(m("9200.00"));
         assert_eq!(known(&base(&big).payback), Payback::NotReached);
+        // The scan stops at PAYBACK_SCAN_MONTHS whatever the ramp: no fixed
+        // costs, so the first delivery month pays back — month 600 counts,
+        // month 601 is past the scan.
+        let late = |ramp: u32| {
+            let mut o = opp.clone();
+            o.economics.fixed_costs_per_month.value = Est::point(Minor::ZERO);
+            o.economics.ramp_months.value = Est::point(ramp);
+            let b = base(&o);
+            (known(&b.payback), known(&b.payback_time_adjusted))
+        };
+        assert_eq!(
+            late(PAYBACK_SCAN_MONTHS - 1),
+            (Payback::Months(600), Payback::Months(600))
+        );
+        assert_eq!(
+            late(PAYBACK_SCAN_MONTHS),
+            (Payback::NotReached, Payback::NotReached)
+        );
     }
 
     #[test]

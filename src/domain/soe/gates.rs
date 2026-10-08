@@ -16,7 +16,7 @@
 //! | `MECHANISM_HOLD` · `MECHANISM_REJECT` | the mechanism is `HOLD` · `REJECT` | HOLD · REJECT |
 //! | `CASH_EXPOSURE_ABOVE_CAP` | the largest of initial capital (downside), Σ stage cash and the `max_loss.cash` high end > `max_cash_exposure` | REJECT |
 //! | `TRANCHE_ABOVE_MAX` | a stage's cash > `max_validation_tranche` | REJECT |
-//! | `CONTRIBUTION_BELOW_TARGET` · `BELOW_TARGET_WITH_PATH` | base contribution (`contribution_basis`) < `min_monthly_contribution`: when the upside reaches it and a staged experiment exists ⇒ the path HOLD, else REJECT | REJECT · HOLD |
+//! | `CONTRIBUTION_BELOW_TARGET` · `BELOW_TARGET_WITH_PATH` | base contribution (`contribution_basis`) < `min_monthly_contribution`: when the upside reaches it and a live staged experiment exists ⇒ the path HOLD, else REJECT | REJECT · HOLD |
 //! | `PAYBACK_ABOVE_MAX` | base cash payback > `max_payback_months` or `NOT_REACHED` | REJECT |
 //! | `DELIVERY_TOO_LONG` | ONE_OFF base `delivery_weeks` > `max_one_off_delivery_weeks` | HOLD |
 //! | `UNBOUNDED_OWNER_TIME` · `UNBOUNDED_SUPPORT` · `UNBOUNDED_PAYMENT_ACCESS` · `UNBOUNDED_SCOPE` | its `risk.bounds` value `UNBOUNDED` ⇒ REJECT; `UNKNOWN` — owner time also with unknown owner hours ⇒ HOLD | REJECT · HOLD |
@@ -27,7 +27,7 @@
 //! | `DILIGENCE_OPEN` | another deal block not `VERIFIED` | HOLD |
 //! | `DEAL_RED_FLAG` | a deal block `RED_FLAG`, or a listed `red_flags` entry | REJECT |
 //! | `JURISDICTION_NOT_ALLOWED` | a `[jurisdictions]` code outside `jurisdictions_allow` | HOLD |
-//! | `NO_STAGED_STOP_RULE` | the first stage with cash has no stop rule ⇒ REJECT; no experiment ⇒ HOLD | REJECT · HOLD |
+//! | `NO_STAGED_STOP_RULE` | the first stage with cash has no stop rule ⇒ REJECT; no experiment, or one that may have expired by the decision (`expires_at`, its whole day) ⇒ HOLD | REJECT · HOLD |
 //! | `DOWNSIDE_UNSTATED` | a `max_loss` term is unknown | HOLD |
 //! | `UNKNOWN_INPUT:<field>` | a figure or field a gate reads is unknown (a jurisdiction `UNKNOWN`, `economics.fx`, …); under a `POST_TAX` profile a passing contribution or payback needs `economics.tax_review` (figures are pre-tax) | HOLD |
 //!
@@ -42,7 +42,7 @@
 //! [`gates`] refuses (`Err`) an unsigned profile, an unknown decision time and
 //! an opportunity dated after it (`future_leakage`).
 
-// Consumers land with the ranking, the eval set and `tengu soe` (O1 W5–W8).
+// `GateCode::ALL` is read by tests only.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;
@@ -50,6 +50,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::economics::{fields, scenarios, to_currency, Metric, Payback, Scenarios};
+use super::experiment::ExperimentSpec;
 use super::opportunity::{DiligenceStatus, Mechanism, Opportunity, RevenueModel};
 use super::profile::{ContributionBasis, OperatorProfile, ProfitBasis};
 use super::record::{stated, Problems, Verdict};
@@ -381,14 +382,14 @@ pub fn gates(
     let mut r = Run::default();
     mechanism(opp, &mut r);
     exposure(opp, &sc, profile, &mut r)?;
-    contribution(opp, &sc, profile, &mut r);
+    contribution(opp, &sc, profile, &as_of, &mut r);
     payback(&sc, profile, &mut r);
     delivery(opp, profile, &mut r);
     bounds(opp, &mut r);
     evidence(opp, cited, &as_of, &mut r);
     legal(opp, &mut r);
     jurisdictions(opp, profile, &mut r);
-    stop_rule(opp, &mut r);
+    stop_rule(opp, &as_of, &mut r);
     downside(opp, &mut r);
     Ok(r.finish(as_of, &sc))
 }
@@ -475,12 +476,22 @@ fn exposure(
     Ok(())
 }
 
-/// An experiment exists and its first spend carries a stop rule.
-fn staged(opp: &Opportunity) -> bool {
+/// The experiment has not expired at `as_of`: `expires_at` covers its whole
+/// day, and one that may have passed by the decision is void.
+fn live(x: &ExperimentSpec, as_of: &Time) -> bool {
+    matches!(
+        (as_of.latest(), x.expires_at.window_end()),
+        (Some(t), Some(end)) if t < end
+    )
+}
+
+/// A live experiment exists and its first spend carries a stop rule.
+fn staged(opp: &Opportunity, as_of: &Time) -> bool {
     opp.experiment.as_ref().is_some_and(|x| {
-        x.first_spend()
-            .map(|(_, stage)| stage.stop_rule.is_some())
-            .unwrap_or(true)
+        live(x, as_of)
+            && x.first_spend()
+                .map(|(_, stage)| stage.stop_rule.is_some())
+                .unwrap_or(true)
     })
 }
 
@@ -495,7 +506,7 @@ fn post_tax(p: &OperatorProfile, r: &mut Run, what: &str) {
     }
 }
 
-fn contribution(opp: &Opportunity, sc: &Scenarios, p: &OperatorProfile, r: &mut Run) {
+fn contribution(opp: &Opportunity, sc: &Scenarios, p: &OperatorProfile, as_of: &Time, r: &mut Run) {
     let basis = p.contribution_basis;
     let target = p.min_monthly_contribution;
     let name = match basis {
@@ -512,7 +523,7 @@ fn contribution(opp: &Opportunity, sc: &Scenarios, p: &OperatorProfile, r: &mut 
                 money(p, *base),
                 money(p, target)
             );
-            if reaches && staged(opp) {
+            if reaches && staged(opp, as_of) {
                 r.hold(
                     GateCode::BelowTargetWithPath,
                     Some("experiment"),
@@ -745,7 +756,7 @@ fn jurisdictions(opp: &Opportunity, p: &OperatorProfile, r: &mut Run) {
     }
 }
 
-fn stop_rule(opp: &Opportunity, r: &mut Run) {
+fn stop_rule(opp: &Opportunity, as_of: &Time, r: &mut Run) {
     let Some(x) = &opp.experiment else {
         r.hold(
             GateCode::NoStagedStopRule,
@@ -754,6 +765,16 @@ fn stop_rule(opp: &Opportunity, r: &mut Run) {
         );
         return;
     };
+    if !live(x, as_of) {
+        r.hold(
+            GateCode::NoStagedStopRule,
+            Some("experiment.expires_at"),
+            format!(
+                "the experiment expired at {} — by the decision {as_of}: it stages nothing; a new one is needed",
+                x.expires_at
+            ),
+        );
+    }
     if let Some((i, stage)) = x.first_spend() {
         if stage.stop_rule.is_none() {
             r.reject(
@@ -1350,6 +1371,55 @@ stop_rule = "fewer than 3 seats sold"
             ["CONTRIBUTION_BELOW_TARGET", "NO_STAGED_STOP_RULE"]
         );
         assert!(has(&v, GateCode::NoStagedStopRule, Verdict::Hold));
+    }
+
+    #[test]
+    fn an_expired_experiment_stages_nothing() {
+        // EXPERIMENT expires 2026-11-30 (its whole day). A later rerun of the
+        // same version must not pass on it, nor hold on it as a bounded path.
+        let last = t("2026-11-30T23:59:59.999Z");
+        let gone = t("2026-12-01T00:00:00Z");
+        assert_eq!(
+            run_with(&passing(), &cited(), &synthetic(), last).verdict,
+            Verdict::Pass
+        );
+        let v = run_with(&passing(), &cited(), &synthetic(), gone);
+        assert_eq!(v.verdict, Verdict::Hold);
+        assert_eq!(labels(&v), ["NO_STAGED_STOP_RULE"]);
+        assert_eq!(next_information(&v), ["experiment.expires_at"]);
+        assert!(
+            v.failures[0].detail.contains("expired at 2026-11-30"),
+            "{v:?}"
+        );
+        // A decision day that runs past an instant expiry may be after it.
+        let mut noon = passing();
+        if let Some(x) = &mut noon.experiment {
+            x.expires_at = t("2026-11-30T12:00:00Z");
+        }
+        assert_eq!(
+            run_with(&noon, &cited(), &synthetic(), t("2026-11-30")).verdict,
+            Verdict::Hold
+        );
+        // Below target: the expired test is no bounded path — rejected.
+        let mut below = passing();
+        if let RevenueModel::RevenueShare {
+            partner_monthly_revenue,
+            ..
+        } = &mut below.economics.revenue
+        {
+            partner_monthly_revenue.value =
+                Est::range(m("7000.00"), m("8750.00"), m("11000.00")).unwrap();
+        }
+        assert_eq!(
+            labels(&run_with(&below, &cited(), &synthetic(), last)),
+            ["BELOW_TARGET_WITH_PATH"]
+        );
+        let v = run_with(&below, &cited(), &synthetic(), gone);
+        assert_eq!(v.verdict, Verdict::Reject);
+        assert_eq!(
+            labels(&v),
+            ["CONTRIBUTION_BELOW_TARGET", "NO_STAGED_STOP_RULE"]
+        );
     }
 
     #[test]

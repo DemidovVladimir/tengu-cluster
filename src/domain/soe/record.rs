@@ -15,7 +15,7 @@
 //! | [`Tier`] | `LOW` `MEDIUM` `HIGH` `UNKNOWN` (defensibility, reversibility, evidence strength) |
 //! | [`Verdict`] | `PASS` `HOLD` `REJECT` |
 
-// Consumers land with the economics, gates, ranking and loader (O1 W3–W7).
+// `from_json` and `Problems::is_empty` are read by tests only until O3.
 #![allow(dead_code)]
 
 use std::collections::BTreeSet;

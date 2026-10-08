@@ -13,7 +13,7 @@
 //! | `EVIDENCE_CONFIDENCE` | [`evidence_confidence`]: `HIGH` a supporting `FACT` and no knowable contradiction · `MEDIUM` ≥ 2 supporting events · else `LOW` | higher |
 //! | `TIME_ADJUSTED_BASE` | base time-adjusted contribution (profile currency) | higher |
 //! | `PAYBACK_BASE` | base cash payback (`NOT_REACHED` after every month count) | lower |
-//! | `DAYS_TO_DECISIVE_EVIDENCE` | whole days from the decision to the end of `experiment.deadline`, rounded up; no experiment = unknown | lower |
+//! | `DAYS_TO_DECISIVE_EVIDENCE` | whole days from the decision to the end of `experiment.deadline`, rounded up; no experiment, or a deadline that may have passed by the decision = unknown | lower |
 //! | `REVERSIBILITY` · `DEFENSIBILITY` | `ordinal` tier | higher |
 //! | `CAPABILITY_FIT` | `matching::fit` level (`PROVEN` > `CLAIMED` > `STALE` > `MISSING`) | higher |
 //! | `CONCENTRATION_MAX` | the largest `risk.concentration` share (bps); none listed = unknown | lower |
@@ -43,7 +43,7 @@
 //! | [`hold_week`] | the `HOLD` week: nothing ranked, every failed gate, the next information, a rationale; refused when a candidate passes (that week is the allocation's) |
 //! | [`unallocated_week`] | `tengu soe portfolio` until O3: the `HOLD` week, or the `PASS` candidates ranked, each `HOLD`, nothing allocated, rationale [`NOT_ALLOCATED`] |
 
-// Some consumers land with the O3 allocation.
+// `rank_moves` (week-over-week moves) and `KeyValue::is_known` wait for O3.
 #![allow(dead_code)]
 
 use std::cmp::Ordering;
@@ -173,14 +173,20 @@ pub fn evidence_confidence(opp: &Opportunity, cited: &[CitedRecord], as_of: &Tim
     }
 }
 
-/// Module table: `DAYS_TO_DECISIVE_EVIDENCE` of `opp` decided at `as_of`.
+/// Module table: `DAYS_TO_DECISIVE_EVIDENCE` of `opp` decided at `as_of`. A
+/// deadline that may have passed by the decision is unknown — never 0 days,
+/// which would rank first on an experiment that can no longer decide.
 pub fn days_to_decisive_evidence(opp: &Opportunity, as_of: &Time) -> KeyValue {
     let Some(x) = &opp.experiment else {
         return KeyValue::Unknown("no experiment".into());
     };
-    match (x.deadline.window_end(), as_of.earliest()) {
-        (Some(end), Some(at)) => {
-            let days = div_ceil((i128::from(end) - i128::from(at)).max(0), DAY_MS);
+    match (x.deadline.window_end(), as_of.earliest(), as_of.latest()) {
+        (Some(end), _, Some(latest)) if latest >= end => KeyValue::Unknown(format!(
+            "experiment.deadline {} passed by the decision",
+            x.deadline
+        )),
+        (Some(end), Some(at), Some(_)) => {
+            let days = div_ceil(i128::from(end) - i128::from(at), DAY_MS);
             KeyValue::Days(u32::try_from(days).unwrap_or(u32::MAX))
         }
         _ => KeyValue::Unknown("experiment.deadline or the decision time unknown".into()),
@@ -1084,6 +1090,52 @@ mod tests {
         let j = serde_json::to_value(&a).unwrap();
         assert_eq!(j["keys"]["TIME_ADJUSTED_BASE"], "5917.49 EUR");
         assert_eq!(j["fit"]["level"], "PROVEN");
+    }
+
+    #[test]
+    fn a_passed_deadline_is_unknown_never_zero_days() {
+        // Decided after `a`'s deadline (2026-11-15) but before `b`'s.
+        let when: Time = "2026-11-20T12:00:00Z".parse().unwrap();
+        let a = automation("a", "\"600.00\"");
+        let mut b = automation("b", "\"600.00\"");
+        if let Some(x) = &mut b.experiment {
+            x.deadline = "2026-12-01".parse().unwrap();
+            x.expires_at = "2026-12-15".parse().unwrap();
+        }
+        assert_eq!(
+            days_to_decisive_evidence(&a, &when).to_string(),
+            "UNKNOWN: experiment.deadline 2026-11-15 passed by the decision"
+        );
+        // To 2026-12-02T00:00Z from 2026-11-20T12:00Z: 11.5 days, rounded up.
+        assert_eq!(days_to_decisive_evidence(&b, &when), KeyValue::Days(12));
+        // The passed one ranks last on the key, never first with 0 days.
+        let all = [&a, &b].map(|o| assess(o, &cited(), &synthetic(), when).unwrap());
+        assert!(all.iter().all(Assessment::passes));
+        assert_eq!(
+            ids(&rank(&all, &[RankKey::DaysToDecisiveEvidence])),
+            ["b", "a"]
+        );
+        // The deadline's last instant still has a day to go; its end has none.
+        let t = |s: &str| -> Time { s.parse().unwrap() };
+        assert_eq!(
+            days_to_decisive_evidence(&a, &t("2026-11-15T23:59:59.999Z")),
+            KeyValue::Days(1)
+        );
+        assert_eq!(
+            days_to_decisive_evidence(&a, &t("2026-11-15")),
+            KeyValue::Days(1)
+        );
+        assert!(!days_to_decisive_evidence(&a, &t("2026-11-16T00:00:00Z")).is_known());
+        // A decision day that runs past an instant deadline may be after it.
+        let mut noon = a.clone();
+        if let Some(x) = &mut noon.experiment {
+            x.deadline = t("2026-11-15T12:00:00Z");
+        }
+        assert!(!days_to_decisive_evidence(&noon, &t("2026-11-15")).is_known());
+        assert_eq!(
+            days_to_decisive_evidence(&noon, &t("2026-11-14")),
+            KeyValue::Days(2)
+        );
     }
 
     #[test]
