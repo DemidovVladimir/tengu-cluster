@@ -368,9 +368,21 @@ mod tests {
         let mut r = resolver(false);
         r.repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         r.check_git = true;
-        // The commit the lineage domain landed on (`domain/evidence.rs`).
+        // The checked-out commit: the one commit a shallow CI clone has (a
+        // fixed older commit is absent there, and after a squash merge).
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&r.repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        let Some(head) = head else {
+            return; // not a git checkout (a source tarball): nothing to resolve
+        };
         assert!(matches!(
-            at(&r, "git:c80d5beb724ff7eaf2fc61a4928ff15aa9a7cd16"),
+            at(&r, &format!("git:{head}")),
             Resolution::Present { .. }
         ));
         assert!(matches!(
