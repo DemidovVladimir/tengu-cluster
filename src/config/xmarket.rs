@@ -16,7 +16,7 @@
 //! | `<state dir>/runtime.db` · `run-<sandbox>.json` | the `tengu run` / `tengu webhooks` leases (`runtime:<sandbox>`, `state:<dir>`: one owner per state dir) · heartbeat | `outbound/runtime_store.rs` |
 //! | `<state dir>/history/<YYYYMMDD>.db` | recorder day files (UTC) | `outbound/history_sqlite.rs` |
 //! | `<state dir>/market.db` · `backtests/<run id>/` | the market-data warehouse · backtest run dirs + the decision cache (xlab) | `outbound/market_data.rs` · `application/backtest/` |
-//! | `<state dir>/strategy-rankings/<contract id>/` | published strategy rankings (`<date>/`, `latest.{json,md}`); retention keeps the runs a `latest.json` cites | `application/backtest/mod.rs` (`cited_runs`) |
+//! | `<state dir>/strategy-rankings/<contract id>/` | published strategy rankings (`<date>/{manifest,ranking}.json`, `ranking.md`, `latest.{json,md}`); retention keeps the runs a `latest.json` cites | `application/ranking/` (writes) · `application/backtest/mod.rs` (`cited_runs`) |
 //! | `<state dir>/{catalog,events,audit,spend}.db` | reserved: `kg-catalog-store` (M1), `info-store` (M4), `ops-audit-store` (M5), `ops-cost-guard` (M4) | — |
 //! | `<workspace>/.tengu/observations.db` | the workspace's only xmarket file: hot rows (`world`, `requires`) | `outbound/observations.rs` |
 //!
