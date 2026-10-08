@@ -44,6 +44,10 @@
 //! | `forms` | `sec_edgar` | each one of `domain::sec::SEC_FORMS`, no repeat (absent = all of them); no other kind takes it |
 //! | `query` | `ted_search` | required, holds `{from}` and `{to}`; no other kind takes it |
 //! | `entities` | `sec_edgar` | each `sec:cik:<10 digits>`; no other kind takes it |
+//!
+//! A fetcher takes a row through [`SourceEntry::fetch_stamp`]: a disabled
+//! row, or one without `license` + `terms_sha256`, is refused before any
+//! request; the stamp is what each of its records carries.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -60,14 +64,14 @@ use crate::domain::evidence::valid_sha256;
 use crate::domain::scope::host_matches;
 use crate::domain::sec::SEC_FORMS;
 use crate::domain::source::record::valid_source_id;
-use crate::domain::source::{valid_jurisdiction, Revision, SourceClass, SourcePolicy, Trust};
+use crate::domain::source::{
+    valid_jurisdiction, Revision, SourceClass, SourcePolicy, SourceStamp, Trust,
+};
 
-/// The append-only source store (O2 step C5).
-#[cfg_attr(not(test), allow(dead_code))]
+/// The append-only source store (`adapters/outbound/sources/store.rs`).
 pub(crate) const SOURCES_DB: &str = "sources.db";
 
 /// `<state_dir>/sources.db`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn sources_db(state_dir: &Path) -> PathBuf {
     state_dir.join(SOURCES_DB)
 }
@@ -242,7 +246,6 @@ impl SourceEntry {
 
     /// The forms a `sec_edgar` row keeps: its `forms`, else every one of
     /// `SEC_FORMS`; nothing for other kinds.
-    #[cfg_attr(not(test), allow(dead_code))] // the SEC fetcher (O2 C6) reads it
     pub fn forms(&self) -> Vec<String> {
         match (self.kind, &self.forms) {
             (SourceKind::SecEdgar, Some(f)) => f.clone(),
@@ -256,6 +259,31 @@ impl SourceEntry {
             revision: self.revision,
             listing_max_age_ms: self.listing_max_age_days.map(|d| i64::from(d) * 86_400_000),
         }
+    }
+
+    /// What every record of row `id` carries ([`SourceStamp`]) — refused
+    /// for a disabled row (listed, never fetched) and for one without its
+    /// reviewed terms (`license` + `terms_sha256`): no fetch without them.
+    pub fn fetch_stamp(&self, id: &str) -> Result<SourceStamp, String> {
+        if !self.enabled {
+            return Err(format!(
+                "source `{id}` is disabled (enabled = false): listed, never fetched"
+            ));
+        }
+        let (Some(license), Some(terms)) = (&self.license, &self.terms_sha256) else {
+            return Err(format!(
+                "source `{id}` has no reviewed terms (license + terms_sha256): no fetch without them"
+            ));
+        };
+        Ok(SourceStamp {
+            source_id: id.to_string(),
+            source_class: self.class,
+            trust: self.trust,
+            jurisdiction: self.jurisdiction.clone(),
+            language: self.language.clone(),
+            license_or_terms: license.clone(),
+            terms_sha256: terms.clone(),
+        })
     }
 
     /// The row's problems, each `<field>: …` (module table).
@@ -673,6 +701,35 @@ mod tests {
         assert!(parse(&format!("{BASE}\n[sourcez]\nstate = \"x\"\n"))
             .unwrap_err()
             .contains("sourcez"));
+    }
+
+    #[test]
+    fn fetch_stamp_refuses_a_disabled_or_unreviewed_row() {
+        let cfg = parse(&with(SEC_ROW)).unwrap();
+        let row = &cfg.sources.as_ref().unwrap().registry["sec_edgar"];
+        let e = row.fetch_stamp("sec_edgar").unwrap_err();
+        assert!(e.contains("disabled"), "{e}");
+        let mut on = row.clone();
+        on.enabled = true;
+        let e = on.fetch_stamp("sec_edgar").unwrap_err();
+        assert!(e.contains("no reviewed terms"), "{e}");
+        let enabled = SEC_ROW.replace("enabled = false", "enabled = true");
+        let cfg = parse(&with(&format!("{enabled}{}", terms()))).unwrap();
+        let s = cfg.sources.as_ref().unwrap().registry["sec_edgar"]
+            .fetch_stamp("sec_edgar")
+            .unwrap();
+        assert_eq!(
+            s,
+            SourceStamp {
+                source_id: "sec_edgar".into(),
+                source_class: SourceClass::CompanyPrimary,
+                trust: Trust::Primary,
+                jurisdiction: "US".into(),
+                language: "en".into(),
+                license_or_terms: "example terms".into(),
+                terms_sha256: HASH.into(),
+            }
+        );
     }
 
     /// Critic U6, config side: PRD §5.1 class rules hold for every row.

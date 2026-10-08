@@ -26,5 +26,6 @@ pub(crate) mod scaffold;
 pub(crate) mod secrets;
 pub(crate) mod shell;
 pub(crate) mod solana;
+pub(crate) mod sources;
 pub(crate) mod subprocess_runner;
 pub(crate) mod tools;

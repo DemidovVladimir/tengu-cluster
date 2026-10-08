@@ -11,6 +11,7 @@
 //! | `rules` | per-class rules of PRD §5.1 (jurisdiction for law / regulator, listing freshness for registries, aggregate demand) as [`Issue`]s; [`Revision`] (`immutable` · `in_place`) and the [`SourcePolicy`] of a registry row |
 //! | `asof` | the two-clock view at t ([`AsOfMode`] `captured` · `knowable`): current version per item, corrections, states (in force · pending · expired · withdrawn · unparsed), issues, confidence per event, conflicts; [`Coverage`], [`Purge`] |
 //! | `packet` | [`EvidencePacket`] `source_asof/1` (an `Observed` row): facts, superseded, events, conflicts, issues, demand, freshness, citations, inferences apart; `render_text` fences every free text ([`fence_untrusted`]) |
+//! | `sec_records` | SEC EDGAR filing → record (`sec-submissions/1`): accession = native id and event, `sec:cik:` entity, index `Accepted` time; an unread index ⇒ `partial` with a time never before the acceptance |
 //! | `testkit` · `checks` | tests only: fixture sources and worlds; split-world no-lookahead checks |
 
 pub(crate) mod asof;
@@ -19,6 +20,7 @@ mod checks;
 pub(crate) mod packet;
 pub(crate) mod record;
 pub(crate) mod rules;
+pub(crate) mod sec_records;
 #[cfg(test)]
 pub(crate) mod testkit;
 
@@ -36,7 +38,8 @@ pub(crate) use packet::{
 #[allow(unused_imports)]
 pub(crate) use record::{
     AccessMethod, Fact, Inference, NativeAmount, Origin, ParseError, ParseStatus, Place, PlaceRole,
-    PlaceScheme, SecFiling, SourceClass, SourceRecord, TedNotice, Trust, Withdrawn, WithdrawnHow,
+    PlaceScheme, SecFiling, SourceClass, SourceRecord, SourceStamp, TedNotice, Trust, Withdrawn,
+    WithdrawnHow,
 };
 #[allow(unused_imports)]
 pub(crate) use rules::{

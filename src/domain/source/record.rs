@@ -28,6 +28,7 @@
 //! | Trust by class (PRD §5.1) | `independent_reporting` never `primary`; `social_inference` only `trigger_only` |
 //! | Parse | `ok` ⇒ no errors + a typed fact (`withdrawn` included); `partial` ⇒ errors + a typed fact; `error` ⇒ errors + `Unparsed` |
 //! | Clocks | `parsed_ms ≥ observed_ms`; `valid_until_ms > valid_from_ms` |
+//! | Stamp | [`SourceStamp`]: the registry row's id, class, trust, jurisdiction, language, terms and terms hash — copied onto each record at parse time |
 
 // Consumers (as-of view, store, parsers, `domain/soe/`) land with the next
 // O2 / O1 steps.
@@ -523,6 +524,20 @@ impl Inference {
             Err(out)
         }
     }
+}
+
+/// What a registry row stamps on every record a parser builds from its
+/// source (`config::sources::SourceEntry::fetch_stamp`): an enabled row with
+/// its reviewed terms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceStamp {
+    pub source_id: String,
+    pub source_class: SourceClass,
+    pub trust: Trust,
+    pub jurisdiction: String,
+    pub language: String,
+    pub license_or_terms: String,
+    pub terms_sha256: String,
 }
 
 /// One fact from one source with its full provenance (module tables).

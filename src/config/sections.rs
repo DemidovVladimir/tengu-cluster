@@ -65,11 +65,11 @@ pub struct SandboxSections {
     pub generation: Option<Arc<GenerationScope>>,
     /// `[sources]` (`config/sources.rs`): the source registry the store,
     /// the CLI and the `source_evidence` tool read (O2 steps C5–C9).
-    #[allow(dead_code)] // read once the source store lands (O2 C5)
+    #[allow(dead_code)] // read by `tengu sources` (O2 C8)
     pub sources: Option<Arc<SourcesConfig>>,
     /// `<TENGU_HOME>/state/<sources.state>` (absolute): where `sources.db`
-    /// lives; outside every fs root and workspace (load rule).
-    #[allow(dead_code)] // read once the source store lands (O2 C5)
+    /// lives; outside every fs root and workspace (load rule). Read by
+    /// `outbound/sources::open_source_store`.
     pub sources_state_dir: Option<PathBuf>,
 }
 

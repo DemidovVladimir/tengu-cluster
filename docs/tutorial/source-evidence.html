@@ -46,7 +46,7 @@
   <div class="sec-head">
     <span class="kicker">The picture</span>
     <h2 id="s-flow">From records to an evidence packet at t</h2>
-    <p>Pure code in <code>src/domain/source/</code>. The store, the fetchers, the CLI and the tool come with the next O2 steps.</p>
+    <p>The view is pure code in <code>src/domain/source/</code>; records come from the append-only store <code>sources.db</code>, filled by the SEC fetcher. The CLI, the TED fetcher and the tool come with the next O2 steps.</p>
   </div>
   <figure class="stage" data-stage data-interval="3600">
     <div class="stage-canvas">
@@ -296,6 +296,61 @@
   </div>
 </section>
 
+<section class="sec" aria-labelledby="s-store">
+  <div class="sec-head">
+    <span class="kicker">The store</span>
+    <h2 id="s-store"><code>sources.db</code>: append-only</h2>
+    <p>One SQLite file per <code>[sources] state</code>, at <code>&lt;TENGU_HOME&gt;/state/&lt;state&gt;/sources.db</code>, mode 0600, never <code>market.db</code>. One commit writes snapshots, records, coverage and the cursor together, or nothing.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Table</th><th>Holds</th><th>Writes</th></tr></thead>
+      <tbody>
+        <tr><td><code>snapshots</code></td><td>every raw body by sha256: kind <code>response</code> or <code>terms</code>, url, status, content type, fetch time, size; the bytes when the row has <code>store_raw = true</code></td><td>insert or ignore; a raw purge drops the bytes and keeps the hash</td></tr>
+        <tr><td><code>records</code> · <code>record_entities</code></td><td>each record's JSON, keyed by <code>record_id</code>, indexed by item, event and read time</td><td>insert or ignore only; deleted only by record retention</td></tr>
+        <tr><td><code>coverage</code></td><td>one row per fetch of a query: span, complete, error class</td><td>appended</td></tr>
+        <tr><td><code>cursors</code></td><td>where a query resumes (SEC: the newest accession of a CIK)</td><td>the one mutable row, moved only inside a committed batch</td></tr>
+        <tr><td><code>purges</code></td><td>tombstones: what a retention purge removed, when and why</td><td>appended in the purge's own transaction</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid two">
+    <div class="card guard">
+      <h3>A commit is refused when</h3>
+      <dl class="kv">
+        <dt>record</dt><dd>it fails <code>validate</code> (hash, ids, clocks, trust, parse status)</dd>
+        <dt>snapshot</dt><dd>a record names a sha256 that is neither in the batch nor stored, or a body does not hash to its sha256</dd>
+        <dt>coverage</dt><dd>a span runs backwards, or a complete fetch carries an error class</dd>
+        <dt>effect</dt><dd>nothing of the batch is written; the cursor stays</dd>
+      </dl>
+    </div>
+    <div class="card data">
+      <h3>A read at t</h3>
+      <dl class="kv">
+        <dt>seeds</dt><dd>records of the source, entity or event with <code>min(published, read) ≤ t</code>: nothing else can be visible at t</dd>
+        <dt>then</dt><dd>every version of each seed's item and every record of its event, until nothing new comes in</dd>
+        <dt>why</dt><dd>the knowable clock needs an item's first read; a correction or a report may lack the entity</dd>
+        <dt>cut</dt><dd>the as-of view decides what is visible</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-sec">
+  <div class="sec-head">
+    <span class="kicker">First source</span>
+    <h2 id="s-sec">SEC EDGAR, one CIK at a time</h2>
+    <p>The <code>sec_edgar</code> row reuses the SEC client of <a href="history.html">Market history</a>: egress gate, scope, budget, retries and the <code>sec_edgar</code> audit line. Every reply is kept as a snapshot.</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>Index read</b>The filing's time is the index page's <code>Accepted</code> (New York to UTC); the record rests on the submissions body and the index body.</span></li>
+    <li><span class="chip ok">kept</span><span><b>Already stored</b>A filing with a stored <code>ok</code> record keeps its time with no index read. The same content is the same record, so a re-run adds nothing.</span></li>
+    <li><span class="chip warn">part</span><span><b>Index without a time</b>A 404 or a page without <code>Accepted</code>: the record is <code>partial</code>, its time is the later of the JSON clock and the end of the filing date in New York, never before the acceptance. Coverage is incomplete.</span></li>
+    <li><span class="chip bad">stop</span><span><b>No answer</b>A denial, budget refusal, 401 / 403 / 429, 5xx or timeout after the retries: what was read is committed, coverage is incomplete, the cursor stays, the next CIK runs.</span></li>
+  </ul>
+  <p class="note">Before any request the row must be enabled and carry its license and terms hash (<code>SourceEntry::fetch_stamp</code>). Records are committed 25 at a time; the last batch adds the coverage row <code>cik:&lt;cik10&gt;</code> and, only when complete, the cursor.</p>
+</section>
+
 <section class="sec" aria-labelledby="s-rules">
   <div class="sec-head">
     <span class="kicker">Enforced in code</span>
@@ -311,6 +366,10 @@
     <li><span><b>Unknown keys are refused.</b> Records, facts, amounts, places, packets and every <code>[sources]</code> row.</span></li>
     <li><span><b>Money is text as written.</b> <code>NativeAmount</code> keeps <code>150000.00</code> with an ISO 4217 code; nothing is converted here.</span></li>
     <li><span><b>Ids stay whole.</b> Accessions, CIKs with their leading zeros, procedure ids and every hash round-trip unchanged.</span></li>
+    <li><span><b>The store only appends.</b> No statement replaces a row or updates a record; a re-read of the same content adds nothing, a changed one adds a version.</span></li>
+    <li><span><b>Store reads change no packet.</b> For the three test worlds, a packet built from a store read at t equals the packet of every record, at every sampled t, in both clocks.</span></li>
+    <li><span><b>Loss leaves a mark.</b> A raw purge keeps each snapshot's hash and size; terms pages are never purged; every purge that removed something leaves a tombstone.</span></li>
+    <li><span><b>The User-Agent is never stored.</b> It is a request header only: not in a snapshot, record, report or audit line.</span></li>
   </ul>
 </section>
 
@@ -318,10 +377,15 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Run the checks</h2>
-    <p>No CLI yet: <code>tengu sources</code> and the <code>source_evidence</code> tool land with the next O2 steps.</p>
+    <p>No CLI yet: <code>tengu sources</code> and the <code>source_evidence</code> tool land with the next O2 steps. The store and the SEC fetch run on fixtures and a local test server.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::checks</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu adapters::outbound::sources</span>
+<span class="ln o">test adapters::outbound::sources::store::tests::store_reads_give_the_packet_of_the_whole_store ... ok</span>
+<span class="ln o">test adapters::outbound::sources::store::tests::purge_leaves_tombstones_and_hashes ... ok</span>
+<span class="ln o">test adapters::outbound::sources::sec::tests::index_404_is_partial_not_a_loss ... ok</span>
+<span class="ln o">test adapters::outbound::sources::sec::tests::user_agent_never_lands_in_records_or_audit ... ok</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::checks</span>
 <span class="ln o">test domain::source::checks::knowable_mode_never_reads_in_place_edits_early ... ok</span>
 <span class="ln o">test domain::source::checks::coverage_and_purges_after_t_change_nothing_at_t ... ok</span>
 <span class="ln o">test domain::source::checks::corrections_after_t_append_and_never_rewrite ... ok</span>
@@ -345,8 +409,12 @@
         <tr><td><code>src/domain/source/rules.rs</code></td><td>PRD §5.1 class rules as issues, <code>Revision</code>, <code>SourcePolicy</code>, demand status</td></tr>
         <tr><td><code>src/domain/source/asof.rs</code></td><td>the two clocks, current versions, corrections, states, event confidence, conflicts</td></tr>
         <tr><td><code>src/domain/source/packet.rs</code></td><td><code>EvidencePacket</code> <code>source_asof/1</code>, freshness, citations, the fence</td></tr>
+        <tr><td><code>src/domain/source/sec_records.rs</code></td><td>an SEC filing as a record: accession, CIK entity, index time, the partial rule</td></tr>
         <tr><td><code>src/domain/source/checks.rs</code> · <code>testkit.rs</code></td><td>tests only: the split-world worlds and checks</td></tr>
-        <tr><td><code>src/config/sources.rs</code></td><td><code>[sources]</code>: the registry rows and their load rules</td></tr>
+        <tr><td><code>src/config/sources.rs</code></td><td><code>[sources]</code>: the registry rows, their load rules, <code>fetch_stamp</code></td></tr>
+        <tr><td><code>src/ports/source_store.rs</code></td><td><code>SourceStore</code>: commit, the read at t, coverage, cursor, snapshot, purge</td></tr>
+        <tr><td><code>src/adapters/outbound/sources/store.rs</code></td><td><code>SqliteSourceStore</code>: <code>sources.db</code> and its tables</td></tr>
+        <tr><td><code>src/adapters/outbound/sources/sec.rs</code> · <code>mod.rs</code></td><td>the <code>sec_edgar</code> fetch per CIK; opening the store</td></tr>
         <tr><td><code>sandboxes/soe/config.toml</code></td><td>the unbound, closed-world SOE sandbox; rows disabled</td></tr>
         <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 behind the content hash and the byte-identity checks</td></tr>
         <tr><td><code>src/domain/sec.rs</code></td><td>SEC EDGAR decoders a filing record is built from (see <a href="history.html">Market history</a>)</td></tr>
