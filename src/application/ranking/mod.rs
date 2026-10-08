@@ -4,8 +4,9 @@
 //! The contract is `domain/lineage/ranking.rs`, selection and rating
 //! `domain/backtest/ranking.rs` (pure), the runs `application/backtest/`, the
 //! files [`store`]. IO is injected ([`RankingEnv`]), so tests run on a temp
-//! state dir. Callers: `tengu ranking run` (`adapters/inbound/cli/ranking.rs`);
-//! the `strategy_ranking` tool (SR-4) next.
+//! state dir. Callers: `tengu ranking run` (`adapters/inbound/cli/ranking.rs`)
+//! and the `strategy_ranking` tool (`adapters/outbound/tools/xlab/rank.rs`,
+//! a `[feeds.*]` of `tengu run` too).
 //!
 //! | Step | Rule |
 //! |---|---|
@@ -680,7 +681,7 @@ async fn stale_detail(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     use super::store::MANIFEST_JSON;
@@ -716,7 +717,11 @@ mod tests {
     /// Hourly bars + hourly funding (~1 % APR, stamped 37 ms late) of AAPL
     /// and TSLA from 2026-02-23 up to each one's end (exclusive): a ±20 bps
     /// wave, a Sunday 12:00–24:00 UTC jump (+200 bps AAPL, −150 bps TSLA).
-    async fn seed(state_dir: &Path, ends: [(&str, &str); 2]) -> Arc<dyn MarketDataStore> {
+    /// Also the `strategy_ranking` tool's tests (`tools/xlab/rank.rs`).
+    pub(crate) async fn seed(
+        state_dir: &Path,
+        ends: [(&str, &str); 2],
+    ) -> Arc<dyn MarketDataStore> {
         let store = SqliteMarketData::open(state_dir).unwrap();
         let t0 = utc("2026-02-23 00:00");
         for (k, (id, end)) in ends.into_iter().enumerate() {

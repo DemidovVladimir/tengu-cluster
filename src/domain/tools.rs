@@ -47,6 +47,10 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 // xmarket workspace.
 pub(crate) const MARKET_HISTORY: &str = "market_history";
 pub(crate) const BACKTEST: &str = "backtest";
+/// Strategy rankings of a `[strategy_ranking]` sandbox (`tools/xlab/rank.rs`):
+/// runs the ranking coordinator (`application/ranking/`) or reads a
+/// published ranking; its state is the state dir's (`strategy-rankings/`).
+pub(crate) const STRATEGY_RANKING: &str = "strategy_ranking";
 
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
@@ -135,6 +139,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
     BACKTEST,
+    STRATEGY_RANKING,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):

@@ -275,7 +275,9 @@ sources = [
   "src/application/backtest/mod.rs",
   "src/application/ranking/",
   "src/adapters/inbound/cli/ranking.rs",
+  "src/adapters/outbound/tools/xlab/rank.rs",
   "lineage/rankings/",
+  "sandboxes/xlab-w2/config.toml",
 ]
 
 # ── Runtime ───────────────────────────────────────────────────────────────

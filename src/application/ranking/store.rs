@@ -190,6 +190,30 @@ pub(crate) fn latest_date(state_dir: &Path, contract: &str) -> Option<NaiveDate>
         .map(|r| r.date)
 }
 
+/// A published ranking: the date's `ranking.json` once its manifest is
+/// `COMPLETE` / `INCOMPLETE`, else `latest.json`; `None` when nothing is
+/// published there (a `RUNNING` / `FAILED` date publishes nothing).
+pub(crate) fn published_ranking(
+    state_dir: &Path,
+    contract: &str,
+    date: Option<NaiveDate>,
+) -> Result<Option<Ranking>> {
+    let path = match date {
+        Some(d) => {
+            let dir = date_dir(state_dir, contract, d);
+            match read_manifest(&dir)? {
+                Some(m) if m.status.is_published() => dir.join(RANKING_JSON),
+                _ => return Ok(None),
+            }
+        }
+        None => contract_dir(state_dir, contract).join(LATEST_JSON),
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    read_ranking(&path).map(Some)
+}
+
 /// A published `ranking.md`: the date's, else `latest.md` — its path and
 /// text; `None` when nothing is published there.
 pub(crate) fn published_markdown(
