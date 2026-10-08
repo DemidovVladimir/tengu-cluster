@@ -14,7 +14,7 @@ use clap::{Parser, Subcommand};
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::adapters::outbound::secrets;
 use crate::bootstrap::sandbox::load_sandbox_or;
@@ -202,10 +202,11 @@ enum Commands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
-        /// Hard reset: also remove each workspace's `.tengu/` dir (cache, daily
-        /// logs, workspace skills), the top-level scaffold directories, and root
-        /// runtime artifacts (TENGU_PLAN.md / TENGU_PLANNER_REGISTRY.md). The
-        /// sandbox config is never touched. Requires --sandbox.
+        /// Hard reset: empty each workspace root — every file and directory in
+        /// it (its `.tengu/` cache and workspace skills, agent output, anything
+        /// else) — plus the top-level scaffold directories and the root
+        /// TENGU_PLAN.md / TENGU_PLANNER_REGISTRY.md. The workspace roots, the
+        /// sandbox config and `<TENGU_HOME>/state` stay. Requires --sandbox.
         #[arg(long)]
         hard: bool,
     },
@@ -406,10 +407,11 @@ pub(crate) async fn run() -> Result<()> {
     let tengu_home = resolve_tengu_home();
     // Inherited vault names (`TENGU_SECRETS_LOADED`), else the vault itself,
     // plus the master password — the same registry `tengu mcp-bridge` and
-    // `run-agent` build (without the vault prompt).
-    let secret_registry = std::sync::Arc::new(secrets::process_secret_registry(Some(
-        &secrets::secrets_file_path(&tengu_home),
-    )));
+    // `run-agent` build (without the vault prompt). `tengu secret` opens the
+    // vault itself — unlocking it here too asked for the password twice.
+    let vault =
+        loads_vault_at_startup(&cli.command).then(|| secrets::secrets_file_path(&tengu_home));
+    let secret_registry = std::sync::Arc::new(secrets::process_secret_registry(vault.as_deref()));
 
     // In TUI mode, persist logs to file only so interactive output stays clean.
     // In Telegram mode, log to both file and stderr so operators can monitor.
@@ -494,8 +496,24 @@ pub(crate) async fn run() -> Result<()> {
     std::env::set_var("TENGU_CONFIG", &config_path);
 
     let config = if config_path.exists() {
-        Config::load(&config_path)
-            .with_context(|| format!("Failed to load config at {}", config_path.display()))?
+        match (Config::load(&config_path), replacing_sandbox(&cli.command)) {
+            (Ok(config), _) => config,
+            // `--sandbox` replaces the base config wholesale: a broken base
+            // file must not stop a sandbox command.
+            (Err(e), Some(sandbox)) => {
+                warn!(
+                    path = %config_path.display(),
+                    sandbox,
+                    error = %format!("{e:#}"),
+                    "base config does not load; ignored — --sandbox replaces it"
+                );
+                Config::default()
+            }
+            (Err(e), None) => {
+                return Err(e)
+                    .with_context(|| format!("Failed to load config at {}", config_path.display()))
+            }
+        }
     } else {
         info!(
             path = %config_path.display(),
@@ -726,5 +744,66 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Tool { .. } => {
             unreachable!("Commands::Tool is dispatched earlier in main()")
         }
+    }
+}
+
+/// The `--sandbox` of a command whose config is that sandbox file alone
+/// (`load_sandbox_or` replaces the base config wholesale), so the base config
+/// is not needed to run it.
+fn replacing_sandbox(command: &Option<Commands>) -> Option<&str> {
+    match command.as_ref()? {
+        Commands::Chat { sandbox }
+        | Commands::Telegram { sandbox }
+        | Commands::Webhooks { sandbox }
+        | Commands::Run { sandbox }
+        | Commands::Doctor { sandbox, .. }
+        | Commands::Decide { sandbox, .. }
+        | Commands::History { sandbox, .. }
+        | Commands::Backtest { sandbox, .. }
+        | Commands::Risk { sandbox, .. } => sandbox.as_deref(),
+        _ => None,
+    }
+}
+
+/// Whether startup unlocks the secrets vault: every command but `tengu
+/// secret`, which opens it itself (one password prompt, not two).
+fn loads_vault_at_startup(command: &Option<Commands>) -> bool {
+    !matches!(command, Some(Commands::Secret { .. }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(args: &[&str]) -> Option<Commands> {
+        Cli::try_parse_from(args).expect("parse").command
+    }
+
+    /// A broken base config is ignored only when `--sandbox` replaces it.
+    #[test]
+    fn only_sandbox_commands_skip_the_base_config() {
+        assert_eq!(
+            replacing_sandbox(&command(&["tengu", "chat", "--sandbox", "lping"])),
+            Some("lping")
+        );
+        assert_eq!(
+            replacing_sandbox(&command(&["tengu", "run", "--sandbox", "xmarket"])),
+            Some("xmarket")
+        );
+        assert_eq!(replacing_sandbox(&command(&["tengu", "chat"])), None);
+        assert_eq!(replacing_sandbox(&command(&["tengu", "status"])), None);
+        assert_eq!(replacing_sandbox(&command(&["tengu"])), None);
+    }
+
+    #[test]
+    fn tengu_secret_opens_the_vault_itself() {
+        assert!(!loads_vault_at_startup(&command(&[
+            "tengu", "secret", "list"
+        ])));
+        assert!(!loads_vault_at_startup(&command(&[
+            "tengu", "secret", "set", "K", "V"
+        ])));
+        assert!(loads_vault_at_startup(&command(&["tengu", "chat"])));
+        assert!(loads_vault_at_startup(&command(&["tengu"])));
     }
 }

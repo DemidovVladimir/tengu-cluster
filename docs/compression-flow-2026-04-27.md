@@ -60,7 +60,7 @@ summary only travels back to the parent over IPC.
 | ✗ | ✓ | **Ok** — graceful (warn logged, summary = final_text) |
 | ✗ | ✗ | **Failed** — DagExecutor retries / replans |
 
-Strict REDESIGN.md doctrine would fail row 2 too; we deliberately stay
+Strict original-spec doctrine would fail row 2 too; we deliberately stay
 pragmatic because many models (Claude Code subagents in particular) don't
 reliably call protocol tools but do produce useful text.
 
@@ -122,7 +122,7 @@ no summarisation pass — oldest turns simply drop off the end.
   agents, skills, and tools.
 - `src/adapters/outbound/tools/agentic_memory/mod.rs` — Open Brain Postgres memory
   (`postgres_memory`) that receives the step summaries.
-- `REDESIGN.md` § 7 — original spec for the `compress_and_store` protocol.
+- `REDESIGN.md` § 7 — original spec for the `compress_and_store` protocol (file removed 2026-10-07; last version: `git show 9f0e98f96704eca960575d6c453c5dabb5487d65:REDESIGN.md`).
 
 ---
 

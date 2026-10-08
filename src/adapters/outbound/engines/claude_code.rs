@@ -326,6 +326,27 @@ const KEPT_CLAUDE_CODE_ENV: &[&str] = &[
 /// | Removed | Kept |
 /// |---|---|
 /// | `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, every `CLAUDE_CODE_*` | [`KEPT_CLAUDE_CODE_ENV`], `CLAUDE_CODE_USE_*` / `CLAUDE_CODE_SKIP_*_AUTH` (provider), `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, the egress proxy env; `ANTHROPIC_API_KEY` is removed separately (subscription) |
+/// The CLI's working directory for one run: the configured workspace (`~`
+/// expanded), else — when Tengu bridge tools are offered — a temp dir for
+/// this run (returned so the caller keeps it alive), as a `run-agent` step
+/// without a workspace gets one. Without either the bridge is not written,
+/// so a chat agent with no `workspace` had no Tengu tools.
+fn run_workspace(
+    configured: Option<&std::path::Path>,
+    has_bridge: bool,
+) -> std::io::Result<(Option<PathBuf>, Option<tempfile::TempDir>)> {
+    if let Some(ws) = configured {
+        return Ok((Some(crate::config::paths::expand_tilde(ws)), None));
+    }
+    if !has_bridge {
+        return Ok((None, None));
+    }
+    let dir = tempfile::Builder::new().prefix("tengu-claude-").tempdir()?;
+    // Canonical: scope checks compare resolved paths (macOS /var → /private/var).
+    let path = std::fs::canonicalize(dir.path())?;
+    Ok((Some(path), Some(dir)))
+}
+
 fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
     names
         .into_iter()
@@ -927,10 +948,12 @@ impl Engine for ClaudeCodeEngine {
             }])));
         }
 
-        let workspace = context
-            .workspace
-            .as_ref()
-            .map(|p| crate::config::paths::expand_tilde(p));
+        let has_bridge = context.bridge_tools.as_ref().is_some_and(|t| !t.is_empty());
+        let (workspace, temp_workspace) =
+            run_workspace(context.workspace.as_deref(), has_bridge).unwrap_or_else(|e| {
+                warn!(error = %e, "Claude Code: no temp workspace — Tengu tools unavailable this run");
+                (None, None)
+            });
 
         // Build subprocess command (arguments: `cli_args`, after the bridge
         // config is written)
@@ -1040,8 +1063,9 @@ impl Engine for ClaudeCodeEngine {
 
         // Spawn async reader task that processes NDJSON lines and emits StreamEvents
         tokio::spawn(async move {
-            // Keep temp files alive until subprocess exits
+            // Keep temp files (and a temp workspace) alive until subprocess exits
             let _mcp_temp = mcp_temp;
+            let _temp_workspace = temp_workspace;
             let mut transcript = transcript;
 
             let reader = tokio::io::BufReader::new(stdout);
@@ -1182,6 +1206,21 @@ impl Engine for ClaudeCodeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A chat agent without `workspace` still gets its Tengu tools: a temp
+    /// dir for the run when the bridge has tools, nothing otherwise.
+    #[test]
+    fn run_workspace_falls_back_to_a_temp_dir_for_the_bridge() {
+        let (ws, keep) = run_workspace(Some(std::path::Path::new("/srv/ws")), true).unwrap();
+        assert_eq!(ws, Some(PathBuf::from("/srv/ws")));
+        assert!(keep.is_none());
+        assert_eq!(run_workspace(None, false).unwrap().0, None);
+        let (ws, keep) = run_workspace(None, true).unwrap();
+        let ws = ws.expect("temp workspace");
+        assert!(ws.is_dir());
+        drop(keep);
+        assert!(!ws.exists(), "removed with its handle");
+    }
 
     fn server(name: &str, env: &[(&str, &str)]) -> crate::config::McpServerConfig {
         crate::config::McpServerConfig {

@@ -324,10 +324,27 @@ fn planner_embedder(
         return None;
     }
     let api_key = std::env::var("OPENROUTER_API_KEY").ok()?;
-    Some(Arc::new(Embedder::new(
-        api_key,
-        memory.embedding_model.clone(),
-    )))
+    let (model, warning) = open_brain_embedding_model(&memory.embedding_model);
+    if let Some(w) = warning {
+        tracing::warn!("{w}");
+    }
+    Some(Arc::new(Embedder::new(api_key, model.to_string())))
+}
+
+/// The model the planner embeds Open Brain recall with: always the one the
+/// Postgres schema is sized for (`vector(1536)`, `DEFAULT_EMBEDDING_MODEL`),
+/// like the `agentic_memory` tool. `[memory] embedding_model` stays the
+/// workspace vector store's; when it differs, a warning says so (another
+/// model here used to turn planner recall text-only, warnings only).
+fn open_brain_embedding_model(configured: &str) -> (&'static str, Option<String>) {
+    let pinned = crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
+    let warning = (configured != pinned).then(|| {
+        format!(
+            "[memory] embedding_model = {configured} is used for workspace memory only; \
+             Open Brain recall uses {pinned} (the Postgres schema is vector(1536))"
+        )
+    });
+    (pinned, warning)
 }
 
 pub(crate) fn build_orchestrator(
@@ -444,7 +461,6 @@ pub(crate) async fn build_cli_chat_factory(
     config: &Config,
     workspace: &std::path::Path,
 ) -> anyhow::Result<Arc<dyn ChatServiceFactory>> {
-    use crate::adapters::outbound::engines::build_engine;
     use crate::application::memory::manager::MemoryManager;
 
     // Build a shared memory manager (no vector backend for CLI — acceptable
@@ -455,35 +471,7 @@ pub(crate) async fn build_cli_chat_factory(
         Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
 
     for (name, agent_cfg) in &config.agents {
-        let engine_box = build_engine(name, agent_cfg, config.claude_code.as_ref())?;
-        let compaction_policy = crate::application::chat::flow::resolve_flow_compaction_policy(
-            &agent_cfg.flow,
-            agent_cfg.limits.max_tokens_per_flow,
-            engine_box.context_window(),
-            engine_box.max_output_tokens_per_turn() as usize,
-        );
-        let engine: Arc<dyn Engine> = Arc::from(engine_box);
-        let system_prompt =
-            crate::application::skills::registry::build_system_prompt(agent_cfg, false, &[]);
-        let history_turn_limit =
-            crate::application::chat::flow::resolve_history_turn_limit(&agent_cfg.flow);
-        let inputs = ChatTurnInputs {
-            engine,
-            agent_id: name.clone(),
-            agent_config: Arc::new(agent_cfg.clone()),
-            history_turn_limit,
-            compaction_policy,
-            system_prompt,
-            tools: Vec::new(),
-            tool_executor: None,
-            memory_manager: Some(Arc::clone(&memory)),
-            max_recall_entries: 10,
-            max_recall_tokens: 2000,
-            bridge_tools: None,
-            mcp_servers: Vec::new(),
-            tool_observer: None,
-            cancel: None,
-        };
+        let inputs = text_only_inputs(config, name, agent_cfg, Some(Arc::clone(&memory)))?;
         snapshots
             .write()
             .map_err(|e| anyhow::anyhow!("snapshots lock poisoned: {e}"))?
@@ -493,4 +481,121 @@ pub(crate) async fn build_cli_chat_factory(
     let _ = workspace; // workspace available for future tool wiring
     let inputs_fn = snapshots_inputs_fn(snapshots);
     Ok(Arc::new(RuntimeChatServiceFactory::new(inputs_fn)))
+}
+
+/// Turn inputs for `[agents.<name>]` with its own engine and system prompt
+/// but no tools — enough for a text turn such as the planner's (which strips
+/// tools and memory anyway) or the skill improver's.
+pub(crate) fn text_only_inputs(
+    config: &Config,
+    name: &str,
+    agent_cfg: &AgentConfig,
+    memory: Option<Arc<MemoryManager>>,
+) -> anyhow::Result<ChatTurnInputs> {
+    let engine_box = crate::adapters::outbound::engines::build_engine(
+        name,
+        agent_cfg,
+        config.claude_code.as_ref(),
+    )?;
+    let compaction_policy = crate::application::chat::flow::resolve_flow_compaction_policy(
+        &agent_cfg.flow,
+        agent_cfg.limits.max_tokens_per_flow,
+        engine_box.context_window(),
+        engine_box.max_output_tokens_per_turn() as usize,
+    );
+    let engine: Arc<dyn Engine> = Arc::from(engine_box);
+    Ok(ChatTurnInputs {
+        engine,
+        agent_id: name.to_string(),
+        agent_config: Arc::new(agent_cfg.clone()),
+        history_turn_limit: crate::application::chat::flow::resolve_history_turn_limit(
+            &agent_cfg.flow,
+        ),
+        compaction_policy,
+        system_prompt: crate::application::skills::registry::build_system_prompt(
+            agent_cfg,
+            false,
+            &[],
+        ),
+        tools: Vec::new(),
+        tool_executor: None,
+        memory_manager: memory,
+        max_recall_entries: 10,
+        max_recall_tokens: 2000,
+        bridge_tools: None,
+        mcp_servers: Vec::new(),
+        tool_observer: None,
+        cancel: None,
+    })
+}
+
+/// The planner's own turn inputs when `[orchestrator] agent` is not
+/// `chat_agent` — a surface that publishes a snapshot only for its chat agent
+/// (the TUI) adds this one, else every planner call failed with "snapshot
+/// missing". `None` without `[orchestrator]` or when the two agents match.
+pub(crate) fn planner_inputs_if_other(
+    config: &Config,
+    chat_agent: &str,
+) -> anyhow::Result<Option<ChatTurnInputs>> {
+    let Some(cfg) = config.orchestrator.as_ref() else {
+        return Ok(None);
+    };
+    if cfg.agent == chat_agent {
+        return Ok(None);
+    }
+    let agent_cfg = config.agents.get(&cfg.agent).ok_or_else(|| {
+        anyhow::anyhow!(
+            "[orchestrator] agent `{}` has no [agents.{0}] block",
+            cfg.agent
+        )
+    })?;
+    text_only_inputs(config, &cfg.agent, agent_cfg, None).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(toml: &str) -> Config {
+        toml::from_str(toml).expect("config")
+    }
+
+    #[test]
+    fn open_brain_recall_always_embeds_with_the_pinned_model() {
+        let pinned = crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
+        assert_eq!(open_brain_embedding_model(pinned), (pinned, None));
+        let (model, warning) = open_brain_embedding_model("text-embedding-3-large");
+        assert_eq!(model, pinned);
+        assert!(warning.unwrap().contains("workspace memory only"));
+    }
+
+    /// The TUI publishes a snapshot for its chat agent only: the planner gets
+    /// its own when `[orchestrator] agent` is another agent.
+    #[test]
+    fn planner_snapshot_only_when_the_planner_is_another_agent() {
+        let c = cfg(r#"
+[agents.chat]
+default = true
+engine = "local"
+model = "m"
+[agents.planner]
+engine = "local"
+model = "m"
+[orchestrator]
+agent = "planner"
+"#);
+        let p = planner_inputs_if_other(&c, "chat")
+            .unwrap()
+            .expect("planner inputs");
+        assert_eq!(p.agent_id, "planner");
+        assert!(p.tools.is_empty() && p.tool_executor.is_none() && p.memory_manager.is_none());
+        assert!(planner_inputs_if_other(&c, "planner").unwrap().is_none());
+
+        let missing = cfg(
+            "[agents.chat]\nengine = \"local\"\nmodel = \"m\"\n[orchestrator]\nagent = \"nope\"\n",
+        );
+        assert!(planner_inputs_if_other(&missing, "chat").is_err());
+        let off = cfg("[agents.chat]\nengine = \"local\"\nmodel = \"m\"\n");
+        assert!(planner_inputs_if_other(&off, "chat").unwrap().is_none());
+    }
 }

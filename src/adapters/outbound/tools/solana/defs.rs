@@ -1,5 +1,5 @@
 //! The Solana LP family's tool interface — names, descriptions and JSON input
-//! schemas of the ten read tools and the write tools, defined in one place. Family files
+//! schemas of the eleven read tools (`lp_swap_plan` the eleventh) and the write tools, defined in one place. Family files
 //! (`price.rs`, `pools.rs`, `dlmm.rs`, `perps.rs`, `wallet.rs`, `lp.rs`) take
 //! their `ToolDef` from [`def`]; the catalog rows advertise [`defs_named`].
 //!
@@ -241,7 +241,7 @@ fn knobs(properties: Value, description: &str) -> Value {
     })
 }
 
-// ── the ten tools ────────────────────────────────────────────────
+// ── the read tools ────────────────────────────────────────────────
 
 fn sol_price() -> ToolDef {
     ToolDef::new(

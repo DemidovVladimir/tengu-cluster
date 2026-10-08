@@ -599,7 +599,8 @@ async fn handle_tools_call(
             )
         }
         Err(e) => {
-            // Errors bypass `SanitizedToolExecutor`; redact them here.
+            // `SanitizedToolExecutor` redacts errors too; redacting again here is
+            // harmless and keeps this path safe on its own.
             let text = secrets.redact(&format!("ERROR: {}", e));
             warn!(
                 tool = %call.name,
@@ -623,9 +624,8 @@ async fn handle_tools_call(
 // ---------------------------------------------------------------------------
 
 /// Maximum characters per MCP tool result returned to Claude CLI.
-/// The Claude Code engine has no per-turn compaction (unlike the OpenRouter
-/// engine's 2-phase pruning), so every byte here stays in context for the
-/// entire session.  50 000 chars ≈ ~12 500 tokens — enough for any useful
+/// The Claude CLI keeps its own context, which Tengu does not compact, so
+/// every byte here stays in that context for the rest of the run.  50 000 chars ≈ ~12 500 tokens — enough for any useful
 /// response while preventing schema-introspection blowup.
 const MAX_MCP_RESULT_CHARS: usize = 50_000;
 

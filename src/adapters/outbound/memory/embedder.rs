@@ -2,7 +2,7 @@
 //!
 //! Ported from `src/adapters/embedding.rs::OpenRouterEmbeddingAdapter` with a
 //! simpler single-string `embed()` API. Calls
-//! `POST https://openrouter.ai/api/v1/embeddings` (OpenAI-compatible) with the
+//! `POST {OPENROUTER_BASE_URL}/v1/embeddings` (default base `https://openrouter.ai/api`; OpenAI-compatible) with the
 //! configured model (default: `text-embedding-3-small`, 1536 dims).
 //!
 //! A `null()` test helper returns a zero-vector without making network calls.
@@ -93,6 +93,16 @@ impl Embedder {
     }
 }
 
+/// `{OPENROUTER_BASE_URL}/v1/embeddings` (default base
+/// `https://openrouter.ai/api`), as the chat engine and the wiki compiler
+/// resolve it — the URL used to be hard-coded.
+fn embeddings_url(base: Option<String>) -> String {
+    let base = base
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| "https://openrouter.ai/api".to_string());
+    format!("{}/v1/embeddings", base.trim_end_matches('/'))
+}
+
 async fn embed_batch_openrouter(
     client: &reqwest::Client,
     api_key: &str,
@@ -109,7 +119,7 @@ async fn embed_batch_openrouter(
     let total_bytes: u32 = texts.iter().map(|t| t.len() as u32).sum();
 
     let resp = client
-        .post("https://openrouter.ai/api/v1/embeddings")
+        .post(embeddings_url(std::env::var("OPENROUTER_BASE_URL").ok()))
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/json")
         .json(&body)
@@ -192,6 +202,22 @@ impl crate::ports::memory::Embedding for Embedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embeddings_url_honours_the_base_url() {
+        assert_eq!(
+            embeddings_url(None),
+            "https://openrouter.ai/api/v1/embeddings"
+        );
+        assert_eq!(
+            embeddings_url(Some("http://gw.local:8080/api/".into())),
+            "http://gw.local:8080/api/v1/embeddings"
+        );
+        assert_eq!(
+            embeddings_url(Some(" ".into())),
+            "https://openrouter.ai/api/v1/embeddings"
+        );
+    }
 
     #[tokio::test]
     async fn null_returns_expected_dim() {

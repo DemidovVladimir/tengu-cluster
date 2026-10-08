@@ -1,7 +1,8 @@
 //! Post-turn memory writes — spawned, non-blocking.
 //!
 //! **Phase 7.1 note:** like `injector.rs`, this module's only remaining
-//! caller is `ChatOrchestratorPortImpl` (the planner-side LLM turn). Subagent
+//! caller is `ChatOrchestratorPortImpl::run_orchestrator_turn` (the plain
+//! planner path; `RagPlanner`'s `_with_system` turns write nothing). Subagent
 //! step output writes go through the run-agent step-summary capture → Postgres `agentic_memory`
 //! instead.
 

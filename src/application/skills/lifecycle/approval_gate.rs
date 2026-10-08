@@ -39,10 +39,7 @@ pub(crate) fn render(view: &GateView, w: &mut dyn Write) -> Result<()> {
         view.best_target - view.baseline_target,
     )?;
     writeln!(w)?;
-    writeln!(
-        w,
-        "Non-target gated metrics (must stay >= baseline - 0.05):"
-    )?;
+    writeln!(w, "Other metrics (must stay >= baseline - 0.05):")?;
     for (name, b, p) in view.gated_snapshots {
         let ok = *p + 0.05 >= *b;
         writeln!(

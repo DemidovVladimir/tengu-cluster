@@ -105,7 +105,7 @@ impl Tool for SkillResourceTool {
         let skill = require_str(args, SKILL_RESOURCE_TOOL_NAME, "skill")?;
 
         validate_skill_name(skill)?;
-        let resources_dir = locate_resources_dir(skill)?
+        let resources_dir = locate_resources_dir(skill, ctx.workspace)?
             .ok_or_else(|| anyhow!("no skill '{}' found in any tier", skill))?;
 
         match action {
@@ -173,11 +173,11 @@ fn validate_resource_path(rel: &str) -> Result<()> {
     Ok(())
 }
 
-/// Walk managed → workspace → project, return the first `resources/` that
-/// exists. Mirrors `application/skills/registry.rs::skill_directories`'s shadowing order.
-fn locate_resources_dir(skill: &str) -> Result<Option<PathBuf>> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let candidates = candidate_resource_dirs(skill, &cwd);
+/// The first existing `resources/` of `skill` in the skill loader's
+/// directories for `workspace` (`skills::registry::skill_directories`, same
+/// shadowing) — the tool used the process cwd in place of the workspace.
+fn locate_resources_dir(skill: &str, workspace: &Path) -> Result<Option<PathBuf>> {
+    let candidates = candidate_resource_dirs(skill, workspace);
     for c in candidates {
         if c.is_dir() {
             return Ok(Some(c));
@@ -186,14 +186,11 @@ fn locate_resources_dir(skill: &str) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-fn candidate_resource_dirs(skill: &str, cwd: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::with_capacity(3);
-    if let Some(home) = dirs_next::home_dir() {
-        out.push(home.join(".tengu/skills").join(skill).join("resources"));
-    }
-    out.push(cwd.join(".tengu/skills").join(skill).join("resources"));
-    out.push(cwd.join("skills").join(skill).join("resources"));
-    out
+fn candidate_resource_dirs(skill: &str, workspace: &Path) -> Vec<PathBuf> {
+    crate::application::skills::registry::skill_directories(workspace)
+        .into_iter()
+        .map(|dir| dir.join(skill).join("resources"))
+        .collect()
 }
 
 fn list_resources(skill: &str, resources_dir: &Path) -> Result<ToolOutput> {

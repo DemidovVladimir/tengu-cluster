@@ -520,7 +520,7 @@ async fn run_one_shot(
     // subagent dispatched, so no `compress_and_store` and no backstop) leave
     // nothing recallable. Coexists with subagent step summaries on the same
     // session_id; different step_ids keep them distinct.
-    persist_webhook_output(config, session_id, &final_text).await;
+    persist_webhook_output(session_id, &final_text).await;
 }
 
 /// Fire-and-forget persist of the webhook turn's final text into Open Brain
@@ -528,12 +528,13 @@ async fn run_one_shot(
 /// propagates. Embedding is best-effort: no `OPENROUTER_API_KEY` (or an embed
 /// error) stores a text-only memory.
 #[cfg(feature = "postgres_memory")]
-async fn persist_webhook_output(config: &Config, session_id: &str, final_text: &str) {
+async fn persist_webhook_output(session_id: &str, final_text: &str) {
     let embedding = match std::env::var("OPENROUTER_API_KEY") {
         Ok(api_key) => {
             let embedder = crate::adapters::outbound::memory::embedder::Embedder::new(
                 api_key,
-                config.memory.embedding_model.clone(),
+                // Open Brain is `vector(1536)`: always the pinned model.
+                crate::domain::memory::DEFAULT_EMBEDDING_MODEL.to_string(),
             );
             match embedder.embed(final_text).await {
                 Ok(v) => Some(v),
@@ -575,7 +576,7 @@ async fn persist_webhook_output(config: &Config, session_id: &str, final_text: &
 /// turn still completes and its output is in the tracing log, just not
 /// recallable.
 #[cfg(not(feature = "postgres_memory"))]
-async fn persist_webhook_output(_config: &Config, session_id: &str, _final_text: &str) {
+async fn persist_webhook_output(session_id: &str, _final_text: &str) {
     warn!(
         session_id = %session_id,
         "webhook output not persisted — built without the `postgres_memory` feature"

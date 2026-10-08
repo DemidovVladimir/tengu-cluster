@@ -25,7 +25,7 @@
 //! | Intent | the order's size at the post-latency book's mid (else the mark, else the position's entry); a close = the whole snapshot position, opposite side; underlying = the position's, else the instrument id |
 //! | Gate | `evaluate` against the plan's legs (the book read after the latency, the `mkt_ctx/1` row), opportunity row and kill-switch probe — `evaluate_shadow` for a shadow account (`ExecPlan.gate`) |
 //! | Kill switch (review #7) | an order that is not reduce-only probes the file again here, inside the transaction (`ExecPlan.kill_recheck`): present at either probe ⇒ present, so a `touch` while the order waited for the ledger lock still denies it; a reduce-only order keeps the probe made before `place` (`allow_reduce_degraded` decides, as before) |
-//! | Fill | allowed ⇒ `simulate_fill` on that book against the snapshot position; no book ⇒ refused `stale_book` (a degraded exit may be allowed without one) |
+//! | Fill | allowed ⇒ `simulate_fill` on that book against the snapshot position; a reduce-only exit whose `book_age` the gate waived fills at a stale book (`FillEnv::stale_book_ok`, result `stale_book`); no book at all ⇒ refused `stale_book` (nothing to price a degraded exit at) |
 //! | Trips | the verdict's halts recorded (`RiskState::trip`) |
 
 use std::collections::BTreeMap;
@@ -40,7 +40,8 @@ use crate::domain::xm::paper::{
     OrderKind, OrderSize, PaperOrder, Tif, VenueRules,
 };
 use crate::domain::xm::risk::{
-    evaluate_with, venue_of, EdgeInput, GateKind, LegMarket, OrderIntent, RiskContext, RiskLimits,
+    evaluate_with, rules, venue_of, CheckStatus, EdgeInput, GateKind, LegMarket, OrderIntent,
+    RiskContext, RiskLimits,
 };
 use crate::ports::book::{BookRead, BookSource};
 use crate::ports::clock::Clock;
@@ -241,6 +242,12 @@ pub(crate) fn decide(plan: ExecPlan) -> Decide {
                 position: &position,
                 fees: &plan.fees,
                 max_book_age_ms: limits.max_data_age_ms.book,
+                // A reduce-only exit the gate let past a stale book fills at
+                // it (marked `stale_book`): the waiver must get the exit out.
+                stale_book_ok: order.reduce_only
+                    && verdict
+                        .check(rules::BOOK_AGE)
+                        .is_some_and(|c| c.status == CheckStatus::Waived),
             };
             let result = match &plan.book {
                 Ok(read) => simulate_fill(&order, &read.book, read.age_ms(now), &env),
@@ -372,6 +379,7 @@ mod tests {
             position: &position,
             fees: &fees,
             max_book_age_ms: 5_000,
+            stale_book_ok: false,
         };
         fill_with_latency(rig.clock.as_ref(), &rig.books, cfg, order, &env, rand01).await
     }

@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Decision loop · Tengu</title>
+<meta name="description" content="How Jev (TypeSafe's System One model) reads the analysis map, walks an execution map one step at a time, and how tools carry out each choice.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: chain simulator, map checker, breaker strip */
+  .key { font-family: var(--font-mono); font-size: 0.8rem; overflow-wrap: anywhere; color: var(--ink); }
+  .chain { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); }
+  .link { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 4px; background: var(--panel); transition: border-color .3s, opacity .3s, transform .3s; }
+  .link b { font-family: var(--font-mono); font-size: 0.85rem; }
+  .link small { color: var(--muted); font-size: 0.78rem; line-height: 1.35; }
+  .link .st { font-family: var(--font-mono); font-size: 0.72rem; text-transform: uppercase; letter-spacing: .06em; }
+  .link.run { border-color: var(--hands); } .link.run .st { color: var(--hands); }
+  .link.skip { border-style: dashed; opacity: .6; } .link.skip .st { color: var(--faint); }
+  .link.halt { border-color: var(--bad); } .link.halt .st { color: var(--bad); }
+  .link.idle { opacity: .45; } .link.idle .st { color: var(--faint); }
+  .link.end { border-color: var(--data); } .link.end .st { color: var(--data); }
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .errs { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-family: var(--font-mono); font-size: .78rem; color: var(--bad); }
+  .errs.ok { color: var(--ok); list-style: none; padding-left: 0; }
+  .mini-json { font-size: 0.76rem; max-height: 260px; }
+  .cand { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cand span { font-family: var(--font-mono); font-size: 0.78rem; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: var(--sunk); overflow-wrap: anywhere; }
+  .cand span.cut { text-decoration: line-through; color: var(--faint); }
+  .breaker { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+  .breaker div { border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 0.8rem; color: var(--muted); display: grid; gap: 4px; background: var(--panel); }
+  .breaker b { font-family: var(--font-mono); font-size: 0.78rem; color: var(--ink); }
+  .breaker .x { color: var(--bad); }
+  .breaker .open { border-color: var(--bad); background: var(--heart-soft); }
+  .breaker.in-view div { animation: lit 0.5s ease both; }
+  .breaker.in-view div:nth-child(2) { animation-delay: .4s } .breaker.in-view div:nth-child(3) { animation-delay: .8s }
+  .breaker.in-view div:nth-child(4) { animation-delay: 1.2s } .breaker.in-view div:nth-child(5) { animation-delay: 1.6s }
+  @keyframes lit { from { transform: translateY(6px); opacity: .3 } to { transform: none; opacity: 1 } }
+  @media (max-width: 640px) { .breaker { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · System One</div>
+  <h1>Decision loop</h1>
+  <p class="lede">An Architect plans; Jev executes. Jev, TypeSafe's typed decision model, reads the <b>analysis map</b>, takes one step of the <b>execution map</b> at a time, and Tengu's tools do the work. It never writes text or tool JSON.</p>
+  <ul class="facts">
+    <li>model <b>~typesafe/jev-latest</b></li>
+    <li>acts at confidence <b>≥ 0.8</b></li>
+    <li>≤ <b>4</b> steps per event</li>
+    <li><b>dry_run</b> on by default</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> Architect / planner LLM</li>
+    <li><span class="chip jev"><span class="k">決</span> Jev</span> typed choice</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools, TOML actions</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks and gates</li>
+    <li><span class="chip data">data</span> stores and logs</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One map, step by step</span>
+    <h2 id="s-flow">From plan to action</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 480" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">The Architect writes an execution map; it is checked against the sandbox loop; each step Jev reads the analysis map and the next legal step, a confidence gate decides, and a tool runs; its result feeds the next step.</title>
+        <path class="e" id="p-arch-check" d="M95 98 L95 148" data-at="1-2"/>
+        <path class="e" id="p-toml-check" d="M95 260 L95 210" data-at="2"/>
+        <path class="e" id="p-check-ana" d="M170 172 C190 172 190 160 208 160" data-at="3"/>
+        <path class="e" id="p-check-legal" d="M170 192 C194 192 186 310 208 310" data-at="3"/>
+        <path class="e" id="p-toml-legal" d="M170 289 C190 289 190 336 208 336" data-at="5"/>
+        <path class="e" id="p-obs-ana" d="M295 74 L295 108" data-at="4"/>
+        <path class="e dash" id="p-ana-legal" d="M295 190 L295 278" data-at="5"/>
+        <path class="e" id="p-ana-jev" d="M380 150 C402 150 400 222 418 222" data-at="6"/>
+        <path class="e" id="p-legal-jev" d="M380 320 C402 320 400 268 418 268" data-at="6"/>
+        <path class="e" id="p-jev-audit" d="M490 190 L490 92" data-at="6"/>
+        <path class="e" id="p-jev-gate" d="M560 240 L580 240" data-at="7-9"/>
+        <path class="e bad" id="p-gate-esc" d="M640 192 C640 120 660 69 698 69" data-at="7"/>
+        <path class="e" id="p-gate-stop" d="M669 216 C684 190 684 145 698 145" data-at="8"/>
+        <path class="e" id="p-gate-tool" d="M698 240 L718 240" data-at="9"/>
+        <path class="e flow" id="p-tool-hist" d="M785 265 C785 360 770 419 732 419" data-at="10"/>
+        <path class="e flow" id="p-hist-jev" d="M560 419 C510 419 490 360 490 292" data-at="10"/>
+
+        <g class="n heart" data-at="1-2">
+          <rect x="20" y="40" width="150" height="58" rx="8"/>
+          <text x="95" y="64" text-anchor="middle" class="t-title">Architect</text>
+          <text x="95" y="83" text-anchor="middle" class="t-small">writes a JSON map</text>
+        </g>
+        <g class="n guard" data-at="2-3">
+          <rect x="20" y="150" width="150" height="58" rx="8"/>
+          <text x="95" y="174" text-anchor="middle" class="t-title">Map check</text>
+          <text x="95" y="193" text-anchor="middle" class="t-small">may only narrow</text>
+        </g>
+        <g class="n hands" data-at="2,5">
+          <rect x="20" y="260" width="150" height="58" rx="8"/>
+          <text x="95" y="284" text-anchor="middle" class="t-title">Loop in TOML</text>
+          <text x="95" y="303" text-anchor="middle" class="t-small">tools · args · caps</text>
+        </g>
+        <g class="n data" data-at="4">
+          <rect x="210" y="24" width="170" height="50" rx="8"/>
+          <text x="295" y="46" text-anchor="middle" class="t-title">Observation store</text>
+          <text x="295" y="63" text-anchor="middle" class="t-small">typed tool results</text>
+        </g>
+        <g class="n data" data-at="3-6">
+          <rect x="210" y="110" width="170" height="80" rx="8"/>
+          <text x="295" y="132" text-anchor="middle" class="zone-label">Analysis map</text>
+          <text x="295" y="154" text-anchor="middle" class="t-title">what Jev reads</text>
+          <text x="295" y="174" text-anchor="middle" class="t-small">goal · event · world</text>
+        </g>
+        <g class="n hands" data-at="3,5-6">
+          <rect x="210" y="280" width="170" height="80" rx="8"/>
+          <text x="295" y="302" text-anchor="middle" class="zone-label">Execution map</text>
+          <text x="295" y="324" text-anchor="middle" class="t-title">next step only</text>
+          <text x="295" y="344" text-anchor="middle" class="t-small">+ terminal actions</text>
+        </g>
+        <g class="n jev" data-at="6-7,10">
+          <rect x="420" y="190" width="140" height="100" rx="10"/>
+          <text x="490" y="220" text-anchor="middle" class="t-kanji k">決</text>
+          <text x="490" y="242" text-anchor="middle" class="t-title">Jev</text>
+          <text x="490" y="261" text-anchor="middle" class="t-small">one decisions call</text>
+          <text x="490" y="277" text-anchor="middle" class="t-small">action + slot picks</text>
+        </g>
+        <g class="n data" data-at="3,6">
+          <rect x="420" y="40" width="140" height="50" rx="8"/>
+          <text x="490" y="62" text-anchor="middle" class="t-title">Audit line</text>
+          <text x="490" y="79" text-anchor="middle" class="t-small">decisions.jsonl</text>
+        </g>
+        <g class="n guard" data-at="7-9">
+          <polygon points="640,192 698,240 640,288 582,240"/>
+          <text x="640" y="238" text-anchor="middle" class="t-title">confident?</text>
+          <text x="640" y="254" text-anchor="middle" class="t-small">≥ act_at</text>
+        </g>
+        <g class="n heart" data-at="7">
+          <rect x="700" y="40" width="150" height="58" rx="8"/>
+          <text x="775" y="64" text-anchor="middle" class="t-title">Escalate</text>
+          <text x="775" y="83" text-anchor="middle" class="t-small">or stop</text>
+        </g>
+        <g class="n data" data-at="8">
+          <rect x="700" y="120" width="150" height="50" rx="8"/>
+          <text x="775" y="141" text-anchor="middle" class="t-title">Stop · or log</text>
+          <text x="775" y="158" text-anchor="middle" class="t-small">terminal · dry_run</text>
+        </g>
+        <g class="n hands" data-at="9-10">
+          <rect x="720" y="215" width="130" height="50" rx="8"/>
+          <text x="785" y="236" text-anchor="middle" class="t-title">Run tool</text>
+          <text x="785" y="253" text-anchor="middle" class="t-small">agent's scopes</text>
+        </g>
+        <g class="n data" data-at="10">
+          <rect x="560" y="390" width="170" height="58" rx="8"/>
+          <text x="645" y="414" text-anchor="middle" class="t-title t-mono">history</text>
+          <text x="645" y="433" text-anchor="middle" class="t-small">next step binds to it</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="10" y="108" width="170" height="22" rx="11"/><text x="95" y="123" text-anchor="middle">loop · sequence · event</text></g>
+        <g class="pop badge" data-at="2"><rect x="10" y="222" width="170" height="22" rx="11"/><text x="95" y="237" text-anchor="middle">wider = refused</text></g>
+        <g class="pop badge" data-at="3"><rect x="560" y="318" width="170" height="22" rx="11"/><text x="645" y="333" text-anchor="middle">id = sha256 of map</text></g>
+        <g class="pop badge" data-at="4"><rect x="390" y="110" width="150" height="22" rx="11"/><text x="465" y="125" text-anchor="middle">read, never fetched</text></g>
+        <g class="pop badge" data-at="5"><rect x="190" y="372" width="210" height="22" rx="11"/><text x="295" y="387" text-anchor="middle">step legal only if values exist</text></g>
+        <g class="pop badge" data-at="6"><rect x="560" y="318" width="170" height="22" rx="11"/><text x="645" y="333" text-anchor="middle">bound slots: no question</text></g>
+        <g class="pop badge" data-at="7"><rect x="560" y="318" width="170" height="22" rx="11"/><text x="645" y="333" text-anchor="middle">0.74 &lt; 0.80 → escalate</text></g>
+        <g class="pop badge" data-at="8"><rect x="560" y="318" width="170" height="22" rx="11"/><text x="645" y="333" text-anchor="middle">dry_run logs, chain goes on</text></g>
+        <g class="pop badge" data-at="9"><rect x="560" y="318" width="170" height="22" rx="11"/><text x="645" y="333" text-anchor="middle">call id loop:session:t</text></g>
+        <g class="pop badge" data-at="10"><rect x="560" y="456" width="170" height="22" rx="11"/><text x="645" y="471" text-anchor="middle">failure halts the chain</text></g>
+
+        <circle class="tok heart" r="6" data-path="p-arch-check" data-at="1"/>
+        <circle class="tok hands" r="6" data-path="p-toml-check" data-at="2"/>
+        <circle class="tok heart" r="5" data-path="p-arch-check" data-at="2" data-delay="300"/>
+        <circle class="tok guard" r="6" data-path="p-check-ana" data-at="3"/>
+        <circle class="tok guard" r="6" data-path="p-check-legal" data-at="3" data-delay="300"/>
+        <circle class="tok" r="6" data-path="p-obs-ana" data-at="4"/>
+        <circle class="tok hands" r="6" data-path="p-toml-legal" data-at="5"/>
+        <circle class="tok" r="5" data-path="p-ana-legal" data-at="5" data-delay="400"/>
+        <circle class="tok" r="6" data-path="p-ana-jev" data-at="6"/>
+        <circle class="tok hands" r="6" data-path="p-legal-jev" data-at="6" data-delay="300"/>
+        <circle class="tok jev" r="5" data-path="p-jev-audit" data-at="6" data-delay="900"/>
+        <circle class="tok jev" r="6" data-path="p-jev-gate" data-at="7" data-dur="600"/>
+        <circle class="tok heart" r="6" data-path="p-gate-esc" data-at="7" data-delay="600"/>
+        <circle class="tok" r="6" data-path="p-gate-stop" data-at="8"/>
+        <circle class="tok hands" r="6" data-path="p-gate-tool" data-at="9" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-tool-hist" data-at="10"/>
+        <circle class="tok" r="6" data-path="p-hist-jev" data-at="10" data-delay="900"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>An Architect agent (Claude) writes an <b>execution map</b>: which loop, which steps in which order, the values to use. It never calls tools itself.</li>
+        <li>The map is checked against the loop in the sandbox TOML. It can only narrow it. Anything wider refuses the whole map with every reason, and nothing runs.</li>
+        <li>An accepted map gets an identity: the sha256 of its canonical JSON. Every audit line of the run carries <code>map:&lt;sha256&gt;</code>.</li>
+        <li><b>Analysis map.</b> Each step, Jev's state is the goal, the event, the <code>world</code> rows from the observation store and the history so far. Nothing is fetched here.</li>
+        <li>With a <code>sequence</code>, only the next step and the terminal actions are offered, and only if every value that step needs exists and is under its cap.</li>
+        <li>One decisions call: <code>next_action</code>, plus one choice for each slot with several candidates. Bound slots need no question. Every call writes one audit line.</li>
+        <li>If the lowest confidence (action or slot) is below <code>act_at</code>, the event is escalated to the planner, or simply stops when nothing can take it.</li>
+        <li>A terminal action (<code>hold</code>, <code>done</code>) stops. A write under <code>dry_run</code> is logged and the chain goes on without its output.</li>
+        <li>Otherwise caps are re-checked and the tool runs through the loop agent's executor: same scopes, same egress as that agent.</li>
+        <li>The result joins <code>history</code>, so the next step can bind to it. A failed or refused step halts the chain; only terminal actions are offered after that.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-chain">
+  <div class="sec-head">
+    <span class="kicker">Try it: walk a real chain</span>
+    <h2 id="s-chain">The execution map, step by step</h2>
+    <p>Loop <code>lp_exec</code> from <code>sandboxes/lping</code>: <code>sequence = ["snapshot", "plan_swap", "swap?", "refresh?", "open"]</code>. A <code>?</code> step is skipped when its values are missing. Change the inputs and watch the chain.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="tsol">event <code>target_sol</code> <input type="range" id="tsol" min="0" max="3" step="0.25" value="0.5"> <span class="readout" id="tsol-out">0.50</span></label>
+      <label for="route"><input type="checkbox" id="route" checked> plan needs a swap</label>
+      <label for="feas"><input type="checkbox" id="feas" checked> plan is feasible</label>
+      <label for="swapfail"><input type="checkbox" id="swapfail"> swap simulation fails</label>
+    </div>
+    <div class="chain" id="chain" aria-live="polite"></div>
+    <p class="note" id="chain-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-check">
+  <div class="sec-head">
+    <span class="kicker">Try it: try to widen a map</span>
+    <h2 id="s-check">A map can only narrow</h2>
+    <p>Tools, arguments, wallets, <code>mode</code>, slot sources and <code>world</code> come from the TOML only. Tick a change; the messages are the ones the code returns.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="w-cap"><input type="checkbox" id="w-cap"> cap <code>plan_swap.target_sol</code> = 5</label>
+      <label for="w-steps"><input type="checkbox" id="w-steps"> <code>max_steps</code> = 9</label>
+      <label for="w-actat"><input type="checkbox" id="w-actat"> <code>act_at</code> = 0.5</label>
+      <label for="w-act"><input type="checkbox" id="w-act"> add action <code>send_everything</code></label>
+    </div>
+    <div class="grid two">
+      <pre class="mini-json" id="map-json"></pre>
+      <div class="card guard"><h3>Result</h3><ul class="errs" id="map-errs"></ul></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-answer">
+  <div class="sec-head">
+    <span class="kicker">The confidence gate</span>
+    <h2 id="s-answer">What Jev answers</h2>
+    <p>A real answer captured from the live endpoint (a test fixture in <code>domain/decision.rs</code>). Move <code>act_at</code> to see when the loop acts.</p>
+  </div>
+  <div class="widget">
+    <div class="bars" aria-label="Probabilities per action">
+      <div class="bar win"><span class="lbl">rebalance</span><span class="track"><span class="fill" style="--w:83%"></span></span><span class="val">0.83</span></div>
+      <div class="bar"><span class="lbl">close</span><span class="track"><span class="fill" style="--w:15%"></span></span><span class="val">0.15</span></div>
+      <div class="bar"><span class="lbl">hold</span><span class="track"><span class="fill" style="--w:2%"></span></span><span class="val">0.02</span></div>
+    </div>
+    <div class="widget-row">
+      <span>reported <code>confidence</code> <span class="readout">0.74</span></span>
+      <label for="actat"><code>act_at</code> <span class="readout" id="actat-out">0.80</span>
+        <input type="range" id="actat" min="0.5" max="0.95" step="0.01" value="0.8">
+      </label>
+      <span class="verdict bad" id="verdict" aria-live="polite">Escalated: 0.74 &lt; 0.80</span>
+    </div>
+    <p class="note">Gate confidence = the answer's <code>confidence</code>, else p(chosen label), else the <code>noul</code> value. The loop takes the <b>lowest</b> of the action and every slot answer.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-slots">
+  <div class="sec-head">
+    <span class="kicker">Slots</span>
+    <h2 id="s-slots">Jev picks labels; code holds the values</h2>
+    <p>A slot fills one tool argument. Three ways, each read from the code's own sources, never typed by the model.</p>
+  </div>
+  <div class="grid">
+    <div class="card jev">
+      <h3>Pick from a list</h3>
+      <div class="cand"><span>pool_1 → 5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6</span></div>
+      <p>Items from an earlier step of <b>this</b> event, a <code>world</code> row or the event get short labels. Jev answers <code>pool_1</code>; the address stays in code.</p>
+    </div>
+    <div class="card guard">
+      <h3>Static list, capped</h3>
+      <div class="cand"><span>0.5</span><span>1</span><span>2</span><span class="cut" title="above cap">3</span></div>
+      <p>With <code>caps = { size_sol = 2.0 }</code>, 3 is never offered; the chosen value is checked again before the tool runs.</p>
+    </div>
+    <div class="card hands">
+      <h3>Bound: one value</h3>
+      <div class="cand"><span>amount ← plan_swap /swaps/0/amount</span></div>
+      <p>No question. Missing, empty or over the cap means no value, so the step is not legal. A binding never invents a value.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-cfg">
+  <div class="sec-head">
+    <span class="kicker">TOML → map → output</span>
+    <h2 id="s-cfg">Same loop, three views</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-toml" aria-selected="true">Loop in TOML</button>
+      <button type="button" aria-controls="tab-map">Execution map</button>
+      <button type="button" aria-controls="tab-req">What Jev is asked</button>
+    </div>
+    <div class="tabpanel" id="tab-toml"><pre><span class="c"># sandboxes/lping/config.toml (shortened to the decision fields)</span>
+<span class="k">[decision_loops.lp_exec]</span>
+agent      = <span class="s">"lp_executor"</span>        <span class="c"># tools, scopes, workspace come from this agent</span>
+sequence   = [<span class="s">"snapshot"</span>, <span class="s">"plan_swap"</span>, <span class="s">"swap?"</span>, <span class="s">"refresh?"</span>, <span class="s">"open"</span>]
+act_at     = <span class="n">0.8</span>
+max_steps  = <span class="n">6</span>                    <span class="c"># must exceed the sequence length</span>
+world      = { snap = <span class="s">"lp_snapshot/1:&lt;wallet&gt;:&lt;pool&gt;"</span> }
+
+<span class="k">[decision_loops.lp_exec.actions.plan_swap]</span>
+tool     = <span class="s">"lp_swap_plan"</span>
+requires = { snap = <span class="n">30</span> }       <span class="c"># snapshot row at most 30 s old</span>
+caps     = { target_sol = <span class="n">2.0</span>, target_usdc = <span class="n">250.0</span> }
+<span class="k">[decision_loops.lp_exec.actions.plan_swap.slots]</span>
+target_sol = { event = <span class="s">"/target_sol"</span> }                                <span class="c"># bound from the event</span>
+wallet_sol = { observation = <span class="s">"snap"</span>, path = <span class="s">"/data/wallet_balances/native_sol/value"</span> }
+
+<span class="k">[decision_loops.lp_exec.actions.swap.slots]</span>
+amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/swaps/0/amount"</span> }            <span class="c"># bound from an earlier step</span></pre></div>
+    <div class="tabpanel" id="tab-map" hidden><pre><span class="c"># what an Architect hands over: tengu decide --sandbox lping --map -</span>
+{
+  <span class="k">"loop"</span>: <span class="s">"lp_exec"</span>,
+  <span class="k">"goal"</span>: <span class="s">"Open a small test position: 0.5 SOL + 40 USDC."</span>,
+  <span class="k">"sequence"</span>: [<span class="s">"snapshot"</span>, <span class="s">"plan_swap"</span>, <span class="s">"swap?"</span>, <span class="s">"refresh?"</span>, <span class="s">"open"</span>],
+  <span class="k">"event"</span>: { <span class="k">"target_sol"</span>: <span class="n">0.5</span>, <span class="k">"target_usdc"</span>: <span class="n">40</span> },
+  <span class="k">"caps"</span>: { <span class="k">"plan_swap"</span>: { <span class="k">"target_sol"</span>: <span class="n">1.0</span> } },
+  <span class="k">"max_steps"</span>: <span class="n">6</span>
+}
+<span class="c"># settable: actions (subset), sequence, event (≤ 16 KiB), goal (≤ 2 000 chars),</span>
+<span class="c"># caps (tighter), max_steps (lower), act_at (higher), dry_run (on only)</span></pre></div>
+    <div class="tabpanel" id="tab-req" hidden><pre><span class="c">POST {OPENROUTER_BASE_URL}/alpha/decisions — step 1 of the map above</span>
+{
+  <span class="k">"model"</span>: <span class="s">"~typesafe/jev-latest"</span>,
+  <span class="k">"state"</span>: {
+    <span class="k">"goal"</span>: <span class="s">"Fund and open the LP position … \n\nTask (architect): Open a small test position: 0.5 SOL + 40 USDC."</span>,
+    <span class="k">"event"</span>: { <span class="k">"target_sol"</span>: <span class="n">0.5</span>, <span class="k">"target_usdc"</span>: <span class="n">40</span> },
+    <span class="k">"world"</span>: { <span class="k">"snap"</span>: { <span class="k">"status"</span>: <span class="s">"ok"</span>, <span class="k">"age_s"</span>: <span class="c">…</span>, <span class="k">"features"</span>: { <span class="c">…</span> } } },
+    <span class="k">"history"</span>: [],
+    <span class="k">"step"</span>: <span class="n">0</span>
+  },
+  <span class="k">"questions"</span>: {
+    <span class="j">"next_action"</span>: { <span class="k">"type"</span>: <span class="s">"choice"</span>, <span class="k">"criteria"</span>: {
+      <span class="s">"hold"</span>: <span class="s">"Nothing (more) to do for this event"</span>,
+      <span class="s">"snapshot"</span>: <span class="s">"Read the wallet x pool snapshot (cached 10 s)"</span> } }
+  }
+}</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Seven outcomes</span>
+    <h2 id="s-out">What a step can end as</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip hands">run</span><span><b>executed</b>The tool ran; ok or failed is in history. A failure halts a sequence.</span></li>
+    <li><span class="chip guard">risk</span><span><b>refused</b>The tool's <code>[risk]</code> gate said no. History records a failure; a sequence halts.</span></li>
+    <li><span class="chip data">log</span><span><b>dry_run</b>A write while <code>dry_run = true</code>: logged, the loop goes on. Steps bound to its output stay illegal.</span></li>
+    <li><span class="chip data">end</span><span><b>stopped</b>A terminal action (no <code>tool</code>), such as <code>hold</code> or <code>done</code>.</span></li>
+    <li><span class="chip heart">ask</span><span><b>escalated</b>Below <code>act_at</code>. The planner gets the full state when the surface has one; otherwise the event stops.</span></li>
+    <li><span class="chip bad">no</span><span><b>rejected</b>Missing answer, a label that was not offered, or a value over its cap.</span></li>
+    <li><span class="chip bad">err</span><span><b>error</b>The decisions call failed. Audited, then the error propagates.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-fail">
+  <div class="sec-head">
+    <span class="kicker">When Jev is down</span>
+    <h2 id="s-fail">Retry once, then a 30-second breaker</h2>
+  </div>
+  <div class="breaker" data-inview>
+    <div><b>429 / 5xx</b>one retry after 0.5–1 s; <code>Retry-After</code> honoured up to 5 s</div>
+    <div><b class="x">timeout · 4xx</b>no retry: a timed-out call may already be billed</div>
+    <div><b class="x">fail ×3</b>three failed calls in a row</div>
+    <div class="open"><b class="x">circuit open</b>30 s of instant failures, no request sent</div>
+    <div><b>trial call</b>success closes it; a failure re-opens it</div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>The TOML is the ceiling.</b> A map cannot add a tool, argument, wallet, <code>mode</code>, slot source or <code>world</code> row; looser caps, more steps, a lower <code>act_at</code> or <code>dry_run</code> off are refused.</span></li>
+    <li><span><b>Every loop can stop.</b> Validation refuses a loop without a terminal action, a sequenced terminal action, or <code>max_steps</code> not above the sequence length.</span></li>
+    <li><span><b>No invented values.</b> A bound slot that reads nothing, or a value above its cap, keeps the step illegal.</span></li>
+    <li><span><b>Old data is never offered.</b> Slots from earlier steps read only this event's history.</span></li>
+    <li><span><b>Tools keep their fences.</b> A loop runs tools as its <code>agent</code>, with that agent's scopes and egress.</span></li>
+    <li><span><b>Audit lines never interleave.</b> Each line is one <code>write_all</code> on an append-only file, across loops and processes.</span></li>
+    <li><span><b>Replay is the same loop.</b> Backtests run it terminal-only on a simulated clock, every answer cached (<a href="backtest.html">Backtests</a>).</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Run a map, or one event</h2>
+    <p>Needs <code>OPENROUTER_API_KEY</code>. Long-running triggers: a webhook endpoint with <code>loop = "&lt;name&gt;"</code>, or a <code>[feeds.*]</code> tick under <a href="runtime.html"><code>tengu run</code></a>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"loop":"lp_exec","event":{"target_sol":0.5,"target_usdc":40}}' | tengu decide --sandbox lping --map -</span>
+<span class="ln o">{ "outcomes": [ … one per step … ], "history": [ … args + ok + result … ],</span>
+<span class="ln">  "map": { "sha256": <span class="hl">"&lt;64 hex chars&gt;"</span>, "path": "~/.tengu/logs/maps/&lt;sha256&gt;.json" } }</span>
+<span class="ln cmd"><span class="p">$ </span>echo '{"task":"What is the SOL price in USD?"}' | tengu decide --sandbox jev-exec --loop executor --event -</span>
+<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"crypto_price"}, {"outcome":"stopped","action":"done"} ], … }</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/config/decision_loop.rs</code></td><td>the loop schema: actions, slots and bindings, <code>sequence</code>, validation</td></tr>
+        <tr><td><code>src/config/execution_map.rs</code></td><td>the execution map: what it may narrow, refusals, sha256 identity</td></tr>
+        <tr><td><code>src/application/decision_loop/mod.rs</code></td><td>the step: legal actions, sequence, questions, gate, run, audit</td></tr>
+        <tr><td><code>src/application/decision_loop/world.rs</code></td><td>the analysis map's <code>world</code> from the observation store</td></tr>
+        <tr><td><code>src/application/decision_loop/slots.rs</code></td><td>candidates, labels, bindings, caps, <code>{slot}</code> rendering</td></tr>
+        <tr><td><code>src/application/decision_loop/reduce.rs</code></td><td>path reducers for events and results</td></tr>
+        <tr><td><code>src/domain/decision.rs</code></td><td>questions, answers, outcomes, verdicts</td></tr>
+        <tr><td><code>src/adapters/outbound/decisions.rs</code></td><td>the Jev HTTP client: retry, breaker</td></tr>
+        <tr><td><code>src/bootstrap/decision.rs</code></td><td>wiring: live loop, mapped loop, replay loop, backtest gate</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/decide.rs</code></td><td><code>tengu decide</code> with <code>--loop</code> / <code>--map</code></td></tr>
+        <tr><td><code>skills/execution-map/SKILL.md</code></td><td>what the Architect is taught about maps</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: chain simulator, map checker, act_at slider */
+(function () {
+  /* --- chain: the lp_exec sequence rules from decision_loop/mod.rs --- */
+  var tsol = document.getElementById("tsol"), tsolOut = document.getElementById("tsol-out");
+  var route = document.getElementById("route"), feas = document.getElementById("feas"), fail = document.getElementById("swapfail");
+  var chain = document.getElementById("chain"), note = document.getElementById("chain-note");
+  var STEPS = [
+    { a: "snapshot", opt: false, what: "read wallet × pool" },
+    { a: "plan_swap", opt: false, what: "plan the funding swap" },
+    { a: "swap", opt: true, what: "Jupiter swap (simulate)" },
+    { a: "refresh", opt: true, what: "re-read after the swap" },
+    { a: "open", opt: false, what: "open DLMM position (simulate)" }
+  ];
+  function walk() {
+    var x = +tsol.value;
+    tsolOut.textContent = x.toFixed(2);
+    var halted = false, stopped = false, swapOk = false, out = [], why = "";
+    STEPS.forEach(function (s) {
+      if (halted || stopped) { out.push([s, "idle", "not reached"]); return; }
+      var legal = true, reason = "";
+      if (s.a === "plan_swap" && x > 2.0) { legal = false; reason = "target_sol " + x + " is above cap 2"; }
+      if (s.a === "swap" && !route.checked) { legal = false; reason = "plan has no route"; }
+      if (s.a === "refresh" && !swapOk) { legal = false; reason = "no successful swap"; }
+      if (s.a === "open" && !feas.checked) { legal = false; reason = "plan not feasible: no deposit"; }
+      if (!legal) {
+        if (s.opt) { out.push([s, "skip", "skipped: " + reason]); return; }
+        stopped = true; why = "Required step " + s.a + " is not legal (" + reason + "). Jev is offered only hold.";
+        out.push([s, "halt", "not legal: " + reason]); return;
+      }
+      if (s.a === "swap" && fail.checked) {
+        halted = true; why = "swap failed (ok = false): the chain halts. Jev is offered only hold.";
+        out.push([s, "halt", "executed, failed"]); return;
+      }
+      if (s.a === "swap") swapOk = true;
+      out.push([s, "run", "executed"]);
+    });
+    out.push([{ a: "hold", opt: false, what: "terminal action" }, "end", "stopped"]);
+    chain.innerHTML = "";
+    out.forEach(function (o, i) {
+      var d = document.createElement("div");
+      d.className = "link " + o[1];
+      d.innerHTML = '<span class="st">' + (i + 1) + " · " + o[2] + "</span><b>" + o[0].a + (o[0].opt ? "?" : "") + "</b><small>" + o[0].what + "</small>";
+      chain.appendChild(d);
+    });
+    note.innerHTML = why ? "<b>Chain stopped early.</b> " + why : "<b>Chain complete.</b> Each run is one Jev decision; a skipped step costs none. Jev ends on <code>hold</code>.";
+  }
+  [tsol, route, feas, fail].forEach(function (e) { e.addEventListener("input", walk); e.addEventListener("change", walk); });
+  walk();
+
+  /* --- map checker: messages from config/execution_map.rs --- */
+  var ids = ["w-cap", "w-steps", "w-actat", "w-act"];
+  var mapPre = document.getElementById("map-json"), errs = document.getElementById("map-errs");
+  function check() {
+    var on = {}; ids.forEach(function (i) { on[i] = document.getElementById(i).checked; });
+    var m = { loop: "lp_exec", event: { target_sol: 0.5, target_usdc: 40 } };
+    var e = [];
+    if (on["w-act"]) { m.actions = ["snapshot", "plan_swap", "send_everything"]; e.push("execution map.actions: `send_everything` is not an action of loop `lp_exec`"); }
+    m.caps = { plan_swap: { target_sol: on["w-cap"] ? 5 : 1 } };
+    if (on["w-cap"]) e.push("execution map.caps.plan_swap.target_sol = 5 is above the loop's cap 2 — a map may only tighten");
+    if (on["w-steps"]) { m.max_steps = 9; e.push("execution map.max_steps = 9 is above the loop's 6 — a map may only lower it"); }
+    if (on["w-actat"]) { m.act_at = 0.5; e.push("execution map.act_at = 0.5 must be in [0.8, 1] — a map may only raise it"); }
+    if (on["w-act"]) ["swap", "refresh", "open"].forEach(function (a) { e.push("decision_loops.lp_exec.sequence: `" + a + "` is not an action"); });
+    mapPre.textContent = JSON.stringify(m, null, 2);
+    errs.className = e.length ? "errs" : "errs ok";
+    errs.innerHTML = e.length ? e.map(function (x) { return "<li>" + x.replace(/</g, "&lt;") + "</li>"; }).join("") + "<li><b>execution map refused — nothing runs</b></li>" : "<li>✓ accepted: narrowed loop runs; audit trigger map:&lt;sha256&gt;</li>";
+  }
+  ids.forEach(function (i) { document.getElementById(i).addEventListener("change", check); });
+  check();
+
+  /* --- act_at gate --- */
+  var actat = document.getElementById("actat"), out = document.getElementById("actat-out"), v = document.getElementById("verdict");
+  function gate() {
+    var x = +actat.value;
+    out.textContent = x.toFixed(2);
+    if (0.74 < x) { v.className = "verdict bad"; v.textContent = "Escalated: 0.74 < " + x.toFixed(2); }
+    else { v.className = "verdict ok"; v.textContent = "Acts: rebalance (0.74 ≥ " + x.toFixed(2) + ")"; }
+  }
+  actat.addEventListener("input", gate);
+  gate();
+})();
+</script>
+</body>
+</html>

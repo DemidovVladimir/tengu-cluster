@@ -49,7 +49,7 @@
               },
               "compose": {
                 "type": "object",
-                "description": "Phase 6.7 (C→B B-half) — optional. When present, the runner takes the [agents.<base_agent>] block of the active sandbox config as the base then OVERRIDES skills+tools with these values for THIS run only. Use ONLY after a prior turn asked the user to confirm a generic-agent fallback (REDESIGN §11). For normal routing, leave out.",
+                "description": "Phase 6.7 (C→B B-half) — optional. When present, the runner takes the [agents.<base_agent>] block of the active sandbox config as the base then OVERRIDES skills+tools with these values for THIS run only. Use ONLY after a prior turn asked the user to confirm a generic-agent fallback. For normal routing, leave out.",
                 "additionalProperties": false,
                 "properties": {
                   "base_agent": {

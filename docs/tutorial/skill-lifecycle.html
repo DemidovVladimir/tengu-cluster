@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Skill evals and evolution · Tengu</title>
+<meta name="description" content="How tengu eval scores a skill with a live agent and an LLM judge, how metrics roll up, and how tengu skill evolve rewrites a skill in a scratch worktree behind an approval gate.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: evolve simulator, rolling window, install scanner */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .readout { white-space: nowrap; }
+  .cyc { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+  .cy { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: grid; gap: 6px; background: var(--panel); transition: border-color .3s, opacity .3s, transform .3s; }
+  .cy .hd { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 6px; font-family: var(--font-mono); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); }
+  .cy label { display: grid !important; gap: 2px !important; font-size: .78rem !important; }
+  .cy input[type="range"] { width: 100% !important; }
+  .cy input[type="number"] { font: inherit; font-size: .8rem; width: 64px; padding: 2px 6px; border-radius: 5px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); }
+  .cy .st { font-family: var(--font-mono); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+  .cy.best { border-color: var(--hands); border-width: 2px; transform: translateY(-2px); } .cy.best .st { color: var(--hands); }
+  .cy.out { border-color: var(--bad); } .cy.out .st { color: var(--bad); }
+  .cy.ok .st { color: var(--muted); }
+  .cy.idle { opacity: .45; } .cy.idle .st { color: var(--faint); }
+  .chart { overflow-x: auto; }
+  .chart svg { min-width: 500px; width: 100%; height: auto; display: block; max-height: 220px; }
+  .chart .ax { stroke: var(--line); stroke-width: 1; }
+  .chart .lbl { font-size: 11px; fill: var(--muted); font-family: var(--font-mono); }
+  .chart .thr { stroke: var(--warn); stroke-dasharray: 5 4; stroke-width: 1.5; }
+  .chart .top { stroke: var(--ok); stroke-dasharray: 2 4; stroke-width: 1.5; }
+  .chart .bar { fill: var(--brain); opacity: .8; transition: height .4s, y .4s; }
+  .chart .bar.base { fill: var(--data); }
+  .chart .bar.best { fill: var(--hands); opacity: 1; }
+  .chart .bar.out { fill: var(--bad); opacity: .7; }
+  .chart .bar.idle { fill: var(--line); opacity: .6; }
+  .chart .gd { fill: var(--guard); stroke: var(--panel); stroke-width: 2; }
+  .gate { font-family: var(--font-mono); font-size: .78rem; background: #0B1119; color: #D5DEE8; border-radius: var(--radius); padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; margin: 0; }
+  .gate .g { color: #7FC793; } .gate .r { color: #F0806A; } .gate .y { color: #E2B65C; } .gate .d { color: #93A3B6; }
+  .gate-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .runs { display: flex; gap: 4px; align-items: flex-end; height: 100px; padding: 6px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .run { flex: 1 0 22px; max-width: 46px; display: grid; gap: 3px; justify-items: center; align-content: end; height: 100%; }
+  .run i { display: block; width: 100%; background: var(--line); border-radius: 4px 4px 0 0; transition: height .4s; }
+  .run.win i { background: var(--brain); }
+  .run small { font-family: var(--font-mono); font-size: .66rem; color: var(--faint); }
+  .roll { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 130px), 1fr)); }
+  .roll div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); font-size: .8rem; color: var(--muted); }
+  .roll b { display: block; font-family: var(--font-mono); font-size: .95rem; color: var(--ink); }
+  .finds { display: flex; flex-wrap: wrap; gap: 6px; }
+  .finds label { display: inline-flex !important; gap: 6px !important; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; font-family: var(--font-mono); font-size: .74rem !important; background: var(--panel); cursor: pointer; }
+  .finds label.critical { border-color: var(--bad); } .finds label.high { border-color: var(--warn); }
+  .finds em { font-style: normal; color: var(--faint); }
+  .pipe { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 120px), 1fr)); counter-reset: p; }
+  .pipe div { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--panel); font-size: .78rem; color: var(--muted); display: block; line-height: 1.45; counter-increment: p; }
+  .pipe div::before { display: block; content: counter(p); font-family: var(--font-mono); font-size: .7rem; color: var(--faint); }
+  .pipe b { display: block; font-size: .84rem; color: var(--ink); }
+  .pipe.in-view div { animation: lit .5s ease both; }
+  .pipe.in-view div:nth-child(2) { animation-delay: .2s } .pipe.in-view div:nth-child(3) { animation-delay: .4s }
+  .pipe.in-view div:nth-child(4) { animation-delay: .6s } .pipe.in-view div:nth-child(5) { animation-delay: .8s }
+  .pipe.in-view div:nth-child(6) { animation-delay: 1s } .pipe.in-view div:nth-child(7) { animation-delay: 1.2s }
+  @keyframes lit { from { transform: translateY(6px); opacity: .3 } to { transform: none; opacity: 1 } }
+  .card h3 { flex-wrap: wrap; }
+  .card h3 code { overflow-wrap: normal; }
+  .card .k2 { font-family: var(--font-mono); font-size: .76rem; color: var(--ink); background: var(--sunk); border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · lifecycle</div>
+  <h1>Skill evals and evolution</h1>
+  <p class="lede"><code>tengu eval</code> replays a skill's prompts through a live agent and an LLM judge. <code>tengu skill evolve</code> rewrites a failing skill in a scratch worktree, scores it again, and changes nothing until you say yes.</p>
+  <ul class="facts">
+    <li>judge <b>anthropic/claude-opus-4-7</b></li>
+    <li>row timeout <b>120 s</b></li>
+    <li>rolling window <b>10</b> runs</li>
+    <li>≤ <b>3</b> evolve cycles</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> agent, judge, improver</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> metrics, picks, your gate</li>
+    <li><span class="chip data">data</span> files on disk</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Score, rewrite, ask</span>
+    <h2 id="s-flow">From eval rows to an applied rewrite</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 460" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Eval rows run an agent; a judge and metric kinds score them into metrics.json; evolve asks an improver for a proposal, scores it in a scratch worktree, picks the best cycle, and a human gate applies or discards it.</title>
+        <path class="e" id="p-pr-ag" d="M175 49 C 192 49, 192 70, 210 70" data-at="1"/>
+        <path class="e" id="p-cf-ag" d="M175 115 C 192 115, 192 96, 210 96" data-at="1"/>
+        <path class="e" id="p-ag-jd" d="M375 60 C 392 60, 392 50, 410 50" data-at="2"/>
+        <path class="e" id="p-ag-mk" d="M375 108 C 392 108, 392 122, 410 122" data-at="3"/>
+        <path class="e" id="p-jd-mj" d="M570 50 C 590 50, 590 72, 610 72" data-at="4"/>
+        <path class="e" id="p-mk-mj" d="M570 122 C 590 122, 590 102, 610 102" data-at="4"/>
+        <path class="e" id="p-mj-im" d="M725 134 L725 230" data-at="5"/>
+        <path class="e" id="p-im-sc" d="M610 266 L570 266" data-at="6"/>
+        <path class="e dash" id="p-sc-ag" d="M480 230 C 480 186, 300 184, 292 136" data-at="7"/>
+        <path class="e" id="p-sc-pk" d="M410 266 L375 266" data-at="8"/>
+        <path class="e" id="p-pk-gt" d="M210 266 L160 266" data-at="9"/>
+        <path class="e" id="p-gt-sk" d="M97 310 L97 372" data-at="10"/>
+        <path class="e" id="p-gt-lg" d="M138 292 C 190 320, 280 330, 292 372" data-at="10"/>
+
+        <g class="n data" data-at="1">
+          <rect x="20" y="24" width="155" height="50" rx="8"/>
+          <text x="97" y="45" text-anchor="middle" class="t-title t-mono">prompts.yaml</text>
+          <text x="97" y="63" text-anchor="middle" class="t-small">prompt + expected</text>
+        </g>
+        <g class="n data" data-at="1">
+          <rect x="20" y="90" width="155" height="50" rx="8"/>
+          <text x="97" y="111" text-anchor="middle" class="t-title t-mono">config.toml</text>
+          <text x="97" y="129" text-anchor="middle" class="t-small">the agent under test</text>
+        </g>
+        <g class="n heart" data-at="1-3,7">
+          <rect x="210" y="30" width="165" height="106" rx="10"/>
+          <text x="292" y="58" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="292" y="80" text-anchor="middle" class="t-title">Agent turn</text>
+          <text x="292" y="99" text-anchor="middle" class="t-small">fresh temp workspace</text>
+          <text x="292" y="116" text-anchor="middle" class="t-small">stubs replace tools</text>
+        </g>
+        <g class="n heart" data-at="2,4">
+          <rect x="410" y="24" width="160" height="52" rx="8"/>
+          <text x="490" y="46" text-anchor="middle" class="t-title">Judge LLM</text>
+          <text x="490" y="64" text-anchor="middle" class="t-small">pass / fail + why</text>
+        </g>
+        <g class="n guard" data-at="3-4">
+          <rect x="410" y="96" width="160" height="52" rx="8"/>
+          <text x="490" y="118" text-anchor="middle" class="t-title">Metric kinds</text>
+          <text x="490" y="136" text-anchor="middle" class="t-small">from SKILL.md</text>
+        </g>
+        <g class="n data" data-at="4-5">
+          <rect x="610" y="40" width="230" height="94" rx="8"/>
+          <text x="725" y="66" text-anchor="middle" class="t-title t-mono">metrics.json</text>
+          <text x="725" y="86" text-anchor="middle" class="t-small">mean of the last 10 runs</text>
+          <text x="725" y="104" text-anchor="middle" class="t-small">gated if &lt; min_pass_rate</text>
+          <text x="725" y="122" text-anchor="middle" class="t-small t-mono">+ history.jsonl</text>
+        </g>
+        <g class="n heart" data-at="5-6">
+          <rect x="610" y="230" width="230" height="72" rx="8"/>
+          <text x="725" y="256" text-anchor="middle" class="t-title">Improver agent</text>
+          <text x="725" y="275" text-anchor="middle" class="t-small">one JSON proposal</text>
+          <text x="725" y="291" text-anchor="middle" class="t-small">body · metrics · rationale</text>
+        </g>
+        <g class="n data" data-at="6-8">
+          <rect x="410" y="230" width="160" height="72" rx="8"/>
+          <text x="490" y="256" text-anchor="middle" class="t-title">Scratch worktree</text>
+          <text x="490" y="275" text-anchor="middle" class="t-small">proposal applied here</text>
+          <text x="490" y="291" text-anchor="middle" class="t-small">then scored again</text>
+        </g>
+        <g class="n guard" data-at="8-9">
+          <rect x="210" y="230" width="165" height="72" rx="8"/>
+          <text x="292" y="256" text-anchor="middle" class="t-title">Pick best</text>
+          <text x="292" y="275" text-anchor="middle" class="t-small">highest target</text>
+          <text x="292" y="291" text-anchor="middle" class="t-small">target up, no drop &gt; 0.05</text>
+        </g>
+        <g class="n guard" data-at="9-10">
+          <polygon points="97,222 158,266 97,310 36,266"/>
+          <text x="97" y="262" text-anchor="middle" class="t-title">you</text>
+          <text x="97" y="279" text-anchor="middle" class="t-small t-mono">y n d o</text>
+        </g>
+        <g class="n data" data-at="10">
+          <rect x="20" y="372" width="160" height="56" rx="8"/>
+          <text x="100" y="395" text-anchor="middle" class="t-title t-mono">SKILL.md</text>
+          <text x="100" y="413" text-anchor="middle" class="t-small">+ resources/ written</text>
+        </g>
+        <g class="n data" data-at="10">
+          <rect x="210" y="372" width="165" height="56" rx="8"/>
+          <text x="292" y="395" text-anchor="middle" class="t-title t-mono">evolve_log.md</text>
+          <text x="292" y="413" text-anchor="middle" class="t-small">every verdict</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">row timeout 120 s</text></g>
+        <g class="pop badge" data-at="2"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">anthropic/claude-opus-4-7</text></g>
+        <g class="pop badge" data-at="3"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">6 metric kinds</text></g>
+        <g class="pop badge" data-at="4"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">exit 0 pass · 1 fail · 2 error</text></g>
+        <g class="pop badge" data-at="5"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">nothing gated → nothing to do</text></g>
+        <g class="pop badge" data-at="6"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">not pure JSON → error</text></g>
+        <g class="pop badge" data-at="7"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">≤ 3 cycles · stop at ≥ 0.999</text></g>
+        <g class="pop badge" data-at="8"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">then fewer lines, then earliest</text></g>
+        <g class="pop badge" data-at="9"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">anything but y d o = discard</text></g>
+        <g class="pop badge" data-at="10"><rect x="430" y="390" width="250" height="22" rx="11"/><text x="555" y="405" text-anchor="middle">editable_by_learner: false = no</text></g>
+
+        <circle class="tok" r="6" data-path="p-pr-ag" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-cf-ag" data-at="1" data-delay="300"/>
+        <circle class="tok heart" r="6" data-path="p-ag-jd" data-at="2"/>
+        <circle class="tok heart" r="6" data-path="p-ag-mk" data-at="3"/>
+        <circle class="tok heart" r="6" data-path="p-jd-mj" data-at="4"/>
+        <circle class="tok guard" r="6" data-path="p-mk-mj" data-at="4" data-delay="300"/>
+        <circle class="tok" r="6" data-path="p-mj-im" data-at="5"/>
+        <circle class="tok heart" r="6" data-path="p-im-sc" data-at="6"/>
+        <circle class="tok" r="6" data-path="p-sc-ag" data-at="7"/>
+        <circle class="tok guard" r="6" data-path="p-sc-pk" data-at="8"/>
+        <circle class="tok guard" r="6" data-path="p-pk-gt" data-at="9"/>
+        <circle class="tok guard" r="6" data-path="p-gt-sk" data-at="10"/>
+        <circle class="tok" r="5" data-path="p-gt-lg" data-at="10" data-delay="300"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu eval &lt;skill&gt;</code> reads <code>evals/prompts.yaml</code> (a list of rows, or the <code>fixtures</code> file the skill tools write; or <code>.md</code>) and <code>evals/config.toml</code>. Each row runs the config's default agent; <code>{TMP_WORKSPACE}</code> there becomes a fresh temp folder per row.</li>
+        <li>A row's stubs answer its tool calls in order; other tools run for real. The judge sees the expected behaviour, every tool call and the final text, and answers pass or fail.</li>
+        <li>When <code>SKILL.md</code> declares <code>metrics</code>, every row is also scored by each one: six kinds, from a shell check to an LLM rubric.</li>
+        <li>Each run appends one <code>history.jsonl</code> line per metric. <code>metrics.json</code> keeps the mean of the last 10 runs; below <code>min_pass_rate</code> a metric is gated.</li>
+        <li><code>tengu skill evolve</code> scores a baseline first. The target is the gated metric with the lowest pass rate, or <code>--target-metric</code>, which must be gated.</li>
+        <li>The <code>[skill_lifecycle] improver_agent</code> gets the body, the metrics and earlier attempts. It must answer with one JSON object: new body, optional metrics and resources, rationale.</li>
+        <li>The proposal is written into a scratch git worktree (a plain copy outside git) and scored there. At most 3 cycles by default; a target of 0.999 or more stops early.</li>
+        <li>A cycle counts only if its target beats the baseline and no other metric drops by more than 0.05. Of those, the highest target wins; ties go to fewer added lines, then the earliest.</li>
+        <li>The gate prints the target delta, a unified diff, new resources and the rationale. <code>y</code> applies, <code>d</code> shows details, <code>o</code> keeps the worktree; anything else discards.</li>
+        <li>Apply is refused when <code>editable_by_learner: false</code>. Otherwise <code>SKILL.md</code> is copied back, resources are written, the verdict is logged and the skill is scored once more.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-evolve">
+  <div class="sec-head">
+    <span class="kicker">Try it: one evolve run</span>
+    <h2 id="s-evolve">Cycles, the best pick and your gate</h2>
+    <p>The rules of <code>pick_best</code> and the gate, with made-up scores. A cycle must beat the target's baseline; every other metric is guarded, gated or not.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="b-tgt">baseline target <input type="range" id="b-tgt" min="0" max="1" step="0.05" value="0.5"> <span class="readout" id="b-tgt-o">0.50</span></label>
+      <label for="t-min">target min_pass_rate <input type="range" id="t-min" min="0.5" max="1" step="0.05" value="0.7"> <span class="readout" id="t-min-o">0.70</span></label>
+      <label for="b-gd">baseline guard <input type="range" id="b-gd" min="0" max="1" step="0.05" value="0.8"> <span class="readout" id="b-gd-o">0.80</span></label>
+      <label for="maxc"><code>--max-cycles</code> <select id="maxc"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
+      <label for="edit"><input type="checkbox" id="edit" checked> <code>editable_by_learner</code></label>
+    </div>
+    <div class="cyc" id="cyc"></div>
+    <div class="chart" id="chart" aria-hidden="true"></div>
+    <pre class="gate" id="gate" aria-live="polite"></pre>
+    <div class="gate-btns">
+      <span class="readout">your key:</span>
+      <button type="button" class="btn" data-k="y">y apply</button>
+      <button type="button" class="btn" data-k="n">n discard</button>
+      <button type="button" class="btn" data-k="d">d details</button>
+      <button type="button" class="btn" data-k="o">o open worktree</button>
+    </div>
+    <p class="note" id="gate-out">Pick a key.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-roll">
+  <div class="sec-head">
+    <span class="kicker">Try it: <code>metrics.json</code></span>
+    <h2 id="s-roll">A rolling window of ten runs</h2>
+    <p>Seeded with the two real <code>distill_quality</code> runs of <code>skills/skill-creator</code> (0.00, then 0.00). Append runs and watch the window, the spread and the gate flag.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="nr">next run pass rate <input type="range" id="nr" min="0" max="1" step="0.25" value="1"> <span class="readout" id="nr-o">1.00</span></label>
+      <button type="button" class="btn" id="add-run">+ append run</button>
+      <button type="button" class="btn" id="reset-run">reset</button>
+      <span class="readout">min_pass_rate 0.70</span>
+    </div>
+    <div class="runs" id="runs"></div>
+    <div class="roll" id="roll"></div>
+    <p class="note">A run's pass rate = passing rows ÷ rows for that metric. <code>stddev</code> needs two runs in the window. Old <code>metrics/runs/&lt;ts&gt;/</code> folders beyond 10 are pruned.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-kinds">
+  <div class="sec-head">
+    <span class="kicker">Declared in SKILL.md frontmatter</span>
+    <h2 id="s-kinds">Six metric kinds</h2>
+    <p>At load, names must be unique, <code>min_pass_rate</code> in [0, 1] and named files present, or the run stops. A metric that errors while scoring is a fail with a note.</p>
+  </div>
+  <div class="grid">
+    <div class="card heart"><h3><code>llm_judge</code></h3><span class="k2">rubric_file</span><p>The judge reads the rubric, prompt, transcript and expected outcome; its <code>verdict</code> is the metric's result for that row.</p></div>
+    <div class="card heart"><h3><code>description_trigger</code></h3><span class="k2">queries_file · runs_per_query 3 · holdout 0.4</span><p>Would the planner pick this skill? Strict majority of 3 votes per held-out query; passes at <code>min_pass_rate</code>, else 0.85.</p></div>
+    <div class="card guard"><h3><code>shell_check</code></h3><span class="k2">cmd · expect_exit_code · expect_stdout_matches</span><p>Runs a command. Needs at least one expectation; exit 0 is required even when only a regex is set.</p></div>
+    <div class="card guard"><h3><code>script</code></h3><span class="k2">path → stdout {pass, score, notes}</span><p>Runs <code>sh &lt;path&gt;</code> with the row's <code>PROMPT</code>, <code>TRANSCRIPT</code> and <code>EXPECTED_OUTCOME</code> in its env.</p></div>
+    <div class="card hands"><h3><code>tool_assertion</code></h3><span class="k2">tool · action · key · assert</span><p>Calls a registered tool and checks its output. <code>tengu eval</code> runs it through the agent's tool executor, in the agent's workspace.</p></div>
+    <div class="card data"><h3><code>dialog_replay</code></h3><span class="k2">from_message_index · delegate_metric</span><p>Scores the live conversation slice through a sibling <code>llm_judge</code> or <code>tool_assertion</code>. Eval rows have no conversation: fail.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-chat">
+  <div class="sec-head">
+    <span class="kicker">In chat: opt-in tools</span>
+    <h2 id="s-chat">Distill and improve from a conversation</h2>
+    <p>Both are opt-in names in an agent's <code>tools</code> or <code>workspace_tools</code>. Neither loads the change into the current conversation.</p>
+  </div>
+  <div class="grid two">
+    <div class="card hands">
+      <h3><code>skill_distill</code></h3>
+      <p>Turns the conversation from <code>from_message_index</code> into a new skill: <code>SKILL.md</code> with metrics, fixtures extracted from the transcript, a seeded <code>evals/config.toml</code>, rubric and script stubs.</p>
+      <ul class="kv"><li>name <code>^[a-z][a-z0-9-]{1,63}$</code>, unused in every tier</li><li>tier <code>project</code> or <code>workspace</code>; <code>managed</code> refused</li><li>no conversation passed → refused, nothing written</li></ul>
+    </div>
+    <div class="card hands">
+      <h3><code>apply_improver_proposal</code></h3>
+      <p>The in-chat twin of the evolve apply step: new body, optional metrics, <code>resource_additions</code>, a rationale. Atomic writes, one audit line.</p>
+      <ul class="kv"><li>refused on <code>editable_by_learner: false</code></li><li>resource paths stay inside <code>resources/</code></li><li>an existing resource needs <code>overwrite: true</code></li></ul>
+    </div>
+  </div>
+  <p class="note">The same plugin family also serves <code>compress_and_store</code>, the step-summary protocol of <a href="subagents.html">Subagent steps</a>.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-install">
+  <div class="sec-head">
+    <span class="kicker">Try it: <code>tengu skill install</code></span>
+    <h2 id="s-install">Quarantine, scan, then install</h2>
+    <p>A URL, git repo, tarball or local folder lands in <code>.tengu/quarantine/</code> first. Tick scanner findings to see the verdict and what the flags do.</p>
+  </div>
+  <div class="pipe" data-inview>
+    <div><b>Quarantine</b>curl, git clone or copy into a fresh folder</div>
+    <div><b>No escape</b>every path, symlinks resolved, stays inside</div>
+    <div><b>Find SKILL.md</b>top level or one sub-folder</div>
+    <div><b>Validate</b><code>name</code> and <code>description</code> not empty</div>
+    <div><b>Scan</b>findings always printed</div>
+    <div><b>Move</b>one rename into <code>--tier</code> (default managed); target must not exist</div>
+    <div><b>Audit</b>sha256 of <code>SKILL.md</code> in <code>skills/.audit.jsonl</code></div>
+  </div>
+  <div class="widget">
+    <div class="finds" id="finds"></div>
+    <div class="ctrls">
+      <label for="f-strict"><input type="checkbox" id="f-strict"> <code>--strict</code></label>
+      <label for="f-yes"><input type="checkbox" id="f-yes"> <code>--yes</code></label>
+    </div>
+    <span class="verdict ok" id="f-verdict" aria-live="polite"></span>
+    <p class="note" id="f-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-cli">
+  <div class="sec-head">
+    <span class="kicker">The rest of <code>tengu skill</code></span>
+    <h2 id="s-cli">Housekeeping verbs</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-list" aria-selected="true">list · metrics</button>
+      <button type="button" aria-controls="tab-doc">doctor</button>
+      <button type="button" aria-controls="tab-exp">export · remove</button>
+    </div>
+    <div class="tabpanel" id="tab-list"><pre><span class="c"># every tier; --tier project|workspace|managed to filter</span>
+tengu skill list
+<span class="c"># columns: name · tier · fixtures (.yaml files in evals/) · gated metrics · last_run
+# "(warn)" marks a skill whose metrics run shell (script / shell_check)</span>
+
+tengu skill metrics skill-creator --last <span class="n">10</span>
+<span class="c"># metrics.json, a summary (pass rate ± stddev [min–max], [GATED]),
+# then the last N history.jsonl lines</span></pre></div>
+    <div class="tabpanel" id="tab-doc" hidden><pre>tengu skill doctor --sandbox xlab
+<span class="c"># phantoms: names in [agents.*].skill_packages with no folder → exit 1
+#           (--no-fail keeps exit 0, for CI)
+# orphans:  installed skills no agent lists
+# missing rubric files: llm_judge rubric_file not on disk
+# scanner findings (informational)</span></pre></div>
+    <div class="tabpanel" id="tab-exp" hidden><pre>tengu skill export skill-creator --out skill-creator.tar.gz
+<span class="c"># project tier only: SKILL.md, evals/prompts.yaml, metrics/*.md
+# (+ metrics/*.sh when a script metric exists); no metrics.json, runs/, history</span>
+
+tengu skill remove my-notes --tier project
+<span class="c"># prints fixtures / metrics.json / runs/ first, asks unless --yes,
+# refused while .tengu/worktrees/evolve-my-notes-* exists</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">How an evolve run ends</span>
+    <h2 id="s-out">Six endings</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip hands">y</span><span><b>accepted</b>SKILL.md and resources written, re-scored, worktree removed.</span></li>
+    <li><span class="chip">n</span><span><b>rejected</b>Nothing changed; worktree removed.</span></li>
+    <li><span class="chip data">d</span><span><b>details-then-discard</b>Rationale, rollups and metrics printed as JSON; nothing changed.</span></li>
+    <li><span class="chip guard">o</span><span><b>open worktree</b>Path printed and kept for you; nothing logged.</span></li>
+    <li><span class="chip warn">flag</span><span><b>refused-by-flag</b>You said y, but <code>editable_by_learner: false</code>.</span></li>
+    <li><span class="chip bad">none</span><span><b>no winner</b>No cycle beat the target's baseline without another metric dropping by more than 0.05. No gate; worktree kept.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No change without you.</b> Evolve writes the real <code>SKILL.md</code> only after <code>y</code> at the terminal gate; any other answer leaves it as it was.</span></li>
+    <li><span><b>Cycles are isolated.</b> Proposals are applied and scored in a git worktree <code>.tengu/worktrees/evolve-&lt;skill&gt;-&lt;ts&gt;</code> (outside git: a copy in <code>.tengu/scratch/</code>); worktrees older than 24 h are swept at the next start.</span></li>
+    <li><span><b>Locked skills stay locked.</b> <code>editable_by_learner: false</code> stops evolve's apply, <code>apply_improver_proposal</code> and <code>manage_skill</code> edits.</span></li>
+    <li><span><b>Evals stay contained.</b> Each row gets a fresh temp folder; tool output is redacted; stubs never reach a <code>claude_code</code> agent's bridge (that row is refused).</span></li>
+    <li><span><b>A timeout is a fail.</b> A row past its <code>timeout_secs</code> fails without a judge call; malformed judge output fails with a preview.</span></li>
+    <li><span><b>Installs are checked first.</b> Symlink escapes are rejected; <code>--strict</code> refuses a caution or dangerous verdict; an existing target is never overwritten.</span></li>
+    <li><span><b>Busy skills can't vanish.</b> <code>remove</code> and <code>manage_skill delete</code> refuse while an evolve worktree for that skill exists.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Score, inspect, evolve</h2>
+    <p>Needs <code>OPENROUTER_API_KEY</code> (the judge). Evolve also needs a <code>[skill_lifecycle]</code> block naming an improver agent; <code>config.example.toml</code> has one, commented. Output is an example.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu eval skill-creator --no-persist</span>
+<span class="ln o">[skill-creator row f1] running…</span>
+<span class="ln o">skill-creator  (<span class="hl">&lt;n&gt;</span> rows, <span class="hl">&lt;s&gt;</span>s)</span>
+<span class="ln o">  ✓ f1   pass  <span class="hl">&lt;judge's one-line rationale&gt;</span></span>
+<span class="ln cmd"><span class="p">$ </span>tengu skill metrics skill-creator</span>
+<span class="ln o">distill_quality: 0.00  n=2 [GATED]</span>
+<span class="ln cmd"><span class="p">$ </span>tengu skill evolve skill-creator --max-cycles 2</span>
+<span class="ln o">Target metric: distill_quality (baseline 0.00 → proposed <span class="hl">&lt;rate&gt;</span>, delta <span class="hl">&lt;+d&gt;</span>)</span>
+<span class="ln o">[y] apply, [n] discard, [d] show details, [o] open worktree: </span></pre>
+  </div>
+  <p class="note">Exit codes of <code>tengu eval</code>: <b>0</b> every row passed · <b>1</b> a row failed or timed out · <b>2</b> runner error. <code>--concurrency</code> above 1 is refused today.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/inbound/eval.rs</code></td><td><code>tengu eval</code>: rows, stubs, judge, report, exit codes</td></tr>
+        <tr><td><code>src/adapters/inbound/evolve.rs</code></td><td>the evolve driver: baseline, improver call, cycles, gate, apply</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/evolve.rs</code></td><td>target pick, <code>pick_best</code>, proposal apply, <code>editable_by_learner</code></td></tr>
+        <tr><td><code>src/application/skills/lifecycle/metrics.rs</code></td><td><code>MetricSpec</code> and its validation</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/metric_kinds/</code></td><td>the six kinds</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/storage.rs</code></td><td><code>metrics.json</code>, <code>history.jsonl</code>, rolling window, pruning</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/approval_gate.rs</code></td><td>the terminal gate</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/scratch_worktree.rs</code></td><td>worktree, plain-copy fallback, stale sweep</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/scanner.rs</code></td><td>install scan patterns and verdict</td></tr>
+        <tr><td><code>src/application/skills/lifecycle/fixtures.rs</code></td><td>fixture extraction for <code>skill_distill</code></td></tr>
+        <tr><td><code>src/application/skills/lifecycle/audit.rs</code></td><td><code>skills/.audit.jsonl</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/skill_lifecycle/</code></td><td><code>skill_distill</code>, <code>apply_improver_proposal</code> (+ <code>compress_and_store</code>)</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/skill.rs</code></td><td><code>tengu skill</code> verbs</td></tr>
+        <tr><td><code>src/config/skill_lifecycle.rs</code></td><td><code>[skill_lifecycle]</code> and its defaults</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: evolve simulator (evolve.rs pick_target_metric / pick_best, evolve driver, approval_gate.rs),
+   rolling window (storage.rs compute_rollups), install scan (scanner.rs compute_verdict + cli/skill.rs) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function f2(x) { return (Math.round(x * 100) / 100).toFixed(2); }
+
+  /* --- evolve --- */
+  var CY = [
+    { t: 0.6, g: 0.75, l: 6 }, { t: 0.85, g: 0.6, l: 9 }, { t: 0.85, g: 0.8, l: 4 },
+    { t: 0.9, g: 0.85, l: 12 }, { t: 1.0, g: 0.9, l: 3 }
+  ];
+  var key = null;
+  var ids = ["b-tgt", "t-min", "b-gd"];
+  function draw() {
+    ids.forEach(function (i) { $(i + "-o").textContent = f2(+$(i).value); });
+    var bT = +$("b-tgt").value, tMin = +$("t-min").value, bG = +$("b-gd").value;
+    var maxc = +$("maxc").value;
+    var tGated = bT < tMin;
+    // pick_best: the target beats its baseline; no other metric drops > 0.05
+    function why(c) { return !(c.t > bT) ? "no target gain" : c.g + 0.05 < bG ? "regressed guard" : ""; }
+    var host = $("cyc");
+    var res = { target: tGated, cycles: [], best: -1 };
+    if (tGated) {
+      for (var n = 0; n < maxc; n++) {
+        res.cycles.push(n);
+        if (CY[n].t >= 0.999) break;
+      }
+      var elig = res.cycles.filter(function (n) { return !why(CY[n]); });
+      elig.sort(function (a, b) { return (CY[b].t - CY[a].t) || (CY[a].l - CY[b].l) || (a - b); });
+      res.best = elig.length ? elig[0] : -1;
+    }
+    host.innerHTML = "";
+    CY.forEach(function (c, n) {
+      var ran = res.cycles.indexOf(n) >= 0;
+      var out = ran && why(c);
+      var cls = !ran ? "idle" : n === res.best ? "best" : out ? "out" : "ok";
+      var st = !ran ? (n >= maxc ? "over --max-cycles" : !tGated ? "not run" : "stopped early") : n === res.best ? "best" : out || "scored";
+      var d = document.createElement("div");
+      d.className = "cy " + cls;
+      d.innerHTML = '<div class="hd"><span>cycle ' + (n + 1) + '</span><span class="st">' + st + "</span></div>" +
+        '<label>target <input type="range" min="0" max="1" step="0.05" value="' + c.t + '" data-n="' + n + '" data-f="t"><span class="readout">' + f2(c.t) + "</span></label>" +
+        '<label>guard <input type="range" min="0" max="1" step="0.05" value="' + c.g + '" data-n="' + n + '" data-f="g"><span class="readout">' + f2(c.g) + "</span></label>" +
+        '<label>lines added <input type="number" min="0" max="99" value="' + c.l + '" data-n="' + n + '" data-f="l"></label>';
+      host.appendChild(d);
+    });
+    Array.prototype.forEach.call(host.querySelectorAll("input"), function (i) {
+      i.addEventListener("change", function () { CY[+i.getAttribute("data-n")][i.getAttribute("data-f")] = +i.value; key = null; draw(); });
+    });
+    chart(bT, tMin, bG, res);
+    gate(bT, bG, tGated, res);
+  }
+  function chart(bT, tMin, bG, res) {
+    var W = 560, H = 190, L = 40, B = 160, T = 14, step = (W - L - 10) / 6;
+    var y = function (v) { return B - v * (B - T); };
+    var s = '<svg viewBox="0 0 ' + W + " " + H + '">';
+    [0, 0.5, 1].forEach(function (v) { s += '<line class="ax" x1="' + L + '" x2="' + (W - 6) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text class="lbl" x="' + (L - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v.toFixed(1) + "</text>"; });
+    var cols = [{ lab: "base", t: bT, g: bG, cls: "base" }];
+    CY.forEach(function (c, n) {
+      var ran = res.cycles.indexOf(n) >= 0;
+      cols.push({ lab: "c" + (n + 1), t: c.t, g: c.g, cls: !ran ? "idle" : n === res.best ? "best" : (res.target && (c.t <= bT || c.g + 0.05 < bG)) ? "out" : "" , ran: ran });
+    });
+    cols.forEach(function (c, i) {
+      var x = L + 8 + i * step, w = step * 0.55;
+      s += '<rect class="bar ' + c.cls + '" x="' + x + '" y="' + y(c.t) + '" width="' + w + '" height="' + (B - y(c.t)) + '" rx="3"/>';
+      if (c.cls !== "idle") s += '<circle class="gd" cx="' + (x + w / 2) + '" cy="' + y(c.g) + '" r="5"/>';
+      s += '<text class="lbl" x="' + (x + w / 2) + '" y="' + (B + 16) + '" text-anchor="middle">' + c.lab + "</text>";
+    });
+    s += '<line class="thr" x1="' + L + '" x2="' + (W - 6) + '" y1="' + y(tMin) + '" y2="' + y(tMin) + '"/>';
+    s += '<text class="lbl" x="' + (W - 8) + '" y="' + (y(tMin) - 5) + '" text-anchor="end">target min ' + f2(tMin) + "</text>";
+    s += '<line class="top" x1="' + L + '" x2="' + (W - 6) + '" y1="' + y(0.999) + '" y2="' + y(0.999) + '"/>';
+    s += '<text class="lbl" x="' + (L + 4) + '" y="' + (y(0.999) + 13) + '">0.999 stops early</text>';
+    s += "</svg>";
+    $("chart").innerHTML = s + '<p class="note" style="margin-top:6px">Bars: target pass rate. Dots: guard metric. Green: the pick. Red: out (no target gain, or a guard drop &gt; 0.05).</p>';
+  }
+  function gate(bT, bG, tGated, res) {
+    var g = $("gate"), out = $("gate-out");
+    var btns = document.querySelectorAll(".gate-btns button");
+    if (!tGated) {
+      g.innerHTML = '<span class="r">Error: no gated metrics failing; nothing to evolve</span>\n<span class="d"># the target is not below its min_pass_rate, so evolve stops after the baseline</span>';
+      Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
+      out.innerHTML = "No improver call, no worktree changes."; return;
+    }
+    if (res.best < 0) {
+      g.innerHTML = '<span class="r">evolve found ' + res.cycles.length + ' proposals but none beat the target\'s baseline without another metric dropping by more than 0.05. No changes applied.</span>\n<span class="d">Worktree preserved for inspection: .tengu/worktrees/evolve-skill-creator-&lt;ts&gt;</span>';
+      Array.prototype.forEach.call(btns, function (b) { b.disabled = true; });
+      out.innerHTML = "No gate is shown."; return;
+    }
+    Array.prototype.forEach.call(btns, function (b) { b.disabled = false; });
+    var c = CY[res.best], d = c.t - bT;
+    var txt = "Skill: skill-creator\nTarget metric: distill_quality (baseline " + f2(bT) + " → proposed " + f2(c.t) + ", delta " + (d >= 0 ? "+" : "") + f2(d) + ")\n\n" +
+      "Other metrics (must stay >= baseline - 0.05):\n";
+    txt += "  triggers_correctly    " + f2(bG) + " → " + f2(c.g) + "   " + '<span class="g">✓</span>' + "\n";
+    txt += '\nSKILL.md changes (unified diff):\n  <span class="r">-…</span>\n  <span class="g">+… (' + c.l + ' lines added)</span>\n\nRationale:\n  <span class="d">&lt;the improver\'s rationale&gt;</span>\n\n<span class="y">[y] apply, [n] discard, [d] show details, [o] open worktree:</span>';
+    g.innerHTML = txt;
+    var edit = $("edit").checked;
+    var msg = {
+      y: edit ? "<b>accepted.</b> SKILL.md copied from the worktree, resources written, <code>evolve_log.md</code> line, one more eval, worktree removed. Review with <code>git diff skills/skill-creator/</code>."
+              : "<b>refused-by-flag.</b> <code>editable_by_learner: false</code> — nothing applied, logged, worktree removed.",
+      n: "<b>rejected.</b> Baseline preserved; logged; worktree removed.",
+      d: "<b>details-then-discard.</b> Rationale, rollups and new metrics printed as JSON; nothing applied; worktree removed.",
+      o: "<b>open worktree.</b> The path is printed and kept; re-run evolve to retry. Nothing logged."
+    };
+    out.innerHTML = key ? msg[key] : "Pick a key. Anything but y, d or o (even Enter) discards.";
+  }
+  ids.forEach(function (i) { $(i).addEventListener("input", function () { key = null; draw(); }); });
+  $("maxc").addEventListener("change", function () { key = null; draw(); });
+  $("edit").addEventListener("change", draw);
+  Array.prototype.forEach.call(document.querySelectorAll(".gate-btns button"), function (b) {
+    b.addEventListener("click", function () { key = b.getAttribute("data-k"); draw(); });
+  });
+  draw();
+
+  /* --- rolling window --- */
+  var SEED = [0, 0], hist = SEED.slice(), WIN = 10, MIN = 0.7;
+  function roll() {
+    $("nr-o").textContent = f2(+$("nr").value);
+    var start = Math.max(0, hist.length - WIN), win = hist.slice(start);
+    var mean = win.reduce(function (a, b) { return a + b; }, 0) / win.length;
+    var sd = null;
+    if (win.length >= 2) sd = Math.sqrt(win.reduce(function (a, x) { return a + (x - mean) * (x - mean); }, 0) / (win.length - 1));
+    var runs = $("runs"); runs.innerHTML = "";
+    hist.forEach(function (v, i) {
+      var d = document.createElement("div");
+      d.className = "run" + (i >= start ? " win" : "");
+      d.innerHTML = '<i style="height:' + Math.max(3, v * 90) + 'px"></i><small>' + (i + 1) + "</small>";
+      d.title = "run " + (i + 1) + ": " + f2(v);
+      runs.appendChild(d);
+    });
+    var gated = mean < MIN;
+    $("roll").innerHTML =
+      "<div>pass_rate<b>" + f2(mean) + "</b></div>" +
+      "<div>runs in window<b>" + win.length + " / " + WIN + "</b></div>" +
+      "<div>stddev<b>" + (sd === null ? "—" : f2(sd)) + "</b></div>" +
+      "<div>min – max<b>" + f2(Math.min.apply(null, win)) + " – " + f2(Math.max.apply(null, win)) + "</b></div>" +
+      '<div>gated<b style="color:var(' + (gated ? "--bad" : "--ok") + ')">' + gated + "</b></div>";
+  }
+  $("nr").addEventListener("input", roll);
+  $("add-run").addEventListener("click", function () { hist.push(+$("nr").value); if (hist.length > 16) hist.shift(); roll(); });
+  $("reset-run").addEventListener("click", function () { hist = SEED.slice(); roll(); });
+  roll();
+
+  /* --- install scan --- */
+  var PAT = [
+    ["rm_rf_home", "critical"], ["curl_pipe_sh", "critical"], ["env_var_exfil", "critical"], ["dev_tcp_redirect", "critical"],
+    ["fork_bomb", "critical"], ["private_key_pem", "critical"], ["eval_subshell", "high"], ["crontab_persistence", "high"],
+    ["api_key_shape", "high"], ["aws_access_key_id", "high"], ["chmod_dangerous", "medium"], ["shell_metric_script", "medium"]
+  ];
+  var fh = $("finds");
+  PAT.forEach(function (p, i) {
+    var l = document.createElement("label");
+    l.className = p[1];
+    l.innerHTML = '<input type="checkbox" data-i="' + i + '"> ' + p[0] + " <em>" + p[1] + "</em>";
+    fh.appendChild(l);
+  });
+  function scan() {
+    var sev = [];
+    Array.prototype.forEach.call(fh.querySelectorAll("input:checked"), function (c) { sev.push(PAT[+c.getAttribute("data-i")][1]); });
+    var v = sev.indexOf("critical") >= 0 ? "dangerous" : sev.indexOf("high") >= 0 ? "caution" : "safe";
+    var strict = $("f-strict").checked, yes = $("f-yes").checked;
+    var el = $("f-verdict"), note = $("f-note");
+    el.textContent = "verdict=" + v + " · " + sev.length + " finding" + (sev.length === 1 ? "" : "s");
+    el.className = "verdict " + (v === "safe" ? "ok" : v === "caution" ? "warn" : "bad");
+    if (v === "safe") note.innerHTML = "<b>Installs.</b> No question asked (medium findings are printed, nothing more).";
+    else if (strict) note.innerHTML = "<b>Refused, exit 1.</b> <code>install refused: --strict and verdict=" + v + "</code>; the quarantine folder is deleted.";
+    else if (yes) note.innerHTML = "<b>Installs.</b> <code>--yes</code> skips the question even on " + v + ".";
+    else note.innerHTML = "<b>Asks.</b> <code>verdict=" + v + "; proceed? [y/N]</code> — only <code>y</code> installs.";
+  }
+  fh.addEventListener("change", scan);
+  $("f-strict").addEventListener("change", scan);
+  $("f-yes").addEventListener("change", scan);
+  scan();
+})();
+</script>
+</body>
+</html>

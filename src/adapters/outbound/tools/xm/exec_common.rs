@@ -419,6 +419,7 @@ pub(crate) async fn exec(
         position: &position,
         fees: &facts.fees,
         max_book_age_ms: order.limits.max_data_age_ms.book,
+        stale_book_ok: false,
     };
     let (latency_ms, book) =
         match fill_with_latency(io.clock, io.books, paper, &paper_order, &env, io.rand01).await {
@@ -1402,7 +1403,8 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
     }
 
     /// A failed book read: an entry is denied `missing:book`; a close under
-    /// `allow_reduce_degraded` is sent and refused `stale_book`.
+    /// `allow_reduce_degraded` is sent and refused `stale_book` — no book,
+    /// nothing to price it at.
     #[tokio::test]
     async fn no_book_after_the_latency() {
         let mut rig = Rig::new(25).await;
@@ -1429,6 +1431,32 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
         );
         // $20 at mid 347.195 → 0.057 (szDecimals 3): still open.
         assert_eq!(r.position_qty_after, 0.057, "nothing closed");
+    }
+
+    /// A stale book: an entry is denied `book_age`; a close under
+    /// `allow_reduce_degraded` fills at it, marked `stale_book` (it used to
+    /// be waived by the gate, then refused by the fill).
+    #[tokio::test]
+    async fn a_degraded_close_fills_at_a_stale_book() {
+        let rig = Rig::new(25).await;
+        rig.run(rig.buy(20.0), "s:1").await.unwrap();
+        // The only book stays the fixture: 60 s later it is 60 s old.
+        rig.clock.set(NOW + 60_000);
+        let o = rig.run(rig.buy(20.0), "s:2").await.unwrap();
+        assert!(!row(&o).gate.allow, "{:?}", row(&o).gate);
+        let o = rig.run(rig.close(), "s:3").await.unwrap();
+        let r = row(&o);
+        assert!(r.gate.allow && r.gate.degraded, "{:?}", r.gate);
+        let f = r.fill.as_ref().unwrap();
+        assert_eq!(
+            (f.status, f.stale_book),
+            (FillStatus::Filled, true),
+            "{f:?}"
+        );
+        assert!(f.book_age_ms.unwrap() > 5_000, "{f:?}");
+        assert_eq!(r.position_qty_after, 0.0, "closed");
+        assert!(o.headline.contains(" stale_book"), "{}", o.headline);
+        assert_eq!(o.features["stale_book"], true);
     }
 
     /// Funding owed at a fresh rate is booked before the next order.

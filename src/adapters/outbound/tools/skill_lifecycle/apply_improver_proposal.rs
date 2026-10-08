@@ -127,9 +127,11 @@ impl Tool for ApplyImproverProposalTool {
 
         validate_skill_name(&args.skill)?;
 
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let skill_dir = locate_skill_dir(&args.skill, &cwd)
+        let skill_dir = locate_skill_dir(&args.skill, ctx.workspace)
             .ok_or_else(|| anyhow!("no skill '{}' found in any tier", args.skill))?;
+        // The skill may live outside the workspace (managed tier): writing it
+        // needs its own grant, as for `manage_skill`.
+        ctx.scope.check_fs_write(&skill_dir)?;
         let skill_md = skill_dir.join("SKILL.md");
         if !skill_md.is_file() {
             anyhow::bail!(
@@ -174,7 +176,7 @@ impl Tool for ApplyImproverProposalTool {
             source: Some(format!("in-chat;resources={}", written.len())),
             sha256: None,
         };
-        if let Err(e) = audit::append(&cwd, entry) {
+        if let Err(e) = audit::append(ctx.workspace, entry) {
             tracing::warn!(error = %e, "audit append failed (non-fatal)");
         }
 
@@ -219,16 +221,14 @@ fn validate_skill_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn locate_skill_dir(name: &str, cwd: &std::path::Path) -> Option<PathBuf> {
-    // Same shadowing order as `rag/indexer.rs::scan_skills`:
-    // managed → workspace → project, first match wins.
-    let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
-    if let Some(home) = dirs_next::home_dir() {
-        candidates.push(home.join(".tengu/skills").join(name));
-    }
-    candidates.push(cwd.join(".tengu/skills").join(name));
-    candidates.push(cwd.join("skills").join(name));
-    candidates.into_iter().find(|p| p.is_dir())
+/// `name` in the skill loader's directories for `workspace`, first match
+/// wins (`skills::registry::skill_directories`) — the tool used the process
+/// cwd in place of the workspace.
+fn locate_skill_dir(name: &str, workspace: &std::path::Path) -> Option<PathBuf> {
+    crate::application::skills::registry::skill_directories(workspace)
+        .into_iter()
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_dir())
 }
 
 pub(crate) fn tool_def() -> ToolDef {

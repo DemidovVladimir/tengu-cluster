@@ -345,7 +345,7 @@ Expected behaviour:
    Skill: skill-creator
    Target metric: distill_quality (baseline 0.50 → proposed 1.00, delta +0.50)
 
-   Non-target gated metrics (must stay >= baseline - 0.05):
+   Other metrics (must stay >= baseline - 0.05):
      (none)
 
    SKILL.md changes (unified diff):
@@ -385,13 +385,13 @@ Difference from 7.1:
 git checkout skills/skill-creator/SKILL.md
 ```
 
-### 7.3 All-cycles-regress path
+### 7.3 No-winner path
 
-Hard to trigger deliberately — happens when every improver proposal makes some non-target gated metric worse than `baseline - 0.05`. If it does:
+Happens when no improver proposal beats the target's baseline pass rate without another metric (gated or not) dropping below `baseline - 0.05`. If it does:
 
 Expected:
 ```
-evolve found 3 proposals but all regressed gated metrics. No changes applied.
+evolve found 3 proposals but none beat the target's baseline without another metric dropping by more than 0.05. No changes applied.
 Worktree preserved for inspection: .tengu/worktrees/evolve-skill-creator-<ts>/
 ```
 

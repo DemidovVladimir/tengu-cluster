@@ -117,8 +117,8 @@ impl MetricsKind {
 /// One row in `MetricsRecord.layers`.
 ///
 /// Layer names come from a stable set so subscribers can group across runs:
-/// `"system"`, `"roster"`, `"cross_session"`, `"history"`, `"recall"`,
-/// `"user_message"`, `"prior_plan"`. Layer accounting is an approximation
+/// `"system"`, `"roster"`, `"cross_session"`, `"history"`, `"session_recall"`
+/// (plan), `"recall"` and `"failure"` (replan), `"user_message"`. Layer accounting is an approximation
 /// — the actual prompt seen by the model also includes engine-injected
 /// framing that we don't measure. Treat layers as relative attribution,
 /// not absolute byte-perfect accounting.

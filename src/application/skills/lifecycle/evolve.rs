@@ -95,20 +95,30 @@ pub(crate) fn pick_target_metric(
         .ok_or_else(|| anyhow::anyhow!("no gated metrics failing; nothing to evolve"))
 }
 
-/// Rank cycles:
+/// Rank cycles. Eligible: the target pass rate beats its baseline, and no
+/// other baseline metric drops by more than 0.05 (passing ones included —
+/// only metrics already failing were guarded, so a passing one could
+/// regress; and a cycle that did not improve the target could win). Then:
 ///   (1) highest target pass_rate
-///   (2) no regression > 0.05 on any non-target gated metric
-///   (3) fewer lines added
-///   (4) earliest cycle
+///   (2) fewer lines added
+///   (3) earliest cycle
 pub(crate) fn pick_best(baseline: &Baseline, cycles: &[CycleOutcome]) -> Option<usize> {
     const REG_TOL: f32 = 0.05;
     let target = &baseline.target_metric;
+    let base_target = baseline.rollups.get(target).map_or(0.0, |r| r.pass_rate);
     let eligible: Vec<usize> = cycles
         .iter()
         .enumerate()
         .filter_map(|(i, c)| {
+            let improved = c
+                .rollups
+                .get(target)
+                .is_some_and(|r| r.pass_rate > base_target);
+            if !improved {
+                return None;
+            }
             for (name, base) in &baseline.rollups {
-                if name == target || !base.gated {
+                if name == target {
                     continue;
                 }
                 let cur = match c.rollups.get(name) {
@@ -365,8 +375,8 @@ mod tests {
     fn baseline(target_rate: f32, other_rate: f32) -> Baseline {
         let mut rollups = BTreeMap::new();
         rollups.insert("target".into(), rollup(target_rate, true));
-        // "other" is always gated=true in these tests — it has a min_pass_rate
-        // protection (0.8) and the regression guard should fire if it drops >0.05.
+        // `gated` = failing its min_pass_rate at baseline; the regression
+        // guard covers every non-target metric either way.
         rollups.insert("other".into(), rollup(other_rate, true));
         Baseline {
             rollups,
@@ -412,6 +422,23 @@ mod tests {
         let b = baseline(0.6, 1.0);
         let cs = vec![cycle(1, 0.9, 0.90, 3), cycle(2, 0.75, 0.98, 3)];
         assert_eq!(pick_best(&b, &cs), Some(1));
+    }
+
+    /// A metric passing at baseline (not gated) is guarded too.
+    #[test]
+    fn pick_best_guards_metrics_that_passed_at_baseline() {
+        let mut b = baseline(0.6, 1.0);
+        b.rollups.insert("other".into(), rollup(1.0, false));
+        let cs = vec![cycle(1, 0.95, 0.5, 3), cycle(2, 0.8, 1.0, 3)];
+        assert_eq!(pick_best(&b, &cs), Some(1));
+    }
+
+    /// A cycle must beat the baseline target to be picked at all.
+    #[test]
+    fn pick_best_needs_a_target_improvement() {
+        let b = baseline(0.6, 1.0);
+        let cs = vec![cycle(1, 0.6, 1.0, 1), cycle(2, 0.5, 1.0, 1)];
+        assert_eq!(pick_best(&b, &cs), None);
     }
 
     #[test]

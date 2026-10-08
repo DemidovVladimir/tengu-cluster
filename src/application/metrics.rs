@@ -88,3 +88,45 @@ pub fn record(rec: MetricsRecord) {
         let _ = tx.send(rec);
     }
 }
+
+/// Put a record that was already logged elsewhere on the global sink only:
+/// a `run-agent` child logs its own records (forwarded into this process's
+/// log), so the parent re-emits them without a second `metrics` line.
+pub fn forward(rec: MetricsRecord) {
+    if let Some(tx) = GLOBAL_SINK.get() {
+        let _ = tx.send(rec);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::metrics::MetricsKind;
+
+    /// `forward` puts a child's record on the sink (the TUI panel and the
+    /// event bridge still see it) without logging it a second time.
+    #[test]
+    fn forward_reaches_the_sink() {
+        let mut rx = install_global_sink().subscribe();
+        let session = format!("fwd-{}", uuid::Uuid::new_v4());
+        forward(MetricsRecord {
+            ts_unix: 0,
+            session_id: session.clone(),
+            kind: MetricsKind::Subagent,
+            agent: "researcher".into(),
+            model: "m".into(),
+            prompt_tokens: 1,
+            completion_tokens: 2,
+            total_tokens: 3,
+            prompt_chars: 0,
+            prompt_bytes: 0,
+            response_chars: 0,
+            latency_ms: 0,
+            layers: Vec::new(),
+            step_id: None,
+        });
+        // Other tests share the process-global sink: skip their records.
+        let got = std::iter::from_fn(|| rx.try_recv().ok()).find(|r| r.session_id == session);
+        assert_eq!(got.map(|r| r.total_tokens), Some(3));
+    }
+}

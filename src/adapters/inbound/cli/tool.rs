@@ -352,7 +352,8 @@ impl AgentTools {
                 "observation": out.observation,
                 "is_error": false,
             }),
-            // Errors bypass `SanitizedToolExecutor` (as in the bridge).
+            // `SanitizedToolExecutor` already redacted the error; `error` redacts
+            // again (harmless), as the bridge does.
             Err(e) => self.error(&format!("ERROR: {e}")),
         }
     }

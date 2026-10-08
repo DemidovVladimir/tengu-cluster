@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 
@@ -868,32 +868,41 @@ impl SkillRegistry {
         true
     }
 
+    /// Active entries sorted by skill name — every list below is built from
+    /// it, so their order (and which body a prompt budget drops) is the same
+    /// every run; it followed `HashMap` order.
+    fn active_sorted(&self) -> Vec<&SkillEntry> {
+        let mut active: Vec<&SkillEntry> = self
+            .entries
+            .values()
+            .filter(|e| e.status == SkillStatus::Active)
+            .collect();
+        active.sort_by(|a, b| a.definition.name.cmp(&b.definition.name));
+        active
+    }
+
     /// Tool definitions for active shell skills only.
     pub(crate) fn active_tools(&self) -> Vec<ToolDef> {
-        self.entries
-            .values()
-            .filter(|e| {
-                e.status == SkillStatus::Active
-                    && matches!(e.definition.execution, SkillExecution::Shell { .. })
-            })
+        self.active_sorted()
+            .into_iter()
+            .filter(|e| matches!(e.definition.execution, SkillExecution::Shell { .. }))
             .map(|e| skill_to_tool_def(&e.definition))
             .collect()
     }
 
     /// Skill definitions for only active skills (used by the executor).
     pub(crate) fn active_skill_definitions(&self) -> Vec<SkillDefinition> {
-        self.entries
-            .values()
-            .filter(|e| e.status == SkillStatus::Active)
+        self.active_sorted()
+            .into_iter()
             .map(|e| e.definition.clone())
             .collect()
     }
 
     /// Context fragments for active API skills (injected into the system prompt).
     pub(crate) fn active_context_fragments(&self) -> Vec<(String, String)> {
-        self.entries
-            .values()
-            .filter(|e| e.status == SkillStatus::Active && e.context_body.is_some())
+        self.active_sorted()
+            .into_iter()
+            .filter(|e| e.context_body.is_some())
             .map(|e| {
                 (
                     e.definition.name.clone(),
@@ -1015,6 +1024,31 @@ impl SkillCommandRouter {
 // Filesystem discovery
 // ===========================================================================
 
+/// Where an agent's skills live, highest priority first (a name found in an
+/// earlier directory shadows later ones):
+///   1. managed — `~/.tengu/skills/` (`tengu skill install --tier managed`)
+///   2. workspace dotdir — `<workspace>/.tengu/skills/`
+///   3. project — `<workspace>/skills/`
+///   4. the repo's `skills/` where tengu runs, when it is another dir
+/// The skill loader, `view_skill`, `skill_resource` and
+/// `apply_improver_proposal` all search this list (the tools used the
+/// process cwd in place of the workspace).
+pub(crate) fn skill_directories(workspace: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = dirs_next::home_dir() {
+        dirs.push(home.join(".tengu/skills"));
+    }
+    dirs.push(workspace.join(".tengu/skills"));
+    dirs.push(workspace.join("skills"));
+    if let Ok(cwd) = std::env::current_dir() {
+        let global = cwd.join("skills");
+        if global != workspace.join("skills") {
+            dirs.push(global);
+        }
+    }
+    dirs
+}
+
 pub(crate) struct FileSystemSkillSource {
     workspace: PathBuf,
 }
@@ -1025,26 +1059,7 @@ impl FileSystemSkillSource {
     }
 
     fn skill_directories(&self) -> Vec<PathBuf> {
-        // Three-tier scan, highest priority first (first-wins via
-        // `seen_names.insert()` in `discover_skill_files`):
-        //   1. Managed — `~/.tengu/skills/` (set by `tengu skill install --tier managed`)
-        //   2. Workspace dotdir — `<workspace>/.tengu/skills/`
-        //   3. Project — `<workspace>/skills/`
-        // Mirrors `rag::indexer::scan_skills_with_counts` so the planner-side
-        // RAG registry and the in-process skill loader see the same set.
-        let mut dirs = Vec::new();
-        if let Some(home) = dirs_next::home_dir() {
-            dirs.push(home.join(".tengu/skills"));
-        }
-        dirs.push(self.workspace.join(".tengu/skills"));
-        dirs.push(self.workspace.join("skills"));
-        if let Ok(cwd) = std::env::current_dir() {
-            let global = cwd.join("skills");
-            if global != self.workspace.join("skills") {
-                dirs.push(global);
-            }
-        }
-        dirs
+        skill_directories(&self.workspace)
     }
 }
 
@@ -1392,5 +1407,33 @@ mod tests {
         let names: Vec<String> = closed.list_all().into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, ["guide"]);
         assert!(!closed.reload(&Two), "a second reload changes nothing");
+    }
+
+    /// Doc skill bodies come back sorted by name, so the same body is the
+    /// one a prompt budget drops on every run (HashMap order varied).
+    #[test]
+    fn context_fragments_are_sorted_by_name() {
+        struct Many;
+        impl SkillSourcePort for Many {
+            fn discover_skill_files(&self) -> Vec<(String, String)> {
+                ["zeta", "alpha", "mid", "beta", "omega"]
+                    .iter()
+                    .map(|n| {
+                        (
+                            n.to_string(),
+                            format!("---\nname: {n}\ndescription: d\n---\n\nBody of {n}.\n"),
+                        )
+                    })
+                    .collect()
+            }
+        }
+        let mut reg = SkillRegistry::new(Vec::new());
+        reg.reload(&Many);
+        let names: Vec<String> = reg
+            .active_context_fragments()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert_eq!(names, ["alpha", "beta", "mid", "omega", "zeta"]);
     }
 }

@@ -82,8 +82,8 @@ reset_mode = "idle"
 idle_timeout_minutes = 30
 # max_history_turns = 20
 # compaction_threshold_ratio = 0.82
-# compaction_keep_turns = 24
-# compaction_summary_max_tokens = 320
+# compaction_keep_turns = 10        # default: half of max_history_turns; kept below it
+# compaction_summary_max_tokens = 4096  # default: 15 % of the input budget, 128 – 4096
 
 [agents.main.limits]
 max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /reset to start fresh.
@@ -586,7 +586,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # [orchestrator]
 # agent = "main"                        # Name of the agent (in `[agents.*]`) that runs the planner LLM call
-# engine = "rag"                        # REQUIRED — the only supported value (historical name; file-registry planner). Anything else disables orchestration.
+# engine = "rag"                        # optional, defaults to "rag" — the only supported value (historical name; file-registry planner). Any other value fails the config load.
 # max_attempts_per_step = 3             # Tier 1: how many times a single step is retried before escalation
 # max_replans = 2                       # Tier 2: how many times the planner is re-invoked to replan before bailing out
 # route_explicit_agents = false         # true = `@role:` messages also go through the planner

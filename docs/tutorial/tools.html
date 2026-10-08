@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tool catalog · Tengu</title>
+<meta name="description" content="Every built-in Tengu tool is one catalog row: how an agent's tool list is computed, registered, scoped, executed, typed and redacted.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: tool picker, family grid, schema lint */
+  .pk-row { display: grid; gap: 12px 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); align-items: start; }
+  .pk-row select, .pk-in { font: inherit; font-size: 0.84rem; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); width: 100%; }
+  .pk-in { font-family: var(--font-mono); font-size: 0.8rem; }
+  .pk-opts { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.85rem; color: var(--muted); }
+  .pk-opts label { display: flex; gap: 6px; align-items: center; }
+  .fams { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); }
+  .fam { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); display: grid; gap: 6px; align-content: start; }
+  .fam h4 { margin: 0; font-size: 0.78rem; font-family: var(--font-mono); font-weight: 500; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); display: flex; justify-content: space-between; gap: 8px; }
+  .tchips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .tc { font-family: var(--font-mono); font-size: 0.74rem; border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; color: var(--faint); background: var(--sunk); transition: all .25s; overflow-wrap: anywhere; }
+  .tc.on { color: var(--hands); border-color: var(--hands); background: var(--hands-soft); font-weight: 500; }
+  .tc.opt { border-style: dashed; }
+  .tc.on.opt { border-style: solid; }
+  .tc.warn { color: var(--warn); border-color: var(--warn); background: var(--brain-soft); }
+  .pk-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .pk-notes { margin: 0; padding-left: 18px; color: var(--muted); font-size: 0.86rem; display: grid; gap: 4px; }
+  .pk-notes li::marker { color: var(--warn); }
+  .famcards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+  .famcards .card .tchips .tc { color: var(--ink); }
+  .famcards .card .tchips .tc.opt { color: var(--muted); }
+  .lint-wrap { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  @media (max-width: 760px) { .lint-wrap { grid-template-columns: minmax(0, 1fr); } }
+  .lint-src { width: 100%; min-height: 260px; font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.5; padding: 10px 12px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--sunk); color: var(--ink); resize: vertical; }
+  .lint-out { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; align-content: start; }
+  .lint-out li { font-family: var(--font-mono); font-size: 0.78rem; border: 1px solid var(--line); border-left: 4px solid var(--bad); border-radius: 6px; padding: 6px 8px; background: var(--panel); overflow-wrap: anywhere; color: var(--ink); }
+  .lint-out li.good { border-left-color: var(--ok); color: var(--ok); }
+  .lint-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ctx-grid { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); padding: 14px 16px; }
+  .ctx-grid div { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); font-size: 0.84rem; color: var(--muted); }
+  .ctx-grid b { font-family: var(--font-mono); font-size: 0.8rem; color: var(--ink); display: block; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · hands</div>
+  <h1>Tool catalog</h1>
+  <p class="lede">Every built-in tool is one row in <code>catalog()</code>. Default rows are on for every agent; opt-in rows need their name in <code>tools</code> or <code>workspace_tools</code>. The same rows feed chat, plan steps, loops and the Claude Code bridge.</p>
+  <ul class="facts">
+    <li><b>12</b> default tools, <b>+2</b> with <code>[memory]</code></li>
+    <li><b>32</b> opt-in names</li>
+    <li>scope check within <b>30</b> lines of <code>execute</code></li>
+    <li>tool name ≤ <b>64</b> chars</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> scopes, redaction</li>
+    <li><span class="chip heart"><span class="k">心</span> heart</span> the model</li>
+    <li><span class="chip data">data</span> config and results</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One tool call, step by step</span>
+    <h2 id="s-flow">From a TOML list to a tool result</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 420" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Tool pipeline: the agent block's lists pick catalog rows, plugins register them, each gets a scope; the model calls a tool, the executor builds a ToolCtx, the tool checks its scope, returns output, and redaction runs before the model sees it.</title>
+        <!-- edges -->
+        <path class="e" id="p-cfg-base" d="M180 62 L206 62" data-at="2"/>
+        <path class="e" id="p-base-reg" d="M388 62 L414 62" data-at="3"/>
+        <path class="e" id="p-reg-reg" d="M602 62 L628 62" data-at="3"/>
+        <path class="e" id="p-reg-scope" d="M735 94 L735 128" data-at="4"/>
+        <path class="e" id="p-model-exec" d="M180 202 L206 202" data-at="5"/>
+        <path class="e" id="p-exec-ctx" d="M398 202 L424 202" data-at="6"/>
+        <path class="e dash" id="p-scope-ctx" d="M630 162 C614 162 616 188 604 188" data-at="6"/>
+        <path class="e" id="p-ctx-exe" d="M602 222 C690 230 735 250 735 298" data-at="7"/>
+        <path class="e" id="p-exe-chk" d="M630 332 L575 332" data-at="7"/>
+        <path class="e" id="p-chk-out" d="M456 332 L400 332" data-at="8"/>
+        <path class="e flow" id="p-out-red" d="M208 332 L182 332" data-at="9"/>
+        <path class="e flow" id="p-red-model" d="M100 300 L100 236" data-at="9"/>
+
+        <!-- row A -->
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="30" width="160" height="64" rx="8"/>
+          <text x="100" y="56" text-anchor="middle" class="t-title">Agent block</text>
+          <text x="100" y="76" text-anchor="middle" class="t-small">tools · workspace_tools</text>
+        </g>
+        <g class="n hands" data-at="2-3">
+          <rect x="208" y="30" width="180" height="64" rx="8"/>
+          <text x="298" y="56" text-anchor="middle" class="t-title t-mono">agent_base_tools</text>
+          <text x="298" y="76" text-anchor="middle" class="t-small">catalog rows, filtered</text>
+        </g>
+        <g class="n hands" data-at="3">
+          <rect x="416" y="30" width="186" height="64" rx="8"/>
+          <text x="509" y="56" text-anchor="middle" class="t-title t-mono">register_catalog</text>
+          <text x="509" y="76" text-anchor="middle" class="t-small">each plugin once</text>
+        </g>
+        <g class="n hands" data-at="3-4">
+          <rect x="630" y="30" width="210" height="64" rx="8"/>
+          <text x="735" y="56" text-anchor="middle" class="t-title">ToolRegistry</text>
+          <text x="735" y="76" text-anchor="middle" class="t-small">name → Tool</text>
+        </g>
+        <!-- row B -->
+        <g class="n guard" data-at="4,6">
+          <rect x="630" y="130" width="210" height="60" rx="8"/>
+          <text x="735" y="155" text-anchor="middle" class="t-title">Scope map</text>
+          <text x="735" y="174" text-anchor="middle" class="t-small">configured or fallback</text>
+        </g>
+        <g class="n heart" data-at="5,9">
+          <rect x="20" y="170" width="160" height="64" rx="8"/>
+          <text x="100" y="191" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="100" y="210" text-anchor="middle" class="t-title">Model</text>
+          <text x="100" y="226" text-anchor="middle" class="t-small">asks for a call</text>
+        </g>
+        <g class="n hands" data-at="5-6">
+          <rect x="208" y="170" width="190" height="64" rx="8"/>
+          <text x="303" y="196" text-anchor="middle" class="t-title">Tool executor</text>
+          <text x="303" y="216" text-anchor="middle" class="t-small">activity line, then lookup</text>
+        </g>
+        <g class="n data" data-at="6-7">
+          <rect x="426" y="170" width="176" height="64" rx="8"/>
+          <text x="514" y="196" text-anchor="middle" class="t-title t-mono">ToolCtx</text>
+          <text x="514" y="216" text-anchor="middle" class="t-small">built per call</text>
+        </g>
+        <!-- row C -->
+        <g class="n guard" data-at="9">
+          <rect x="20" y="300" width="160" height="64" rx="8"/>
+          <text x="100" y="326" text-anchor="middle" class="t-title">Redaction</text>
+          <text x="100" y="346" text-anchor="middle" class="t-small">SanitizedToolExecutor</text>
+        </g>
+        <g class="n data" data-at="8-9">
+          <rect x="208" y="300" width="190" height="64" rx="8"/>
+          <text x="303" y="326" text-anchor="middle" class="t-title t-mono">ToolOutput</text>
+          <text x="303" y="346" text-anchor="middle" class="t-small">text + observation</text>
+        </g>
+        <g class="n guard" data-at="7-8">
+          <polygon points="515,290 573,332 515,374 457,332"/>
+          <text x="515" y="330" text-anchor="middle" class="t-title">scope ok?</text>
+          <text x="515" y="347" text-anchor="middle" class="t-small t-mono">check_*</text>
+        </g>
+        <g class="n hands" data-at="7">
+          <rect x="630" y="300" width="210" height="64" rx="8"/>
+          <text x="735" y="326" text-anchor="middle" class="t-title t-mono">Tool::execute</text>
+          <text x="735" y="346" text-anchor="middle" class="t-small">gate, then side effects</text>
+        </g>
+
+        <!-- badges -->
+        <g class="pop badge" data-at="1"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">tools = [] → every default tool</text></g>
+        <g class="pop badge" data-at="2"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">an opt-in row needs its name listed</text></g>
+        <g class="pop badge" data-at="3"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">the MCP bridge makes the same call</text></g>
+        <g class="pop badge" data-at="4"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">no entry → fallback rooted in workspace</text></g>
+        <g class="pop badge" data-at="5"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">unknown name → error listing its tools</text></g>
+        <g class="pop badge" data-at="6"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">call id → ctx.call_id</text></g>
+        <g class="pop badge" data-at="7"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">denied → error, nothing touched</text></g>
+        <g class="pop badge" data-at="8"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">typed: status · age · features</text></g>
+        <g class="pop badge" data-at="9"><rect x="270" y="384" width="320" height="22" rx="11"/><text x="430" y="399" text-anchor="middle">secret value → [REDACTED]</text></g>
+
+        <!-- tokens -->
+        <circle class="tok" r="6" data-path="p-cfg-base" data-at="2" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-base-reg" data-at="3" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-reg-reg" data-at="3" data-dur="700" data-delay="700"/>
+        <circle class="tok guard" r="6" data-path="p-reg-scope" data-at="4" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-model-exec" data-at="5" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-exec-ctx" data-at="6" data-dur="700"/>
+        <circle class="tok guard" r="5" data-path="p-scope-ctx" data-at="6" data-dur="800" data-delay="400"/>
+        <circle class="tok" r="6" data-path="p-ctx-exe" data-at="7" data-dur="1100"/>
+        <circle class="tok hands" r="5" data-path="p-exe-chk" data-at="7" data-dur="600" data-delay="1100"/>
+        <circle class="tok" r="6" data-path="p-chk-out" data-at="8" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-out-red" data-at="9" data-dur="600"/>
+        <circle class="tok guard" r="6" data-path="p-red-model" data-at="9" data-dur="700" data-delay="600"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>An agent block lists <code>tools</code> (the allow-list) and <code>workspace_tools</code> (opt-ins). An empty <code>tools</code> means every default tool.</li>
+        <li><code>agent_base_tools</code> walks the catalog: default rows, memory rows when memory is on, opt-in rows that are named (an opt-in memory row, <code>persistent_store</code>, also needs memory on). A non-empty <code>tools</code> keeps only listed names.</li>
+        <li><code>register_catalog</code> builds each needed plugin once and registers only allowed tools. The in-process executor and the MCP bridge call this same function.</li>
+        <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace. A hardened sandbox drops its shell.</li>
+        <li>The model asks for a call. The executor publishes an activity line first; an unknown name fails with the sorted list of this agent's tools.</li>
+        <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, memory, secrets, conversation, agent config, call id.</li>
+        <li><code>Tool::execute</code> calls <code>ctx.scope.check_*</code> before it touches a file, host, env var, shell or wallet. A denial is an error, never a silent skip.</li>
+        <li>The tool returns <code>ToolOutput</code>: text for the model and, for typed tools, an <code>Observation</code> with status, age and features.</li>
+        <li><code>SanitizedToolExecutor</code> redacts secret values from the text, the observation and errors. Only then does the model see it.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-pick">
+  <div class="sec-head">
+    <span class="kicker">Try it: edit the lists</span>
+    <h2 id="s-pick">Which tools does this agent get?</h2>
+    <p>Start from a real agent or type your own names. The rules are <code>agent_base_tools</code> and config validation, line for line.</p>
+  </div>
+  <div class="widget" id="pk">
+    <div class="pk-row">
+      <label for="pk-preset">Real agent
+        <select id="pk-preset"></select>
+      </label>
+      <label for="pk-tools"><code>tools = [ … ]</code>
+        <input class="pk-in" id="pk-tools" type="text" spellcheck="false" autocomplete="off">
+      </label>
+      <label for="pk-wt"><code>workspace_tools = [ … ]</code>
+        <input class="pk-in" id="pk-wt" type="text" spellcheck="false" autocomplete="off">
+      </label>
+    </div>
+    <div class="pk-opts">
+      <label><input type="radio" name="pk-surf" value="chat" checked> chat turn (TUI, Telegram; OpenRouter or local)</label>
+      <label><input type="radio" name="pk-surf" value="step"> plan step (<code>run-agent</code>)</label>
+      <label><input type="checkbox" id="pk-mem"> <code>[memory] enabled</code></label>
+      <label><input type="checkbox" id="pk-ws" checked> agent has a <code>workspace</code></label>
+    </div>
+    <div class="pk-head"><span class="verdict ok" id="pk-verdict" aria-live="polite"></span><span class="note" id="pk-hint" style="padding:6px 10px"></span></div>
+    <div class="fams" id="pk-fams"></div>
+    <ul class="pk-notes" id="pk-notes"></ul>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-fam">
+  <div class="sec-head">
+    <span class="kicker">The catalog</span>
+    <h2 id="s-fam">Tool families</h2>
+    <p>Solid chips are default rows; dashed chips are opt-ins. One plugin serves each family.</p>
+  </div>
+  <div class="bars" aria-label="Tools per family">
+    <div class="bar"><span class="lbl">solana</span><span class="track"><span class="fill" style="--w:100%"></span></span><span class="val">16</span></div>
+    <div class="bar"><span class="lbl">xm paper</span><span class="track"><span class="fill" style="--w:37.5%"></span></span><span class="val">6</span></div>
+    <div class="bar"><span class="lbl">memory</span><span class="track"><span class="fill" style="--w:31.3%"></span></span><span class="val">5</span></div>
+    <div class="bar"><span class="lbl">crypto (Privy)</span><span class="track"><span class="fill" style="--w:31.3%"></span></span><span class="val">5</span></div>
+    <div class="bar"><span class="lbl">skills</span><span class="track"><span class="fill" style="--w:31.3%"></span></span><span class="val">5</span></div>
+    <div class="bar"><span class="lbl">workspace</span><span class="track"><span class="fill" style="--w:25%"></span></span><span class="val">4</span></div>
+    <div class="bar"><span class="lbl">hyperliquid</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
+    <div class="bar"><span class="lbl">xlab</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
+    <div class="bar"><span class="lbl">http</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
+  </div>
+  <div class="famcards" id="famcards"></div>
+  <p class="note">Not in the catalog: <code>compress_and_store</code> (added to every plan step, answered by the runner), shell skills (from <code>skill_packages</code>, see <a href="skills.html">Skills</a>) and <code>[[mcp_servers]]</code> tools named <code>{server}__{tool}</code>, filtered by the same <code>tools</code> list.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-code">
+  <div class="sec-head">
+    <span class="kicker">Inside one tool</span>
+    <h2 id="s-code">Row, gate, context, output</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-row" aria-selected="true">One catalog row</button>
+      <button type="button" aria-controls="tab-exec">The gate in execute</button>
+      <button type="button" aria-controls="tab-ctx">ToolCtx</button>
+      <button type="button" aria-controls="tab-out">Typed output</button>
+    </div>
+    <div class="tabpanel" id="tab-row"><pre><span class="c">// src/adapters/outbound/tools/mod.rs · catalog() — a real row</span>
+ToolEntry {
+    opt_in: <span class="k">Some</span>(names::LP_SWAP_PLAN),   <span class="c">// None = on for every agent</span>
+    needs_memory: <span class="n">false</span>,                <span class="c">// true = only with a memory backend</span>
+    defs: || solana::defs_named(names::LP_SWAP_PLAN),
+    plugin: |_| Box::new(solana::SolanaPlugin),
+},
+<span class="c">// opt-in? also add the name to domain::tools::WORKSPACE_TOOLS —</span>
+<span class="c">// catalog_tests fail when the two lists drift.</span></pre></div>
+    <div class="tabpanel" id="tab-exec" hidden><pre><span class="c">// src/adapters/outbound/tools/workspace/run_command.rs</span>
+<span class="k">async fn</span> execute(&amp;self, args: &amp;Value, ctx: &amp;ToolCtx&lt;'_&gt;) -&gt; Result&lt;ToolOutput&gt; {
+    <span class="k">let</span> command = require_str(args, <span class="s">"run_command"</span>, <span class="s">"command"</span>)?;
+    <span class="k">let</span> bin = crate::domain::scope::shell_command_binary(command);
+    <span class="k">if</span> bin.is_empty() { anyhow::bail!(<span class="s">"run_command: empty command"</span>); }
+    <span class="j">ctx.scope.check_shell_bin(bin)?;</span>          <span class="c">// the gate: first command word only</span>
+    <span class="k">let</span> audit = egress::policy().guard_shell(<span class="s">"run_command"</span>, command)?;
+    <span class="k">let</span> output = ctx.shell.execute_shell(command, ctx.workspace);   <span class="c">// 300 s cap</span>
+    audit.finish(&amp;output);
+    Ok(ToolOutput::from(output?))
+}
+<span class="c">// tests/scope_lint.rs: `scope.check_` within 30 lines of `fn execute(`,</span>
+<span class="c">// or a `// scope: pure-compute` note (abi_encode, hex_to_uint256).</span></pre></div>
+    <div class="tabpanel" id="tab-ctx" hidden>
+      <div class="ctx-grid">
+        <div><b>workspace</b>root every path resolves against</div>
+        <div><b>scope</b>this tool's <code>ToolScope</code>: fs_roots, net_hosts, env_reads, shell_bins, wallets</div>
+        <div><b>shell</b>runs commands in the workspace</div>
+        <div><b>http</b>the egress client: proxied per <code>[egress]</code>, redirects off</div>
+        <div><b>memory_manager</b>vector memory, when the agent has one</div>
+        <div><b>secret_registry</b>vault values for <code>$VAR</code> expansion and redaction</div>
+        <div><b>activity</b>where activity lines go (TUI bubble, log)</div>
+        <div><b>conversation</b>read-only view of the messages so far</div>
+        <div><b>agent_config</b>the calling agent's block (engine, model, sections)</div>
+        <div><b>call_id</b><code>chat:&lt;nonce&gt;:&lt;round&gt;:&lt;i&gt;:&lt;provider id&gt;</code>, <code>mcp:&lt;nonce&gt;:&lt;id&gt;</code>, <code>feed:&lt;name&gt;:&lt;slot ms&gt;:&lt;i&gt;</code> or <code>{loop}:{session}:{t}</code>; exec tools dedupe on it</div>
+      </div>
+    </div>
+    <div class="tabpanel" id="tab-out" hidden><pre><span class="c">// ToolOutput { text, observation: Option&lt;Observation&gt; } — render_text(), example values</span>
+<span class="s">SOL/USD 148.21</span> | <span class="n">partial</span> 12s <span class="j">live</span>          <span class="c">← headline | status age [slot=n] source</span>
+usd=148.21 sources_ok=1                <span class="c">← features, scalars only</span>
+error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c">← one line per failed read</span>
+
+<span class="c">// a failed read is an error field with a class — never a 0.</span>
+<span class="c">// Plain tools return text only (ToolOutput::from(String)).</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-lint">
+  <div class="sec-head">
+    <span class="kicker">Try it: break a schema</span>
+    <h2 id="s-lint">The schema subset</h2>
+    <p>Every tool definition must fit what OpenRouter models, local servers and Claude all accept. Edit the JSON; the checks are a port of <code>schema_lint.rs</code>.</p>
+  </div>
+  <div class="widget">
+    <div class="lint-btns" role="group" aria-label="Examples">
+      <button type="button" class="btn" data-ex="ok" aria-pressed="true">read_file (passes)</button>
+      <button type="button" class="btn" data-ex="union" aria-pressed="false">type union</button>
+      <button type="button" class="btn" data-ex="dot" aria-pressed="false">dotted name</button>
+      <button type="button" class="btn" data-ex="anyof" aria-pressed="false">anyOf + bad enum</button>
+      <button type="button" class="btn" data-ex="arr" aria-pressed="false">array, no items</button>
+    </div>
+    <div class="lint-wrap">
+      <textarea class="lint-src" id="lint-src" spellcheck="false" aria-label="Tool definition JSON"></textarea>
+      <ul class="lint-out" id="lint-out" aria-live="polite"></ul>
+    </div>
+    <p class="note">In CI the lint runs over every catalog row, <code>compress_and_store</code>, shell-skill tools and MCP proxies. At runtime an external <code>[[mcp_servers]]</code> tool that breaks a rule is dropped with a warning.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>One row, every surface.</b> Chat, plan steps, loops, <code>tengu tool</code> and the MCP bridge all register through <code>register_catalog</code>.</span></li>
+    <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
+    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 32 fails the config.</span></li>
+    <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
+    <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
+    <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
+    <li><span><b>Secrets stay out.</b> Text, observations and error messages pass <code>SanitizedToolExecutor</code> before a model sees them.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Call a tool without a model</h2>
+    <p><code>tengu tool</code> is a hidden helper: it runs one catalog tool as an agent, through the same executor a plan step uses.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu tool list</span>
+<span class="ln o">["read_file","list_directory","write_file","run_command","memory_ingest","memory_search","shared_cache", …]</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xmarket --agent xm_architect --tool write_file --args '{"path":"x","content":"y"}'</span>
+<span class="ln">{"text":"<span class="er">ERROR: Tool 'write_file' is not available to this agent. Its tools: hl_book, hl_ctx, list_directory, paper_positions, read_file, risk_status.</span>","observation":null,"is_error":true}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox xlab --agent xl_architect --tool list_directory --args '{"path":"."}'</span>
+<span class="ln o">{"text":"…","observation":null,"is_error":false}</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/outbound/tools/mod.rs</code></td><td><code>catalog()</code>, <code>advertised_defs</code>, <code>register_catalog</code></td></tr>
+        <tr><td><code>src/domain/tools.rs</code></td><td>opt-in names: <code>WORKSPACE_TOOLS</code>, exec and signing lists</td></tr>
+        <tr><td><code>src/ports/tool.rs</code></td><td><code>Tool</code>, <code>ToolPlugin</code>, <code>ToolCtx</code>, <code>ToolOutput</code></td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>agent_base_tools</code>, <code>build_tool_executor</code>, scope map, fallback scope</td></tr>
+        <tr><td><code>src/application/tools/registry.rs</code></td><td><code>ToolRegistry</code>, <code>PluginToolExecutor</code></td></tr>
+        <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td>argument helpers, workspace path checks</td></tr>
+        <tr><td class="wrap"><code>src/adapters/outbound/tools/{workspace,http,crypto}/</code></td><td>the default tool families</td></tr>
+        <tr><td><code>src/adapters/outbound/shell.rs</code></td><td>the shell runner (300 s cap)</td></tr>
+        <tr><td><code>tests/scope_lint.rs</code></td><td>the scope-gate lint</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: tool picker (agent_base_tools), family cards, schema lint port */
+(function () {
+  "use strict";
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // catalog() in advertised order: [name, family, opt-in, needs_memory]
+  var C = [
+    ["read_file", "workspace", 0, 0], ["list_directory", "workspace", 0, 0], ["write_file", "workspace", 0, 0], ["run_command", "workspace", 0, 0],
+    ["memory_ingest", "memory", 0, 1], ["memory_search", "memory", 0, 1],
+    ["shared_cache", "memory", 1, 0], ["agentic_memory", "memory", 1, 0], ["persistent_store", "memory", 1, 1],
+    ["skill_distill", "skills", 1, 0], ["apply_improver_proposal", "skills", 1, 0], ["manage_skill", "skills", 1, 0],
+    ["http_request", "http", 0, 0],
+    ["sign_and_send_transaction", "crypto (Privy)", 0, 0], ["sign_message", "crypto (Privy)", 0, 0], ["get_wallet_address", "crypto (Privy)", 0, 0], ["abi_encode", "crypto (Privy)", 0, 0], ["hex_to_uint256", "crypto (Privy)", 0, 0],
+    ["skill_resource", "skills", 0, 0], ["view_skill", "skills", 0, 0],
+    ["sol_price", "solana", 1, 0], ["dlmm_pools", "solana", 1, 0], ["dlmm_pool", "solana", 1, 0], ["dlmm_positions", "solana", 1, 0], ["jup_perps", "solana", 1, 0],
+    ["solana_wallet", "solana", 1, 0], ["solana_tx", "solana", 1, 0], ["lp_snapshot", "solana", 1, 0], ["lp_swap_plan", "solana", 1, 0], ["hedge_decide", "solana", 1, 0], ["lp_decide", "solana", 1, 0],
+    ["solana_close_token_accounts", "solana", 1, 0], ["jupiter_swap", "solana", 1, 0], ["dlmm_close_position", "solana", 1, 0], ["dlmm_open_position", "solana", 1, 0], ["jup_perps_order", "solana", 1, 0],
+    ["hl_ctx", "hyperliquid", 1, 0], ["hl_book", "hyperliquid", 1, 0],
+    ["risk_status", "xm paper", 1, 0], ["paper_order", "xm paper", 1, 0], ["paper_close", "xm paper", 1, 0], ["xm_exits", "xm paper", 1, 0], ["xm_weekend_fade", "xm paper", 1, 0], ["paper_positions", "xm paper", 1, 0],
+    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0]
+  ];
+  var FAMS = ["workspace", "memory", "http", "crypto (Privy)", "skills", "solana", "hyperliquid", "xm paper", "xlab"];
+  var OPT = C.filter(function (r) { return r[2]; }).map(function (r) { return r[0]; });
+  var ALL = C.map(function (r) { return r[0]; });
+  var SOL = ["http_request", "read_file", "list_directory", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order"];
+  var PRESETS = [
+    { id: "jev-exec · architect", tools: [], wt: [], mem: false, hint: "tools empty: every default tool is listed; its scopes deny all but run_command (tengu)." },
+    { id: "lping · lping", tools: ["http_request", "read_file", "list_directory"], wt: [], mem: true, hint: "Planner + chat agent: three tools." },
+    { id: "lping · crypto_researcher", tools: SOL, wt: [], mem: true, hint: "Opt-ins named in tools are switched on." },
+    { id: "storage-test · storage", tools: ["persistent_store", "read_file", "http_request", "write_file"], wt: [], mem: true, hint: "persistent_store needs the memory backend." },
+    { id: "xmarket · xm_architect", tools: ["read_file", "list_directory", "hl_ctx", "hl_book", "risk_status", "paper_positions"], wt: [], mem: false, hint: "Read-only research agent of a [risk] sandbox." },
+    { id: "xlab · xl_architect", tools: ["market_history", "backtest", "read_file", "list_directory"], wt: [], mem: false, hint: "History tools only." },
+    { id: "your own (example)", tools: ["htp_request", "read_file"], wt: ["shared_cache", "backtests"], mem: false, hint: "Two typos: see what each one does." }
+  ];
+  var sel = document.getElementById("pk-preset"), tIn = document.getElementById("pk-tools"), wIn = document.getElementById("pk-wt");
+  var mem = document.getElementById("pk-mem"), ws = document.getElementById("pk-ws");
+  var verdict = document.getElementById("pk-verdict"), hint = document.getElementById("pk-hint");
+  var famsBox = document.getElementById("pk-fams"), notes = document.getElementById("pk-notes");
+  PRESETS.forEach(function (p, i) { var o = document.createElement("option"); o.value = i; o.textContent = p.id; sel.appendChild(o); });
+  function list(v) { return v.split(/[\s,"\[\]]+/).map(function (s) { return s.trim(); }).filter(Boolean); }
+  function show(p) {
+    tIn.value = p.tools.map(function (t) { return '"' + t + '"'; }).join(", ");
+    wIn.value = p.wt.map(function (t) { return '"' + t + '"'; }).join(", ");
+    mem.checked = p.mem; hint.textContent = p.hint; compute();
+  }
+  function compute() {
+    var tools = list(tIn.value), wt = list(wIn.value);
+    var surf = document.querySelector('input[name="pk-surf"]:checked').value;
+    var badW = wt.filter(function (n) { return OPT.indexOf(n) < 0; });
+    var n = [], out = [];
+    if (badW.length) {
+      verdict.className = "verdict bad";
+      verdict.textContent = "Config load fails";
+      n.push("agents.<id>.workspace_tools: unknown tool '" + badW[0] + "' (valid: " + OPT.join(", ") + ")");
+    } else {
+      var opted = wt.slice();
+      tools.forEach(function (t) { if (OPT.indexOf(t) >= 0 && opted.indexOf(t) < 0) opted.push(t); });
+      var uses = surf === "step" || ws.checked;
+      var base = !uses ? [] : C.filter(function (r) { return (!r[2] || opted.indexOf(r[0]) >= 0) && (mem.checked || !r[3]); });
+      out = (tools.length ? base.filter(function (r) { return tools.indexOf(r[0]) >= 0 || opted.indexOf(r[0]) >= 0; }) : base).map(function (r) { return r[0]; });
+      var count = out.length + (surf === "step" ? 1 : 0);
+      verdict.className = "verdict " + (count ? "ok" : "warn");
+      verdict.textContent = count + " tool" + (count === 1 ? "" : "s") + " advertised" + (surf === "step" ? " (incl. compress_and_store)" : "");
+      if (!uses) n.push("No workspace: a chat surface gives this agent no tools at all.");
+      tools.filter(function (t) { return ALL.indexOf(t) < 0; }).forEach(function (t) {
+        n.push("`" + t + "` matches no catalog row: the config load warns, and it is dropped unless a shell skill the agent loads defines it. An [[mcp_servers]] tool named server__tool would be kept.");
+      });
+      if (opted.indexOf("persistent_store") >= 0 && !mem.checked) n.push("persistent_store needs a memory backend: without one it is not advertised.");
+      if (out.indexOf("agentic_memory") >= 0) n.push("agentic_memory exists only in a build with the postgres_memory feature.");
+      if (!tools.length && uses) n.push("tools is empty: every default row" + (mem.checked ? " (memory rows included)" : "") + " plus the opt-ins.");
+    }
+    famsBox.innerHTML = FAMS.map(function (f) {
+      var rows = C.filter(function (r) { return r[1] === f; });
+      var on = rows.filter(function (r) { return out.indexOf(r[0]) >= 0; }).length;
+      return '<div class="fam"><h4><span>' + esc(f) + "</span><span>" + on + "/" + rows.length + '</span></h4><div class="tchips">' +
+        rows.map(function (r) {
+          var cls = "tc" + (r[2] ? " opt" : "") + (out.indexOf(r[0]) >= 0 ? " on" : "");
+          return '<span class="' + cls + '">' + r[0] + "</span>";
+        }).join("") + (f === "skills" && surf === "step" && !badW.length ? '<span class="tc on">compress_and_store</span>' : "") + "</div></div>";
+    }).join("");
+    notes.innerHTML = n.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("");
+  }
+  sel.addEventListener("change", function () { show(PRESETS[+sel.value]); });
+  [tIn, wIn].forEach(function (x) { x.addEventListener("input", compute); });
+  [mem, ws].forEach(function (x) { x.addEventListener("change", compute); });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="pk-surf"]'), function (r) { r.addEventListener("change", compute); });
+  sel.value = "2"; show(PRESETS[2]);
+
+  /* family cards */
+  var NOTES = {
+    "workspace": ["hands", "Files and a shell in the agent workspace. write_file refuses .tengu/, .claude/, .git/, skills/ and CLAUDE.md / AGENTS.md."],
+    "memory": ["brain", "Vector memory (needs [memory]); shared_cache is a SQLite store in the workspace; agentic_memory is Open Brain on Postgres."],
+    "http": ["hands", "Any HTTP API through the egress client. Follows up to 10 redirects itself, re-checking scope and egress on every hop."],
+    "crypto (Privy)": ["guard", "Privy agentic wallets plus two pure helpers. A [risk] sandbox turns the signing tools off."],
+    "skills": ["brain", "Read skill files and resources; manage_skill writes them; skill_distill and apply_improver_proposal evolve them."],
+    "solana": ["hands", "Typed, cached LP reads and pure decisions; five write tools that simulate unless signing is set up."],
+    "hyperliquid": ["data", "Typed market contexts and order books from Hyperliquid."],
+    "xm paper": ["guard", "Paper ledger reads and exec tools; the [risk] gate runs inside each exec tool."],
+    "xlab": ["data", "Read-only market history and backtests on the sandbox's market.db."]
+  };
+  var LINKS = { "solana": "solana.html", "xm paper": "paper-desk.html", "xlab": "backtest.html", "memory": "memory.html", "skills": "skills.html", "http": "egress.html", "crypto (Privy)": "secrets.html", "workspace": "scopes.html", "hyperliquid": "observations.html" };
+  document.getElementById("famcards").innerHTML = FAMS.map(function (f) {
+    var rows = C.filter(function (r) { return r[1] === f; });
+    return '<div class="card ' + NOTES[f][0] + '"><h3>' + esc(f) + ' <span class="chip data">' + rows.length + "</span></h3>" +
+      '<div class="tchips">' + rows.map(function (r) { return '<span class="tc' + (r[2] ? " opt" : "") + '">' + r[0] + "</span>"; }).join("") + "</div>" +
+      "<p>" + esc(NOTES[f][1]) + ' <a href="' + LINKS[f] + '">More</a></p></div>';
+  }).join("");
+
+  /* schema lint — port of src/adapters/outbound/tools/schema_lint.rs */
+  var TYPES = ["string", "number", "integer", "boolean", "array", "object"];
+  var FORBIDDEN = ["oneOf", "anyOf", "allOf", "not", "const", "$ref", "$defs", "definitions"];
+  function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
+  function chars(s) { return Array.from(s).length; }
+  function violations(def) {
+    var tool = typeof def.name === "string" ? def.name : "", out = [];
+    function bad(at, p) { out.push(tool + ": " + at + ": " + p); }
+    if (!(tool.length <= 64 && /^[A-Za-z_]/.test(tool) && /^[A-Za-z0-9_-]*$/.test(tool))) bad("name", "must match ^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$");
+    var d = typeof def.description === "string" ? chars(def.description) : 0;
+    if (d > 1024) bad("description", d + " chars (> 1024)");
+    var root = def.parameters;
+    if (!isObj(root) || root.type !== "object" || !isObj(root.properties)) bad("parameters", 'root must be `type: "object"` with a `properties` object');
+    schema(root, "parameters");
+    function schema(s, at) {
+      if (!isObj(s)) { bad(at, "a schema must be a JSON object"); return; }
+      FORBIDDEN.forEach(function (k) { if (k in s) bad(at, "`" + k + "` is outside the subset"); });
+      if ("description" in s) {
+        if (typeof s.description === "string") { var n = chars(s.description); if (n > 512) bad(at, "description is " + n + " chars (> 512)"); }
+        else bad(at, "description must be a string");
+      }
+      var ty = null;
+      if ("type" in s) {
+        if (typeof s.type === "string" && TYPES.indexOf(s.type) >= 0) ty = s.type;
+        else { bad(at, 'type must be one of ["string", "number", "integer", "boolean", "array", "object"], got ' + JSON.stringify(s.type)); return; }
+      }
+      if ("enum" in s) {
+        var e = s["enum"];
+        if (!(Array.isArray(e) && e.length && e.every(function (x) { return typeof x === "string"; }))) bad(at, "enum must be a non-empty list of strings");
+        if (ty && ty !== "string") bad(at, 'enum needs `type: "string"`');
+      } else if (!ty) bad(at, "needs `type` or `enum`");
+      if ("format" in s && !(ty === "string" && s.format === "date-time")) bad(at, "format " + JSON.stringify(s.format) + ' is outside the subset (strings only: ["date-time"])');
+      if (ty === "object") object(s, at);
+      else if (ty === "array") { if (isObj(s.items)) schema(s.items, at + "/items"); else bad(at, "an array needs one `items` schema"); }
+    }
+    function object(o, at) {
+      var props = null;
+      if ("properties" in o) { if (isObj(o.properties)) props = o.properties; else bad(at, "properties must be an object"); }
+      if ("required" in o) {
+        if (Array.isArray(o.required)) o.required.forEach(function (n) { if (!(typeof n === "string" && props && Object.prototype.hasOwnProperty.call(props, n))) bad(at, "required " + JSON.stringify(n) + " is not in properties"); });
+        else bad(at, "required must be a list");
+      }
+      if (props) Object.keys(props).sort().forEach(function (k) { schema(props[k], at + "/properties/" + k); });
+      if (isObj(o.additionalProperties)) schema(o.additionalProperties, at + "/additionalProperties");
+    }
+    return out;
+  }
+  var EX = {
+    ok: { name: "read_file", description: "Read a file.", parameters: { type: "object", properties: { path: { type: "string", description: "File path relative to the workspace root" } }, required: ["path"] } },
+    union: { name: "fetch_page", description: "Example: a nullable field.", parameters: { type: "object", properties: { url: { type: ["string", "null"] } }, required: ["url"] } },
+    dot: { name: "github.create_issue", description: "Example: the old {server}.{tool} naming.", parameters: { type: "object", properties: { title: { type: "string" } } } },
+    anyof: { name: "set_mode", description: "Example.", parameters: { type: "object", properties: { mode: { anyOf: [{ type: "string" }], "enum": [1, 2] } }, required: ["mode", "level"] } },
+    arr: { name: "tag_rows", description: "Example.", parameters: { type: "object", properties: { tags: { type: "array" }, at: { type: "string", format: "uri" } } } }
+  };
+  var src = document.getElementById("lint-src"), lout = document.getElementById("lint-out");
+  function lint() {
+    var def;
+    try { def = JSON.parse(src.value); } catch (e) { lout.innerHTML = "<li>not JSON: " + esc(e.message) + "</li>"; return; }
+    if (!isObj(def)) { lout.innerHTML = "<li>a tool definition is a JSON object</li>"; return; }
+    var v = violations(def);
+    lout.innerHTML = v.length ? v.map(function (x) { return "<li>" + esc(x) + "</li>"; }).join("") : '<li class="good">no violations: inside the subset</li>';
+  }
+  var exBtns = Array.prototype.slice.call(document.querySelectorAll(".lint-btns .btn"));
+  exBtns.forEach(function (b) {
+    b.addEventListener("click", function () {
+      exBtns.forEach(function (x) { x.setAttribute("aria-pressed", x === b ? "true" : "false"); });
+      src.value = JSON.stringify(EX[b.getAttribute("data-ex")], null, 2); lint();
+    });
+  });
+  src.addEventListener("input", lint);
+  src.value = JSON.stringify(EX.ok, null, 2); lint();
+})();
+</script>
+</body>
+</html>

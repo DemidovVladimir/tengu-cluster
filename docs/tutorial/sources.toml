@@ -1,0 +1,383 @@
+# Tutorial sync map: each feature page → the source paths it explains.
+# A path ending in `/` covers every file below it.
+#
+# After a code change, update every page whose `sources` lists the changed
+# file or one of its parent directories (docs/tutorial/AUTHORING.md § Sync rule).
+# `cargo test --test tutorial_map` fails when a src/ file is in no page and not
+# in [glue], when a path here no longer exists, or when nav.js and this file
+# disagree on the page list.
+
+# Files that only declare modules: no behaviour of their own.
+[glue]
+sources = [
+  "src/adapters/mod.rs",
+  "src/adapters/inbound/mod.rs",
+  "src/adapters/outbound/mod.rs",
+  "src/application/mod.rs",
+  "src/bootstrap/mod.rs",
+  "src/domain/mod.rs",
+  "src/ports/mod.rs",
+]
+
+# ── Start here ────────────────────────────────────────────────────────────
+
+[pages.big-picture]
+sources = [
+  "src/main.rs",
+  "src/adapters/inbound/cli/mod.rs",
+  "src/adapters/inbound/cli/run_agent.rs",
+  "src/adapters/inbound/tui/mod.rs",
+  "src/adapters/outbound/subprocess_runner.rs",
+  "src/application/chat/service.rs",
+  "src/application/orchestrator/",
+  "src/bootstrap/orchestrator.rs",
+  "src/bootstrap/sandbox.rs",
+  "src/config/mod.rs",
+  "sandboxes/lping/config.toml",
+]
+
+# ── Core loop ─────────────────────────────────────────────────────────────
+
+[pages.planner]
+sources = [
+  "src/application/orchestrator/planner.rs",
+  "src/application/orchestrator/shared_files.rs",
+  "src/application/orchestrator/replan.rs",
+  "src/application/orchestrator/events.rs",
+  "src/application/orchestrator/wiring.rs",
+  "src/application/orchestrator/mod.rs",
+  "src/bootstrap/orchestrator.rs",
+  "src/ports/orchestration.rs",
+  "src/domain/plan.rs",
+  "src/config/mod.rs",
+  "skills/orchestrator/",
+]
+
+[pages.subagents]
+sources = [
+  "src/adapters/outbound/subprocess_runner.rs",
+  "src/adapters/inbound/cli/run_agent.rs",
+  "src/application/orchestrator/executor.rs",
+  "src/application/orchestrator/retry.rs",
+  "src/application/orchestrator/replan.rs",
+  "src/ports/orchestration.rs",
+  "src/bootstrap/tools.rs",
+  "src/application/chat/tool_loop.rs",
+  "src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs",
+  "src/config/mod.rs",
+  "tests/run_agent_ipc.rs",
+]
+
+[pages.tool-loop]
+sources = [
+  "src/application/chat/",
+  "src/application/tools/",
+  "src/domain/message.rs",
+  "src/domain/token.rs",
+  "src/domain/session.rs",
+  "src/domain/usage.rs",
+  "src/config/mod.rs",
+]
+
+[pages.engines]
+sources = [
+  "src/adapters/outbound/engines/",
+  "src/ports/engine.rs",
+  "src/domain/engine_smoke.rs",
+  "src/config/hardening.rs",
+  "src/adapters/inbound/cli/doctor.rs",
+]
+
+[pages.mcp-bridge]
+sources = [
+  "src/adapters/inbound/mcp_bridge.rs",
+  "src/adapters/outbound/bridge_env.rs",
+  "src/adapters/outbound/mcp_client/",
+  "src/adapters/outbound/tools/schema_lint.rs",
+  "src/adapters/outbound/engines/claude_code.rs",
+  "src/adapters/inbound/cli/tool.rs",
+  "tests/bridge_conformance.rs",
+]
+
+# ── Build a team ──────────────────────────────────────────────────────────
+
+[pages.sandboxes]
+sources = [
+  "src/config/mod.rs",
+  "src/config/paths.rs",
+  "src/config/sections.rs",
+  "src/config/hardening.rs",
+  "src/bootstrap/sandbox.rs",
+  "src/adapters/outbound/scaffold.rs",
+  "src/adapters/inbound/cli/mod.rs",
+  "sandboxes/",
+  "config.example.toml",
+]
+
+[pages.tools]
+sources = [
+  "src/adapters/outbound/tools/mod.rs",
+  "src/adapters/outbound/tools/args.rs",
+  "src/adapters/outbound/tools/schema_lint.rs",
+  "src/adapters/outbound/tools/workspace/",
+  "src/adapters/outbound/tools/http/",
+  "src/adapters/outbound/tools/crypto/",
+  "src/domain/tools.rs",
+  "src/ports/tool.rs",
+  "src/ports/shell.rs",
+  "src/adapters/outbound/shell.rs",
+  "src/adapters/outbound/noop.rs",
+  "src/bootstrap/tools.rs",
+  "src/application/tools/registry.rs",
+  "tests/scope_lint.rs",
+]
+
+[pages.skills]
+sources = [
+  "src/application/skills/mod.rs",
+  "src/application/skills/registry.rs",
+  "src/ports/skill_source.rs",
+  "src/adapters/outbound/tools/skill/",
+  "src/adapters/outbound/tools/view_skill/",
+  "src/adapters/outbound/tools/skill_resource/",
+  "src/adapters/outbound/tools/manage_skill/",
+  "src/domain/scope.rs",
+  "src/bootstrap/tools.rs",
+  "src/adapters/inbound/cli/run_agent.rs",
+  "src/adapters/inbound/cli/skill.rs",
+  "skills/",
+]
+
+[pages.skill-lifecycle]
+sources = [
+  "src/application/skills/lifecycle/",
+  "src/adapters/outbound/tools/skill_lifecycle/",
+  "src/adapters/inbound/eval.rs",
+  "src/adapters/inbound/evolve.rs",
+  "src/adapters/inbound/cli/skill.rs",
+  "src/config/skill_lifecycle.rs",
+]
+
+[pages.channels]
+sources = [
+  "src/adapters/inbound/tui/",
+  "src/adapters/inbound/telegram.rs",
+  "src/adapters/inbound/webhooks.rs",
+  "src/adapters/inbound/channel.rs",
+  "src/adapters/inbound/activity.rs",
+  "src/ports/tool_activity.rs",
+  "src/application/runtime/loops.rs",
+  "src/bootstrap/orchestrator.rs",
+]
+
+# ── Memory ────────────────────────────────────────────────────────────────
+
+[pages.memory]
+sources = [
+  "src/adapters/outbound/tools/agentic_memory/",
+  "src/domain/memory.rs",
+  "src/application/orchestrator/planner.rs",
+  "src/bootstrap/orchestrator.rs",
+  "src/adapters/inbound/mcp_bridge.rs",
+  "src/adapters/inbound/webhooks.rs",
+  "src/adapters/inbound/cli/run_agent.rs",
+  "src/config/mod.rs",
+]
+
+[pages.local-memory]
+sources = [
+  "src/application/memory/",
+  "src/adapters/outbound/memory/",
+  "src/adapters/outbound/tools/memory/",
+  "src/adapters/outbound/tools/cache/",
+  "src/ports/memory.rs",
+  "src/bootstrap/memory.rs",
+  "src/application/chat/service.rs",
+  "src/application/skills/registry.rs",
+]
+
+# ── Safety ────────────────────────────────────────────────────────────────
+
+[pages.scopes]
+sources = [
+  "src/domain/scope.rs",
+  "src/config/hardening.rs",
+  "src/adapters/outbound/tools/args.rs",
+  "src/config/mod.rs",
+  "src/bootstrap/tools.rs",
+  "src/adapters/outbound/tools/workspace/",
+  "src/adapters/inbound/mcp_bridge.rs",
+  "tests/scope_lint.rs",
+]
+
+[pages.egress]
+sources = [
+  "src/config/egress.rs",
+  "src/adapters/outbound/egress.rs",
+  "src/adapters/outbound/http_class.rs",
+  "src/adapters/outbound/tools/http/request.rs",
+  "src/bootstrap/sandbox.rs",
+  "src/adapters/outbound/subprocess_runner.rs",
+  "src/adapters/outbound/engines/claude_code.rs",
+  "src/adapters/inbound/cli/doctor.rs",
+  "src/adapters/inbound/telegram.rs",
+  "deploy/tor/",
+  "docker-compose.tor.yml",
+  "Makefile",
+]
+
+[pages.secrets]
+sources = [
+  "src/adapters/outbound/secrets.rs",
+  "src/domain/secrets.rs",
+  "src/adapters/inbound/cli/mod.rs",
+  "src/adapters/outbound/tools/http/request.rs",
+  "src/adapters/inbound/mcp_bridge.rs",
+  "src/adapters/inbound/tui/mod.rs",
+  "src/adapters/inbound/telegram.rs",
+  "src/bootstrap/decision.rs",
+]
+
+# ── Runtime ───────────────────────────────────────────────────────────────
+
+[pages.decision-loop]
+sources = [
+  "src/application/decision_loop/",
+  "src/config/decision_loop.rs",
+  "src/config/execution_map.rs",
+  "src/domain/decision.rs",
+  "src/domain/canonical.rs",
+  "src/ports/decision.rs",
+  "src/adapters/outbound/decisions.rs",
+  "src/bootstrap/decision.rs",
+  "src/adapters/inbound/cli/decide.rs",
+  "skills/execution-map/",
+  "sandboxes/lping/config.toml",
+  "sandboxes/jev-exec/config.toml",
+]
+
+[pages.observations]
+sources = [
+  "src/domain/observation.rs",
+  "src/application/observe.rs",
+  "src/adapters/outbound/observations.rs",
+  "src/adapters/outbound/history_sqlite.rs",
+  "src/config/recorder.rs",
+  "src/ports/observation.rs",
+  "src/ports/history.rs",
+  "src/adapters/inbound/cli/history.rs",
+  "src/application/chat/tool_loop.rs",
+  "src/domain/token.rs",
+]
+
+[pages.runtime]
+sources = [
+  "src/application/runtime/",
+  "src/adapters/inbound/run.rs",
+  "src/bootstrap/runtime.rs",
+  "src/config/runtime.rs",
+  "src/config/feeds.rs",
+  "src/config/rate_limits.rs",
+  "src/adapters/outbound/runtime_store.rs",
+  "src/adapters/outbound/rate_limit.rs",
+  "src/adapters/outbound/clock.rs",
+  "src/domain/runtime.rs",
+  "src/domain/backoff.rs",
+  "src/domain/calendar.rs",
+  "src/domain/tz.rs",
+  "src/domain/schedule.rs",
+  "src/ports/runtime.rs",
+  "src/ports/clock.rs",
+  "src/adapters/outbound/http_class.rs",
+  "src/config/xmarket.rs",
+]
+
+[pages.metrics]
+sources = [
+  "src/domain/metrics.rs",
+  "src/application/metrics.rs",
+  "src/domain/usage.rs",
+  "src/adapters/outbound/subprocess_runner.rs",
+  "src/adapters/outbound/memory/embedder.rs",
+  "src/adapters/inbound/tui/mod.rs",
+  "src/bootstrap/orchestrator.rs",
+]
+
+# ── Trading desk ──────────────────────────────────────────────────────────
+
+[pages.solana]
+sources = [
+  "src/adapters/outbound/tools/solana/",
+  "src/adapters/outbound/solana/",
+  "src/domain/solana.rs",
+  "src/domain/solana_tx.rs",
+  "src/domain/solana_write.rs",
+  "src/domain/lp/",
+  "src/domain/market.rs",
+  "src/config/solana.rs",
+  "src/ports/solana_signer.rs",
+  "src/ports/solana_writes.rs",
+  "src/config/hardening.rs",
+  "src/domain/scope.rs",
+  "sandboxes/lping/config.toml",
+]
+
+[pages.paper-desk]
+sources = [
+  "src/domain/xm/",
+  "src/domain/hl/",
+  "src/domain/book.rs",
+  "src/application/paper.rs",
+  "src/adapters/outbound/paper_store.rs",
+  "src/adapters/outbound/tools/xm/",
+  "src/adapters/outbound/tools/hyperliquid/",
+  "src/adapters/outbound/hyperliquid/",
+  "src/config/risk.rs",
+  "src/config/xmarket.rs",
+  "src/adapters/inbound/cli/risk.rs",
+  "src/ports/paper.rs",
+  "src/ports/book.rs",
+]
+
+# ── Research ──────────────────────────────────────────────────────────────
+
+[pages.history]
+sources = [
+  "src/domain/marketdata.rs",
+  "src/domain/marketdata_decode.rs",
+  "src/domain/marketdata_stats.rs",
+  "src/domain/canonical.rs",
+  "src/ports/market_data.rs",
+  "src/adapters/outbound/market_data.rs",
+  "src/adapters/outbound/backfill/",
+  "src/adapters/inbound/cli/history.rs",
+  "src/adapters/outbound/tools/xlab/history.rs",
+]
+
+[pages.backtest]
+sources = [
+  "src/domain/backtest/",
+  "src/application/backtest/",
+  "src/adapters/outbound/decision_cache.rs",
+  "src/config/backtest.rs",
+  "src/adapters/inbound/cli/backtest.rs",
+  "src/adapters/outbound/tools/xlab/",
+  "src/bootstrap/decision.rs",
+]
+
+# ── Operate ───────────────────────────────────────────────────────────────
+
+[pages.ops]
+sources = [
+  "src/adapters/inbound/cli/doctor.rs",
+  "src/adapters/inbound/cli/mod.rs",
+  "src/adapters/outbound/prune.rs",
+  "src/domain/engine_smoke.rs",
+  "src/domain/runtime.rs",
+  "src/config/runtime.rs",
+  "Dockerfile",
+  "docker-compose.yml",
+  "docker-compose.tor.yml",
+  "Makefile",
+  "deploy/",
+]

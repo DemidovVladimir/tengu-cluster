@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Subagent steps · Tengu</title>
+<meta name="description" content="How each plan step runs as a tengu run-agent child process: the IPC request, the agent block, workspace and scopes, the tool loop until compress_and_store, retries and replans.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: plan shapes, retry timeline, compose check */
+  svg .t-mono-b { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .seg label { display: block; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+  .seg label:last-child span { border-right: 0; }
+  .seg input:checked + span { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .waves { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+  .wave { display: grid; gap: 6px; align-content: start; border: 1px dashed var(--line); border-radius: 8px; padding: 8px; min-width: 96px; background: var(--sunk); }
+  .wave > small { font-family: var(--font-mono); font-size: 0.7rem; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+  .wave .st { font-family: var(--font-mono); font-size: 0.82rem; border: 1px solid var(--hands); background: var(--hands-soft); color: var(--ink); border-radius: 6px; padding: 4px 8px; animation: pop-in .4s ease both; }
+  .wave .st.never { border-color: var(--bad); background: var(--heart-soft); border-style: dashed; }
+  .wave .st.leaf { box-shadow: 0 0 0 2px var(--accent); }
+  .wave-arrow { align-self: center; color: var(--faint); font-family: var(--font-mono); }
+  @keyframes pop-in { from { opacity: .35; transform: translateY(4px) } to { opacity: 1; transform: none } }
+  .mini { font-size: 0.76rem; max-height: 260px; }
+  .two-col { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+  .stats { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--sunk); display: grid; gap: 2px; }
+  .stat b { font-family: var(--font-mono); font-size: 1.25rem; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .stat span { font-size: 0.8rem; color: var(--muted); }
+  .runs { display: grid; gap: 6px; }
+  .run { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px; align-items: center; }
+  .run > small { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); }
+  .bar-row { display: flex; gap: 3px; min-width: 0; }
+  .bar-row span { display: grid; place-items: center; height: 26px; border-radius: 5px; font-family: var(--font-mono); font-size: 0.68rem; white-space: nowrap; overflow: hidden; min-width: 30px; animation: pop-in .35s ease both; }
+  .bar-row .try { background: var(--heart-soft); border: 1px solid var(--bad); color: var(--bad); }
+  .bar-row .wait { background: var(--sunk); border: 1px dashed var(--line); color: var(--muted); flex: 0 0 auto; }
+  .bar-row .plan { background: var(--heart-soft); border: 1px solid var(--heart); color: var(--heart); flex: 0 0 auto; }
+  .bar-row .end { background: var(--data-soft); border: 1px solid var(--data); color: var(--ink); flex: 0 0 auto; padding: 0 8px; }
+  .bar-row em { font-style: normal; }
+  @media (max-width: 640px) { .bar-row em { display: none; } .run { grid-template-columns: 58px minmax(0, 1fr); } }
+  .checks-inline { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.85rem; color: var(--muted); }
+  .checks-inline label { display: flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · one process per step</div>
+  <h1>Subagent steps</h1>
+  <p class="lede">Every plan step is a fresh <code>tengu run-agent</code> child. It reloads the same sandbox, takes one <code>[agents.&lt;name&gt;]</code> block, works with its own tools until <code>compress_and_store</code>, prints one JSON line and exits.</p>
+  <ul class="facts">
+    <li>≤ <b>70</b> tool rounds per step</li>
+    <li><b>600 s</b> per step, then killed</li>
+    <li><b>3</b> attempts, waits <b>1 s</b>, <b>3 s</b></li>
+    <li>≤ <b>2</b> replans</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> LLM</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> memory</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks</li>
+    <li><span class="chip data">data</span> config, JSON</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One step, parent and child</span>
+    <h2 id="s-flow">The life of a step</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 500" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A plan step: the executor hands it to SubprocessRunner, which checks the agent, spawns tengu run-agent; the child checks the IPC guard, reloads the sandbox and agent block, sets workspace and scopes, builds prompt and tools, loops model and tools until compress_and_store, prints AgentIpcOutput; the parent retries failures.</title>
+        <rect class="zone" x="8" y="8" width="286" height="484" rx="12"/>
+        <text x="20" y="482" class="zone-label">tengu chat · parent</text>
+        <rect class="zone" x="312" y="8" width="540" height="484" rx="12"/>
+        <text x="324" y="482" class="zone-label">tengu run-agent · child</text>
+
+        <!-- edges: parent -->
+        <path class="e" id="p-exec-gate" d="M149 86 L149 106" data-at="1"/>
+        <path class="e" id="p-gate-run" d="M149 192 L149 224" data-at="3"/>
+        <path class="e bad" id="p-gate-bad" d="M83 150 C40 150 40 250 40 380" data-at="2"/>
+        <path class="e" id="p-run-spawn" d="M274 240 C302 240 302 58 328 58" data-at="3"/>
+        <path class="e bad" id="p-run-retry" d="M200 290 L200 380" data-at="10"/>
+        <path class="e dash" id="p-retry-run" d="M110 382 L110 292" data-at="10"/>
+        <path class="e" id="p-out-run" d="M330 428 C300 428 298 276 276 276" data-at="10"/>
+        <!-- edges: child -->
+        <path class="e" id="p-guard-cfg" d="M500 58 L518 58" data-at="4"/>
+        <path class="e" id="p-cfg-agent" d="M690 58 L708 58" data-at="4"/>
+        <path class="e" id="p-agent-ws" d="M777 86 L777 128" data-at="5"/>
+        <path class="e" id="p-ws-scope" d="M710 158 L692 158" data-at="5"/>
+        <path class="e" id="p-scope-prompt" d="M520 158 L502 158" data-at="6"/>
+        <path class="e" id="p-prompt-llm" d="M400 186 L400 238" data-at="6"/>
+        <path class="e flow" id="p-llm-tool" d="M480 266 L558 266" data-at="7"/>
+        <path class="e flow" id="p-tool-llm" d="M560 296 L482 296" data-at="7"/>
+        <path class="e" id="p-llm-cas" d="M470 240 C470 214 780 214 780 248" data-at="8"/>
+        <path class="e dash" id="p-cas-mem" d="M780 310 L780 418" data-at="8"/>
+        <path class="e" id="p-cas-out" d="M724 310 C724 360 660 360 660 398" data-at="9"/>
+        <path class="e" id="p-llm-out" d="M405 320 L405 398" data-at="9"/>
+
+        <!-- parent nodes -->
+        <g class="n" data-at="1,10">
+          <rect x="24" y="30" width="250" height="56" rx="8"/>
+          <text x="149" y="54" text-anchor="middle" class="t-title">DAG executor</text>
+          <text x="149" y="73" text-anchor="middle" class="t-small">goal + upstream outputs</text>
+        </g>
+        <g class="n guard" data-at="2">
+          <polygon points="149,108 215,150 149,192 83,150"/>
+          <text x="149" y="149" text-anchor="middle" class="t-title">described?</text>
+          <text x="149" y="166" text-anchor="middle" class="t-small">agent block</text>
+        </g>
+        <g class="n" data-at="3,10">
+          <rect x="60" y="226" width="214" height="64" rx="8"/>
+          <text x="167" y="252" text-anchor="middle" class="t-title">SubprocessRunner</text>
+          <text x="167" y="271" text-anchor="middle" class="t-small">spawn · wait ≤ timeout</text>
+        </g>
+        <g class="n guard" data-at="2,10">
+          <rect x="24" y="382" width="250" height="60" rx="8"/>
+          <text x="149" y="406" text-anchor="middle" class="t-title">Retry policy</text>
+          <text x="149" y="425" text-anchor="middle" class="t-small">3 tries · waits 1 s, 3 s</text>
+        </g>
+
+        <!-- child nodes, row 1 -->
+        <g class="n guard" data-at="3-4">
+          <rect x="330" y="30" width="170" height="56" rx="8"/>
+          <text x="415" y="54" text-anchor="middle" class="t-title">IPC guard</text>
+          <text x="415" y="73" text-anchor="middle" class="t-small">TENGU_AGENT_IPC=1</text>
+        </g>
+        <g class="n data" data-at="4">
+          <rect x="520" y="30" width="170" height="56" rx="8"/>
+          <text x="605" y="54" text-anchor="middle" class="t-title">Same sandbox</text>
+          <text x="605" y="73" text-anchor="middle" class="t-small">sandbox_config → toml</text>
+        </g>
+        <g class="n data" data-at="4-5">
+          <rect x="710" y="30" width="135" height="56" rx="8"/>
+          <text x="777" y="54" text-anchor="middle" class="t-title t-mono">[agents.&lt;a&gt;]</text>
+          <text x="777" y="73" text-anchor="middle" class="t-small">description again</text>
+        </g>
+        <!-- row 2 -->
+        <g class="n data" data-at="5">
+          <rect x="710" y="130" width="135" height="56" rx="8"/>
+          <text x="777" y="154" text-anchor="middle" class="t-title">Workspace</text>
+          <text x="777" y="173" text-anchor="middle" class="t-small">agent's or temp dir</text>
+        </g>
+        <g class="n guard" data-at="5-6">
+          <rect x="520" y="130" width="170" height="56" rx="8"/>
+          <text x="605" y="154" text-anchor="middle" class="t-title">Scopes</text>
+          <text x="605" y="173" text-anchor="middle" class="t-small">+ workspace root</text>
+        </g>
+        <g class="n heart" data-at="6">
+          <rect x="330" y="130" width="170" height="56" rx="8"/>
+          <text x="415" y="154" text-anchor="middle" class="t-title">Prompt + tools</text>
+          <text x="415" y="173" text-anchor="middle" class="t-small">+ compress_and_store</text>
+        </g>
+        <!-- row 3: the loop -->
+        <g class="n heart" data-at="6-9">
+          <rect x="330" y="240" width="150" height="80" rx="10"/>
+          <text x="405" y="262" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="405" y="284" text-anchor="middle" class="t-title">Agent LLM</text>
+          <text x="405" y="304" text-anchor="middle" class="t-small">≤ max_tool_rounds</text>
+        </g>
+        <g class="n hands" data-at="7">
+          <rect x="560" y="240" width="140" height="80" rx="10"/>
+          <text x="630" y="262" text-anchor="middle" class="t-kanji k">手</text>
+          <text x="630" y="284" text-anchor="middle" class="t-title">Tools</text>
+          <text x="630" y="304" text-anchor="middle" class="t-small">sanitized · capped</text>
+        </g>
+        <g class="n hands" data-at="8-9">
+          <rect x="712" y="250" width="135" height="60" rx="8"/>
+          <text x="779" y="275" text-anchor="middle" class="t-mono-b">compress_and_store</text>
+          <text x="779" y="295" text-anchor="middle" class="t-small">summary · stop</text>
+        </g>
+        <!-- row 4 -->
+        <g class="n data" data-at="9-10">
+          <rect x="330" y="400" width="360" height="56" rx="8"/>
+          <text x="510" y="423" text-anchor="middle" class="t-title t-mono">AgentIpcOutput</text>
+          <text x="510" y="442" text-anchor="middle" class="t-small">one JSON line on stdout</text>
+        </g>
+        <g class="n brain" data-at="8">
+          <rect x="712" y="420" width="135" height="56" rx="8"/>
+          <text x="779" y="443" text-anchor="middle" class="t-title t-mono">agentic_memory</text>
+          <text x="779" y="462" text-anchor="middle" class="t-small">postgres_memory</text>
+        </g>
+
+        <!-- per-step badges (one slot) -->
+        <g class="pop badge" data-at="1"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">goal + &lt;step-input&gt; blocks</text></g>
+        <g class="pop badge" data-at="2"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">no description → fails, no spawn</text></g>
+        <g class="pop badge" data-at="3"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">JSON on stdin · stderr to the log</text></g>
+        <g class="pop badge" data-at="4"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">same file as the parent</text></g>
+        <g class="pop badge" data-at="5"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">deny-all scopes stay deny</text></g>
+        <g class="pop badge" data-at="6"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">identity + skills in</text></g>
+        <g class="pop badge" data-at="7"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">old results cut to 200 chars</text></g>
+        <g class="pop badge" data-at="8"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">handled by the loop itself</text></g>
+        <g class="pop badge" data-at="9"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">status ok or failed</text></g>
+        <g class="pop badge" data-at="10"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">error → retry → replan</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok" r="6" data-path="p-exec-gate" data-at="1" data-dur="800"/>
+        <circle class="tok bad" r="6" data-path="p-gate-bad" data-at="2"/>
+        <circle class="tok" r="6" data-path="p-gate-run" data-at="3" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-run-spawn" data-at="3" data-delay="700"/>
+        <circle class="tok" r="5" data-path="p-guard-cfg" data-at="4" data-dur="600"/>
+        <circle class="tok" r="5" data-path="p-cfg-agent" data-at="4" data-delay="700" data-dur="600"/>
+        <circle class="tok" r="5" data-path="p-agent-ws" data-at="5" data-dur="700"/>
+        <circle class="tok" r="5" data-path="p-ws-scope" data-at="5" data-delay="700" data-dur="600"/>
+        <circle class="tok" r="5" data-path="p-scope-prompt" data-at="6" data-dur="600"/>
+        <circle class="tok heart" r="6" data-path="p-prompt-llm" data-at="6" data-delay="600" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-llm-tool" data-at="7" data-dur="800"/>
+        <circle class="tok hands" r="6" data-path="p-tool-llm" data-at="7" data-delay="900" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-llm-cas" data-at="8"/>
+        <circle class="tok brain" r="6" data-path="p-cas-mem" data-at="8" data-delay="1200" data-dur="900"/>
+        <circle class="tok hands" r="6" data-path="p-cas-out" data-at="9" data-dur="900"/>
+        <circle class="tok heart" r="5" data-path="p-llm-out" data-at="9" data-delay="400" data-dur="900"/>
+        <circle class="tok" r="6" data-path="p-out-run" data-at="10" data-dur="1100"/>
+        <circle class="tok bad" r="6" data-path="p-run-retry" data-at="10" data-delay="1100" data-dur="700"/>
+        <circle class="tok" r="5" data-path="p-retry-run" data-at="10" data-delay="1900" data-dur="700"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;step-input from="s1"&gt;</code> block per finished dependency.</li>
+        <li>The runner looks up <code>[agents.&lt;step.agent&gt;]</code> (or <code>compose.base_agent</code>). Missing, or no <code>description</code>: the step fails before any process starts.</li>
+        <li>It starts the same binary as <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and the resolved egress policy, writes the JSON request, starts the step timer.</li>
+        <li>The child checks the guard, reloads <code>sandboxes/&lt;name&gt;/config.toml</code> from <code>sandbox_config</code>, and checks the <code>description</code> again. A <code>compose</code> applies here.</li>
+        <li>Workspace: the agent's <code>workspace</code>, else a fresh <code>tengu-step-*</code> temp dir. Every inherited scope gains that root, except a deny-all scope.</li>
+        <li>Prompt: a fixed base, the agent's identity (name, role, instructions), its skill bodies, the plan, a "call <code>compress_and_store</code>" suffix. Tools: the agent's list plus <code>compress_and_store</code>.</li>
+        <li>Loop: model turn, tool calls through the redacting executor, capped results; older rounds shrink to 200 chars. At most the agent's <code>max_tool_rounds</code> (default 70).</li>
+        <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary, writes it to <code>agentic_memory</code> (with <code>postgres_memory</code>) and stops.</li>
+        <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code> is the last model text, else the summary. A temp workspace is deleted after printing.</li>
+        <li>The parent parses it. Ok: metrics re-emitted, output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-shapes">
+  <div class="sec-head">
+    <span class="kicker">Try it: pick a plan shape</span>
+    <h2 id="s-shapes">How steps are scheduled</h2>
+    <p>A step starts once all its <code>depends_on</code> are done. The reply is the output of the step nothing depends on; parallel leaves are joined, one section each.</p>
+  </div>
+  <div class="widget">
+    <div class="seg" role="radiogroup" aria-label="Plan shape">
+      <label><input type="radio" name="shape" value="one" checked><span>one step</span></label>
+      <label><input type="radio" name="shape" value="chain"><span>chain</span></label>
+      <label><input type="radio" name="shape" value="fanin"><span>fan-in</span></label>
+      <label><input type="radio" name="shape" value="noleaf"><span>two parallel, no join</span></label>
+      <label><input type="radio" name="shape" value="ghost"><span>missing dependency</span></label>
+    </div>
+    <div class="waves" id="waves" aria-live="polite"></div>
+    <span class="verdict ok" id="shape-verdict"></span>
+    <div class="two-col">
+      <div class="card data"><h3>Plan (example)</h3><pre class="mini" id="shape-json"></pre></div>
+      <div class="card hands"><h3>Goal the last step receives</h3><pre class="mini" id="shape-goal"></pre></div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-retry">
+  <div class="sec-head">
+    <span class="kicker">Try it: worst case for one failing step</span>
+    <h2 id="s-retry">Retries, then replans</h2>
+    <p>Each replan restarts the new plan from scratch. Assume the planner keeps returning the same failing step.</p>
+  </div>
+  <div class="widget" id="retry">
+    <div class="widget-row">
+      <label for="att"><code>max_attempts_per_step</code> <span class="readout" id="att-out">3</span><input type="range" id="att" min="1" max="5" value="3"></label>
+      <label for="rep"><code>max_replans</code> <span class="readout" id="rep-out">2</span><input type="range" id="rep" min="0" max="4" value="2"></label>
+      <label for="tmo"><code>step_timeout_secs</code> <span class="readout" id="tmo-out">600</span><input type="range" id="tmo" min="60" max="1800" step="60" value="600"></label>
+    </div>
+    <div class="seg" role="radiogroup" aria-label="How the step fails">
+      <label><input type="radio" name="how" value="timeout" checked><span>every attempt times out</span></label>
+      <label><input type="radio" name="how" value="ghost"><span>agent name does not exist</span></label>
+    </div>
+    <div class="runs" id="runs"></div>
+    <div class="stats">
+      <div class="stat"><b id="r-spawn">9</b><span>child processes</span></div>
+      <div class="stat"><b id="r-wait">12 s</b><span>spent waiting between tries</span></div>
+      <div class="stat"><b id="r-wall">1 h 30 m</b><span>worst wall clock (planner calls not counted)</span></div>
+      <div class="stat"><b id="r-plan">3</b><span>planner calls</span></div>
+    </div>
+    <p class="note" id="r-final"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-compose">
+  <div class="sec-head">
+    <span class="kicker">Try it: a composed step</span>
+    <h2 id="s-compose">compose replaces, hardening only narrows</h2>
+    <p>Example base agent <code>researcher</code> with <code>tools = ["read_file", "http_request"]</code> and <code>skills = ["web-research"]</code>; four catalog tools shown. Hardened = a <code>[risk]</code> section or a Solana signer.</p>
+  </div>
+  <div class="widget">
+    <div class="checks-inline">
+      <label><input type="checkbox" id="hard"> hardened sandbox</label>
+    </div>
+    <div class="checks-inline" role="group" aria-label="compose.tools">
+      <b style="color:var(--ink);font-size:.82rem">compose.tools</b>
+      <label><input type="checkbox" class="ct" value="read_file" checked> <code>read_file</code></label>
+      <label><input type="checkbox" class="ct" value="list_directory"> <code>list_directory</code></label>
+      <label><input type="checkbox" class="ct" value="http_request" checked> <code>http_request</code></label>
+      <label><input type="checkbox" class="ct" value="write_file"> <code>write_file</code></label>
+    </div>
+    <div class="checks-inline" role="group" aria-label="compose.skills">
+      <b style="color:var(--ink);font-size:.82rem">compose.skills</b>
+      <label><input type="checkbox" class="cs" value="web-research" checked> <code>web-research</code></label>
+      <label><input type="checkbox" class="cs" value="summarizer"> <code>summarizer</code></label>
+    </div>
+    <span class="verdict ok" id="compose-verdict" aria-live="polite"></span>
+    <pre class="mini" id="compose-out"></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-ipc">
+  <div class="sec-head">
+    <span class="kicker">The wire</span>
+    <h2 id="s-ipc">Request, reply, prompt</h2>
+    <p>Field names are real; values are examples. The prompt text is copied from <code>run_agent.rs</code>.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-in" aria-selected="true">stdin</button>
+      <button type="button" aria-controls="tab-ok">stdout · ok</button>
+      <button type="button" aria-controls="tab-fail">stdout · failed</button>
+      <button type="button" aria-controls="tab-prompt">system prompt</button>
+    </div>
+    <div class="tabpanel" id="tab-in"><pre>{
+  <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;step-input from=\"s1\"&gt;\n…\n&lt;/step-input&gt;\n\n"</span>,
+  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set</span>
+  <span class="k">"model"</span>: <span class="s">""</span>,  <span class="k">"tools"</span>: [],  <span class="k">"skills"</span>: [],   <span class="c"># sent empty; the child reads its agent block</span>
+  <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (20 if the field is missing)</span>
+  <span class="k">"sandbox"</span>: <span class="n">null</span>,
+  <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,         <span class="c"># shared with the planner</span>
+  <span class="k">"step_id"</span>: <span class="s">"s2"</span>,
+  <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,          <span class="c"># the child loads sandboxes/lping/config.toml</span>
+  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n…"</span>   <span class="c"># this session's plan</span>
+}</pre></div>
+    <div class="tabpanel" id="tab-ok" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"ok"</span>,
+  <span class="k">"output"</span>: <span class="s">"&lt;last model text, else the summary&gt;"</span>,
+  <span class="k">"summary"</span>: <span class="s">"&lt;compress_and_store text, else the last model text&gt;"</span>,
+  <span class="k">"metrics"</span>: [ { <span class="k">"kind"</span>: <span class="s">"subagent"</span>, <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>, <span class="k">"step_id"</span>: <span class="s">"s2"</span>, <span class="c">… one per engine turn</span> } ],
+  <span class="k">"tools"</span>: [ { <span class="k">"name"</span>: <span class="s">"sol_price"</span>, <span class="k">"ok"</span>: <span class="n">true</span> },
+             { <span class="k">"name"</span>: <span class="s">"compress_and_store"</span>, <span class="k">"ok"</span>: <span class="n">true</span> } ] }</pre></div>
+    <div class="tabpanel" id="tab-fail" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"failed"</span>,
+  <span class="k">"error"</span>: <span class="s">"subagent 'crypto_researcher' produced no output and did not call compress_and_store"</span>,
+  <span class="k">"output"</span>: <span class="s">""</span> }
+
+<span class="c"># the parent turns it into the step error:</span>
+<span class="h">subagent failed: subagent 'crypto_researcher' produced no output and did not call compress_and_store</span>
+<span class="h">partial output:</span></pre></div>
+    <div class="tabpanel" id="tab-prompt" hidden><pre>You are a focused subagent run as a single-shot process. Read the user's goal, do exactly what is asked, and respond concisely with the result. Do not ask follow-up questions — make reasonable assumptions and answer the user directly.
+
+---
+
+You are <span class="c">&lt;identity.name&gt;</span>.
+
+Your role: <span class="c">&lt;role&gt;</span>.
+
+<span class="c">&lt;identity.instructions&gt;</span>
+
+---
+
+<span class="c">&lt;body of each skill in skill_packages, frontmatter stripped&gt;</span>
+
+---
+
+## Current execution plan (loaded from IPC `plan_state`)
+
+<span class="c">&lt;the rendered plan&gt;</span>
+
+---
+
+When you have completed your task, your FINAL action MUST be to call the `compress_and_store` tool with a concise `summary` of what you accomplished. Failure to call it will be treated as task failure.</pre></div>
+  </div>
+  <p class="note">The identity block is <code>[agents.&lt;a&gt;.identity] name</code>, the agent's <code>role</code> and its <code>instructions</code> (cut to <code>max_file_tokens</code>), as in chat. It is left out when none is set.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Six endings</span>
+    <h2 id="s-out">How a step ends</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>compress_and_store called</b>The canonical path. Its summary is the step summary.</span></li>
+    <li><span class="chip warn">ok</span><span><b>text, no compress_and_store</b>Still ok, with a warn line. The text becomes the summary (stored with <code>postgres_memory</code>).</span></li>
+    <li><span class="chip bad">failed</span><span><b>no text, no call</b>Status <code>failed</code>; the parent retries.</span></li>
+    <li><span class="chip bad">exit</span><span><b>run-agent exited with non-zero status</b>Before or during the loop: guard, bad JSON, unknown agent, widening compose, engine error.</span></li>
+    <li><span class="chip bad">time</span><span><b>run-agent timed out after 600s</b>The child is killed; the parent retries.</span></li>
+    <li><span class="chip data">cap</span><span><b>max turns reached</b>The loop just ends: ok if the model wrote any text, else failed.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Routable agents only.</b> A block without a <code>description</code> never runs as a step: the runner refuses it, and so does the child.</span></li>
+    <li><span><b>No accidental children.</b> <code>tengu run-agent</code> exits with an error unless <code>TENGU_AGENT_IPC=1</code>.</span></li>
+    <li><span><b>Bounded in time.</b> After <code>step_timeout_secs</code> the parent stops waiting and the child process is killed.</span></li>
+    <li><span><b>A deny stays a deny.</b> The workspace root is added to every inherited scope except one with every field empty.</span></li>
+    <li><span><b>Hardened compose only narrows.</b> In a <code>[risk]</code> or signer sandbox an extra tool or skill fails the step before the engine is built.</span></li>
+    <li><span><b>Redacted results.</b> Every tool result and tool error passes the secret redactor before the model sees it.</span></li>
+    <li><span><b>Same network rules.</b> The child installs the parent's resolved egress policy; an invalid one aborts it.</span></li>
+    <li><span><b>One log.</b> The parent reads the child's stderr into its own log (target <code>tengu::run_agent</code>); a failed exit carries its last 40 lines.</span></li>
+    <li><span><b>No orphans.</b> A replan, a cancel or a panic aborts every step still in flight; its child is killed.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Run one step by hand</h2>
+    <p>From the repo root. <code>run-agent</code> is internal, but the guard is the only thing stopping you. Needs <code>OPENROUTER_API_KEY</code>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"goal":"What is the SOL price?","agent_name":"crypto_researcher","model":"","session_id":"try-1","step_id":"s1","sandbox_config":"lping"}' &gt; step.json</span>
+<span class="ln cmd"><span class="p">$ </span>tengu run-agent &lt; step.json</span>
+<span class="ln er">Error: `tengu run-agent` is a subprocess mode not meant for direct invocation. Set TENGU_AGENT_IPC=1 …</span>
+<span class="ln cmd"><span class="p">$ </span>TENGU_AGENT_IPC=1 tengu run-agent &lt; step.json</span>
+<span class="ln o"># logs on stderr; max_turns is 20 here (field missing)</span>
+<span class="ln">{"status":"ok","output":"…","summary":"…",<span class="hl">"tools":[{"name":"sol_price","ok":true},{"name":"compress_and_store","ok":true}]</span>,…}</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --test run_agent_ipc</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output</td></tr>
+        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, <code>&lt;step-input&gt;</code>, leaves, aborts</td></tr>
+        <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
+        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans, plan per session</td></tr>
+        <tr><td><code>src/ports/orchestration.rs</code></td><td><code>WorkerHandle</code></td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td>workspace, scope grant, <code>compose_agent</code>, the step's tools</td></tr>
+        <tr><td><code>src/application/chat/tool_loop.rs</code></td><td>one engine turn, result caps, compaction</td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>[orchestrator]</code> and <code>limits</code> defaults</td></tr>
+        <tr><td><code>tests/run_agent_ipc.rs</code></td><td>the child's IPC contract</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: plan shapes, retry worst case, compose check */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function radio(name) { return document.querySelector('input[name="' + name + '"]:checked').value; }
+
+  /* ---- plan shapes: same rules as DagExecutor::run ---- */
+  var SHAPES = {
+    one:    [["s1", "Get the SOL price.", []]],
+    chain:  [["s1", "Fetch pools.", []], ["s2", "Rank pools by fee/TVL.", ["s1"]], ["s3", "Write the summary.", ["s2"]]],
+    fanin:  [["s1", "Price from source A.", []], ["s2", "Price from source B.", []], ["s3", "Compare the two answers.", ["s1", "s2"]]],
+    noleaf: [["s1", "Price from source A.", []], ["s2", "Price from source B.", []]],
+    ghost:  [["s1", "Price from source A.", []], ["s2", "Compare with s9.", ["s9"]]]
+  };
+  function schedule(steps) {
+    var done = {}, waves = [], guard = 0;
+    while (guard++ < 10) {
+      var ready = steps.filter(function (s) { return !done[s[0]] && s[2].every(function (d) { return done[d]; }); });
+      if (!ready.length) break;
+      waves.push(ready.map(function (s) { return s[0]; }));
+      ready.forEach(function (s) { done[s[0]] = true; });
+    }
+    var dependedOn = {};
+    steps.forEach(function (s) { s[2].forEach(function (d) { dependedOn[d] = true; }); });
+    var leaves = steps.filter(function (s) { return !dependedOn[s[0]]; }).map(function (s) { return s[0]; });
+    var never = steps.filter(function (s) { return !done[s[0]]; }).map(function (s) { return s[0]; });
+    return { waves: waves, leaves: leaves, never: never };
+  }
+  function renderShape() {
+    var steps = SHAPES[radio("shape")], r = schedule(steps), box = $("waves");
+    box.innerHTML = "";
+    r.waves.forEach(function (w, i) {
+      if (i) { var a = document.createElement("span"); a.className = "wave-arrow"; a.textContent = "→"; box.appendChild(a); }
+      var d = document.createElement("div"); d.className = "wave";
+      d.innerHTML = "<small>wave " + (i + 1) + (w.length > 1 ? " · parallel" : "") + "</small>" + w.map(function (id, j) {
+        var leaf = !r.never.length && r.leaves.indexOf(id) >= 0;
+        return '<span class="st' + (leaf ? " leaf" : "") + '" style="animation-delay:' + (i * 0.3 + j * 0.1) + 's">' + id + "</span>";
+      }).join("");
+      box.appendChild(d);
+    });
+    if (r.never.length) {
+      var a2 = document.createElement("span"); a2.className = "wave-arrow"; a2.textContent = "·"; box.appendChild(a2);
+      var n = document.createElement("div"); n.className = "wave";
+      n.innerHTML = "<small>never ready</small>" + r.never.map(function (id) { return '<span class="st never">' + id + "</span>"; }).join("");
+      box.appendChild(n);
+    }
+    var v = $("shape-verdict"), kids = r.waves.reduce(function (a, w) { return a + w.length; }, 0);
+    var ran = kids + " child process" + (kids === 1 ? "" : "es");
+    if (r.never.length) {
+      v.className = "verdict bad";
+      v.textContent = ran + ", then NeedsReplan: step " + r.never[0] + " never became ready";
+    } else if (r.leaves.length === 1) {
+      v.className = "verdict ok";
+      v.textContent = ran + " · reply = " + r.leaves[0] + "'s output";
+    } else {
+      v.className = "verdict ok";
+      v.textContent = ran + " · reply = " + r.leaves.map(function (l) { return "### " + l; }).join(" + ") + ", joined in plan order";
+    }
+    var plan = { kind: "plan", steps: steps.map(function (s) { return { id: s[0], agent: "crypto_researcher", goal: s[1], depends_on: s[2] }; }) };
+    $("shape-json").textContent = JSON.stringify(plan, null, 2);
+    var last = steps[steps.length - 1], goal = last[1];
+    var got = last[2].filter(function (d) { return steps.some(function (s) { return s[0] === d; }); });
+    if (last[2].length) {
+      goal += "\n\nUpstream context:\n" + got.map(function (d) { return '<step-input from="' + d + '">\n(' + d + "'s output)\n</step-input>\n\n"; }).join("");
+      if (!got.length) goal = "(never runs: " + last[2].join(", ") + " is not a step)";
+    }
+    $("shape-goal").textContent = goal;
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="shape"]'), function (x) { x.addEventListener("change", renderShape); });
+  renderShape();
+
+  /* ---- retry worst case: RetryPolicy waits 1 s, 3 s, then 9 s ---- */
+  var BACKOFF = [1, 3, 9];
+  function fmt(s) {
+    if (s < 60) return s + " s";
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    return (h ? h + " h " : "") + (m ? m + " m" : "") + (r && !h ? " " + r + " s" : "");
+  }
+  function renderRetry() {
+    var att = +$("att").value, rep = +$("rep").value, tmo = +$("tmo").value, how = radio("how");
+    $("att-out").textContent = att; $("rep-out").textContent = rep; $("tmo-out").textContent = tmo;
+    var runs = rep + 1, waits = 0;
+    for (var k = 1; k < att; k++) waits += BACKOFF[k - 1] !== undefined ? BACKOFF[k - 1] : 9;
+    var per = (how === "timeout" ? att * tmo : 0) + waits;
+    $("r-spawn").textContent = how === "timeout" ? att * runs : 0;
+    $("r-wait").textContent = fmt(waits * runs);
+    $("r-wall").textContent = fmt(per * runs).trim();
+    $("r-plan").textContent = runs;
+    var box = $("runs"); box.innerHTML = "";
+    for (var r = 0; r < runs; r++) {
+      var row = document.createElement("div"); row.className = "run";
+      var cells = [];
+      if (r) cells.push('<span class="plan" title="planner replan call">↻<em> replan</em></span>');
+      for (var a = 1; a <= att; a++) {
+        cells.push('<span class="try" style="flex:' + (how === "timeout" ? 4 : 0) + ' 1 30px">' + (how === "timeout" ? "✗" + a + "<em> · " + tmo + " s</em>" : "✗" + a) + "</span>");
+        if (a < att) cells.push('<span class="wait">' + (BACKOFF[a - 1] !== undefined ? BACKOFF[a - 1] : 9) + " s</span>");
+      }
+      if (r === runs - 1) cells.push('<span class="end">give up</span>');
+      row.innerHTML = "<small>" + (r ? "replan " + r : "first plan") + '</small><div class="bar-row">' + cells.join("") + "</div>";
+      box.appendChild(row);
+    }
+    $("r-final").innerHTML = "Reply: <code>Unable to complete the request after " + rep + " replans. Last error: " +
+      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : "no agent 'ghost' in the active config …") + "</code>" +
+      (how === "ghost" ? " The runner fails before spawning, so only the waits cost time." : "");
+  }
+  ["att", "rep", "tmo"].forEach(function (id) { $(id).addEventListener("input", renderRetry); });
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="how"]'), function (x) { x.addEventListener("change", renderRetry); });
+  renderRetry();
+
+  /* ---- compose check: same rule as bootstrap::tools::compose_agent ---- */
+  var CATALOG = ["read_file", "list_directory", "http_request", "write_file"];
+  var BASE = { tools: ["read_file", "http_request"], skills: ["web-research"] };
+  function picked(cls) { return Array.prototype.slice.call(document.querySelectorAll("." + cls)).filter(function (x) { return x.checked; }).map(function (x) { return x.value; }); }
+  function renderCompose() {
+    var hard = $("hard").checked, tools = picked("ct"), skills = picked("cs");
+    var gets = tools.length ? tools : CATALOG.slice();
+    var v = $("compose-verdict"), out = $("compose-out");
+    var addT = gets.filter(function (t) { return BASE.tools.indexOf(t) < 0; }).sort();
+    var addS = skills.filter(function (s) { return BASE.skills.indexOf(s) < 0; }).sort();
+    var dbg = function (a) { return "[" + a.map(function (x) { return '"' + x + '"'; }).join(", ") + "]"; };
+    if (hard && (addT.length || addS.length)) {
+      v.className = "verdict bad"; v.textContent = "Step refused before the engine is built";
+      out.textContent = "compose would widen agent `researcher` in a hardened sandbox (Solana signer or [risk]): a composed plan step may only narrow its base agent's tools and skills — adds tools " + dbg(addT) + ", skills " + dbg(addS);
+    } else {
+      v.className = "verdict ok"; v.textContent = hard ? "Allowed: it only narrows" : "Allowed: lists replaced wholesale";
+      out.textContent = "tools  = " + dbg(tools) + (tools.length ? "" : "   # empty = every catalog tool: " + dbg(CATALOG)) + "\nskills = " + dbg(skills) + "\n+ compress_and_store (always)";
+    }
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#hard, .ct, .cs"), function (x) { x.addEventListener("change", renderCompose); });
+  renderCompose();
+})();
+</script>
+</body>
+</html>

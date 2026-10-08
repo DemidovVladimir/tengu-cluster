@@ -6,7 +6,7 @@
 //! | Rule | Detail |
 //! |---|---|
 //! | Pairs | any pair simulates; `send` only SOL↔USDC (wSOL / USDC mints) |
-//! | Oracle gate | SOL↔USDC: the order's WORST fill (`otherAmountThreshold`) implies a SOL price within `oracle_gate_bps` of the oracle (`gates::check_swap_oracle_gate`; oracle = `price_oracle/1:<wSOL>` row ≤ 10 s, else Jupiter live). No oracle or no amounts ⇒ refused (the bot skipped the gate) |
+//! | Oracle gate | SOL↔USDC: the order's WORST fill (`otherAmountThreshold`) implies a SOL price within `oracle_gate_bps` of the oracle (`gates::check_swap_oracle_gate`; oracle = `price_oracle/1:<wSOL>` row ≤ 30 s (`plan::ORACLE_MAX_AGE_MS`), else Jupiter live). No oracle or no amounts ⇒ refused (the bot skipped the gate) |
 //! | Fee payer | the wallet must be signature slot 0; a gasless order (Jupiter pays) is refused for `send` |
 //! | Keeper requests | an open Jupiter perps request of the wallet ⇒ `send` refused (its keeper pays into the SOL / USDC accounts) |
 //! | `/execute` | same `signedTransaction` + `requestId` re-POSTed on a transport failure inside Jupiter's 2-minute idempotency window; `Success` = landed at its slot; `-1/-2/-3/-1002/-1003/-1004` = not sent; anything else = unknown ⇒ poll our RPC until the blockhash expires |

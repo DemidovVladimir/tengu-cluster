@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MCP bridge · Tengu</title>
+<meta name="description" content="How a Claude Code agent reaches Tengu's tools: the tengu mcp-bridge stdio server, its env contract, agent resolution, redaction, call ids, compress_and_store and proxied MCP servers.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: the env-contract builder, the schema lint checker, the name strip */
+  .toggles { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  .toggles label { display: flex !important; gap: 8px; align-items: center; font-size: 0.85rem; color: var(--muted); }
+  .cfg { font-size: 0.76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .cfg .add { color: var(--hands); font-weight: 500; }
+  .cfg .dim { color: var(--faint); }
+  .seg-group { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg-group .btn[aria-pressed="true"] { font-weight: 600; }
+  .lint-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+  .lint-grid textarea {
+    width: 100%; min-height: 210px; resize: vertical;
+    font-family: var(--font-mono); font-size: 0.78rem; line-height: 1.5;
+    background: var(--sunk); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  }
+  .lint-grid input[type="text"] {
+    font-family: var(--font-mono); font-size: 0.82rem; background: var(--sunk); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: min(100%, 220px);
+  }
+  .lint-out { display: grid; gap: 8px; align-content: start; }
+  .lint-out pre { font-size: 0.76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .names { display: grid; gap: 8px; }
+  .names .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 0.86rem; }
+  .names .row > span { border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; background: var(--panel); }
+  .names .row .p { color: var(--faint); }
+  .names .row .t { border-color: var(--hands); color: var(--hands); background: var(--hands-soft); }
+  .names .row .arrow { border: 0; background: none; color: var(--faint); padding: 4px 2px; }
+  .names .row small { font-family: var(--font-body); color: var(--muted); font-size: 0.78rem; }
+  .names.in-view .row { animation: lit .5s ease both; }
+  .names.in-view .row:nth-child(2) { animation-delay: .4s } .names.in-view .row:nth-child(3) { animation-delay: .8s }
+  @keyframes lit { from { transform: translateY(6px); opacity: .25 } to { transform: none; opacity: 1 } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · MCP bridge</div>
+  <h1>MCP bridge</h1>
+  <p class="lede">Claude Code runs its own tool loop. Tengu gives it exactly one MCP server, <code>tengu mcp-bridge</code>, which runs Tengu's tools as the calling agent: same scopes, same redaction, same egress.</p>
+  <ul class="facts">
+    <li>tools seen as <b>mcp__tengu-tools__&lt;name&gt;</b></li>
+    <li>result ≤ <b>50 000</b> chars</li>
+    <li>call id <b>mcp:&lt;nonce&gt;:&lt;id&gt;</b></li>
+    <li>JSON-RPC 2.0 on stdio · <b>2024-11-05</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> Claude Code</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> agent, scopes</li>
+    <li><span class="chip data">data</span> files, config</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One bridged call, step by step</span>
+    <h2 id="s-flow">From the CLI to a Tengu tool and back</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3800">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 440" role="img" aria-labelledby="br-t">
+        <title id="br-t">The Claude Code engine writes an MCP config and starts the CLI; the CLI starts tengu mcp-bridge over stdio; the bridge loads the config and the agent block, builds a sanitized executor over the same catalog, shell skills and MCP proxies, reads the transcript per call, serves compress_and_store into the summary file, and returns capped, redacted results that the engine records as ToolRan.</title>
+        <!-- edges -->
+        <path class="e" id="p-eng-cli" d="M105 110 L105 168" data-at="2,9"/>
+        <path class="e" id="p-cli-br" d="M190 200 C222 200 222 182 248 182" data-at="2,6"/>
+        <path class="e" id="p-cli-tr" d="M105 252 L105 328" data-at="6"/>
+        <path class="e" id="p-tr-br" d="M190 359 C226 359 226 272 248 272" data-at="6"/>
+        <path class="e" id="p-cfg-br" d="M508 65 C468 65 452 98 440 128" data-at="3"/>
+        <path class="e bad dash" id="p-cfg-fb" d="M690 65 L708 65" data-at="4"/>
+        <path class="e" id="p-br-ex" d="M452 205 L508 205" data-at="5,7"/>
+        <path class="e" id="p-ex-tools" d="M600 252 L600 328" data-at="5,7"/>
+        <path class="e" id="p-ex-px" d="M690 240 C716 262 772 290 775 328" data-at="5"/>
+        <path class="e" id="p-ex-sum" d="M690 210 L708 210" data-at="8"/>
+        <path class="e flow" id="p-ex-br" d="M508 232 L452 232" data-at="7-8"/>
+        <path class="e flow" id="p-br-cli" d="M248 236 C220 236 220 228 192 228" data-at="7-9"/>
+
+        <!-- nodes -->
+        <g class="n heart" data-at="1,9">
+          <rect x="20" y="30" width="170" height="80" rx="10"/>
+          <text x="105" y="56" text-anchor="middle" class="t-title">Claude Code engine</text>
+          <text x="105" y="76" text-anchor="middle" class="t-small">writes --mcp-config</text>
+          <text x="105" y="93" text-anchor="middle" class="t-small">names and paths only</text>
+        </g>
+        <g class="n heart" data-at="2,6-7,9">
+          <rect x="20" y="170" width="170" height="82" rx="10"/>
+          <text x="105" y="198" text-anchor="middle" class="t-kanji k">心</text>
+          <text x="105" y="219" text-anchor="middle" class="t-title">claude CLI</text>
+          <text x="105" y="238" text-anchor="middle" class="t-small">its own tool loop</text>
+        </g>
+        <g class="n data" data-at="6">
+          <rect x="20" y="330" width="170" height="58" rx="8"/>
+          <text x="105" y="354" text-anchor="middle" class="t-title">Transcript file</text>
+          <text x="105" y="373" text-anchor="middle" class="t-small">0600 · read per call</text>
+        </g>
+        <g class="n hands" data-at="2-8">
+          <rect x="250" y="130" width="200" height="160" rx="10"/>
+          <text x="350" y="152" text-anchor="middle" class="zone-label">tengu mcp-bridge</text>
+          <text x="350" y="182" text-anchor="middle" class="t-kanji k">手</text>
+          <text x="350" y="204" text-anchor="middle" class="t-title">stdio server</text>
+          <text x="350" y="228" text-anchor="middle" class="t-small t-mono">initialize · tools/list</text>
+          <text x="350" y="246" text-anchor="middle" class="t-small t-mono">tools/call · ping</text>
+          <text x="350" y="270" text-anchor="middle" class="t-small">logs to stderr only</text>
+        </g>
+        <g class="n guard" data-at="3">
+          <rect x="510" y="30" width="180" height="70" rx="8"/>
+          <text x="600" y="57" text-anchor="middle" class="t-title">[agents.&lt;a&gt;]</text>
+          <text x="600" y="77" text-anchor="middle" class="t-small">from TENGU_CONFIG</text>
+          <text x="600" y="92" text-anchor="middle" class="t-small">TENGU_BRIDGE_AGENT</text>
+        </g>
+        <g class="n bad" data-at="4">
+          <rect x="710" y="30" width="130" height="70" rx="8"/>
+          <text x="775" y="57" text-anchor="middle" class="t-title">main fallback</text>
+          <text x="775" y="77" text-anchor="middle" class="t-small">+ env scopes</text>
+          <text x="775" y="92" text-anchor="middle" class="t-small">with a warn</text>
+        </g>
+        <g class="n guard" data-at="5,7">
+          <rect x="510" y="170" width="180" height="82" rx="8"/>
+          <text x="600" y="198" text-anchor="middle" class="t-title">Executor</text>
+          <text x="600" y="218" text-anchor="middle" class="t-small">per-tool scopes</text>
+          <text x="600" y="235" text-anchor="middle" class="t-small">SanitizedToolExecutor</text>
+        </g>
+        <g class="n data" data-at="8">
+          <rect x="710" y="170" width="130" height="82" rx="8"/>
+          <text x="775" y="198" text-anchor="middle" class="t-title">Summary file</text>
+          <text x="775" y="218" text-anchor="middle" class="t-small">run-agent step</text>
+          <text x="775" y="235" text-anchor="middle" class="t-small">only</text>
+        </g>
+        <g class="n hands" data-at="5,7">
+          <rect x="510" y="330" width="180" height="58" rx="8"/>
+          <text x="600" y="354" text-anchor="middle" class="t-title">Catalog tools</text>
+          <text x="600" y="373" text-anchor="middle" class="t-small">+ shell skills</text>
+        </g>
+        <g class="n hands" data-at="5">
+          <rect x="710" y="330" width="130" height="58" rx="8"/>
+          <text x="775" y="354" text-anchor="middle" class="t-title">MCP proxies</text>
+          <text x="775" y="373" text-anchor="middle" class="t-small t-mono">{server}__{tool}</text>
+        </g>
+
+        <!-- per-step badges -->
+        <g class="pop badge" data-at="1"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">no secret value in the file</text></g>
+        <g class="pop badge" data-at="2"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">--strict-mcp-config</text></g>
+        <g class="pop badge" data-at="3"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">Config::load, folded</text></g>
+        <g class="pop badge" data-at="4"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">warn: tools run as main</text></g>
+        <g class="pop badge" data-at="5"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">only TENGU_BRIDGE_TOOLS</text></g>
+        <g class="pop badge" data-at="6"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">id mcp:&lt;nonce&gt;:&lt;id&gt;</text></g>
+        <g class="pop badge" data-at="7"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">cut at 50 000 + footer</text></g>
+        <g class="pop badge" data-at="8"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">"stored — stop now"</text></g>
+        <g class="pop badge" data-at="9"><rect x="250" y="404" width="200" height="22" rx="11"/><text x="350" y="419" text-anchor="middle">ToolRan { name, ok }</text></g>
+
+        <!-- moving tokens -->
+        <circle class="tok heart" r="6" data-path="p-eng-cli" data-at="2"/>
+        <circle class="tok heart" r="6" data-path="p-cli-br" data-at="2" data-delay="700"/>
+        <circle class="tok guard" r="6" data-path="p-cfg-br" data-at="3"/>
+        <circle class="tok bad" r="6" data-path="p-cfg-fb" data-at="4" data-dur="600"/>
+        <circle class="tok hands" r="6" data-path="p-br-ex" data-at="5" data-dur="800"/>
+        <circle class="tok hands" r="6" data-path="p-ex-tools" data-at="5" data-delay="600"/>
+        <circle class="tok hands" r="6" data-path="p-ex-px" data-at="5" data-delay="600"/>
+        <circle class="tok heart" r="6" data-path="p-cli-br" data-at="6"/>
+        <circle class="tok" r="6" data-path="p-cli-tr" data-at="6" data-delay="300"/>
+        <circle class="tok" r="6" data-path="p-tr-br" data-at="6" data-delay="900"/>
+        <circle class="tok hands" r="6" data-path="p-ex-tools" data-at="7"/>
+        <circle class="tok hands" r="6" data-path="p-ex-br" data-at="7" data-delay="700" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-br-cli" data-at="7" data-delay="1200" data-dur="800"/>
+        <circle class="tok" r="6" data-path="p-ex-sum" data-at="8" data-dur="600"/>
+        <circle class="tok hands" r="6" data-path="p-br-cli" data-at="8" data-delay="700"/>
+        <circle class="tok hands" r="6" data-path="p-br-cli" data-at="9"/>
+        <circle class="tok heart" r="6" data-path="p-eng-cli" data-at="9" data-delay="800" data-reverse/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A run with Tengu tools: the engine writes a temp <code>--mcp-config</code>. No <code>workspace</code> set: the run gets a temp dir as its workspace. One server, <code>tengu-tools</code> = this binary + <code>mcp-bridge</code>, plus an env block of names and paths.</li>
+        <li>The CLI starts the bridge on stdio. <code>--allowedTools</code> names each tool as <code>mcp__tengu-tools__&lt;name&gt;</code>; <code>--strict-mcp-config</code> keeps every other MCP server out.</li>
+        <li>The bridge loads <code>TENGU_CONFIG</code> exactly like any Tengu process and takes <code>[agents.&lt;TENGU_BRIDGE_AGENT&gt;]</code>: scopes, sandbox sections, no-shell rule, memory.</li>
+        <li>No config file or no such agent: a warning, then the built-in <code>main</code> agent with <code>TENGU_BRIDGE_SCOPES</code>, the engine's copy of the agent's scopes.</li>
+        <li>It registers the same catalog as in-process, keeps only <code>TENGU_BRIDGE_TOOLS</code>, adds shell skills and <code>[[mcp_servers]]</code> proxies, and wraps it all in <code>SanitizedToolExecutor</code>.</li>
+        <li>Each <code>tools/call</code> gets call id <code>mcp:&lt;process nonce&gt;:&lt;JSON-RPC id&gt;</code> and the run's conversation, read from the transcript the engine keeps current.</li>
+        <li>The tool runs inside its scope. Text and errors are redacted, then cut at <code>max_mcp_result_chars</code> (50 000) before they go back to the CLI.</li>
+        <li>In a <code>run-agent</code> step, <code>compress_and_store</code> writes the summary file and answers <code>stored — stop now</code>; the engine stops the CLI. Anywhere else it is refused.</li>
+        <li>The engine turns each <code>tool_use</code> → <code>tool_result</code> pair into <code>ToolRan {name, ok}</code>, prefix stripped: Tengu's record of the call. It never runs it again.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-names">
+  <div class="sec-head">
+    <span class="kicker">Three names for one tool</span>
+    <h2 id="s-names">What the model sees</h2>
+    <p>The bridge's server name prefixes every Tengu tool. Tools from <code>[[mcp_servers]]</code> already carry their server name.</p>
+  </div>
+  <div class="names" data-inview>
+    <div class="row"><span class="t">read_file</span><span class="arrow">→</span><span><span class="p">mcp__tengu-tools__</span>read_file</span><small>a catalog tool, as Claude Code calls it</small></div>
+    <div class="row"><span class="t">github__search_issues</span><span class="arrow">→</span><span><span class="p">mcp__tengu-tools__</span>github__search_issues</span><small>an <code>[[mcp_servers]]</code> tool (example server <code>github</code>)</small></div>
+    <div class="row"><span class="t">ToolRan</span><span class="arrow">←</span><span>read_file · ok</span><small>what the engine records: prefix stripped</small></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-env">
+  <div class="sec-head">
+    <span class="kicker">Try it: change the run, watch the config</span>
+    <h2 id="s-env">The env contract</h2>
+    <p>The file the engine writes for one CLI run. Keys come out sorted. Values in angle brackets are placeholders; secrets reach the bridge only by inheritance.</p>
+  </div>
+  <div class="widget" id="envw">
+    <div class="toggles">
+      <label><input type="checkbox" id="e-step" checked> <span><code>run-agent</code> step</span></label>
+      <label><input type="checkbox" id="e-mcp"> <span>an <code>[[mcp_servers]]</code> tool in the list</span></label>
+      <label><input type="checkbox" id="e-sess" checked> <span><code>TENGU_SESSION_ID</code> set</span></label>
+      <label><input type="checkbox" id="e-vault" checked> <span>vault unlocked</span></label>
+    </div>
+    <pre class="cfg" id="cfg"></pre>
+    <p class="note">The CLI merges this <code>env</code> over its own inherited env, so <code>OPENROUTER_API_KEY</code>, vault values and <code>$VAR</code>s for <code>[[mcp_servers]]</code> arrive without being written down.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-agent">
+  <div class="sec-head">
+    <span class="kicker">Who the tools run as</span>
+    <h2 id="s-agent">Agent resolution</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip guard">agent</span><span><b>config + agent found</b>That block as <code>Config::load</code> folded it: <code>[default_scopes]</code>, sandbox sections, signer, <code>no_shell_fallback</code>.</span></li>
+    <li><span class="chip hands">step</span><span><b>+ GRANT_WORKSPACE=1</b>Each configured scope also gets the workspace, like the step's own executor. Deny-all scopes stay deny.</span></li>
+    <li><span class="chip bad">warn</span><span><b>either missing</b>Built-in <code>main</code> with <code>TENGU_BRIDGE_SCOPES</code>; shell-free when the loaded config's agents are.</span></li>
+    <li><span class="chip data">opt-in</span><span><b>workspace tools</b>Any opt-in name in <code>TENGU_BRIDGE_TOOLS</code> joins <code>workspace_tools</code>, as <code>subagent_config</code> does.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rpc">
+  <div class="sec-head">
+    <span class="kicker">On the wire</span>
+    <h2 id="s-rpc">Four JSON-RPC exchanges</h2>
+    <p>One request per line on stdin, one response per line on stdout. Example values; a failed tool is still a <code>result</code>, with <code>isError: true</code>.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="rpc-init" aria-selected="true">initialize</button>
+      <button type="button" aria-controls="rpc-call">tools/call</button>
+      <button type="button" aria-controls="rpc-err">denied call</button>
+      <button type="button" aria-controls="rpc-cas">compress_and_store</button>
+    </div>
+    <div class="tabpanel" id="rpc-init"><pre><span class="c">→</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">1</span>,<span class="k">"method"</span>:<span class="s">"initialize"</span>}
+<span class="c">←</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">1</span>,<span class="k">"result"</span>:{<span class="k">"capabilities"</span>:{<span class="k">"tools"</span>:{}},<span class="k">"protocolVersion"</span>:<span class="s">"2024-11-05"</span>,
+     <span class="k">"serverInfo"</span>:{<span class="k">"name"</span>:<span class="s">"tengu-tools"</span>,<span class="k">"version"</span>:<span class="s">"0.1.0"</span>}}}
+<span class="c">→</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"method"</span>:<span class="s">"notifications/initialized"</span>}     <span class="c"># no answer</span>
+<span class="c">→</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">2</span>,<span class="k">"method"</span>:<span class="s">"tools/list"</span>}
+<span class="c">←</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">2</span>,<span class="k">"result"</span>:{<span class="k">"tools"</span>:[{<span class="k">"name"</span>:<span class="s">"read_file"</span>,<span class="k">"description"</span>:<span class="s">"…"</span>,<span class="k">"inputSchema"</span>:{<span class="c">…</span>}}]}}</pre></div>
+    <div class="tabpanel" id="rpc-call" hidden><pre><span class="c">→</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">7</span>,<span class="k">"method"</span>:<span class="s">"tools/call"</span>,
+   <span class="k">"params"</span>:{<span class="k">"name"</span>:<span class="s">"list_directory"</span>,<span class="k">"arguments"</span>:{<span class="k">"path"</span>:<span class="s">"."</span>}}}
+<span class="c">  ToolCtx.call_id = mcp:&lt;32-hex process nonce&gt;:7</span>
+<span class="c">←</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">7</span>,<span class="k">"result"</span>:{<span class="k">"content"</span>:[{<span class="k">"text"</span>:<span class="s">"notes.txt\nreport.md"</span>,<span class="k">"type"</span>:<span class="s">"text"</span>}],<span class="k">"isError"</span>:<span class="n">false</span>}}</pre></div>
+    <div class="tabpanel" id="rpc-err" hidden><pre><span class="c"># sandboxes/jev-exec: the architect's own scope is read_file = {} (deny-all)</span>
+<span class="c">→</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">8</span>,<span class="k">"method"</span>:<span class="s">"tools/call"</span>,<span class="k">"params"</span>:{<span class="k">"name"</span>:<span class="s">"read_file"</span>,<span class="k">"arguments"</span>:{<span class="k">"path"</span>:<span class="s">"notes.txt"</span>}}}
+<span class="c">←</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">8</span>,<span class="k">"result"</span>:{<span class="k">"content"</span>:[{<span class="k">"text"</span>:<span class="h">"ERROR: fs read denied for '&lt;workspace&gt;/notes.txt': no fs_roots configured (default-deny)"</span>,
+     <span class="k">"type"</span>:<span class="s">"text"</span>}],<span class="k">"isError"</span>:<span class="n">true</span>}}</pre></div>
+    <div class="tabpanel" id="rpc-cas" hidden><pre><span class="c">→</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">12</span>,<span class="k">"method"</span>:<span class="s">"tools/call"</span>,
+   <span class="k">"params"</span>:{<span class="k">"name"</span>:<span class="s">"compress_and_store"</span>,<span class="k">"arguments"</span>:{<span class="k">"summary"</span>:<span class="s">"TSLA funding is …"</span>}}}
+<span class="c"># run-agent step: the summary is written to TENGU_BRIDGE_SUMMARY_FILE</span>
+<span class="c">←</span> {<span class="k">"jsonrpc"</span>:<span class="s">"2.0"</span>,<span class="k">"id"</span>:<span class="n">12</span>,<span class="k">"result"</span>:{<span class="k">"content"</span>:[{<span class="k">"text"</span>:<span class="s">"stored — stop now"</span>,<span class="k">"type"</span>:<span class="s">"text"</span>}],<span class="k">"isError"</span>:<span class="n">false</span>}}
+<span class="c"># any other bridge (chat, no summary file):</span>
+<span class="c">←</span> … <span class="h">"ERROR: compress_and_store ends a `tengu run-agent` plan step, and this bridge serves none
+     (no TENGU_BRIDGE_SUMMARY_FILE) — give your summary as plain text instead"</span>, <span class="k">"isError"</span>:<span class="n">true</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-lint">
+  <div class="sec-head">
+    <span class="kicker">Try it: lint an external tool</span>
+    <h2 id="s-lint">Proxied MCP servers, filtered at discovery</h2>
+    <p>Every tool an <code>[[mcp_servers]]</code> entry lists becomes <code>{server}__{tool}</code>, unless its schema leaves the subset every engine accepts. Then it is dropped with a warning. The rules below run in your browser, mirroring <code>schema_lint.rs</code>.</p>
+  </div>
+  <div class="widget" id="lintw">
+    <div class="seg-group" role="group" aria-label="Example remote tools">
+      <button type="button" class="btn" data-ex="0" aria-pressed="true">clean</button>
+      <button type="button" class="btn" data-ex="1" aria-pressed="false">anyOf</button>
+      <button type="button" class="btn" data-ex="2" aria-pressed="false">nullable type</button>
+      <button type="button" class="btn" data-ex="3" aria-pressed="false">dot in name</button>
+      <button type="button" class="btn" data-ex="4" aria-pressed="false">uri format</button>
+    </div>
+    <div class="lint-grid">
+      <div class="lint-out">
+        <label for="l-server">server · tool (example)
+          <span style="display:flex;gap:6px;flex-wrap:wrap"><input type="text" id="l-server" value="files" aria-label="server name"><input type="text" id="l-tool" value="search" aria-label="remote tool name"></span>
+        </label>
+        <label for="l-schema">inputSchema (edit me)</label>
+        <textarea id="l-schema" spellcheck="false"></textarea>
+      </div>
+      <div class="lint-out">
+        <span class="verdict ok" id="l-verdict" aria-live="polite">-</span>
+        <pre id="l-out"></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Same tools, same rules.</b> The bridge registers the same catalog and resolves scopes with the same function as the in-process executor.</span></li>
+    <li><span><b>Only listed tools.</b> Registration keeps only <code>TENGU_BRIDGE_TOOLS</code>; a call to any other name gets the agent's real tool list back.</span></li>
+    <li><span><b>Nothing secret leaves.</b> Text and typed rows go through <code>SanitizedToolExecutor</code>; errors are redacted in the call handler.</span></li>
+    <li><span><b>Bounded results.</b> At most <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code> (default 50 000) plus a <code>[truncated — showing …]</code> footer.</span></li>
+    <li><span><b>No replayed orders.</b> A fresh nonce per bridge process: two sessions with the same JSON-RPC ids place two orders (tested).</span></li>
+    <li><span><b>The parent's egress.</b> The bridge installs <code>TENGU_EGRESS</code> from the engine, so proxied MCP calls follow the same policy.</span></li>
+    <li><span><b>Proven equal.</b> <code>tests/bridge_conformance.rs</code> runs every catalog tool in-process and through a real bridge, then compares text, files and upstream requests.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Talk to the bridge by hand</h2>
+    <p>Without <code>TENGU_BRIDGE_AGENT</code> it falls back to <code>main</code> and says so on stderr; stdout stays pure JSON-RPC. The listing is an example.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>export TENGU_BRIDGE_TOOLS='[{"name":"list_directory","description":"List a directory","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}]'</span>
+<span class="ln cmd"><span class="p">$ </span>printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_directory","arguments":{"path":"."}}}' | tengu mcp-bridge 2&gt;/dev/null</span>
+<span class="ln">{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}},"protocolVersion":"2024-11-05","serverInfo":{"name":"tengu-tools","version":"0.1.0"}}}</span>
+<span class="ln">{"jsonrpc":"2.0","id":2,"result":{"content":[{"text":<span class="hl">"notes.txt\nreport.md"</span>,"type":"text"}],"isError":false}}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --agent main --tool list_directory --args '{"path":"."}'</span>
+<span class="ln">{"is_error":false,"observation":null,"text":<span class="hl">"notes.txt\nreport.md"</span>}</span></pre>
+  </div>
+  <p class="note">The last command is the in-process twin the conformance test compares against. Same text, same flags.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>stdio loop, agent resolution, executor, call ids, <code>compress_and_store</code></td></tr>
+        <tr><td><code>src/adapters/outbound/bridge_env.rs</code></td><td>the env contract between engine and bridge</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>writes <code>--mcp-config</code>, transcript, <code>ToolRan</code>, stop after a stored summary</td></tr>
+        <tr><td><code>src/adapters/outbound/mcp_client/</code></td><td><code>[[mcp_servers]]</code>: stdio / http client, <code>{server}__{tool}</code> proxies, lint drop</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset every engine accepts</td></tr>
+        <tr><td><code>src/adapters/outbound/secrets.rs</code></td><td><code>SanitizedToolExecutor</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/tool.rs</code></td><td><code>tengu tool call</code>: the in-process twin</td></tr>
+        <tr><td><code>tests/bridge_conformance.rs</code></td><td>every catalog tool, both ways, compared</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: the env-contract builder (build_mcp_config_json) and the schema lint (schema_lint.rs) */
+(function () {
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  var step = document.getElementById("e-step"), mcp = document.getElementById("e-mcp"),
+      sess = document.getElementById("e-sess"), vault = document.getElementById("e-vault"), cfg = document.getElementById("cfg");
+  function renderCfg() {
+    var env = [
+      ["TENGU_BRIDGE_AGENT", '"storage"', 0],
+      ["TENGU_BRIDGE_GRANT_WORKSPACE", '"1"', step.checked ? 1 : -1],
+      ["TENGU_BRIDGE_MAX_RESULT_CHARS", '"50000"', 0],
+      ["TENGU_BRIDGE_MCP_SERVERS", '"[\\"github\\"]"', mcp.checked ? 1 : -1],
+      ["TENGU_BRIDGE_SCOPES", '"<the agent\'s scopes as JSON: fallback only>"', 0],
+      ["TENGU_BRIDGE_SUMMARY_FILE", '"<temp file of this step>"', step.checked ? 1 : -1],
+      ["TENGU_BRIDGE_TOOLS", '"<the tool definitions as JSON>"', 0],
+      ["TENGU_BRIDGE_TRANSCRIPT_FILE", '"<temp file: tengu-transcript-*>"', 0],
+      ["TENGU_BRIDGE_WORKSPACE", '"<agent workspace>"', 0],
+      ["TENGU_CONFIG", '"<absolute path of the sandbox config>"', 0],
+      ["TENGU_EGRESS", '"<resolved [egress] as JSON>"', 0],
+      ["TENGU_SECRETS_LOADED", '"<vault var names, no values>"', vault.checked ? 1 : -1],
+      ["TENGU_SESSION_ID", '"<session id>"', sess.checked ? 1 : -1]
+    ].filter(function (e) { return e[2] >= 0; });
+    var lines = [
+      '{ "mcpServers": { "tengu-tools": {',
+      '    "args": ["mcp-bridge"],',
+      '    "command": "<this tengu binary>",',
+      '    "env": {'
+    ].map(esc);
+    env.forEach(function (e, i) {
+      var l = '      "' + e[0] + '": ' + e[1] + (i < env.length - 1 ? "," : "");
+      lines.push(e[2] === 1 ? '<span class="add">' + esc(l) + "</span>" : esc(l));
+    });
+    lines.push(esc("    } } } }"));
+    if (mcp.checked) lines.push('<span class="dim">' + esc("# names only: the bridge takes [[mcp_servers]] \"github\" (example) from TENGU_CONFIG") + "</span>");
+    cfg.innerHTML = lines.join("\n");
+  }
+  [step, mcp, sess, vault].forEach(function (x) { x.addEventListener("change", renderCfg); });
+  renderCfg();
+
+  /* ---- schema lint: same rules and messages as tools/schema_lint.rs ---- */
+  var TYPES = ["string", "number", "integer", "boolean", "array", "object"];
+  var FORBIDDEN = ["oneOf", "anyOf", "allOf", "not", "const", "$ref", "$defs", "definitions"];
+  var TYPES_DBG = '["string", "number", "integer", "boolean", "array", "object"]';
+  function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
+  function show(v) { return JSON.stringify(v); }
+  function len(s) { return Array.from(s).length; }
+  function lint(name, description, params) {
+    var out = [];
+    function bad(at, p) { out.push(name + ": " + at + ": " + p); }
+    var okName = name.length <= 64 && /^[a-zA-Z_]/.test(name) && /^[a-zA-Z0-9_-]*$/.test(name);
+    if (!okName) bad("name", "must match ^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$");
+    if (len(description) > 1024) bad("description", len(description) + " chars (> 1024)");
+    if (!isObj(params) || params.type !== "object" || !isObj(params.properties)) bad("parameters", 'root must be `type: "object"` with a `properties` object');
+    schema(params, "parameters");
+    return out;
+    function schema(s, at) {
+      if (!isObj(s)) return bad(at, "a schema must be a JSON object");
+      FORBIDDEN.forEach(function (k) { if (k in s) bad(at, "`" + k + "` is outside the subset"); });
+      if ("description" in s) {
+        if (typeof s.description === "string") { var n = len(s.description); if (n > 512) bad(at, "description is " + n + " chars (> 512)"); }
+        else bad(at, "description must be a string");
+      }
+      var ty = null;
+      if ("type" in s) {
+        if (typeof s.type === "string" && TYPES.indexOf(s.type) >= 0) ty = s.type;
+        else return bad(at, "type must be one of " + TYPES_DBG + ", got " + show(s.type));
+      }
+      if ("enum" in s) {
+        var e = s["enum"];
+        if (!(Array.isArray(e) && e.length && e.every(function (x) { return typeof x === "string"; }))) bad(at, "enum must be a non-empty list of strings");
+        if (ty && ty !== "string") bad(at, 'enum needs `type: "string"`');
+      } else if (!ty) bad(at, "needs `type` or `enum`");
+      if ("format" in s) {
+        if (!(ty === "string" && s.format === "date-time")) bad(at, "format " + show(s.format) + ' is outside the subset (strings only: ["date-time"])');
+      }
+      if (ty === "object") object(s, at);
+      else if (ty === "array") { if (isObj(s.items)) schema(s.items, at + "/items"); else bad(at, "an array needs one `items` schema"); }
+    }
+    function object(o, at) {
+      var props = null;
+      if ("properties" in o) { if (isObj(o.properties)) props = o.properties; else bad(at, "properties must be an object"); }
+      if ("required" in o) {
+        if (Array.isArray(o.required)) o.required.forEach(function (n) {
+          if (!(typeof n === "string" && props && Object.prototype.hasOwnProperty.call(props, n))) bad(at, "required " + show(n) + " is not in properties");
+        });
+        else bad(at, "required must be a list");
+      }
+      /* serde_json maps iterate in key order */
+      if (props) Object.keys(props).sort().forEach(function (k) { schema(props[k], at + "/properties/" + k); });
+      if (isObj(o.additionalProperties)) schema(o.additionalProperties, at + "/additionalProperties");
+    }
+  }
+  var EX = [
+    { tool: "search", schema: { type: "object", properties: { query: { type: "string", description: "Text to find" }, limit: { type: "integer" } }, required: ["query"] } },
+    { tool: "search", schema: { type: "object", properties: { query: { type: "string" } }, anyOf: [{ required: ["query"] }] } },
+    { tool: "read", schema: { type: "object", properties: { path: { type: ["string", "null"] } } } },
+    { tool: "read.v2", schema: { type: "object", properties: { path: { type: "string" } } } },
+    { tool: "fetch", schema: { type: "object", properties: { url: { type: "string", format: "uri" } }, required: ["url", "headers"] } }
+  ];
+  var srv = document.getElementById("l-server"), tool = document.getElementById("l-tool"), ta = document.getElementById("l-schema");
+  var out = document.getElementById("l-out"), verdict = document.getElementById("l-verdict");
+  function run() {
+    var name = srv.value + "__" + tool.value, params;
+    try { params = JSON.parse(ta.value); }
+    catch (e) { verdict.className = "verdict warn"; verdict.textContent = "Not JSON yet"; out.textContent = String(e.message); return; }
+    var v = lint(name, "", params);
+    if (!v.length) {
+      verdict.className = "verdict ok";
+      verdict.textContent = "Kept: Claude Code sees mcp__tengu-tools__" + name;
+      out.textContent = "registered as " + name + "\n(proxied by McpProxyTool; the call is an opaque RPC to the server)";
+    } else {
+      verdict.className = "verdict bad";
+      verdict.textContent = "Dropped: no engine ever sees " + name;
+      out.textContent = "WARN mcp: tool schema outside the subset every engine accepts — tool dropped\n  server=" + srv.value + " tool=" + tool.value + "\n  rules=" + v.join(" | ");
+    }
+  }
+  function pick(i) {
+    tool.value = EX[i].tool;
+    ta.value = JSON.stringify(EX[i].schema, null, 2);
+    Array.prototype.forEach.call(document.querySelectorAll("#lintw [data-ex]"), function (b) { b.setAttribute("aria-pressed", +b.getAttribute("data-ex") === i ? "true" : "false"); });
+    run();
+  }
+  Array.prototype.forEach.call(document.querySelectorAll("#lintw [data-ex]"), function (b) { b.addEventListener("click", function () { pick(+b.getAttribute("data-ex")); }); });
+  [srv, tool, ta].forEach(function (x) { x.addEventListener("input", run); });
+  pick(0);
+})();
+</script>
+</body>
+</html>

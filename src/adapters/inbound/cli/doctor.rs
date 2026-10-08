@@ -109,6 +109,21 @@ pub(super) async fn run_doctor(
                 failures.push(format!("{id}: {err}"));
             }
         }
+        // A `claude_code` engine builds without its CLI; its turns then fail.
+        // The shipped image has none, so a container passed this healthcheck
+        // with agents that could not run.
+        if ac.engine == "claude_code" {
+            let cli = config
+                .claude_code
+                .as_ref()
+                .map_or("claude", |c| c.cli_path.as_str());
+            if find_executable(cli, std::env::var_os("PATH")).is_none() {
+                println!("    {id}: Claude CLI `{cli}` not found");
+                failures.push(format!(
+                    "{id}: Claude CLI `{cli}` not found — install it or set [claude_code] cli_path"
+                ));
+            }
+        }
     }
 
     doctor_egress(tor_check, &mut failures).await;
@@ -597,5 +612,54 @@ mod tests {
             matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock),
             "the doctor connected to the local server"
         );
+    }
+}
+
+/// `cli` as an executable file: a path (with a `/`) as given, else the first
+/// match in `path_var` (`PATH`).
+fn find_executable(cli: &str, path_var: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    fn runnable(p: &std::path::Path) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            p.metadata()
+                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            p.is_file()
+        }
+    }
+    let expanded = crate::config::paths::expand_tilde(std::path::Path::new(cli));
+    if cli.contains('/') {
+        return runnable(&expanded).then_some(expanded);
+    }
+    std::env::split_paths(&path_var?)
+        .map(|dir| dir.join(cli))
+        .find(|p| runnable(p))
+}
+
+#[cfg(test)]
+mod find_executable_tests {
+    use super::find_executable;
+
+    #[cfg(unix)]
+    #[test]
+    fn finds_the_cli_on_path_or_by_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("claude");
+        std::fs::write(&cli, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = Some(dir.path().as_os_str().to_owned());
+        assert_eq!(find_executable("claude", path.clone()), Some(cli.clone()));
+        assert_eq!(find_executable("nope", path.clone()), None);
+        assert_eq!(
+            find_executable(cli.to_str().unwrap(), None),
+            Some(cli.clone())
+        );
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(find_executable("claude", path), None, "not executable");
     }
 }

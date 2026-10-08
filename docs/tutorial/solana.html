@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Solana LP tools · Tengu</title>
+<meta name="description" content="Typed read tools for Meteora DLMM pools, Jupiter perps and wallets, pure hedge and LP decisions, and write tools that simulate by default and send only behind a signer grant, a per-wallet lease and a write fence.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: gate walker, read-tool table, host chips */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .ctrls select { font: inherit; font-size: .85rem; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
+  .ctrl-group { display: grid; gap: 8px; align-content: start; border: 1px dashed var(--line); border-radius: 8px; padding: 10px 12px; }
+  .ctrl-group > b { font-family: var(--font-mono); font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  .gates { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; counter-reset: g; }
+  .gates li { counter-increment: g; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); font-size: .86rem; color: var(--muted); transition: border-color .3s, opacity .3s; }
+  .gates li::before { content: counter(g); width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font-family: var(--font-mono); font-size: .72rem; }
+  .gates li b { color: var(--ink); font-weight: 600; display: block; }
+  .gates li code.msg { display: block; margin-top: 4px; white-space: normal; overflow-wrap: anywhere; color: var(--bad); background: var(--heart-soft); }
+  .gates li .st { font-family: var(--font-mono); font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+  .gates li.pass { border-color: var(--ok); } .gates li.pass .st { color: var(--ok); } .gates li.pass::before { background: var(--hands-soft); border-color: var(--ok); }
+  .gates li.fail { border-color: var(--bad); } .gates li.fail .st { color: var(--bad); } .gates li.fail::before { background: var(--heart-soft); border-color: var(--bad); }
+  .gates li.skip { border-style: dashed; opacity: .6; } .gates li.skip .st { color: var(--faint); }
+  .gates li.idle { opacity: .4; } .gates li.idle .st { color: var(--faint); }
+  .gates li.cfg { border-left: 4px solid var(--guard); }
+  .hosts { display: flex; flex-wrap: wrap; gap: 4px; }
+  .hosts span { font-family: var(--font-mono); font-size: .72rem; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; background: var(--sunk); white-space: nowrap; }
+  .hosts span.rpc { border-color: var(--hands); color: var(--hands); }
+  .hosts span.none { border-style: dashed; color: var(--faint); }
+  td.key code { white-space: normal; overflow-wrap: anywhere; }
+  td .ttl { font-family: var(--font-mono); font-size: .8rem; white-space: nowrap; }
+  .widget .ctrl-group label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .wcard h3 { display: block; font-size: 1rem; }
+  .wcard h3 code { white-space: normal; overflow-wrap: anywhere; }
+  table.reads { min-width: 700px; }
+  .wcard ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: .86rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">市</span> Trading desk · Solana</div>
+  <h1>Solana LP tools</h1>
+  <p class="lede">Eleven typed read tools watch Meteora DLMM pools, Jupiter perps and a wallet. Five write tools build real transactions: they simulate by default, with no key. Sending needs a signer grant, a per-wallet lease and fresh checks.</p>
+  <ul class="facts">
+    <li><b>11</b> read · <b>5</b> write tools</li>
+    <li><code>mode</code> = <b>simulate</b> by default</li>
+    <li>wallet lease <b>150 s</b></li>
+    <li>tx ≤ <b>1232</b> bytes, ≤ <b>1.4M</b> CU</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools, the send pipeline</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> gates</li>
+    <li><span class="chip data">data</span> stores</li>
+    <li><span class="chip jev"><span class="k">決</span> Jev</span> decision loops</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Read, decide, simulate or send</span>
+    <h2 id="s-flow">One write, end to end</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 490" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Read tools fill the observation cache, decide tools read it, a loop or private agent calls a write tool; simulate needs no key; send passes the signer gate, takes the wallet lease, checks live reads, signs and sends each transaction, confirms it and raises the wallet's write fence, which pins later reads.</title>
+        <path class="e" id="p-read-store" d="M100 96 L100 148" data-at="1"/>
+        <path class="e" id="p-store-decide" d="M100 220 L100 268" data-at="2"/>
+        <path class="e" id="p-decide-loop" d="M100 326 L100 378" data-at="3"/>
+        <path class="e" id="p-loop-write" d="M180 408 C212 408 204 185 228 185" data-at="3"/>
+        <path class="e" id="p-write-mode" d="M315 220 L315 256" data-at="4-5"/>
+        <path class="e" id="p-mode-sim" d="M315 342 L315 378" data-at="4"/>
+        <path class="e" id="p-mode-signer" d="M370 300 C415 300 412 68 448 68" data-at="5"/>
+        <path class="e" id="p-signer-lease" d="M535 96 L535 128" data-at="6"/>
+        <path class="e" id="p-lease-db" d="M620 150 L668 150" data-at="6"/>
+        <path class="e" id="p-lease-checks" d="M535 186 L535 218" data-at="7"/>
+        <path class="e" id="p-checks-send" d="M535 276 L535 308" data-at="8"/>
+        <path class="e" id="p-send-chain" d="M620 338 L668 338" data-at="8"/>
+        <path class="e" id="p-send-confirm" d="M535 366 L535 398" data-at="9"/>
+        <path class="e" id="p-confirm-db" d="M620 428 C652 428 652 186 668 176" data-at="9"/>
+        <path class="e dash" id="p-fence-read" d="M755 118 C755 8 100 8 100 38" data-at="10"/>
+
+        <g class="n hands" data-at="1,10">
+          <rect x="20" y="40" width="160" height="56" rx="8"/>
+          <text x="100" y="63" text-anchor="middle" class="t-title">Read tools</text>
+          <text x="100" y="82" text-anchor="middle" class="t-small">RPC · Jupiter · Meteora</text>
+        </g>
+        <g class="n data" data-at="1-2,10">
+          <rect x="20" y="150" width="160" height="70" rx="8"/>
+          <text x="100" y="168" text-anchor="middle" class="zone-label">cache</text>
+          <text x="100" y="189" text-anchor="middle" class="t-title">observations.db</text>
+          <text x="100" y="207" text-anchor="middle" class="t-small">lp_snapshot/1 · 10 s</text>
+        </g>
+        <g class="n hands" data-at="2-3,10">
+          <rect x="20" y="270" width="160" height="56" rx="8"/>
+          <text x="100" y="293" text-anchor="middle" class="t-title">Decide tools</text>
+          <text x="100" y="312" text-anchor="middle" class="t-small">pure, no network</text>
+        </g>
+        <g class="n jev" data-at="3">
+          <rect x="20" y="380" width="160" height="56" rx="8"/>
+          <text x="100" y="403" text-anchor="middle" class="t-title">Loop or agent</text>
+          <text x="100" y="422" text-anchor="middle" class="t-small">private: no description</text>
+        </g>
+        <g class="n hands" data-at="3-4">
+          <rect x="230" y="150" width="170" height="70" rx="8"/>
+          <text x="315" y="168" text-anchor="middle" class="zone-label">write tool</text>
+          <text x="315" y="189" text-anchor="middle" class="t-title t-mono">dlmm_open_position</text>
+          <text x="315" y="207" text-anchor="middle" class="t-small">mode = simulate | send</text>
+        </g>
+        <g class="n guard" data-at="4-5">
+          <polygon points="315,258 370,300 315,342 260,300"/>
+          <text x="315" y="298" text-anchor="middle" class="t-title">mode?</text>
+          <text x="315" y="314" text-anchor="middle" class="t-small">default simulate</text>
+        </g>
+        <g class="n data" data-at="4">
+          <rect x="230" y="380" width="170" height="56" rx="8"/>
+          <text x="315" y="403" text-anchor="middle" class="t-title">Simulated</text>
+          <text x="315" y="422" text-anchor="middle" class="t-small">no key · nothing sent</text>
+        </g>
+        <g class="n guard" data-at="5">
+          <rect x="450" y="40" width="170" height="56" rx="8"/>
+          <text x="535" y="63" text-anchor="middle" class="t-title">Signer gate</text>
+          <text x="535" y="82" text-anchor="middle" class="t-small">wallet grant · key 0600</text>
+        </g>
+        <g class="n guard" data-at="6">
+          <rect x="450" y="130" width="170" height="56" rx="8"/>
+          <text x="535" y="153" text-anchor="middle" class="t-title">Wallet lease</text>
+          <text x="535" y="172" text-anchor="middle" class="t-small">one sender · 150 s</text>
+        </g>
+        <g class="n guard" data-at="7">
+          <rect x="450" y="220" width="170" height="56" rx="8"/>
+          <text x="535" y="243" text-anchor="middle" class="t-title">Live checks</text>
+          <text x="535" y="262" text-anchor="middle" class="t-small">reads at ≥ fence slot</text>
+        </g>
+        <g class="n hands" data-at="8">
+          <rect x="450" y="310" width="170" height="56" rx="8"/>
+          <text x="535" y="333" text-anchor="middle" class="t-title">Sign and send</text>
+          <text x="535" y="352" text-anchor="middle" class="t-small">simulate first, each tx</text>
+        </g>
+        <g class="n guard" data-at="9">
+          <rect x="450" y="400" width="170" height="56" rx="8"/>
+          <text x="535" y="423" text-anchor="middle" class="t-title">Confirm</text>
+          <text x="535" y="442" text-anchor="middle" class="t-small">poll ≤ 120 s</text>
+        </g>
+        <g class="n data" data-at="6,9-10">
+          <rect x="670" y="120" width="170" height="76" rx="8"/>
+          <text x="755" y="138" text-anchor="middle" class="zone-label">install-wide</text>
+          <text x="755" y="160" text-anchor="middle" class="t-title">solana-writes.db</text>
+          <text x="755" y="179" text-anchor="middle" class="t-small">lease · pending · fence</text>
+        </g>
+        <g class="n" data-at="8">
+          <rect x="670" y="310" width="170" height="56" rx="8"/>
+          <text x="755" y="333" text-anchor="middle" class="t-title">Solana cluster</text>
+          <text x="755" y="352" text-anchor="middle" class="t-small">sendTransaction</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">one consistent read per snapshot</text></g>
+        <g class="pop badge" data-at="2"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">commit = false by default</text></g>
+        <g class="pop badge" data-at="3"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">no mode → simulate</text></g>
+        <g class="pop badge" data-at="4"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">write/1 status simulated</text></g>
+        <g class="pop badge" data-at="5"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">wallets = ["&lt;full address&gt;"]</text></g>
+        <g class="pop badge" data-at="6"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">held → lease_held, not sent</text></g>
+        <g class="pop badge" data-at="7"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">failed check → refused</text></g>
+        <g class="pop badge" data-at="8"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">CU limit = min(1.4M, units × 1.1)</text></g>
+        <g class="pop badge" data-at="9"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">fence = landing slot</text></g>
+        <g class="pop badge" data-at="10"><rect x="200" y="462" width="240" height="22" rx="11"/><text x="320" y="477" text-anchor="middle">older snapshot → stale_input</text></g>
+
+        <circle class="tok hands" r="6" data-path="p-read-store" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-store-decide" data-at="2"/>
+        <circle class="tok jev" r="6" data-path="p-loop-write" data-at="3"/>
+        <circle class="tok hands" r="6" data-path="p-write-mode" data-at="4"/>
+        <circle class="tok" r="6" data-path="p-mode-sim" data-at="4" data-delay="600"/>
+        <circle class="tok hands" r="6" data-path="p-write-mode" data-at="5"/>
+        <circle class="tok guard" r="6" data-path="p-mode-signer" data-at="5" data-delay="600"/>
+        <circle class="tok guard" r="6" data-path="p-signer-lease" data-at="6"/>
+        <circle class="tok" r="5" data-path="p-lease-db" data-at="6" data-delay="500"/>
+        <circle class="tok guard" r="6" data-path="p-lease-checks" data-at="7"/>
+        <circle class="tok hands" r="6" data-path="p-checks-send" data-at="8"/>
+        <circle class="tok hands" r="6" data-path="p-send-chain" data-at="8" data-delay="700"/>
+        <circle class="tok guard" r="6" data-path="p-send-confirm" data-at="9"/>
+        <circle class="tok" r="6" data-path="p-confirm-db" data-at="9" data-delay="600"/>
+        <circle class="tok" r="6" data-path="p-fence-read" data-at="10" data-dur="2200"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>Read tools fetch over Solana RPC, Jupiter and Meteora. Each answer is a typed row in the workspace cache; <code>lp_snapshot</code> reads pool, positions, perps and wallet together.</li>
+        <li><code>hedge_decide</code> and <code>lp_decide</code> make no network call. They decide from the cached snapshot row. Every knob is required; <code>commit</code> defaults to false.</li>
+        <li>A private agent or a decision loop calls a write tool, such as <code>dlmm_open_position</code>, with a <code>mode</code>. No mode means <code>simulate</code>.</li>
+        <li><b>simulate</b>: live reads, checks, then each transaction simulated as the wallet. No key is loaded, nothing is sent. Result: <code>write/1</code>, status <code>simulated</code>.</li>
+        <li><b>send</b>: this agent's own scope for the tool must list the wallet in full, and <code>[solana] signer_key_file</code> (mode 0600) must hold that wallet's key.</li>
+        <li>The tool takes lease <code>wallet:&lt;address&gt;</code> in <code>&lt;TENGU_HOME&gt;/state/solana-writes.db</code> for 150 s. Held, or an earlier send still in flight: refused.</li>
+        <li>Reads are live, never cached, and pinned at or after the wallet's fence. Any failed check refuses the whole write before anything is signed.</li>
+        <li>Per transaction: renew the lease, simulate, CU limit, priority fee, blockhash, ≤ 1232 bytes, sign, write a pending record, then <code>sendTransaction</code>.</li>
+        <li>Poll up to 120 s. Landed: the fence rises to its slot and the record clears. Then stale cache rows are dropped and the lease released.</li>
+        <li>Later reads of that wallet are pinned at the fence. A cached snapshot from before it blocks <code>hedge_decide</code> with <code>stale_input</code>.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-reads">
+  <div class="sec-head">
+    <span class="kicker">The read side</span>
+    <h2 id="s-reads">Eleven read tools, their keys and hosts</h2>
+    <p>Each takes an optional <code>max_age_secs</code> (0 = live), except the pure <code>lp_swap_plan</code>. Hosts are the <code>net_hosts</code> of <code>sandboxes/lping</code>; RPC = <code>api.mainnet-beta.solana.com</code> or the <code>$SOLANA_RPC_URL</code> host.</p>
+  </div>
+  <div class="table-wrap">
+    <table class="reads">
+      <thead><tr><th>Tool</th><th>Key</th><th>Cached</th><th>Reaches</th></tr></thead>
+      <tbody>
+        <tr><td><code>sol_price</code></td><td class="key"><code>price_oracle/1:&lt;mint&gt;</code> (+ <code>:&lt;pool&gt;</code>)</td><td><span class="ttl">10 s</span></td><td><div class="hosts"><span>lite-api.jup.ag</span><span>hermes.pyth.network</span><span class="rpc">RPC</span></div></td></tr>
+        <tr><td><code>dlmm_pools</code></td><td class="key"><code>dlmm_pools/1:&lt;query&gt;|&lt;sort&gt;|&lt;limit&gt;|&lt;min_tvl&gt;</code></td><td><span class="ttl">60 s</span></td><td><div class="hosts"><span>dlmm.datapi.meteora.ag</span></div></td></tr>
+        <tr><td><code>dlmm_pool</code></td><td class="key"><code>dlmm_pool/1:&lt;pool&gt;</code></td><td><span class="ttl">5 s</span></td><td><div class="hosts"><span class="rpc">RPC</span></div></td></tr>
+        <tr><td><code>dlmm_positions</code></td><td class="key"><code>dlmm_positions/1:&lt;wallet&gt;:&lt;pool&gt;</code></td><td><span class="ttl">10 s</span></td><td><div class="hosts"><span class="rpc">RPC</span></div></td></tr>
+        <tr><td><code>jup_perps</code></td><td class="key"><code>jup_perps/1:&lt;wallet&gt;</code></td><td><span class="ttl">5 s</span></td><td><div class="hosts"><span class="rpc">RPC</span><span>lite-api.jup.ag</span></div></td></tr>
+        <tr><td><code>solana_wallet</code></td><td class="key"><code>solana_wallet/1:&lt;wallet&gt;</code></td><td><span class="ttl">5 s</span></td><td><div class="hosts"><span class="rpc">RPC</span></div></td></tr>
+        <tr><td><code>solana_tx</code></td><td class="key"><code>solana_tx/1:&lt;signature&gt;</code></td><td><span class="ttl">2 s · 1 day final</span></td><td><div class="hosts"><span class="rpc">RPC</span></div></td></tr>
+        <tr><td><code>lp_snapshot</code></td><td class="key"><code>lp_snapshot/1:&lt;wallet&gt;:&lt;pool&gt;</code></td><td><span class="ttl">10 s</span></td><td><div class="hosts"><span class="rpc">RPC</span><span>lite-api.jup.ag</span></div></td></tr>
+        <tr><td><code>lp_swap_plan</code></td><td class="key"><code>lp_swap_plan/1:&lt;context&gt;:&lt;base&gt;:&lt;quote&gt;</code></td><td><span class="ttl">never</span></td><td><div class="hosts"><span class="none">arguments only</span></div></td></tr>
+        <tr><td><code>hedge_decide</code></td><td class="key"><code>hedge_decide/1:&lt;wallet&gt;:&lt;pool&gt;</code></td><td><span class="ttl">never</span></td><td><div class="hosts"><span class="none">cached rows only</span></div></td></tr>
+        <tr><td><code>lp_decide</code></td><td class="key"><code>lp_decide/1:&lt;wallet&gt;:&lt;pool&gt;</code></td><td><span class="ttl">never</span></td><td><div class="hosts"><span class="none">cached rows only</span></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid">
+    <div class="card guard"><h3>Scope per tool</h3><p>Each tool needs <code>[default_scopes.&lt;tool&gt;]</code>: <code>fs_roots</code> = the workspace (its cache), its <code>net_hosts</code>, and <code>env_reads = ["SOLANA_RPC_URL"]</code>.</p></div>
+    <div class="card guard"><h3>RPC URL stays secret</h3><p>Without that <code>env_reads</code> entry the public RPC is used silently. Only the host is ever rendered; errors never echo the URL.</p></div>
+    <div class="card data"><h3>Explicit positions</h3><p><code>positions</code> on <code>lp_snapshot</code> or <code>dlmm_positions</code> bypasses discovery: never served from cache, stored with ttl 0. Decide tools refuse such a row.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-gates">
+  <div class="sec-head">
+    <span class="kicker">Try it: can this call send?</span>
+    <h2 id="s-gates">Walk the gates in order</h2>
+    <p>Load rules run when the config loads; call gates run inside the tool, in this order. Messages are the code's (example values in <code>&lt;…&gt;</code>).</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="g-tool">tool
+        <select id="g-tool">
+          <option>dlmm_open_position</option>
+          <option>dlmm_close_position</option>
+          <option>jupiter_swap</option>
+          <option>jup_perps_order</option>
+          <option>solana_close_token_accounts</option>
+        </select>
+      </label>
+      <label for="g-mode"><code>mode</code>
+        <select id="g-mode"><option value="simulate">simulate (default)</option><option value="send" selected>send</option></select>
+      </label>
+    </div>
+    <div class="grid two">
+      <div class="ctrl-group"><b>Config load</b>
+        <label for="g-signer"><input type="checkbox" id="g-signer" checked> <code>[solana] signer_key_file</code> is set</label>
+        <label for="g-default"><input type="checkbox" id="g-default"> the <code>wallets</code> grant sits in <code>[default_scopes]</code></label>
+        <label for="g-desc"><input type="checkbox" id="g-desc"> the signing agent has a <code>description</code></label>
+        <label for="g-mcp"><input type="checkbox" id="g-mcp"> the sandbox lists <code>[[mcp_servers]]</code></label>
+      </div>
+      <div class="ctrl-group"><b>At call time</b>
+        <label for="g-grant"><input type="checkbox" id="g-grant" checked> agent's scope lists the wallet</label>
+        <label for="g-perm"><input type="checkbox" id="g-perm" checked> key file is mode 0600</label>
+        <label for="g-match"><input type="checkbox" id="g-match" checked> key is this wallet's</label>
+        <label for="g-store"><input type="checkbox" id="g-store" checked> <code>solana-writes.db</code> opens</label>
+        <label for="g-lease"><input type="checkbox" id="g-lease"> another process holds the lease</label>
+        <label for="g-pend">earlier send
+          <select id="g-pend"><option value="none">none</option><option value="landed">landed since</option><option value="expired">expired unseen</option><option value="flight">still in flight</option></select>
+        </label>
+        <label for="g-check"><input type="checkbox" id="g-check" checked> checks pass (e.g. divergence)</label>
+        <label for="g-sim"><input type="checkbox" id="g-sim" checked> simulation succeeds</label>
+      </div>
+    </div>
+    <ol class="gates" id="g-list" aria-live="polite"></ol>
+    <div><span class="verdict" id="g-verdict"></span></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-writes">
+  <div class="sec-head">
+    <span class="kicker">The write side</span>
+    <h2 id="s-writes">Five write tools</h2>
+    <p>Each returns one <code>write/1</code> row with ttl 0. Reads inside a write tool are always live.</p>
+  </div>
+  <div class="grid">
+    <div class="card hands wcard"><h3><code>dlmm_open_position</code></h3><ul><li>centred on the active bin, ≤ 70 bins</li><li>≤ 2 new bin arrays (0.0714 SOL rent each)</li><li>SOL/USDC: refused past <code>max_divergence_bps</code> from the oracle</li><li>refused when a position exists, unless <code>allow_existing</code></li></ul></div>
+    <div class="card hands wcard"><h3><code>dlmm_close_position</code></h3><ul><li>remove liquidity, claim fees and rewards, close</li><li>&gt; 70 bins: one chunk per ≤ 70 bins, every chunk sent</li><li>wSOL kept open while a keeper request is pending</li></ul></div>
+    <div class="card hands wcard"><h3><code>jupiter_swap</code></h3><ul><li>Jupiter Ultra: order, simulate as is, sign our slot</li><li>send: SOL↔USDC only; worst fill within <code>oracle_gate_bps</code></li><li>wallet must pay the fee (no gasless)</li></ul></div>
+    <div class="card hands wcard"><h3><code>jup_perps_order</code></h3><ul><li>a keeper request: increase, decrease or close</li><li>refused while one is open, without an oracle price, or above <code>max_notional_usd</code></li></ul></div>
+    <div class="card hands wcard"><h3><code>solana_close_token_accounts</code></h3><ul><li>closes EMPTY token accounts, rent back</li><li>never wSOL, USDC or <code>keep_mints</code></li><li>8 accounts per transaction, batches independent</li></ul></div>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>simulated</b>Simulation succeeded; nothing sent.</span></li>
+    <li><span class="chip ok">ok</span><span><b>confirmed</b>Every transaction confirmed.</span></li>
+    <li><span class="chip ok">ok</span><span><b>noop</b>Nothing to do, e.g. no empty account.</span></li>
+    <li><span class="chip warn">part</span><span><b>unconfirmed</b>Sent, outcome unknown. Do not retry: the next send resolves it first.</span></li>
+    <li><span class="chip warn">part</span><span><b>partial</b>Some transactions confirmed, then one did not.</span></li>
+    <li><span class="chip bad">err</span><span><b>refused · sim_failed</b>A gate, check or simulation said no. Never sent.</span></li>
+    <li><span class="chip bad">err</span><span><b>failed</b>Rejected at preflight, or landed with an on-chain error (fees paid).</span></li>
+    <li><span class="chip bad">err</span><span><b>expired</b>Blockhash expired unseen: did not land, safe to retry.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-cfg">
+  <div class="sec-head">
+    <span class="kicker">TOML</span>
+    <h2 id="s-cfg">Simulate-only by default, signing by opt-in</h2>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-scope" aria-selected="true">Scopes in lping</button>
+      <button type="button" aria-controls="tab-sign">Turning signing on</button>
+      <button type="button" aria-controls="tab-res">A write/1 row</button>
+    </div>
+    <div class="tabpanel" id="tab-scope"><pre><span class="c"># sandboxes/lping/config.toml — no [solana] signer, no wallet grant: every write simulates</span>
+<span class="k">[default_scopes.lp_snapshot]</span>
+net_hosts = [<span class="s">"api.mainnet-beta.solana.com"</span>, <span class="s">"lite-api.jup.ag"</span>]
+env_reads = [<span class="s">"SOLANA_RPC_URL"</span>]
+fs_roots  = [<span class="s">"~/lping-workspace"</span>]
+
+<span class="k">[default_scopes.dlmm_open_position]</span>        <span class="c"># a write tool: same shape, never `wallets` here</span>
+net_hosts = [<span class="s">"api.mainnet-beta.solana.com"</span>, <span class="s">"lite-api.jup.ag"</span>]
+env_reads = [<span class="s">"SOLANA_RPC_URL"</span>]
+fs_roots  = [<span class="s">"~/lping-workspace"</span>]
+
+<span class="k">[agents.lp_executor]</span>                        <span class="c"># no description: not planner-routable</span>
+engine = <span class="s">"openrouter"</span>
+workspace = <span class="s">"~/lping-workspace"</span>
+tools = [<span class="s">"lp_snapshot"</span>, <span class="s">"hedge_decide"</span>, <span class="s">"dlmm_open_position"</span>, <span class="c">…</span>]</pre></div>
+    <div class="tabpanel" id="tab-sign" hidden><pre><span class="c"># the steps written at the end of sandboxes/lping/config.toml</span>
+<span class="k">[solana]</span>
+signer_key_file = <span class="s">"~/.tengu/keys/lping-signer.json"</span>   <span class="c"># chmod 600, outside every fs root</span>
+
+<span class="k">[agents.lp_executor.scopes.dlmm_open_position]</span>  <span class="c"># the whole scope: a per-agent scope replaces the default</span>
+net_hosts = [<span class="s">"api.mainnet-beta.solana.com"</span>, <span class="s">"lite-api.jup.ag"</span>]
+env_reads = [<span class="s">"SOLANA_RPC_URL"</span>]
+fs_roots  = [<span class="s">"~/lping-workspace"</span>]
+wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
+
+<span class="c"># then: the loop action's args mode = "send", the loop's dry_run = false.</span>
+<span class="c"># Never the TS bot's wallet: the lease cannot see the bot's sends.</span></pre></div>
+    <div class="tabpanel" id="tab-res" hidden><pre><span class="c"># write/1:&lt;tool&gt;:&lt;wallet&gt;:&lt;started_at_ms&gt; — shape, example values</span>
+{
+  <span class="k">"tool"</span>: <span class="s">"dlmm_open_position"</span>, <span class="k">"wallet"</span>: <span class="s">"&lt;wallet&gt;"</span>, <span class="k">"mode"</span>: <span class="s">"simulate"</span>,
+  <span class="k">"status"</span>: <span class="s">"simulated"</span>, <span class="k">"rpc_host"</span>: <span class="s">"api.mainnet-beta.solana.com"</span>,
+  <span class="k">"checks"</span>: [ { <span class="k">"name"</span>: <span class="s">"divergence"</span>, <span class="k">"ok"</span>: <span class="n">true</span>, <span class="k">"detail"</span>: <span class="s">"pool 148.21 vs oracle 148.18: 2.0 bps (max 50)"</span> } <span class="c">…</span> ],
+  <span class="k">"txs"</span>: [ { <span class="k">"label"</span>: <span class="s">"open"</span>, <span class="k">"status"</span>: <span class="s">"simulated"</span>, <span class="k">"units"</span>: <span class="n">212000</span>, <span class="k">"tx_size"</span>: <span class="n">1104</span>, <span class="k">"logs_tail"</span>: [ <span class="c">… ≤ 15 lines</span> ] } ],
+  <span class="k">"details"</span>: { <span class="c">…</span> }
+}</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>No mode is simulate.</b> Simulate never loads the key and never sends.</span></li>
+    <li><span><b>Send needs the full wallet in this agent's own scope.</b> <code>check_wallet</code> has no wildcard; a grant in <code>[default_scopes]</code> fails the load.</span></li>
+    <li><span><b>Only private agents sign.</b> A grant on an agent with a <code>description</code>, the default agent or a webhook agent fails the load.</span></li>
+    <li><span><b>A signer hardens the sandbox.</b> No <code>[[mcp_servers]]</code>, no shell scopes, <code>claude_code</code> only with built-ins off, the key outside every fs root.</span></li>
+    <li><span><b>The key file is strict.</b> Mode 0600, ≤ 1 KiB, its public half must match its secret half; errors never echo its content.</span></li>
+    <li><span><b>One sender per wallet</b> across every process of the install, through one SQL lease.</span></li>
+    <li><span><b>An unknown send blocks the next</b> until it lands or its blockhash expires.</span></li>
+    <li><span><b>Never sent blind.</b> A failed simulation, missing compute units or a transaction over 1232 bytes is not sent.</span></li>
+    <li><span><b>No decision on pre-write data.</b> A snapshot older than the wallet's fence is <code>stale_input</code>.</span></li>
+    <li><span><b>Write store down means simulate only.</b> <code>send</code> is refused without the lease store.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Read, plan, simulate</h2>
+    <p>Nothing here sends: no <code>mode</code> means simulate, and lping has no signer. Outputs are shortened examples. Loops: <a href="decision-loop.html">Decision loop</a>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox lping --agent lp_executor --tool sol_price</span>
+<span class="ln o">{"text": "price So11111111111111111111111111111111111111112 usd=… via jupiter | ok 0s live\n…", "observation": {…}, "is_error": false}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox lping --agent lp_executor --tool lp_snapshot --args '{"wallet":"&lt;wallet&gt;","pool":"5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"}'</span>
+<span class="ln o">{"text": "… | ok 0s slot=… live", "observation": {"key": "lp_snapshot/1:&lt;wallet&gt;:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6", …}, …}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu tool call --sandbox lping --agent lp_executor --tool solana_close_token_accounts --args '{"wallet":"&lt;wallet&gt;"}'</span>
+<span class="ln o">{"text": "solana_close_token_accounts <span class="hl">simulate</span> simulated wallet=&lt;wallet&gt; | ok 0s live\n…", …}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu decide --sandbox lping --loop lp_watch</span>
+<span class="ln o">{ "outcomes": [ … ], … }   # dry_run: a write action is logged, never run</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/outbound/tools/solana/defs.rs</code></td><td>names, descriptions, input schemas of all 16 tools</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/solana/{price,pools,dlmm,perps,wallet,lp}.rs</code></td><td class="wrap">the read and decide tools</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/solana/write_common.rs</code></td><td><code>mode</code>, signer gate, simulate / send runner</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/solana/write_*.rs</code></td><td>the five write tools and their checks</td></tr>
+        <tr><td><code>src/adapters/outbound/solana/send.rs</code></td><td>the send pipeline: lease, pending record, confirm, fence</td></tr>
+        <tr><td><code>src/adapters/outbound/solana/writes_store.rs</code></td><td><code>solana-writes.db</code>: leases, pending sends, fences</td></tr>
+        <tr><td><code>src/adapters/outbound/solana/rpc.rs</code> · <code>signer.rs</code></td><td>JSON-RPC client, URL rules · local ed25519 key file</td></tr>
+        <tr><td><code>src/domain/solana_write.rs</code></td><td><code>write/1</code>, statuses, CU limit and price, lease TTL</td></tr>
+        <tr><td><code>src/domain/lp/</code></td><td>snapshot, gates, hedge and LP policy, DLMM and perps decoding</td></tr>
+        <tr><td><code>src/config/solana.rs</code> · <code>src/config/hardening.rs</code></td><td>signer and wallet-grant rules · hardened sandbox</td></tr>
+        <tr><td><code>src/ports/solana_signer.rs</code> · <code>solana_writes.rs</code></td><td>signer and write-store ports</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: the send gate walker (config/solana.rs, config/hardening.rs, write_common.rs, send.rs) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  var ids = ["g-tool", "g-mode", "g-signer", "g-default", "g-desc", "g-mcp", "g-grant", "g-perm", "g-match", "g-store", "g-lease", "g-pend", "g-check", "g-sim"];
+  function walk() {
+    var tool = $("g-tool").value, send = $("g-mode").value === "send", signer = $("g-signer").checked;
+    var G = [], stopped = false, verdict = null;
+    function gate(cfg, title, ok, msg, skip) {
+      if (stopped) { G.push({ cfg: cfg, t: title, s: "idle", st: "not reached" }); return; }
+      if (skip) { G.push({ cfg: cfg, t: title, s: "skip", st: skip }); return; }
+      if (ok) { G.push({ cfg: cfg, t: title, s: "pass", st: "pass" }); return; }
+      G.push({ cfg: cfg, t: title, s: "fail", st: cfg ? "load fails" : "refused", msg: msg });
+      stopped = true;
+    }
+    gate(true, "A wallet grant never sits in [default_scopes]", !$("g-default").checked,
+      "default_scopes." + tool + ".wallets: signing grants go on one agent ([agents.<name>.scopes." + tool + "]), never in [default_scopes]");
+    gate(true, "The signing agent is private", !$("g-desc").checked,
+      "agents.lp_executor may sign (" + tool + ") but has a `description` — a signing agent must not be planner-routable");
+    gate(true, "Hardened sandbox: no foreign processes", !$("g-mcp").checked,
+      "[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer or [risk]): foreign processes with this filesystem",
+      signer ? null : "no signer: not hardened");
+    var cs = send ? null : "simulate: skipped";
+    gate(false, "This agent's scope for " + tool + " lists the wallet", $("g-grant").checked,
+      "signer_not_allowed: this agent's scope for " + tool + " does not list wallet <wallet> (wallets = [\"<wallet>\"] on [agents.<name>.scopes." + tool + "])", cs);
+    gate(false, "[solana] signer_key_file is set", signer, "no_signer: [solana] signer_key_file is not configured", cs);
+    gate(false, "Key file: mode 0600, readable, well formed", $("g-perm").checked,
+      "signer_unavailable: <key file>: key file mode is 644; group / other must have no access (chmod 600)", cs);
+    gate(false, "The key is this wallet's", $("g-match").checked, "signer_mismatch: the key file holds <other pubkey>, not <wallet>", cs);
+    gate(false, "solana-writes.db opens", $("g-store").checked,
+      "write_store_unavailable: <TENGU_HOME>/state/solana-writes.db could not be opened", cs);
+    gate(false, "Lease wallet:<wallet> is free (150 s)", !$("g-lease").checked,
+      "lease_held: <pid>:<uuid> is sending for <wallet> (lease until <ms> ms)", cs);
+    var pend = $("g-pend").value;
+    gate(false, "An earlier send of this wallet is resolved", pend !== "flight",
+      "pending_unresolved: <signature> of " + tool + " (<label>) sent at <ms> ms is still in flight (block height <h> ≤ <last valid>)", cs);
+    gate(false, "Live reads, at or after the wallet's fence", true, "");
+    gate(false, "Every check passes", $("g-check").checked,
+      tool === "dlmm_open_position" ? "divergence: pool 149.13 vs oracle 148.18: 64.1 bps (max 50)" : "<check name>: <detail> (example)");
+    gate(false, "Each transaction simulates", $("g-sim").checked,
+      "status sim_failed: the simulation returned an error — never sent");
+    var html = G.map(function (g) {
+      return '<li class="' + g.s + (g.cfg ? " cfg" : "") + '"><span><b>' + esc(g.t) + "</b>" + (g.cfg ? "config load" : "inside the tool") +
+        (g.msg ? '<code class="msg">' + esc(g.msg) + "</code>" : "") + '</span><span class="st">' + g.st + "</span></li>";
+    }).join("");
+    var v = $("g-verdict");
+    if (stopped) {
+      var last = G.filter(function (g) { return g.s === "fail"; })[0];
+      v.className = "verdict bad";
+      v.textContent = last.cfg ? "Config does not load — no tool runs" : /simulates/.test(last.t) ? "sim_failed — never sent" : (send ? "Refused — nothing signed, nothing sent" : "Refused — nothing simulated");
+    } else if (!send) {
+      v.className = "verdict ok"; v.textContent = "Simulated as the wallet — no key, nothing sent";
+    } else {
+      v.className = "verdict ok";
+      v.textContent = "Signed and sent → poll ≤ 120 s → confirmed raises the fence";
+      if (pend === "landed") v.textContent += " (the earlier send was resolved first: landed, fence raised)";
+      if (pend === "expired") v.textContent += " (the earlier send was resolved first: expired unseen)";
+    }
+    $("g-list").innerHTML = html;
+  }
+  ids.forEach(function (i) { $(i).addEventListener("change", walk); });
+  walk();
+})();
+</script>
+</body>
+</html>

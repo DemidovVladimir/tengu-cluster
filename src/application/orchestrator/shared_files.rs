@@ -296,12 +296,9 @@ struct SkillFrontmatter {
 }
 
 fn scan_skill_summaries(workspace: &Path) -> Vec<SkillSummary> {
-    let mut roots = Vec::new();
-    roots.push(workspace.join("skills"));
-    roots.push(workspace.join(".tengu/skills"));
-    if let Some(home) = dirs_next::home_dir() {
-        roots.push(home.join(".tengu/skills"));
-    }
+    // The skill loader's directories and order (managed first; was project
+    // first, so the registry could describe another skill than agents load).
+    let roots = crate::application::skills::registry::skill_directories(workspace);
 
     let mut by_name = std::collections::BTreeMap::new();
     for root in roots {

@@ -102,6 +102,33 @@ impl DiskVectorStore {
         })
     }
 
+    /// Apply one change to the store under the cross-process lock: re-read
+    /// `vectors.bin` first (another process may have written it since this one
+    /// loaded), apply `op`, write it back. Each process used to rewrite the
+    /// whole file from its own copy, so the last writer dropped the others' rows.
+    fn mutate<T>(&self, op: impl FnOnce(&mut Vec<Entry>) -> T) -> Result<T> {
+        let _lock = StoreLock::acquire(self.store_path.with_extension("bin.lock"))?;
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
+        if let Some(on_disk) = self.read_disk() {
+            *entries = on_disk;
+        }
+        let out = op(&mut entries);
+        self.flush(&entries)?;
+        Ok(out)
+    }
+
+    /// The rows in `vectors.bin`; `None` when there is no readable file (the
+    /// in-memory rows stay).
+    fn read_disk(&self) -> Option<Vec<Entry>> {
+        let data = std::fs::read(&self.store_path).ok()?;
+        bincode::deserialize(&data)
+            .map_err(|e| tracing::warn!(error = %e, "memory store unreadable; keeping loaded rows"))
+            .ok()
+    }
+
     fn flush(&self, entries: &[Entry]) -> Result<()> {
         let data = bincode::serialize(entries).context("failed to serialize memory store")?;
         let tmp_path = self.store_path.with_extension("bin.tmp");
@@ -110,6 +137,56 @@ impl DiskVectorStore {
         std::fs::rename(&tmp_path, &self.store_path)
             .with_context(|| format!("failed to rename to {}", self.store_path.display()))?;
         Ok(())
+    }
+}
+
+/// Cross-process write lock: `<store>/vectors.bin.lock`, created exclusively
+/// and removed on drop. A lock older than `STALE_LOCK` is a crashed writer's
+/// and is taken over. (`File::lock` needs rustc 1.89; the crate supports 1.78.)
+struct StoreLock {
+    path: PathBuf,
+}
+
+const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(30);
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl StoreLock {
+    fn acquire(path: PathBuf) -> Result<Self> {
+        let deadline = std::time::Instant::now() + LOCK_WAIT;
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(Self { path }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.elapsed().ok())
+                        .is_some_and(|age| age > STALE_LOCK);
+                    if stale {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    if std::time::Instant::now() > deadline {
+                        anyhow::bail!(
+                            "memory store busy: {} is held by another writer",
+                            path.display()
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => return Err(e).with_context(|| format!("create {}", path.display())),
+            }
+        }
+    }
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -185,12 +262,7 @@ impl VectorStore for DiskVectorStore {
     ) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
         let entry = Entry::new(id.clone(), text.to_string(), embedding, &metadata)?;
-        let mut entries = self
-            .entries
-            .write()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-        entries.push(entry);
-        self.flush(&entries)?;
+        self.mutate(|entries| entries.push(entry))?;
         Ok(id)
     }
 
@@ -232,26 +304,15 @@ impl VectorStore for DiskVectorStore {
     }
 
     async fn delete(&self, id: &str) -> Result<bool> {
-        let mut entries = self
-            .entries
-            .write()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-        let before = entries.len();
-        entries.retain(|e| e.id != id);
-        if entries.len() == before {
-            return Ok(false);
-        }
-        self.flush(&entries)?;
-        Ok(true)
+        self.mutate(|entries| {
+            let before = entries.len();
+            entries.retain(|e| e.id != id);
+            entries.len() != before
+        })
     }
 
     async fn clear_all(&self) -> Result<()> {
-        let mut entries = self
-            .entries
-            .write()
-            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
-        entries.clear();
-        self.flush(&entries)
+        self.mutate(Vec::clear)
     }
 
     async fn entry_count(&self) -> Result<usize> {
@@ -296,6 +357,34 @@ impl DiskVectorStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two processes on one `vectors.bin` (two stores here) keep each other's
+    /// rows: each change re-reads the file under the lock before writing.
+    #[tokio::test]
+    async fn two_writers_on_one_file_keep_each_others_rows() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let a = DiskVectorStore::new(dir.path()).unwrap();
+        let b = DiskVectorStore::new(dir.path()).unwrap();
+        let md = ChunkMetadata::default();
+        let id_a = a.write(vec![1.0, 0.0], "from a", md.clone()).await.unwrap();
+        b.write(vec![0.0, 1.0], "from b", md.clone()).await.unwrap();
+        let fresh = DiskVectorStore::new(dir.path()).unwrap();
+        assert_eq!(fresh.entry_count().await.unwrap(), 2);
+        // A delete through b sees a's row too.
+        assert!(b.delete(&id_a).await.unwrap());
+        assert_eq!(
+            DiskVectorStore::new(dir.path())
+                .unwrap()
+                .entry_count()
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(
+            !dir.path().join("vectors.bin.lock").exists(),
+            "lock released"
+        );
+    }
 
     #[tokio::test]
     async fn write_then_search_returns_hit() {

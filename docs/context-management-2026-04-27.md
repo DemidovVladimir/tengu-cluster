@@ -111,12 +111,16 @@ is a deliberate choice — Layer 2's sliding window catches whatever Layer
 
 `FlowCompactionPolicy` defaults (per scope):
 
-| scope | `compaction_threshold_ratio` | `compaction_keep_turns` |
-|---|---|---|
-| `main` | 0.88 | 60 |
-| `per-group` | 0.86 | 40 |
-| `per-pipe-sender` | 0.84 | 32 |
-| (other) | 0.82 | 24 |
+| scope | `compaction_threshold_ratio` | history limit | `compaction_keep_turns` |
+|---|---|---|---|
+| `main` | 0.88 | 40 | 20 |
+| `per-group` | 0.86 | 30 | 15 |
+| `per-pipe-sender` | 0.84 | 25 | 12 |
+| (other) | 0.82 | 20 | 10 |
+
+`compaction_keep_turns` defaults to half the history limit and is clamped
+below it (a set value too): the history limit drops older turns first, so a
+larger value left nothing to fold.
 
 `summary_max_tokens` default: `15%` of max input budget, clamped to
 `[128, max_input_budget/3]` and absolute `[256, 4096]`.

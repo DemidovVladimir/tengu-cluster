@@ -11,7 +11,7 @@
 //! |---|---|---|
 //! | 1 | well-formed: size > 0, `limit_px` iff `limit`, 0 < `max_slippage_bps` < 10 000, `ref_mid` > 0, position of the same instrument, valid rules / fees | `invalid_order` |
 //! | 2 | market open | `market_halted` · `market_closed` · `delisted` |
-//! | 3 | `book_age_ms ≤ max_book_age_ms`; the book passes `L2Book::validate` (a replayed book is deserialized, not built) | `stale_book` · `bad_book` |
+//! | 3 | `book_age_ms ≤ max_book_age_ms` — unless `stale_book_ok` (a reduce-only exit whose `book_age` the gate waived, `allow_reduce_degraded`): filled at that book, marked `stale_book`; the book passes `L2Book::validate` (a replayed book is deserialized, not built) | `stale_book` · `bad_book` |
 //! | 4 | reference px = `ref_mid` (the mid the order was priced at), else the book mid; neither and an empty taker side ⇒ as 10; a one-sided book ⇒ refused | `missing:mid` |
 //! | 5 | IOC bound on the HL tick grid: ref ± `max_slippage_bps` (buy rounded down, sell up); a limit order's `limit_px` must be a valid HL price, and the tighter of the two binds | `Tick` |
 //! | 6 | `oracle_band`: \|bound / oracle − 1\| ≤ `max_bps`; unknown oracle ⇒ refused | `Oracle` · `missing:oracle` |
@@ -191,6 +191,11 @@ pub(crate) struct FillEnv<'a> {
     pub fees: &'a FeeSchedule,
     /// `[risk] max_data_age_ms.book`.
     pub max_book_age_ms: u64,
+    /// The gate waived `book_age` for this order (a reduce-only exit under
+    /// `allow_reduce_degraded`): a book past `max_book_age_ms` is filled,
+    /// not refused, and the result says `stale_book`. An exit must be able
+    /// to get out; the waiver used to end in a `stale_book` rejection.
+    pub stale_book_ok: bool,
 }
 
 // ── Result ───────────────────────────────────────────────────────
@@ -399,6 +404,10 @@ pub(crate) struct FillResult {
     /// Age of the book filled against; `None` when refused before a book
     /// was read.
     pub book_age_ms: Option<u64>,
+    /// Filled against a book older than `max_book_age_ms` (`stale_book_ok`):
+    /// its prices may be stale.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale_book: bool,
 }
 
 impl FillResult {
@@ -428,6 +437,7 @@ impl FillResult {
             slippage_bps: None,
             fee_usd: 0.0,
             book_age_ms,
+            stale_book: false,
         }
     }
 
@@ -549,10 +559,13 @@ pub(crate) fn simulate_fill(
         );
     }
     if book_age_ms > env.max_book_age_ms {
-        return r.reject(
-            FillReason::StaleBook,
-            &format!("book age {book_age_ms} ms > {} ms", env.max_book_age_ms),
-        );
+        if !(env.stale_book_ok && order.reduce_only) {
+            return r.reject(
+                FillReason::StaleBook,
+                &format!("book age {book_age_ms} ms > {} ms", env.max_book_age_ms),
+            );
+        }
+        r.stale_book = true;
     }
     if let Err(e) = book.validate() {
         return r.reject(FillReason::BadBook, &e.to_string());
@@ -828,6 +841,7 @@ mod tests {
             position,
             fees: &fees,
             max_book_age_ms: 5_000,
+            stale_book_ok: false,
         };
         simulate_fill(o, &tsla_book(), 1_000, &env)
     }
@@ -1129,6 +1143,7 @@ mod tests {
             position: &flat(),
             fees: &fees,
             max_book_age_ms: 5_000,
+            stale_book_ok: false,
         };
         let buy = market(Side::Buy, OrderSize::Qty(1.0));
         rejected(
@@ -1271,6 +1286,48 @@ mod tests {
         rejected(&run_with(&buy, &unknown, &flat()), FillReason::MissingOiCap);
     }
 
+    /// `stale_book_ok` (the gate waived `book_age` for a reduce-only exit):
+    /// a stale book fills, marked `stale_book`. Without the flag, or for an
+    /// order that is not reduce-only, it is still refused.
+    #[test]
+    fn a_waived_exit_fills_at_a_stale_book() {
+        let (rules, fees, book, long) = (rules(), fees(), tsla_book(), held(2.0, 340.0));
+        let env = |stale_book_ok| FillEnv {
+            rules: &rules,
+            status: MarketStatus::Open,
+            position: &long,
+            fees: &fees,
+            max_book_age_ms: 5_000,
+            stale_book_ok,
+        };
+        let exit = PaperOrder {
+            reduce_only: true,
+            ..market(Side::Sell, OrderSize::Qty(2.0))
+        };
+        let r = simulate_fill(&exit, &book, 9_000, &env(true));
+        assert_eq!(
+            (r.status, r.stale_book, r.book_age_ms, r.filled_qty),
+            (FillStatus::Filled, true, Some(9_000), 2.0)
+        );
+        assert_eq!(serde_json::to_value(&r).unwrap()["stale_book"], true);
+        rejected(
+            &simulate_fill(&exit, &book, 9_000, &env(false)),
+            FillReason::StaleBook,
+        );
+        let entry = market(Side::Buy, OrderSize::NotionalUsd(1_000.0));
+        rejected(
+            &simulate_fill(&entry, &book, 9_000, &env(true)),
+            FillReason::StaleBook,
+        );
+        // A fresh book is never marked, and the field stays off the wire.
+        let fresh = simulate_fill(&exit, &book, 1_000, &env(true));
+        assert!(!fresh.stale_book);
+        assert!(serde_json::to_value(&fresh)
+            .unwrap()
+            .get("stale_book")
+            .is_none());
+    }
+
     #[test]
     fn market_state_and_book_age_refuse_before_pricing() {
         let o = market(Side::Buy, OrderSize::NotionalUsd(1_000.0));
@@ -1287,6 +1344,7 @@ mod tests {
                 position: &flat(),
                 fees: &fees,
                 max_book_age_ms: 5_000,
+                stale_book_ok: false,
             };
             let r = simulate_fill(&o, &book, 0, &env);
             rejected(&r, reason);
@@ -1298,6 +1356,7 @@ mod tests {
             position: &flat(),
             fees: &fees,
             max_book_age_ms: 5_000,
+            stale_book_ok: false,
         };
         let r = simulate_fill(&o, &book, 5_001, &env);
         rejected(&r, FillReason::StaleBook);

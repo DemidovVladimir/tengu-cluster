@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Open Brain and LLM Wiki · Tengu</title>
+<meta name="description" content="Postgres + pgvector memory: what writes it, the recall lanes the planner reads, how it fails soft, and how promoted memories compile into a cited LLM Wiki page.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: op cards, schema cards, lane filter, fail-soft board, wiki title check */
+  .mini { font-size: 0.74rem; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ops { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); padding: 14px; }
+  .ops .card { gap: 6px; }
+  .ops h3 { font-family: var(--font-mono); font-size: 0.95rem; }
+  .ops p { font-size: 0.86rem; }
+  .cols { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); }
+  .cols li b { color: var(--ink); font-weight: 500; }
+  .cols li.vec b { color: var(--brain); }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .seg label { display: block; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg span { display: block; padding: 5px 12px; font-size: 0.82rem; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+  .seg label:last-child span { border-right: 0; }
+  .seg input:checked + span { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: .86rem; color: var(--muted); }
+  .ctrls input[type="range"] { width: min(220px, 52vw); accent-color: var(--accent); }
+  .card .verdict { justify-self: start; }
+  .rows { display: grid; gap: 6px; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--panel); transition: opacity .25s, border-color .25s; }
+  .row .meta { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; }
+  .row .txt { font-size: 0.86rem; color: var(--ink); overflow-wrap: anywhere; }
+  .row .st { font-family: var(--font-mono); font-size: 0.72rem; text-align: right; grid-row: span 2; }
+  .row.in { border-color: var(--brain); background: var(--brain-soft); }
+  .row.in .st { color: var(--brain); font-weight: 500; }
+  .row.out { opacity: .5; }
+  .row.out .st { color: var(--faint); }
+  .row.drop { opacity: .7; border-style: dashed; }
+  .row.drop .st { color: var(--bad); }
+  #lane-block { font-size: 0.76rem; min-height: 64px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .board { display: grid; gap: 6px; }
+  .board .b { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--panel); font-size: 0.86rem; }
+  .board .b > span:first-child { font-weight: 600; color: var(--ink); }
+  .board .b > span:last-child { color: var(--muted); overflow-wrap: anywhere; }
+  .board .b.ok { border-left: 4px solid var(--ok); }
+  .board .b.warn { border-left: 4px solid var(--warn); }
+  .board .b.bad { border-left: 4px solid var(--bad); }
+  .ctrls select { font: inherit; font-size: .84rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; }
+  #wt { font: inherit; font-family: var(--font-mono); font-size: .86rem; color: var(--ink); background: var(--sunk); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: min(340px, 74vw); }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .path-out { font-family: var(--font-mono); font-size: .84rem; overflow-wrap: anywhere; }
+  @media (max-width: 560px) { .board .b { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">脳</span> Memory · Open Brain</div>
+  <h1>Open Brain and LLM Wiki</h1>
+  <p class="lede">Open Brain is live agent memory in Postgres with pgvector: user messages, step summaries and captures. The planner recalls from it. Promoted memories compile into the LLM Wiki: one cited Markdown page.</p>
+  <ul class="facts">
+    <li>vectors <b>vector(1536)</b>, text-embedding-3-small</li>
+    <li><b>4</b> tables</li>
+    <li><code>cross_plan_top_k</code> <b>5</b>, other lanes <b>0</b></li>
+    <li>build <b>--features postgres_memory</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> planner, subagent, wiki LLM</li>
+    <li><span class="chip brain"><span class="k">脳</span> brain</span> embeddings, memory</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> the <code>agentic_memory</code> tool</li>
+    <li><span class="chip data">data</span> tables and files</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Write, recall, promote, compile</span>
+    <h2 id="s-flow">One memory, many writers</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 450" role="img" aria-labelledby="mem-t">
+        <title id="mem-t">The planner embeds each user message, reads recall lanes from memory_events, then stores the message. Subagent steps store their summaries. The agentic_memory tool captures, ingests and promotes; compile_wiki turns promotions into a wiki page; an MCP server shares the same tool.</title>
+        <rect class="zone" x="225" y="104" width="330" height="300" rx="12"/>
+        <text x="237" y="122" class="zone-label">Open Brain · Postgres</text>
+
+        <path class="e" id="p-user-plan" d="M100 74 L100 128" data-at="1"/>
+        <path class="e" id="p-plan-emb" d="M170 130 C200 60 330 49 368 49" data-at="1,3"/>
+        <path class="e" id="p-emb-ev" d="M445 74 L445 132" data-at="3"/>
+        <path class="e" id="p-plan-ev" d="M182 150 L243 150" data-at="3"/>
+        <path class="e flow" id="p-ev-plan" d="M243 178 L182 178" data-at="2"/>
+        <path class="e" id="p-plan-sub" d="M100 194 L100 278" data-at="4"/>
+        <path class="e" id="p-sub-ev" d="M182 300 C228 300 226 188 243 186" data-at="5"/>
+        <path class="e" id="p-tool-ev" d="M588 46 C560 46 560 158 537 158" data-at="6,9"/>
+        <path class="e" id="p-tool-chk" d="M588 66 C568 66 568 232 537 232" data-at="6"/>
+        <path class="e" id="p-tool-pro" d="M588 82 C576 82 576 300 537 300" data-at="7"/>
+        <path class="e" id="p-pro-wc" d="M537 314 C562 314 565 287 588 287" data-at="8"/>
+        <path class="e" id="p-wc-wiki" d="M715 316 L715 350" data-at="8"/>
+        <path class="e" id="p-srv-tool" d="M715 124 L715 90" data-at="9"/>
+
+        <g class="n" data-at="1">
+          <rect x="20" y="24" width="160" height="50" rx="8"/>
+          <text x="100" y="46" text-anchor="middle" class="t-title">User message</text>
+          <text x="100" y="63" text-anchor="middle" class="t-small">one chat turn</text>
+        </g>
+        <g class="n heart" data-at="1-4">
+          <rect x="20" y="130" width="160" height="64" rx="8"/>
+          <text x="100" y="155" text-anchor="middle" class="t-title">Planner</text>
+          <text x="100" y="173" text-anchor="middle" class="t-small">recall lanes in,</text>
+          <text x="100" y="186" text-anchor="middle" class="t-small">user message out</text>
+        </g>
+        <g class="n heart" data-at="4-5">
+          <rect x="20" y="280" width="160" height="64" rx="8"/>
+          <text x="100" y="305" text-anchor="middle" class="t-title">Subagent step</text>
+          <text x="100" y="323" text-anchor="middle" class="t-small">tengu run-agent</text>
+          <text x="100" y="336" text-anchor="middle" class="t-small">same session_id</text>
+        </g>
+        <g class="n brain" data-at="1,3">
+          <rect x="370" y="24" width="150" height="50" rx="8"/>
+          <text x="445" y="46" text-anchor="middle" class="t-title">Embedder</text>
+          <text x="445" y="63" text-anchor="middle" class="t-small">1536 numbers per text</text>
+        </g>
+        <g class="n data" data-at="2-3,5-6,9">
+          <rect x="245" y="134" width="290" height="58" rx="8"/>
+          <text x="390" y="158" text-anchor="middle" class="t-title t-mono">memory_events</text>
+          <text x="390" y="177" text-anchor="middle" class="t-small">messages · step outputs · captures</text>
+        </g>
+        <g class="n data" data-at="6">
+          <rect x="245" y="206" width="140" height="58" rx="8"/>
+          <text x="315" y="230" text-anchor="middle" class="t-title t-mono">memory_sources</text>
+          <text x="315" y="249" text-anchor="middle" class="t-small">raw file + sha256</text>
+        </g>
+        <g class="n data" data-at="6">
+          <rect x="395" y="206" width="140" height="58" rx="8"/>
+          <text x="465" y="230" text-anchor="middle" class="t-title t-mono">memory_chunks</text>
+          <text x="465" y="249" text-anchor="middle" class="t-small">1800 chars, 200 overlap</text>
+        </g>
+        <g class="n data" data-at="7-8">
+          <rect x="245" y="278" width="290" height="58" rx="8"/>
+          <text x="390" y="302" text-anchor="middle" class="t-title t-mono">memory_promotions</text>
+          <text x="390" y="321" text-anchor="middle" class="t-small">target · reason · status pending</text>
+        </g>
+        <text x="390" y="368" text-anchor="middle" class="t-small">pgvector HNSW cosine + full-text GIN indexes</text>
+        <text x="390" y="386" text-anchor="middle" class="t-small">vector(1536) on events and chunks</text>
+
+        <g class="n hands" data-at="6-7,9">
+          <rect x="590" y="24" width="250" height="66" rx="8"/>
+          <text x="715" y="47" text-anchor="middle" class="t-title">agentic_memory tool</text>
+          <text x="715" y="65" text-anchor="middle" class="t-small">capture · recall · ingest_source</text>
+          <text x="715" y="80" text-anchor="middle" class="t-small">promote · compile_wiki · lint</text>
+        </g>
+        <g class="n" data-at="9">
+          <rect x="590" y="124" width="250" height="54" rx="8"/>
+          <text x="715" y="147" text-anchor="middle" class="t-title t-mono">agentic-memory-server</text>
+          <text x="715" y="166" text-anchor="middle" class="t-small">MCP stdio for other agents</text>
+        </g>
+        <g class="n heart" data-at="8">
+          <rect x="590" y="258" width="250" height="58" rx="8"/>
+          <text x="715" y="282" text-anchor="middle" class="t-title">Wiki compiler</text>
+          <text x="715" y="301" text-anchor="middle" class="t-small">one LLM call, cites [mem:kind/id]</text>
+        </g>
+        <g class="n data" data-at="8">
+          <rect x="590" y="352" width="250" height="58" rx="8"/>
+          <text x="715" y="376" text-anchor="middle" class="t-title t-mono">wiki/&lt;slug&gt;.md</text>
+          <text x="715" y="395" text-anchor="middle" class="t-small">under .tengu/agentic-memory/</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">one embedding call per turn</text></g>
+        <g class="pop badge" data-at="2"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">top_k = 0 skips the query</text></g>
+        <g class="pop badge" data-at="3"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">read first, then write</text></g>
+        <g class="pop badge" data-at="4"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">TENGU_SESSION_ID is exported</text></g>
+        <g class="pop badge" data-at="5"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">kind step_output + step_id</text></g>
+        <g class="pop badge" data-at="6"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">raw/&lt;kind&gt;/&lt;sha256&gt;.md kept on disk</text></g>
+        <g class="pop badge" data-at="7"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">promotion = one row, nothing copied</text></g>
+        <g class="pop badge" data-at="8"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">30 newest promotions per page</text></g>
+        <g class="pop badge" data-at="9"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">same tool, same database</text></g>
+
+        <circle class="tok" r="6" data-path="p-user-plan" data-at="1"/>
+        <circle class="tok heart" r="6" data-path="p-plan-emb" data-at="1" data-delay="700"/>
+        <circle class="tok brain" r="6" data-path="p-ev-plan" data-at="2"/>
+        <circle class="tok brain" r="5" data-path="p-ev-plan" data-at="2" data-delay="500"/>
+        <circle class="tok heart" r="6" data-path="p-plan-ev" data-at="3"/>
+        <circle class="tok brain" r="6" data-path="p-emb-ev" data-at="3" data-delay="300"/>
+        <circle class="tok heart" r="6" data-path="p-plan-sub" data-at="4"/>
+        <circle class="tok heart" r="6" data-path="p-sub-ev" data-at="5"/>
+        <circle class="tok hands" r="6" data-path="p-tool-ev" data-at="6"/>
+        <circle class="tok hands" r="6" data-path="p-tool-chk" data-at="6" data-delay="400"/>
+        <circle class="tok hands" r="6" data-path="p-tool-pro" data-at="7"/>
+        <circle class="tok" r="6" data-path="p-pro-wc" data-at="8"/>
+        <circle class="tok heart" r="6" data-path="p-wc-wiki" data-at="8" data-delay="900"/>
+        <circle class="tok" r="6" data-path="p-srv-tool" data-at="9"/>
+        <circle class="tok hands" r="6" data-path="p-tool-ev" data-at="9" data-delay="800"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A user message reaches the planner. One embedding call turns it into 1536 numbers, reused by every lane this turn.</li>
+        <li>Lanes read first: earlier user messages and this session's step outputs. Both are off by default (top_k 0). Replan adds a cross-plan lane (5).</li>
+        <li>Then the message is stored: kind <code>message</code>, agent <code>planner</code>, with its vector. Reading first keeps it out of its own recall.</li>
+        <li>A plan step runs as <code>tengu run-agent</code>. The child exports <code>TENGU_SESSION_ID</code> and <code>TENGU_AGENT_NAME</code>, so its writes carry the planner's session.</li>
+        <li>The step summary is stored as kind <code>step_output</code> with its <code>step_id</code>: the <code>compress_and_store</code> text, or the final reply as a backstop.</li>
+        <li>Agents with the opt-in tool capture notes and ingest sources. <code>ingest_source</code> keeps the raw file, one source row and its chunks, each embedded.</li>
+        <li><code>promote</code> marks a stable event, chunk or source: one <code>memory_promotions</code> row with a reason and optional evidence.</li>
+        <li><code>compile_wiki</code> reads the 30 newest promotions. An LLM writes one page citing <code>[mem:kind/id]</code>; if it fails, a plain bullet list is written.</li>
+        <li><code>tengu agentic-memory-server</code> serves the same tool over MCP stdio, so agents outside Tengu read and write the same memory.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-ops">
+  <div class="sec-head">
+    <span class="kicker">One tool, six operations</span>
+    <h2 id="s-ops">The <code>agentic_memory</code> tool and its tables</h2>
+    <p>Opt-in per agent (<code>workspace_tools</code>). Replies below are the code's own shapes; values in angle brackets are placeholders.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-ops" aria-selected="true">Operations</button>
+      <button type="button" aria-controls="tab-tables">Tables</button>
+      <button type="button" aria-controls="tab-cfg">Config</button>
+    </div>
+    <div class="tabpanel" id="tab-ops">
+      <div class="ops">
+        <div class="card hands"><h3>capture</h3><p>Stores <code>content</code> as one event, embedded (text only without a key). <code>kind</code> defaults to <code>event</code>.</p><pre class="mini">captured: event_id=&lt;uuid&gt; kind=&lt;kind&gt; bytes=&lt;n&gt;</pre></div>
+        <div class="card hands"><h3>recall</h3><p>Events and chunks. Vector order first, full text if no vector hit. <code>top_k</code> 5, kept in 1–20.</p><pre class="mini">- &lt;uuid&gt; [&lt;kind&gt;] &lt;first line, 500 chars&gt;</pre></div>
+        <div class="card hands"><h3>ingest_source</h3><p><code>content</code> or a workspace <code>path</code>. Raw copy on disk, one source row, chunks with vectors.</p><pre class="mini">ingested: source_id=&lt;uuid&gt; chunks=&lt;n&gt; raw_path=&lt;path&gt;</pre></div>
+        <div class="card hands"><h3>promote</h3><p>Marks <code>target_id</code> (an event by default) as stable, with a <code>reason</code> and <code>evidence</code>.</p><pre class="mini">promoted: promotion_id=&lt;uuid&gt; target=&lt;kind&gt;/&lt;id&gt;</pre></div>
+        <div class="card hands"><h3>compile_wiki</h3><p>One page per <code>title</code> (default <code>agentic-memory</code>) from the 30 newest promotions.</p><pre class="mini">compiled_wiki: page=&lt;path&gt; items=&lt;n&gt; mode=llm</pre></div>
+        <div class="card hands"><h3>lint</h3><p>Counts only: rows per table and wiki pages. No hygiene checks yet.</p><pre class="mini">agentic_memory lint: events=&lt;n&gt; sources=&lt;n&gt; chunks=&lt;n&gt; promotions=&lt;n&gt; wiki_pages=&lt;n&gt;</pre></div>
+      </div>
+    </div>
+    <div class="tabpanel" id="tab-tables" hidden>
+      <div class="ops">
+        <div class="card data"><h3>memory_events</h3><ul class="cols"><li><b>id</b> uuid</li><li><b>session_id</b> · <b>agent</b> · <b>role</b> · <b>kind</b></li><li><b>content</b> text · <b>summary</b></li><li class="vec"><b>embedding</b> vector(1536)</li><li><b>metadata</b> jsonb · <b>created_at</b></li></ul></div>
+        <div class="card data"><h3>memory_sources</h3><ul class="cols"><li><b>id</b> uuid · <b>kind</b> · <b>uri</b></li><li><b>title</b> · <b>raw_path</b></li><li><b>hash</b> sha256 of the content</li><li><b>metadata</b> jsonb · <b>created_at</b></li></ul></div>
+        <div class="card data"><h3>memory_chunks</h3><ul class="cols"><li><b>id</b> uuid</li><li><b>source_id</b> → sources, cascade</li><li><b>event_id</b> → events, cascade</li><li><b>content</b> · <span class="vec"><b>embedding</b> vector(1536)</span></li><li><b>metadata</b> · <b>created_at</b></li></ul></div>
+        <div class="card data"><h3>memory_promotions</h3><ul class="cols"><li><b>id</b> uuid</li><li><b>target_kind</b> · <b>target_id</b></li><li><b>status</b> default 'pending'</li><li><b>reason</b> · <b>evidence</b> jsonb</li><li><b>created_at</b></li></ul></div>
+      </div>
+      <p class="note" style="margin:0 14px 14px">Indexes: full text (<code>english</code>) on events and chunks, GIN on metadata, HNSW cosine on both embedding columns. The DDL runs once per process under a Postgres advisory lock.</p>
+    </div>
+    <div class="tabpanel" id="tab-cfg" hidden><pre><span class="c"># sandboxes/&lt;name&gt;/config.toml — the recall knobs, real defaults</span>
+<span class="k">[memory]</span>
+embedding_model             = <span class="s">"text-embedding-3-small"</span>  <span class="c"># workspace store; Open Brain is pinned to this one</span>
+session_recent_n            = <span class="n">10</span>   <span class="c"># in-process history lane, no Postgres</span>
+cross_session_msg_top_k     = <span class="n">0</span>    <span class="c"># earlier user messages, any session (off)</span>
+within_session_output_top_k = <span class="n">0</span>    <span class="c"># this session's step outputs on plan() (off)</span>
+cross_plan_top_k            = <span class="n">5</span>    <span class="c"># step outputs on replan()</span>
+
+<span class="k">[agents.researcher]</span>
+workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># opt in to the tool</span>
+
+<span class="c"># environment</span>
+<span class="c"># TENGU_MEMORY_DATABASE_URL   Postgres with pgvector (the tool's scope must allow reading it)</span>
+<span class="c"># OPENROUTER_API_KEY          embeddings + the wiki compiler; unset = text-only</span>
+<span class="c"># TENGU_WIKI_COMPILER_MODEL   default anthropic/claude-sonnet-4-6</span></pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-lanes">
+  <div class="sec-head">
+    <span class="kicker">Try it: pick a lane, watch the rows</span>
+    <h2 id="s-lanes">Which rows a lane returns</h2>
+    <p>Eight example rows. The current message is <q>Check my LP position</q>. Filters, ordering and the block text follow the code; scores are example values.</p>
+  </div>
+  <div class="widget">
+    <div class="seg" role="radiogroup" aria-label="Recall lane">
+      <label><input type="radio" name="lane" value="xs" checked><span>cross-session messages</span></label>
+      <label><input type="radio" name="lane" value="ws"><span>this session's outputs</span></label>
+      <label><input type="radio" name="lane" value="xp"><span>cross-plan (replan)</span></label>
+      <label><input type="radio" name="lane" value="tool"><span>tool recall</span></label>
+    </div>
+    <div class="ctrls">
+      <label for="lk"><span id="lk-name">cross_session_msg_top_k</span> <input type="range" id="lk" min="0" max="6" value="3"> <span class="readout" id="lk-out">3</span></label>
+      <label for="lvec"><input type="checkbox" id="lvec" checked> query vector available</label>
+    </div>
+    <div class="rows" id="lane-rows" aria-live="polite"></div>
+    <pre id="lane-block" aria-label="Prompt block"></pre>
+    <p class="note" id="lane-note"></p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-soft">
+  <div class="sec-head">
+    <span class="kicker">Try it: break something</span>
+    <h2 id="s-soft">Memory fails soft</h2>
+    <p>Turn off a dependency and see what each path does. Memory errors never fail a turn; only the tool itself returns an error.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label><input type="checkbox" id="f-feat" checked> built with <code>postgres_memory</code></label>
+      <label><input type="checkbox" id="f-db" checked> <code>TENGU_MEMORY_DATABASE_URL</code> reachable</label>
+      <label><input type="checkbox" id="f-key" checked> <code>OPENROUTER_API_KEY</code> set</label>
+      <label for="f-model"><code>[memory] embedding_model</code>
+        <select id="f-model"><option value="1536">text-embedding-3-small (1536)</option><option value="3072">text-embedding-3-large (3072)</option></select>
+      </label>
+    </div>
+    <div class="board" id="board" aria-live="polite"></div>
+    <p class="note">Every Open Brain reader and writer embeds with <code>text-embedding-3-small</code>, the size the schema holds: planner, step summaries, webhook output and the tool. <code>[memory] embedding_model</code> only picks the workspace vector store's model. Anything not 1536 finite numbers is refused before it reaches Postgres.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-wiki">
+  <div class="sec-head">
+    <span class="kicker">Try it: name a wiki page</span>
+    <h2 id="s-wiki">From promotions to a cited page</h2>
+    <p>The title becomes the file name. Titles that name instruction files are refused, more of them in a hardened sandbox.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="wt">title <input id="wt" type="text" value="Agent Memory / Open Brain" spellcheck="false" autocomplete="off"></label>
+      <label><input type="checkbox" id="wh"> hardened sandbox (<code>[risk]</code> or a Solana signer)</label>
+    </div>
+    <div class="presets" aria-label="Example titles">
+      <button type="button" class="btn" data-t="agentic-memory">agentic-memory</button>
+      <button type="button" class="btn" data-t="LP playbook (SOL-USDC)">LP playbook (SOL-USDC)</button>
+      <button type="button" class="btn" data-t="CLAUDE">CLAUDE</button>
+      <button type="button" class="btn" data-t="Agents">Agents</button>
+      <button type="button" class="btn" data-t="Memory">Memory</button>
+    </div>
+    <div class="grid two">
+      <div class="card data"><h3>Result</h3><p class="path-out" id="w-out"></p><span class="verdict ok" id="w-v">written</span></div>
+      <pre class="mini" id="w-page"></pre>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-who">
+  <div class="sec-head">
+    <span class="kicker">Five writers</span>
+    <h2 id="s-who">Who writes <code>memory_events</code></h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip heart">plan</span><span><b>user message</b>Every <code>plan()</code>, not <code>replan()</code>. kind <code>message</code>, agent <code>planner</code>, role <code>user</code>.</span></li>
+    <li><span class="chip heart">step</span><span><b>step summary</b>The <code>compress_and_store</code> text, in-process or through the MCP bridge. kind <code>step_output</code>, agent <code>subagent</code>.</span></li>
+    <li><span class="chip guard">backstop</span><span><b>final reply</b>A step that never called <code>compress_and_store</code> but replied: its text, same kind.</span></li>
+    <li><span class="chip data">hook</span><span><b>webhook output</b>A webhook turn's final text: <code>step_output</code>, step id <code>webhook-handler</code>.</span></li>
+    <li><span class="chip hands">tool</span><span><b>capture</b>Any kind. session and agent from the args, else the exported env, else the model slug. Embedded when a key is set.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Read before write.</b> The cross-session lane runs before the current message is stored, and drops rows whose text equals it.</span></li>
+    <li><span><b>Memory never breaks a turn.</b> A lane that fails becomes an empty block; a failed write is a warning. The planner still plans.</span></li>
+    <li><span><b>No wrong-size vector is stored.</b> Anything but 1536 finite numbers falls back to a text-only row or full-text recall.</span></li>
+    <li><span><b>One session key.</b> The planner and its <code>run-agent</code> children share one <code>session_id</code>, so the this-session lane finds their outputs.</span></li>
+    <li><span><b>Scope first.</b> Every tool call checks that its scope may read <code>TENGU_MEMORY_DATABASE_URL</code>; <code>ingest_source</code> and <code>compile_wiki</code> also need workspace write.</span></li>
+    <li><span><b>No instruction-file pages.</b> <code>compile_wiki</code> refuses titles that become <code>claude.md</code> or <code>agents.md</code>; hardened sandboxes also the five prompt files.</span></li>
+    <li><span><b>Full provenance.</b> An LLM page ends with a <code>## Sources</code> list of every promoted token, even ones the model left out.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Start Postgres, build, share</h2>
+    <p>Open Brain needs no <code>[memory] enabled</code>; that switch is for <a href="local-memory.html">workspace memory</a>. Put your own credentials in the URL.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>docker compose --profile postgres-memory up -d postgres-memory</span>
+<span class="ln cmd"><span class="p">$ </span>export TENGU_MEMORY_DATABASE_URL=postgres://&lt;user&gt;:&lt;password&gt;@localhost:5432/&lt;db&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release --features postgres_memory</span>
+<span class="ln cmd"><span class="p">$ </span>./target/release/tengu chat --sandbox lping</span>
+<span class="ln o">  # planner turns now write kind=message rows; steps write kind=step_output</span>
+<span class="ln cmd"><span class="p">$ </span>./target/release/tengu agentic-memory-server</span>
+<span class="ln o">  # stdio JSON-RPC: initialize · tools/list · tools/call — point any MCP client here</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/adapters/outbound/tools/agentic_memory/mod.rs</code></td><td>the tool, schema DDL, hybrid recall, the wiki compiler, <code>AgenticRecallStore</code></td></tr>
+        <tr><td><code>src/domain/memory.rs</code></td><td>the embedding model pin, <code>RecallHit</code></td></tr>
+        <tr><td><code>src/ports/memory.rs</code></td><td>the <code>RecallStore</code> port the planner reads through</td></tr>
+        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td>recall blocks, user-message write</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>recall store + embedder wiring, one <code>session_id</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>step summary write, backstop, env export</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>webhook output write</td></tr>
+        <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td><code>tengu agentic-memory-server</code></td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>MemoryConfig</code> knobs and defaults</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: lane filter, fail-soft board, wiki title check */
+(function () {
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  /* --- lanes: filters from agentic_memory/mod.rs, block text from planner.rs --- */
+  var CUR = "Check my LP position";
+  var ROWS = [
+    { tbl: "events", kind: "message", sess: "older", who: "planner", vec: true, score: 0.99, text: "Check my LP position" },
+    { tbl: "events", kind: "message", sess: "older", who: "planner", vec: true, score: 0.84, text: "Check LP position before the swap" },
+    { tbl: "events", kind: "step_output", sess: "this", who: "subagent", step: "s1", vec: true, score: 0.81, text: "LP position in range; fees 0.8 USDC" },
+    { tbl: "events", kind: "step_output", sess: "older", who: "subagent", step: "s2", vec: true, score: 0.77, text: "Check passed: LP position closed" },
+    { tbl: "chunks", kind: "chunk", sess: "", who: "source", vec: true, score: 0.73, text: "Notes: check LP position health daily" },
+    { tbl: "events", kind: "message", sess: "this", who: "planner", vec: true, score: 0.62, text: "Open a small test position" },
+    { tbl: "events", kind: "step_output", sess: "this", who: "subagent", step: "webhook-handler", vec: true, score: 0.41, text: "Helius event: swap seen in pool" },
+    { tbl: "events", kind: "note", sess: "older", who: "lp_researcher", vec: false, score: 0, text: "Remind me to check my LP position at 9" }
+  ];
+  var LANES = {
+    xs: { knob: "cross_session_msg_top_k", def: 0, kind: "message", sess: null, events: true },
+    ws: { knob: "within_session_output_top_k", def: 0, kind: "step_output", sess: "this", events: true },
+    xp: { knob: "cross_plan_top_k", def: 5, kind: "step_output", sess: null, events: true },
+    tool: { knob: "recall top_k", def: 5, kind: null, sess: null, events: true, chunks: true }
+  };
+  var STOP = { my: 1, a: 1, the: 1, to: 1, at: 1, in: 1, of: 1, me: 1, is: 1, before: 1 };
+  function words(s) { return s.toLowerCase().split(/[^a-z0-9]+/).filter(function (w) { return w && !STOP[w]; }); }
+  /* replan's query = message + failed step id + error (example: s1, "swap simulation failed") */
+  var REPLAN_Q = CUR + " s1 swap simulation failed";
+  function ftsMatch(text, query) { var w = words(text), q = words(query); return q.every(function (x) { return w.indexOf(x) >= 0; }); }
+
+  var lk = document.getElementById("lk"), lkOut = document.getElementById("lk-out"), lkName = document.getElementById("lk-name");
+  var lvec = document.getElementById("lvec"), rowsEl = document.getElementById("lane-rows");
+  var blockEl = document.getElementById("lane-block"), noteEl = document.getElementById("lane-note");
+  function laneId() { return document.querySelector('input[name="lane"]:checked').value; }
+
+  function runLane() {
+    var id = laneId(), L = LANES[id], k = +lk.value, vec = lvec.checked;
+    lkName.textContent = L.knob + " (default " + L.def + ")"; lkOut.textContent = k;
+    var eff = id === "tool" ? Math.min(20, Math.max(1, k)) : k;
+    var res = ROWS.map(function (r) { return { r: r, st: "", cls: "out" }; });
+    var picked = [];
+    if (eff === 0) {
+      res.forEach(function (x) { x.st = "lane off"; });
+    } else {
+      var cands = [];
+      res.forEach(function (x) {
+        var r = x.r;
+        if (r.tbl === "chunks" && !L.chunks) { x.st = "chunk: events only"; return; }
+        if (L.kind && r.kind !== L.kind) { x.st = "kind " + r.kind; return; }
+        if (L.sess && r.sess !== L.sess) { x.st = "other session"; return; }
+        cands.push(x);
+      });
+      var mode = "vector";
+      var hits = cands.filter(function (x) { if (!vec) return false; if (!x.r.vec) { x.st = "no vector"; } return x.r.vec; });
+      if (!hits.length) {
+        mode = "fts";
+        cands.forEach(function (x) { x.st = ""; });
+        hits = cands.filter(function (x) { var m = ftsMatch(x.r.text, id === "xp" ? REPLAN_Q : CUR); if (!m) x.st = "words missing"; return m; });
+      } else {
+        hits.sort(function (a, b) { return b.r.score - a.r.score; });
+      }
+      var limit = id === "xs" ? eff + 2 : eff;
+      hits.forEach(function (x, i) {
+        if (i >= limit) { x.st = "beyond k"; return; }
+        if (id === "xs" && x.r.text.trim() === CUR.trim()) { x.st = "exact repeat"; x.cls = "drop"; return; }
+        if (picked.length >= eff) { x.st = "beyond k"; return; }
+        picked.push(x); x.cls = "in"; x.st = "#" + picked.length;
+      });
+      res.mode = mode;
+    }
+    rowsEl.innerHTML = res.map(function (x) {
+      var r = x.r;
+      var meta = r.tbl === "chunks" ? "memory_chunks · ingested source" :
+        "kind " + r.kind + " · " + (r.sess ? r.sess + " session" : "") + " · " + r.who + (r.step ? " · step " + r.step : "") + (r.vec ? " · vector" : " · text only") + (r.vec ? " · cos " + r.score.toFixed(2) : "");
+      return '<div class="row ' + x.cls + '"><span class="meta">' + esc(meta) + '</span><span class="st">' + esc(x.st || "–") + '</span><span class="txt">' + esc(r.text) + "</span></div>";
+    }).join("");
+
+    var b = "";
+    if (picked.length) {
+      var sc = function (x, i) { return res.mode === "vector" ? x.r.score.toFixed(2) : (0.1 - i * 0.02).toFixed(2); };
+      if (id === "xs") {
+        b = "## Cross-session message recall\n\n_(prior user messages from Postgres `agentic_memory`, excluding the current turn)_\n\n";
+        picked.forEach(function (x, i) { b += (i + 1) + ". score=" + sc(x, i) + "  kind=" + x.r.kind + "  " + x.r.text + "\n"; });
+      } else if (id === "ws") {
+        b = "## Recent step outputs (this session)\n\n_(prior subagent results from Postgres `agentic_memory`, filtered to this `session_id`)_\n\n";
+        picked.forEach(function (x, i) { b += (i + 1) + ". score=" + sc(x, i) + "  kind=" + x.r.kind + "  step=" + x.r.step + "\n   " + x.r.text + "\n"; });
+      } else if (id === "xp") {
+        b = "## Relevant prior step outputs (cross-plan recall)\n\n_(prior subagent results from Postgres `agentic_memory`)_\n\n";
+        picked.forEach(function (x, i) { b += (i + 1) + ". score=" + sc(x, i) + "  kind=" + x.r.kind + "  step=" + x.r.step + "\n   " + x.r.text + "\n\n"; });
+      } else {
+        picked.forEach(function (x) { b += "- <uuid> [" + x.r.kind + "] " + x.r.text + "\n"; });
+      }
+    } else {
+      b = id === "tool" ? "recall: no matches" : "(empty: no block in the prompt)";
+    }
+    blockEl.textContent = b;
+
+    var note = "";
+    if (eff === 0) note = "<b>Lane off.</b> With <code>" + L.knob + " = 0</code> the planner sends no query and adds no block.";
+    else if (res.mode === "fts") note = "<b>Full-text fallback.</b> <code>plainto_tsquery</code> needs every query word in the row (here: " + words(id === "xp" ? REPLAN_Q : CUR).join(", ") + "). Text-only rows (no key, or an embedding error) can only be found this way.";
+    else note = "<b>Vector order.</b> Nearest by cosine, no score threshold: a weak match still fills a free slot. Rows without a vector are skipped; full text runs only when no vector row matches.";
+    if (id === "tool" && k === 0) note += " Tool <code>top_k</code> is kept in 1–20, so 0 becomes 1.";
+    if (id === "xs" && eff > 0) note += " The query fetches k + 2 rows, then drops exact repeats of the current message.";
+    if (id === "xp" && eff > 0) note += " On replan the query is the message plus the failed step id and its error (example: <code>s1</code>, <q>swap simulation failed</q>), so full text almost never matches.";
+    noteEl.innerHTML = note;
+  }
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="lane"]'), function (r) {
+    r.addEventListener("change", function () { var L = LANES[laneId()]; lk.value = L.def === 0 ? 3 : L.def; runLane(); });
+  });
+  lk.addEventListener("input", runLane); lvec.addEventListener("change", runLane);
+  runLane();
+
+  /* --- fail-soft board: outcomes from planner.rs, run_agent.rs, webhooks.rs, agentic_memory/mod.rs --- */
+  var ids = ["f-feat", "f-db", "f-key", "f-model"], board = document.getElementById("board");
+  function soft() {
+    var feat = document.getElementById("f-feat").checked, db = document.getElementById("f-db").checked;
+    var key = document.getElementById("f-key").checked, dim = +document.getElementById("f-model").value;
+    var vec = key;
+    function row(name, cls, text) { return '<div class="b ' + cls + '"><span>' + name + "</span><span>" + text + "</span></div>"; }
+    var out = [];
+    if (!feat) {
+      out.push(row("Planner lanes", "warn", "empty: no recall store is built"));
+      out.push(row("User message", "warn", "not stored"));
+      out.push(row("Step summary, webhook", "warn", "not stored (webhooks warn once per turn)"));
+      out.push(row("agentic_memory tool", "bad", "not in the catalog: agents cannot call it"));
+      out.push(row("agentic-memory-server", "bad", "refuses to start: build with postgres_memory"));
+      board.innerHTML = out.join(""); return;
+    }
+    if (!db) {
+      out.push(row("Planner lanes", "warn", "empty blocks (debug: agentic_memory unavailable)"));
+      out.push(row("User message", "warn", "skipped with a warning; the turn goes on"));
+      out.push(row("Step summary, webhook", "warn", "skipped; the step still succeeds"));
+      out.push(row("capture · recall · promote · lint", "bad", "tool error: the database is required"));
+      out.push(row("ingest_source", "bad", "raw file written to disk, then the tool errors"));
+      out.push(row("compile_wiki", "bad", "tool error before any page is written"));
+      board.innerHTML = out.join(""); return;
+    }
+    var why = "no key: no embedder";
+    if (dim !== 1536) out.push(row("Startup", "warn", "warning: [memory] embedding_model is for workspace memory only; Open Brain embeds with text-embedding-3-small"));
+    out.push(row("Planner lanes", vec ? "ok" : "warn", vec ? "vector first, full text if no vector hit" : "full text only (" + why + ")"));
+    out.push(row("User message", vec ? "ok" : "warn", vec ? "row + vector" : "text-only row (" + why + ")"));
+    out.push(row("Step summary, webhook", vec ? "ok" : "warn", vec ? "row + vector" : "text-only row (" + why + ")"));
+    out.push(row("capture", vec ? "ok" : "warn", vec ? "row + vector" : "text-only row (" + why + ")"));
+    out.push(row("recall (tool)", vec ? "ok" : "warn", vec ? "vector first, full text if none" : "full text only"));
+    out.push(row("ingest_source", vec ? "ok" : "warn", vec ? "chunks + vectors" : "chunks stored text-only"));
+    out.push(row("compile_wiki", key ? "ok" : "warn", key ? "LLM page with citations (mode=llm)" : "bullet-list page (mode=fallback), with a warning"));
+    board.innerHTML = out.join("");
+  }
+  ids.forEach(function (i) { document.getElementById(i).addEventListener("change", soft); });
+  soft();
+
+  /* --- wiki: wiki_page_path + wiki_title_refusal (domain::scope::protected_write_in) --- */
+  var wt = document.getElementById("wt"), wh = document.getElementById("wh");
+  var wOut = document.getElementById("w-out"), wV = document.getElementById("w-v"), wPage = document.getElementById("w-page");
+  var ALWAYS = { "claude.md": "a CLI agent loads `CLAUDE.md` as instructions", "agents.md": "agents load `AGENTS.md` as instructions" };
+  var HARD = ["memory.md", "user.md", "identity.md", "profile.md", "context.md"];
+  function slug(t) {
+    return t.split("").map(function (c) { return /[A-Za-z0-9]/.test(c) ? c.toLowerCase() : "-"; }).join("").split("-").filter(Boolean).join("-");
+  }
+  function wiki() {
+    var title = wt.value || "agentic-memory";
+    var file = slug(title) + ".md";
+    var why = ALWAYS[file] || (wh.checked && HARD.indexOf(file) >= 0 ? "a hardened sandbox ([risk] or a Solana signer) keeps the workspace prompt files (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — tengu loads them into the system prompt" : null);
+    if (why) {
+      wV.className = "verdict bad"; wV.textContent = "refused";
+      wOut.textContent = "agentic_memory: wiki title '" + title + "' is not allowed: " + why;
+      wPage.textContent = "(no page written)";
+    } else {
+      wV.className = "verdict ok"; wV.textContent = "written";
+      wOut.textContent = "<workspace>/.tengu/agentic-memory/wiki/" + file;
+      wPage.textContent = "# " + title + "\n\n> LLM Wiki page compiled from promoted Open Brain memories. Generated — do not hand-edit; re-run `agentic_memory(compile_wiki)`.\n\n## <a heading the model picks>\n\n<a claim> [mem:event/<id>]\n\n## Sources\n\n- `[mem:event/<id>]` — <promotion reason>";
+    }
+  }
+  wt.addEventListener("input", wiki); wh.addEventListener("change", wiki);
+  Array.prototype.forEach.call(document.querySelectorAll(".presets .btn"), function (b) {
+    b.addEventListener("click", function () { wt.value = b.getAttribute("data-t"); wiki(); });
+  });
+  wiki();
+})();
+</script>
+</body>
+</html>
