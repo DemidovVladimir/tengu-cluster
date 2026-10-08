@@ -136,7 +136,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li><code>tengu soe init</code> writes an <code>UNSIGNED</code> profile template with the PRD's proposed values to <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>: mode 0600, never inside a git work tree, never over an existing file.</li>
+        <li><code>tengu soe init</code> writes an <code>UNSIGNED</code> profile template (generic values; the four money values <code>REQUIRED</code>, since they are yours and the source is public) to <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>: mode 0600, never inside a git work tree, never over an existing file.</li>
         <li>The operator reviews every value, adds capabilities and signs (<code>signed_by</code>, <code>signed_at</code>). Until then every deciding command refuses it: <code>operator_profile_unsigned</code>.</li>
         <li>Inputs: opportunity files (<code>soe.opportunity/1</code>), the views of the source records they cite (<code>--cited</code>) and one decision time (<code>--as-of</code>).</li>
         <li>The economics turn each input range into downside, base and upside figures, in integer minor units of the profile's currency. A figure that needs an unknown input names it.</li>
@@ -159,7 +159,7 @@
     <table>
       <thead><tr><th>Command</th><th>Prints</th><th>Exit 1 when</th></tr></thead>
       <tbody>
-        <tr><td><code>init</code></td><td>writes the <code>UNSIGNED</code> template (the PRD's proposed values, no capability), mode 0600; its path and sha256</td><td>the file exists (<code>profile_exists</code>); the path is inside a git work tree (<code>profile_in_repo</code>)</td></tr>
+        <tr><td><code>init</code></td><td>writes the <code>UNSIGNED</code> template (generic values, money <code>REQUIRED</code>, no capability), mode 0600; its path and sha256</td><td>the file exists (<code>profile_exists</code>); the path is inside a git work tree (<code>profile_in_repo</code>)</td></tr>
         <tr><td><code>check &lt;opportunity.toml&gt;</code></td><td>the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information</td><td>the profile or the file is refused; the decision is before the opportunity (<code>future_leakage</code>)</td></tr>
         <tr><td><code>portfolio &lt;dir&gt; --as-of &lt;t&gt;</code></td><td>the week: ranked (each <code>HOLD</code>, nothing allocated before O3) with why each ranks above the next, held, rejected, next information; JSON = its canonical JSON</td><td>as <code>check</code>, for any file in the dir</td></tr>
         <tr><td><code>sensitivity &lt;opportunity.toml&gt;</code></td><td>the tornado: each input at ± <code>--scale-bps</code> (default 2000), the time-adjusted change, the verdict, gates added or removed</td><td>as <code>check</code>; a scale outside 1..=10000 is a usage error</td></tr>
@@ -407,7 +407,7 @@
   <div class="sec-head">
     <span class="kicker">The operator's numbers stay private</span>
     <h2 id="s-profile">Loading the operator profile</h2>
-    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. <code>tengu soe init</code> writes it once, unsigned, with the PRD's proposed values for the operator to review. Each check refuses with a code. The code never falls back to a built-in value.</p>
+    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. <code>tengu soe init</code> writes it once, unsigned, with the four money values left <code>REQUIRED</code> for the operator to set. Each check refuses with a code. The code never falls back to a built-in value.</p>
   </div>
   <div class="table-wrap">
     <table>

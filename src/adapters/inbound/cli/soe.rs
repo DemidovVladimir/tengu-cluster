@@ -6,7 +6,7 @@
 //!
 //! | Command | Prints | Exit 1 when |
 //! |---|---|---|
-//! | `init` | writes the UNSIGNED profile template — the PRD § 14 proposed values, no capability — at `--profile`, mode 0600 (new dirs 0700), whole or not at all (a synced temp file hard-linked into place); its path + sha256 | the file exists (never overwritten); the path sits inside a git work tree (`profile_in_repo`) |
+//! | `init` | writes the UNSIGNED profile template — generic values, the four money values `REQUIRED` (the operator's, never in public source), no capability — at `--profile`, mode 0600 (new dirs 0700), whole or not at all (a synced temp file hard-linked into place); its path + sha256 | the file exists (never overwritten); the path sits inside a git work tree (`profile_in_repo`) |
 //! | `check <opportunity.toml> [--cited F] [--as-of T]` | the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information, the hashes | the profile or the opportunity is refused; the gates refuse (`future_leakage`, an unknown time) |
 //! | `portfolio <dir> --as-of T [--week YYYY-Www] [--cited F]` | the week (`rank::unallocated_week`): ranked — each `HOLD`, nothing allocated before O3 — with why each ranks above the next, held, rejected, the next information; json = its canonical JSON | as `check`, for any `<id>.toml` in `<dir>` |
 //! | `sensitivity <opportunity.toml> [--scale-bps 2000] [--cited F] [--as-of T]` | the tornado: each input at ± the scale — fields scaled, the base time-adjusted contribution, the verdict, gates added / removed | as `check` |
@@ -79,7 +79,7 @@ pub(crate) struct SoeArgs {
 
 #[derive(Subcommand)]
 pub(super) enum SoeAction {
-    /// Write the UNSIGNED profile template (the PRD § 14 proposed values) —
+    /// Write the UNSIGNED profile template (money values `REQUIRED`) —
     /// never over an existing file, never inside a git work tree.
     Init,
     /// One opportunity: three scenarios, the hard gates, rank keys, next information.
@@ -239,11 +239,14 @@ fn profile_line(p: &Loaded<OperatorProfile>) -> String {
 // init
 // ---------------------------------------------------------------------------
 
-/// The `init` template: the PRD § 14 proposed values, UNSIGNED. Never read as
+/// The `init` template, UNSIGNED, the four money values `REQUIRED` (they are the
+/// operator's; the source is public). Never read as
 /// a default — every deciding command refuses it until the operator signs it.
 const PROFILE_TEMPLATE: &str = r#"# The SOE operator profile — PRIVATE (docs/soe-2026-10-08.md § 2).
 # Written by `tengu soe init` as an UNSIGNED template. The values below are
-# the PRD § 14 proposals, not decisions. Review every one, add your
+# generic starting points, not decisions. The four money values are left
+# "REQUIRED" on purpose: the repository is public and they are yours (your
+# PRD § 14 lists the proposals). Set them, review the rest, add your
 # capabilities, then sign: set `signed_by` to your name and `signed_at` to
 # the time you signed (RFC 3339 UTC, e.g. 2026-10-12T09:00:00Z). Every
 # `tengu soe` command that decides refuses this file until then.
@@ -264,17 +267,17 @@ profit_basis = "PRE_TAX"
 # minus owner hours x shadow_hourly_rate) or CASH.
 contribution_basis = "TIME_ADJUSTED"
 # Max gross cash exposure per opportunity.
-max_cash_exposure = "30000.00"
+max_cash_exposure = "REQUIRED"
 # Min net contribution per active month after the ramp.
-min_monthly_contribution = "5000.00"
+min_monthly_contribution = "REQUIRED"
 # What one owner hour costs.
-shadow_hourly_rate = "100.00"
+shadow_hourly_rate = "REQUIRED"
 # Max base-case payback.
 max_payback_months = 12
 # Owner hours a week for research and validation.
 weekly_owner_hours = 8
 # Max validation tranche before reapproval.
-max_validation_tranche = "1000.00"
+max_validation_tranche = "REQUIRED"
 # Max one-off delivery length.
 max_one_off_delivery_weeks = 6
 # Germany / EU by default; anything beyond is an explicit entry.
@@ -318,6 +321,12 @@ fn profile_template(day: &str) -> String {
     PROFILE_TEMPLATE
         .replace("{valid_from}", day)
         .replace("{unsigned}", UNSIGNED)
+}
+
+/// `text` with every `REQUIRED` money value set to a placeholder amount —
+/// only to check that the template is a profile once the operator fills it.
+fn required_set(text: &str) -> String {
+    text.replace("= \"REQUIRED\"", "= \"1.00\"")
 }
 
 /// Today, UTC (`YYYY-MM-DD`).
@@ -396,8 +405,9 @@ fn init(path: &Path, day: &str, format: Format) -> Result<()> {
         );
     }
     let text = profile_template(day);
-    // The template is a valid profile, unsigned.
-    let p = from_toml::<OperatorProfile>(&text).map_err(|errs| {
+    // The template is a valid profile, unsigned, once its `REQUIRED` money
+    // values are set.
+    let p = from_toml::<OperatorProfile>(&required_set(&text)).map_err(|errs| {
         anyhow!(
             "the profile template is invalid:\n{}",
             errs.iter()
@@ -421,8 +431,8 @@ fn init(path: &Path, day: &str, format: Format) -> Result<()> {
         path.display()
     );
     println!(
-        "Its values are the PRD § 14 proposals, not decisions: review each, add your \
-         [[capabilities]], then sign (signed_by, signed_at). Until then every deciding \
+        "Set the four REQUIRED money values (yours: your PRD § 14 lists the proposals), \
+         review the rest, add your [[capabilities]], then sign (signed_by, signed_at). Until then every deciding \
          `tengu soe` command refuses it (operator_profile_unsigned)."
     );
     Ok(())
@@ -883,9 +893,29 @@ mod tests {
     use super::*;
     use crate::domain::soe::matching::active_at;
 
+    /// The template with the four `REQUIRED` money values set (synthetic
+    /// round values, not the operator's).
+    fn with_money(text: &str) -> String {
+        [
+            ("max_cash_exposure", "10.00"),
+            ("min_monthly_contribution", "1.00"),
+            ("shadow_hourly_rate", "1.00"),
+            ("max_validation_tranche", "1.00"),
+        ]
+        .iter()
+        .fold(text.to_string(), |t, (k, v)| {
+            t.replace(&format!("{k} = \"REQUIRED\""), &format!("{k} = \"{v}\""))
+        })
+    }
+
     #[test]
-    fn init_template_is_a_valid_unsigned_profile() {
+    fn init_template_carries_no_operator_money() {
         let text = profile_template("2026-10-12");
+        // The money values are the operator's: the template refuses to parse
+        // until they are set (the public source never holds them).
+        assert_eq!(text.matches("= \"REQUIRED\"").count(), 4, "{text}");
+        assert!(from_toml::<OperatorProfile>(&text).is_err());
+        let text = with_money(&text);
         let p = from_toml::<OperatorProfile>(&text).unwrap_or_else(|e| panic!("{e:?}"));
         assert!(!p.is_signed() && !p.synthetic);
         assert_eq!(p.signed_by, UNSIGNED);
@@ -964,9 +994,14 @@ mod tests {
             assert!(!tmp.path().join("nowhere").exists());
             assert_eq!(listing(link.parent().unwrap()), ["operator.toml"]);
         }
-        // The loader refuses the template: unsigned.
+        // The loader refuses the template: no profile until the money values
+        // are set, then unsigned.
         let fresh = tmp.path().join("other/operator.toml");
         init(&fresh, "2026-10-12", Format::Json).unwrap();
+        let e = load_profile(&fresh, false).unwrap_err();
+        assert!(e.starts_with("invalid_profile"), "{e}");
+        let set = required_set(&std::fs::read_to_string(&fresh).unwrap());
+        std::fs::write(&fresh, set).unwrap();
         let e = load_profile(&fresh, false).unwrap_err();
         assert!(e.starts_with("operator_profile_unsigned: "), "{e}");
     }
