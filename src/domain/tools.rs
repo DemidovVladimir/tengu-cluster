@@ -47,6 +47,10 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 // xmarket workspace.
 pub(crate) const MARKET_HISTORY: &str = "market_history";
 pub(crate) const BACKTEST: &str = "backtest";
+/// Strategy rankings of a `[strategy_ranking]` sandbox (`tools/xlab/rank.rs`):
+/// runs the ranking coordinator (`application/ranking/`) or reads a
+/// published ranking; its state is the state dir's (`strategy-rankings/`).
+pub(crate) const STRATEGY_RANKING: &str = "strategy_ranking";
 
 // Source family (O2, `adapters/outbound/tools/sources/`) — read-only typed
 // rows over the sandbox's source store (`<sources state dir>/sources.db`);
@@ -141,6 +145,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
     BACKTEST,
+    STRATEGY_RANKING,
     SOURCE_EVIDENCE,
 ];
 

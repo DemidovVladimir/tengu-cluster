@@ -3,7 +3,7 @@
 //!
 //! | Query | Returns |
 //! |---|---|
-//! | [`trace`] | from any record id (or `<kind>/<id>`): family → variants → experiments → windows / results / evidence → verdict → episodes → incidents, as indented lines; the start record marked |
+//! | [`trace`] | from any record id (or `<kind>/<id>`): family → variants → experiments → windows / results / evidence → verdict → episodes → incidents, as indented lines; the start record marked (a ranking contract: the families of its strategies' variants, then its own line with its seal) |
 //! | [`attempt_rows`] | every run dir → the variants whose `spec_sha256` it carries, or none (`UNREGISTERED`) |
 //! | [`family_report`] | the variant tree + search accounting: registered variants, `prior_search`, run-dir attempts mapped to the family's variants (distinct spec hashes, runs, holdout reads) and the `UNREGISTERED` runs of the family's strategy names |
 //!
@@ -69,8 +69,9 @@ pub struct AttemptRow {
     pub families: Vec<String>,
 }
 
-/// `spec_sha256` → variant ids.
-fn variants_by_hash(reg: &Registry) -> BTreeMap<&str, Vec<&Variant>> {
+/// `spec_sha256` → the variants carrying it (also a strategy ranking's
+/// standing, `domain/backtest/ranking.rs`).
+pub(crate) fn variants_by_hash(reg: &Registry) -> BTreeMap<&str, Vec<&Variant>> {
     let mut m: BTreeMap<&str, Vec<&Variant>> = BTreeMap::new();
     for v in reg.variants.values() {
         if let Some(h) = &v.spec.spec_sha256 {
@@ -820,6 +821,20 @@ pub fn trace(reg: &Registry, id: &str) -> Result<Trace, String> {
                 }
             }
         }
+        RecordKind::Ranking => {
+            // The families of the variants that are its strategies' specs.
+            let c = &reg.rankings[&id];
+            for v in reg.variants.values() {
+                let s = &v.spec;
+                if s.sandbox.as_deref() == Some(c.sandbox.as_str())
+                    && s.strategy
+                        .as_ref()
+                        .is_some_and(|n| c.strategies.contains(n))
+                {
+                    families.insert(v.family.clone());
+                }
+            }
+        }
     }
     families.retain(|f| reg.families.contains_key(f));
     let mut b = TraceBuilder {
@@ -906,6 +921,42 @@ pub fn trace(reg: &Registry, id: &str) -> Result<Trace, String> {
                     ev.captured_at.as_deref().unwrap_or("not yet (a plan)"),
                     ev.manifest_sha256.as_deref().unwrap_or(UNKNOWN),
                     ev.items.len()
+                ),
+            );
+        }
+        RecordKind::Ranking => {
+            let c = &reg.rankings[&id];
+            let key = format!("ranking:{id}");
+            let seal = reg.locks.sealed.iter().rev().find(|s| s.record == key);
+            b.line(
+                0,
+                "ranking",
+                &id,
+                format!(
+                    "{} [sandbox {} · {} · arm {} · cutoff {} {}{} · from {}] strategies {} · rating {} · {}",
+                    c.title,
+                    c.sandbox,
+                    enum_name(&c.evidence_class),
+                    c.arm,
+                    c.cutoff,
+                    c.tz,
+                    if c.days.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" on {}", c.days.join(", "))
+                    },
+                    c.from,
+                    c.strategies.join(", "),
+                    c.rating
+                        .order
+                        .iter()
+                        .map(|t| t.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    seal.map_or("UNSEALED".to_string(), |s| format!(
+                        "sealed {} at {}",
+                        s.sha256, s.sealed_at
+                    ))
                 ),
             );
         }

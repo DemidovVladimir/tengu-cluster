@@ -325,6 +325,12 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             defs: || xlab::defs_named(names::BACKTEST),
             plugin: |_| Box::new(xlab::XlabPlugin),
         },
+        ToolEntry {
+            opt_in: Some(names::STRATEGY_RANKING),
+            needs_memory: false,
+            defs: || xlab::defs_named(names::STRATEGY_RANKING),
+            plugin: |_| Box::new(xlab::XlabPlugin),
+        },
         // Source family (O2): read-only evidence over `sources.db`
         // (interfaces in `sources/defs.rs`); agents never fetch.
         ToolEntry {

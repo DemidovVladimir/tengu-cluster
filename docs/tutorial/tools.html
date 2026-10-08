@@ -340,7 +340,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
   <ul class="checks">
     <li><span><b>One row, every surface.</b> Chat, plan steps, loops, <code>tengu tool</code> and the MCP bridge all register through <code>register_catalog</code>.</span></li>
     <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
-    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 32 fails the config.</span></li>
+    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 33 fails the config.</span></li>
     <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
     <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
@@ -414,7 +414,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     ["solana_close_token_accounts", "solana", 1, 0], ["jupiter_swap", "solana", 1, 0], ["dlmm_close_position", "solana", 1, 0], ["dlmm_open_position", "solana", 1, 0], ["jup_perps_order", "solana", 1, 0],
     ["hl_ctx", "hyperliquid", 1, 0], ["hl_book", "hyperliquid", 1, 0],
     ["risk_status", "xm paper", 1, 0], ["paper_order", "xm paper", 1, 0], ["paper_close", "xm paper", 1, 0], ["xm_exits", "xm paper", 1, 0], ["xm_weekend_fade", "xm paper", 1, 0], ["paper_positions", "xm paper", 1, 0],
-    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0],
+    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0], ["strategy_ranking", "xlab", 1, 0],
     ["source_evidence", "sources", 1, 0]
   ];
   var FAMS = ["workspace", "memory", "http", "crypto (Privy)", "skills", "solana", "hyperliquid", "xm paper", "xlab", "sources"];

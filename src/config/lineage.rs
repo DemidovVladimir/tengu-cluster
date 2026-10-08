@@ -5,7 +5,7 @@
 //!
 //! | Loader ([`load_registry`]) | Rule |
 //! |---|---|
-//! | dirs | `families/ variants/ experiments/ episodes/ incidents/ capabilities/ generations/ evidence/` — each optional; another dir is refused |
+//! | dirs | `families/ variants/ experiments/ episodes/ incidents/ capabilities/ generations/ evidence/ rankings/` — each optional; another dir is refused |
 //! | files | `<id>.toml` per record, the file stem = its `id`; `locks.toml` at the root; `*.md` and dotfiles skipped; another file refused |
 //! | parse | every table `deny_unknown_fields`; each error names the file |
 //! | digest | `pins::toml_digest` of each record file (what `locks.toml` pins) |
@@ -59,14 +59,20 @@ pub struct GenerationBinding {
 impl GenerationBinding {
     /// The registry dir for the config file at `config_file`.
     pub fn registry_dir(&self, config_file: &Path) -> PathBuf {
-        if self.registry.is_absolute() {
-            return self.registry.clone();
-        }
-        config_file
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(&self.registry)
+        relative_to_config(config_file, &self.registry)
     }
+}
+
+/// `path` as a config file names it: absolute as is, else relative to the
+/// file's dir (`[generation] registry`, `[strategy_ranking] registry`).
+pub fn relative_to_config(config_file: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    config_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(path)
 }
 
 /// `<registry>/<kind dir>/<id>.toml`.
@@ -202,6 +208,11 @@ pub fn load_registry(dir: &Path) -> Result<Registry, Vec<String>> {
         RecordKind::Evidence,
         evidence,
         crate::domain::evidence::EvidenceRecord
+    );
+    load!(
+        RecordKind::Ranking,
+        rankings,
+        crate::domain::lineage::ranking::RankingContract
     );
     let locks = dir.join(LOCKS_FILE);
     if locks.exists() {

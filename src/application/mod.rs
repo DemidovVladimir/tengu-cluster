@@ -12,6 +12,7 @@ pub(crate) mod metrics;
 pub(crate) mod observe;
 pub(crate) mod orchestrator;
 pub(crate) mod paper;
+pub(crate) mod ranking;
 pub(crate) mod runtime;
 pub(crate) mod skills;
 pub(crate) mod sources;

@@ -1,0 +1,9 @@
+id = "intel.strategy_ranking"
+title = "Strategy ranking under a sealed contract (rules arms, weakest to strongest)"
+class = "INTELLIGENCE"
+version = 1
+permission = "RESEARCH"
+lifecycle = "CANDIDATE"
+contract = "tool_schema:strategy_ranking"
+bindings = ["tool:strategy_ranking"]
+notes = "One ranking date of a sealed lineage/rankings/<id>.toml contract: every listed strategy's backtest over [from, cutoff) — no split, the holdout never read, rules arms only (evaluation NOT_GATED) — selected and rated by domain/backtest/ranking.rs, published under <state>/strategy-rankings/<contract>/ (dated + latest). The publisher refuses an unsealed or changed contract. The same coordinator serves tengu ranking run (CLI). No outcome observed yet: CANDIDATE."

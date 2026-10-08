@@ -317,7 +317,7 @@ limits     --max-decisions <span class="n">500</span> (rest counted as cut) · -
 --offline  cache only: a miss is a class-error decision, est. cost 0
 cost       misses × <span class="n">$0.00004</span> a decision</pre></div>
     <div class="tabpanel" id="tab-run" hidden><pre><span class="c"># &lt;state dir&gt;/backtests/&lt;run id&gt;/    run id = &lt;YYYYMMDDTHHMMSSZ&gt;-&lt;strategy&gt;, taken ⇒ -2, -3 …</span>
-report.json          <span class="c"># the report = row backtest/1:&lt;run id&gt;</span>
+report.json          <span class="c"># the report = row backtest/1:&lt;run id&gt;; + generation, instruments_sha256, costs_sha256</span>
 report.md            <span class="c"># the same, readable</span>
 trades-&lt;arm&gt;.jsonl   <span class="c"># one trade per line: legs, fills, costs, funding, exit reason</span>
 candidates.jsonl     <span class="c"># side, signal, decided / data-as-of, exit plan, features</span>
@@ -354,6 +354,8 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
     <li><span><b>No peeking at exits.</b> Capped admissions read the book as of the decision, never whether a later bar exists.</span></li>
     <li><span><b>Read-only warehouse.</b> A run never writes <code>market.db</code>.</span></li>
     <li><span><b>Reruns match.</b> The bootstrap is seeded; replay loops keep no history and the cache answers by full sha256, whatever <code>--concurrency</code>. Every report records <code>data_through_ms</code>, the newest row it read; <code>--data-through</code> with it reruns on the same data after <code>market.db</code> grew.</span></li>
+    <li><span><b>Runs say what they compare on.</b> Every report records its cohort identity: the bound <code>generation</code>, <code>instruments_sha256</code> of the ids read and <code>costs_sha256</code> of each id's resolved cost. <code>[backtest.costs]</code> sits outside <code>spec_sha256</code>; a <a href="strategy-ranking.html">strategy ranking</a> compares runs on both.</span></li>
+    <li><span><b>Cited runs stay.</b> Retention past <code>keep_runs</code> never deletes a run a lineage registry cites (<code>[generation]</code> or <code>[strategy_ranking]</code>) or a published ranking's <code>latest.json</code> names, and does not count it.</span></li>
     <li><span><b>The holdout is never shown unrecorded.</b> The tool refuses its text if the ledger line cannot be written.</span></li>
     <li><span><b>Runaway specs stop early.</b> Past <code>max_candidates</code> a run stops before any arm or file.</span></li>
     <li><span><b>Only the generation's kinds.</b> In a sandbox bound by <code>[generation]</code>, a spec kind no capability of that generation binds is refused before any read, <code>--fetch</code> included: <code>capability_unavailable</code> (<a href="lineage.html">Lineage and generations</a>).</span></li>
@@ -399,12 +401,13 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
         <tr><td><code>src/domain/backtest/stats.rs</code></td><td>summary, clustered t, bootstrap CI, calibration</td></tr>
         <tr><td><code>src/domain/backtest/gate.rs</code> · <code>report.rs</code></td><td>gate event and summary; <code>report.json</code>, <code>report.md</code></td></tr>
         <tr><td><code>src/domain/backtest/checks.rs</code></td><td>time-integrity proofs and the rule W golden (tests; also W1's replay check)</td></tr>
-        <tr><td><code>src/application/backtest/</code></td><td>resolve, prepare, evaluate, the gate arm, the run dir, <code>capability_refusal</code></td></tr>
+        <tr><td><code>src/domain/backtest/ranking.rs</code></td><td>the pure strategy ranker over run reports (<a href="strategy-ranking.html">strategy ranking</a>)</td></tr>
+        <tr><td><code>src/application/backtest/</code></td><td>resolve, prepare, evaluate, the gate arm, the run dir, <code>capability_refusal</code>, the cohort identity, the cited runs retention keeps</td></tr>
         <tr><td><code>src/adapters/outbound/decision_cache.rs</code></td><td>the sha256-keyed decision cache</td></tr>
         <tr><td><code>src/bootstrap/decision.rs</code></td><td>replay loops and the gate's wiring</td></tr>
         <tr><td><code>src/config/backtest.rs</code></td><td><code>[backtest]</code> knobs and load rules</td></tr>
         <tr><td><code>src/adapters/inbound/cli/backtest.rs</code></td><td><code>tengu backtest</code> flags</td></tr>
-        <tr><td><code>src/adapters/outbound/tools/xlab/</code></td><td>the <code>backtest</code> tool: run, holdout ledger, rows by run id</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/xlab/</code></td><td>the <code>backtest</code> tool: run, holdout ledger, rows by run id; the <code>strategy_ranking</code> tool (<a href="strategy-ranking.html">strategy ranking</a>)</td></tr>
       </tbody>
     </table>
   </div>

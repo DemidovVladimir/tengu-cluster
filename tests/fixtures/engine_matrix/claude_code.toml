@@ -139,6 +139,28 @@ interval = "1h"
 calendar = "us_equity"
 direction = "fade"
 
+# The xlab_rank set's `strategy_ranking`: the two move triggers of the test
+# contract rank.test.v1 (tests/fixtures/strategy_ranking/lineage). A contract
+# names its sandbox, so the leg runs a copy of this file at
+# <tmp>/sandboxes/rank-test/config.toml + [strategy_ranking] (the test adds it).
+[backtest.strategies.rank_fade]
+kind = "move_trigger"
+universe = "@matrix"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+
+[backtest.strategies.rank_follow]
+kind = "move_trigger"
+universe = "@matrix"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "follow"
+hold_bars = 3
+
 # The sources set: `source_evidence` reads <TENGU_HOME>/state/engine-matrix/
 # sources.db, seeded per leg by `tengu sources import` of the captured TED
 # pair tests/fixtures/ted/search_change_notice.json (no network). The row is
@@ -212,6 +234,11 @@ env_reads = ["HL_API_URL", "GECKO_API_URL"]
 [default_scopes.backtest]
 fs_roots = ["/nonexistent/tengu-engine-matrix"]
 
+# `strategy_ranking` runs the contract's backtests on the same market.db and
+# writes <state dir>/strategy-rankings/: no network, no env.
+[default_scopes.strategy_ranking]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
 # `source_evidence` writes only its observation row (the workspace store);
 # sources.db sits in the state dir. No network, no env.
 [default_scopes.source_evidence]
@@ -251,7 +278,7 @@ env_reads = ["HL_API_URL"]
 engine = "claude_code"
 model = "claude-haiku-4-5"
 description = "Engine-matrix fixture: Claude CLI (subscription) claude-haiku-4-5, built-ins off."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "source_evidence"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "strategy_ranking", "source_evidence"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.claude.claude_code]

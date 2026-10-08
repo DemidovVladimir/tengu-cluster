@@ -10,6 +10,7 @@
 //! | `run.rs` | `backtest` — `backtest/1:<run id>`: a `[backtest.strategies]` name or an inline spec through `application/backtest/` (rules arms; no Jev gate, no network), the run dir `<state dir>/backtests/<run id>/`; at most `MAX_TOOL_ROWS` candidates |
 //! | `holdout.rs` | `backtest`'s holdout discipline: a split runs its in-sample half only unless `holdout: true`, and every holdout read is a line of `<state dir>/backtests/holdout-reads.jsonl` (`holdout read #n for this spec`) |
 //! | `rows.rs` | `backtest` with `run_id`: a stored run's periods / instruments / trades / notes by run id (never a path), holdout rows hidden unless read |
+//! | `rank.rs` | `strategy_ranking` — a `[strategy_ranking]` contract's ranking date run through `application/ranking/` (`run`: backtests of every listed strategy, no split, published under `<state dir>/strategy-rankings/`), or a published one read (`latest`); no observation row |
 //!
 //! The plugin opens the market-data store once (`open_market_data`) and the
 //! workspace observation store (`open_observation_store`: rows are recorded
@@ -27,6 +28,7 @@
 pub(crate) mod defs;
 pub(crate) mod history;
 pub(crate) mod holdout;
+pub(crate) mod rank;
 pub(crate) mod rows;
 pub(crate) mod run;
 
@@ -184,6 +186,7 @@ impl ToolPlugin for XlabPlugin {
         };
         let mut tools = history::tools(&shared);
         tools.extend(run::tools(&shared));
+        tools.extend(rank::tools(&shared));
         Ok(tools)
     }
 }

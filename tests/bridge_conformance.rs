@@ -65,6 +65,7 @@
 //! | epoch ms / s within 2 days of now (fixture timestamps stay) | `<EPOCH_MS>` / `<EPOCH_S>` |
 //! | JSON-RPC `"id":<n>` (request bodies) | `"id":<N>` |
 //! | call-id nonce `mcp:<32 hex>:` (bridge and `tengu tool call`: one per process) | `mcp:<NONCE>:` |
+//! | a strategy ranking's `"report_sha256": "<64 hex>"` (the hash of a `report.json` holding its run id) | `<SHA256>` |
 //!
 //! Add a case: one `case("<tool>", json!({..}))` row in `cases()` plus the
 //! TOML its scope needs, `.route(..)` replies and `.ok("…")` / `.err("…")`
@@ -186,6 +187,9 @@ struct Case {
     /// `TENGU_BRIDGE_TRANSCRIPT_FILE` for the bridge, as a Claude Code run
     /// hands its bridge.
     transcript: Option<Value>,
+    /// `.sandbox(<name>)`: the config at `<root>/sandboxes/<name>/config.toml`
+    /// (a ranking contract names its sandbox), else `<root>/config.toml`.
+    sandbox: Option<String>,
     /// The tool may be absent from this build (cargo feature): skipped then.
     gated: bool,
     /// Not a catalog tool (an `[[mcp_servers]]` proxy tool).
@@ -220,6 +224,7 @@ fn case(tool: &str, args: Value) -> Case {
         routes: Vec::new(),
         mcp_servers: None,
         transcript: None,
+        sandbox: None,
         gated: false,
         extra: false,
     }
@@ -327,6 +332,11 @@ impl Case {
     }
     fn gated(mut self) -> Self {
         self.gated = true;
+        self
+    }
+    /// The config as sandbox `name`'s (`Case::sandbox`).
+    fn sandbox(mut self, name: &str) -> Self {
+        self.sandbox = Some(name.to_string());
         self
     }
     fn agent_tools(&self) -> Vec<String> {
@@ -448,6 +458,13 @@ const XLAB_TOML: &str = "[xmarket]\nstate = \"conf\"\n";
 /// replies and the window `[from, to)` they fill.
 fn recent_tsla_history() -> (String, String, i64, i64) {
     const H: i64 = 3_600_000;
+    tsla_history_closing_at(now_ms() / H * H - 2 * H)
+}
+
+/// [`recent_tsla_history`] with the last bar closing at `close_ms` (a whole
+/// hour).
+fn tsla_history_closing_at(close_ms: i64) -> (String, String, i64, i64) {
+    const H: i64 = 3_600_000;
     let mut candles: Value =
         serde_json::from_str(&fixture("hyperliquid/candleSnapshot_xyz_TSLA_1h.json")).unwrap();
     let mut funding: Value =
@@ -455,7 +472,7 @@ fn recent_tsla_history() -> (String, String, i64, i64) {
     let bars = candles.as_array_mut().unwrap();
     let first = bars[0]["t"].as_i64().unwrap();
     let last = bars[bars.len() - 1]["t"].as_i64().unwrap();
-    let shift = (now_ms() / H * H - 3 * H) - last;
+    let shift = (close_ms - H) - last;
     let moved = |v: &Value| json!(v.as_i64().unwrap() + shift);
     for b in bars.iter_mut() {
         b["t"] = moved(&b["t"]);
@@ -798,6 +815,111 @@ fn source_evidence_asof() -> Case {
             json!({"at": "2026-10-03", "fetch": true}),
         )
         .err("unknown argument(s) [\"fetch\"]")
+}
+
+/// The `strategy_ranking` case's sandbox: the fixture contract
+/// `rank.test.v1` (`tests/fixtures/strategy_ranking/lineage`, sealed; it
+/// names sandbox `rank-test`, so the config sits at
+/// `<root>/sandboxes/rank-test/config.toml`) and its two move triggers on
+/// `xyz:TSLA` (`tests/fixtures/strategy_ranking/config.toml`'s library).
+const RANK_TOML: &str = r#"
+[backtest]
+bootstrap = 200
+seed = 7
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.universes]
+tsla = ["hyperliquid:xyz:TSLA"]
+
+[backtest.strategies.rank_fade]
+kind = "move_trigger"
+universe = "@tsla"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+
+[backtest.strategies.rank_follow]
+kind = "move_trigger"
+universe = "@tsla"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "follow"
+hold_bars = 3
+
+[strategy_ranking]
+registry = "{fixtures}/strategy_ranking/lineage"
+contracts = ["rank.test.v1"]
+"#;
+
+/// `strategy_ranking` on the HL captures fetched through the mock, moved so
+/// their last bar closes at the contract's newest past cutoff (15:00 UTC):
+/// the date's ranking runs both move triggers (a run dir each, the files
+/// under `<TENGU_HOME>/state/conf/strategy-rankings/`, `report_sha256`
+/// normalised); a rerun returns the published date; `latest` reads it; a
+/// contract not listed is refused alike.
+fn strategy_ranking_hl() -> Case {
+    const H: i64 = 3_600_000;
+    const DAY: i64 = 24 * H;
+    let today_15 = now_ms() / DAY * DAY + 15 * H;
+    let cutoff = if today_15 <= now_ms() {
+        today_15
+    } else {
+        today_15 - DAY
+    };
+    let date = chrono::DateTime::from_timestamp_millis(cutoff)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    let (candles, funding, from, to) = tsla_history_closing_at(cutoff);
+    let fetch = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                       "from": from, "to": to, "fetch": true});
+    let run = json!({"action": "run", "date": date});
+    case("market_history", fetch)
+        .sandbox("rank-test")
+        .toml(XLAB_TOML)
+        .toml(RANK_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then("strategy_ranking", run.clone())
+        .ok(&format!(
+            "strategy_ranking run rank.test.v1 {date} COMPLETE · ran now · latest replaced · 2 \
+             ranked, 0 ineligible, 0 failed, 0 dropped\nstrategy ranking `rank.test.v1` {date}: \
+             COMPLETE · contract sha256 \
+             28c5d0c0339d82f13d14949dfebe2d423adc17a70aee292cbce55549d335f60d\n"
+        ))
+        .then("strategy_ranking", run)
+        .ok(
+            "\ncohort 1 of 1, weakest → strongest:\n  1. rank_fade  ci95_lo -56.86  mean -27.39  \
+             n 2  run:conf/<TIME>-rank_fade\n  2. rank_follow  ci95_lo -9.67  mean +19.79  n 2  \
+             run:conf/<TIME>-rank_follow\n",
+        )
+        .then("strategy_ranking", json!({"action": "latest"}))
+        .ok(&format!(
+            "strategy_ranking latest rank.test.v1 {date} COMPLETE · the newest COMPLETE ranking — \
+             nothing ran"
+        ))
+        .then(
+            "strategy_ranking",
+            json!({"action": "run", "contract": "rank.nope"}),
+        )
+        .err("contract_not_listed: `rank.nope` is not in [strategy_ranking] contracts (rank.test.v1)")
+        .retool("strategy_ranking")
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -1345,6 +1467,8 @@ fn cases() -> Vec<Case> {
         // a stored run's rows by run id.
         backtest_holdout(),
         backtest_rows(),
+        // A sealed ranking contract's date: run, rerun (published), latest.
+        strategy_ranking_hl(),
         // A bad inline spec: refused alike, every problem named, no run dir.
         case(
             "backtest",
@@ -1715,7 +1839,14 @@ impl Side {
         let toml = format!("{BASE_TOML}{}", case.full_toml())
             .replace("{tools}", &tools.join(", "))
             .replace("{skills}", &skills.join(", "));
-        let config = root.join("config.toml");
+        let config = match &case.sandbox {
+            Some(name) => {
+                let dir = root.join("sandboxes").join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                dir.join("config.toml")
+            }
+            None => root.join("config.toml"),
+        };
         std::fs::write(&config, expand(&toml, &root, &ws, mock)).unwrap();
         if let Some(messages) = &case.transcript {
             std::fs::write(root.join("transcript.json"), messages.to_string()).unwrap();
@@ -1977,6 +2108,8 @@ fn normalize(s: &str, roots: &[String]) -> String {
             (r"\b20\d{6}\.db\b", "<DAY>.db"),
             (r#""id":\d+"#, r#""id":<N>"#),
             (r"\bmcp:[0-9a-f]{32}:", "mcp:<NONCE>:"),
+            // A run's report.json bytes hold its run id (the UTC second).
+            (r#"("report_sha256": ?")[0-9a-f]{64}""#, r#"$1<SHA256>""#),
         ]
         .into_iter()
         .map(|(re, to)| (Regex::new(re).unwrap(), to))
