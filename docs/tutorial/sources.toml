@@ -242,6 +242,7 @@ sources = [
 sources = [
   "src/domain/evidence.rs",
   "src/domain/evidence_coverage.rs",
+  "src/domain/backtest/evaluation.rs",
   "src/domain/xm/grade.rs",
   "src/domain/xm/regrade.rs",
   "src/ports/evidence.rs",

@@ -9,6 +9,7 @@
 //! | `verify <record file>` | re-hash the vault: MATCH · MISMATCH · ABSENT · EXTRA; exit 1 unless all MATCH |
 //! | `coverage --history <dir>… --schema <s> --from --to --cadence-secs N [--bars <market.db> --interval 1m] [--instruments ids…]` | cadence slots, gaps, `LIVE_RECORDED` / `BACKFILLED` / `MISSING` intervals |
 //! | `grade --ledger <ledger.db> [--account A…]` | trades, totals, verdicts, 12 reconciliation checks per account; exit 1 when one fails |
+//! | `evaluate <run dir> [--bootstrap 2000] [--seed 7]` | a gated backtest run (`decisions.jsonl` beside `candidates.jsonl` + `trades-research.jsonl`, live or a vault copy): one row per candidate, rules · Jev · HOLD scored on the same candidates, paired per-candidate CIs, calibration, latency, cost, the Jev verdict PROVEN / UNPROVEN / REJECTED (`domain/backtest/evaluation.rs`); json adds every row |
 //! | `regrade --history <dir>… --anchor [--signal-at [--allow-signal-after-entry]] --entry --exit --notional-usd N [--top-n N] [--min-abs-signal-bps X] [--direction fade\|follow] [--taker-fee-bps F \| --fees recorded] [--market-db <db>] [--instruments ids…] [--fill-book as-of\|next] [--compare-ledger <db> --compare-account A] [--expect-signals <file>]` | rule W or a variant from recorded rows (`domain/xm/regrade.rs`); universe default = every `mkt_ctx/1` key at the anchor or the signal; a signal after the entry refused unless allowed, then `LOOK-AHEAD: …` is line 1 (JSON `look_ahead`) |
 //!
 //! Every command takes `--format text|json`. Times: RFC 3339, epoch ms or a
@@ -25,6 +26,7 @@ use serde_json::json;
 use crate::adapters::outbound::backfill::text_table;
 use crate::adapters::outbound::evidence::ledger_reader::SqliteLedgerReader;
 use crate::adapters::outbound::evidence::recorded::{DayFiles, MarketDb};
+use crate::adapters::outbound::evidence::run_dir::FsRunDir;
 use crate::adapters::outbound::evidence::vault::FsVault;
 use crate::application::evidence::{self as uc, Verdict};
 use crate::config::paths::resolve_tengu_home;
@@ -36,7 +38,7 @@ use crate::domain::xm::regrade::{
     check_signals, compare_with_ledger, parse_signal_lines, BookPick, Direction, FeeModel,
     Instants, Limits, Regrade, RegradeRule,
 };
-use crate::ports::evidence::{BackfillSource, LedgerSource};
+use crate::ports::evidence::{BackfillSource, LedgerSource, RunDirSource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(super) enum Format {
@@ -117,6 +119,21 @@ pub(super) enum EvidenceAction {
         /// Accounts to grade; default every account.
         #[arg(long = "account")]
         accounts: Vec<String>,
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
+    },
+    /// Evaluate a gated backtest run: rules · Jev · HOLD on the same
+    /// candidates, the Jev verdict.
+    Evaluate {
+        /// The run dir (`<state dir>/backtests/<run id>`, or its vault copy).
+        run_dir: PathBuf,
+        /// Bootstrap resamples over periods (`[backtest] bootstrap`).
+        #[arg(long, default_value_t = 2_000)]
+        bootstrap: u32,
+        /// The bootstrap seed (`[backtest] seed`).
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+        /// json: the summary and every candidate row.
         #[arg(long, value_enum, default_value_t = Format::Text)]
         format: Format,
     },
@@ -255,6 +272,31 @@ pub(super) fn run_evidence(action: EvidenceAction) -> Result<()> {
                 .collect();
             if !failed.is_empty() {
                 bail!("reconciliation FAIL: {}", failed.join(", "));
+            }
+            Ok(())
+        }
+        EvidenceAction::Evaluate {
+            run_dir,
+            bootstrap,
+            seed,
+            format,
+        } => {
+            let source = FsRunDir::new(&run_dir);
+            let (run_id, rows, summary) = uc::evaluate(&source, bootstrap, seed)?;
+            match format {
+                Format::Json => println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "run_dir": source.describe(),
+                        "run_id": run_id,
+                        "summary": summary,
+                        "rows": rows,
+                    }))?
+                ),
+                Format::Text => {
+                    println!("run dir {}", source.describe());
+                    print!("{}", summary.render_text(&run_id));
+                }
             }
             Ok(())
         }

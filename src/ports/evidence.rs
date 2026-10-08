@@ -10,11 +10,13 @@
 //! | [`LedgerSource`] | every row of a paper `ledger.db` the grade reads (`domain::xm::grade::LedgerRows`), schema of binary 6fcb455 or later | `evidence/ledger_reader.rs` |
 //! | [`RecordedHistory`] | recorder day files (`obs_history`) over one or more dirs: instants per schema, rows per key and time range | `evidence/recorded.rs` |
 //! | [`BackfillSource`] | `market.db` bars and funding, read-only | `evidence/recorded.rs` |
+//! | [`RunDirSource`] | a backtest run dir: `report.json` (run id, strategy), `candidates.jsonl`, `trades-research.jsonl`, `decisions.jsonl` (`tengu evidence evaluate`) | `evidence/run_dir.rs` |
 
 use std::collections::BTreeSet;
 
 use serde_json::Value;
 
+use crate::domain::backtest::engine::{Candidate, Trade};
 use crate::domain::evidence::{ItemKind, ManifestEntry};
 use crate::domain::observation::{Features, ObsStatus};
 use crate::domain::xm::grade::LedgerRows;
@@ -135,5 +137,25 @@ pub(crate) trait BackfillSource {
         from_ms: i64,
         to_ms: i64,
     ) -> anyhow::Result<Vec<(i64, f64)>>;
+    fn describe(&self) -> String;
+}
+
+/// What `tengu evidence evaluate` reads of a gated backtest run dir.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RunFiles {
+    /// `report.json` `run_id` / `strategy`.
+    pub run_id: String,
+    pub strategy: String,
+    pub candidates: Vec<Candidate>,
+    /// `trades-research.jsonl`: every candidate's outcome if taken.
+    pub research: Vec<Trade>,
+    /// `decisions.jsonl`, one JSON value per line.
+    pub decisions: Vec<Value>,
+}
+
+/// A backtest run dir, read-only (module table).
+pub(crate) trait RunDirSource {
+    fn read(&self) -> anyhow::Result<RunFiles>;
+    /// The dir, for the output's header.
     fn describe(&self) -> String;
 }
