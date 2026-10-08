@@ -183,6 +183,43 @@ exit = "09:00"
 direction = "follow"
 min_abs_signal_bps = 100
 
+# Weeknight fade, top 4 (pre-registered 2026-10-03 before any xlab run, plan in the
+# weekend research folder): fade the 4 largest moves of ≥ 50 bps from 20:00 to 00:00
+# New York, exit 09:00. A Monday 00:00 entry anchors on Friday 20:00 (the previous
+# trading day) and spans the weekend: read those trades apart from the weeknights.
+[backtest.strategies.xyz_weeknight_fade_top4]
+kind = "daily_window"
+universe = "@xyz_stocks"
+interval = "1h"
+days = "trading"
+calendar = "us_equity"
+tz = "America/New_York"
+anchor = "20:00"
+entry = "00:00"
+exit = "09:00"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+notional_usd = 25
+min_entry_trades = 1
+
+# Its only sibling: the same rule entering at 04:00 (pre-market open).
+[backtest.strategies.xyz_weeknight_fade_top4_0400]
+kind = "daily_window"
+universe = "@xyz_stocks"
+interval = "1h"
+days = "trading"
+calendar = "us_equity"
+tz = "America/New_York"
+anchor = "20:00"
+entry = "04:00"
+exit = "09:00"
+direction = "fade"
+min_abs_signal_bps = 50
+top_n = 4
+notional_usd = 25
+min_entry_trades = 1
+
 # Funding dislocation on the stock perps: receive funding while |rate| is
 # extreme, out when it normalises.
 [backtest.strategies.xyz_funding_carry]
