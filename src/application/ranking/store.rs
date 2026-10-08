@@ -214,15 +214,23 @@ pub(crate) fn published_ranking(
     read_ranking(&path).map(Some)
 }
 
-/// A published `ranking.md`: the date's, else `latest.md` — its path and
-/// text; `None` when nothing is published there.
+/// A published `ranking.md`: the date's once its manifest is `COMPLETE` /
+/// `INCOMPLETE` (as [`published_ranking`]: a `RUNNING` / `FAILED` date may
+/// hold a `ranking.md` its publish never committed), else `latest.md` — its
+/// path and text; `None` when nothing is published there.
 pub(crate) fn published_markdown(
     state_dir: &Path,
     contract: &str,
     date: Option<NaiveDate>,
 ) -> Result<Option<(PathBuf, String)>> {
     let path = match date {
-        Some(d) => date_dir(state_dir, contract, d).join(RANKING_MD),
+        Some(d) => {
+            let dir = date_dir(state_dir, contract, d);
+            match read_manifest(&dir)? {
+                Some(m) if m.status.is_published() => dir.join(RANKING_MD),
+                _ => return Ok(None),
+            }
+        }
         None => contract_dir(state_dir, contract).join(LATEST_MD),
     };
     match std::fs::read_to_string(&path) {

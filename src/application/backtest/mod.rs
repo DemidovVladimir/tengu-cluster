@@ -115,10 +115,6 @@ impl Resolved {
         self.spec.costs.as_ref().or_else(|| cost_for(costs, id))
     }
 
-    /// The series range a run over `[from_ms, to_ms)` reads:
-    /// `StrategySpec::data_range`, reaching further back for the longest
-    /// `abdi_ranaldo` window among the `[backtest.costs]` its instruments
-    /// resolve to.
     /// The run's cohort identity (module table) under `sections`.
     pub(crate) fn identity(
         &self,
@@ -143,6 +139,10 @@ impl Resolved {
         }
     }
 
+    /// The series range a run over `[from_ms, to_ms)` reads:
+    /// `StrategySpec::data_range`, reaching further back for the longest
+    /// `abdi_ranaldo` window among the `[backtest.costs]` its instruments
+    /// resolve to.
     pub(crate) fn data_window(
         &self,
         costs: &BTreeMap<String, CostSpec>,
@@ -1788,10 +1788,6 @@ mod tests {
         assert_eq!(left, want);
     }
 
-    /// Strategy ranking (SR-2): `report.json` records the cohort identity —
-    /// the bound generation, the sorted ids read and every id's resolved
-    /// cost; `[backtest.costs]` moves `costs_sha256` and never
-    /// `spec_sha256`, an `exclude` moves `instruments_sha256`.
     /// 13 old run dirs of the state `state`, `keep_runs = 10`, `sections`
     /// edited by `with`; one run written. The run dirs left, sorted, and the
     /// new run's id.
@@ -1883,6 +1879,10 @@ mod tests {
         assert_eq!(left, want);
     }
 
+    /// Strategy ranking (SR-2): `report.json` records the cohort identity —
+    /// the bound generation, the sorted ids read and every id's resolved
+    /// cost; `[backtest.costs]` moves `costs_sha256` and never
+    /// `spec_sha256`, an `exclude` moves `instruments_sha256`.
     #[tokio::test]
     async fn report_records_its_cohort_identity() {
         let tmp = tempfile::tempdir().unwrap();

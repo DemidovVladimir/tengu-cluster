@@ -195,7 +195,7 @@
         <li>The date: given, or the newest local date whose cutoff has passed, on one of <code>days</code>. A published date comes back as it is. Then the lease <code>ranking:&lt;id&gt;</code>.</li>
         <li>Per strategy, freshness first: every instrument's newest stored bar must close by the cutoff minus <code>max_lag_bars</code> bars. Otherwise the strategy is <code>STALE</code> and does not run.</li>
         <li>The backtest runs from <code>from</code> to the cutoff, data through the cutoff, no split, rules arms only. Its run dir lands in <code>backtests/</code>; the manifest is rewritten after each strategy.</li>
-        <li><code>report.json</code> is read back and hashed. The standing (evidence tier, verdict) comes from the registry reloaded at this run, so a later forward grade lifts only later dates.</li>
+        <li><code>report.json</code> is read back and hashed. The standing (evidence tier, verdict) comes from the registry reloaded at this run, read as of the cutoff: a PASS decided after the cutoff lifts nothing, so a later forward grade lifts only later dates, even when an earlier date is ranked again.</li>
         <li>The pure ranker: <code>select</code> keeps one run per strategy and cohort and lists every other with its reason; <code>rank</code> sorts each cohort ascending by the rating tuple.</li>
         <li>Publish: the dated <code>ranking.json</code> and <code>ranking.md</code>; on COMPLETE, <code>latest.md</code> then <code>latest.json</code>; the manifest's final status last. INCOMPLETE keeps the old <code>latest</code>.</li>
         <li>Run-dir retention past <code>keep_runs</code> never deletes a run the registry cites or a run <code>latest.json</code> names, and does not count it.</li>
@@ -296,7 +296,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
   </div>
   <div class="widget">
     <div class="ctrls">
-      <label for="t-pass"><input type="checkbox" id="t-pass"> <code>strat_b</code>: a variant with a PASS forward experiment</label>
+      <label for="t-pass"><input type="checkbox" id="t-pass"> <code>strat_b</code>: a variant with a PASS forward experiment, decided before the cutoff</label>
       <label for="t-super"><input type="checkbox" id="t-super"> <code>strat_a</code>'s variant is SUPERSEDED</label>
       <label for="t-thin"><input type="checkbox" id="t-thin"> <code>strat_c</code> has only 12 trades</label>
       <label for="t-stale"><input type="checkbox" id="t-stale"> <code>strat_d</code>'s data is stale</label>
@@ -314,7 +314,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     </div>
     <div class="widget-row"><span class="verdict ok" id="rank-status" aria-live="polite"></span></div>
   </div>
-  <p class="note"><b>Standing.</b> <code>evidence_tier</code> is the highest result class of PASS experiments of the variants carrying the run's <code>spec_sha256</code>, else <code>NONE</code>; a PENDING forward lifts nothing. Ordinals: NONE 0, DEVELOPMENT 1, HOLDOUT 2, FORWARD_PAPER 3, LIVE_MICRO 4, LIVE_PRODUCTION 5. <code>verdict</code> is the variants' weakest status: REJECTED 0, UNREGISTERED / INCONCLUSIVE / SUPERSEDED 1, REGISTERED / ACTIVE 2, SURVIVING 3. Numbers count as <code>round(x / 0.01)</code>.</p>
+  <p class="note"><b>Standing.</b> <code>evidence_tier</code> is the highest result class of PASS experiments of the variants carrying the run's <code>spec_sha256</code>, else <code>NONE</code>; only a PASS whose <code>decided_at</code> is not after the cutoff counts, so a PENDING forward, or one graded later, lifts nothing. Ordinals: NONE 0, DEVELOPMENT 1, HOLDOUT 2, FORWARD_PAPER 3, LIVE_MICRO 4, LIVE_PRODUCTION 5. <code>verdict</code> is the variants' weakest status: REJECTED 0, UNREGISTERED / INCONCLUSIVE / SUPERSEDED 1, REGISTERED / ACTIVE 2, SURVIVING 3. Numbers count as <code>round(x / 0.01)</code>.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Reason (check order)</th><th>List</th><th>When</th></tr></thead>
@@ -393,7 +393,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     <table>
       <thead><tr><th>Caller</th><th>How</th><th>INCOMPLETE</th></tr></thead>
       <tbody>
-        <tr><td><code>tengu ranking run</code></td><td>the operator or an external cron; <code>show</code> prints <code>latest.md</code> or a date's <code>ranking.md</code>; lease holder <code>cli:&lt;pid&gt;</code></td><td>exit 1</td></tr>
+        <tr><td><code>tengu ranking run</code></td><td>the operator or an external cron; <code>show</code> prints <code>latest.md</code> or a published date's <code>ranking.md</code> (manifest COMPLETE or INCOMPLETE); lease holder <code>cli:&lt;pid&gt;</code></td><td>exit 1</td></tr>
         <tr><td><code>strategy_ranking</code> tool</td><td><code>action</code> <code>run</code> or <code>latest</code>, optional <code>contract</code> and <code>date</code>; every engine (in-process, the MCP bridge for Claude Code); the backtests run on a thread of their own; holder = the call id; no observation row</td><td>an error, <code>ranking_incomplete: …</code>, with the rows</td></tr>
         <tr><td>xlab-w2 feeds</td><td>the private agent <code>xl_ranker</code> calls the tool on the clock above; the Architect does not hold it</td><td>the feed shows <code>down</code>; <code>doctor --live</code> names it</td></tr>
       </tbody>
@@ -428,7 +428,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run. Dated files written, <code>latest</code> kept, CLI exit 1, tool error.</span></li>
     <li><span class="chip warn">warn</span><span><b>RUNNING · FAILED</b>A manifest that stopped mid-run, or a publish that failed. The next run resumes it.</span></li>
     <li><span class="chip bad">error</span><span><b>contract_unsealed · contract_changed</b>The publisher refuses before writing anything.</span></li>
-    <li><span class="chip bad">error</span><span><b>ranking_busy · ranking_lease_lost</b>Another run holds the contract's lease, or took it mid-run.</span></li>
+    <li><span class="chip bad">error</span><span><b>ranking_busy · ranking_lease_lost</b>Another run holds the contract's lease, or took it mid-run (a step outlived the 15-min TTL): this run then writes nothing more.</span></li>
     <li><span class="chip bad">error</span><span><b>not_a_ranking_day · cutoff_not_reached · before_from</b>The date is not one of <code>days</code>, its cutoff is still ahead, or it is not after <code>from</code>.</span></li>
     <li><span class="chip warn">warn</span><span><b>ranking_unsealed</b>No <code>[[sealed]]</code> row: a draft. Both repo contracts are here.</span></li>
     <li><span class="chip bad">error</span><span><b>invalid_field</b>A shape rule: empty or repeated strategies, cohort fields or rating keys, an unknown zone, a bad cutoff, <code>from</code> not a UTC day, an arm other than research or capped.</span></li>
@@ -453,7 +453,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     <li><span><b>Cohorts never mix.</b> Runs rank together only when every cohort field is equal; each cohort gets its own table.</span></li>
     <li><span><b>Same data, same hash.</b> <code>content_sha256</code> leaves out run ids, report hashes and the generation time, so a rerun on the same data hashes the same.</span></li>
     <li><span><b>One run per contract.</b> The lease <code>ranking:&lt;contract id&gt;</code> refuses an overlapping run, from the CLI or anywhere else on the state dir.</span></li>
-    <li><span><b>Published is final.</b> A published date reruns as a no-op and its files are never rewritten. A later forward grade lifts the evidence tier only in later dates.</span></li>
+    <li><span><b>Published is final.</b> A published date reruns as a no-op and its files are never rewritten. A later forward grade lifts the evidence tier only in later dates: the standing is read as of each date's cutoff.</span></li>
     <li><span><b>Latest moves last.</b> Both dated files are written before <code>latest.md</code>, then <code>latest.json</code>. An older date never replaces a newer one.</span></li>
     <li><span><b>No holdout read.</b> A ranking run has no split, so it never writes <code>holdout-reads.jsonl</code>.</span></li>
     <li><span><b>Cited runs stay.</b> In a sandbox bound to no generation too, retention keeps the <code>[strategy_ranking]</code> registry's cited runs and every run a <code>latest.json</code> names.</span></li>

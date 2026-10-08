@@ -13,13 +13,13 @@
 //! | 1 Contract | listed in `[strategy_ranking]` (`contract_not_listed`); the registry reloaded from disk (a seal appended after start counts); its newest `[[sealed]]` row `ranking:<id>` hashes the file now — else `contract_unsealed` / `contract_changed`; nothing is written before this passes |
 //! | 2 Date | [`ranking_date`]: the given date, else the newest local date in `tz` whose cutoff has passed; a weekday of `days` (none = every day) — else `not_a_ranking_day`; cutoff = `Zone::at(date, cutoff)` (DST-correct), ≤ now — else `cutoff_not_reached` — and after `from` — else `before_from` |
 //! | 3 Idempotency | a `COMPLETE` / `INCOMPLETE` manifest: the published ranking comes back (`published = false`), nothing runs or is written — checked before and after the lease; only the operator reruns a published date (by deleting its `<date>/` dir) |
-//! | 4 Lease | `ranking:<contract id>` in the state dir's `runtime.db`, TTL 15 min, renewed before each strategy; another holder ⇒ `ranking_busy` (named); a lost renewal ⇒ `ranking_lease_lost`; released at the end |
+//! | 4 Lease | `ranking:<contract id>` in the state dir's `runtime.db`, TTL 15 min, renewed before each strategy and again before its manifest write (so before the publish too); another holder ⇒ `ranking_busy` (named); a lost renewal (a step outlived the TTL and another holder took the date) ⇒ `ranking_lease_lost`, and this run writes nothing more; released at the end |
 //! | 5 Manifest | a `RUNNING` / `FAILED` one of the same contract sha256 is resumed: a `DONE` strategy whose `report.json` still hashes its `report_sha256` is reused, the rest run again; rewritten after each strategy |
 //! | 6 Freshness | per instrument the strategy reads: its newest stored bar at the spec's interval closes ≥ cutoff − `max_lag_bars` × interval, else `STALE` (no run) |
 //! | 7 Backtest | one strategy at a time: `prepare` (from = `from`, to = data through = the cutoff, no split — never a holdout read), `evaluate` (the rules arms), `write_run_dir` (retention also keeps this date's `DONE` runs) |
-//! | 8 Evaluate | `report.json` read back: its sha256, `RunFacts`, the standing from the reloaded registry (a forward grade landed since lifts only later dates); evaluation `NOT_GATED`; skips and data notes are never failures |
+//! | 8 Evaluate | `report.json` read back: its sha256, `RunFacts`, the standing from the reloaded registry as of the cutoff (a PASS decided after it lifts nothing: a grade landed since lifts only later dates, a rerun of an earlier one too); evaluation `NOT_GATED`; skips and data notes are never failures |
 //! | 9 Rank | `select` → `rank`, stamped with the contract sha256, the date and now |
-//! | 10 Publish | `<date>/ranking.json` + `ranking.md`; `COMPLETE` and no newer date in `latest` ⇒ `latest.md`, then `latest.json`; then the manifest's final status. A failure after step 5 marks the manifest `FAILED` (resumable) |
+//! | 10 Publish | `<date>/ranking.json` + `ranking.md`; `COMPLETE` and no newer date in `latest` ⇒ `latest.md`, then `latest.json`; then the manifest's final status. A failure after step 5 marks the manifest `FAILED` (resumable) — a lost lease excepted: the manifest is the new holder's |
 //!
 //! A failed strategy's `error` names the state dir `<state>` (never its
 //! path), so a copy of the state ranks to the same `content_sha256`.
@@ -345,6 +345,28 @@ struct Run<'a> {
     resource: &'a str,
 }
 
+/// `ranking_lease_lost`: the lease expired during a step and another holder
+/// took it — this run writes nothing more (no FAILED manifest over the new
+/// holder's).
+#[derive(Debug)]
+struct LeaseLost {
+    resource: String,
+    holder: String,
+}
+
+impl std::fmt::Display for LeaseLost {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "ranking_lease_lost: `{}` passed to `{}` — this run stops and writes nothing more; \
+             that holder runs the date (a later run resumes its manifest)",
+            self.resource, self.holder
+        )
+    }
+}
+
+impl std::error::Error for LeaseLost {}
+
 /// What one strategy's fresh run gave (steps 6–8).
 enum Fresh {
     Ran { text: String },
@@ -396,6 +418,8 @@ impl Run<'_> {
         write_manifest(&self.dir, &m)?;
         match self.steps(&mut m).await {
             Ok(out) => Ok(out),
+            // Another holder runs the date now: the manifest is its to write.
+            Err(e) if e.downcast_ref::<LeaseLost>().is_some() => Err(e),
             Err(e) => {
                 m.status = ManifestStatus::Failed;
                 m.error = Some(format!("{e:#}"));
@@ -414,24 +438,7 @@ impl Run<'_> {
         let state = state_name(&self.env.state_dir)?;
         let mut inputs = Vec::with_capacity(c.strategies.len());
         for name in &c.strategies {
-            let lease = self
-                .env
-                .runtime
-                .acquire_lease(
-                    self.resource,
-                    self.holder,
-                    LEASE_TTL_MS,
-                    self.env.clock.now_ms(),
-                )
-                .await?;
-            if !lease.granted {
-                bail!(
-                    "ranking_lease_lost: `{}` passed to `{}` — this run stops; the next one \
-                     resumes the manifest",
-                    self.resource,
-                    lease.current_holder
-                );
-            }
+            self.renew().await?;
             let reused = m
                 .strategies
                 .get(name)
@@ -455,6 +462,9 @@ impl Run<'_> {
                 run = entry.run.as_deref().unwrap_or("-"),
                 "strategy ranking: strategy done"
             );
+            // A strategy that outlived the TTL may have lost the date to
+            // another holder: this run writes nothing more then.
+            self.renew().await?;
             m.strategies.insert(name.clone(), entry);
             m.updated_at_ms = self.env.clock.now_ms();
             write_manifest(&self.dir, m)?;
@@ -500,6 +510,28 @@ impl Run<'_> {
             ranking,
             manifest: m.clone(),
         })
+    }
+
+    /// Step 4: renew the lease (TTL from now), else [`LeaseLost`].
+    async fn renew(&self) -> Result<()> {
+        let lease = self
+            .env
+            .runtime
+            .acquire_lease(
+                self.resource,
+                self.holder,
+                LEASE_TTL_MS,
+                self.env.clock.now_ms(),
+            )
+            .await?;
+        if lease.granted {
+            return Ok(());
+        }
+        Err(LeaseLost {
+            resource: self.resource.to_string(),
+            holder: lease.current_holder,
+        }
+        .into())
     }
 
     /// A DONE entry's `report.json` text while it still hashes its
@@ -626,7 +658,8 @@ impl Run<'_> {
                     let sha = sha256_hex(&text);
                     let facts =
                         RunFacts::from_report(&report, state, &sha, &self.sealed.contract.arm);
-                    let standing = StrategyStanding::of(self.reg, &report.spec_sha256);
+                    let standing =
+                        StrategyStanding::of(self.reg, &report.spec_sha256, self.cutoff_ms);
                     (
                         StrategyEntry {
                             status: StrategyStatus::Done,
@@ -1251,6 +1284,90 @@ pub(crate) mod tests {
         assert!(next.granted, "released at the end");
     }
 
+    /// The runtime store, except that `holder`'s `steal_at`-th acquire finds
+    /// the lease taken by `thief` — as when a step outlives the TTL and
+    /// another process takes the date.
+    struct Thief {
+        inner: Arc<SqliteRuntimeStore>,
+        holder: &'static str,
+        steal_at: usize,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl RuntimeStore for Thief {
+        async fn acquire_lease(
+            &self,
+            resource: &str,
+            holder: &str,
+            ttl_ms: i64,
+            now_ms: i64,
+        ) -> Result<crate::domain::runtime::RunnerLease> {
+            use std::sync::atomic::Ordering;
+            if holder == self.holder
+                && self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.steal_at
+            {
+                let expired = now_ms + ttl_ms;
+                let stolen = self
+                    .inner
+                    .acquire_lease(resource, "thief", ttl_ms, expired)
+                    .await?;
+                assert!(stolen.granted);
+            }
+            self.inner
+                .acquire_lease(resource, holder, ttl_ms, now_ms)
+                .await
+        }
+        async fn release_lease(&self, resource: &str, holder: &str) -> Result<()> {
+            self.inner.release_lease(resource, holder).await
+        }
+        async fn write_heartbeat(&self, hb: &crate::domain::runtime::Heartbeat) -> Result<()> {
+            self.inner.write_heartbeat(hb).await
+        }
+    }
+
+    /// A step that outlived the lease: the renewal before its manifest write
+    /// fails `ranking_lease_lost`, and this run writes nothing more — no
+    /// FAILED manifest, no entry — over the date the new holder now runs.
+    #[tokio::test]
+    async fn a_lost_lease_writes_nothing_more() {
+        let f = fx().await;
+        let mut env = f.env.clone();
+        // Acquires of `test:a`: the run's, the renewal before rule_w, the
+        // one after it (stolen).
+        env.runtime = Arc::new(Thief {
+            inner: f.runtime.clone(),
+            holder: "test:a",
+            steal_at: 3,
+            calls: Default::default(),
+        });
+        let req = RankRequest {
+            contract: ID.into(),
+            date: Some(day("2026-10-09")),
+            holder: "test:a".into(),
+        };
+        let e = format!("{:#}", run_ranking(&env, req).await.unwrap_err());
+        assert!(
+            e.starts_with("ranking_lease_lost: `ranking:rank.fixture.v1` passed to `thief`"),
+            "{e}"
+        );
+        let m = read_manifest(&f.dir("2026-10-09")).unwrap().unwrap();
+        assert_eq!(m.status, ManifestStatus::Running, "{m:#?}");
+        assert!(m.strategies.is_empty() && m.error.is_none(), "{m:#?}");
+        assert!(!f.dir("2026-10-09").join(RANKING_JSON).exists());
+        assert_eq!(f.runs().len(), 1, "rule_w ran before the loss");
+        let other = f
+            .runtime
+            .acquire_lease(&lease_resource(ID), "other", LEASE_TTL_MS, f.clock.now_ms())
+            .await
+            .unwrap();
+        assert_eq!(other.current_holder, "thief", "not released by test:a");
+        // The thief gone, the next run resumes the manifest and publishes.
+        f.clock.advance(3 * LEASE_TTL_MS);
+        let out = f.run("2026-10-09").await.unwrap();
+        assert_eq!(out.manifest.status, ManifestStatus::Complete);
+    }
+
     #[tokio::test]
     async fn an_unsealed_or_changed_contract_is_refused() {
         let f = fx().await;
@@ -1346,9 +1463,14 @@ pub(crate) mod tests {
         let dir1 = f.dir("2026-10-08");
         let files = || [MANIFEST_JSON, RANKING_JSON, RANKING_MD].map(|n| bytes(&dir1.join(n)));
         let before = files();
-        // Monday's grade: the forward PASSes.
+        // The grade: the forward PASSes, decided Thu 2026-10-08 14:00Z —
+        // after 2026-10-08's cutoff (04:00Z), before 2026-10-09's.
         f.edit("experiments/rule_w.forward.toml", |t| {
             t.replace("value = \"PENDING\"", "value = \"PASS\"")
+                .replace(
+                    "decided_at = \"UNKNOWN\"",
+                    "decided_at = \"2026-10-08T14:00:00Z\"",
+                )
         });
         f.clock.advance(H);
         let d2 = f.run("2026-10-09").await.unwrap();
@@ -1365,5 +1487,14 @@ pub(crate) mod tests {
         let again = f.run("2026-10-08").await.unwrap();
         assert!(!again.published);
         assert_eq!(top(&again).evidence_tier, EvidenceClass::None);
+        // Ranked anew (its dir deleted, as an INCOMPLETE date is rerun), the
+        // earlier date still reads the registry as of its own cutoff: the
+        // grade decided after it lifts nothing, the content is the same.
+        std::fs::remove_dir_all(&dir1).unwrap();
+        f.clock.advance(H);
+        let rerun = f.run("2026-10-08").await.unwrap();
+        assert!(rerun.published);
+        assert_eq!(top(&rerun).evidence_tier, EvidenceClass::None);
+        assert_eq!(rerun.ranking.content_sha256(), d1.ranking.content_sha256());
     }
 }

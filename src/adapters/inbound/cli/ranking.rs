@@ -7,7 +7,7 @@
 //! | Command | Rule |
 //! |---|---|
 //! | `run [--contract <id>] [--date YYYY-MM-DD] [--format table\|json]` | `--contract` default = the only contract listed; `--date` default = the newest date whose cutoff has passed; lease holder `cli:<pid>`; a missing `market.db` is an error (never created) · table: the ranking's compact lines, whether it ran now, `latest` replaced or kept, the date dir · json: `ranking.json` on stdout, the date dir on stderr · exit 1 on an `INCOMPLETE` ranking (after printing it), a failed run or a refusal (`contract_unsealed`, `contract_changed`, `ranking_busy`, `not_a_ranking_day`, `cutoff_not_reached`, …) |
-//! | `show [--contract <id>] [--date YYYY-MM-DD]` | `latest.md`, or the date's `ranking.md`; nothing published there ⇒ an error saying so |
+//! | `show [--contract <id>] [--date YYYY-MM-DD]` | `latest.md`, or the date's `ranking.md` once its manifest is `COMPLETE` / `INCOMPLETE`; nothing published there (a `RUNNING` / `FAILED` date included) ⇒ an error saying so |
 //!
 //! Sandbox resolution and logging (stderr) are `tengu backtest`'s
 //! (`cli/mod.rs`).
@@ -168,6 +168,10 @@ mod tests {
 
     use super::super::{Cli, Commands};
     use super::*;
+    use crate::application::ranking::store::{
+        write_manifest, Manifest, ManifestStatus, MANIFEST_SCHEMA,
+    };
+    use crate::domain::lineage::value::Time;
 
     fn parse(args: &[&str]) -> Result<(Option<String>, RankingAction), String> {
         let cli = Cli::try_parse_from(std::iter::once("tengu").chain(args.iter().copied()))
@@ -256,11 +260,50 @@ mod tests {
             e.starts_with("no published ranking of `rank.fixture.v1` for 2026-10-09"),
             "{e}"
         );
-        // Published: latest.md and the dated ranking.md are printed as written.
+        // A dated ranking.md whose manifest is RUNNING or FAILED (a publish
+        // that stopped after writing it) is not published.
         let dir = tmp.path().join("strategy-rankings/rank.fixture.v1");
-        std::fs::create_dir_all(dir.join("2026-10-09")).unwrap();
+        let dated = dir.join("2026-10-09");
+        std::fs::create_dir_all(&dated).unwrap();
         std::fs::write(dir.join("latest.md"), "# latest\n").unwrap();
-        std::fs::write(dir.join("2026-10-09/ranking.md"), "# dated\n").unwrap();
+        std::fs::write(dated.join("ranking.md"), "# dated\n").unwrap();
+        let mut m = Manifest {
+            schema: MANIFEST_SCHEMA.into(),
+            contract: "rank.fixture.v1".into(),
+            contract_sha256: "c".repeat(64),
+            sealed_at: Time::At(0),
+            sandbox: "ranked".into(),
+            date: d.unwrap(),
+            tz: "America/New_York".into(),
+            from_ms: 0,
+            cutoff_ms: 1,
+            status: ManifestStatus::Failed,
+            strategies: Default::default(),
+            holder: "cli:1".into(),
+            started_at_ms: 0,
+            updated_at_ms: 0,
+            finished_at_ms: None,
+            content_sha256: None,
+            latest_replaced: false,
+            error: Some("replace latest.md: is a directory".into()),
+        };
+        for status in [
+            None,
+            Some(ManifestStatus::Running),
+            Some(ManifestStatus::Failed),
+        ] {
+            if let Some(s) = status {
+                m.status = s;
+                write_manifest(&dated, &m).unwrap();
+            }
+            let e = show(tmp.path(), "rank.fixture.v1", d)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("RUNNING or FAILED publishes nothing"), "{e}");
+        }
+        // Published: latest.md and the dated ranking.md are printed as written.
+        m.status = ManifestStatus::Incomplete;
+        write_manifest(&dated, &m).unwrap();
         assert_eq!(
             show(tmp.path(), "rank.fixture.v1", None).unwrap(),
             "# latest\n"

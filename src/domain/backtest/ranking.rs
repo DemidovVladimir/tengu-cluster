@@ -7,7 +7,7 @@
 //! | Step | Rule |
 //! |---|---|
 //! | [`RunFacts::from_report`] | a `report.json`, the file's sha256, its state and the contract's arm → what a ranking reads: the arm's `Summary`, the window, the cohort identity, whether a split read the holdout; [`RunFacts::run`] = `run:<state>/<run id>` (what retention keeps) |
-//! | [`StrategyStanding::of`] | the registry on a spec hash: the variants carrying it; `evidence_tier` = the highest result class of their PASS experiments (validity ≠ `INVALID_FOR_STRATEGY_INFERENCE`, class ≠ `NONE`), else `NONE`; `verdict` = their weakest status ([`RunVerdict`]), `UNREGISTERED` when none |
+//! | [`StrategyStanding::of`] | the registry on a spec hash, as of the cutoff: the variants carrying it; `evidence_tier` = the highest result class of their PASS experiments decided by the cutoff (`decided_at` not after it; validity ≠ `INVALID_FOR_STRATEGY_INFERENCE`, class ≠ `NONE`), else `NONE`; `verdict` = their weakest status ([`RunVerdict`]; a status carries no time: the registry's now), `UNREGISTERED` when none |
 //! | [`select`] | each [`RunInput`] → chosen, or [`Rejected`] with the first reason of the table below; one run per strategy and cohort (the newest run id) |
 //! | [`rank`] | per cohort, rows ascending by the rating tuple, then [`TieBreak`]; rank 1 = the weakest; status `INCOMPLETE` when a listed strategy failed under `on_missing = INCOMPLETE`, or none was evaluated |
 //! | Rating tuple | one integer per `[rating] order` term: `evidence_tier` / `verdict` as ordinals ([`tier_ordinal`], [`RunVerdict::ordinal`]), a number as `round(x / quantum)`; a leading `-` negates |
@@ -47,7 +47,7 @@ use crate::domain::lineage::query::{enum_name, variants_by_hash};
 use crate::domain::lineage::ranking::{
     CohortField, MissingPolicy, RankingContract, RatingKey, RatingTerm, TieBreak,
 };
-use crate::domain::lineage::value::Locator;
+use crate::domain::lineage::value::{Locator, Time, TimeOrder};
 use crate::domain::lineage::variant::VariantStatus;
 use crate::domain::lineage::Registry;
 use crate::domain::marketdata::fmt_time;
@@ -140,8 +140,13 @@ pub struct StrategyStanding {
 }
 
 impl StrategyStanding {
-    /// Module table: the standing of `spec_sha256` in `reg`.
-    pub fn of(reg: &Registry, spec_sha256: &str) -> Self {
+    /// Module table: the standing of `spec_sha256` in `reg` as of `as_of_ms`
+    /// (the ranking's cutoff). A PASS lifts the tier only when its
+    /// `decided_at` is not after `as_of_ms` (a day: all of it; `UNKNOWN`:
+    /// never), so a grade decided later never reaches back into an earlier
+    /// date — published or rerun.
+    pub fn of(reg: &Registry, spec_sha256: &str, as_of_ms: i64) -> Self {
+        let as_of = Time::At(as_of_ms);
         let variants: BTreeMap<String, VariantStatus> = variants_by_hash(reg)
             .get(spec_sha256)
             .map(|vs| vs.iter().map(|v| (v.id.clone(), v.status)).collect())
@@ -152,6 +157,7 @@ impl StrategyStanding {
             .filter(|x| {
                 variants.contains_key(&x.variant)
                     && x.verdict.value == VerdictValue::Pass
+                    && x.verdict.decided_at.order(&as_of) == TimeOrder::NotAfter
                     && x.validity != Some(Validity::InvalidForStrategyInference)
             })
             .flat_map(|x| x.results.iter().map(|r| r.class))
@@ -1287,27 +1293,46 @@ mod tests {
         let mut reg = registry(&[("proven", VariantStatus::Surviving)]);
         reg.experiments.get_mut("bt").unwrap().variant = "var.proven".into();
         reg.experiments.get_mut("fw").unwrap().variant = "var.proven".into();
-        let proven = StrategyStanding::of(&reg, &hash("proven"));
+        let proven = StrategyStanding::of(&reg, &hash("proven"), cutoff());
         assert_eq!(proven.evidence_tier, EvidenceClass::Holdout);
         assert_eq!(proven.verdict, RunVerdict::Surviving);
         assert_eq!(
             proven.variants,
             BTreeMap::from([("var.proven".to_string(), VariantStatus::Surviving)])
         );
-        // A PASS forward lifts it; one invalid for strategy inference does not.
+        // A PASS forward lifts it once decided by the cutoff (2026-10-09
+        // 04:00Z); decided after it, at an UNKNOWN time or on the cutoff's own
+        // day (it may be after) it lifts nothing: a later grade never reaches
+        // back into an earlier date.
         let mut passed = reg.clone();
         passed.experiments.get_mut("fw").unwrap().verdict.value = VerdictValue::Pass;
+        for (decided, tier) in [
+            ("UNKNOWN", EvidenceClass::Holdout),
+            ("2026-10-09T04:00:01Z", EvidenceClass::Holdout),
+            ("2026-10-09", EvidenceClass::Holdout),
+            ("2026-10-09T04:00:00Z", EvidenceClass::ForwardPaper),
+            ("2026-10-08", EvidenceClass::ForwardPaper),
+        ] {
+            passed.experiments.get_mut("fw").unwrap().verdict.decided_at = decided.parse().unwrap();
+            assert_eq!(
+                StrategyStanding::of(&passed, &hash("proven"), cutoff()).evidence_tier,
+                tier,
+                "decided {decided}"
+            );
+        }
+        // An earlier as-of instant leaves even the 2026-10-08 grade out.
         assert_eq!(
-            StrategyStanding::of(&passed, &hash("proven")).evidence_tier,
-            EvidenceClass::ForwardPaper
+            StrategyStanding::of(&passed, &hash("proven"), cutoff() - 2 * 86_400_000).evidence_tier,
+            EvidenceClass::Holdout
         );
+        // One invalid for strategy inference never lifts it.
         passed.experiments.get_mut("fw").unwrap().validity =
             Some(Validity::InvalidForStrategyInference);
         assert_eq!(
-            StrategyStanding::of(&passed, &hash("proven")).evidence_tier,
+            StrategyStanding::of(&passed, &hash("proven"), cutoff()).evidence_tier,
             EvidenceClass::Holdout
         );
-        let rich = StrategyStanding::of(&reg, &hash("rich"));
+        let rich = StrategyStanding::of(&reg, &hash("rich"), cutoff());
         assert_eq!(rich, unregistered());
 
         let c = contract_of(&["proven", "rich"]);
@@ -1341,7 +1366,7 @@ mod tests {
             ("alive", VariantStatus::Surviving),
             ("unsure", VariantStatus::Inconclusive),
         ]);
-        let dead = StrategyStanding::of(&reg, &hash("dead"));
+        let dead = StrategyStanding::of(&reg, &hash("dead"), cutoff());
         assert_eq!(dead.verdict, RunVerdict::Rejected);
         let c = contract_of(&["dead", "alive", "unsure"]);
         let r = ranking(
@@ -1350,11 +1375,11 @@ mod tests {
                 with(facts("dead", "20261009T050000Z-dead", 80.0, 50.0), dead),
                 with(
                     facts("alive", "20261009T050000Z-alive", 5.0, -10.0),
-                    StrategyStanding::of(&reg, &hash("alive")),
+                    StrategyStanding::of(&reg, &hash("alive"), cutoff()),
                 ),
                 with(
                     facts("unsure", "20261009T050000Z-unsure", 40.0, 20.0),
-                    StrategyStanding::of(&reg, &hash("unsure")),
+                    StrategyStanding::of(&reg, &hash("unsure"), cutoff()),
                 ),
             ],
         );
@@ -1369,7 +1394,7 @@ mod tests {
         twin.status = VariantStatus::Rejected;
         both.variants.insert(twin.id.clone(), twin);
         assert_eq!(
-            StrategyStanding::of(&both, &hash("alive")).verdict,
+            StrategyStanding::of(&both, &hash("alive"), cutoff()).verdict,
             RunVerdict::Rejected
         );
     }
@@ -1496,7 +1521,7 @@ mod tests {
                 run(gappy),
                 with(
                     facts("retired", "20261009T050000Z-retired", 1.0, 1.0),
-                    StrategyStanding::of(&reg, &hash("retired")),
+                    StrategyStanding::of(&reg, &hash("retired"), cutoff()),
                 ),
                 run(facts("ok", "20261009T050000Z-ok", 1.0, 1.0)),
             ],
