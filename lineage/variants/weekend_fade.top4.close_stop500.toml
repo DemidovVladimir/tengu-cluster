@@ -1,0 +1,20 @@
+id = "weekend_fade.top4.close_stop500"
+family = "weekend_overshoot_fade"
+title = "Rule W top 4, exit at the first 1h close 500 bps against the fade"
+parent = "weekend_fade.top4"
+reason = "Phase 9 (cost / liquidity and exits): the 2026-10-03 sweep's best level, now a bar-close stop on the engine."
+registered_at = "2026-10-08"
+order = 30
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "On the engine (weekend_window knob, bar-close walk / cost model v2 of xlab-w2), unlike the hand-rolled 2026-10-03 sweep (intrabar high / low + 10 bps slippage). Experiment xlab.weekend_fade_top4.exits_costs.2026-10-08. docs/p9-cost-liquidity-2026-10-08.md."
+
+[spec]
+sandbox = "xlab-w2"
+strategy = "weekend_fade_top4_stop500"
+spec_sha256 = "f7131886b6624294f04eb52ff6ba157ce611c9f3fb4c4d2b6120aa7f4de3439e"
+
+[[changed]]
+dim = "stop_loss_bps"
+from = "none"
+to = 500

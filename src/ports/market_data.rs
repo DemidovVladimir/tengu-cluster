@@ -3,13 +3,15 @@
 //! asset contexts per full instrument id. Impl: `SqliteMarketData`
 //! (`adapters/outbound/market_data.rs`, `<state dir>/market.db`); fed by the
 //! backfill fetchers (`adapters/outbound/backfill/`), read by the backtest
-//! use case (`application/backtest/`) and the `market_history` tool.
+//! use case (`application/backtest/`) and the `market_history` tool. Phase 7 adds
+//! dated information events (`events`, `event_coverage`: SEC filings first).
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::marketdata::{
-    Bar, BarSeries, CtxPoint, CtxSeries, FundingPoint, FundingSeries, Interval,
+    Bar, BarSeries, CtxPoint, CtxSeries, EventCoverage, FundingPoint, FundingSeries, Interval,
+    MarketEvent,
 };
 
 /// What the store holds for one instrument and kind.
@@ -75,4 +77,21 @@ pub(crate) trait MarketDataStore: Send + Sync {
     /// Coverage rows, one per (instrument, kind, interval); `instrument`
     /// filters to one id. Sorted by instrument, kind, interval.
     async fn coverage(&self, instrument: Option<&str>) -> anyhow::Result<Vec<CoverageRow>>;
+    /// Upsert events (same `(instrument, source, id)` = replaced); each is
+    /// `MarketEvent::validate`d — one bad event fails the call, nothing
+    /// written. Returns the rows written.
+    async fn put_events(&self, source: &str, events: &[MarketEvent]) -> anyhow::Result<usize>;
+    /// Events of `instrument` with `from_ms <= published_ms < to_ms`, every
+    /// source, ascending by time then id.
+    async fn events(
+        &self,
+        instrument: &str,
+        from_ms: i64,
+        to_ms: i64,
+    ) -> anyhow::Result<Vec<MarketEvent>>;
+    /// Record what a source read of an instrument (same `(instrument,
+    /// source)` = replaced: the latest fetch's span).
+    async fn put_event_coverage(&self, coverage: &EventCoverage) -> anyhow::Result<()>;
+    /// Every source's coverage of `instrument`, by source.
+    async fn event_coverage(&self, instrument: &str) -> anyhow::Result<Vec<EventCoverage>>;
 }

@@ -1,0 +1,25 @@
+id = "weekend_fade.top4.close_stop500.net_of_cost"
+family = "weekend_overshoot_fade"
+title = "Rule W top 4, 500 bps bar-close stop and net-of-cost ranking"
+parent = "weekend_fade.top4"
+reason = "Phase 9 (cost / liquidity and exits): both Phase 9 changes together."
+registered_at = "2026-10-08"
+order = 32
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "On the engine (weekend_window knob, bar-close walk / cost model v2 of xlab-w2), unlike the hand-rolled 2026-10-03 sweep (intrabar high / low + 10 bps slippage). Experiment xlab.weekend_fade_top4.exits_costs.2026-10-08. docs/p9-cost-liquidity-2026-10-08.md."
+
+[spec]
+sandbox = "xlab-w2"
+strategy = "weekend_fade_top4_stop500_net_of_cost"
+spec_sha256 = "30274d9e0a7f6a7f5b83a93b7e843c6b4cf9dc2282ffb86fde5ae942ef4d4d9e"
+
+[[changed]]
+dim = "stop_loss_bps"
+from = "none"
+to = 500
+
+[[changed]]
+dim = "rank_by"
+from = "signal"
+to = "net_of_cost"

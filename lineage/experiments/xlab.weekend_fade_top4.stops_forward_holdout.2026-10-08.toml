@@ -1,0 +1,66 @@
+id = "xlab.weekend_fade_top4.stops_forward_holdout.2026-10-08"
+title = "Rule W top 4 bar-close stops on the forward weekend 2026-10-02 → 10-05 (never seen when the stop levels were picked) — Phase 9 / 11"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4.close_stop300"
+generation = "UNKNOWN"
+environment = "XLAB"
+kind = "HOLDOUT_TEST"
+registered_at = "2026-10-08"
+ran_at = "2026-10-08T12:35:08Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''xlab-w2 cost model v2 (per-name observed fee + measured $100 spread cost)'''
+uncertainty = "One weekend, 4 trades: no CI (one period). A single draw, not a verdict on the rule — a verdict on carrying the stop forward now."
+incidents = []
+limitations = ["Fills at 1h bar closes from backfilled bars, not the recorded books; the live forward run (fwd.rule_w.2026-10-02) graded at books gave +141.8 bps a trade.", "Not preregistered: the stop levels were chosen 2026-10-03 from 24 weekends to 2026-09-25, before this weekend's outcome (2026-10-05), but this test was not sealed in advance."]
+notes = "BIRD (short) went 520 bps against on marks before ending +211.80 bps; the 300 bps stop cuts it at a loss. Stop 500 is never hit. docs/p9-cost-liquidity-2026-10-08.md, docs/p10-w2-candidate-2026-10-08.md."
+
+[[windows]]
+role = "HOLDOUT"
+from = "2026-10-03T00:00:00Z"
+to = "2026-10-05T00:00:00Z"
+scope = "@xyz_stocks, the rule W weekend 2026-10-02 20:00 → 2026-10-05 09:00 New York"
+integrity = "CLEAN"
+note = "Outside every stop-level selection (the 2026-10-03 sweep read weekends to 2026-09-25)."
+
+[[results]]
+label = "baseline weekend_fade_top4"
+arm = "research"
+class = "HOLDOUT"
+n = 4
+mean_net_bps = 131.036736972543
+net_usd = 5.24146947890172
+evidence = "run:xlab/20261008T123508Z-weekend_fade_top4"
+extract = "arm:research"
+
+[[results]]
+label = "close stop 300 bps"
+arm = "research"
+class = "HOLDOUT"
+n = 4
+mean_net_bps = -40.569148563171
+net_usd = -1.62276594252684
+evidence = "run:xlab/20261008T123508Z-weekend_fade_top4_stop300"
+extract = "arm:research"
+
+[[results]]
+label = "close stop 500 bps"
+arm = "research"
+class = "HOLDOUT"
+n = 4
+mean_net_bps = 131.036736972543
+net_usd = 5.24146947890172
+evidence = "run:xlab/20261008T123508Z-weekend_fade_top4_stop500"
+extract = "arm:research"
+
+[verdict]
+value = "FAIL"
+reason = "The 300 bps stop's development gain (+163.14 vs +142.65) does not survive outside development: −40.57 vs +131.04 on the one clean weekend (BIRD stopped out before winning). Stop 500 is never hit (= baseline). Neither is a supported W2 change."
+decided_at = "2026-10-08"
+decided_by = "Phase 11 evaluation (Claude, operator-delegated)"
+
+[[evidence]]
+ref = "repo:docs/p10-w2-candidate-2026-10-08.md"
+role = "phase report"
+class = "HOLDOUT"
+provenance = "DERIVED"

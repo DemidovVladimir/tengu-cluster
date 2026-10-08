@@ -10,6 +10,7 @@
 //! | `spec.rs` | strategy specs — six kinds, `deny_unknown_fields`, bounds naming the field — and `SplitSpec` (`time:` / `instruments:`) |
 //! | `engine.rs` | `candidates` (checks, then `kinds.rs`) and `simulate` (research arm / `[risk]`-capped arm): `MarketData`, `RunParams`, `Candidate`, `Trade`, `RiskCaps`, `ArmResult` |
 //! | `kinds.rs` | the decisions of each of the six kinds, as-of t, with skips and data notes |
+//! | `labels.rs` | Phase 7: point-in-time NEWS / UNCERTAIN / NOISE labels of `weekend_window` names (events, event coverage, first bar, splits over [anchor − lookback, decision]) and the spec's `labels` knob (`skip` before `top_n`) |
 //! | `fills.rs` | cost per side (fee, half-spread fixed / Abdi–Ranaldo / ctx, slippage), funding over a hold, the path-dependent exits, the pair spread series |
 //! | `costs.rs` | the cost model a spec or `[backtest.costs]` sets: taker fee, half-spread (fixed / Abdi–Ranaldo / archive ctx), slippage, funding on or off |
 //! | `features.rs` | features as-of t (returns, vol, volume ratio, trades, funding APR, half-spread, hour of week) for the Jev gate |
@@ -28,6 +29,7 @@ pub(crate) mod features;
 pub(crate) mod fills;
 pub(crate) mod gate;
 pub(crate) mod kinds;
+pub(crate) mod labels;
 pub(crate) mod report;
 pub(crate) mod spec;
 pub(crate) mod stats;

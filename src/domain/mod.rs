@@ -26,6 +26,7 @@ pub(crate) mod plan;
 pub(crate) mod runtime;
 pub(crate) mod schedule;
 pub(crate) mod scope;
+pub(crate) mod sec;
 pub(crate) mod secrets;
 pub(crate) mod session;
 pub(crate) mod solana;

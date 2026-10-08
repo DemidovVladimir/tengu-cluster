@@ -1,0 +1,95 @@
+id = "xlab.weekend_fade_top4.exits_costs.2026-10-08"
+title = "Rule W top 4 under cost model v2: bar-close stops (300, 500 bps) and net-of-cost ranking — Phase 9"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4.close_stop300"
+generation = "UNKNOWN"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-08"
+ran_at = "2026-10-08T12:31:26Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''xlab-w2 cost model v2: per-name taker fee observed 2026-10-04 (0.9; 9.0 for BMNR, MSTR, PURRDAT) + per-name half-spread = the measured $100 cost of the recorded weekend's books (mean 4.13 bps per side, OBSERVED once, ASSUMED over history) + funding; simple-return P&L'''
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; stop levels already searched (5 hand-rolled 2026-10-03 + 2 here): the best level is a selected one"
+incidents = []
+limitations = ["Development data only: the time holdout (from 2026-07-01) is contaminated (D9); forward weekends are the only clean test.", "Stops at 1h bar closes (the engine's walk), not at the stop level: a gap past the stop fills at the close.", "Net-of-cost ranking reads cost model v2, measured on 2026-10-04 / 05 books and applied to earlier weekends: a structural assumption, not point-in-time.", "Run in sandboxes/xlab-w2 (unbound): generation UNKNOWN."]
+notes = "The best stop level moves with the method (hand-rolled intrabar sweep: 500 > 300; engine bar-close: 300 > 500). docs/p9-cost-liquidity-2026-10-08.md."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-01T00:00:00Z"
+to = "2026-10-03T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars"
+integrity = "CLEAN"
+
+[[results]]
+label = "baseline weekend_fade_top4 (cost model v2)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 142.653869065543
+ci95_bps = [46.1470400680283, 243.32550577575]
+net_usd = 165.47848811603
+t_stat = 2.84070172988476
+evidence = "run:xlab/20261008T123126Z-weekend_fade_top4"
+extract = "arm:research"
+
+[[results]]
+label = "close stop 300 bps"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 163.141408926507
+ci95_bps = [75.9691527425793, 251.548569133123]
+net_usd = 189.244034354748
+t_stat = 3.53758568569514
+evidence = "run:xlab/20261008T123126Z-weekend_fade_top4_stop300"
+extract = "arm:research"
+
+[[results]]
+label = "close stop 500 bps"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 142.897293419643
+ci95_bps = [51.2758021751794, 237.750718424976]
+net_usd = 165.760860366786
+t_stat = 2.98191903172468
+evidence = "run:xlab/20261008T123127Z-weekend_fade_top4_stop500"
+extract = "arm:research"
+
+[[results]]
+label = "net-of-cost ranking"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 143.382848135762
+ci95_bps = [47.9558938980937, 243.204670922352]
+net_usd = 166.324103837483
+t_stat = 2.84567352040784
+evidence = "run:xlab/20261008T123127Z-weekend_fade_top4_net_of_cost"
+extract = "arm:research"
+
+[[results]]
+label = "close stop 500 + net-of-cost ranking"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 143.626272489862
+ci95_bps = [51.7795086626214, 239.228378475082]
+net_usd = 166.60647608824
+t_stat = 2.98750254017216
+evidence = "run:xlab/20261008T123127Z-weekend_fade_top4_stop500_net_of_cost"
+extract = "arm:research"
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "A 300 bps bar-close stop reads +163.14 bps vs +142.65 (Sharpe 4.60 vs 3.69, capped drawdown $7.27 vs $9.67) but every CI overlaps the baseline's and the best level depends on the method; 500 bps and net-of-cost ranking change little. Eligible for a W2 candidate as a capital change with development evidence only; G11 needs evidence outside development tuning."
+decided_at = "2026-10-08"
+decided_by = "Phase 9 research (Claude, operator-delegated)"
+
+[[evidence]]
+ref = "repo:docs/p9-cost-liquidity-2026-10-08.md"
+role = "phase report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

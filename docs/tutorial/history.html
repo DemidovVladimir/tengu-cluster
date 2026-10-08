@@ -254,7 +254,7 @@
 <section class="sec" aria-labelledby="s-schema">
   <div class="sec-head">
     <span class="kicker">The warehouse</span>
-    <h2 id="s-schema">Three tables, one file per state dir</h2>
+    <h2 id="s-schema">Prices, news, one file per state dir</h2>
     <p>WAL SQLite in <code>&lt;TENGU_HOME&gt;/state/&lt;xmarket.state&gt;/</code>, outside every workspace. Every row names its <code>source</code>.</p>
   </div>
   <div class="tabs">
@@ -262,6 +262,7 @@
       <button type="button" aria-controls="tab-bars" aria-selected="true">bars</button>
       <button type="button" aria-controls="tab-funding">funding</button>
       <button type="button" aria-controls="tab-ctx">ctx</button>
+      <button type="button" aria-controls="tab-events">events</button>
       <button type="button" aria-controls="tab-src">sources</button>
     </div>
     <div class="tabpanel" id="tab-bars"><pre><span class="c">-- src/adapters/outbound/market_data.rs</span>
@@ -281,12 +282,23 @@
   mark REAL, oracle REAL, mid REAL, impact_bid REAL, impact_ask REAL,
   oi REAL, day_ntl_vlm REAL, funding_1h REAL, premium REAL, source TEXT,
   <span class="k">PRIMARY KEY</span> (instrument, t_ms)) <span class="k">WITHOUT ROWID</span>;</pre></div>
+    <div class="tabpanel" id="tab-events" hidden><pre><span class="k">CREATE TABLE</span> events (                                 <span class="c">-- SEC filings (tengu history events)</span>
+  instrument TEXT, source TEXT, id TEXT,               <span class="c">-- key; SEC: the accession number</span>
+  published_ms INTEGER,                                <span class="c">-- index page "Accepted", New York → UTC</span>
+  kind TEXT, form TEXT, title TEXT, fetched_at_ms INTEGER,
+  <span class="k">PRIMARY KEY</span> (instrument, source, id)) <span class="k">WITHOUT ROWID</span>;
+<span class="k">CREATE TABLE</span> event_coverage (                         <span class="c">-- what a source read</span>
+  instrument TEXT, source TEXT, from_ms INTEGER, to_ms INTEGER,
+  covered INTEGER,                                     <span class="c">-- 0: no CIK, silence is no evidence</span>
+  note TEXT, fetched_at_ms INTEGER,                    <span class="c">-- "cik 0000320193 AAPL"</span>
+  <span class="k">PRIMARY KEY</span> (instrument, source)) <span class="k">WITHOUT ROWID</span>;</pre></div>
     <div class="tabpanel" id="tab-src" hidden><pre><span class="c"># source values</span>
 <span class="s">hl</span>                       <span class="c"># Hyperliquid mainnet</span>
 <span class="s">hl:&lt;host&gt;</span>                <span class="c"># any other host (testnet): never mistaken for mainnet</span>
 <span class="s">gecko:&lt;network&gt;:&lt;pool&gt;</span>   <span class="c"># GeckoTerminal pool, full pool address</span>
 <span class="s">hl-archive:asset_ctxs</span>    <span class="c"># HL S3 archive import</span>
-<span class="s">json:&lt;file name&gt;</span>         <span class="c"># JSON import without its own source</span></pre></div>
+<span class="s">json:&lt;file name&gt;</span>         <span class="c"># JSON import without its own source</span>
+<span class="s">sec</span>                      <span class="c"># SEC EDGAR filings (events, event_coverage)</span></pre></div>
   </div>
 </section>
 
@@ -328,6 +340,7 @@
     <li><span><b>Every request is fenced.</b> Egress policy, the client's host and the budget, on every request; a denial sends nothing.</span></li>
     <li><span><b>No future at t.</b> Readers take prices through <code>close_at</code> / <code>observable_at</code>: a bar closing after t is invisible at t.</span></li>
     <li><span><b>Mainnet stays mainnet.</b> Rows from another HL host are tagged <code>hl:&lt;host&gt;</code>.</span></li>
+    <li><span><b>A filing is dated when it went public.</b> <code>published_ms</code> is the index page's <code>Accepted</code> time, New York → UTC (DST-aware). The submissions <code>acceptanceDateTime</code> is not used as the time: for some filers it runs 4–5 h late.</span></li>
     <li><span><b>Agents cannot touch the file.</b> <code>market.db</code> sits in the state dir, outside every fs root and workspace.</span></li>
     <li><span><b>Reads stay offline.</b> Without <code>fetch</code> / <code>--fetch</code> no request is sent, and a missing <code>market.db</code> is an error, never created by a backtest.</span></li>
   </ul>
@@ -348,7 +361,9 @@
 <span class="ln o"># instrument  kind  interval  first  last  rows  sources</span>
 <span class="ln cmd"><span class="p">$ </span>aws s3 cp --request-payer requester s3://hyperliquid-archive/asset_ctxs/20260901.csv.lz4 ~/hl-archive/</span>
 <span class="ln cmd"><span class="p">$ </span>tengu history import-hl-archive --sandbox xlab --dir ~/hl-archive</span>
-<span class="ln cmd"><span class="p">$ </span>tengu history import-json --sandbox xlab --file ./dataset.json</span></pre>
+<span class="ln cmd"><span class="p">$ </span>tengu history import-json --sandbox xlab --file ./dataset.json</span>
+<span class="ln cmd"><span class="p">$ </span>tengu history events --sandbox xlab-w2 --instruments @xyz_stocks --from 2026-03-01</span>
+<span class="ln o"># SEC filings per stock (needs SEC_USER_AGENT); note: <span class="hl">no SEC CIK for ticker &lt;T&gt;: coverage recorded as not covered</span></span></pre>
   </div>
 </section>
 
@@ -364,11 +379,12 @@
         <tr><td><code>src/domain/marketdata.rs</code></td><td>bars, funding, ctx; <code>close_at</code>, <code>observable_at</code>; split adjustment</td></tr>
         <tr><td><code>src/domain/marketdata_decode.rs</code></td><td>HL, Gecko, archive CSV and JSON decoders; <code>closed_bars</code></td></tr>
         <tr><td><code>src/domain/marketdata_stats.rs</code></td><td>window stats, gaps, the sample, <code>mkt_history/1</code></td></tr>
+        <tr><td><code>src/domain/sec.rs</code></td><td>SEC EDGAR decoders: ticker → CIK, submissions, the index page's acceptance time, filing events</td></tr>
         <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 (spec ids, cache keys)</td></tr>
         <tr><td><code>src/ports/market_data.rs</code></td><td>the <code>MarketDataStore</code> port, coverage rows</td></tr>
         <tr><td><code>src/adapters/outbound/market_data.rs</code></td><td><code>market.db</code>: tables, upserts, coverage</td></tr>
-        <tr><td><code>src/adapters/outbound/backfill/</code></td><td><code>hl</code>, <code>gecko</code>, <code>hl_archive</code>, <code>json</code>; retry, resume</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/history.rs</code></td><td><code>tengu history backfill | import-hl-archive | import-json | coverage</code></td></tr>
+        <tr><td><code>src/adapters/outbound/backfill/</code></td><td><code>hl</code>, <code>gecko</code>, <code>sec</code>, <code>hl_archive</code>, <code>json</code>; retry, resume</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/history.rs</code></td><td><code>tengu history backfill | events | import-hl-archive | import-json | coverage</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/xlab/history.rs</code></td><td>the <code>market_history</code> tool</td></tr>
       </tbody>
     </table>
@@ -376,7 +392,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>

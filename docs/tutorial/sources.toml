@@ -374,6 +374,7 @@ sources = [
   "src/domain/marketdata.rs",
   "src/domain/marketdata_decode.rs",
   "src/domain/marketdata_stats.rs",
+  "src/domain/sec.rs",
   "src/domain/canonical.rs",
   "src/ports/market_data.rs",
   "src/adapters/outbound/market_data.rs",

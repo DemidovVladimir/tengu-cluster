@@ -1,0 +1,71 @@
+id = "xlab.weekend_fade_top4.news_labels.2026-10-08"
+title = "Rule W top 4 with point-in-time news labels: skip NEWS, NOISE only — Phase 7"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade.top4.noise_only"
+generation = "UNKNOWN"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-08"
+ran_at = "2026-10-08T12:24:06Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''xlab-w2 cost model v2: per-name taker fee observed 2026-10-04 (0.9; 9.0 for BMNR, MSTR, PURRDAT) + per-name half-spread = the measured $100 cost of the recorded weekend's books (mean 4.13 bps per side) + funding; simple-return P&L; research arm $100 per candidate'''
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; the variants are subsets of the baseline's candidates — CIs overlap, the difference is not tested"
+incidents = []
+limitations = ["Development data only: the time holdout (from 2026-07-01) is contaminated (D9); forward weekends are the only clean test.", "Labels are point-in-time on publication (SEC index-page acceptance time) but backfilled 2026-10-08: received long after the fact.", "SEC covers 63 of 75 names (12 non-US / private names are UNCERTAIN); no headline / news-wire source.", "xyz ticker → SEC company matched by ticker only (names checked for 7 unfamiliar tickers).", "Run in sandboxes/xlab-w2 (unbound): generation UNKNOWN."]
+notes = "Labels over the 1,500 candidates: NEWS 62 · UNCERTAIN 273 · NOISE 1165. docs/p7-news-labels-2026-10-08.md."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-01T00:00:00Z"
+to = "2026-10-03T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars, SEC filings since 2026-03-01 (844), 1d bars for listing age"
+integrity = "CLEAN"
+
+[[results]]
+label = "baseline weekend_fade_top4 (cost model v2)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 142.653869065543
+ci95_bps = [46.1470400680283, 243.32550577575]
+net_usd = 165.47848811603
+t_stat = 2.84070172988476
+evidence = "run:xlab/20261008T122406Z-weekend_fade_top4"
+extract = "arm:research"
+
+[[results]]
+label = "top 4, skip NEWS"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 140.747185786577
+ci95_bps = [45.1271301351261, 241.429697612662]
+net_usd = 163.26673551243
+t_stat = 2.81829303684596
+evidence = "run:xlab/20261008T122407Z-weekend_fade_top4_skip_news"
+extract = "arm:research"
+
+[[results]]
+label = "top 4, NOISE only"
+arm = "research"
+class = "DEVELOPMENT"
+n = 116
+mean_net_bps = 134.744749793035
+ci95_bps = [62.5648250797185, 205.848085570829]
+net_usd = 156.303909759921
+t_stat = 3.5395449604931
+evidence = "run:xlab/20261008T122407Z-weekend_fade_top4_noise_only"
+extract = "arm:research"
+
+[verdict]
+value = "INCONCLUSIVE"
+reason = "No label policy shows value beyond rule W: skipping NEWS changes nothing (NEWS candidates fade like the rest — HL prices a filing within 1–2 h, ext.feasibility.generic_8k.2026-09-30); NOISE only trims the variance (UNCERTAIN = the 12 non-SEC names + new listings) but not the mean, and every CI overlaps the baseline's. Not eligible for W2 (G7); kept as Experience."
+decided_at = "2026-10-08"
+decided_by = "Phase 7 research (Claude, operator-delegated)"
+
+[[evidence]]
+ref = "repo:docs/p7-news-labels-2026-10-08.md"
+role = "phase report"
+class = "DEVELOPMENT"
+provenance = "DERIVED"

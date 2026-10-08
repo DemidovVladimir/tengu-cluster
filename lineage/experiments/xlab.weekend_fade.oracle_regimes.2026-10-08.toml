@@ -1,0 +1,71 @@
+id = "xlab.weekend_fade.oracle_regimes.2026-10-08"
+title = "Rule W before and after trade.xyz's internal-oracle time constant change (1 h → 30 min, 2026-04-30) — Phase 8"
+family = "weekend_overshoot_fade"
+variant = "weekend_fade"
+generation = "UNKNOWN"
+environment = "XLAB"
+kind = "BACKTEST"
+registered_at = "2026-10-08"
+ran_at = "2026-10-08T11:55:35Z"
+preregistered = false
+policies = ["DETERMINISTIC"]
+cost_model = '''[backtest.costs."hyperliquid:xyz:"]: taker 0.9 bps + fixed half-spread 1.0 bps per side (3.8 bps round trip) + funding per settlement hour; simple-return P&L; research arm $100 per candidate'''
+uncertainty = "95 % CI = seeded bootstrap over periods (2000 resamples, seed 7); t clustered by period; 7 weekends before the change, 22 after"
+incidents = []
+limitations = ["Two plain windows (no split, no holdout read): both are development data; the window after 2026-07-01 is the contaminated time holdout (D9).", "Run in sandboxes/xlab-w2 (unbound, W1's spec and costs unchanged) on main after the Phase 6 fixes: generation UNKNOWN.", "The 2026-06-12 band change (TSLA, META, MSFT, GOOGL, AMZN 10x → 20x, band 10 % → 5 %) falls inside the after window."]
+notes = "Phase 8 critical condition (TENGU_ROADMAP): does rule W depend on a mechanism that no longer exists? The current mechanism (τ = 30 min) is the after window. docs/p8-hip3-oracle-2026-10-08.md."
+
+[[windows]]
+role = "DATA"
+from = "2026-03-01T00:00:00Z"
+to = "2026-10-03T00:00:00Z"
+scope = "@xyz_stocks: the 75 xyz stock perps, 1h bars, decisions split at 2026-04-30T00:00:00Z into two runs"
+integrity = "CLEAN"
+
+[[results]]
+label = "research arm, decisions 2026-03-01 → 2026-04-30 (τ = 1 h)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 204
+mean_net_bps = 87.5675303108097
+ci95_bps = [19.8059292039634, 161.129111375757]
+net_usd = 178.637761834052
+t_stat = 2.27970563356582
+evidence = "run:xlab/20261008T115535Z-weekend_fade"
+extract = "arm:research"
+
+[[results]]
+label = "research arm, decisions 2026-04-30 → 2026-10-03 (τ = 30 min)"
+arm = "research"
+class = "DEVELOPMENT"
+n = 1296
+mean_net_bps = 44.6027782229139
+ci95_bps = [7.3676411833603, 79.6840024815291]
+net_usd = 578.052005768964
+t_stat = 2.34579762185072
+evidence = "run:xlab/20261008T115535Z-weekend_fade-2"
+extract = "arm:research"
+
+[verdict]
+value = "PASS"
+reason = "The edge holds under the current mechanism (after window CI above 0), about half the earlier mean: rule W does not depend on the retired 1 h constant — no Phase 8 STOP."
+decided_at = "2026-10-08"
+decided_by = "Phase 8 research (Claude, operator-delegated)"
+
+[[evidence]]
+ref = "run:xlab/20261008T115535Z-weekend_fade"
+role = "before run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+
+[[evidence]]
+ref = "run:xlab/20261008T115535Z-weekend_fade-2"
+role = "after run"
+class = "DEVELOPMENT"
+provenance = "DERIVED"
+
+[[evidence]]
+ref = "url:https://docs.trade.xyz/llms-full.txt"
+role = "changelog: 2026-04-30 internal oracle time constant 1 h → 30 min for equity perpetuals"
+class = "NONE"
+provenance = "REPORTED"

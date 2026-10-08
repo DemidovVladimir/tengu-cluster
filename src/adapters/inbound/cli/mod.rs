@@ -119,7 +119,8 @@ enum Commands {
     /// Read recorded observation history (`[recorder]`): `range` / `asof`,
     /// JSON lines with full keys. Fill and inspect the market-data
     /// warehouse `<state dir>/market.db` (xlab): `backfill` (Hyperliquid,
-    /// GeckoTerminal), `import-hl-archive`, `import-json`, `coverage`.
+    /// GeckoTerminal), `events` (SEC EDGAR filings), `import-hl-archive`,
+    /// `import-json`, `coverage`.
     History {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long, global = true)]

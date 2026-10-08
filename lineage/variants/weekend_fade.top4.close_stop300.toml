@@ -1,0 +1,20 @@
+id = "weekend_fade.top4.close_stop300"
+family = "weekend_overshoot_fade"
+title = "Rule W top 4, exit at the first 1h close 300 bps against the fade"
+parent = "weekend_fade.top4"
+reason = "Phase 9 (cost / liquidity and exits): the 2026-10-03 sweep read 300–500 best; now a bar-close stop on the engine."
+registered_at = "2026-10-08"
+order = 29
+preregistered = false
+status = "REJECTED"
+notes = "REJECTED 2026-10-08: −40.57 vs +131.04 bps on the forward weekend 2026-10-02 (xlab.weekend_fade_top4.stops_forward_holdout.2026-10-08). On the engine (weekend_window knob, bar-close walk / cost model v2 of xlab-w2), unlike the hand-rolled 2026-10-03 sweep (intrabar high / low + 10 bps slippage). Experiment xlab.weekend_fade_top4.exits_costs.2026-10-08. docs/p9-cost-liquidity-2026-10-08.md."
+
+[spec]
+sandbox = "xlab-w2"
+strategy = "weekend_fade_top4_stop300"
+spec_sha256 = "b246f99af1aafc26ab296e12c793efddac734c7bdad4fb9047f0b9a93f6c361a"
+
+[[changed]]
+dim = "stop_loss_bps"
+from = "none"
+to = 300
