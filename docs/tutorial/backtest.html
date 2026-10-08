@@ -256,7 +256,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: tune in-sample, read the holdout once</span>
     <h2 id="s-split">In-sample, holdout, and who sees what</h2>
-    <p>Thirty example weekends, <code>--split time:&lt;t&gt;</code>: decisions at or after t are the holdout. The Architect's <code>backtest</code> tool hides it unless asked, and counts every read.</p>
+    <p>Thirty example weekends, <code>--split time:&lt;t&gt;</code>: decisions at or after t are the holdout. The Architect's <code>backtest</code> tool hides it unless asked, and counts every read. The CLI shows both halves and counts its read too.</p>
   </div>
   <div class="widget">
     <div class="ctrls">
@@ -325,7 +325,7 @@ skips.json           <span class="c"># every skip, drop and [risk] refusal</span
 decisions.jsonl      <span class="c"># with --gate: one audit line per decision, by seq</span>
 <span class="c"># beside the run dirs:</span>
 decision-cache.db    <span class="c"># never pruned</span>
-holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads</span></pre></div>
+holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool and CLI)</span></pre></div>
     <div class="tabpanel" id="tab-spec" hidden><pre><span class="c">// example spec file: tengu backtest --sandbox xlab --spec ./big_move_fade.json</span>
 {
   <span class="k">"name"</span>: <span class="s">"big_move_fade"</span>,
@@ -367,7 +367,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads<
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01</span>
-<span class="ln o"># arms research + capped, in-sample vs holdout side by side, then the run dir</span>
+<span class="ln o"># arms research + capped, in-sample vs holdout side by side, then the run dir; stderr: holdout read #n for this spec (one ledger line)</span>
 <span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade_top4 --fetch</span>
 <span class="ln o"># backfills bars + funding first (as tengu history backfill), then runs</span>
 <span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --gate --max-decisions 200</span>
@@ -544,7 +544,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads<
     if (mode === "read" && run) reads++;
     if (mode === "cli") {
       v.className = "verdict ok"; v.textContent = "in-sample " + ins + " · holdout " + ho + ", side by side";
-      led.textContent = "The operator's CLI keeps both halves and records nothing.";
+      led.textContent = "The operator's CLI keeps both halves and counts the read: one ledger line, via = \"cli\".";
     } else if (hidden) {
       v.className = "verdict warn"; v.textContent = "runs the " + ins + " in-sample weekends · holdout hidden";
       led.textContent = "The time split ends the decisions at weekend " + cut + ": no holdout trade is simulated or written.";

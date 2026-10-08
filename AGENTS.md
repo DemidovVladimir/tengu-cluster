@@ -356,6 +356,7 @@ These are not preferences. They're load-bearing.
   `<state dir>/backtests/holdout-reads.jsonl` (`holdout read #n for this spec`) —
   never show the model a holdout uncounted; its runs are read by run id
   (`backtest` `run_id`), never by path (the state dir is outside every fs root).
+  The operator's `tengu backtest --split` counts its reads too (`via = "cli"`).
 - **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
   in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
   the Solana, Hyperliquid and xmarket families — read the list there, don't

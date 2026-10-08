@@ -8,7 +8,7 @@
 //! |---|---|
 //! | `--strategy <name>` xor `--spec <file.json>` | a `[backtest.strategies]` name, or a JSON object (named by its `name`, else the file stem) |
 //! | `--from` / `--to` | decisions in `[from, to)`: epoch ms, RFC 3339 or a UTC date (`domain::marketdata::parse_time`); default the earliest stored bar of the run's instruments at the spec's interval / now |
-//! | `--split time:<t>` · `instruments:<id,…>` | in-sample vs holdout, side by side |
+//! | `--split time:<t>` · `instruments:<id,…>` | in-sample vs holdout, side by side; a run with a holdout candidate is a read: one `holdout-reads.jsonl` line (`via = "cli"`, counted with the tool's) before the figures print, `holdout read #n …` on stderr |
 //! | `--format table` (default) · `json` | the compact summary (+ the gate's two lines) + the run dir · `report.json` on stdout (the run dir on stderr) |
 //! | `--fetch` | a kind outside the sandbox's `[generation]` is refused before anything is fetched (`capability_unavailable`); then `tengu history backfill` (same code: resume, budgets, egress audit) of the run's Hyperliquid instruments at the spec's interval + funding, over the run's data range (from HL's oldest bar without `--from`); prints its run table (stderr with `json`); a failed row is a warning — the run goes on with what is stored |
 //! | `--gate [<loop>]` | the Jev gate arm (§ 7) with `[decision_loops.<loop>]`; no value = `[backtest] gate` (neither ⇒ an error). Built before `--fetch` and `prepare` — an unknown or tool-calling loop, or a missing `OPENROUTER_API_KEY` online, fails before any work |
@@ -34,6 +34,7 @@ use serde_json::Value;
 use super::history::{self, BackfillArgs, BackfillSource, Target};
 use crate::adapters::outbound::backfill::hl::hl_reach_ms;
 use crate::adapters::outbound::market_data::{market_state_dir, open_market_data};
+use crate::adapters::outbound::tools::xlab::holdout::{self, HoldoutRead, ReadCount};
 use crate::application::backtest::gate::{describe, evaluate_gated, run_gate, Gate, GateAudit};
 use crate::application::backtest::{
     capability_refusal, evaluate, prepare, resolve, write_run_dir, BacktestEnv, BacktestJob,
@@ -360,6 +361,20 @@ pub(super) async fn run_backtest(config: &Config, args: BacktestArgs) -> Result<
         None => evaluate(&prepared, Vec::new())?,
     };
     let dir = write_run_dir(&prepared, &mut run)?;
+    // A holdout read is recorded before anything shows it (as the tool's).
+    let read = match prepared.split.as_ref() {
+        Some(split) => {
+            let r = &run.report;
+            let shown = RunIds {
+                run_id: &r.run_id,
+                spec_sha256: &r.spec_sha256,
+                strategy: &r.strategy,
+            };
+            let candidates = holdout::holdout_candidates(&prepared, split);
+            record_cli_read(&env.backtests_dir, split, candidates, shown, now)?
+        }
+        None => None,
+    };
     match args.format {
         OutputFormat::Table => {
             println!("{}", run.report.render_compact());
@@ -370,7 +385,51 @@ pub(super) async fn run_backtest(config: &Config, args: BacktestArgs) -> Result<
             eprintln!("run dir: {}", dir.display());
         }
     }
+    if let (Some(count), Some(split)) = (read, prepared.split.as_ref()) {
+        eprintln!("{}", holdout::read_line(count, split));
+    }
     Ok(())
+}
+
+/// The ids of the run a holdout read shows.
+#[derive(Debug, Clone, Copy)]
+struct RunIds<'a> {
+    run_id: &'a str,
+    spec_sha256: &'a str,
+    strategy: &'a str,
+}
+
+/// `--split` shows both halves, so a run with a holdout candidate is a
+/// holdout read: one `holdout-reads.jsonl` line, `via = "cli"`, counted with
+/// the tool's (lineage D2). No candidate on the holdout side ⇒ nothing is
+/// read, nothing recorded. An unrecordable read fails the command before
+/// the figures print (the run dir stays).
+fn record_cli_read(
+    backtests: &Path,
+    split: &SplitSpec,
+    holdout_candidates: usize,
+    run: RunIds<'_>,
+    now: i64,
+) -> Result<Option<ReadCount>> {
+    if holdout_candidates == 0 {
+        return Ok(None);
+    }
+    let read = HoldoutRead::new(
+        "cli",
+        run.run_id,
+        run.spec_sha256,
+        run.strategy,
+        split,
+        None,
+        now,
+    );
+    holdout::record(backtests, &read).map(Some).map_err(|e| {
+        anyhow!(
+            "run {} finished, but its holdout read could not be recorded ({e:#}) — \
+                 not shown",
+            run.run_id
+        )
+    })
 }
 
 #[cfg(test)]
@@ -541,6 +600,62 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("read /nonexistent/x.json"));
+    }
+
+    /// Lineage D2: the CLI's `--split` reads count with the tool's — one
+    /// `via = "cli"` line per run that has a holdout candidate, numbered per
+    /// spec; a split whose holdout side is empty records nothing.
+    #[test]
+    fn cli_split_reads_are_counted_in_the_holdout_ledger() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backtests = tmp.path().join("backtests");
+        let split = SplitSpec::Time(parse_time("2026-09-15").unwrap());
+        let spec_sha256 = "e2b361ac710107d7317ed8223bf7f1da4cf74818cb0e9323a363014e35c30d14";
+        let ids = |run_id| RunIds {
+            run_id,
+            spec_sha256,
+            strategy: "weekend_fade",
+        };
+        assert_eq!(
+            record_cli_read(
+                &backtests,
+                &split,
+                0,
+                ids("20261008T000000Z-weekend_fade"),
+                1
+            )
+            .unwrap(),
+            None
+        );
+        assert!(!holdout::ledger_path(&backtests).exists());
+        let first = record_cli_read(
+            &backtests,
+            &split,
+            3,
+            ids("20261008T000001Z-weekend_fade"),
+            2,
+        )
+        .unwrap();
+        let second = record_cli_read(
+            &backtests,
+            &split,
+            3,
+            ids("20261008T000002Z-weekend_fade"),
+            3,
+        )
+        .unwrap();
+        assert_eq!(first.map(|c| c.spec), Some(1));
+        assert_eq!(second.map(|c| (c.spec, c.split)), Some((2, 2)));
+        let lines: Vec<HoldoutRead> = std::fs::read_to_string(holdout::ledger_path(&backtests))
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|l| l.via == "cli" && l.call_id.is_none()));
+        assert_eq!(lines[1].run_id, "20261008T000002Z-weekend_fade");
+        assert_eq!(lines[1].spec_sha256, spec_sha256);
+        assert_eq!(lines[1].split, split.to_string());
     }
 
     /// Review #16: `--fetch` of a kind the bound generation lacks writes

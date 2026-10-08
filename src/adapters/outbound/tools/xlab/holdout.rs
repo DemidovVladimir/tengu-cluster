@@ -1,7 +1,8 @@
 //! Holdout discipline of the `backtest` tool (xlab, `docs/xlab-2026-10-01.md`
 //! § 8): the Architect tunes on the in-sample half and reads the holdout
 //! once, on purpose, counted. The operator's CLI (`tengu backtest --split`)
-//! keeps both halves side by side and records nothing.
+//! keeps both halves side by side and counts the read too (`via = "cli"`,
+//! `cli/backtest.rs`).
 //!
 //! | Call | Runs | Shows | Ledger |
 //! |---|---|---|---|
@@ -12,7 +13,7 @@
 //! | Ledger rule | Value |
 //! |---|---|
 //! | File | `<state dir>/backtests/holdout-reads.jsonl` — append-only, one `write_all` per line, never rewritten: the operator's audit |
-//! | Line | `ts_ms`, `time`, `via` (`backtest` · `rows`), `run_id`, `spec_sha256`, `strategy`, `split`, `call_id` (when the call has one) — ids in full |
+//! | Line | `ts_ms`, `time`, `via` (`backtest` · `rows` · `cli`), `run_id`, `spec_sha256`, `strategy`, `split`, `call_id` (when the call has one) — ids in full |
 //! | #n | the line's place among the lines of its `spec_sha256`, counted up to its own end (the append's offset): a concurrent read never takes its number; the split's count over every spec alike |
 //! | Not recorded | a run that fails, or a read with no holdout candidate (refused: nothing is shown) |
 //! | Unrecordable | the run's text is refused (the holdout is never shown unrecorded) |
@@ -199,7 +200,8 @@ pub(crate) struct HoldoutRead {
     pub ts_ms: i64,
     /// `ts_ms` as RFC 3339 (UTC).
     pub time: String,
-    /// `backtest` (a run with both halves) · `rows` (a stored run's rows).
+    /// `backtest` (a run with both halves) · `rows` (a stored run's rows) ·
+    /// `cli` (`tengu backtest --split` with a holdout candidate).
     pub via: String,
     pub run_id: String,
     pub spec_sha256: String,
