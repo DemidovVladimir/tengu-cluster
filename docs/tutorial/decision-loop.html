@@ -415,7 +415,10 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 <span class="ln o">{ "outcomes": [ … one per step … ], "history": [ … args + ok + result … ],</span>
 <span class="ln">  "map": { "sha256": <span class="hl">"&lt;64 hex chars&gt;"</span>, "path": "~/.tengu/logs/maps/&lt;sha256&gt;.json" } }</span>
 <span class="ln cmd"><span class="p">$ </span>echo '{"task":"What is the SOL price in USD?"}' | tengu decide --sandbox jev-exec --loop executor --event -</span>
-<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"crypto_price"}, {"outcome":"stopped","action":"done"} ], … }</span></pre>
+<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"crypto_price"}, {"outcome":"stopped","action":"done"} ], … }</span>
+<span class="ln o"># the safe lab (no money, no shell; runbook docs/control-loop-lab-2026-10-08.md) — export TENGU_HOME="$HOME/tengu-lab/home" first</span>
+<span class="ln cmd"><span class="p">$ </span>echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event -</span>
+<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"write_marker"}, {"outcome":"stopped","action":"hold"} ], … }</span></pre>
   </div>
 </section>
 
@@ -445,7 +448,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>
