@@ -17,8 +17,6 @@
 //! | `immutable` | a published item never changes; a correction is its own item with its own publication time (SEC accessions, TED notices) | from `published_ms`; a later read of new bytes under the same id is an edit, from its read |
 //! | `in_place` | an item may change under the same id (a page, a repository) | from `max(published_ms, observed_ms)` |
 
-#![allow(dead_code)] // consumers (store, CLI, tool) land with the next O2 steps
-
 use serde::{Deserialize, Serialize};
 
 use super::record::{SourceClass, SourceRecord};
@@ -37,6 +35,7 @@ pub enum Revision {
 }
 
 impl Revision {
+    #[allow(dead_code)] // tests
     pub fn as_str(self) -> &'static str {
         match self {
             Revision::Immutable => "immutable",

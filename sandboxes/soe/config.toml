@@ -13,8 +13,8 @@
 #   otherwise (src/config/sources.rs).
 # - Fetching is the operator's (`tengu sources fetch`; `tengu sources disable`
 #   stops a source at once, whatever this file says); the agent's only tool
-#   `source_evidence` is read-only (O2 step C9 — until it lands, the load warns
-#   that it is no catalog tool and the agent holds no tool at all).
+#   `source_evidence` is read-only: the as-of evidence packet of sources.db
+#   (src/adapters/outbound/tools/sources/), never a fetch.
 #
 # State: ~/.tengu/state/soe/ (sources.db; outside every fs root and workspace).
 # Workspace: ~/soe-ws (only .tengu/observations.db).
@@ -92,7 +92,7 @@ default = true
 engine = "claude_code"            # the Claude CLI (operator's login); build with --features claude_code
 model = "claude-sonnet-5-5"       # bare slug for claude_code
 workspace = "~/soe-ws"
-tools = ["source_evidence"]       # read-only (O2 step C9); never empty: an empty list is every base tool
+tools = ["source_evidence"]       # read-only; never empty: an empty list is every base tool
 
 [agents.soe_reader.identity]
 name = "soe source reader"

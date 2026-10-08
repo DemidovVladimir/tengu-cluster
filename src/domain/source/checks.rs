@@ -31,7 +31,7 @@ const MODES: [AsOfMode; 2] = [AsOfMode::Captured, AsOfMode::Knowable];
 const FLOOD_HOURS: i64 = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Move {
+pub(super) enum Move {
     Delete,
     NextMs,
     Flood,
@@ -40,7 +40,7 @@ enum Move {
     Purge,
 }
 
-const MOVES: [Move; 6] = [
+pub(super) const MOVES: [Move; 6] = [
     Move::Delete,
     Move::NextMs,
     Move::Flood,
@@ -50,7 +50,7 @@ const MOVES: [Move; 6] = [
 ];
 
 /// Module table: knowable mode is not invariant to a reparse after t.
-fn allowed(mode: AsOfMode, how: Move) -> bool {
+pub(super) fn allowed(mode: AsOfMode, how: Move) -> bool {
     !(mode == AsOfMode::Knowable && how == Move::Reparse)
 }
 
@@ -71,12 +71,12 @@ const FLOOD_ALL: [Flood; 5] = [
     Flood::NewItem,
 ];
 
-fn canon(p: &EvidencePacket) -> String {
+pub(super) fn canon(p: &EvidencePacket) -> String {
     canonical_json(&serde_json::to_value(p).expect("packet serializes"))
 }
 
 /// `a == b`, else a panic naming where they part.
-fn assert_same(a: &str, b: &str, what: &str) {
+pub(super) fn assert_same(a: &str, b: &str, what: &str) {
     if a == b {
         return;
     }
@@ -149,7 +149,7 @@ fn in_scope(w: &World, t: i64, mode: AsOfMode) -> Vec<bool> {
 }
 
 /// `w` with what comes after `t` moved (module table).
-fn moved(w: &World, t: i64, mode: AsOfMode, how: Move) -> World {
+pub(super) fn moved(w: &World, t: i64, mode: AsOfMode, how: Move) -> World {
     let mut out = w.clone();
     match how {
         Move::Delete => {

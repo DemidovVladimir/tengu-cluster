@@ -30,10 +30,6 @@
 //! | Clocks | `parsed_ms ≥ observed_ms`; `valid_until_ms > valid_from_ms` |
 //! | Stamp | [`SourceStamp`]: the registry row's id, class, trust, jurisdiction, language, terms and terms hash — copied onto each record at parse time |
 
-// Consumers (as-of view, store, parsers, `domain/soe/`) land with the next
-// O2 / O1 steps.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
@@ -65,6 +61,7 @@ pub enum SourceClass {
 }
 
 impl SourceClass {
+    #[allow(dead_code)] // tests; `domain/soe/` (O1) gates
     pub const ALL: [SourceClass; 6] = [
         SourceClass::LawRegulator,
         SourceClass::CompanyPrimary,
@@ -158,6 +155,7 @@ impl ParseError {
     }
 
     /// As an observation error (class `decode`).
+    #[allow(dead_code)] // tests; a typed parse failure for O3 rows
     pub fn to_read_error(&self) -> ReadError {
         ReadError::new(self.field.clone(), ErrorClass::Decode, self.message.clone())
     }
@@ -499,6 +497,7 @@ pub struct Inference {
 }
 
 impl Inference {
+    #[allow(dead_code)] // tests; O3 attaches inferences to packets
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut out = Vec::new();
         if self.text.trim().is_empty() {
@@ -636,6 +635,7 @@ impl SourceRecord {
     /// `snapshot` at `observed_ms`. What the source said before stays in its
     /// own record. Reading the same withdrawal again gives the same
     /// `record_id` (the read times are not content).
+    #[allow(dead_code)] // tests; a re-check mode (404 / 301 on a stored item) produces it
     pub fn withdrawal(
         &self,
         withdrawn: Withdrawn,

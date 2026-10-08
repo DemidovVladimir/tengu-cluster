@@ -390,10 +390,63 @@
         <tr><td><code>list</code></td><td>every registry row (enabled, runtime switch, class, retention, terms page stored or not), cursors, newest fetch per query</td></tr>
         <tr><td><code>fetch --source &lt;id&gt; [--from] [--to] [--ciks]</code></td><td>SEC filings of CIKs, or TED notices day by day; refused for a disabled, unreviewed or switched-off row before any request; exit 1 on a failed row</td></tr>
         <tr><td><code>import --source &lt;id&gt; --file &lt;json&gt; --observed-at &lt;t&gt;</code></td><td>a saved TED reply, read as if fetched at t; parsed now, so captured mode sees it from now and knowable mode from publication; no coverage</td></tr>
-        <tr><td><code>asof --at &lt;t&gt; [--mode] [--source] [--entity] [--event] [--text]</code></td><td>the evidence packet as canonical JSON, or its fenced text</td></tr>
+        <tr><td><code>asof --at &lt;t&gt; [--mode] [--source] [--entity] [--event] [--published-from] [--published-to] [--text]</code></td><td>the evidence packet as canonical JSON, or its fenced text — what <code>source_evidence</code> returns, without its page bound</td></tr>
         <tr><td><code>terms --source &lt;id&gt; --file &lt;page&gt;</code></td><td>stores the reviewed terms page, refused unless its sha256 is the row's <code>terms_sha256</code>; never purged</td></tr>
         <tr><td><code>purge [--source &lt;id&gt;]</code></td><td>applies each row's retention now and prints each tombstone</td></tr>
         <tr><td><code>disable</code> · <code>enable --source &lt;id&gt; --reason &lt;text&gt;</code></td><td>the kill switch: off refuses every fetch and import at once, whatever the TOML says; <code>enable</code> lifts only that</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-tool">
+  <div class="sec-head">
+    <span class="kicker">The agent's one read</span>
+    <h2 id="s-tool"><code>source_evidence</code></h2>
+    <p>An opt-in catalog tool, the same on every engine (in-process, local, and Claude Code through <code>tengu mcp-bridge</code>). It reads <code>sources.db</code> and returns the packet at t; it has no fetch argument.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Argument</th><th>Default</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><code>at</code></td><td>now</td><td>the instant (epoch ms, RFC 3339 or a UTC date); after now is refused</td></tr>
+        <tr><td><code>mode</code></td><td><code>captured</code></td><td><code>captured</code> = read by then · <code>knowable</code> = public by then</td></tr>
+        <tr><td><code>source</code> · <code>entity</code> · <code>event_key</code></td><td>all</td><td>a registry row id, an entity key, an event key — each verbatim, in full</td></tr>
+        <tr><td><code>from</code> · <code>to</code></td><td>none</td><td>publication window <code>[from, to)</code></td></tr>
+        <tr><td><code>limit</code></td><td>10 (1–50)</td><td>current records listed, newest first; fewer while the text is above 6 000 bytes — the rest counted as <code>omitted</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">row</span><span><b>Observation</b><code>source_asof/1:&lt;source|all&gt;:&lt;event|entity|all&gt;:&lt;at ms&gt;</code>, ttl 0 (never cached; recorded when <code>[recorder]</code> takes the schema).</span></li>
+    <li><span class="chip ok">text</span><span><b>What the model reads</b>Line 1 = the headline and status, then features, then the packet's own lines: ids whole outside the fence, titles and buyer names inside it. Never the data JSON.</span></li>
+    <li><span class="chip warn">none</span><span><b>No store yet</b>An empty packet, <code>absent</code>; nothing is created.</span></li>
+    <li><span class="chip bad">stop</span><span><b>Refused</b>No <code>[sources]</code> (<code>sources_state_missing</code>), an unknown argument, an unknown source, a bad time or limit — before any read.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-eval">
+  <div class="sec-head">
+    <span class="kicker">O2 exit</span>
+    <h2 id="s-eval">Twelve dated cases</h2>
+    <p>One fixture file, <code>tests/fixtures/sources/eval/cases.json</code>: each case's records, coverage, tombstones, t, mode and query, its expected packet and a hand-written summary. Records come from the SEC and TED captures; cases 05 and 11 use synthetic sources.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Case</th><th>t</th><th>Must show</th></tr></thead>
+      <tbody>
+        <tr><td>01 fresh filing</td><td>2026-07-30T21:00:00Z</td><td>one fact, <code>confirmed</code></td></tr>
+        <tr><td>02 amendment after t</td><td>2026-08-15 knowable</td><td>only the 8-K; the 8-K/A is never back-dated</td></tr>
+        <tr><td>03 TED change notice after t</td><td>2026-09-30 knowable</td><td>the original stands; nothing superseded yet</td></tr>
+        <tr><td>04 duplicate notice on two pages</td><td>2026-10-02T12:00:00Z</td><td>listed once, with its first read</td></tr>
+        <tr><td>05 syndicated copy</td><td>2026-07-31</td><td><code>single</code>, one origin: two copies add nothing</td></tr>
+        <tr><td>06 stale coverage</td><td>2026-10-06</td><td>one gap, two failed fetches: <code>partial</code></td></tr>
+        <tr><td>07 parse failure</td><td>2026-10-02T12:00:00Z</td><td>one <code>unparsed</code>, one <code>partial</code></td></tr>
+        <tr><td>08 purged raw</td><td>2026-08-02</td><td>the fact keeps its hashes; one tombstone</td></tr>
+        <tr><td>09 expired tender</td><td>2026-10-30</td><td><code>expired</code>, not in force</td></tr>
+        <tr><td>10 conflicting values</td><td>2026-10-03</td><td>a change read before its target: a <code>deadline_ms</code> conflict</td></tr>
+        <tr><td>11 in-place edit</td><td>2026-10-01T12:00:00Z knowable</td><td>the first read only; the edit counts from its read</td></tr>
+        <tr><td>12 no evidence</td><td>2026-07-31</td><td>no row, <code>absent</code>: HOLD</td></tr>
       </tbody>
     </table>
   </div>
@@ -420,6 +473,9 @@
     <li><span><b>The User-Agent is never stored.</b> It is a request header only: not in a snapshot, record, report or audit line.</span></li>
     <li><span><b>Contact data is never read.</b> TED requests ask for no contact field, and the decoder reads only its allow-list: injected emails and phones never reach a record.</span></li>
     <li><span><b>A kill switch acts at once.</b> <code>tengu sources disable</code> refuses every fetch and import of the source from the next call; the TOML stays the ceiling.</span></li>
+    <li><span><b>Agents read, never fetch.</b> <code>source_evidence</code> has no fetch argument (an unknown key is refused) and opens <code>sources.db</code> only when it exists.</span></li>
+    <li><span><b>The same answer on every engine.</b> In-process and through the bridge: the same text and the same store rows (bridge conformance); a 16k local model gets each read whole.</span></li>
+    <li><span><b>The eval set replays.</b> Each of the 12 cases gives its packet byte for byte from the fixture alone, unchanged by anything after t; removing copies beside their origin changes no confidence.</span></li>
   </ul>
 </section>
 
@@ -427,7 +483,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Run it</h2>
-    <p>The soe rows ship off: to try the commands, use a copy of the config with a row enabled and its terms reviewed. The <code>source_evidence</code> tool lands with the next O2 step.</p>
+    <p>The soe rows ship off: to try the commands, use a copy of the config with a row enabled and its terms reviewed (example values below).</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu sources --sandbox soe list</span>
@@ -438,6 +494,14 @@
 <span class="ln o">day:2026-10-01  notices  -  ted_search  318  2  2026-10-01T22:00:00Z  2026-10-01T22:00:00Z  ok</span>
 <span class="ln cmd"><span class="p">$ </span>tengu -c my-soe.toml sources asof --at 2026-10-09 --event ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 --text</span>
 <span class="ln o">fact ted_search:674231-2026:&lt;content hash&gt; … <span class="hl">deadline=2026-11-04T09:00:00Z value=5300000 CZK</span></span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c my-soe.toml sources import --source ted_search --file tests/fixtures/ted/search_change_notice.json --observed-at 2026-10-02T08:00:00Z</span>
+<span class="ln o">2 rows written, 0 error(s)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c my-soe.toml tool call --agent soe_reader --tool source_evidence --args '{"at": "2026-10-03", "mode": "knowable", "source": "ted_search"}'</span>
+<span class="ln o">source_asof 2026-10-03T00:00:00Z knowable: 1 facts · 0 pending · 0 expired · 0 withdrawn · 0 unparsed · 0 conflicts · 0 issues | ok 0s live</span>
+<span class="ln o"><span class="hl">superseded ted_search:657981-2026:8579a6a96d1da58ed0436f179ddb8b9fbb4429e84e65744af69a494d42f07aa6 by ted_search:674231-2026:597c697334b0a8ace69fb449d04c17e9ea3aaec2b412f8b8813d6cf615830b0a (correction)</span></span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::eval</span>
+<span class="ln o">test domain::source::eval::eval_set_replays_without_lookahead ... ok</span>
+<span class="ln o">test domain::source::eval::no_case_counts_a_copy_as_confirmation ... ok</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu sources::</span>
 <span class="ln o">test adapters::outbound::sources::ted::tests::crash_between_pages_resumes_from_the_cursor ... ok</span>
 <span class="ln o">test adapters::inbound::cli::sources::tests::import_then_asof_is_deterministic ... ok</span>
@@ -470,6 +534,9 @@
         <tr><td><code>src/domain/source/sec_records.rs</code></td><td>an SEC filing as a record: accession, CIK entity, index time, the partial rule</td></tr>
         <tr><td><code>src/domain/source/ted.rs</code></td><td>a TED search page: the request body, the field allow-list, the decoder, a notice as a record, the change-notice target</td></tr>
         <tr><td><code>src/domain/source/checks.rs</code> · <code>testkit.rs</code></td><td>tests only: the split-world worlds and checks</td></tr>
+        <tr><td><code>src/domain/source/eval.rs</code> · <code>tests/fixtures/sources/eval/cases.json</code></td><td>tests only: the 12 dated replay cases and their builder (<code>TENGU_REGEN_SOURCE_EVAL=1</code>)</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/sources/</code></td><td>the <code>source_evidence</code> tool: its definition, arguments, page and text</td></tr>
+        <tr><td><code>lineage/capabilities/intel.source_evidence.toml</code></td><td>the capability that binds <code>tool:source_evidence</code> (candidate, read-only, no generation)</td></tr>
         <tr><td><code>src/config/sources.rs</code></td><td><code>[sources]</code>: the registry rows, their load rules, <code>fetch_stamp</code></td></tr>
         <tr><td><code>src/ports/source_store.rs</code></td><td><code>SourceStore</code>: commit, the read at t, coverage, cursors, snapshot, purge, runtime switches</td></tr>
         <tr><td><code>src/adapters/outbound/sources/store.rs</code></td><td><code>SqliteSourceStore</code>: <code>sources.db</code> and its tables</td></tr>

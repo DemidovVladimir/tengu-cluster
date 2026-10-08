@@ -401,6 +401,7 @@ sources = [
   "src/config/sources.rs",
   "src/ports/source_store.rs",
   "src/adapters/outbound/sources/",
+  "src/adapters/outbound/tools/sources/",
   "src/application/sources.rs",
   "src/adapters/inbound/cli/sources.rs",
 ]

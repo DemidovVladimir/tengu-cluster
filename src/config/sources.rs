@@ -897,7 +897,11 @@ mod tests {
                 "{id}: the operator hashes the terms page"
             );
         }
-        const READ_ONLY: [&str; 1] = ["source_evidence"];
+        const READ_ONLY: [&str; 1] = [crate::domain::tools::SOURCE_EVIDENCE];
+        // A catalog tool (opt-in), so the agent holds it.
+        assert!(READ_ONLY
+            .iter()
+            .all(|t| crate::domain::tools::WORKSPACE_TOOLS.contains(t)));
         for (id, a) in &cfg.agents {
             assert!(
                 !a.tools.is_empty(),

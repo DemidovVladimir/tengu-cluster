@@ -10,7 +10,7 @@
 //!
 //! | Fixture family | Files | Sandbox | Sets |
 //! |---|---|---|---|
-//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]`: no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab`, `xlab_holdout` |
+//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]` + `[sources]` (one enabled `ted_search` row, synthetic terms): no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab`, `xlab_holdout`, `sources` |
 //! | open | `tests/fixtures/engine_matrix/open/{openrouter,claude_code,local}.toml` | `[memory]` on, a shell, the `matrix` `[[mcp_servers]]` (`token_mcp_server.sh`), no signer | every other set |
 //!
 //! | Tool set | Scripted calls | The leg also asserts |
@@ -20,6 +20,7 @@
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //! | `xlab` | `market_history` `xyz:TSLA` 1h over 2026-09-25T20:00Z … 2026-09-28T15:00Z → `backtest` the fixtures' library strategy `matrix_fade` (rule W on `xyz:TSLA`) → `backtest` an inline spec (`matrix_move`, a move trigger) over the same window — no network: the leg's warehouse (`<TENGU_HOME>/state/engine-matrix/market.db`) is seeded first by `tengu history import-json` from `tests/fixtures/xlab/dataset_xyz_TSLA_1h.json` (67 captured HL bars + 68 funding rows) | the answer quotes the last close (360.2), `ret_bps` (−331.2, within 0.05) and each run's research mean net bps (+76.43, −27.39, within 0.005); both run dirs under `<TENGU_HOME>/state/engine-matrix/backtests/` |
 //! | `xlab_holdout` | `backtest` `{"run_id": "20261001T182112Z-conf_rows", "view": "trades", "holdout": true}` (a stored split run's rows by id, its holdout shown: a read; first, before any other run id is in the conversation) → `matrix_move` with `split = time:2026-09-27` (the holdout hidden: the in-sample run) → the same + `holdout = true` (both halves: a second read) — the xlab warehouse + the stored run from `tests/fixtures/xlab/run_conf_rows/` seeded first; a set of its own: weak models misread five results in one turn | the answer quotes the hidden run's mean (+2.07), the holdout half's mean (−56.86) and the worst trade's gross bps (−52.88, only in the `trades` rows) within 0.005; `holdout-reads.jsonl` holds both scripted reads (`backtest` · `matrix_move`, `rows` · `conf_rows`; any order — a repeated or extra read of the split is one more line) and no read of another split |
+//! | `sources` | `source_evidence` `{"at": "2026-09-30", "mode": "knowable", "source": "ted_search"}` → the same at `2026-10-03` — no network: the leg's `<TENGU_HOME>/state/engine-matrix/sources.db` is seeded first by `tengu sources import` of `tests/fixtures/ted/search_change_notice.json` (notice 657981-2026 and its change notice 674231-2026, read 2026-10-02) | the answer quotes the original's publication number (657981-2026) and the superseding record id in full (`ted_search:674231-2026:<content hash>`, read from the leg's `sources.db`) |
 //! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
 //! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` (`from_message_index` 1) → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, the distilled one's `evals/prompts.yaml` holds a fixture from the goal (the step's conversation; Claude Code: the engine's transcript through the bridge); `matrix-doc` holds the improved body |
@@ -49,7 +50,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole) (no network; not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole), `offline_local_sources` (`source_evidence` before / after the change notice: the original stands, then `superseded … (correction)`; each text whole under the 16k cap, the buyer's name fenced) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
@@ -123,6 +124,22 @@ const XLAB_STORED_RUN_FIXTURE: &str = concat!(
     "/tests/fixtures/xlab/run_conf_rows"
 );
 const XLAB_WORST_GROSS_BPS: f64 = -52.88;
+
+/// The sources set's seed (`tengu sources import`): the captured TED pair —
+/// notice 657981-2026 (published 2026-09-24) and its change notice
+/// 674231-2026 (2026-10-01) of one procedure — read as of 2026-10-02.
+const SOURCES_SEED: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/ted/search_change_notice.json"
+);
+const SOURCES_OBSERVED_AT: &str = "2026-10-02T08:00:00Z";
+/// The two publication numbers, in full.
+const SOURCES_ORIGINAL: &str = "657981-2026";
+const SOURCES_CHANGE: &str = "674231-2026";
+/// The sources set's reads (knowable mode): before the change notice was
+/// published, then after it.
+const SOURCES_BEFORE: &str = "2026-09-30";
+const SOURCES_AFTER: &str = "2026-10-03";
 
 /// The xlab set's inline strategy spec (the Architect's level-2 capability):
 /// fade a ≥ 25 bps hourly move on `xyz:TSLA`, out after 3 bars.
@@ -222,6 +239,7 @@ enum Set {
     Xm,
     Xlab,
     XlabHoldout,
+    Sources,
     Shell,
     Memory,
     Skills,
@@ -235,12 +253,13 @@ enum Set {
 }
 
 impl Set {
-    const ALL: [Set; 15] = [
+    const ALL: [Set; 16] = [
         Set::Workspace,
         Set::Hyperliquid,
         Set::Xm,
         Set::Xlab,
         Set::XlabHoldout,
+        Set::Sources,
         Set::Shell,
         Set::Memory,
         Set::Skills,
@@ -260,6 +279,7 @@ impl Set {
             Set::Xm => "xm",
             Set::Xlab => "xlab",
             Set::XlabHoldout => "xlab_holdout",
+            Set::Sources => "sources",
             Set::Shell => "shell",
             Set::Memory => "memory",
             Set::Skills => "skills",
@@ -277,7 +297,12 @@ impl Set {
     fn hardened(self) -> bool {
         matches!(
             self,
-            Set::Workspace | Set::Hyperliquid | Set::Xm | Set::Xlab | Set::XlabHoldout
+            Set::Workspace
+                | Set::Hyperliquid
+                | Set::Xm
+                | Set::Xlab
+                | Set::XlabHoldout
+                | Set::Sources
         )
     }
 
@@ -306,6 +331,7 @@ impl Set {
             ],
             Set::Xlab => &["market_history", "backtest"],
             Set::XlabHoldout => &["backtest"],
+            Set::Sources => &["source_evidence"],
             Set::Shell => &["run_command", "matrix__token"],
             Set::Memory => &["memory_ingest", "memory_search", "persistent_store"],
             Set::Skills => &[
@@ -488,6 +514,17 @@ impl Set {
                 "the gross_bps of the worst trade step 1 listed, then the mean_net_bps= value step 2 returned on its first line, then the mean_net_bps= value step 3 printed on its first line (the HOLDOUT line), exactly as printed",
                 "",
             ),
+            Set::Sources => {
+                let at = |day: &str| json!({"at": day, "mode": "knowable", "source": "ted_search"});
+                (
+                    vec![
+                        call("source_evidence", at(SOURCES_BEFORE)),
+                        call("source_evidence", at(SOURCES_AFTER)),
+                    ],
+                    "the publication number inside the record id of the one fact step 1 listed (between `ted_search:` and the next `:`), then the full record id that step 2's superseded line names after `by`, exactly as printed",
+                    "",
+                )
+            }
             Set::Shell => (
                 vec![
                     call("run_command", json!({"command": "cat shell-token.txt"})),
@@ -697,6 +734,7 @@ live_legs! {
     openrouter_gemini_xm => GEMINI, Set::Xm;
     openrouter_gemini_xlab => GEMINI, Set::Xlab;
     openrouter_gemini_xlab_holdout => GEMINI, Set::XlabHoldout;
+    openrouter_gemini_sources => GEMINI, Set::Sources;
     openrouter_gemini_shell => GEMINI, Set::Shell;
     openrouter_gemini_memory => GEMINI, Set::Memory;
     openrouter_gemini_skills => GEMINI, Set::Skills;
@@ -712,6 +750,7 @@ live_legs! {
     openrouter_haiku_xm => HAIKU, Set::Xm;
     openrouter_haiku_xlab => HAIKU, Set::Xlab;
     openrouter_haiku_xlab_holdout => HAIKU, Set::XlabHoldout;
+    openrouter_haiku_sources => HAIKU, Set::Sources;
     openrouter_haiku_shell => HAIKU, Set::Shell;
     openrouter_haiku_memory => HAIKU, Set::Memory;
     openrouter_haiku_skills => HAIKU, Set::Skills;
@@ -727,6 +766,7 @@ live_legs! {
     claude_code_xm => CLAUDE, Set::Xm;
     claude_code_xlab => CLAUDE, Set::Xlab;
     claude_code_xlab_holdout => CLAUDE, Set::XlabHoldout;
+    claude_code_sources => CLAUDE, Set::Sources;
     claude_code_shell => CLAUDE, Set::Shell;
     claude_code_memory => CLAUDE, Set::Memory;
     claude_code_skills => CLAUDE, Set::Skills;
@@ -742,6 +782,7 @@ live_legs! {
     local_xm => GEMMA, Set::Xm;
     local_xlab => GEMMA, Set::Xlab;
     local_xlab_holdout => GEMMA, Set::XlabHoldout;
+    local_sources => GEMMA, Set::Sources;
     local_shell => GEMMA, Set::Shell;
     local_memory => GEMMA, Set::Memory;
     local_skills => GEMMA, Set::Skills;
@@ -993,6 +1034,7 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
             seed_market_history(target, ws, envs);
             seed_stored_run(ws);
         }
+        Set::Sources => seed_sources(target, ws, envs),
         Set::Shell => {
             write("shell-token.txt", &ws.shell_token);
             write("skill-token.txt", &ws.skill_token);
@@ -1354,6 +1396,54 @@ fn seed_market_history(target: Target, ws: &Workspace, envs: &[(&str, String)]) 
     );
 }
 
+/// The sources set's store: `tengu sources import` of [`SOURCES_SEED`] as
+/// read at [`SOURCES_OBSERVED_AT`] into the leg's
+/// `<TENGU_HOME>/state/engine-matrix/sources.db` — the CLI an operator runs.
+/// Through the openrouter fixture whatever the target: the hardened
+/// fixtures share `[sources]` (`fixtures_load_and_agree`).
+fn seed_sources(target: Target, ws: &Workspace, envs: &[(&str, String)]) {
+    let config = fixture("openrouter.toml").display().to_string();
+    let args = [
+        "-c",
+        &config,
+        "sources",
+        "import",
+        "--source",
+        "ted_search",
+        "--file",
+        SOURCES_SEED,
+        "--observed-at",
+        SOURCES_OBSERVED_AT,
+    ];
+    let out = leg_command(target, ws, envs, &args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn tengu sources import");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success() && stored_record_id(ws, SOURCES_CHANGE).is_some(),
+        "seeding sources.db failed:\n{stdout}\n{stderr}"
+    );
+}
+
+/// The stored record id of TED notice `publication` in the leg's
+/// `sources.db`, in full.
+fn stored_record_id(ws: &Workspace, publication: &str) -> Option<String> {
+    let db = ws.home.join("state").join(XM_STATE).join("sources.db");
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    conn.query_row(
+        "SELECT record_id FROM records WHERE source_id = 'ted_search' AND native_id = ?1",
+        [publication],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
 /// The stored run the xlab set reads by id ([`XLAB_STORED_RUN`]): its
 /// `report.json` and trade files into the leg's
 /// `<TENGU_HOME>/state/engine-matrix/backtests/<run id>/`, as the tool wrote
@@ -1658,6 +1748,14 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
                 reads.iter().all(|(_, _, split)| split == XLAB_SPLIT),
                 "{label}: holdout reads of another split: {reads:?}"
             );
+        }
+        Set::Sources => {
+            // The original notice stood before its change; after it, the
+            // change supersedes it — its record id is only in step 2's text.
+            quotes("the original notice's publication number", SOURCES_ORIGINAL);
+            let change = stored_record_id(ws, SOURCES_CHANGE)
+                .unwrap_or_else(|| panic!("{label}: {SOURCES_CHANGE} is not stored"));
+            quotes("the superseding record id", &change);
         }
         Set::Shell => {
             quotes("the run_command token", &ws.shell_token);
@@ -2449,6 +2547,76 @@ fn offline_local_xlab_holdout() {
         assert!(read.contains(want), "{want}: {read}");
     }
     for result in [hidden, read, rows] {
+        assert!(
+            result.len() < 8_192
+                && !result.contains("bytes in observation")
+                && !result.contains("[truncated"),
+            "{} chars: {result}",
+            result.len()
+        );
+    }
+}
+
+/// The sources set on the local engine, scripted, through `run-agent`: the
+/// leg's `sources.db` (seeded by `tengu sources import`, no network) read
+/// as of before and after the change notice, knowable — the original notice
+/// stands, then the change supersedes it (`correction`). Each text arrives
+/// whole under the 16k agent's 8 192-char cap: typed lines with full record
+/// ids, the buyer's name inside one fence after one system note; the model
+/// sees only the composed set.
+#[test]
+fn offline_local_sources() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::Sources, &ws, &[]);
+    let original = stored_record_id(&ws, SOURCES_ORIGINAL).expect("seeded");
+    let change = stored_record_id(&ws, SOURCES_CHANGE).expect("seeded");
+    let at = |day: &str| json!({"at": day, "mode": "knowable", "source": "ted_search"});
+    let (leg, bodies) = offline_leg(
+        Set::Sources,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply("c1", "source_evidence", &at(SOURCES_BEFORE)),
+            tool_call_reply("c2", "source_evidence", &at(SOURCES_AFTER)),
+            text_reply(&format!("{SOURCES_ORIGINAL} {change}")),
+        ],
+    );
+    assert_leg(MOCK, Set::Sources, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 3, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(names, ["compress_and_store", "source_evidence"]);
+    let latest = |i: usize| tool_messages(&bodies[i]).pop().unwrap_or_default();
+    let (before, after) = (latest(1), latest(2));
+    assert!(
+        before.starts_with(&format!(
+            "source_asof {SOURCES_BEFORE}T00:00:00Z knowable: 1 facts · 0 pending · 0 expired"
+        )),
+        "{before}"
+    );
+    assert!(
+        before.contains(&format!("\nfact {original} event=ted:procedure:")),
+        "{before}"
+    );
+    assert!(
+        !before.contains(&change),
+        "the change is not yet public: {before}"
+    );
+    assert!(
+        after.contains(&format!("\nsuperseded {original} by {change} (correction)")),
+        "{after}"
+    );
+    assert!(
+        after.contains(&format!("\nfact {change} event=")),
+        "{after}"
+    );
+    for result in [&before, &after] {
+        let note = "[System note: each source-text block below quotes external data";
+        assert_eq!(result.matches(note).count(), 1, "{result}");
+        assert!(
+            result.contains("field=\"buyer_name\">") && result.contains("</source-text>"),
+            "{result}"
+        );
         assert!(
             result.len() < 8_192
                 && !result.contains("bytes in observation")

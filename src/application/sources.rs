@@ -1,11 +1,11 @@
 //! Source evidence use cases (O2): the as-of evidence packet of the source
-//! store (`tengu sources asof`; the `source_evidence` tool next) and a row's
+//! store (`tengu sources asof`, the read-only `source_evidence` tool) and a row's
 //! retention purge (`tengu sources purge`). Reads through
 //! `ports::source_store`, rules from `[sources]`; no network.
 //!
 //! | Use case | Rule |
 //! |---|---|
-//! | [`evidence_as_of`] | refused for a source no registry row names; no store yet (`None`) = an empty packet, nothing created; the store read is seeded by the queried source (else every record) with `min(published, observed) ≤ t`, whole items and events added (`SourceStore::records`); every coverage row and tombstone; the registry's policies; then `EvidencePacket::build` filters by entity / event / publication — so the freshness counts are exact |
+//! | [`evidence_as_of`] | refused for a source no registry row names; no store yet (`None`) = an empty packet, nothing created; the store read is seeded by the queried source (else every record) with `min(published, observed) ≤ t`, whole items and events added (`SourceStore::records`); every coverage row and tombstone; the registry's policies; then `EvidencePacket::build` filters by entity / event / publication window — so the freshness counts are exact |
 //! | [`purge_request`] | a row's retention as cutoffs: `raw_retention_days` / `record_retention_days` = N > 0 ⇒ before `now − N days`; `0` or unset ⇒ none (kept forever); both none ⇒ nothing to purge |
 
 use anyhow::{bail, Result};
@@ -25,6 +25,8 @@ pub(crate) struct AsOfRequest {
     pub entity: Option<String>,
     pub event_key: Option<String>,
     pub published_from_ms: Option<i64>,
+    /// Exclusive.
+    pub published_to_ms: Option<i64>,
 }
 
 /// The evidence packet of `store` at `req.at_ms` (module table); `None` =
@@ -74,6 +76,7 @@ pub(crate) async fn evidence_as_of(
         entity: req.entity.clone(),
         event_key: req.event_key.clone(),
         published_from_ms: req.published_from_ms,
+        published_to_ms: req.published_to_ms,
     };
     Ok(EvidencePacket::build(&input, req.at_ms, req.mode, &query))
 }
@@ -224,6 +227,7 @@ mod tests {
                         entity: None,
                         event_key: None,
                         published_from_ms: None,
+                        published_to_ms: None,
                     };
                     let got = evidence_as_of(Some(&store), &reg, &req).await.unwrap();
                     // The world's tombstones are not in this store (the
@@ -248,6 +252,7 @@ mod tests {
                 entity: None,
                 event_key: None,
                 published_from_ms: None,
+                published_to_ms: None,
             };
             let e = evidence_as_of(None, &reg, &unknown)
                 .await

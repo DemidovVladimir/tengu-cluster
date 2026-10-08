@@ -21,8 +21,6 @@
 //! | Confidence, per `event_key` | over current typed records without an issue and not `trigger_only`: `confirmed` ≥ 1 `primary` · `corroborated` ≥ 2 origins · `single` 1 origin; `trigger_only` when only trigger-level or issue-flagged typed records exist; `none` without a typed record |
 //! | Conflicts | current typed facts of one event, the same kind and stage (TED: the notice type and the same lot set — distinct lots are never compared), disagreeing on a field (SEC: `cik`, `form`, `items`; TED: `value` as a number, `deadline_ms`, `cpv`) |
 
-#![allow(dead_code)] // consumers (store, CLI, tool) land with the next O2 steps
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
@@ -105,6 +103,7 @@ pub enum RecordState {
 }
 
 impl RecordState {
+    #[allow(dead_code)] // for `domain/soe/` (O3) reports
     pub fn as_str(self) -> &'static str {
         match self {
             RecordState::InForce => "in_force",
@@ -201,6 +200,7 @@ pub struct Conflict {
 
 /// The view at t (module tables). Every list is sorted.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // `at_ms` / `mode` name the view for `domain/soe/` (O3) readers
 pub struct AsOfView<'a> {
     pub at_ms: i64,
     pub mode: AsOfMode,

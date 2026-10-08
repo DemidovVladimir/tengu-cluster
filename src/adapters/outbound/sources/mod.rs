@@ -12,7 +12,7 @@
 //!
 //! | Rule | Value |
 //! |---|---|
-//! | Store | [`open_source_store`]: refused without `[sources]` (`sources_state_missing`) |
+//! | Store | [`open_source_store`]: refused without `[sources]` (`sources_state_missing`); readers take [`existing_source_store`] (`None` until `sources.db` exists — a read creates nothing) |
 //! | Fetch / import | [`fetch_gate`]: the row's kind, an enabled row with its reviewed terms (`SourceEntry::fetch_stamp`) and no runtime off switch (`tengu sources disable`) — refused before any request otherwise |
 
 pub(crate) mod sec;
@@ -45,6 +45,20 @@ pub(crate) fn sources_state_dir(sections: &SandboxSections) -> Result<&Path> {
 pub(crate) fn open_source_store(sections: &SandboxSections) -> Result<Arc<dyn SourceStore>> {
     let dir = sources_state_dir(sections)?;
     Ok(Arc::new(store::SqliteSourceStore::open(dir)?))
+}
+
+/// The sandbox's source store when `sources.db` exists, else `None` — a
+/// reader (`tengu sources list|asof|purge`, the `source_evidence` tool)
+/// creates nothing; refused without `[sources]`.
+pub(crate) fn existing_source_store(
+    sections: &SandboxSections,
+) -> Result<Option<Arc<dyn SourceStore>>> {
+    let dir = sources_state_dir(sections)?;
+    if dir.join(SOURCES_DB).exists() {
+        Ok(Some(open_source_store(sections)?))
+    } else {
+        Ok(None)
+    }
 }
 
 /// What every record of row `id` carries, or why nothing may be fetched or
