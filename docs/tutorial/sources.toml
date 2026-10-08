@@ -394,6 +394,12 @@ sources = [
   "src/bootstrap/decision.rs",
 ]
 
+[pages.source-evidence]
+sources = [
+  "src/domain/source/",
+  "src/domain/canonical.rs",
+]
+
 # ── Operate ───────────────────────────────────────────────────────────────
 
 [pages.ops]

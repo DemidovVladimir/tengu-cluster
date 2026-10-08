@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Source evidence · Tengu</title>
+<meta name="description" content="Source records: one row per thing an approved source published, with its full provenance, kept lossless — ids, hashes and amounts as written; inferences never become facts.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: field list */
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; font-size: .88rem; margin: 0; }
+  .kv dt { color: var(--muted); font-family: var(--font-mono); font-size: .8rem; }
+  .kv dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Sources</div>
+  <h1>Source evidence</h1>
+  <p class="lede">A fact read from an approved source (SEC EDGAR, EU TED) becomes one source record: the fact plus where, when and under which terms it was read. Nothing is shortened or rounded, and a model's reading is never stored as a fact.</p>
+  <ul class="facts">
+    <li>schema <b>source_record/1</b></li>
+    <li><b>6</b> source classes</li>
+    <li><b>3</b> trust levels</li>
+    <li>hashes <b>64</b> hex, whole</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip data">data</span> records</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-record">
+  <div class="sec-head">
+    <span class="kicker">One record</span>
+    <h2 id="s-record">The fact and its provenance</h2>
+    <p>Every field the opportunity PRD asks of a factual observation (§5.2) is on the record. Confidence and contradictions need many records, so they are computed later, never stored on one.</p>
+  </div>
+  <div class="grid two">
+    <div class="card data">
+      <h3>Identity and time</h3>
+      <dl class="kv">
+        <dt>record_id</dt><dd><code>&lt;source_id&gt;:&lt;native_id&gt;:&lt;content_hash&gt;</code>, each part whole</dd>
+        <dt>native_id</dt><dd>the source's own id: an SEC accession, a TED publication number</dd>
+        <dt>event_key</dt><dd>the real-world event: <code>sec:filing:&lt;accession&gt;</code>, <code>ted:procedure:&lt;id&gt;</code></dd>
+        <dt>entities</dt><dd><code>sec:cik:&lt;10 digits&gt;</code>, <code>ted:buyer:&lt;country&gt;:&lt;id&gt;</code></dd>
+        <dt>published_ms</dt><dd>when the source made it public</dd>
+        <dt>observed_ms</dt><dd>fetch time of the newest raw snapshot it rests on</dd>
+        <dt>parsed_ms</dt><dd>when the parser produced it; never before <code>observed_ms</code></dd>
+        <dt>valid_from_ms · valid_until_ms</dt><dd>when the fact applies; the end is optional and after the start</dd>
+      </dl>
+    </div>
+    <div class="card guard">
+      <h3>Origin and terms</h3>
+      <dl class="kv">
+        <dt>source_class · trust</dt><dd>copied from the source's registry row at parse time</dd>
+        <dt>content_hash</dt><dd>sha256 of what the source said; the same content read twice is the same record</dd>
+        <dt>snapshots</dt><dd>sha256 of every raw body it was parsed from (at least one)</dd>
+        <dt>parser_version</dt><dd><code>&lt;parser&gt;/&lt;n&gt;</code>, e.g. <code>sec-submissions/1</code></dd>
+        <dt>license_or_terms · terms_sha256</dt><dd>the reuse terms and the hash of the terms page the operator reviewed</dd>
+        <dt>supersedes</dt><dd>the record a correction replaces; the old one stays</dd>
+        <dt>origin</dt><dd>the source a syndicated copy came from, so copies count once</dd>
+        <dt>jurisdiction · language · currency</dt><dd>where and how it applies; <code>currency</code> is the fact's amount currency</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-class">
+  <div class="sec-head">
+    <span class="kicker">PRD §5.1</span>
+    <h2 id="s-class">Classes and trust</h2>
+    <p>A trust level says how far one record counts: <code>primary</code> establishes a fact, <code>corroborating</code> counts toward two independent confirmations, <code>trigger_only</code> only starts a search.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Class</th><th>May be</th></tr></thead>
+      <tbody>
+        <tr><td><code>law_regulator</code> · <code>company_primary</code> · <code>registry_marketplace</code> · <code>customer_demand</code></td><td>any trust level</td></tr>
+        <tr><td><code>independent_reporting</code></td><td><code>corroborating</code> or <code>trigger_only</code>, never <code>primary</code></td></tr>
+        <tr><td><code>social_inference</code></td><td><code>trigger_only</code> only</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-parse">
+  <div class="sec-head">
+    <span class="kicker">Parse status</span>
+    <h2 id="s-parse">A failed parse still leaves a record</h2>
+    <p>The fact is typed per source: <code>sec_filing</code>, <code>ted_notice</code>, or <code>unparsed</code> with a reason. Errors are listed per field, never dropped.</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>ok</b>A typed fact, no errors.</span></li>
+    <li><span class="chip warn">part</span><span><b>partial</b>A typed fact plus at least one field error.</span></li>
+    <li><span class="chip bad">err</span><span><b>error</b>An <code>unparsed</code> fact plus at least one field error.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Unknown keys are refused.</b> At every level: the record, its fact, amounts, places, origin, parse errors.</span></li>
+    <li><span><b>An inference is never a fact.</b> <code>Inference</code> (text, model, prompt sha256, generation, as-of) is its own type; no record field and no fact kind takes it.</span></li>
+    <li><span><b>Money is text as written.</b> <code>NativeAmount</code> keeps <code>150000.00</code> as <code>150000.00</code> with an ISO 4217 code; a JSON number, <code>1e5</code> or <code>1,000</code> is refused. Nothing is converted here.</span></li>
+    <li><span><b>Places keep their role.</b> Buyer, performance, legal or delivery, each in ISO 3166 or NUTS: never one folded field.</span></li>
+    <li><span><b>Identity is checked.</b> <code>validate</code> recomputes the content hash and the record id; a tampered fact or id fails.</span></li>
+    <li><span><b>Ids stay whole.</b> Accessions, CIKs with their leading zeros, procedure ids and every hash round-trip unchanged.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/source/mod.rs</code></td><td>the source layer's module table and re-exports</td></tr>
+        <tr><td><code>src/domain/source/record.rs</code></td><td><code>SourceRecord</code>, <code>Fact</code>, <code>NativeAmount</code>, <code>Place</code>, <code>Origin</code>, <code>Inference</code>, <code>SourceClass</code>, <code>Trust</code>; <code>validate</code>, <code>with_identity</code></td></tr>
+        <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 behind the content hash</td></tr>
+        <tr><td><code>src/domain/sec.rs</code></td><td>SEC EDGAR decoders a filing record is built from (see <a href="history.html">Market history</a>)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+</article>
+</main>
+</div>
+</body>
+</html>
