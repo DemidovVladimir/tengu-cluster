@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, FX kept apart from the native amount, typed versioned records and a private signed operator profile. Offline today.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics and the hard gates that return PASS, HOLD or REJECT. Offline today.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,12 +22,12 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
   <h1>Software opportunities</h1>
-  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Today it is the value layer and the typed records: exact money, estimates that stay unknown, and a private signed profile. Nothing here reads the network or acts.</p>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Built so far: exact money, estimates that stay unknown, typed records, a private signed profile, three-scenario economics and the hard gates. Nothing here reads the network or acts.</p>
   <ul class="facts">
     <li>money in <b>2</b> minor digits, never a float</li>
     <li><b>7</b> currencies, a closed set</li>
-    <li>shares in <b>0–10 000</b> bps</li>
     <li><b>5</b> record schemas, version <b>1</b></li>
+    <li><b>22</b> gate codes, <b>3</b> verdicts</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, rounding</li>
@@ -79,6 +79,66 @@
     <li><span class="chip ok">range</span><span><b>known</b><code>{ low, base, high }</code>, ordered.</span></li>
     <li><span class="chip warn">unknown</span><span><b>unknown</b><code>"UNKNOWN"</code> or <code>"UNKNOWN: &lt;reason&gt;"</code>; never read as 0.</span></li>
     <li><span class="chip bad">refused</span><span><b>malformed</b>Out of order, another string, a bare number.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-econ">
+  <div class="sec-head">
+    <span class="kicker">Deterministic, integer only</span>
+    <h2 id="s-econ">Three scenarios from the input ranges</h2>
+    <p>Each figure is computed in the profile's currency for the downside, base and upside. A figure that needs an unknown input says which fields it lacks; it is never 0.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Figure</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>run-rate month</td><td><code>max_payback_months</code> from the decision; nothing is earned during the ramp</td></tr>
+        <tr><td>revenue collected</td><td>recurring customer base (churned monthly) × price · acquired revenue churned monthly · partner revenue × share · one-off contract value per occupied month; each less collection loss</td></tr>
+        <tr><td>cash contribution</td><td>revenue − variable cost − fixed costs</td></tr>
+        <tr><td>time-adjusted contribution</td><td>cash contribution − owner hours × <code>shadow_hourly_rate</code></td></tr>
+        <tr><td>initial capital</td><td>acquisition + setup + validation + working capital</td></tr>
+        <tr><td>payback</td><td>first month the running sum covers the initial capital; none in 600 months is <code>NOT_REACHED</code></td></tr>
+        <tr><td>expected loss</td><td>Σ probability × impact, a low–high range</td></tr>
+        <tr><td>another currency</td><td>converted through <code>economics.fx</code>; without it every money figure is unknown</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Example (a test golden, synthetic profile)</th><th>Base</th></tr></thead>
+      <tbody>
+        <tr><td>10 leads × 20 % a month, churn 5 %, price 150.00, ramp 2: revenue in month 9</td><td>1809.75</td></tr>
+        <tr><td>− variable 9 % − fixed 40.00 = cash contribution</td><td>1606.87</td></tr>
+        <tr><td>− 9 h × 70.00 owner time = time-adjusted</td><td>976.87</td></tr>
+        <tr><td>payback of 1200.00: cash · time-adjusted</td><td>month 5 · month 10</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-gates">
+  <div class="sec-head">
+    <span class="kicker">Before any ranking</span>
+    <h2 id="s-gates">The hard gates</h2>
+    <p>Every gate runs and every failure is listed with its field. A known violation rejects; anything unknown, unverified or open holds. A figure exactly at the profile's value passes.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Gate</th><th><code>REJECT</code> when</th><th><code>HOLD</code> when</th></tr></thead>
+      <tbody>
+        <tr><td>cash exposure · tranche</td><td>above <code>max_cash_exposure</code> · a stage above <code>max_validation_tranche</code></td><td>an amount unknown</td></tr>
+        <tr><td>contribution · payback</td><td>base below <code>min_monthly_contribution</code> · above <code>max_payback_months</code></td><td>the upside reaches the target and a staged test exists (<code>BELOW_TARGET_WITH_PATH</code>)</td></tr>
+        <tr><td>bounds</td><td>owner time, support, payment access or scope <code>UNBOUNDED</code></td><td><code>UNKNOWN</code>, or the owner hours unknown</td></tr>
+        <tr><td>evidence</td><td>—</td><td>no cited record supports it at the decision time; one demand event only; a contradiction</td></tr>
+        <tr><td>legal · deal</td><td>a red flag</td><td>a legal risk not resolved; a deal block not verified</td></tr>
+        <tr><td>jurisdictions · stop rule · downside</td><td>— · the first spend has no stop rule · —</td><td>outside <code>jurisdictions_allow</code> · no experiment · a max-loss term unknown</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">PASS</span><span><b>nothing failed</b>Ranked next; still not permission to act.</span></li>
+    <li><span class="chip warn">HOLD</span><span><b>unknown or open</b>Lists the next information worth buying.</span></li>
+    <li><span class="chip bad">REJECT</span><span><b>a known violation</b>At least one gate failed on known figures.</span></li>
   </ul>
 </section>
 
@@ -157,6 +217,11 @@
     <li><span><b>No unknown keys.</b> Every record table refuses a key it does not define, at every depth.</span></li>
     <li><span><b>No look-ahead.</b> An economic assumption dated after the opportunity's <code>as_of</code> is refused (<code>future_leakage</code>).</span></li>
     <li><span><b>One quadrant rule.</b> An opportunity episode's decision × outcome quadrant is the lineage rule (<code>quadrant_of</code>).</span></li>
+    <li><span><b>Unknown never passes a gate.</b> An unknown input holds the candidate and names the field (<code>UNKNOWN_INPUT:&lt;field&gt;</code>).</span></li>
+    <li><span><b>Boundaries are exact.</b> At the cap or the target a candidate passes; one cent past it fails.</span></li>
+    <li><span><b>Owner time is priced.</b> The time-adjusted contribution subtracts owner hours × the shadow hourly rate.</span></li>
+    <li><span><b>No look-ahead in the gates.</b> A record knowable only after the decision time — or later the same day — changes nothing then, not even the explanation.</span></li>
+    <li><span><b>One post is not demand.</b> A single customer-demand event holds; news and social posts support nothing.</span></li>
     <li><span><b>A public brief cites public links only.</b> A <code>repo:</code>, <code>state:</code>, <code>vault:</code> or <code>run:</code> locator is refused (<code>private_locator</code>).</span></li>
   </ul>
 </section>
@@ -169,7 +234,9 @@
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe</span>
-<span class="ln o"># 30 tests: values, record headers, profile knobs, mechanisms, risk, stages, episodes, portfolio, public brief</span>
+<span class="ln o"># 59 tests: values, records, profile knobs, economics goldens, gates</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe::gates</span>
+<span class="ln o"># 18 tests: exact boundaries, unknown holds, evidence timing, deal diligence</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu config::soe</span>
 <span class="ln o"># 4 tests: missing, synthetic, in-repo and loose-mode profiles; record dirs</span></pre>
   </div>
@@ -192,8 +259,10 @@
         <tr><td><code>src/domain/soe/risk.rs</code> · <code>experiment.rs</code></td><td><code>RiskAssessment</code> · <code>ExperimentSpec</code>, <code>ApprovalKind</code></td></tr>
         <tr><td><code>src/domain/soe/episode.rs</code></td><td><code>OpportunityEpisode</code></td></tr>
         <tr><td><code>src/domain/soe/portfolio.rs</code></td><td><code>WeeklyPortfolio</code>, <code>PortfolioAction</code>, <code>IsoWeek</code>, <code>PublicBrief</code></td></tr>
+        <tr><td><code>src/domain/soe/economics.rs</code></td><td><code>scenarios</code>, <code>ScenarioMetrics</code>, <code>Metric</code>, <code>Payback</code>, <code>expected_loss</code></td></tr>
+        <tr><td><code>src/domain/soe/gates.rs</code></td><td><code>gates</code>, <code>GateVerdict</code>, <code>GateCode</code>, <code>CitedRecord</code>, <code>next_information</code></td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code></td></tr>
-        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>gates, the operator contract's field names, sources, threat model</td></tr>
+        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics and hard-gate rules</td></tr>
       </tbody>
     </table>
   </div>

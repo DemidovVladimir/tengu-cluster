@@ -36,7 +36,7 @@
 //! | `HIGH_TICKET_DELIVERY` with `RECURRING` revenue | `fake_recurring` (PRD § 12: no fake recurring revenue) |
 //! | `PARTNER_REVSHARE` without `REVENUE_SHARE`; `ACQUIRE_TRANSFORM` without `ACQUISITION` | `revenue_model_mismatch` |
 //! | `ACQUIRE_TRANSFORM` without `[deal]` | `deal_review_missing` |
-//! | an assumption dated after `as_of` | `future_leakage` |
+//! | an assumption or the `fx` rate dated after `as_of` | `future_leakage` |
 //! | a negative amount; `fx` not from `currency`; a `VERIFIED` diligence block without evidence | `invalid_field` |
 
 // Consumers land with the economics, gates and ranking (O1 W3–W5).
@@ -499,6 +499,7 @@ impl SoeRecord for Opportunity {
                 "economics.fx.pair",
                 format_args!("{} does not convert {}", fx.pair, e.currency),
             );
+            p.not_after("economics.fx.as_of", &fx.as_of, "as_of", &self.as_of);
         }
         for (field, input) in e.inputs() {
             if let Some(low) = input.amount_low() {
@@ -787,5 +788,18 @@ collection_loss = { value = { low = 0, base = 200, high = 500 }, evidence = [], 
                 codes::INVALID_FIELD
             ]
         );
+        // A rate read after the record is look-ahead too.
+        let mut late_fx = recurring();
+        late_fx.economics.currency = Currency::Usd;
+        late_fx.economics.fx = Some(
+            FxRate::new(
+                "USD/EUR".parse().unwrap(),
+                "0.9",
+                Locator::Unknown,
+                "2026-10-06".parse().unwrap(),
+            )
+            .unwrap(),
+        );
+        assert_eq!(codes_of(validate(&late_fx)), vec![codes::FUTURE_LEAKAGE]);
     }
 }

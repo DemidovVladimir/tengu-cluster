@@ -1,6 +1,6 @@
 //! Software Opportunity Engine (SOE) — pure domain: no IO, clock, network or
-//! LLM (`docs/soe-2026-10-08.md`). Grows per phase: O1 adds the records,
-//! economics, gates and ranking beside `value`. The operator's parameters
+//! LLM (`docs/soe-2026-10-08.md`). Grows per phase: O1 holds the values,
+//! records, economics and gates (ranking next). The operator's parameters
 //! never live in the repo; they come from the signed private profile at run
 //! time (loaded by `config/soe.rs`).
 //!
@@ -13,6 +13,8 @@
 //! | `risk.rs` · `experiment.rs` | `RiskAssessment` (max loss, risks, concentration, bounds) · `ExperimentSpec` (threshold, stages, `ApprovalKind`) |
 //! | `episode.rs` | `OpportunityEpisode` (`soe.opportunity_episode/1`, private; lineage `Quality` / `Lesson` / `quadrant_of`) |
 //! | `portfolio.rs` | `WeeklyPortfolio` (`soe.weekly_portfolio/1`, `PortfolioAction`, `IsoWeek`) · `PublicBrief` (`soe.public_brief/1`, allow-listed keys) |
+//! | `economics.rs` | `scenarios`: downside / base / upside `ScenarioMetrics` (`Metric` known or the fields it lacks, `Payback`), `expected_loss`, `inputs_sha256`, `ECONOMICS_VERSION` |
+//! | `gates.rs` | `gates`: PRD § 7.2 hard gates → `GateVerdict` (`PASS` / `HOLD` / `REJECT`, `GateFailure` codes), `CitedRecord` (what a cited source record shows at `as_of`), `next_information` |
 //!
 //! | Rule | Why |
 //! |---|---|
@@ -24,8 +26,10 @@
 //! | Provenance is `domain/source/` (O2); imports go `soe` → `source`, never back | one provenance type for every domain: `Opportunity.signals` lists source record ids, no SOE signal type |
 //! | Private records stay private | profile, episodes and portfolios live under `<TENGU_HOME>/state/soe/`; only a `PublicBrief` may leave |
 
+pub(crate) mod economics;
 pub(crate) mod episode;
 pub(crate) mod experiment;
+pub(crate) mod gates;
 pub(crate) mod opportunity;
 pub(crate) mod portfolio;
 pub(crate) mod profile;

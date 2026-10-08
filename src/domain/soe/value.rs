@@ -63,6 +63,8 @@ pub mod codes {
     pub const REVENUE_MODEL_MISMATCH: &str = "revenue_model_mismatch";
     pub const DEAL_REVIEW_MISSING: &str = "deal_review_missing";
     pub const PRIVATE_LOCATOR: &str = "private_locator";
+    // Gates (`gates.rs`).
+    pub const OPERATOR_PROFILE_UNSIGNED: &str = "operator_profile_unsigned";
 }
 
 /// A refused value: a [`codes`] entry + what was wrong.
