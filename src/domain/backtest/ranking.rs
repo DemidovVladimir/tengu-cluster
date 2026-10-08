@@ -13,6 +13,7 @@
 //! | Rating tuple | one integer per `[rating] order` term: `evidence_tier` / `verdict` as ordinals ([`tier_ordinal`], [`RunVerdict::ordinal`]), a number as `round(x / quantum)`; a leading `-` negates |
 //! | [`Ranking::content_sha256`] | canonical sha256 of the ranking without `run`, `report_sha256`, `generated_at_ms`: a rerun on the same data (new run ids) hashes the same |
 //! | [`Ranking::render_markdown`] | `ranking.md`: the header, one table per cohort weakest → strongest, the ineligible / failed / dropped lists — ids whole |
+//! | [`Ranking::render_compact`] | a few lines (`tengu ranking run`, a tool result): status, window, rows weakest → strongest, the failed / ineligible / dropped reasons — ids whole |
 //!
 //! | Reason (check order) | List | When |
 //! |---|---|---|
@@ -29,9 +30,6 @@
 //!
 //! Evaluation is `NOT_GATED` on every row: a ranking runs the rules arms
 //! only (no Jev gate, `RANKED_ARMS`).
-
-// The coordinator (SR-5) and the `strategy_ranking` tool are the consumers.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -860,6 +858,63 @@ impl Ranking {
         let mut v = serde_json::to_value(self).expect("a ranking serializes (string map keys)");
         strip_volatile(&mut v);
         canonical_sha256(&v)
+    }
+
+    /// A few lines for a terminal or a tool result: status, window, each
+    /// cohort's rows weakest → strongest (`rank strategy ci95_lo mean n run`,
+    /// ids whole), then the failed / ineligible / dropped strategies with
+    /// their reasons.
+    pub fn render_compact(&self) -> String {
+        let mut m = String::new();
+        let _ = writeln!(
+            m,
+            "strategy ranking `{}` {}: {} · contract sha256 {}",
+            self.contract,
+            self.date,
+            enum_name(&self.status),
+            self.contract_sha256
+        );
+        let _ = writeln!(
+            m,
+            "decisions {} → {} (cutoff, data through it) · arm {} · {}",
+            self.from_ms.map_or("—".to_string(), fmt_time),
+            fmt_time(self.cutoff_ms),
+            self.arm,
+            enum_name(&self.evaluation)
+        );
+        if self.cohorts.is_empty() {
+            let _ = writeln!(m, "no run ranked");
+        }
+        let n = self.cohorts.len();
+        for (i, c) in self.cohorts.iter().enumerate() {
+            let _ = writeln!(m, "cohort {} of {n}, weakest → strongest:", i + 1);
+            for r in &c.rows {
+                let _ = writeln!(
+                    m,
+                    "  {}. {}  ci95_lo {}  mean {}  n {}  {}",
+                    r.rank,
+                    r.strategy,
+                    signed(r.ci95_bps.map(|[lo, _]| lo), 2),
+                    signed(r.mean_net_bps, 2),
+                    r.n,
+                    r.run
+                );
+            }
+        }
+        for (title, rows) in [
+            ("failed", &self.failed),
+            ("ineligible", &self.ineligible),
+            ("dropped", &self.dropped),
+        ] {
+            if !rows.is_empty() {
+                let list: Vec<String> = rows
+                    .iter()
+                    .map(|r| format!("{} {}", r.strategy, r.reason))
+                    .collect();
+                let _ = writeln!(m, "{title} ({}): {}", rows.len(), list.join(", "));
+            }
+        }
+        m
     }
 
     /// `ranking.md` (module table).
@@ -1704,5 +1759,30 @@ mod tests {
         at("| `gone` | `missing` |");
         assert!(at("## Ineligible") < at("## Failed") && at("## Failed") < at("## Dropped"));
         at("## Dropped\n\nNone.");
+    }
+
+    #[test]
+    fn compact_lists_rows_weakest_first_and_the_reasons() {
+        let c = contract_of(&["strong", "weak", "gone"]);
+        let r = ranking(
+            &c,
+            &[
+                run(facts("strong", "20261009T050000Z-strong", 40.0, 20.0)),
+                run(facts("weak", "20261009T050000Z-weak", -5.0, -30.0)),
+            ],
+        );
+        let text = r.render_compact();
+        let at = |s: &str| text.find(s).unwrap_or_else(|| panic!("{s} not in\n{text}"));
+        at(&format!(
+            "strategy ranking `rank.t` 2026-10-09: INCOMPLETE · contract sha256 {}",
+            "c".repeat(64)
+        ));
+        at("decisions 2026-03-01T00:00:00Z → 2026-10-09T04:00:00Z (cutoff, data through it)");
+        assert!(
+            at("  1. weak  ci95_lo -30.00  mean -5.00  n 40  run:xlab/20261009T050000Z-weak")
+                < at("  2. strong  ci95_lo +20.00  mean +40.00  n 40")
+        );
+        at("failed (1): gone missing");
+        assert!(!text.contains("ineligible") && !text.contains("dropped"));
     }
 }

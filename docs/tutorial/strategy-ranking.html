@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Strategy ranking · Tengu</title>
-<meta name="description" content="Strategy ranking: a preregistered ranking contract in the lineage registry, sealed before any ranking; the [strategy_ranking] sandbox section; the cohort identity every backtest report records; the pure ranker that selects one run per strategy and cohort and orders them weakest first; run-dir retention that keeps every cited run.">
+<meta name="description" content="Strategy ranking: a preregistered ranking contract in the lineage registry, sealed before any ranking; the [strategy_ranking] sandbox section; the cohort identity every backtest report records; the pure ranker that selects one run per strategy and cohort and orders them weakest first; the publisher that runs one ranking date under a lease and writes dated files and latest; run-dir retention that keeps every cited run.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,7 +25,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Strategy ranking</div>
   <h1>Strategy ranking</h1>
-  <p class="lede">A ranking orders a sandbox's strategies from weakest to strongest on the same data, under rules sealed in a lineage record first. Built: the contract, its load checks, the run identity, retention and the pure ranker; the publisher comes next.</p>
+  <p class="lede">A ranking orders a sandbox's strategies weakest to strongest on the same data, under rules sealed in the lineage registry first. Built: the contract, its checks, the run identity, the ranker and the publisher (<code>tengu ranking</code>). Next: the tool and the feeds.</p>
   <ul class="facts">
     <li><b>2</b> draft contracts, both unsealed</li>
     <li><b>15</b> daily · <b>8</b> weekend strategies</li>
@@ -168,14 +168,48 @@
 <span class="ln"># rows sort ascending by this tuple, then by strategy id: rank 1 = the weakest of its cohort</span></pre></div>
 </section>
 
+<section class="sec" aria-labelledby="s-publish">
+  <div class="sec-head">
+    <span class="kicker">The publisher</span>
+    <h2 id="s-publish">One ranking date, start to finish</h2>
+    <p><code>tengu ranking run</code> runs one date of one contract. No LLM and no network: it reads the market-data store and writes run dirs and ranking files in the sandbox's state dir.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>Contract</td><td>Listed in <code>[strategy_ranking]</code>. The registry is reloaded from disk; the newest <code>[[sealed]]</code> row must match the file, else <code>contract_unsealed</code> or <code>contract_changed</code> and nothing is written.</td></tr>
+        <tr><td>Date</td><td>The given date, else the newest local date whose cutoff has passed. It must be one of <code>days</code>. The cutoff is that date's local time in the contract's zone, correct across DST.</td></tr>
+        <tr><td>Published?</td><td>A <code>COMPLETE</code> or <code>INCOMPLETE</code> date comes back as it is. Nothing runs.</td></tr>
+        <tr><td>Lease</td><td><code>ranking:&lt;contract id&gt;</code> for 15 minutes, renewed before each strategy. Another holder: <code>ranking_busy</code>.</td></tr>
+        <tr><td>Freshness</td><td>Every instrument's newest bar must close by the cutoff minus <code>max_lag_bars</code> bars, else the strategy is <code>STALE</code> and does not run.</td></tr>
+        <tr><td>Backtest</td><td>One strategy at a time, decisions from <code>from</code> to the cutoff, data through the cutoff, no split.</td></tr>
+        <tr><td>Rank</td><td><code>report.json</code> read back and hashed; the standing comes from the reloaded registry; then <code>select</code> and <code>rank</code>.</td></tr>
+        <tr><td>Publish</td><td>The dated <code>ranking.json</code> and <code>ranking.md</code>; on <code>COMPLETE</code>, <code>latest.md</code> then <code>latest.json</code>; the manifest's final status last.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="term-wrap"><pre class="term"><span class="ln">&lt;state dir&gt;/strategy-rankings/rank.xlab-w2.daily.v1/</span>
+<span class="ln">  2026-10-09/manifest.json   # example date · RUNNING → COMPLETE | INCOMPLETE; FAILED resumes</span>
+<span class="ln">  2026-10-09/ranking.json    # never rewritten once published</span>
+<span class="ln">  2026-10-09/ranking.md</span>
+<span class="ln">  latest.md                  # the newest COMPLETE date, written first</span>
+<span class="ln">  latest.json                # written last: the commit point retention reads</span></pre></div>
+  <p class="note"><b>Resume.</b> The manifest is rewritten after each strategy. A <code>RUNNING</code> or <code>FAILED</code> date resumes: a <code>DONE</code> strategy whose <code>report.json</code> still hashes the same is reused, the rest run again.</p>
+</section>
+
 <section class="sec" aria-labelledby="s-states">
   <div class="sec-head">
     <span class="kicker">Outcomes</span>
-    <h2 id="s-states">What verify, load and the ranker say</h2>
+    <h2 id="s-states">What verify, load, the ranker and the publisher say</h2>
   </div>
   <ul class="states">
-    <li><span class="chip ok">ok</span><span><b>COMPLETE</b>Every listed strategy has a run, ranked or listed as ineligible. Under <code>on_missing = "EXCLUDE"</code>, failed strategies are listed and the rest is ranked.</span></li>
-    <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run.</span></li>
+    <li><span class="chip ok">ok</span><span><b>COMPLETE</b>Every listed strategy has a run, ranked or listed as ineligible. Under <code>on_missing = "EXCLUDE"</code>, failed strategies are listed and the rest is ranked. <code>latest</code> moves to it.</span></li>
+    <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run. The dated files are written, <code>latest</code> is kept, the CLI exits 1.</span></li>
+    <li><span class="chip warn">warn</span><span><b>RUNNING · FAILED</b>A manifest that stopped mid-run, or a publish that failed. The next run resumes it.</span></li>
+    <li><span class="chip bad">error</span><span><b>contract_unsealed · contract_changed</b>The publisher refuses before writing anything.</span></li>
+    <li><span class="chip bad">error</span><span><b>ranking_busy</b>Another run holds the contract's lease.</span></li>
+    <li><span class="chip bad">error</span><span><b>not_a_ranking_day · cutoff_not_reached · before_from</b>The date is not one of <code>days</code>, its cutoff is still ahead, or it is not after <code>from</code>.</span></li>
     <li><span class="chip warn">warn</span><span><b>ranking_unsealed</b>No <code>[[sealed]]</code> row: a draft. Both repo contracts are here.</span></li>
     <li><span class="chip bad">error</span><span><b>invalid_field</b>A shape rule: empty or repeated strategies, cohort fields or rating keys, an unknown zone, a bad cutoff, <code>from</code> not a UTC day, an arm other than research or capped.</span></li>
     <li><span class="chip bad">error</span><span><b>seal_mismatch</b>A sealed contract whose values changed since.</span></li>
@@ -198,18 +232,27 @@
     <li><span><b>One run per strategy and cohort.</b> The newest run id is judged; an older run never stands in for an ineligible newer one.</span></li>
     <li><span><b>Cohorts never mix.</b> Runs rank together only when every cohort field is equal; each cohort gets its own table.</span></li>
     <li><span><b>Same data, same hash.</b> <code>content_sha256</code> leaves out run ids, report hashes and the generation time, so a rerun on the same data hashes the same.</span></li>
+    <li><span><b>Sealed or nothing.</b> The publisher reloads the registry on every run and writes nothing for an unsealed or changed contract.</span></li>
+    <li><span><b>One run per contract.</b> The lease <code>ranking:&lt;contract id&gt;</code> refuses an overlapping run, from the CLI or anywhere else on the state dir.</span></li>
+    <li><span><b>Published is final.</b> A published date reruns as a no-op and its files are never rewritten. A later forward grade lifts the evidence tier only in later dates.</span></li>
+    <li><span><b>Latest moves last.</b> Both dated files are written before <code>latest.md</code>, then <code>latest.json</code>. An older date never replaces a newer one.</span></li>
+    <li><span><b>No holdout read.</b> A ranking run has no split, so it never writes <code>holdout-reads.jsonl</code>.</span></li>
   </ul>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
   <div class="sec-head">
     <span class="kicker">Try it</span>
-    <h2 id="s-try">Check and trace the drafts</h2>
+    <h2 id="s-try">Check the drafts, run a date</h2>
+    <p>The run needs a sandbox with <code>[strategy_ranking]</code> and a sealed contract; until the operator seals one, it is refused.</p>
   </div>
   <div class="term-wrap"><pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu lineage verify</span>
 <span class="ln">WARN   ranking_unsealed   ranking/rank.xlab-w2.daily.v1     not sealed: …</span>
 <span class="ln">WARN   ranking_unsealed   ranking/rank.xlab-w2.weekend.v1   not sealed: …</span>
-<span class="ln cmd"><span class="p">$ </span>tengu lineage trace rank.xlab-w2.weekend.v1</span></pre></div>
+<span class="ln cmd"><span class="p">$ </span>tengu lineage trace rank.xlab-w2.weekend.v1</span>
+<span class="ln cmd"><span class="p">$ </span>tengu ranking run --sandbox &lt;sandbox&gt; --date 2026-10-09</span>
+<span class="ln">Error: contract_unsealed: `rank.xlab-w2.daily.v1` has no [[sealed]] row in locks.toml — …</span>
+<span class="ln cmd"><span class="p">$ </span>tengu ranking show --sandbox &lt;sandbox&gt;</span></pre></div>
 </section>
 
 <section class="sec" aria-labelledby="s-where">
@@ -224,8 +267,11 @@
         <tr><td><code>src/domain/lineage/ranking.rs</code></td><td><code>RankingContract</code>, cohort fields, rating keys, shape rules</td></tr>
         <tr><td><code>src/domain/lineage/validate.rs</code></td><td><code>ranking_unsealed</code>, the shape findings</td></tr>
         <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code> and its load rules</td></tr>
-        <tr><td><code>src/domain/backtest/ranking.rs</code></td><td><code>RunFacts</code>, <code>StrategyStanding</code>, <code>select</code>, <code>rank</code>, <code>ranking.md</code>, <code>content_sha256</code></td></tr>
+        <tr><td><code>src/domain/backtest/ranking.rs</code></td><td><code>RunFacts</code>, <code>StrategyStanding</code>, <code>select</code>, <code>rank</code>, <code>ranking.md</code>, the compact lines, <code>content_sha256</code></td></tr>
         <tr><td><code>src/application/backtest/mod.rs</code></td><td>the cohort identity, the cited runs retention keeps</td></tr>
+        <tr><td><code>src/application/ranking/mod.rs</code></td><td><code>run_ranking</code>: seal check, date and cutoff, lease, resume, freshness, backtests, rank, publish</td></tr>
+        <tr><td><code>src/application/ranking/store.rs</code></td><td>the manifest, the dated files, <code>latest</code>, atomic writes</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/ranking.rs</code></td><td><code>tengu ranking run</code> and <code>show</code></td></tr>
         <tr><td><code>lineage/rankings/</code></td><td>the two draft contracts</td></tr>
       </tbody>
     </table>

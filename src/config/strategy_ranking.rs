@@ -48,10 +48,8 @@ pub struct StrategyRankingConfig {
 pub struct RankingSection {
     /// The registry dir, absolute: the publisher reloads it at run time (a
     /// seal appended after the process started counts).
-    #[cfg_attr(not(test), allow(dead_code))] // read by the ranking coordinator
     pub registry_dir: PathBuf,
     /// The contract ids, as listed.
-    #[cfg_attr(not(test), allow(dead_code))] // read by the ranking coordinator
     pub contracts: Vec<String>,
     /// Every run dir the registry cites (`Registry::cited_runs`), by state.
     pub cited_runs: BTreeMap<String, BTreeSet<String>>,
@@ -142,15 +140,16 @@ pub(crate) fn section_errors(cfg: &Config, path: &Path) -> (Vec<String>, Option<
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     use crate::config::Config;
 
     /// A ranked sandbox: rule W and its top-4 cut in `[backtest]`, the
-    /// fixture contract `rank.fixture.v1` listed.
-    const CONFIG: &str = r#"
+    /// fixture contract `rank.fixture.v1` listed (also the ranking
+    /// coordinator's, `application/ranking/`).
+    pub(crate) const CONFIG: &str = r#"
 runtime_profile = "auto"
 
 [egress]
@@ -227,7 +226,10 @@ contracts = ["rank.fixture.v1"]
 
     /// `<tmp>/registry` = the lineage fixture registry, `<tmp>/sandboxes/
     /// <sandbox>/config.toml` = `edit(CONFIG)`.
-    fn setup(sandbox: &str, edit: impl Fn(String) -> String) -> (tempfile::TempDir, PathBuf) {
+    pub(crate) fn setup(
+        sandbox: &str,
+        edit: impl Fn(String) -> String,
+    ) -> (tempfile::TempDir, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lineage/registry");
         copy_dir(&fixture, &tmp.path().join("registry"));
