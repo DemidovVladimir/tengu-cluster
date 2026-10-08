@@ -1,0 +1,20 @@
+id = "weekend_fade.skip_news"
+family = "weekend_overshoot_fade"
+title = "Rule W skipping NEWS candidates (SEC filing or split in the weekend window)"
+parent = "weekend_fade"
+reason = "Phase 7: weekend moves with real-world information (an SEC filing or a split in [Fri 16:00 ET close, Sun 18:00 ET decision]) may behave unlike thin-market noise; UNCERTAIN = no SEC coverage or listed < 14 days."
+registered_at = "2026-10-08"
+order = 25
+preregistered = false
+status = "INCONCLUSIVE"
+notes = "Knob defaults (lookback 240 min, new listing 14 d, every filing) set before any run, not tuned. Experiment xlab.weekend_fade.news_labels.2026-10-08 (cost model v2). docs/p7-news-labels-2026-10-08.md."
+
+[spec]
+sandbox = "xlab-w2"
+strategy = "weekend_fade_skip_news"
+spec_sha256 = "d06b1148e15ea50c84595e1cfb586d1daa5f0e5715438016cce1a5d9000ad4c5"
+
+[[changed]]
+dim = "labels.skip"
+from = "none"
+to = "NEWS"
