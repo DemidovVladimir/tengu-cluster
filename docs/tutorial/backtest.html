@@ -159,7 +159,7 @@
         <g class="pop badge" data-at="6"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">every candidate at notional_usd</text></g>
         <g class="pop badge" data-at="7"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">largest |signal| admitted first</text></g>
         <g class="pop badge" data-at="8"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">side × (exit / entry − 1) × 10⁴</text></g>
-        <g class="pop badge" data-at="9"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">oldest run dirs pruned past 100</text></g>
+        <g class="pop badge" data-at="9"><rect x="490" y="300" width="350" height="22" rx="11"/><text x="665" y="315" text-anchor="middle">pruned past 100 · cited runs kept</text></g>
 
         <circle class="tok" r="6" data-path="p-spec-res" data-at="1-2"/>
         <circle class="tok guard" r="6" data-path="p-res-db" data-at="3" data-dur="700"/>
@@ -256,7 +256,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: tune in-sample, read the holdout once</span>
     <h2 id="s-split">In-sample, holdout, and who sees what</h2>
-    <p>Thirty example weekends, <code>--split time:&lt;t&gt;</code>: decisions at or after t are the holdout. The Architect's <code>backtest</code> tool hides it unless asked, and counts every read.</p>
+    <p>Thirty example weekends, <code>--split time:&lt;t&gt;</code>: decisions at or after t are the holdout. The Architect's <code>backtest</code> tool hides it unless asked, and counts every read. The CLI shows both halves and counts its read too.</p>
   </div>
   <div class="widget">
     <div class="ctrls">
@@ -325,7 +325,7 @@ skips.json           <span class="c"># every skip, drop and [risk] refusal</span
 decisions.jsonl      <span class="c"># with --gate: one audit line per decision, by seq</span>
 <span class="c"># beside the run dirs:</span>
 decision-cache.db    <span class="c"># never pruned</span>
-holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads</span></pre></div>
+holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool and CLI)</span></pre></div>
     <div class="tabpanel" id="tab-spec" hidden><pre><span class="c">// example spec file: tengu backtest --sandbox xlab --spec ./big_move_fade.json</span>
 {
   <span class="k">"name"</span>: <span class="s">"big_move_fade"</span>,
@@ -352,7 +352,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads<
     <li><span><b>Simple return.</b> Gross = side × (exit / entry − 1) × 10⁴, never ln.</span></li>
     <li><span><b>No peeking at exits.</b> Capped admissions read the book as of the decision, never whether a later bar exists.</span></li>
     <li><span><b>Read-only warehouse.</b> A run never writes <code>market.db</code>.</span></li>
-    <li><span><b>Reruns match.</b> The bootstrap is seeded; replay loops keep no history and the cache answers by full sha256, whatever <code>--concurrency</code>.</span></li>
+    <li><span><b>Reruns match.</b> The bootstrap is seeded; replay loops keep no history and the cache answers by full sha256, whatever <code>--concurrency</code>. Every report records <code>data_through_ms</code>, the newest row it read; <code>--data-through</code> with it reruns on the same data after <code>market.db</code> grew.</span></li>
     <li><span><b>The holdout is never shown unrecorded.</b> The tool refuses its text if the ledger line cannot be written.</span></li>
     <li><span><b>Runaway specs stop early.</b> Past <code>max_candidates</code> a run stops before any arm or file.</span></li>
     <li><span><b>Only the generation's kinds.</b> In a sandbox bound by <code>[generation]</code>, a spec kind no capability of that generation binds is refused before any read, <code>--fetch</code> included: <code>capability_unavailable</code> (<a href="lineage.html">Lineage and generations</a>).</span></li>
@@ -367,7 +367,9 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads<
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01</span>
-<span class="ln o"># arms research + capped, in-sample vs holdout side by side, then the run dir</span>
+<span class="ln o"># arms research + capped, in-sample vs holdout side by side, then the run dir; stderr: holdout read #n for this spec (one ledger line)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --data-through 2026-10-05T14:00:00Z</span>
+<span class="ln o"># example bound: only rows known then; stderr: data through … — rerun on the same data: --data-through &lt;ms&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade_top4 --fetch</span>
 <span class="ln o"># backfills bars + funding first (as tengu history backfill), then runs</span>
 <span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --gate --max-decisions 200</span>
@@ -544,7 +546,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of tool holdout reads<
     if (mode === "read" && run) reads++;
     if (mode === "cli") {
       v.className = "verdict ok"; v.textContent = "in-sample " + ins + " · holdout " + ho + ", side by side";
-      led.textContent = "The operator's CLI keeps both halves and records nothing.";
+      led.textContent = "The operator's CLI keeps both halves and counts the read: one ledger line, via = \"cli\".";
     } else if (hidden) {
       v.className = "verdict warn"; v.textContent = "runs the " + ins + " in-sample weekends · holdout hidden";
       led.textContent = "The time split ends the decisions at weekend " + cut + ": no holdout trade is simulated or written.";

@@ -17,9 +17,9 @@
 //! | Run id | `<YYYYMMDDTHHMMSSZ>-<strategy>` (UTC); taken ⇒ `-2`, `-3`, …; claimed with `create_dir` (never two runs in one dir) |
 //! | An extra file's name | `[A-Za-z0-9._-]`, ≤ 128 chars, not starting with `.`, none of the files above |
 //! | Writes | the `.jsonl` files and `skips.json` stream through a buffer (a big run never holds a file's text in memory); size is bounded upstream by `[backtest] max_candidates` |
-//! | Retention ([`prune_runs`], `[backtest] keep_runs`) | after a run is written: the run dirs under the root beyond the newest `keep_runs` go, oldest first by the id's UTC stamp, then its suffix; never the run just written (it counts as kept, whatever its stamp), never a file (the decision cache `decision-cache.db*`), never a dir whose name is not a run id (rename one — `keep-<run id>` — to pin it), never a symlink; 0 = keep all; a failed delete is a warning, never the run's error |
+//! | Retention ([`prune_runs`], `[backtest] keep_runs`) | after a run is written: the run dirs under the root beyond the newest `keep_runs` go, oldest first by the id's UTC stamp, then its suffix; never the run just written (it counts as kept, whatever its stamp), never a file (the decision cache `decision-cache.db*`), never a run the bound generation's lineage registry cites (`run:<state>/<run id>`, `GenerationScope::cited_runs` — kept and not counted, lineage D3), never a dir whose name is not a run id (rename one — `keep-<run id>` — to pin it), never a symlink; 0 = keep all; a failed delete is a warning, never the run's error |
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -150,10 +150,16 @@ fn run_age(name: &str) -> Option<(&str, u32)> {
 }
 
 /// Retention (module table): delete the run dirs under `root` beyond the
-/// newest `keep` — never `current`, a file, a symlink or a name that is not
+/// newest `keep` — never `current`, a run the lineage registry cites
+/// (`cited`: kept and not counted), a file, a symlink or a name that is not
 /// a run id. Returns the ids deleted, oldest first; a failed delete is a
 /// warning.
-pub(crate) fn prune_runs(root: &Path, keep: usize, current: &str) -> Result<Vec<String>> {
+pub(crate) fn prune_runs(
+    root: &Path,
+    keep: usize,
+    current: &str,
+    cited: &BTreeSet<String>,
+) -> Result<Vec<String>> {
     if keep == 0 {
         return Ok(Vec::new());
     }
@@ -161,7 +167,11 @@ pub(crate) fn prune_runs(root: &Path, keep: usize, current: &str) -> Result<Vec<
     for entry in std::fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if entry.file_type()?.is_dir() && run_age(&name).is_some() && name != current {
+        if entry.file_type()?.is_dir()
+            && run_age(&name).is_some()
+            && name != current
+            && !cited.contains(&name)
+        {
             runs.push(name);
         }
     }
@@ -255,7 +265,7 @@ pub(crate) fn write_run_dir(p: &Prepared, run: &mut BacktestRun) -> Result<PathB
     for (name, text) in &run.extra_files {
         write(&dir, name, text)?;
     }
-    match prune_runs(&p.backtests_dir, p.keep_runs, &run_id) {
+    match prune_runs(&p.backtests_dir, p.keep_runs, &run_id, &p.keep_cited) {
         Ok(gone) if !gone.is_empty() => info!(
             keep_runs = p.keep_runs,
             pruned = %gone.join(", "),

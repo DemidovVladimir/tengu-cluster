@@ -435,6 +435,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
     <li><span><b>Bound means bound.</b> <code>Config::load</code> refuses an unlisted sandbox, a tool, feed, loop action or strategy kind outside the generation, and a drifted <code>config:</code> / <code>spec:</code> pin of a FROZEN one.</span></li>
     <li><span><b>Closed world for opt-ins.</b> An opt-in tool that no capability binds is refused under any generation; base tools stay.</span></li>
     <li><span><b>Defense in depth.</b> The executor build and the MCP bridge drop a tool outside the generation; a backtest refuses an outside kind before any read (<a href="backtest.html">Backtests</a>).</span></li>
+    <li><span><b>Cited runs stay.</b> A bound sandbox's run-dir retention (<code>[backtest] keep_runs</code>) never deletes a run the registry cites (<code>run:&lt;state&gt;/&lt;run id&gt;</code>), and does not count it.</span></li>
     <li><span><b>A seal is never redone.</b> <code>seal</code> refuses a record already sealed, not preregistered, with errors, or whose first outcome is past or unknown.</span></li>
     <li><span><b>Read-only views.</b> Only <code>seal</code> writes: one row appended to <code>locks.toml</code>. The adapters never write a registry, vault, run dir or state file.</span></li>
   </ul>

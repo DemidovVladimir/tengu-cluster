@@ -360,7 +360,7 @@ Needs `[xmarket]` (`market.db` and run dirs live in its state dir). Doc: `docs/x
 | `seed` | 7 | a rerun prints the same numbers |
 | `gate` | none | a `[decision_loops.<name>]` — the Jev gate arm of `tengu backtest --gate` |
 | `max_candidates` | 50 000 | 1–1 000 000; a run past it stops before any arm or file |
-| `keep_runs` | 100 | 0 (keep all) or ≥ 10 run dirs under `<state dir>/backtests/`; the decision cache is never pruned |
+| `keep_runs` | 100 | 0 (keep all) or ≥ 10 run dirs under `<state dir>/backtests/`; the decision cache is never pruned, nor a run the bound generation's lineage registry cites |
 | `costs."<prefix>"` | — | `taker_fee_bps` (required), `half_spread` (`{ model = "fixed", bps }` default 0 \| `{ model = "abdi_ranaldo", window_bars, floor_bps }` \| `{ model = "ctx", fallback_bps }`), `slippage_bps` (0), `funding` (`true`); bps 0–10 000; longest id prefix wins |
 | `universes.<name>` | — | non-empty full instrument ids; `@<name>` in specs and on the CLI; names `[a-z0-9_]`, 1–48 |
 | `splits."<full id>"` | — | `[{ at = "<RFC 3339>", ratio = <new shares per old> }]`: ratio finite, > 0, ≠ 1; sorted by `at` |
