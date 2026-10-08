@@ -10,6 +10,7 @@ mod lineage;
 mod risk;
 mod run_agent;
 mod skill;
+mod soe;
 mod tool;
 
 use clap::{Parser, Subcommand};
@@ -154,6 +155,12 @@ enum Commands {
     /// capabilities, generations, seal a preregistration. No config needed.
     /// See docs/lineage-2026-10-06.md § 5.
     Lineage(lineage::LineageArgs),
+    /// Software Opportunity Engine, offline (docs/soe-2026-10-08.md): `init`
+    /// writes the UNSIGNED private profile template; `check` an opportunity
+    /// (three scenarios, hard gates, rank keys), `portfolio` a week,
+    /// `sensitivity` a tornado, `eval` the dated eval set — each on the
+    /// signed private profile. No config, secrets, network or LLM.
+    Soe(soe::SoeArgs),
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
     /// account name, and for the content of `TENGU_RISK_RESUME_SECRET_FILE`
@@ -445,6 +452,20 @@ pub(crate) async fn run() -> Result<()> {
             .with_writer(std::io::stderr)
             .init();
         return lineage::run_lineage(args);
+    }
+
+    if let Some(Commands::Soe(args)) = cli.command {
+        // Profile + record files only — no config, secrets or egress; stdout
+        // carries the report.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return soe::run_soe(args);
     }
 
     let tengu_home = resolve_tengu_home();
@@ -786,6 +807,9 @@ pub(crate) async fn run() -> Result<()> {
         }
         Commands::Lineage(_) => {
             unreachable!("Commands::Lineage is dispatched earlier in run()")
+        }
+        Commands::Soe(_) => {
+            unreachable!("Commands::Soe is dispatched earlier in run()")
         }
         Commands::Tool { .. } => {
             unreachable!("Commands::Tool is dispatched earlier in main()")

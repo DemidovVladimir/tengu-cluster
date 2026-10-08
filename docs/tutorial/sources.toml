@@ -400,6 +400,8 @@ sources = [
 sources = [
   "src/domain/soe/",
   "src/config/soe.rs",
+  "src/adapters/inbound/cli/soe.rs",
+  "tests/soe_cli.rs",
   "tests/fixtures/soe/",
   "docs/soe-2026-10-08.md",
 ]

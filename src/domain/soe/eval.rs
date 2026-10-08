@@ -25,15 +25,11 @@
 //!
 //! A case run under another profile is refused (`profile_mismatch`).
 
-// Consumers land with `tengu soe eval` (O1 W7).
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Datelike};
 use serde::{Deserialize, Serialize};
 
-use super::gates::CitedRecord;
+use super::gates::{cited_problems, CitedRecord};
 use super::opportunity::Opportunity;
 use super::portfolio::IsoWeek;
 use super::profile::OperatorProfile;
@@ -120,11 +116,7 @@ impl SoeRecord for EvalCase {
         p.known("as_of", &self.as_of);
         p.id("profile", &self.profile);
         p.text("note", &self.note);
-        p.unique("cited.record_id", self.cited.iter().map(|c| &c.record_id));
-        for (i, c) in self.cited.iter().enumerate() {
-            p.text(&format!("cited[{i}].record_id"), &c.record_id);
-            p.text(&format!("cited[{i}].event_key"), &c.event_key);
-        }
+        cited_problems(&self.cited, p);
         p.unique(
             "candidates (id, version)",
             self.candidates.iter().map(|c| (&c.id, c.version)),
@@ -325,14 +317,6 @@ fn diffs(x: &Expected, got: &Answer) -> Vec<String> {
     out
 }
 
-/// The ISO week `t` falls in (UTC).
-fn week_of(t: &Time) -> Option<IsoWeek> {
-    let w = DateTime::from_timestamp_millis(t.earliest()?)?
-        .date_naive()
-        .iso_week();
-    IsoWeek::new(w.year(), w.week()).ok()
-}
-
 /// Module table: `case` replayed under `profile` (refused under another
 /// profile, or when the gates refuse a candidate).
 pub fn run_case(case: &EvalCase, profile: &OperatorProfile) -> Result<CaseResult, ValueError> {
@@ -376,7 +360,7 @@ pub fn run_case(case: &EvalCase, profile: &OperatorProfile) -> Result<CaseResult
 
     // A week where nothing ranks is a valid HOLD week.
     if answer.ranked.is_empty() {
-        let head = week_of(&as_of).map(|week| WeekHead {
+        let head = IsoWeek::of(&as_of).map(|week| WeekHead {
             id: week.to_string(),
             week,
             as_of,
@@ -527,7 +511,7 @@ mod tests {
         c.cited[0].knowable_at = "2026-10-05".parse().unwrap();
         let r = run_case(&c, &synthetic()).unwrap();
         assert!(r.ok, "{:?}", r.diffs);
-        assert_eq!(week_of(&at()).unwrap().to_string(), "2026-W41");
+        assert_eq!(IsoWeek::of(&at()).unwrap().to_string(), "2026-W41");
     }
 
     #[test]

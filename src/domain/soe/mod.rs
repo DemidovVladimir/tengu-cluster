@@ -17,7 +17,7 @@
 //! | `economics.rs` | `scenarios`: downside / base / upside `ScenarioMetrics` (`Metric` known or the fields it lacks, `Payback`), `expected_loss`, `inputs_sha256`, `ECONOMICS_VERSION` |
 //! | `gates.rs` | `gates`: PRD § 7.2 hard gates → `GateVerdict` (`PASS` / `HOLD` / `REJECT`, `GateFailure` codes), `CitedRecord` (what a cited source record shows at `as_of`), `next_information` |
 //! | `matching.rs` | `fit`: how the profile's capabilities cover `requires_skills` at the decision (`active_at`, `FitLevel` `PROVEN` `CLAIMED` `STALE` `MISSING` · `UNSTATED`) |
-//! | `rank.rs` | `assess` (verdict, figures, fit, the eight `RankKey` values), `rank` by the profile's `rank_order`, `explain_order`, `rank_moves`, `perturb` / `sensitivity`; week blocks: `current_versions`, `ranked_row`, `gated_rows`, `week_next_information`, `hold_week` |
+//! | `rank.rs` | `assess` (verdict, figures, fit, the eight `RankKey` values), `rank` by the profile's `rank_order`, `explain_order`, `rank_moves`, `perturb` / `sensitivity`; week blocks: `current_versions`, `ranked_row`, `gated_rows`, `week_next_information`, `hold_week`, `unallocated_week` (`tengu soe portfolio` until O3) |
 //! | `eval.rs` | `EvalCase` (`soe.eval_case/1`: dated, synthetic, profile-bound) + `run_case` (expected vs answered, no look-ahead, a valid `HOLD` week) |
 //!
 //! | Rule | Why |

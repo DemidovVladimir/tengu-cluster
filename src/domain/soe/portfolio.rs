@@ -42,7 +42,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use chrono::{NaiveDate, Weekday};
+use chrono::{DateTime, Datelike, NaiveDate, Weekday};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::profile::RankKey;
@@ -82,6 +82,14 @@ impl IsoWeek {
     /// Its Monday.
     pub fn monday(&self) -> NaiveDate {
         NaiveDate::from_isoywd_opt(self.year, self.week, Weekday::Mon).expect("checked in new")
+    }
+
+    /// The week `t` falls in (UTC; a day by its start); none when unknown.
+    pub fn of(t: &Time) -> Option<IsoWeek> {
+        let w = DateTime::from_timestamp_millis(t.earliest()?)?
+            .date_naive()
+            .iso_week();
+        IsoWeek::new(w.year(), w.week()).ok()
     }
 }
 

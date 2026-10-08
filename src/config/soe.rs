@@ -9,22 +9,22 @@
 //! | [`load_profile`] | no file ⇒ `operator_profile_missing` — never a built-in default (PRD § 14); a parse or rule error ⇒ `invalid_profile`, every problem listed; `synthetic = true` ⇒ `synthetic_profile_refused` unless allowed (public fixtures); a real profile inside a git work tree (a `.git` dir or file in any ancestor) ⇒ `profile_in_repo`, with any group / other permission bit ⇒ `profile_mode` (`chmod 600`); `signed_by = "UNSIGNED"` ⇒ `operator_profile_unsigned` |
 //! | [`load_opportunity`] | one `soe.opportunity/1` file, any name; problems listed |
 //! | [`load_record_dir`] | `<id>.toml` per record (file stem = `id`); `*.md` and dotfiles skipped; another entry refused; sorted by id; every error names its file |
+//! | [`load_cited`] | a `--cited` file: `[[cited]]` `gates::CitedRecord` views (what each cited source record shows; the O2 as-of view builds them later) — record ids unique, unknown keys refused, problems listed |
 //! | digest | `lineage::pins::toml_digest` of the file text (the profile's is `profile_sha256`) |
-
-// Consumers land with `tengu soe` and the eval set (O1 W7–W8).
-#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 use super::lineage::{parse, toml_files};
 use super::paths;
 use crate::domain::lineage::pins::toml_digest;
+use crate::domain::soe::gates::{cited_problems, CitedRecord};
 use crate::domain::soe::opportunity::Opportunity;
 use crate::domain::soe::profile::OperatorProfile;
-use crate::domain::soe::record::{from_toml, validate, SoeRecord};
-use crate::domain::soe::value::ValueError;
+use crate::domain::soe::record::{from_toml, validate, Problems, SoeRecord};
+use crate::domain::soe::value::{codes, ValueError};
 
 /// The SOE state dir name under `<TENGU_HOME>/state/`.
 pub const SOE_STATE: &str = "soe";
@@ -144,6 +144,31 @@ pub fn load_profile(path: &Path, allow_synthetic: bool) -> Result<Loaded<Operato
 /// Module table: one opportunity file.
 pub fn load_opportunity(path: &Path) -> Result<Loaded<Opportunity>, String> {
     read_record(path)
+}
+
+/// A `--cited` file (module table).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CitedFile {
+    #[serde(default)]
+    cited: Vec<CitedRecord>,
+}
+
+/// Module table: the record views in `path`.
+pub fn load_cited(path: &Path) -> Result<Vec<CitedRecord>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file: CitedFile = toml::from_str(&text).map_err(|e| {
+        format!(
+            "{}: {}: {}",
+            path.display(),
+            codes::INVALID_RECORD,
+            e.to_string().trim_end()
+        )
+    })?;
+    let mut p = Problems::default();
+    cited_problems(&file.cited, &mut p);
+    p.into_result().map_err(|errors| listed(path, &errors))?;
+    Ok(file.cited)
 }
 
 /// Module table: every `<id>.toml` record under `dir`, sorted by id; `Err`
@@ -326,6 +351,37 @@ mod tests {
         assert_eq!((one.record.id.as_str(), one.sha256.len()), ("c", 64));
         let e = load_opportunity(&dir.join("d.toml")).unwrap_err();
         assert!(e.contains("fake_recurring"), "{e}");
+    }
+
+    #[test]
+    fn cited_file_lists_views_and_refuses_repeats() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("cited.toml");
+        let row = |id: &str| {
+            format!(
+                "[[cited]]\nrecord_id = \"{id}\"\nevent_key = \"synthetic:e\"\nkind = \"FACT\"\nknowable_at = \"2026-09-10\"\n"
+            )
+        };
+        write(
+            &path,
+            &format!("{}{}", row("synthetic:a"), row("synthetic:b")),
+            0o644,
+        );
+        let views = load_cited(&path).unwrap();
+        assert_eq!(views.len(), 2);
+        assert_eq!(views[1].record_id, "synthetic:b");
+        write(&path, "", 0o644);
+        assert!(load_cited(&path).unwrap().is_empty());
+        write(
+            &path,
+            &format!("{}{}", row("synthetic:a"), row("synthetic:a")),
+            0o644,
+        );
+        let e = load_cited(&path).unwrap_err();
+        assert!(e.contains("duplicate: cited.record_id"), "{e}");
+        write(&path, &format!("{}extra = 1\n", row("synthetic:a")), 0o644);
+        let e = load_cited(&path).unwrap_err();
+        assert!(e.contains("invalid_record") && e.contains("extra"), "{e}");
     }
 
     /// The O0 eval set: every case under `tests/fixtures/soe/cases/` loads and

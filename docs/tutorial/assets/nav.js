@@ -50,7 +50,7 @@ window.TUTORIAL = {
     { slug: "evidence", chapter: "research", title: "Forward evidence", blurb: "Freeze what a forward run recorded, then grade it from the books it saw." },
     { slug: "lineage", chapter: "research", title: "Lineage and generations", blurb: "Every idea, run and verdict as a record; a frozen generation cannot drift." },
 
-    { slug: "soe", chapter: "opportunity", title: "Software opportunities", blurb: "Exact money, unknown-safe estimates and schema-tagged records for a weekly portfolio." },
+    { slug: "soe", chapter: "opportunity", title: "Software opportunities", blurb: "tengu soe: gate and rank software opportunities offline on a private, signed profile." },
 
     { slug: "ops", chapter: "operate", title: "Diagnose and deploy", blurb: "doctor, prune, Docker and the Tor proxy." }
   ]

@@ -1,0 +1,88 @@
+# Example week (synthetic): a candidate of the eval case `good_high_ticket_integration`
+# (tests/fixtures/soe/cases/good_high_ticket_integration.toml), as a standalone opportunity file.
+# Invented example values — no real firm, person or figure.
+schema = "soe.opportunity/1"
+id = "erp-integration"
+version = 1
+as_of = "2026-09-21"
+customer = "a mid-size logistics firm (synthetic example)"
+pain = "two order systems that do not talk"
+mechanism = "HIGH_TICKET_DELIVERY"
+alternatives = ["INTEGRATE", "REJECT"]
+requires_skills = ["integration"]
+signals = ["synthetic:tender-erp-link-1:423fde6e3f7894677ec5a0e0aeb4c72e6cb806e2299e01ee7cdaa14542fa3f62", "synthetic:tender-erp-link-2:9e43bf2963527fc88fe0eb35b53ee4388c6e08196fdb35f01fb7a94b2c6e9238"]
+
+[jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[economics]
+currency = "EUR"
+revenue_quality = "ONE_OFF"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 300, base = 500, high = 700 }, evidence = [], as_of = "2026-09-18" }
+fixed_costs_per_month = { value = { low = "0.00", base = "20.00", high = "40.00" }, evidence = [], as_of = "2026-09-18" }
+owner_hours_per_month = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-09-18" }
+ramp_months = { value = { low = 0, base = 1, high = 1 }, evidence = [], as_of = "2026-09-18" }
+
+[economics.revenue]
+kind = "ONE_OFF"
+contract_value = { value = { low = "13000.00", base = "16000.00", high = "18000.00" }, evidence = ["url:https://example.org/synthetic-evidence"], as_of = "2026-09-18" }
+win_probability = { value = { low = 4500, base = 6500, high = 7500 }, evidence = [], as_of = "2026-09-18" }
+delivery_weeks = { value = { low = 3, base = 4, high = 5 }, evidence = [], as_of = "2026-09-18" }
+owner_hours_total = { value = { low = 40, base = 50, high = 70 }, evidence = [], as_of = "2026-09-18" }
+collection_loss = { value = { low = 0, base = 200, high = 400 }, evidence = [], as_of = "2026-09-18" }
+
+[economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+setup = { value = { low = "300.00", base = "500.00", high = "800.00" }, evidence = [], as_of = "2026-09-18" }
+validation = { value = { low = "0.00", base = "200.00", high = "300.00" }, evidence = [], as_of = "2026-09-18" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-09-18" }
+
+[risk]
+risks = [{ kind = "PAYMENT", probability = { low = 300, base = 700, high = 1500 }, impact = { low = "0.00", base = "4000.00", high = "9000.00" }, control = "milestone invoices, half upfront", status = "UNRESOLVED" }]
+concentration = [{ dimension = "CLIENT", name = "the one client", share = 10000 }]
+
+[risk.max_loss]
+cash = { low = "500.00", base = "1200.00", high = "3500.00" }
+owner_hours = { low = 30, base = 50, high = 90 }
+reputation = "a failed go-live at one client"
+dependency = "the client's ERP vendor"
+
+[risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[experiment]
+hypothesis = "the client signs a fixed-scope integration"
+metric = "signed statements of work"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-23"
+expires_at = "2026-11-06"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[experiment.stages]]
+name = "pilot"
+cash = "600.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"

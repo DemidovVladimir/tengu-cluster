@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use super::economics::{fields, scenarios, to_currency, Metric, Payback, Scenarios};
 use super::opportunity::{DiligenceStatus, Mechanism, Opportunity, RevenueModel};
 use super::profile::{ContributionBasis, OperatorProfile, ProfitBasis};
-use super::record::{stated, Verdict};
+use super::record::{stated, Problems, Verdict};
 use super::risk::{Boundedness, RiskStatus};
 use super::value::{codes, Better, Flow, Minor, Money, Side, ValueError};
 use crate::domain::lineage::value::{Time, TimeOrder};
@@ -264,6 +264,16 @@ impl CitedRecord {
             && self.fresh(as_of)
             && !self.contradicted(as_of)
             && self.kind != CitedKind::Trigger
+    }
+}
+
+/// A list of record views (an eval case's, a `--cited` file's): record ids
+/// unique, ids and event keys stated.
+pub fn cited_problems(cited: &[CitedRecord], p: &mut Problems) {
+    p.unique("cited.record_id", cited.iter().map(|c| &c.record_id));
+    for (i, c) in cited.iter().enumerate() {
+        p.text(&format!("cited[{i}].record_id"), &c.record_id);
+        p.text(&format!("cited[{i}].event_key"), &c.event_key);
     }
 }
 

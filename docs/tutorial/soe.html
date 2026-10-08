@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes and a dated eval set. Offline today.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set and the offline tengu soe command.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,18 +22,164 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
   <h1>Software opportunities</h1>
-  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. Built so far: exact money, typed records, a private signed profile, three-scenario economics, the hard gates, the ranking and a dated eval set. Nothing here reads the network or acts.</p>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. <code>tengu soe</code> runs it offline on a private, signed profile: three scenarios, the hard gates, the ranking, the week and a dated eval set. Nothing here reads the network or acts.</p>
   <ul class="facts">
     <li>money in <b>2</b> minor digits, never a float</li>
-    <li><b>6</b> record schemas, version <b>1</b></li>
     <li><b>22</b> gate codes, <b>3</b> verdicts</li>
     <li><b>8</b> rank keys, <b>16</b> dated eval cases</li>
+    <li><b>5</b> <code>tengu soe</code> commands, no network</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
-    <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, rounding</li>
-    <li><span class="chip data">data</span> values, records</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, gates</li>
+    <li><span class="chip data">data</span> profile, records, the week</li>
   </ul>
 </header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">One week, offline</span>
+    <h2 id="s-flow">From a signed profile to a week</h2>
+    <p>Every command reads files only. The profile decides the caps, the target and the rank order; the code holds none of them.</p>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 450" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">tengu soe init writes an unsigned profile template; the operator signs it. Opportunity files and cited record views at one decision time go through the economics and the hard gates. Passing candidates are ranked by the profile's order; the week lists ranked, held and rejected rows, or is a HOLD week. eval replays the dated cases.</title>
+        <path class="e" id="p-init-prof" d="M110 94 L110 150" data-at="1"/>
+        <path class="e" id="p-opp-econ" d="M200 326 C 236 326, 226 120, 260 120" data-at="3-4"/>
+        <path class="e" id="p-prof-econ" d="M200 176 C 230 176, 230 96, 260 96" data-at="4"/>
+        <path class="e" id="p-econ-gates" d="M345 132 L345 190" data-at="5"/>
+        <path class="e" id="p-prof-gates" d="M200 210 C 230 210, 232 240, 260 240" data-at="5"/>
+        <path class="e" id="p-gates-rank" d="M430 216 C 466 216, 464 96, 500 96" data-at="6"/>
+        <path class="e" id="p-gates-week" d="M430 262 L500 262" data-at="7"/>
+        <path class="e" id="p-rank-week" d="M585 132 L585 190" data-at="7"/>
+        <path class="e dash" id="p-week-hold" d="M670 240 L710 240" data-at="7"/>
+        <path class="e dash" id="p-eval-gates" d="M345 340 L345 290" data-at="8"/>
+
+        <g class="n guard" data-at="1">
+          <rect x="20" y="30" width="180" height="64" rx="8"/>
+          <text x="110" y="54" text-anchor="middle" class="t-title t-mono">tengu soe init</text>
+          <text x="110" y="74" text-anchor="middle" class="t-small">UNSIGNED template</text>
+        </g>
+        <g class="n data" data-at="1-2,4-5,8">
+          <rect x="20" y="150" width="180" height="84" rx="8"/>
+          <text x="110" y="176" text-anchor="middle" class="t-title">Signed profile</text>
+          <text x="110" y="196" text-anchor="middle" class="t-small t-mono">state/soe/operator.toml</text>
+          <text x="110" y="214" text-anchor="middle" class="t-small">0600 · signed_by</text>
+        </g>
+        <g class="n data" data-at="3-4">
+          <rect x="20" y="290" width="180" height="72" rx="8"/>
+          <text x="110" y="314" text-anchor="middle" class="t-title">Opportunities</text>
+          <text x="110" y="333" text-anchor="middle" class="t-small t-mono">soe.opportunity/1</text>
+          <text x="110" y="350" text-anchor="middle" class="t-small t-mono">+ --cited views</text>
+        </g>
+        <g class="n" data-at="4">
+          <rect x="260" y="60" width="170" height="72" rx="8"/>
+          <text x="345" y="84" text-anchor="middle" class="t-title">Economics</text>
+          <text x="345" y="103" text-anchor="middle" class="t-small">downside · base · upside</text>
+          <text x="345" y="120" text-anchor="middle" class="t-small">integer, never 0</text>
+        </g>
+        <g class="n guard" data-at="5">
+          <rect x="260" y="190" width="170" height="100" rx="10"/>
+          <text x="345" y="216" text-anchor="middle" class="t-kanji k">守</text>
+          <text x="345" y="238" text-anchor="middle" class="t-title">Hard gates</text>
+          <text x="345" y="257" text-anchor="middle" class="t-small">PASS · HOLD · REJECT</text>
+          <text x="345" y="274" text-anchor="middle" class="t-small">every failure listed</text>
+        </g>
+        <g class="n" data-at="8">
+          <rect x="260" y="340" width="170" height="72" rx="8"/>
+          <text x="345" y="364" text-anchor="middle" class="t-title t-mono">eval</text>
+          <text x="345" y="383" text-anchor="middle" class="t-small">16 dated cases</text>
+          <text x="345" y="400" text-anchor="middle" class="t-small">expected vs answered</text>
+        </g>
+        <g class="n" data-at="6">
+          <rect x="500" y="60" width="170" height="72" rx="8"/>
+          <text x="585" y="84" text-anchor="middle" class="t-title">Rank</text>
+          <text x="585" y="103" text-anchor="middle" class="t-small">PASS candidates only</text>
+          <text x="585" y="120" text-anchor="middle" class="t-small t-mono">profile rank_order</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="500" y="190" width="170" height="100" rx="8"/>
+          <text x="585" y="216" text-anchor="middle" class="t-title">Week</text>
+          <text x="585" y="236" text-anchor="middle" class="t-small t-mono">soe.weekly_portfolio/1</text>
+          <text x="585" y="255" text-anchor="middle" class="t-small">ranked · held · rejected</text>
+          <text x="585" y="273" text-anchor="middle" class="t-small">next information</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="710" y="204" width="130" height="72" rx="8"/>
+          <text x="775" y="228" text-anchor="middle" class="t-title">HOLD week</text>
+          <text x="775" y="247" text-anchor="middle" class="t-small">nothing passes</text>
+          <text x="775" y="264" text-anchor="middle" class="t-small">still a valid week</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">0600 · never overwritten</text></g>
+        <g class="pop badge" data-at="2"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">unsigned ⇒ refused</text></g>
+        <g class="pop badge" data-at="3"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">one decision time</text></g>
+        <g class="pop badge" data-at="4"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">unknown ⇒ named, never 0</text></g>
+        <g class="pop badge" data-at="5"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">at the cap passes</text></g>
+        <g class="pop badge" data-at="6"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">ties: id ascending</text></g>
+        <g class="pop badge" data-at="7"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">rerun = the same bytes</text></g>
+        <g class="pop badge" data-at="8"><rect x="560" y="404" width="220" height="22" rx="11"/><text x="670" y="419" text-anchor="middle">any diff ⇒ exit 1</text></g>
+
+        <circle class="tok guard" r="6" data-path="p-init-prof" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-opp-econ" data-at="3"/>
+        <circle class="tok" r="6" data-path="p-opp-econ" data-at="4"/>
+        <circle class="tok" r="5" data-path="p-prof-econ" data-at="4" data-delay="400"/>
+        <circle class="tok" r="6" data-path="p-econ-gates" data-at="5"/>
+        <circle class="tok guard" r="5" data-path="p-prof-gates" data-at="5" data-delay="400"/>
+        <circle class="tok guard" r="6" data-path="p-gates-rank" data-at="6"/>
+        <circle class="tok" r="6" data-path="p-rank-week" data-at="7"/>
+        <circle class="tok guard" r="5" data-path="p-gates-week" data-at="7" data-delay="300"/>
+        <circle class="tok" r="5" data-path="p-week-hold" data-at="7" data-delay="700"/>
+        <circle class="tok guard" r="6" data-path="p-eval-gates" data-at="8"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu soe init</code> writes an <code>UNSIGNED</code> profile template with the PRD's proposed values to <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>: mode 0600, never inside a git work tree, never over an existing file.</li>
+        <li>The operator reviews every value, adds capabilities and signs (<code>signed_by</code>, <code>signed_at</code>). Until then every deciding command refuses it: <code>operator_profile_unsigned</code>.</li>
+        <li>Inputs: opportunity files (<code>soe.opportunity/1</code>), the views of the source records they cite (<code>--cited</code>) and one decision time (<code>--as-of</code>).</li>
+        <li>The economics turn each input range into downside, base and upside figures, in integer minor units of the profile's currency. A figure that needs an unknown input names it.</li>
+        <li>The hard gates run on those figures and the profile's caps. A known violation rejects; anything unknown or open holds; a figure exactly at a cap passes.</li>
+        <li>Only <code>PASS</code> candidates rank, by the signed profile's <code>rank_order</code>. Each neighbour pair is explained by the first key that tells them apart.</li>
+        <li>The week lists ranked, held and rejected rows and the next information. Until the O3 allocation every ranked row holds. When nothing passes it is a valid <code>HOLD</code> week.</li>
+        <li><code>tengu soe eval</code> replays the dated cases against the profile they name: expected vs answered, with no look-ahead. Any difference exits 1.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-cli">
+  <div class="sec-head">
+    <span class="kicker">No config, secrets, network or LLM</span>
+    <h2 id="s-cli">The <code>tengu soe</code> command</h2>
+    <p>Every command but <code>init</code> loads the signed profile first and stops on any refusal. Ids and hashes print in full; <code>--format json</code> prints the same data as JSON.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Command</th><th>Prints</th><th>Exit 1 when</th></tr></thead>
+      <tbody>
+        <tr><td><code>init</code></td><td>writes the <code>UNSIGNED</code> template (the PRD's proposed values, no capability), mode 0600; its path and sha256</td><td>the file exists (<code>profile_exists</code>); the path is inside a git work tree (<code>profile_in_repo</code>)</td></tr>
+        <tr><td><code>check &lt;opportunity.toml&gt;</code></td><td>the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information</td><td>the profile or the file is refused; the decision is before the opportunity (<code>future_leakage</code>)</td></tr>
+        <tr><td><code>portfolio &lt;dir&gt; --as-of &lt;t&gt;</code></td><td>the week: ranked (each <code>HOLD</code>, nothing allocated before O3) with why each ranks above the next, held, rejected, next information; JSON = its canonical JSON</td><td>as <code>check</code>, for any file in the dir</td></tr>
+        <tr><td><code>sensitivity &lt;opportunity.toml&gt;</code></td><td>the tornado: each input at ± <code>--scale-bps</code> (default 2000), the time-adjusted change, the verdict, gates added or removed</td><td>as <code>check</code>; a scale outside 1..=10000 is a usage error</td></tr>
+        <tr><td><code>eval &lt;cases dir&gt;</code></td><td>ok or <code>FAIL</code> per case with every difference; classes without a case</td><td>any case fails, or is refused (another profile id)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Flag</th><th>Default</th></tr></thead>
+      <tbody>
+        <tr><td><code>--profile &lt;path&gt;</code></td><td><code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code></td></tr>
+        <tr><td><code>--allow-synthetic</code></td><td>off: a <code>synthetic = true</code> test profile is refused</td></tr>
+        <tr><td><code>--as-of &lt;t&gt;</code></td><td><code>check</code>, <code>sensitivity</code>: the opportunity's own <code>as_of</code>; <code>portfolio</code>: required</td></tr>
+        <tr><td><code>--week YYYY-Www</code></td><td>the ISO week of <code>--as-of</code> (UTC)</td></tr>
+        <tr><td><code>--cited &lt;file&gt;</code></td><td>none: no record supports anything, so the evidence gates hold. A TOML file of <code>[[cited]]</code> record views until the O2 as-of view builds them</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
 
 <section class="sec" aria-labelledby="s-values">
   <div class="sec-head">
@@ -195,7 +341,7 @@
   <div class="sec-head">
     <span class="kicker">Dated, synthetic, replayable</span>
     <h2 id="s-eval">The eval set</h2>
-    <p>Each case is one dated decision: the record views, the candidates and what the gates and the ranking must answer. Every case is synthetic and names the profile its expectations hold for.</p>
+    <p>Each case is one dated decision: the record views, the candidates and what the gates and the ranking must answer. Every case is synthetic and names the profile its expectations hold for. <code>tengu soe eval</code> runs them.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -230,7 +376,7 @@
       <thead><tr><th>Record</th><th>Schema</th><th>Holds</th><th>Kept</th></tr></thead>
       <tbody>
         <tr><td><code>OperatorProfile</code></td><td><code>soe.operator_profile/1</code></td><td>caps, target, shadow hourly rate, payback, hours, tranche, delivery length, allow-lists, rank order, capabilities</td><td>private, signed</td></tr>
-        <tr><td><code>Opportunity</code></td><td><code>soe.opportunity/1</code></td><td>customer, pain, mechanism, source record ids, economic inputs, risk, experiment, deal review</td><td>case files</td></tr>
+        <tr><td><code>Opportunity</code></td><td><code>soe.opportunity/1</code></td><td>customer, pain, mechanism, source record ids, economic inputs, risk, experiment, deal review</td><td>opportunity files, eval cases</td></tr>
         <tr><td><code>OpportunityEpisode</code></td><td><code>soe.opportunity_episode/1</code></td><td>verdict, actions, spend, hours, forecast vs actual, lineage quality and lesson</td><td>private</td></tr>
         <tr><td><code>WeeklyPortfolio</code></td><td><code>soe.weekly_portfolio/1</code></td><td>ranked, held and rejected rows with an action; allocation; <code>HOLD</code> rationale</td><td>private</td></tr>
         <tr><td><code>PublicBrief</code></td><td><code>soe.public_brief/1</code></td><td>facts with <code>url:</code> links, thesis, disclosed assumptions</td><td>the only public one</td></tr>
@@ -261,7 +407,7 @@
   <div class="sec-head">
     <span class="kicker">The operator's numbers stay private</span>
     <h2 id="s-profile">Loading the operator profile</h2>
-    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. Each check refuses with a code. The code never falls back to a built-in value.</p>
+    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. <code>tengu soe init</code> writes it once, unsigned, with the PRD's proposed values for the operator to review. Each check refuses with a code. The code never falls back to a built-in value.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -304,24 +450,41 @@
     <li><span><b>Copies count once.</b> Records sharing an event key are one confirmation.</span></li>
     <li><span><b>One row per opportunity.</b> A weekly rerun takes each id at its latest version known at the decision; a later version is ignored.</span></li>
     <li><span><b>A public brief cites public links only.</b> A <code>repo:</code>, <code>state:</code>, <code>vault:</code> or <code>run:</code> locator is refused (<code>private_locator</code>).</span></li>
+    <li><span><b>Unsigned never decides.</b> <code>check</code>, <code>portfolio</code>, <code>sensitivity</code> and <code>eval</code> refuse an unsigned profile, an <code>init</code> template included.</span></li>
+    <li><span><b>The profile is never overwritten.</b> <code>init</code> creates the file only when none exists, mode 0600, and never inside a git work tree.</span></li>
+    <li><span><b>Same inputs, same week.</b> A <code>portfolio</code> rerun prints the same bytes, whatever the file order.</span></li>
+    <li><span><b>Nothing is allocated yet.</b> Until the O3 allocation, every ranked candidate holds; no command contacts, spends or publishes.</span></li>
   </ul>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
   <div class="sec-head">
     <span class="kicker">Try it</span>
-    <h2 id="s-try">Run the SOE tests</h2>
-    <p>No <code>tengu soe</code> command exists yet. The rules above are tested here.</p>
+    <h2 id="s-try">Run it on the synthetic fixtures</h2>
+    <p>The example week has five opportunities from three eval cases, all decided at 2026-09-21T18:00:00Z. The synthetic profile is a test fixture, so each command needs <code>--allow-synthetic</code>.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe</span>
-<span class="ln o"># 75 tests: values, records, profile knobs, economics goldens, gates, ranking, eval</span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe::gates</span>
-<span class="ln o"># 18 tests: exact boundaries, unknown holds, evidence timing, deal diligence</span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::soe::rank</span>
-<span class="ln o"># 11 tests: rank order, rank moves, sensitivity, the HOLD week, reruns</span>
-<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu config::soe</span>
-<span class="ln o"># 5 tests: missing, synthetic, in-repo and loose-mode profiles; record dirs; the 16 eval cases</span></pre>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>F=tests/fixtures/soe; soe() { tengu soe "$@" --profile $F/profile.synthetic.toml --allow-synthetic; }</span>
+<span class="ln cmd"><span class="p">$ </span>soe eval $F/cases</span>
+<span class="ln o">16 case(s): 16 ok, 0 FAIL · classes without a case: none</span>
+<span class="ln cmd"><span class="p">$ </span>soe portfolio $F/week/opportunities --cited $F/week/cited.toml --as-of 2026-09-21T18:00:00Z</span>
+<span class="ln o"># the first three of the eight key columns, in the profile's order:</span>
+<span class="ln o">rank  id                     version  action  EVIDENCE_CONFIDENCE  TIME_ADJUSTED_BASE  PAYBACK_BASE</span>
+<span class="ln o">1     final-rule-automation  1        HOLD    HIGH                 5818.67 EUR         4 months</span>
+<span class="ln o">2     reseller-at-cap        1        HOLD    HIGH                 3760.00 EUR         2 months</span>
+<span class="ln o">3     erp-integration        1        HOLD    MEDIUM               6162.40 EUR         2 months</span>
+<span class="ln o">  why: `reseller-at-cap` before `erp-integration`: EVIDENCE_CONFIDENCE HIGH vs MEDIUM</span>
+<span class="ln o"># held: draft-rule-automation (NO_TESTABLE_EVIDENCE, CONTRADICTED_EVIDENCE) · rejected: reseller-over-cap (CASH_EXPOSURE_ABOVE_CAP)</span>
+<span class="ln cmd"><span class="p">$ </span>soe check $F/week/opportunities/erp-integration.toml --cited $F/week/cited.toml</span>
+<span class="ln o"># verdict, gates, the three scenarios, rank keys, capability fit, next information</span>
+<span class="ln cmd"><span class="p">$ </span>soe sensitivity $F/week/opportunities/final-rule-automation.toml --cited $F/week/cited.toml</span>
+<span class="ln o"># 8 rows: OWNER_HOURS, CONVERSION, CHURN, PRICE at -2000 and +2000 bps</span>
+<span class="ln cmd"><span class="p">$ </span>tengu soe init</span>
+<span class="ln o"># writes &lt;TENGU_HOME&gt;/state/soe/operator.toml, UNSIGNED; review the values, then sign</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --test soe_cli</span>
+<span class="ln o"># 9 tests: eval, init, refusals, a byte-identical portfolio rerun, check JSON, the tornado, the week fixture</span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu soe</span>
+<span class="ln o"># 86 unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init</span></pre>
   </div>
 </section>
 
@@ -345,11 +508,13 @@
         <tr><td><code>src/domain/soe/economics.rs</code></td><td><code>scenarios</code>, <code>ScenarioMetrics</code>, <code>Metric</code>, <code>Payback</code>, <code>expected_loss</code></td></tr>
         <tr><td><code>src/domain/soe/gates.rs</code></td><td><code>gates</code>, <code>GateVerdict</code>, <code>GateCode</code>, <code>CitedRecord</code>, <code>next_information</code></td></tr>
         <tr><td><code>src/domain/soe/matching.rs</code></td><td><code>fit</code>, <code>active_at</code>, <code>FitLevel</code></td></tr>
-        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code></td></tr>
+        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code>, <code>unallocated_week</code></td></tr>
         <tr><td><code>src/domain/soe/eval.rs</code></td><td><code>EvalCase</code>, <code>run_case</code></td></tr>
-        <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code></td></tr>
-        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile and the 16 eval cases</td></tr>
-        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set</td></tr>
+        <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
+        <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
+        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases and the example week (<code>week/</code>)</td></tr>
+        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set, the command</td></tr>
       </tbody>
     </table>
   </div>
