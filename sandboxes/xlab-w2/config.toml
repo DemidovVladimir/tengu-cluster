@@ -88,6 +88,317 @@ gate = "xl_gate"
 taker_fee_bps = 0.9
 half_spread = { model = "fixed", bps = 1.0 }
 
+# --- W2 cost model v2 (Phase 9, 2026-10-08): per name, longest prefix wins --------
+# taker_fee_bps: OBSERVED — mkt_ctx/1 taker_fee_bps at 2026-10-04T22:00Z (vault
+#   w1-2026-10-06, xmarket-weekend/history/20261004.db): 0.9 in growth mode, 9.0 for
+#   BMNR / MSTR / PURRDAT (W1 assumed 0.9 for all — defect D8).
+# half_spread: the measured cost of a $100 order per side (half-spread + impact,
+#   hl_book/1 buy / sell slippage at notional 100) averaged over the rule W entry
+#   (Sun 18:00 ET) and exit (Mon 09:00 ET) of 2026-10-04 / 05 — OBSERVED on one
+#   weekend, ASSUMED to hold over the history it reprices (not point-in-time).
+#   Mean 4.13 bps vs W1's fixed 1.0. docs/p9-cost-liquidity-2026-10-08.md.
+
+[backtest.costs."hyperliquid:xyz:AAOI"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.36 }
+
+[backtest.costs."hyperliquid:xyz:AAPL"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.44 }
+
+[backtest.costs."hyperliquid:xyz:AMAT"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 4.65 }
+
+[backtest.costs."hyperliquid:xyz:AMD"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.62 }
+
+[backtest.costs."hyperliquid:xyz:AMZN"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.44 }
+
+[backtest.costs."hyperliquid:xyz:ARM"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.28 }
+
+[backtest.costs."hyperliquid:xyz:ASML"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 3.38 }
+
+[backtest.costs."hyperliquid:xyz:AVGO"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.84 }
+
+[backtest.costs."hyperliquid:xyz:BABA"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.92 }
+
+[backtest.costs."hyperliquid:xyz:BB"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 2.77 }
+
+[backtest.costs."hyperliquid:xyz:BE"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.44 }
+
+[backtest.costs."hyperliquid:xyz:BIRD"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 18.78 }
+
+[backtest.costs."hyperliquid:xyz:BMNR"]
+taker_fee_bps = 9.0
+half_spread = { model = "fixed", bps = 1.86 }
+
+[backtest.costs."hyperliquid:xyz:BOT"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 4.09 }
+
+[backtest.costs."hyperliquid:xyz:BX"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 5.50 }
+
+[backtest.costs."hyperliquid:xyz:CBRS"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.20 }
+
+[backtest.costs."hyperliquid:xyz:COIN"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.91 }
+
+[backtest.costs."hyperliquid:xyz:COST"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 5.51 }
+
+[backtest.costs."hyperliquid:xyz:CRCL"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.66 }
+
+[backtest.costs."hyperliquid:xyz:CRWD"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 3.19 }
+
+[backtest.costs."hyperliquid:xyz:CRWV"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.01 }
+
+[backtest.costs."hyperliquid:xyz:CVX"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 47.48 }
+
+[backtest.costs."hyperliquid:xyz:CXMT"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.49 }
+
+[backtest.costs."hyperliquid:xyz:DELL"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.92 }
+
+[backtest.costs."hyperliquid:xyz:DKNG"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 7.87 }
+
+[backtest.costs."hyperliquid:xyz:EBAY"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 8.51 }
+
+[backtest.costs."hyperliquid:xyz:GEV"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 11.39 }
+
+[backtest.costs."hyperliquid:xyz:GIGADEV"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 15.05 }
+
+[backtest.costs."hyperliquid:xyz:GME"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 5.12 }
+
+[backtest.costs."hyperliquid:xyz:GOOGL"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.41 }
+
+[backtest.costs."hyperliquid:xyz:HIMS"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 4.45 }
+
+[backtest.costs."hyperliquid:xyz:HOOD"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.88 }
+
+[backtest.costs."hyperliquid:xyz:HYUNDAI"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 4.22 }
+
+[backtest.costs."hyperliquid:xyz:IBM"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.32 }
+
+[backtest.costs."hyperliquid:xyz:INTC"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.70 }
+
+[backtest.costs."hyperliquid:xyz:IREN"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 3.29 }
+
+[backtest.costs."hyperliquid:xyz:KIOXIA"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 4.34 }
+
+[backtest.costs."hyperliquid:xyz:LITE"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.23 }
+
+[backtest.costs."hyperliquid:xyz:LLY"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 2.50 }
+
+[backtest.costs."hyperliquid:xyz:META"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.49 }
+
+[backtest.costs."hyperliquid:xyz:MINIMAX"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.56 }
+
+[backtest.costs."hyperliquid:xyz:MRNA"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.86 }
+
+[backtest.costs."hyperliquid:xyz:MRVL"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.82 }
+
+[backtest.costs."hyperliquid:xyz:MSFT"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.48 }
+
+[backtest.costs."hyperliquid:xyz:MSTR"]
+taker_fee_bps = 9.0
+half_spread = { model = "fixed", bps = 0.50 }
+
+[backtest.costs."hyperliquid:xyz:MU"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.59 }
+
+[backtest.costs."hyperliquid:xyz:NBIS"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.41 }
+
+[backtest.costs."hyperliquid:xyz:NET"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 15.65 }
+
+[backtest.costs."hyperliquid:xyz:NFLX"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.15 }
+
+[backtest.costs."hyperliquid:xyz:NOK"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 6.05 }
+
+[backtest.costs."hyperliquid:xyz:NOW"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 5.13 }
+
+[backtest.costs."hyperliquid:xyz:NVDA"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.41 }
+
+[backtest.costs."hyperliquid:xyz:ORCL"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.96 }
+
+[backtest.costs."hyperliquid:xyz:PLTR"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.89 }
+
+[backtest.costs."hyperliquid:xyz:PURRDAT"]
+taker_fee_bps = 9.0
+half_spread = { model = "fixed", bps = 5.24 }
+
+[backtest.costs."hyperliquid:xyz:QCOM"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.00 }
+
+[backtest.costs."hyperliquid:xyz:QNT"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 9.85 }
+
+[backtest.costs."hyperliquid:xyz:RDDT"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 8.04 }
+
+[backtest.costs."hyperliquid:xyz:RIVN"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 7.50 }
+
+[backtest.costs."hyperliquid:xyz:RKLB"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.77 }
+
+[backtest.costs."hyperliquid:xyz:SHAZ"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 12.38 }
+
+[backtest.costs."hyperliquid:xyz:SHEIN"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 9.68 }
+
+[backtest.costs."hyperliquid:xyz:SKHX"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.60 }
+
+[backtest.costs."hyperliquid:xyz:SKHY"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.51 }
+
+[backtest.costs."hyperliquid:xyz:SMSN"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.52 }
+
+[backtest.costs."hyperliquid:xyz:SNDK"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.34 }
+
+[backtest.costs."hyperliquid:xyz:SOFTBANK"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 11.62 }
+
+[backtest.costs."hyperliquid:xyz:SPCX"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.36 }
+
+[backtest.costs."hyperliquid:xyz:TSLA"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.40 }
+
+[backtest.costs."hyperliquid:xyz:TSM"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.75 }
+
+[backtest.costs."hyperliquid:xyz:UNITREE"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.04 }
+
+[backtest.costs."hyperliquid:xyz:USAR"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 3.36 }
+
+[backtest.costs."hyperliquid:xyz:WDC"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 0.97 }
+
+[backtest.costs."hyperliquid:xyz:ZHIPU"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.63 }
+
+[backtest.costs."hyperliquid:xyz:ZM"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 12.41 }
+
+
 [backtest.costs."hyperliquid:"]
 taker_fee_bps = 4.5
 half_spread = { model = "ctx", fallback_bps = 1.0 }
