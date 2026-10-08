@@ -156,7 +156,7 @@
       <dl class="kv">
         <dt>record_id</dt><dd><code>&lt;source_id&gt;:&lt;native_id&gt;:&lt;content_hash&gt;</code>, each part whole</dd>
         <dt>native_id</dt><dd>the source's own id: an SEC accession, a TED publication number</dd>
-        <dt>event_key</dt><dd>the real-world event: <code>sec:filing:&lt;accession&gt;</code>, <code>ted:procedure:&lt;id&gt;</code></dd>
+        <dt>event_key</dt><dd>the real-world event: <code>sec:filing:&lt;accession&gt;</code>, <code>ted:procedure:&lt;id&gt;</code> (a planning notice naming no procedure: <code>ted:notice:&lt;publication number&gt;</code>)</dd>
         <dt>entities</dt><dd><code>sec:cik:&lt;10 digits&gt;</code>, <code>ted:buyer:&lt;country&gt;:&lt;id&gt;</code></dd>
         <dt>published_ms</dt><dd>when the source made it public</dd>
         <dt>observed_ms</dt><dd>fetch time of the newest raw snapshot it rests on</dd>
@@ -309,8 +309,9 @@
         <tr><td><code>snapshots</code></td><td>every raw body by sha256: kind <code>response</code> or <code>terms</code>, url, status, content type, fetch time, size; the bytes when the row has <code>store_raw = true</code></td><td>insert or ignore; a raw purge drops the bytes and keeps the hash</td></tr>
         <tr><td><code>records</code> · <code>record_entities</code></td><td>each record's JSON, keyed by <code>record_id</code>, indexed by item, event and read time</td><td>insert or ignore only; deleted only by record retention</td></tr>
         <tr><td><code>coverage</code></td><td>one row per fetch of a query: span, complete, error class</td><td>appended</td></tr>
-        <tr><td><code>cursors</code></td><td>where a query resumes (SEC: the newest accession of a CIK)</td><td>the one mutable row, moved only inside a committed batch</td></tr>
+        <tr><td><code>cursors</code></td><td>where a query resumes (SEC: the newest accession of a CIK; TED: the newest publication day read whole)</td><td>the one mutable row, moved only inside a committed batch</td></tr>
         <tr><td><code>purges</code></td><td>tombstones: what a retention purge removed, when and why</td><td>appended in the purge's own transaction</td></tr>
+        <tr><td><code>switches</code></td><td>the runtime kill switch: source, off or on, when, why</td><td>appended; the newest row per source wins</td></tr>
       </tbody>
     </table>
   </div>
@@ -348,7 +349,54 @@
     <li><span class="chip warn">part</span><span><b>Index without a time</b>A 404 or a page without <code>Accepted</code>: the record is <code>partial</code>, its time is the later of the JSON clock and the end of the filing date in New York, never before the acceptance. Coverage is incomplete.</span></li>
     <li><span class="chip bad">stop</span><span><b>No answer</b>A denial, budget refusal, 401 / 403 / 429, 5xx or timeout after the retries: what was read is committed, coverage is incomplete, the cursor stays, the next CIK runs.</span></li>
   </ul>
-  <p class="note">Before any request the row must be enabled and carry its license and terms hash (<code>SourceEntry::fetch_stamp</code>). Records are committed 25 at a time; the last batch adds the coverage row <code>cik:&lt;cik10&gt;</code> and, only when complete, the cursor.</p>
+  <p class="note">Before any request the row must be enabled, carry its license and terms hash and not be switched off at runtime (<code>sources::fetch_gate</code>). Records are committed 25 at a time; the last batch adds the coverage row <code>cik:&lt;cik10&gt;</code> and, only when complete, the cursor.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-ted">
+  <div class="sec-head">
+    <span class="kicker">Second source</span>
+    <h2 id="s-ted">EU TED, one publication day at a time</h2>
+    <p>The <code>ted_search</code> row posts the row's query to <code>api.ted.europa.eu/v3/notices/search</code>, anonymously, with <code>{from}</code> = <code>{to}</code> = one day (<code>YYYYMMDD</code>), and pages until every match is read. Field names and shapes were pinned from live replies (2026-10-08). A whole day of the soe query was 318 notices on 2 pages, none partial.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Request</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td><code>fields</code></td><td>an allow-list of 21 fields: ids, dates, notice type, procedure, lots, buyer organisation and country, places, CPV, deadlines, estimated values. No contact field (person, email, phone, address) is ever asked for or read.</td></tr>
+        <tr><td><code>page</code> · <code>limit</code></td><td>250 per page; the server pages no further than 15 000 matches, so a bigger day is cut there and marked incomplete</td></tr>
+        <tr><td><code>scope</code></td><td><code>ALL</code>: every notice, not only active ones</td></tr>
+        <tr><td>coverage · cursor key</td><td><code>query:&lt;sha256 of the query template&gt;</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>A notice</b>One record per publication number. TED gives a date only, so <code>published</code> is the end of that date in its own offset, never before the notice was public. The event is the procedure; the buyer id becomes <code>ted:buyer:&lt;country&gt;:&lt;id&gt;</code>; the value stays text as written.</span></li>
+    <li><span class="chip ok">link</span><span><b>A change notice</b>It <code>supersedes</code> the record it corrects: the publication it names, else the newest earlier notice of the procedure with the same type and lot. The as-of view then shows only the change.</span></li>
+    <li><span class="chip warn">part</span><span><b>A field that does not read</b>The notice is <code>partial</code> (or <code>unparsed</code> without a notice type), never dropped. A notice with no publication number cannot be a record: it is a row error and the day stays incomplete.</span></li>
+    <li><span class="chip bad">stop</span><span><b>No answer</b>After the retries: what was read is committed, the day's coverage is incomplete, later days are not read. A re-run without <code>--from</code> resumes the day after the cursor; days read whole are skipped.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-cli">
+  <div class="sec-head">
+    <span class="kicker">The operator's commands</span>
+    <h2 id="s-cli"><code>tengu sources</code></h2>
+    <p>Only the operator acquires: agents never fetch. Every network call goes through the installed <code>[egress]</code> policy and is audited as <code>agent = cli</code>, <code>session = sources-fetch:&lt;start ms&gt;</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Subcommand</th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td><code>list</code></td><td>every registry row (enabled, runtime switch, class, retention, terms page stored or not), cursors, newest fetch per query</td></tr>
+        <tr><td><code>fetch --source &lt;id&gt; [--from] [--to] [--ciks]</code></td><td>SEC filings of CIKs, or TED notices day by day; refused for a disabled, unreviewed or switched-off row before any request; exit 1 on a failed row</td></tr>
+        <tr><td><code>import --source &lt;id&gt; --file &lt;json&gt; --observed-at &lt;t&gt;</code></td><td>a saved TED reply, read as if fetched at t; parsed now, so captured mode sees it from now and knowable mode from publication; no coverage</td></tr>
+        <tr><td><code>asof --at &lt;t&gt; [--mode] [--source] [--entity] [--event] [--text]</code></td><td>the evidence packet as canonical JSON, or its fenced text</td></tr>
+        <tr><td><code>terms --source &lt;id&gt; --file &lt;page&gt;</code></td><td>stores the reviewed terms page, refused unless its sha256 is the row's <code>terms_sha256</code>; never purged</td></tr>
+        <tr><td><code>purge [--source &lt;id&gt;]</code></td><td>applies each row's retention now and prints each tombstone</td></tr>
+        <tr><td><code>disable</code> · <code>enable --source &lt;id&gt; --reason &lt;text&gt;</code></td><td>the kill switch: off refuses every fetch and import at once, whatever the TOML says; <code>enable</code> lifts only that</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -370,20 +418,30 @@
     <li><span><b>Store reads change no packet.</b> For the three test worlds, a packet built from a store read at t equals the packet of every record, at every sampled t, in both clocks.</span></li>
     <li><span><b>Loss leaves a mark.</b> A raw purge keeps each snapshot's hash and size; terms pages are never purged; every purge that removed something leaves a tombstone.</span></li>
     <li><span><b>The User-Agent is never stored.</b> It is a request header only: not in a snapshot, record, report or audit line.</span></li>
+    <li><span><b>Contact data is never read.</b> TED requests ask for no contact field, and the decoder reads only its allow-list: injected emails and phones never reach a record.</span></li>
+    <li><span><b>A kill switch acts at once.</b> <code>tengu sources disable</code> refuses every fetch and import of the source from the next call; the TOML stays the ceiling.</span></li>
   </ul>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
   <div class="sec-head">
     <span class="kicker">Try it</span>
-    <h2 id="s-try">Run the checks</h2>
-    <p>No CLI yet: <code>tengu sources</code> and the <code>source_evidence</code> tool land with the next O2 steps. The store and the SEC fetch run on fixtures and a local test server.</p>
+    <h2 id="s-try">Run it</h2>
+    <p>The soe rows ship off: to try the commands, use a copy of the config with a row enabled and its terms reviewed. The <code>source_evidence</code> tool lands with the next O2 step.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu adapters::outbound::sources</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu sources --sandbox soe list</span>
+<span class="ln o">source      kind        enabled  runtime  class/trust              retention                      terms</span>
+<span class="ln o">sec_edgar   sec_edgar   false    on       company_primary/primary  raw forever · records forever  no reviewed terms</span>
+<span class="ln o">ted_search  ted_search  false    on       law_regulator/primary    raw 90d · records forever      no reviewed terms</span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c my-soe.toml sources fetch --source ted_search --from 2026-10-01 --to 2026-10-02</span>
+<span class="ln o">day:2026-10-01  notices  -  ted_search  318  2  2026-10-01T22:00:00Z  2026-10-01T22:00:00Z  ok</span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c my-soe.toml sources asof --at 2026-10-09 --event ted:procedure:f08aa593-61f7-418e-90ec-043a09cc23b1 --text</span>
+<span class="ln o">fact ted_search:674231-2026:&lt;content hash&gt; … <span class="hl">deadline=2026-11-04T09:00:00Z value=5300000 CZK</span></span>
+<span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu sources::</span>
+<span class="ln o">test adapters::outbound::sources::ted::tests::crash_between_pages_resumes_from_the_cursor ... ok</span>
+<span class="ln o">test adapters::inbound::cli::sources::tests::import_then_asof_is_deterministic ... ok</span>
 <span class="ln o">test adapters::outbound::sources::store::tests::store_reads_give_the_packet_of_the_whole_store ... ok</span>
-<span class="ln o">test adapters::outbound::sources::store::tests::purge_leaves_tombstones_and_hashes ... ok</span>
-<span class="ln o">test adapters::outbound::sources::sec::tests::index_404_is_partial_not_a_loss ... ok</span>
 <span class="ln o">test adapters::outbound::sources::sec::tests::user_agent_never_lands_in_records_or_audit ... ok</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu domain::source::checks</span>
 <span class="ln o">test domain::source::checks::knowable_mode_never_reads_in_place_edits_early ... ok</span>
@@ -410,11 +468,16 @@
         <tr><td><code>src/domain/source/asof.rs</code></td><td>the two clocks, current versions, corrections, states, event confidence, conflicts</td></tr>
         <tr><td><code>src/domain/source/packet.rs</code></td><td><code>EvidencePacket</code> <code>source_asof/1</code>, freshness, citations, the fence</td></tr>
         <tr><td><code>src/domain/source/sec_records.rs</code></td><td>an SEC filing as a record: accession, CIK entity, index time, the partial rule</td></tr>
+        <tr><td><code>src/domain/source/ted.rs</code></td><td>a TED search page: the request body, the field allow-list, the decoder, a notice as a record, the change-notice target</td></tr>
         <tr><td><code>src/domain/source/checks.rs</code> · <code>testkit.rs</code></td><td>tests only: the split-world worlds and checks</td></tr>
         <tr><td><code>src/config/sources.rs</code></td><td><code>[sources]</code>: the registry rows, their load rules, <code>fetch_stamp</code></td></tr>
-        <tr><td><code>src/ports/source_store.rs</code></td><td><code>SourceStore</code>: commit, the read at t, coverage, cursor, snapshot, purge</td></tr>
+        <tr><td><code>src/ports/source_store.rs</code></td><td><code>SourceStore</code>: commit, the read at t, coverage, cursors, snapshot, purge, runtime switches</td></tr>
         <tr><td><code>src/adapters/outbound/sources/store.rs</code></td><td><code>SqliteSourceStore</code>: <code>sources.db</code> and its tables</td></tr>
-        <tr><td><code>src/adapters/outbound/sources/sec.rs</code> · <code>mod.rs</code></td><td>the <code>sec_edgar</code> fetch per CIK; opening the store</td></tr>
+        <tr><td><code>src/adapters/outbound/sources/sec.rs</code> · <code>mod.rs</code></td><td>the <code>sec_edgar</code> fetch per CIK; opening the store; the fetch gate</td></tr>
+        <tr><td><code>src/adapters/outbound/sources/ted.rs</code></td><td><code>TedClient</code> and the <code>ted_search</code> fetch day by day; the offline import</td></tr>
+        <tr><td><code>src/application/sources.rs</code></td><td><code>evidence_as_of</code> (the store read behind a packet) and the retention cutoffs</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/sources.rs</code></td><td><code>tengu sources</code>: list, fetch, import, asof, terms, purge, disable, enable</td></tr>
+        <tr><td><code>tests/fixtures/ted/</code></td><td>TED replies captured 2026-10-08 (one hand-edited bad page); buyers are organisations, no contact field</td></tr>
         <tr><td><code>sandboxes/soe/config.toml</code></td><td>the unbound, closed-world SOE sandbox; rows disabled</td></tr>
         <tr><td><code>src/domain/canonical.rs</code></td><td>canonical JSON + sha256 behind the content hash and the byte-identity checks</td></tr>
         <tr><td><code>src/domain/sec.rs</code></td><td>SEC EDGAR decoders a filing record is built from (see <a href="history.html">Market history</a>)</td></tr>

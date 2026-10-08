@@ -11,9 +11,10 @@
 #   the operator's reviewed terms (license, terms_url, terms_sha256 of the page
 #   read, terms_reviewed_at) and both retention periods — the load refuses it
 #   otherwise (src/config/sources.rs).
-# - Fetching is the operator's (`tengu sources fetch`, O2 step C8); the agent's
-#   only tool `source_evidence` is read-only (O2 step C9 — until it lands, the
-#   load warns that it is no catalog tool and the agent holds no tool at all).
+# - Fetching is the operator's (`tengu sources fetch`; `tengu sources disable`
+#   stops a source at once, whatever this file says); the agent's only tool
+#   `source_evidence` is read-only (O2 step C9 — until it lands, the load warns
+#   that it is no catalog tool and the agent holds no tool at all).
 #
 # State: ~/.tengu/state/soe/ (sources.db; outside every fs root and workspace).
 # Workspace: ~/soe-ws (only .tengu/observations.db).
@@ -74,8 +75,9 @@ store_raw = true
 jurisdiction = "EU"
 language = "en"
 # Proposed first backfill: CPV 72000000 + 48000000 (IT services, software),
-# all EU, one-day publication windows. Field names unverified until O2 step C7
-# pins them from captured fixtures.
+# all EU, one-day publication windows ({from} = {to} = the day, YYYYMMDD). Field
+# names checked against live replies 2026-10-08 (src/domain/source/ted.rs): a
+# CPV family code also matches its sub-codes; 2026-10-01 = 318 notices.
 query = "classification-cpv IN (72000000 48000000) AND publication-date >= {from} AND publication-date <= {to}"
 license = "EU Publications Office reuse policy"                                                   # proposed
 terms_url = "https://docs.ted.europa.eu/api/latest/search.html"                                    # proposed (PRD §5.3 link)

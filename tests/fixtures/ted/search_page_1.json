@@ -1,0 +1,582 @@
+{
+  "notices": [
+    {
+      "deadline-receipt-tender-date-lot": [
+        "2026-11-04+01:00"
+      ],
+      "notice-type": "cn-standard",
+      "place-of-performance-subdiv-lot": [
+        "CZ010"
+      ],
+      "publication-number": "674231-2026",
+      "estimated-value-lot": [
+        "5300000"
+      ],
+      "main-classification-proc": [
+        "48730000"
+      ],
+      "estimated-value-cur-lot": [
+        "CZK"
+      ],
+      "procedure-identifier": "f08aa593-61f7-418e-90ec-043a09cc23b1",
+      "estimated-value-cur-proc": "CZK",
+      "change-notice-version-identifier": "657981-2026",
+      "buyer-country": [
+        "CZE"
+      ],
+      "place-of-performance-country-proc": [
+        "CZE"
+      ],
+      "place-of-performance-country-lot": [
+        "CZE"
+      ],
+      "deadline-receipt-tender-time-lot": [
+        "10:00:00+01:00"
+      ],
+      "classification-cpv": [
+        "48730000",
+        "72268000",
+        "72261000",
+        "72253200",
+        "72800000",
+        "48730000",
+        "72268000",
+        "72268000",
+        "72253200",
+        "72800000"
+      ],
+      "publication-date": "2026-10-01+02:00",
+      "buyer-name": {
+        "ces": [
+          "Středisko společných činností AV ČR, v. v. i."
+        ]
+      },
+      "estimated-value-proc": "5300000",
+      "links": {
+        "xml": {
+          "MUL": "https://ted.europa.eu/en/notice/674231-2026/xml"
+        },
+        "pdf": {
+          "BUL": "https://ted.europa.eu/bg/notice/674231-2026/pdf",
+          "SPA": "https://ted.europa.eu/es/notice/674231-2026/pdf",
+          "CES": "https://ted.europa.eu/cs/notice/674231-2026/pdf",
+          "DAN": "https://ted.europa.eu/da/notice/674231-2026/pdf",
+          "DEU": "https://ted.europa.eu/de/notice/674231-2026/pdf",
+          "EST": "https://ted.europa.eu/et/notice/674231-2026/pdf",
+          "ELL": "https://ted.europa.eu/el/notice/674231-2026/pdf",
+          "ENG": "https://ted.europa.eu/en/notice/674231-2026/pdf",
+          "FRA": "https://ted.europa.eu/fr/notice/674231-2026/pdf",
+          "GLE": "https://ted.europa.eu/ga/notice/674231-2026/pdf",
+          "HRV": "https://ted.europa.eu/hr/notice/674231-2026/pdf",
+          "ITA": "https://ted.europa.eu/it/notice/674231-2026/pdf",
+          "LAV": "https://ted.europa.eu/lv/notice/674231-2026/pdf",
+          "LIT": "https://ted.europa.eu/lt/notice/674231-2026/pdf",
+          "HUN": "https://ted.europa.eu/hu/notice/674231-2026/pdf",
+          "MLT": "https://ted.europa.eu/mt/notice/674231-2026/pdf",
+          "NLD": "https://ted.europa.eu/nl/notice/674231-2026/pdf",
+          "POL": "https://ted.europa.eu/pl/notice/674231-2026/pdf",
+          "POR": "https://ted.europa.eu/pt/notice/674231-2026/pdf",
+          "RON": "https://ted.europa.eu/ro/notice/674231-2026/pdf",
+          "SLK": "https://ted.europa.eu/sk/notice/674231-2026/pdf",
+          "SLV": "https://ted.europa.eu/sl/notice/674231-2026/pdf",
+          "FIN": "https://ted.europa.eu/fi/notice/674231-2026/pdf",
+          "SWE": "https://ted.europa.eu/sv/notice/674231-2026/pdf"
+        },
+        "pdfs": {
+          "CES": "https://ted.europa.eu/cs/notice/674231-2026/pdfs"
+        },
+        "html": {
+          "BUL": "https://ted.europa.eu/bg/notice/-/detail/674231-2026",
+          "SPA": "https://ted.europa.eu/es/notice/-/detail/674231-2026",
+          "CES": "https://ted.europa.eu/cs/notice/-/detail/674231-2026",
+          "DAN": "https://ted.europa.eu/da/notice/-/detail/674231-2026",
+          "DEU": "https://ted.europa.eu/de/notice/-/detail/674231-2026",
+          "EST": "https://ted.europa.eu/et/notice/-/detail/674231-2026",
+          "ELL": "https://ted.europa.eu/el/notice/-/detail/674231-2026",
+          "ENG": "https://ted.europa.eu/en/notice/-/detail/674231-2026",
+          "FRA": "https://ted.europa.eu/fr/notice/-/detail/674231-2026",
+          "GLE": "https://ted.europa.eu/ga/notice/-/detail/674231-2026",
+          "HRV": "https://ted.europa.eu/hr/notice/-/detail/674231-2026",
+          "ITA": "https://ted.europa.eu/it/notice/-/detail/674231-2026",
+          "LAV": "https://ted.europa.eu/lv/notice/-/detail/674231-2026",
+          "LIT": "https://ted.europa.eu/lt/notice/-/detail/674231-2026",
+          "HUN": "https://ted.europa.eu/hu/notice/-/detail/674231-2026",
+          "MLT": "https://ted.europa.eu/mt/notice/-/detail/674231-2026",
+          "NLD": "https://ted.europa.eu/nl/notice/-/detail/674231-2026",
+          "POL": "https://ted.europa.eu/pl/notice/-/detail/674231-2026",
+          "POR": "https://ted.europa.eu/pt/notice/-/detail/674231-2026",
+          "RON": "https://ted.europa.eu/ro/notice/-/detail/674231-2026",
+          "SLK": "https://ted.europa.eu/sk/notice/-/detail/674231-2026",
+          "SLV": "https://ted.europa.eu/sl/notice/-/detail/674231-2026",
+          "FIN": "https://ted.europa.eu/fi/notice/-/detail/674231-2026",
+          "SWE": "https://ted.europa.eu/sv/notice/-/detail/674231-2026"
+        },
+        "htmlDirect": {
+          "BUL": "https://ted.europa.eu/bg/notice/674231-2026/html",
+          "SPA": "https://ted.europa.eu/es/notice/674231-2026/html",
+          "CES": "https://ted.europa.eu/cs/notice/674231-2026/html",
+          "DAN": "https://ted.europa.eu/da/notice/674231-2026/html",
+          "DEU": "https://ted.europa.eu/de/notice/674231-2026/html",
+          "EST": "https://ted.europa.eu/et/notice/674231-2026/html",
+          "ELL": "https://ted.europa.eu/el/notice/674231-2026/html",
+          "ENG": "https://ted.europa.eu/en/notice/674231-2026/html",
+          "FRA": "https://ted.europa.eu/fr/notice/674231-2026/html",
+          "GLE": "https://ted.europa.eu/ga/notice/674231-2026/html",
+          "HRV": "https://ted.europa.eu/hr/notice/674231-2026/html",
+          "ITA": "https://ted.europa.eu/it/notice/674231-2026/html",
+          "LAV": "https://ted.europa.eu/lv/notice/674231-2026/html",
+          "LIT": "https://ted.europa.eu/lt/notice/674231-2026/html",
+          "HUN": "https://ted.europa.eu/hu/notice/674231-2026/html",
+          "MLT": "https://ted.europa.eu/mt/notice/674231-2026/html",
+          "NLD": "https://ted.europa.eu/nl/notice/674231-2026/html",
+          "POL": "https://ted.europa.eu/pl/notice/674231-2026/html",
+          "POR": "https://ted.europa.eu/pt/notice/674231-2026/html",
+          "RON": "https://ted.europa.eu/ro/notice/674231-2026/html",
+          "SLK": "https://ted.europa.eu/sk/notice/674231-2026/html",
+          "SLV": "https://ted.europa.eu/sl/notice/674231-2026/html",
+          "FIN": "https://ted.europa.eu/fi/notice/674231-2026/html",
+          "SWE": "https://ted.europa.eu/sv/notice/674231-2026/html"
+        }
+      },
+      "identifier-lot": [
+        "LOT-0001"
+      ],
+      "place-of-performance-subdiv-proc": [
+        "CZ010"
+      ],
+      "buyer-identifier": [
+        "60457856"
+      ]
+    },
+    {
+      "deadline-receipt-tender-date-lot": [
+        "2026-11-02+01:00"
+      ],
+      "notice-type": "cn-standard",
+      "place-of-performance-subdiv-lot": [
+        "PL633"
+      ],
+      "publication-number": "674236-2026",
+      "estimated-value-lot": [
+        "401698.9"
+      ],
+      "main-classification-proc": [
+        "48822000"
+      ],
+      "estimated-value-cur-lot": [
+        "PLN"
+      ],
+      "procedure-identifier": "40ce8ea4-78ed-4d56-9ffa-92a46828c114",
+      "buyer-country": [
+        "POL"
+      ],
+      "place-of-performance-country-proc": [
+        "POL"
+      ],
+      "place-of-performance-country-lot": [
+        "POL"
+      ],
+      "deadline-receipt-tender-time-lot": [
+        "10:00:00+01:00"
+      ],
+      "classification-cpv": [
+        "48822000",
+        "48820000",
+        "30213000",
+        "30213300",
+        "30231300",
+        "30237200",
+        "48822000"
+      ],
+      "publication-date": "2026-10-01+02:00",
+      "buyer-name": {
+        "pol": [
+          "Politechnika Gdańska"
+        ]
+      },
+      "links": {
+        "xml": {
+          "MUL": "https://ted.europa.eu/en/notice/674236-2026/xml"
+        },
+        "pdf": {
+          "BUL": "https://ted.europa.eu/bg/notice/674236-2026/pdf",
+          "SPA": "https://ted.europa.eu/es/notice/674236-2026/pdf",
+          "CES": "https://ted.europa.eu/cs/notice/674236-2026/pdf",
+          "DAN": "https://ted.europa.eu/da/notice/674236-2026/pdf",
+          "DEU": "https://ted.europa.eu/de/notice/674236-2026/pdf",
+          "EST": "https://ted.europa.eu/et/notice/674236-2026/pdf",
+          "ELL": "https://ted.europa.eu/el/notice/674236-2026/pdf",
+          "ENG": "https://ted.europa.eu/en/notice/674236-2026/pdf",
+          "FRA": "https://ted.europa.eu/fr/notice/674236-2026/pdf",
+          "GLE": "https://ted.europa.eu/ga/notice/674236-2026/pdf",
+          "HRV": "https://ted.europa.eu/hr/notice/674236-2026/pdf",
+          "ITA": "https://ted.europa.eu/it/notice/674236-2026/pdf",
+          "LAV": "https://ted.europa.eu/lv/notice/674236-2026/pdf",
+          "LIT": "https://ted.europa.eu/lt/notice/674236-2026/pdf",
+          "HUN": "https://ted.europa.eu/hu/notice/674236-2026/pdf",
+          "MLT": "https://ted.europa.eu/mt/notice/674236-2026/pdf",
+          "NLD": "https://ted.europa.eu/nl/notice/674236-2026/pdf",
+          "POL": "https://ted.europa.eu/pl/notice/674236-2026/pdf",
+          "POR": "https://ted.europa.eu/pt/notice/674236-2026/pdf",
+          "RON": "https://ted.europa.eu/ro/notice/674236-2026/pdf",
+          "SLK": "https://ted.europa.eu/sk/notice/674236-2026/pdf",
+          "SLV": "https://ted.europa.eu/sl/notice/674236-2026/pdf",
+          "FIN": "https://ted.europa.eu/fi/notice/674236-2026/pdf",
+          "SWE": "https://ted.europa.eu/sv/notice/674236-2026/pdf"
+        },
+        "pdfs": {
+          "POL": "https://ted.europa.eu/pl/notice/674236-2026/pdfs"
+        },
+        "html": {
+          "BUL": "https://ted.europa.eu/bg/notice/-/detail/674236-2026",
+          "SPA": "https://ted.europa.eu/es/notice/-/detail/674236-2026",
+          "CES": "https://ted.europa.eu/cs/notice/-/detail/674236-2026",
+          "DAN": "https://ted.europa.eu/da/notice/-/detail/674236-2026",
+          "DEU": "https://ted.europa.eu/de/notice/-/detail/674236-2026",
+          "EST": "https://ted.europa.eu/et/notice/-/detail/674236-2026",
+          "ELL": "https://ted.europa.eu/el/notice/-/detail/674236-2026",
+          "ENG": "https://ted.europa.eu/en/notice/-/detail/674236-2026",
+          "FRA": "https://ted.europa.eu/fr/notice/-/detail/674236-2026",
+          "GLE": "https://ted.europa.eu/ga/notice/-/detail/674236-2026",
+          "HRV": "https://ted.europa.eu/hr/notice/-/detail/674236-2026",
+          "ITA": "https://ted.europa.eu/it/notice/-/detail/674236-2026",
+          "LAV": "https://ted.europa.eu/lv/notice/-/detail/674236-2026",
+          "LIT": "https://ted.europa.eu/lt/notice/-/detail/674236-2026",
+          "HUN": "https://ted.europa.eu/hu/notice/-/detail/674236-2026",
+          "MLT": "https://ted.europa.eu/mt/notice/-/detail/674236-2026",
+          "NLD": "https://ted.europa.eu/nl/notice/-/detail/674236-2026",
+          "POL": "https://ted.europa.eu/pl/notice/-/detail/674236-2026",
+          "POR": "https://ted.europa.eu/pt/notice/-/detail/674236-2026",
+          "RON": "https://ted.europa.eu/ro/notice/-/detail/674236-2026",
+          "SLK": "https://ted.europa.eu/sk/notice/-/detail/674236-2026",
+          "SLV": "https://ted.europa.eu/sl/notice/-/detail/674236-2026",
+          "FIN": "https://ted.europa.eu/fi/notice/-/detail/674236-2026",
+          "SWE": "https://ted.europa.eu/sv/notice/-/detail/674236-2026"
+        },
+        "htmlDirect": {
+          "BUL": "https://ted.europa.eu/bg/notice/674236-2026/html",
+          "SPA": "https://ted.europa.eu/es/notice/674236-2026/html",
+          "CES": "https://ted.europa.eu/cs/notice/674236-2026/html",
+          "DAN": "https://ted.europa.eu/da/notice/674236-2026/html",
+          "DEU": "https://ted.europa.eu/de/notice/674236-2026/html",
+          "EST": "https://ted.europa.eu/et/notice/674236-2026/html",
+          "ELL": "https://ted.europa.eu/el/notice/674236-2026/html",
+          "ENG": "https://ted.europa.eu/en/notice/674236-2026/html",
+          "FRA": "https://ted.europa.eu/fr/notice/674236-2026/html",
+          "GLE": "https://ted.europa.eu/ga/notice/674236-2026/html",
+          "HRV": "https://ted.europa.eu/hr/notice/674236-2026/html",
+          "ITA": "https://ted.europa.eu/it/notice/674236-2026/html",
+          "LAV": "https://ted.europa.eu/lv/notice/674236-2026/html",
+          "LIT": "https://ted.europa.eu/lt/notice/674236-2026/html",
+          "HUN": "https://ted.europa.eu/hu/notice/674236-2026/html",
+          "MLT": "https://ted.europa.eu/mt/notice/674236-2026/html",
+          "NLD": "https://ted.europa.eu/nl/notice/674236-2026/html",
+          "POL": "https://ted.europa.eu/pl/notice/674236-2026/html",
+          "POR": "https://ted.europa.eu/pt/notice/674236-2026/html",
+          "RON": "https://ted.europa.eu/ro/notice/674236-2026/html",
+          "SLK": "https://ted.europa.eu/sk/notice/674236-2026/html",
+          "SLV": "https://ted.europa.eu/sl/notice/674236-2026/html",
+          "FIN": "https://ted.europa.eu/fi/notice/674236-2026/html",
+          "SWE": "https://ted.europa.eu/sv/notice/674236-2026/html"
+        }
+      },
+      "identifier-lot": [
+        "LOT-0001"
+      ],
+      "place-of-performance-subdiv-proc": [
+        "PL633"
+      ],
+      "buyer-identifier": [
+        "5840203593"
+      ]
+    },
+    {
+      "notice-type": "veat",
+      "place-of-performance-subdiv-lot": [
+        "SI041"
+      ],
+      "publication-number": "674237-2026",
+      "main-classification-proc": [
+        "72320000"
+      ],
+      "procedure-identifier": "372a4cfd-5c8e-4ade-85a0-1fc034e8fbd9",
+      "buyer-country": [
+        "SVN"
+      ],
+      "place-of-performance-country-proc": [
+        "SVN"
+      ],
+      "place-of-performance-country-lot": [
+        "SVN"
+      ],
+      "classification-cpv": [
+        "72320000",
+        "72320000"
+      ],
+      "publication-date": "2026-10-01+02:00",
+      "buyer-name": {
+        "slv": [
+          "MINISTRSTVO ZA OBRAMBO"
+        ]
+      },
+      "links": {
+        "xml": {
+          "MUL": "https://ted.europa.eu/en/notice/674237-2026/xml"
+        },
+        "pdf": {
+          "BUL": "https://ted.europa.eu/bg/notice/674237-2026/pdf",
+          "SPA": "https://ted.europa.eu/es/notice/674237-2026/pdf",
+          "CES": "https://ted.europa.eu/cs/notice/674237-2026/pdf",
+          "DAN": "https://ted.europa.eu/da/notice/674237-2026/pdf",
+          "DEU": "https://ted.europa.eu/de/notice/674237-2026/pdf",
+          "EST": "https://ted.europa.eu/et/notice/674237-2026/pdf",
+          "ELL": "https://ted.europa.eu/el/notice/674237-2026/pdf",
+          "ENG": "https://ted.europa.eu/en/notice/674237-2026/pdf",
+          "FRA": "https://ted.europa.eu/fr/notice/674237-2026/pdf",
+          "GLE": "https://ted.europa.eu/ga/notice/674237-2026/pdf",
+          "HRV": "https://ted.europa.eu/hr/notice/674237-2026/pdf",
+          "ITA": "https://ted.europa.eu/it/notice/674237-2026/pdf",
+          "LAV": "https://ted.europa.eu/lv/notice/674237-2026/pdf",
+          "LIT": "https://ted.europa.eu/lt/notice/674237-2026/pdf",
+          "HUN": "https://ted.europa.eu/hu/notice/674237-2026/pdf",
+          "MLT": "https://ted.europa.eu/mt/notice/674237-2026/pdf",
+          "NLD": "https://ted.europa.eu/nl/notice/674237-2026/pdf",
+          "POL": "https://ted.europa.eu/pl/notice/674237-2026/pdf",
+          "POR": "https://ted.europa.eu/pt/notice/674237-2026/pdf",
+          "RON": "https://ted.europa.eu/ro/notice/674237-2026/pdf",
+          "SLK": "https://ted.europa.eu/sk/notice/674237-2026/pdf",
+          "SLV": "https://ted.europa.eu/sl/notice/674237-2026/pdf",
+          "FIN": "https://ted.europa.eu/fi/notice/674237-2026/pdf",
+          "SWE": "https://ted.europa.eu/sv/notice/674237-2026/pdf"
+        },
+        "pdfs": {
+          "SLV": "https://ted.europa.eu/sl/notice/674237-2026/pdfs"
+        },
+        "html": {
+          "BUL": "https://ted.europa.eu/bg/notice/-/detail/674237-2026",
+          "SPA": "https://ted.europa.eu/es/notice/-/detail/674237-2026",
+          "CES": "https://ted.europa.eu/cs/notice/-/detail/674237-2026",
+          "DAN": "https://ted.europa.eu/da/notice/-/detail/674237-2026",
+          "DEU": "https://ted.europa.eu/de/notice/-/detail/674237-2026",
+          "EST": "https://ted.europa.eu/et/notice/-/detail/674237-2026",
+          "ELL": "https://ted.europa.eu/el/notice/-/detail/674237-2026",
+          "ENG": "https://ted.europa.eu/en/notice/-/detail/674237-2026",
+          "FRA": "https://ted.europa.eu/fr/notice/-/detail/674237-2026",
+          "GLE": "https://ted.europa.eu/ga/notice/-/detail/674237-2026",
+          "HRV": "https://ted.europa.eu/hr/notice/-/detail/674237-2026",
+          "ITA": "https://ted.europa.eu/it/notice/-/detail/674237-2026",
+          "LAV": "https://ted.europa.eu/lv/notice/-/detail/674237-2026",
+          "LIT": "https://ted.europa.eu/lt/notice/-/detail/674237-2026",
+          "HUN": "https://ted.europa.eu/hu/notice/-/detail/674237-2026",
+          "MLT": "https://ted.europa.eu/mt/notice/-/detail/674237-2026",
+          "NLD": "https://ted.europa.eu/nl/notice/-/detail/674237-2026",
+          "POL": "https://ted.europa.eu/pl/notice/-/detail/674237-2026",
+          "POR": "https://ted.europa.eu/pt/notice/-/detail/674237-2026",
+          "RON": "https://ted.europa.eu/ro/notice/-/detail/674237-2026",
+          "SLK": "https://ted.europa.eu/sk/notice/-/detail/674237-2026",
+          "SLV": "https://ted.europa.eu/sl/notice/-/detail/674237-2026",
+          "FIN": "https://ted.europa.eu/fi/notice/-/detail/674237-2026",
+          "SWE": "https://ted.europa.eu/sv/notice/-/detail/674237-2026"
+        },
+        "htmlDirect": {
+          "BUL": "https://ted.europa.eu/bg/notice/674237-2026/html",
+          "SPA": "https://ted.europa.eu/es/notice/674237-2026/html",
+          "CES": "https://ted.europa.eu/cs/notice/674237-2026/html",
+          "DAN": "https://ted.europa.eu/da/notice/674237-2026/html",
+          "DEU": "https://ted.europa.eu/de/notice/674237-2026/html",
+          "EST": "https://ted.europa.eu/et/notice/674237-2026/html",
+          "ELL": "https://ted.europa.eu/el/notice/674237-2026/html",
+          "ENG": "https://ted.europa.eu/en/notice/674237-2026/html",
+          "FRA": "https://ted.europa.eu/fr/notice/674237-2026/html",
+          "GLE": "https://ted.europa.eu/ga/notice/674237-2026/html",
+          "HRV": "https://ted.europa.eu/hr/notice/674237-2026/html",
+          "ITA": "https://ted.europa.eu/it/notice/674237-2026/html",
+          "LAV": "https://ted.europa.eu/lv/notice/674237-2026/html",
+          "LIT": "https://ted.europa.eu/lt/notice/674237-2026/html",
+          "HUN": "https://ted.europa.eu/hu/notice/674237-2026/html",
+          "MLT": "https://ted.europa.eu/mt/notice/674237-2026/html",
+          "NLD": "https://ted.europa.eu/nl/notice/674237-2026/html",
+          "POL": "https://ted.europa.eu/pl/notice/674237-2026/html",
+          "POR": "https://ted.europa.eu/pt/notice/674237-2026/html",
+          "RON": "https://ted.europa.eu/ro/notice/674237-2026/html",
+          "SLK": "https://ted.europa.eu/sk/notice/674237-2026/html",
+          "SLV": "https://ted.europa.eu/sl/notice/674237-2026/html",
+          "FIN": "https://ted.europa.eu/fi/notice/674237-2026/html",
+          "SWE": "https://ted.europa.eu/sv/notice/674237-2026/html"
+        }
+      },
+      "identifier-lot": [
+        "LOT-0000"
+      ],
+      "place-of-performance-subdiv-proc": [
+        "SI041"
+      ],
+      "buyer-identifier": [
+        "5268923000"
+      ]
+    },
+    {
+      "deadline-receipt-tender-date-lot": [
+        "2026-11-04+02:00",
+        "2026-11-04+02:00",
+        "2026-11-04+02:00",
+        "2026-11-04+02:00"
+      ],
+      "notice-type": "cn-standard",
+      "place-of-performance-subdiv-lot": [
+        "ITI43",
+        "ITI43",
+        "ITI43",
+        "ITI43"
+      ],
+      "publication-number": "674254-2026",
+      "estimated-value-lot": [
+        "30240000",
+        "155520000",
+        "100800000",
+        "169819200"
+      ],
+      "main-classification-proc": [
+        "48730000"
+      ],
+      "estimated-value-cur-lot": [
+        "EUR"
+      ],
+      "procedure-identifier": "2a05304d-00df-4fc5-a5c2-29ef49686785",
+      "estimated-value-cur-proc": "EUR",
+      "buyer-country": [
+        "ITA"
+      ],
+      "place-of-performance-country-proc": [
+        "ITA"
+      ],
+      "place-of-performance-country-lot": [
+        "ITA",
+        "ITA",
+        "ITA",
+        "ITA"
+      ],
+      "deadline-receipt-tender-time-lot": [
+        "16:00:00+02:00",
+        "16:00:00+02:00",
+        "16:00:00+02:00",
+        "16:00:00+02:00"
+      ],
+      "classification-cpv": [
+        "48730000",
+        "30200000",
+        "30200000",
+        "48730000",
+        "48730000"
+      ],
+      "publication-date": "2026-10-01+02:00",
+      "buyer-name": {
+        "ita": [
+          "CONSIP SPA"
+        ]
+      },
+      "estimated-value-proc": "456379200",
+      "links": {
+        "xml": {
+          "MUL": "https://ted.europa.eu/en/notice/674254-2026/xml"
+        },
+        "pdf": {
+          "BUL": "https://ted.europa.eu/bg/notice/674254-2026/pdf",
+          "SPA": "https://ted.europa.eu/es/notice/674254-2026/pdf",
+          "CES": "https://ted.europa.eu/cs/notice/674254-2026/pdf",
+          "DAN": "https://ted.europa.eu/da/notice/674254-2026/pdf",
+          "DEU": "https://ted.europa.eu/de/notice/674254-2026/pdf",
+          "EST": "https://ted.europa.eu/et/notice/674254-2026/pdf",
+          "ELL": "https://ted.europa.eu/el/notice/674254-2026/pdf",
+          "ENG": "https://ted.europa.eu/en/notice/674254-2026/pdf",
+          "FRA": "https://ted.europa.eu/fr/notice/674254-2026/pdf",
+          "GLE": "https://ted.europa.eu/ga/notice/674254-2026/pdf",
+          "HRV": "https://ted.europa.eu/hr/notice/674254-2026/pdf",
+          "ITA": "https://ted.europa.eu/it/notice/674254-2026/pdf",
+          "LAV": "https://ted.europa.eu/lv/notice/674254-2026/pdf",
+          "LIT": "https://ted.europa.eu/lt/notice/674254-2026/pdf",
+          "HUN": "https://ted.europa.eu/hu/notice/674254-2026/pdf",
+          "MLT": "https://ted.europa.eu/mt/notice/674254-2026/pdf",
+          "NLD": "https://ted.europa.eu/nl/notice/674254-2026/pdf",
+          "POL": "https://ted.europa.eu/pl/notice/674254-2026/pdf",
+          "POR": "https://ted.europa.eu/pt/notice/674254-2026/pdf",
+          "RON": "https://ted.europa.eu/ro/notice/674254-2026/pdf",
+          "SLK": "https://ted.europa.eu/sk/notice/674254-2026/pdf",
+          "SLV": "https://ted.europa.eu/sl/notice/674254-2026/pdf",
+          "FIN": "https://ted.europa.eu/fi/notice/674254-2026/pdf",
+          "SWE": "https://ted.europa.eu/sv/notice/674254-2026/pdf"
+        },
+        "pdfs": {
+          "ITA": "https://ted.europa.eu/it/notice/674254-2026/pdfs"
+        },
+        "html": {
+          "BUL": "https://ted.europa.eu/bg/notice/-/detail/674254-2026",
+          "SPA": "https://ted.europa.eu/es/notice/-/detail/674254-2026",
+          "CES": "https://ted.europa.eu/cs/notice/-/detail/674254-2026",
+          "DAN": "https://ted.europa.eu/da/notice/-/detail/674254-2026",
+          "DEU": "https://ted.europa.eu/de/notice/-/detail/674254-2026",
+          "EST": "https://ted.europa.eu/et/notice/-/detail/674254-2026",
+          "ELL": "https://ted.europa.eu/el/notice/-/detail/674254-2026",
+          "ENG": "https://ted.europa.eu/en/notice/-/detail/674254-2026",
+          "FRA": "https://ted.europa.eu/fr/notice/-/detail/674254-2026",
+          "GLE": "https://ted.europa.eu/ga/notice/-/detail/674254-2026",
+          "HRV": "https://ted.europa.eu/hr/notice/-/detail/674254-2026",
+          "ITA": "https://ted.europa.eu/it/notice/-/detail/674254-2026",
+          "LAV": "https://ted.europa.eu/lv/notice/-/detail/674254-2026",
+          "LIT": "https://ted.europa.eu/lt/notice/-/detail/674254-2026",
+          "HUN": "https://ted.europa.eu/hu/notice/-/detail/674254-2026",
+          "MLT": "https://ted.europa.eu/mt/notice/-/detail/674254-2026",
+          "NLD": "https://ted.europa.eu/nl/notice/-/detail/674254-2026",
+          "POL": "https://ted.europa.eu/pl/notice/-/detail/674254-2026",
+          "POR": "https://ted.europa.eu/pt/notice/-/detail/674254-2026",
+          "RON": "https://ted.europa.eu/ro/notice/-/detail/674254-2026",
+          "SLK": "https://ted.europa.eu/sk/notice/-/detail/674254-2026",
+          "SLV": "https://ted.europa.eu/sl/notice/-/detail/674254-2026",
+          "FIN": "https://ted.europa.eu/fi/notice/-/detail/674254-2026",
+          "SWE": "https://ted.europa.eu/sv/notice/-/detail/674254-2026"
+        },
+        "htmlDirect": {
+          "BUL": "https://ted.europa.eu/bg/notice/674254-2026/html",
+          "SPA": "https://ted.europa.eu/es/notice/674254-2026/html",
+          "CES": "https://ted.europa.eu/cs/notice/674254-2026/html",
+          "DAN": "https://ted.europa.eu/da/notice/674254-2026/html",
+          "DEU": "https://ted.europa.eu/de/notice/674254-2026/html",
+          "EST": "https://ted.europa.eu/et/notice/674254-2026/html",
+          "ELL": "https://ted.europa.eu/el/notice/674254-2026/html",
+          "ENG": "https://ted.europa.eu/en/notice/674254-2026/html",
+          "FRA": "https://ted.europa.eu/fr/notice/674254-2026/html",
+          "GLE": "https://ted.europa.eu/ga/notice/674254-2026/html",
+          "HRV": "https://ted.europa.eu/hr/notice/674254-2026/html",
+          "ITA": "https://ted.europa.eu/it/notice/674254-2026/html",
+          "LAV": "https://ted.europa.eu/lv/notice/674254-2026/html",
+          "LIT": "https://ted.europa.eu/lt/notice/674254-2026/html",
+          "HUN": "https://ted.europa.eu/hu/notice/674254-2026/html",
+          "MLT": "https://ted.europa.eu/mt/notice/674254-2026/html",
+          "NLD": "https://ted.europa.eu/nl/notice/674254-2026/html",
+          "POL": "https://ted.europa.eu/pl/notice/674254-2026/html",
+          "POR": "https://ted.europa.eu/pt/notice/674254-2026/html",
+          "RON": "https://ted.europa.eu/ro/notice/674254-2026/html",
+          "SLK": "https://ted.europa.eu/sk/notice/674254-2026/html",
+          "SLV": "https://ted.europa.eu/sl/notice/674254-2026/html",
+          "FIN": "https://ted.europa.eu/fi/notice/674254-2026/html",
+          "SWE": "https://ted.europa.eu/sv/notice/674254-2026/html"
+        }
+      },
+      "identifier-lot": [
+        "LOT-0001",
+        "LOT-0002",
+        "LOT-0003",
+        "LOT-0004"
+      ],
+      "place-of-performance-subdiv-proc": [
+        "ITI43"
+      ],
+      "buyer-identifier": [
+        "05359681003"
+      ]
+    }
+  ],
+  "totalNoticeCount": 318,
+  "iterationNextToken": null,
+  "timedOut": false
+}

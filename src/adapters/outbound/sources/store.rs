@@ -4,9 +4,10 @@
 //! bodies may hold contact data). WAL (`synchronous = NORMAL`: a power cut
 //! may lose the last commit, which a re-fetch reads again — later, never
 //! earlier) + busy_timeout; every call runs on `spawn_blocking`;
-//! `user_version = 1`.
+//! `user_version = 2` (2: + `switches`; a version-1 file gains the table on
+//! open, an older binary refuses a version-2 file).
 //!
-//! | Table (`WITHOUT ROWID` but `purges`) | Key | Columns | Writes |
+//! | Table (`WITHOUT ROWID` but `purges`, `switches`) | Key | Columns | Writes |
 //! |---|---|---|---|
 //! | `snapshots` | sha256 | kind (`response` · `terms`), source_id, request_key, url, http_status, content_type, fetched_ms, bytes, body (NULL = not kept or purged), purged_ms | `INSERT OR IGNORE`; raw purge sets `body = NULL, purged_ms` |
 //! | `records` | record_id | source_id, native_id, event_key, published_ms, observed_ms, parsed_ms, content_hash, parser_version, parse_status, body (the record's JSON) — indexed by item, event, read time | `INSERT OR IGNORE` only; record purge deletes |
@@ -14,14 +15,11 @@
 //! | `coverage` | (source_id, query_key, fetched_ms, from_ms, to_ms) | complete, error_class | `INSERT OR IGNORE` |
 //! | `cursors` | (source_id, query_key) | value, updated_ms | the one upsert, inside a committed batch |
 //! | `purges` | — (append log) | source_id, purged_ms, raw_before_ms, records_before_ms, snapshots, records, reason | `INSERT` |
+//! | `switches` | — (append log) | source_id, enabled, at_ms, reason — the runtime kill switch (`tengu sources disable` / `enable`) | `INSERT` |
 //!
 //! The `records` key is `<source_id>:<native_id>:<content_hash>`, so it is
 //! unique per `(source_id, native_id, content_hash)` (`source_id` has no `:`,
 //! the hash is hex). Read rules: `ports/source_store.rs`.
-
-// The reads and the purge are called by `tengu sources` and the
-// `source_evidence` tool (O2 C8–C9); until then by tests only.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -37,11 +35,11 @@ use crate::domain::source::record::valid_source_id;
 use crate::domain::source::{Coverage, ParseStatus, Purge, SourceRecord};
 use crate::ports::source_store::{
     body_sha256, Batch, CommitReport, Cursor, PurgeRequest, RecordQuery, Snapshot, SnapshotKind,
-    SourceStore,
+    SourceStore, SourceSwitch,
 };
 
 /// The schema version in `PRAGMA user_version`.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -71,6 +69,9 @@ CREATE TABLE IF NOT EXISTS cursors (
 CREATE TABLE IF NOT EXISTS purges (
   source_id TEXT NOT NULL, purged_ms INTEGER NOT NULL, raw_before_ms INTEGER,
   records_before_ms INTEGER, snapshots INTEGER NOT NULL, records INTEGER NOT NULL,
+  reason TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS switches (
+  source_id TEXT NOT NULL, enabled INTEGER NOT NULL, at_ms INTEGER NOT NULL,
   reason TEXT NOT NULL);";
 
 const PUT_SNAPSHOT_SQL: &str = "
@@ -148,9 +149,20 @@ const PURGES_SQL: &str = "
 SELECT source_id, purged_ms, raw_before_ms, records_before_ms, snapshots, records, reason
 FROM purges WHERE (?1 IS NULL OR source_id = ?1) ORDER BY purged_ms, rowid";
 
+const CURSORS_SQL: &str = "
+SELECT source_id, query_key, value, updated_ms FROM cursors
+WHERE (?1 IS NULL OR source_id = ?1) ORDER BY source_id, query_key";
+
+const PUT_SWITCH_SQL: &str =
+    "INSERT INTO switches(source_id, enabled, at_ms, reason) VALUES (?1, ?2, ?3, ?4)";
+
+const SWITCHES_SQL: &str = "
+SELECT source_id, enabled, at_ms, reason FROM switches
+WHERE (?1 IS NULL OR source_id = ?1) ORDER BY at_ms, rowid";
+
 /// Every statement, for the append-only check.
 #[cfg(test)]
-const ALL_SQL: [&str; 21] = [
+const ALL_SQL: [&str; 24] = [
     SCHEMA_SQL,
     PUT_SNAPSHOT_SQL,
     PUT_RECORD_SQL,
@@ -170,6 +182,9 @@ const ALL_SQL: [&str; 21] = [
     CURSOR_SQL,
     SNAPSHOT_SQL,
     PURGES_SQL,
+    CURSORS_SQL,
+    PUT_SWITCH_SQL,
+    SWITCHES_SQL,
     "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
     "PRAGMA user_version",
 ];
@@ -595,6 +610,25 @@ impl SourceStore for SqliteSourceStore {
         .await
     }
 
+    async fn cursors(&self, source_id: Option<&str>) -> Result<Vec<Cursor>> {
+        let source = source_id.map(str::to_string);
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare_cached(CURSORS_SQL)?;
+            let out = stmt
+                .query_map(params![source], |r| {
+                    Ok(Cursor {
+                        source_id: r.get(0)?,
+                        query_key: r.get(1)?,
+                        value: r.get(2)?,
+                        updated_ms: r.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(out)
+        })
+        .await
+    }
+
     async fn snapshot(&self, sha256: &str) -> Result<Option<Snapshot>> {
         let sha = sha256.to_string();
         self.with_conn(move |conn| {
@@ -675,6 +709,43 @@ impl SourceStore for SqliteSourceStore {
         })
         .await
     }
+
+    async fn set_switch(&self, switch: &SourceSwitch) -> Result<()> {
+        if !valid_source_id(&switch.source_id) {
+            bail!("switch: source_id `{}` is not [a-z0-9_]+", switch.source_id);
+        }
+        if switch.reason.trim().is_empty() {
+            bail!("switch {}: a reason is required", switch.source_id);
+        }
+        let s = switch.clone();
+        self.with_conn(move |conn| {
+            conn.execute(
+                PUT_SWITCH_SQL,
+                params![s.source_id, s.enabled, s.at_ms, s.reason],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn switches(&self, source_id: Option<&str>) -> Result<Vec<SourceSwitch>> {
+        let source = source_id.map(str::to_string);
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare_cached(SWITCHES_SQL)?;
+            let out = stmt
+                .query_map(params![source], |r| {
+                    Ok(SourceSwitch {
+                        source_id: r.get(0)?,
+                        enabled: r.get(1)?,
+                        at_ms: r.get(2)?,
+                        reason: r.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(out)
+        })
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -687,6 +758,7 @@ mod tests {
     use crate::domain::source::record::{sec_cik_entity, Origin};
     use crate::domain::source::testkit::{copy_of, edited, rec, worlds, Src, D, H, T0};
     use crate::domain::source::{AsOfInput, AsOfMode, AsOfQuery, EvidencePacket};
+    use crate::ports::source_store::switched_off;
 
     fn open() -> (tempfile::TempDir, SqliteSourceStore) {
         let dir = tempfile::tempdir().unwrap();
@@ -1155,7 +1227,8 @@ mod tests {
                 assert!(
                     s.contains("INSERT OR IGNORE")
                         || s.contains("INTO CURSORS")
-                        || s.contains("INTO PURGES"),
+                        || s.contains("INTO PURGES")
+                        || s.contains("INTO SWITCHES"),
                     "{sql}"
                 );
             }
@@ -1363,5 +1436,85 @@ mod tests {
             }
             assert!(w.records.len() > 10, "{}: not vacuous", w.name);
         }
+    }
+
+    /// Critic U10: the runtime kill switch is an append log — every row
+    /// kept, the newest per source wins; a version-1 file gains the table.
+    #[tokio::test]
+    async fn switches_append_and_the_newest_wins() {
+        let (dir, store) = open();
+        let row = |enabled: bool, at_ms: i64, reason: &str| SourceSwitch {
+            source_id: "ted_search".into(),
+            enabled,
+            at_ms,
+            reason: reason.into(),
+        };
+        assert!(store.switches(None).await.unwrap().is_empty());
+        store
+            .set_switch(&row(false, T0, "terms under review"))
+            .await
+            .unwrap();
+        let rows = store.switches(Some("ted_search")).await.unwrap();
+        assert_eq!(
+            switched_off(&rows, "ted_search").map(|s| s.reason.as_str()),
+            Some("terms under review")
+        );
+        assert_eq!(switched_off(&rows, "sec_edgar"), None);
+        store
+            .set_switch(&row(true, T0 + H, "reviewed"))
+            .await
+            .unwrap();
+        let rows = store.switches(None).await.unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                row(false, T0, "terms under review"),
+                row(true, T0 + H, "reviewed")
+            ]
+        );
+        assert_eq!(switched_off(&rows, "ted_search"), None);
+        for bad in [
+            SourceSwitch {
+                source_id: "TED".into(),
+                ..row(false, T0, "x")
+            },
+            row(false, T0, " "),
+        ] {
+            assert!(store.set_switch(&bad).await.is_err(), "{bad:?}");
+        }
+        assert_eq!(store.switches(None).await.unwrap().len(), 2);
+        // Cursors list by source.
+        assert!(store.cursors(None).await.unwrap().is_empty());
+        let a = rec(Src::SEC, "0000000001-26-000001", T0, T0 + H, T0 + H);
+        let cursor = Cursor {
+            source_id: "sec_edgar".into(),
+            query_key: "cik:0000000001".into(),
+            value: "0000000001-26-000001".into(),
+            updated_ms: T0,
+        };
+        store
+            .commit(Batch {
+                cursor: Some(cursor.clone()),
+                ..batch(vec![a])
+            })
+            .await
+            .unwrap();
+        assert_eq!(store.cursors(None).await.unwrap(), vec![cursor.clone()]);
+        assert!(store.cursors(Some("ted_search")).await.unwrap().is_empty());
+        // A version-1 file opens, gains `switches`, becomes version 2.
+        drop(store);
+        let path = sources_db(dir.path());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("DROP TABLE switches; PRAGMA user_version = 1;")
+            .unwrap();
+        drop(conn);
+        let store = SqliteSourceStore::open(dir.path()).unwrap();
+        assert!(store.switches(None).await.unwrap().is_empty());
+        assert_eq!(store.cursors(None).await.unwrap(), vec![cursor]);
+        let conn = Connection::open(&path).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
     }
 }

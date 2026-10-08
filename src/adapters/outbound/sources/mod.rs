@@ -1,21 +1,23 @@
 //! Source adapters (O2): the append-only store of the source layer and the
 //! fetchers that fill it from approved `[sources]` rows (`config/sources.rs`).
-//! Records are built by the pure parsers of `domain/source/`; the as-of view
-//! reads them back. Agents never fetch: `source_evidence` is read-only, the
-//! operator fetches with `tengu sources fetch` (O2 C8).
+//! Records are built by the pure parsers of `domain/source/`; the as-of
+//! view reads them back. Agents never fetch: `source_evidence` is read-only, the
+//! operator fetches with `tengu sources fetch` (`cli/sources.rs`).
 //!
 //! | File | Holds |
 //! |---|---|
-//! | `store.rs` | `SqliteSourceStore` — `ports::source_store::SourceStore` over `<TENGU_HOME>/state/<sources.state>/sources.db`: raw snapshots (sha256, body when `store_raw`), records, coverage, cursors, purge tombstones; append-only |
+//! | `store.rs` | `SqliteSourceStore` — `ports::source_store::SourceStore` over `<TENGU_HOME>/state/<sources.state>/sources.db`: raw snapshots (sha256, body when `store_raw`), records, coverage, cursors, purge tombstones, runtime switches; append-only |
 //! | `sec.rs` | a `sec_edgar` row → records keyed by CIK: `SecClient` (`backfill/sec.rs`) replies kept as snapshots, `domain::source::sec_records` builds each record, one batch per 25 records, coverage + cursor in the last |
+//! | `ted.rs` | a `ted_search` row → records per notice: `TedClient` (anonymous `POST /v3/notices/search`), one-day windows paged, every page a snapshot, `domain::source::ted` builds each record (change notices linked to what they correct); an offline import of a saved page |
 //!
 //! | Rule | Value |
 //! |---|---|
 //! | Store | [`open_source_store`]: refused without `[sources]` (`sources_state_missing`) |
-//! | Fetch | only an enabled row with its reviewed terms (`SourceEntry::fetch_stamp`), refused before any request otherwise |
+//! | Fetch / import | [`fetch_gate`]: the row's kind, an enabled row with its reviewed terms (`SourceEntry::fetch_stamp`) and no runtime off switch (`tengu sources disable`) — refused before any request otherwise |
 
 pub(crate) mod sec;
 pub(crate) mod store;
+pub(crate) mod ted;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -23,8 +25,10 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 
 use crate::config::sections::SandboxSections;
-use crate::config::sources::SOURCES_DB;
-use crate::ports::source_store::SourceStore;
+use crate::config::sources::{SourceEntry, SourceKind, SOURCES_DB};
+use crate::domain::marketdata::fmt_time;
+use crate::domain::source::SourceStamp;
+use crate::ports::source_store::{switched_off, SourceStore};
 
 /// `[sources]`'s state dir, where `sources.db` lives; refused without it.
 pub(crate) fn sources_state_dir(sections: &SandboxSections) -> Result<&Path> {
@@ -38,10 +42,39 @@ pub(crate) fn sources_state_dir(sections: &SandboxSections) -> Result<&Path> {
 
 /// The sandbox's source store (`[sources]` state dir); refused without
 /// `[sources]`.
-#[cfg_attr(not(test), allow(dead_code))] // `tengu sources` + `source_evidence` (O2 C8–C9)
 pub(crate) fn open_source_store(sections: &SandboxSections) -> Result<Arc<dyn SourceStore>> {
     let dir = sources_state_dir(sections)?;
     Ok(Arc::new(store::SqliteSourceStore::open(dir)?))
+}
+
+/// What every record of row `id` carries, or why nothing may be fetched or
+/// imported for it (module table: fetch / import).
+pub(crate) async fn fetch_gate(
+    store: &dyn SourceStore,
+    id: &str,
+    entry: &SourceEntry,
+    kind: SourceKind,
+) -> Result<SourceStamp, String> {
+    if entry.kind != kind {
+        return Err(format!(
+            "source `{id}` is a `{}` row, not {}",
+            entry.kind.as_str(),
+            kind.as_str()
+        ));
+    }
+    let stamp = entry.fetch_stamp(id)?;
+    let rows = store
+        .switches(Some(id))
+        .await
+        .map_err(|e| format!("source `{id}`: its runtime switch does not read: {e:#}"))?;
+    if let Some(off) = switched_off(&rows, id) {
+        return Err(format!(
+            "source `{id}` is switched off at runtime since {} ({}) — `tengu sources enable --source {id}` lifts it",
+            fmt_time(off.at_ms),
+            off.reason
+        ));
+    }
+    Ok(stamp)
 }
 
 #[cfg(test)]

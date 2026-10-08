@@ -42,12 +42,14 @@
 //! | `raw_retention_days` · `record_retention_days` | `enabled` | required; `0` = forever |
 //! | `listing_max_age_days` | `registry_marketplace` | required, ≥ 1 (PRD §5.1 listing freshness); no other class takes it |
 //! | `forms` | `sec_edgar` | each one of `domain::sec::SEC_FORMS`, no repeat (absent = all of them); no other kind takes it |
-//! | `query` | `ted_search` | required, holds `{from}` and `{to}`; no other kind takes it |
+//! | `query` | `ted_search` | required, holds `{from}` and `{to}` (each replaced by the publication day read, `YYYYMMDD` — TED Search query syntax, `domain/source/ted.rs`); no other kind takes it |
 //! | `entities` | `sec_edgar` | each `sec:cik:<10 digits>`; no other kind takes it |
 //!
 //! A fetcher takes a row through [`SourceEntry::fetch_stamp`]: a disabled
 //! row, or one without `license` + `terms_sha256`, is refused before any
-//! request; the stamp is what each of its records carries.
+//! request; the stamp is what each of its records carries. The operator can
+//! also switch a row off at runtime (`tengu sources disable`, a row in
+//! `sources.db`) — `outbound/sources::fetch_gate` checks both.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -161,7 +163,6 @@ impl SourcesConfig {
 
     /// The as-of view's policy of every row, enabled or not (records of a
     /// row switched off stay readable).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn policies(&self) -> BTreeMap<String, SourcePolicy> {
         self.registry
             .iter()

@@ -140,7 +140,7 @@ pub(crate) fn rec(
                value: Option<NativeAmount>| {
         Fact::TedNotice(TedNotice {
             notice_type: notice_type.into(),
-            procedure_id: procedure.into(),
+            procedure_id: Some(procedure.into()),
             lot_ids: lots,
             buyer_name: buyer.map(String::from),
             places: vec![Place {
@@ -612,7 +612,7 @@ pub(crate) fn ted_world() -> World {
         let deadline = published + 5 * D;
         r.valid_until_ms = Some(deadline);
         let n = ted_mut(&mut r);
-        n.procedure_id = procedure;
+        n.procedure_id = Some(procedure);
         n.lot_ids = lots.iter().map(|l| l.to_string()).collect();
         n.places[0].code = country.into();
         n.deadline_ms = Some(deadline);

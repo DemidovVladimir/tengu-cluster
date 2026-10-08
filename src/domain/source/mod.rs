@@ -12,6 +12,7 @@
 //! | `asof` | the two-clock view at t ([`AsOfMode`] `captured` · `knowable`): current version per item, corrections, states (in force · pending · expired · withdrawn · unparsed), issues, confidence per event, conflicts; [`Coverage`], [`Purge`] |
 //! | `packet` | [`EvidencePacket`] `source_asof/1` (an `Observed` row): facts, superseded, events, conflicts, issues, demand, freshness, citations, inferences apart; `render_text` fences every free text ([`fence_untrusted`]) |
 //! | `sec_records` | SEC EDGAR filing → record (`sec-submissions/1`): accession = native id and event, `sec:cik:` entity, index `Accepted` time; an unread index ⇒ `partial` with a time never before the acceptance |
+//! | `ted` | EU TED Search notice → record (`ted-search/1`): the one-day search body ([`ted::TED_FIELDS`], no contact field), the page decoder (a bad notice is `partial` / `unparsed`, never a dropped page), publication = the end of its date, procedure = event (`ted:notice:` for a planning notice), change notices `supersedes` the record they correct |
 //! | `testkit` · `checks` | tests only: fixture sources and worlds; split-world no-lookahead checks |
 
 pub(crate) mod asof;
@@ -21,6 +22,7 @@ pub(crate) mod packet;
 pub(crate) mod record;
 pub(crate) mod rules;
 pub(crate) mod sec_records;
+pub(crate) mod ted;
 #[cfg(test)]
 pub(crate) mod testkit;
 

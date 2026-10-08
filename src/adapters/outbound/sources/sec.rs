@@ -12,7 +12,7 @@
 //!
 //! | Concern | Rule |
 //! |---|---|
-//! | Row | `SourceEntry::fetch_stamp`: enabled, with license + terms hash, kind `sec_edgar` — else refused before any request; [`source_sec_client`]: scope = the row's `hosts`, budget = its `rate_limit`, User-Agent = its `user_agent_env` variable |
+//! | Row | `sources::fetch_gate`: kind `sec_edgar`, enabled, with license + terms hash, not switched off at runtime — else refused before any request; [`source_sec_client`]: scope = the row's `hosts`, budget = its `rate_limit`, User-Agent = its `user_agent_env` variable |
 //! | Resume | a filing with a stored `ok` record keeps its time (no index read); its record is rebuilt from the new submissions row — the same content is the same id (nothing added) — and rests on that body only, so a changed row never passes for a reparse of old bytes |
 //! | Index answered without a time | an HTTP error answer (404, 410, …) or a page without a readable `Accepted`: the record is `partial` (`sec_records`: a time never before the acceptance), the row gets an error, coverage `complete = false` with the class; the next filing is read |
 //! | Stop | any other failure after the retries (egress / scope denial, budget, 401 / 403 / 429, 5xx, timeout) or an undecodable submissions page: records built so far and every snapshot read are committed, coverage `complete = false` with the class, no cursor move; the next CIK runs |
@@ -31,6 +31,7 @@ use crate::adapters::outbound::backfill::sec::{
 use crate::adapters::outbound::backfill::{BackfillReport, ReportRow, Retry};
 use crate::adapters::outbound::egress;
 use crate::adapters::outbound::http_class::{read_error, HttpError};
+use crate::adapters::outbound::sources::fetch_gate;
 use crate::config::sections::SandboxSections;
 use crate::config::sources::{SourceAuth, SourceEntry, SourceKind};
 use crate::domain::marketdata::fmt_time;
@@ -49,7 +50,6 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 const FLUSH: usize = 25;
 
 /// The client of a `sec_edgar` row (module table: row).
-#[cfg_attr(not(test), allow(dead_code))] // `tengu sources fetch` (O2 C8)
 pub(crate) fn source_sec_client(
     sections: &SandboxSections,
     id: &str,
@@ -93,7 +93,6 @@ pub(crate) struct SecFetch<'a> {
 /// Every CIK of `ciks` (10 digits each) over `[from_ms, to_ms)` (module
 /// tables). Never fails: a refused row lands in `errors`, a CIK's errors in
 /// its row (`instrument` = `sec:cik:<cik10>`).
-#[cfg_attr(not(test), allow(dead_code))] // `tengu sources fetch` (O2 C8)
 pub(crate) async fn sec_source_fetch(
     f: &SecFetch<'_>,
     id: &str,
@@ -103,15 +102,7 @@ pub(crate) async fn sec_source_fetch(
     to_ms: i64,
 ) -> BackfillReport {
     let mut report = BackfillReport::default();
-    let stamp = if entry.kind == SourceKind::SecEdgar {
-        entry.fetch_stamp(id)
-    } else {
-        Err(format!(
-            "source `{id}` is a `{}` row, not sec_edgar",
-            entry.kind.as_str()
-        ))
-    };
-    let stamp = match stamp {
+    let stamp = match fetch_gate(f.store, id, entry, SourceKind::SecEdgar).await {
         Ok(s) => s,
         Err(e) => {
             report.errors.push(e);
@@ -504,6 +495,7 @@ mod tests {
         as_of, AsOfInput, AsOfMode, Revision, SourcePolicy, SourceRecord, SupersededBy,
     };
     use crate::ports::clock::SimClock;
+    use crate::ports::source_store::SourceSwitch;
 
     const CIK: &str = "0000320193";
     const UA: &str = "tengu-test-ua-7d1e ops@example.com";
@@ -1040,8 +1032,35 @@ mod tests {
             assert!(report.rows.is_empty());
             assert!(report.errors[0].contains(needle), "{:?}", report.errors);
         }
+        // Critic U10: the runtime kill switch refuses an enabled, reviewed row.
+        store
+            .set_switch(&SourceSwitch {
+                source_id: "sec_edgar".into(),
+                enabled: false,
+                at_ms: clock.now_ms(),
+                reason: "operator stop".into(),
+            })
+            .await
+            .unwrap();
+        let report = fetch(&c, &store, &clock, &entry(""), "2026-01-01").await;
+        assert!(report.rows.is_empty());
+        assert!(
+            report.errors[0]
+                .contains("switched off at runtime since 2026-10-08T12:00:00Z (operator stop)"),
+            "{:?}",
+            report.errors
+        );
         assert!(seen.lock().unwrap().is_empty(), "nothing sent");
         assert!(store.coverage(None).await.unwrap().is_empty());
+        store
+            .set_switch(&SourceSwitch {
+                source_id: "sec_edgar".into(),
+                enabled: true,
+                at_ms: clock.now_ms() + 1,
+                reason: "resumed".into(),
+            })
+            .await
+            .unwrap();
         // Bad CIKs and empty spans fail their row before any request.
         let f = SecFetch {
             client: &c,

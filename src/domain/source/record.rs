@@ -19,7 +19,7 @@
 //! | Schema | `schema = "source_record/1"`; an unknown key is refused at every level |
 //! | Identity | `record_id = "<source_id>:<native_id>:<content_hash>"`, each part in full; the same content read twice is the same record |
 //! | Content hash | sha256 of the canonical JSON of what the source said: `source_id`, `native_id`, `event_key`, `entities`, `url`, `published_ms`, `valid_from_ms`, `valid_until_ms`, `jurisdiction`, `language`, `currency`, `fact`, `origin`, `supersedes` — never the fetch / parse metadata (clocks, snapshots, parser, terms, class, trust) |
-//! | Ids | `source_id` `[a-z0-9_]+`; `native_id` no whitespace (accession, publication number, in full); `event_key` / entities `<scheme>:<kind>:<id>` (`sec:filing:<accession>`, `sec:cik:<10 digits>`, `ted:procedure:<id>`, `ted:buyer:<country>:<id>`) |
+//! | Ids | `source_id` `[a-z0-9_]+`; `native_id` no whitespace (accession, publication number, in full); `event_key` / entities `<scheme>:<kind>:<id>` (`sec:filing:<accession>`, `sec:cik:<10 digits>`, `ted:procedure:<id>`, `ted:notice:<publication number>` for a notice naming no procedure, `ted:buyer:<country>:<id>`) |
 //! | Correction | a new record with `supersedes = <old record_id>`; the old record stays |
 //! | Withdrawal | an item an earlier read had is gone or moved: a new version of the same native id with fact [`Fact::Withdrawn`] (`how`, `http_status?`, `moved_to?`, `reason`) — [`SourceRecord::withdrawal`]; the earlier versions stay |
 //! | Syndication | `origin` names the source a copy came from (`derived_from`); the as-of view counts copies once |
@@ -305,8 +305,10 @@ pub struct SecFiling {
 pub struct TedNotice {
     /// eForms notice type as the source writes it.
     pub notice_type: String,
-    /// The procedure this notice belongs to, in full.
-    pub procedure_id: String,
+    /// The procedure this notice belongs to, in full; a planning notice
+    /// (`pin-only`, `pmc`, …) may name none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub procedure_id: Option<String>,
     /// The lots it covers, in full; distinct lots stay distinct.
     pub lot_ids: Vec<String>,
     /// The buying organisation (never a contact person). External data.
@@ -420,10 +422,9 @@ impl Fact {
                         n.notice_type
                     ));
                 }
-                if !valid_token(&n.procedure_id) {
+                if let Some(p) = n.procedure_id.as_deref().filter(|p| !valid_token(p)) {
                     out.push(format!(
-                        "fact.procedure_id: `{}` is empty or has whitespace",
-                        n.procedure_id
+                        "fact.procedure_id: `{p}` is empty or has whitespace (omit it instead)"
                     ));
                 }
                 if let Some(l) = n.lot_ids.iter().find(|l| !valid_token(l)) {
@@ -850,6 +851,12 @@ pub fn ted_procedure_key(procedure_id: &str) -> String {
     format!("ted:procedure:{procedure_id}")
 }
 
+/// `ted:notice:<publication number>` — the event of a notice that names no
+/// procedure (a planning notice).
+pub fn ted_notice_key(publication_number: &str) -> String {
+    format!("ted:notice:{publication_number}")
+}
+
 /// `ted:buyer:<country>:<buyer id>`.
 pub fn ted_buyer_entity(country: &str, buyer_id: &str) -> String {
     format!("ted:buyer:{country}:{buyer_id}")
@@ -878,7 +885,7 @@ pub fn valid_source_id(s: &str) -> bool {
 }
 
 /// Non-empty, no whitespace or control character.
-fn valid_token(s: &str) -> bool {
+pub fn valid_token(s: &str) -> bool {
     !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
@@ -908,7 +915,7 @@ pub fn valid_currency(s: &str) -> bool {
 }
 
 /// 8 digits, optionally `-<one digit>` (the CPV check digit).
-fn valid_cpv(s: &str) -> bool {
+pub fn valid_cpv(s: &str) -> bool {
     let digits = |p: &str, n: usize| p.len() == n && p.bytes().all(|c| c.is_ascii_digit());
     match s.split_once('-') {
         Some((code, check)) => digits(code, 8) && digits(check, 1),
@@ -1009,7 +1016,7 @@ mod tests {
             parse_errors: vec![ParseError::new("deadline-receipt-tender", "no time zone")],
             fact: Fact::TedNotice(TedNotice {
                 notice_type: "cn-standard".into(),
-                procedure_id: TED_PROC.into(),
+                procedure_id: Some(TED_PROC.into()),
                 lot_ids: vec!["LOT-0001".into(), "LOT-0002".into()],
                 buyer_name: Some("Example City Council".into()),
                 places: vec![

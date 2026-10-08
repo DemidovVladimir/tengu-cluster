@@ -686,7 +686,7 @@ fn fact_lines(out: &mut Text, label: &str, f: &FactRow) {
             out.line(format!(
                 "  ted_notice type={} procedure={} lots={} cpv={} places={} deadline={} value={}",
                 n.notice_type,
-                n.procedure_id,
+                n.procedure_id.as_deref().unwrap_or("-"),
                 list(&n.lot_ids),
                 list(&n.cpv),
                 list(&places),

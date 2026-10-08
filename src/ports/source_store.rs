@@ -15,10 +15,7 @@
 //! | `records` fidelity | facts, events, conflicts, issues, demand and citations of a packet filtered like the seeds are exact; freshness counts (parse failures, partial parses) cover the whole source — seed by `source` (or nothing) for them |
 //! | `cursor` | the only mutable row: one value per `(source_id, query_key)`, moved only inside a committed batch |
 //! | `purge` | raw retention: `response` bodies fetched before `raw_before_ms` dropped (sha256, size and metadata kept; `terms` bodies never); record retention: records read before `records_before_ms` deleted; a purge that removed something leaves a tombstone ([`Purge`]) in the same transaction |
-
-// The reads, the terms snapshot and the purge are called by `tengu sources`
-// and the `source_evidence` tool (O2 C8–C9); until then by tests only.
-#![cfg_attr(not(test), allow(dead_code))]
+//! | `set_switch` · `switches` | the runtime kill switch of a source (critic U10, `tengu sources disable` / `enable`): rows appended, never updated; the newest per source wins ([`switched_off`]) — off refuses every fetch whatever the registry says; on lifts only a runtime off (a row with `enabled = false` stays off) |
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -178,6 +175,28 @@ pub(crate) struct RecordQuery {
     pub upto_ms: i64,
 }
 
+/// One runtime switch of a source (module table: `set_switch`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SourceSwitch {
+    pub source_id: String,
+    /// `false` = off (`tengu sources disable`), `true` = the off lifted.
+    pub enabled: bool,
+    pub at_ms: i64,
+    /// The operator's reason, kept.
+    pub reason: String,
+}
+
+/// The newest switch of `source_id` among `rows`, when it is off.
+pub(crate) fn switched_off<'a>(
+    rows: &'a [SourceSwitch],
+    source_id: &str,
+) -> Option<&'a SourceSwitch> {
+    rows.iter()
+        .filter(|s| s.source_id == source_id)
+        .max_by_key(|s| s.at_ms)
+        .filter(|s| !s.enabled)
+}
+
 /// One retention purge (module table: `purge`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PurgeRequest {
@@ -202,6 +221,8 @@ pub(crate) trait SourceStore: Send + Sync {
     /// source, query, fetch time, span.
     async fn coverage(&self, source_id: Option<&str>) -> anyhow::Result<Vec<Coverage>>;
     async fn cursor(&self, source_id: &str, query_key: &str) -> anyhow::Result<Option<Cursor>>;
+    /// Every cursor of `source_id` (all when `None`), by source and query.
+    async fn cursors(&self, source_id: Option<&str>) -> anyhow::Result<Vec<Cursor>>;
     /// A snapshot's metadata and body (when kept and not purged).
     async fn snapshot(&self, sha256: &str) -> anyhow::Result<Option<Snapshot>>;
     /// Apply one retention purge (module table); returns what it removed
@@ -209,4 +230,8 @@ pub(crate) trait SourceStore: Send + Sync {
     async fn purge(&self, request: &PurgeRequest) -> anyhow::Result<Purge>;
     /// Tombstones of `source_id` (all when `None`), oldest first.
     async fn purges(&self, source_id: Option<&str>) -> anyhow::Result<Vec<Purge>>;
+    /// Append one runtime switch row (module table).
+    async fn set_switch(&self, switch: &SourceSwitch) -> anyhow::Result<()>;
+    /// Switch rows of `source_id` (all when `None`), oldest first.
+    async fn switches(&self, source_id: Option<&str>) -> anyhow::Result<Vec<SourceSwitch>>;
 }
