@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::backtest::BacktestConfig;
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
+use super::sources::SourcesConfig;
 use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
@@ -62,6 +63,13 @@ pub struct SandboxSections {
     /// unbound. The backtest use case refuses a kind outside it
     /// (`capability_unavailable`), the executor build a tool.
     pub generation: Option<Arc<GenerationScope>>,
+    /// `[sources]` (`config/sources.rs`): the source registry the store,
+    /// the CLI and the `source_evidence` tool read (O2 steps C5–C9).
+    pub sources: Option<Arc<SourcesConfig>>,
+    /// `<TENGU_HOME>/state/<sources.state>` (absolute): where `sources.db`
+    /// lives; outside every fs root and workspace (load rule). Read by
+    /// `outbound/sources::open_source_store`.
+    pub sources_state_dir: Option<PathBuf>,
 }
 
 impl SandboxSections {

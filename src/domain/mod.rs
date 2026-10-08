@@ -33,6 +33,7 @@ pub(crate) mod soe;
 pub(crate) mod solana;
 pub(crate) mod solana_tx;
 pub(crate) mod solana_write;
+pub(crate) mod source;
 pub(crate) mod token;
 pub(crate) mod tools;
 pub(crate) mod tz;

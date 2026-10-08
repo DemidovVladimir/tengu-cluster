@@ -14,4 +14,5 @@ pub(crate) mod orchestrator;
 pub(crate) mod paper;
 pub(crate) mod runtime;
 pub(crate) mod skills;
+pub(crate) mod sources;
 pub(crate) mod tools;

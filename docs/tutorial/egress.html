@@ -229,7 +229,7 @@
         <li><code>[egress]</code> sits in the sandbox TOML. No section means <code>network = "tor"</code>: proxy <code>TENGU_TOR_PROXY</code>, else <code>socks5h://127.0.0.1:9050</code>, and <code>route_llm_api = true</code>.</li>
         <li><code>install</code> validates and sets one policy per process. A bad <code>[egress]</code> fails the load. A dead proxy port only warns; requests then fail.</li>
         <li><code>run-agent</code> children and the MCP bridge get the resolved policy as <code>TENGU_EGRESS</code> JSON. It wins over their own config, so parent and child cannot drift.</li>
-        <li>Tool traffic (<code>http_request</code>, Hyperliquid, Solana RPC, GeckoTerminal, SEC EDGAR) uses <code>tool_client</code> with redirects off. <code>http_request</code> follows up to 10 redirects itself.</li>
+        <li>Tool traffic (<code>http_request</code>, Hyperliquid, Solana RPC, GeckoTerminal, SEC EDGAR, EU TED) uses <code>tool_client</code> with redirects off. <code>http_request</code> follows up to 10 redirects itself.</li>
         <li>Every hop is gated before it is sent: scheme (<code>https_only</code>), <code>deny_hosts</code> first, the <code>allow_hosts</code> ceiling, then the tool's own <code>net_hosts</code>.</li>
         <li>Shell commands: each <code>http(s)://</code> literal passes the same URL gate. Built or encoded URLs slip by; on macOS <code>shell_network = "isolated"</code> is the hard stop.</li>
         <li>LLM calls (OpenRouter, embeddings, Jev) use the proxy only with <code>route_llm_api</code>. The Claude CLI gets <code>HTTPS_PROXY</code>; MCP and Telegram follow the proxy. No host check here.</li>
