@@ -399,6 +399,7 @@ sources = [
 [pages.soe]
 sources = [
   "src/domain/soe/",
+  "src/ports/soe.rs",
   "src/config/soe.rs",
   "src/adapters/inbound/cli/soe.rs",
   "tests/soe_cli.rs",

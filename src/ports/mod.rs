@@ -16,6 +16,7 @@ pub(crate) mod paper;
 pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod skill_source;
+pub(crate) mod soe;
 pub(crate) mod solana_signer;
 pub(crate) mod solana_writes;
 pub(crate) mod source_store;
