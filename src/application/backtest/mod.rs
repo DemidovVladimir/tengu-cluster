@@ -9,7 +9,7 @@
 //! | Step | Call | Rule |
 //! |---|---|---|
 //! | 1 | [`resolve`] | the spec (`[backtest.strategies.<name>]`, or a JSON object: its `name`, else the caller's fallback) parsed and validated ([`spec_of`]: every problem, one each — the `backtest` tool's spec check); universe resolved (`@<name>`); instruments read = the universe or the ids the spec names, minus `exclude`; `spec_sha256` |
-//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
+//! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; with `data_through_ms` (`--data-through`) the rows after it cut (`MarketData::cut_after`, a data note), else the newest row loaded recorded as the run's `data_through_ms` (lineage D1); `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
 //! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: `run_gate` reads [`Prepared::set`] (candidates in decision order, features as-of) and decides them |
 //! | 3 | [`evaluate`] · `gate::evaluate_gated` | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split. With the gate: `evaluate_gated` = `evaluate` + the gate's `rules` / `jev` arms (research + capped) over the decided candidates, comparisons, calibration, summary, `decisions.jsonl` |
 //! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache or a run the bound generation's registry cites — `keep_cited`) |
@@ -83,6 +83,9 @@ pub(crate) struct BacktestJob {
     pub from_ms: Option<i64>,
     pub to_ms: Option<i64>,
     pub split: Option<SplitSpec>,
+    /// Read only what was known then (`MarketData::cut_after`); `None` =
+    /// everything stored (lineage D1).
+    pub data_through_ms: Option<i64>,
 }
 
 /// A spec resolved against the sandbox (module table, step 1).
@@ -158,6 +161,9 @@ pub(crate) struct Prepared {
     /// (`GenerationScope::cited_runs`): never pruned, not counted in
     /// `keep_runs` (lineage D3).
     pub keep_cited: BTreeSet<String>,
+    /// [`BacktestReport::data_through_ms`]: the `--data-through` bound, else
+    /// the newest row loaded.
+    pub data_through_ms: Option<i64>,
 }
 
 /// What [`evaluate`] produced; [`write_run_dir`] writes it.
@@ -347,6 +353,18 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
     }
     let window = r.data_window(&bt.costs, from, to);
     let mut md = load(env.store.as_ref(), &r, &bt.costs, window).await?;
+    // The data this run reads, recorded so a rerun can read the same.
+    let mut through_notes = Vec::new();
+    if let Some(t) = job.data_through_ms {
+        let cut = md.cut_after(t);
+        if cut > 0 {
+            through_notes.push(format!(
+                "data through {} (--data-through): {cut} row(s) stored after it left out",
+                fmt_time(t)
+            ));
+        }
+    }
+    let data_through_ms = job.data_through_ms.or_else(|| md.newest_ms());
     // Share splits before any decision reads a price.
     let split_notes = md.adjust_for_splits(&bt.stock_splits());
     let params = RunParams {
@@ -362,7 +380,8 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
     };
     let mut set = candidates(&r.spec, &md, &params)
         .map_err(|e| anyhow!("strategy `{}`: {e}", r.spec.name))?;
-    set.notes.splice(0..0, split_notes);
+    set.notes
+        .splice(0..0, through_notes.into_iter().chain(split_notes));
     let run_id_base = run_dir::run_id_base(env.now_ms, &r.spec.name);
     let run_id = run_dir::propose_run_id(&env.backtests_dir, &run_id_base);
     Ok(Prepared {
@@ -380,6 +399,7 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         backtests_dir: env.backtests_dir.clone(),
         keep_runs: bt.keep_runs,
         keep_cited: cited_runs(&env.sections, &env.backtests_dir),
+        data_through_ms,
     })
 }
 
@@ -414,6 +434,7 @@ pub(crate) fn evaluate(
         p.split.clone(),
         &p.set,
     );
+    report.data_through_ms = p.data_through_ms;
     let mut arms: BTreeMap<String, ArmResult> = BTreeMap::new();
     let mut base: Vec<(&[Candidate], Arm)> = vec![(&p.set.candidates, Arm::Research)];
     if let Some(caps) = &p.caps {
@@ -630,6 +651,7 @@ mod tests {
             from_ms: None,
             to_ms: Some(utc("2026-09-29 00:00")),
             split: None,
+            data_through_ms: None,
         }
     }
 
@@ -1333,6 +1355,62 @@ mod tests {
         want.sort();
         // 10 run dirs: the future one, the new one and the 8 newest old ones.
         assert_eq!(left, want);
+    }
+
+    /// Lineage D1: a run cut at `--data-through T` over the full warehouse
+    /// is the run over a warehouse that held only what was known at T (the
+    /// same arms, the same bound recorded) — so a rerun with a report's
+    /// `data_through_ms` survives a grown `market.db`; without the cut the
+    /// grown warehouse changes the run.
+    #[tokio::test]
+    async fn data_through_reruns_a_grown_warehouse_on_the_same_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let full = seeded(&tmp.path().join("full")).await;
+        let through = utc("2026-09-22 00:00");
+        // The warehouse as it was at `through`: bars closed by it, funding
+        // stamped by it.
+        let grown_later = SqliteMarketData::open(&tmp.path().join("then")).unwrap();
+        for id in [AAA, BBB, CCC] {
+            let bars = full.bars(id, Interval::H1, 0, i64::MAX).await.unwrap();
+            let kept: Vec<Bar> = bars
+                .bars
+                .into_iter()
+                .filter(|b| b.t_close_ms(Interval::H1) <= through)
+                .collect();
+            grown_later
+                .put_bars(id, Interval::H1, "test", &kept)
+                .await
+                .unwrap();
+            let f = full.funding(id, 0, i64::MAX).await.unwrap();
+            let kept: Vec<FundingPoint> =
+                f.points.into_iter().filter(|p| p.t_ms <= through).collect();
+            grown_later.put_funding(id, "test", &kept).await.unwrap();
+        }
+        let then: Arc<dyn MarketDataStore> = Arc::new(grown_later);
+        let backtests = tmp.path().join("backtests");
+        let run_on = |store: Arc<dyn MarketDataStore>, data_through_ms: Option<i64>| {
+            let e = env(store, &backtests);
+            async move {
+                let job = BacktestJob {
+                    data_through_ms,
+                    ..job(SpecSource::Strategy("weekend_fade".into()))
+                };
+                let p = prepare(&e, job).await.unwrap();
+                evaluate(&p, Vec::new()).unwrap().report
+            }
+        };
+        let at_the_time = run_on(Arc::clone(&then), None).await;
+        let cut = run_on(Arc::clone(&full), Some(through)).await;
+        let uncut = run_on(full, None).await;
+        assert_eq!(at_the_time.data_through_ms, Some(through));
+        assert_eq!(cut.data_through_ms, Some(through));
+        assert_eq!(cut.arms, at_the_time.arms);
+        assert_eq!(cut.n_candidates, at_the_time.n_candidates);
+        assert!(
+            cut.data_notes[0].starts_with("data through 2026-09-22T00:00:00Z (--data-through): ")
+        );
+        assert_ne!(uncut.arms, cut.arms, "the later data changes the run");
+        assert!(uncut.data_through_ms > Some(through));
     }
 
     /// Lineage D3: a run the bound generation's registry cites is never

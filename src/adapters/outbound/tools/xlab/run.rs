@@ -287,6 +287,8 @@ fn parse_job(o: &serde_json::Map<String, Value>, bt: &BacktestConfig) -> Result<
         from_ms: opt_time(tool, o, "from")?,
         to_ms: opt_time(tool, o, "to")?,
         split,
+        // Not a tool argument: W1 pins the tool's schema (`tool_schema:backtest`).
+        data_through_ms: None,
     })
 }
 

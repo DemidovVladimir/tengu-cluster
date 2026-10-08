@@ -311,6 +311,7 @@ mod tests {
             from_ms: from,
             to_ms: to,
             split: split.map(|s| SplitSpec::parse(s).unwrap()),
+            data_through_ms: None,
         }
     }
 

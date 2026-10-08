@@ -26,6 +26,7 @@
 //! | `capped` arm ([`RiskCaps`]) | a ledger: in time order, the candidates of one instant by descending \|signal\| (ties: instrument key) — the caps keep the highest-conviction trades; positions open until their exit, exits at an instant before entries; an admitted candidate whose exit has no price (a gap, or still open where the data ends) holds its exposure until its exit instant, P&L unknown and never booked (`missing_exit`) — admissions read only the book as of the decision, never whether a later bar exists; notional clamped to `max_order_notional_usd`; refused, rule = the `[risk]` field: `total_loss_limit_usd` once realized equity ≤ initial − limit (for good; equity read once per exit instant, after every exit of it) · `daily_loss_limit_usd` while the UTC day's realized P&L ≤ −limit · `max_gross_exposure_usd` / `max_net_exposure_usd` when the open notional with this one would exceed; drawdown in USD and % of `initial_cash_usd` |
 //! | Skips ([`SkipReason`]) | excluded · missing_anchor / missing_entry / missing_price · flat · below_min_signal · not_top_n · thin_entry · no_costs (no `costs`, no `[backtest.costs]` prefix) · missing_exit (no price at the exit, or the data ends before the plan's horizon: not a trade) · future_data; an arm's drop carries its candidate's `seq` |
 //! | Share splits ([`MarketData::adjust_for_splits`]) | before any decision: each instrument's bars closed before each of its splits (and ctx rows before it) split-adjusted (`marketdata::StockSplit`); a bar straddling the split (a day bar around an intraday split) dropped — its prices mix both share counts; one data note per split that changed a row |
+//! | Data through ([`MarketData::cut_after`], [`MarketData::newest_ms`]) | a run reads what the warehouse held: its report records `data_through_ms` = the newest bar close, funding or ctx row loaded; given one (`tengu backtest --data-through`), rows after it are cut before any decision — a rerun over a grown `market.db` reads the same data (lineage D1) |
 //! | `max_candidates` ([`RunParams`]) | [`candidates`] stops with an error once a run passes it — nothing simulated or written (`[backtest] max_candidates`) |
 
 use std::collections::BTreeMap;
@@ -58,6 +59,50 @@ pub struct MarketData {
 }
 
 impl MarketData {
+    /// The newest observation loaded — the latest bar close, funding row or
+    /// ctx row; `None` when nothing is (a run's `data_through_ms`).
+    pub fn newest_ms(&self) -> Option<i64> {
+        let bars = self
+            .bars
+            .values()
+            .flat_map(|s| s.bars.iter().map(move |b| b.t_close_ms(s.interval)));
+        let funding = self
+            .funding
+            .values()
+            .flat_map(|s| s.points.iter().map(|p| p.t_ms));
+        let ctx = self
+            .ctx
+            .values()
+            .flat_map(|s| s.points.iter().map(|p| p.t_ms));
+        bars.chain(funding).chain(ctx).max()
+    }
+
+    /// Keep what was known at `through_ms` (module table): bars closed by
+    /// it, funding and ctx rows stamped by it; a series left empty goes.
+    /// Returns the rows removed.
+    pub fn cut_after(&mut self, through_ms: i64) -> usize {
+        let mut removed = 0;
+        for s in self.bars.values_mut() {
+            let (iv, before) = (s.interval, s.bars.len());
+            s.bars.retain(|b| b.t_close_ms(iv) <= through_ms);
+            removed += before - s.bars.len();
+        }
+        for s in self.funding.values_mut() {
+            let before = s.points.len();
+            s.points.retain(|p| p.t_ms <= through_ms);
+            removed += before - s.points.len();
+        }
+        for s in self.ctx.values_mut() {
+            let before = s.points.len();
+            s.points.retain(|p| p.t_ms <= through_ms);
+            removed += before - s.points.len();
+        }
+        self.bars.retain(|_, s| !s.bars.is_empty());
+        self.funding.retain(|_, s| !s.points.is_empty());
+        self.ctx.retain(|_, s| !s.points.is_empty());
+        removed
+    }
+
     /// Split-adjust the series (module table): for each instrument's
     /// splits, its bars closed before the split and its ctx rows before it
     /// (`adjust_for_split`; funding is a rate, untouched); a bar straddling
@@ -860,8 +905,34 @@ pub fn simulate(
 mod tests {
     use serde_json::json;
 
+    /// Lineage D1: `cut_after` keeps what was known at the bound — bars
+    /// closed by it, funding stamped by it — and drops a series left empty;
+    /// `newest_ms` is the latest bar close or row.
+    #[test]
+    fn cut_after_keeps_what_was_known_then() {
+        let t0 = utc("2026-09-01 00:00");
+        let mut md = market(vec![
+            series("a", Interval::H1, t0, &[1.0, 2.0, 3.0]),
+            series("b", Interval::H1, t0 + 5 * H, &[1.0]),
+        ]);
+        md.funding.insert(
+            "a".into(),
+            funding("a", &[(t0 + H + 37, 1e-6), (t0 + 2 * H + 37, 1e-6)]),
+        );
+        assert_eq!(md.newest_ms(), Some(t0 + 6 * H));
+        // At t0 + 2 h: bars closing at +1 h, +2 h; the +1 h funding row.
+        assert_eq!(md.cut_after(t0 + 2 * H), 3);
+        assert_eq!(md.bars["a"].bars.len(), 2);
+        assert!(!md.bars.contains_key("b"));
+        assert_eq!(md.funding["a"].points.len(), 1);
+        assert_eq!(md.newest_ms(), Some(t0 + 2 * H));
+        assert_eq!(MarketData::default().newest_ms(), None);
+    }
+
     use super::*;
-    use crate::domain::backtest::testkit::{market, run_params, series, sparse, spec, utc, H};
+    use crate::domain::backtest::testkit::{
+        funding, market, run_params, series, sparse, spec, utc, H,
+    };
     use crate::domain::marketdata::{BarSeries, Interval};
 
     const A: &str = "hyperliquid:xyz:AAA";

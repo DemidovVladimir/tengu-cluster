@@ -9,6 +9,7 @@
 //! | `--strategy <name>` xor `--spec <file.json>` | a `[backtest.strategies]` name, or a JSON object (named by its `name`, else the file stem) |
 //! | `--from` / `--to` | decisions in `[from, to)`: epoch ms, RFC 3339 or a UTC date (`domain::marketdata::parse_time`); default the earliest stored bar of the run's instruments at the spec's interval / now |
 //! | `--split time:<t>` · `instruments:<id,…>` | in-sample vs holdout, side by side; a run with a holdout candidate is a read: one `holdout-reads.jsonl` line (`via = "cli"`, counted with the tool's) before the figures print, `holdout read #n …` on stderr |
+//! | `--data-through <t>` | read only the data known at t (bars closed by it, funding / ctx rows stamped by it) — every run prints and records its `data_through_ms` (the newest row read); rerun with it over a grown `market.db` for the same result (lineage D1) |
 //! | `--format table` (default) · `json` | the compact summary (+ the gate's two lines) + the run dir · `report.json` on stdout (the run dir on stderr) |
 //! | `--fetch` | a kind outside the sandbox's `[generation]` is refused before anything is fetched (`capability_unavailable`); then `tengu history backfill` (same code: resume, budgets, egress audit) of the run's Hyperliquid instruments at the spec's interval + funding, over the run's data range (from HL's oldest bar without `--from`); prints its run table (stderr with `json`); a failed row is a warning — the run goes on with what is stored |
 //! | `--gate [<loop>]` | the Jev gate arm (§ 7) with `[decision_loops.<loop>]`; no value = `[backtest] gate` (neither ⇒ an error). Built before `--fetch` and `prepare` — an unknown or tool-calling loop, or a missing `OPENROUTER_API_KEY` online, fails before any work |
@@ -84,6 +85,11 @@ pub(super) struct BacktestArgs {
     /// instruments:<id,id,…> (holdout = those ids).
     #[arg(long)]
     pub(super) split: Option<String>,
+    /// Read only the data known then (epoch ms, RFC 3339 or a UTC date):
+    /// bars closed by it, funding / ctx rows stamped by it — a report's
+    /// `data_through_ms`, to rerun on the same data.
+    #[arg(long, value_name = "TIME")]
+    pub(super) data_through: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub(super) format: OutputFormat,
     /// Backfill the run's Hyperliquid instruments (bars at the spec's
@@ -145,6 +151,7 @@ impl BacktestArgs {
                 .map(SplitSpec::parse)
                 .transpose()
                 .map_err(|e| anyhow!(e))?,
+            data_through_ms: self.data_through.as_deref().map(time).transpose()?,
         })
     }
 
@@ -384,6 +391,12 @@ pub(super) async fn run_backtest(config: &Config, args: BacktestArgs) -> Result<
             println!("{}", serde_json::to_string_pretty(&run.report)?);
             eprintln!("run dir: {}", dir.display());
         }
+    }
+    if let Some(t) = run.report.data_through_ms {
+        eprintln!(
+            "data through {} — rerun on the same data: --data-through {t}",
+            fmt_time(t)
+        );
     }
     if let (Some(count), Some(split)) = (read, prepared.split.as_ref()) {
         eprintln!("{}", holdout::read_line(count, split));
@@ -680,6 +693,7 @@ mod tests {
             from_ms: Some(parse_time("2026-09-01").unwrap()),
             to_ms: Some(parse_time("2026-09-20").unwrap()),
             split: None,
+            data_through_ms: None,
         };
         let e = fetch(&sections, &job, now_ms(), OutputFormat::Table)
             .await

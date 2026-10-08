@@ -6,7 +6,7 @@
 //!
 //! | Piece | Holds |
 //! |---|---|
-//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, instruments, candidates, arms, skips by reason, data notes (incl. applied share splits); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
+//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, data through (`data_through_ms`: the newest row read, the rerun bound), instruments, candidates, arms, skips by reason, data notes (incl. applied share splits); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
 //! | [`ArmReport`] | candidates offered, summary, split halves (in-sample / holdout), refusals by rule, drops by reason |
 //! | Drawdown | research arms (`research`, `rules`, `jev`): USD + bps of one trade's notional; capped arms: USD + % of `initial_cash_usd` (`stats.rs`) |
 //! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison + the gate's `jev_*` in the slots left (`t_stat` is clustered by period, `sharpe` annualised by the rate of periods with trades — `stats.rs`); `partial` with an error per data gap kind (missing prices, exits without a price, funding hours without a row) |
@@ -92,6 +92,12 @@ pub struct BacktestReport {
     pub to_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split: Option<SplitSpec>,
+    /// The newest observation the run read (bar close, funding or ctx row),
+    /// or the `--data-through` bound it was cut at: rerun with it over a
+    /// grown `market.db` to read the same data. `None` in reports written
+    /// before 2026-10-08 (lineage D1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_through_ms: Option<i64>,
     pub n_instruments: usize,
     pub n_candidates: usize,
     pub arms: BTreeMap<String, ArmReport>,
@@ -164,6 +170,7 @@ impl BacktestReport {
             from_ms: params.from_ms,
             to_ms: params.to_ms,
             split,
+            data_through_ms: None,
             n_instruments,
             n_candidates: set.candidates.len(),
             arms: BTreeMap::new(),
@@ -286,6 +293,12 @@ impl BacktestReport {
                 format!("{} → {}", fmt_time(self.from_ms), fmt_time(self.to_ms)),
             ),
             ("Split", split),
+            (
+                "Data through",
+                self.data_through_ms.map_or("—".to_string(), |t| {
+                    format!("{} (`--data-through {t}`)", fmt_time(t))
+                }),
+            ),
             (
                 "Instruments · candidates",
                 format!("{} · {}", self.n_instruments, self.n_candidates),

@@ -352,7 +352,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
     <li><span><b>Simple return.</b> Gross = side × (exit / entry − 1) × 10⁴, never ln.</span></li>
     <li><span><b>No peeking at exits.</b> Capped admissions read the book as of the decision, never whether a later bar exists.</span></li>
     <li><span><b>Read-only warehouse.</b> A run never writes <code>market.db</code>.</span></li>
-    <li><span><b>Reruns match.</b> The bootstrap is seeded; replay loops keep no history and the cache answers by full sha256, whatever <code>--concurrency</code>.</span></li>
+    <li><span><b>Reruns match.</b> The bootstrap is seeded; replay loops keep no history and the cache answers by full sha256, whatever <code>--concurrency</code>. Every report records <code>data_through_ms</code>, the newest row it read; <code>--data-through</code> with it reruns on the same data after <code>market.db</code> grew.</span></li>
     <li><span><b>The holdout is never shown unrecorded.</b> The tool refuses its text if the ledger line cannot be written.</span></li>
     <li><span><b>Runaway specs stop early.</b> Past <code>max_candidates</code> a run stops before any arm or file.</span></li>
     <li><span><b>Only the generation's kinds.</b> In a sandbox bound by <code>[generation]</code>, a spec kind no capability of that generation binds is refused before any read, <code>--fetch</code> included: <code>capability_unavailable</code> (<a href="lineage.html">Lineage and generations</a>).</span></li>
@@ -368,6 +368,8 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01</span>
 <span class="ln o"># arms research + capped, in-sample vs holdout side by side, then the run dir; stderr: holdout read #n for this spec (one ledger line)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --data-through 2026-10-05T14:00:00Z</span>
+<span class="ln o"># example bound: only rows known then; stderr: data through … — rerun on the same data: --data-through &lt;ms&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade_top4 --fetch</span>
 <span class="ln o"># backfills bars + funding first (as tengu history backfill), then runs</span>
 <span class="ln cmd"><span class="p">$ </span>tengu backtest --sandbox xlab --strategy weekend_fade --gate --max-decisions 200</span>
