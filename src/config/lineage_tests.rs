@@ -377,3 +377,19 @@ fn w2_leaves_w1_and_its_replay_unchanged() {
     );
     replay();
 }
+
+/// Lineage D3: the scope lists every run the registry cites, by state, so
+/// run-dir retention can spare them.
+#[test]
+fn the_scope_lists_the_runs_the_registry_cites() {
+    let reg = load_registry(&fixture_root().join("registry")).unwrap_or_else(|e| panic!("{e:#?}"));
+    let scope = GenerationScope::of(&reg, "W1").unwrap();
+    assert_eq!(
+        scope.cited_runs.get("xlab"),
+        Some(&BTreeSet::from([
+            "20261001T120034Z-rule_w".to_string(),
+            "20261002T100000Z-rule_w_top4".to_string(),
+        ]))
+    );
+    assert_eq!(scope.cited_runs.len(), 1);
+}

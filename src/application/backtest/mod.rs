@@ -12,7 +12,7 @@
 //! | 2 | [`prepare`] | `from` default = the earliest stored bar of those instruments at the spec's interval, `to` default = now; series over [`Resolved::data_window`]: bars at the interval, funding when the instrument's cost books it (always for `funding_carry`), ctx when its cost is `half_spread = ctx`; `[backtest.splits]` applied to them (`MarketData::adjust_for_splits`: bars closed before each split ÷ ratio, volume × ratio, a bar straddling it dropped; a data note each, listed first); `RunParams` from `[backtest]` (incl. `max_candidates`), `[xmarket.calendars]`; `engine::candidates` — a run past `max_candidates` stops here, before any arm or file; `RiskCaps` from `[risk]` + `[paper]`; the run id proposed |
 //! | — | the Jev gate arm (`gate.rs`) | between `prepare` and `evaluate`: `run_gate` reads [`Prepared::set`] (candidates in decision order, features as-of) and decides them |
 //! | 3 | [`evaluate`] · `gate::evaluate_gated` | arm `research` always; `capped` when the sandbox has `[risk]` + `[paper]`; then every extra `(name, candidates, Arm)` simulated over its own candidates, reported with `n_candidates` = their count and compared with the base arm of its kind (`research` / `capped`: mean net bps difference, paired bootstrap over periods); split halves when the job has a split. With the gate: `evaluate_gated` = `evaluate` + the gate's `rules` / `jev` arms (research + capped) over the decided candidates, comparisons, calibration, summary, `decisions.jsonl` |
-//! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache) |
+//! | 4 | [`write_run_dir`] | `<backtests dir>/<run id>/` (`run_dir.rs`): `report.json`, `report.md`, `trades-<arm>.jsonl`, `candidates.jsonl`, `skips.json` + [`BacktestRun::extra_files`] (the gate's `decisions.jsonl`); then the run dirs beyond `[backtest] keep_runs` pruned, oldest first (never the decision cache or a run the bound generation's registry cites — `keep_cited`) |
 //!
 //! | Rule | Value |
 //! |---|---|
@@ -25,7 +25,7 @@
 pub(crate) mod gate;
 pub(crate) mod run_dir;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -154,6 +154,10 @@ pub(crate) struct Prepared {
     /// `[backtest] keep_runs`: [`write_run_dir`] prunes the oldest run dirs
     /// beyond it (0 = keep all).
     pub keep_runs: usize,
+    /// Run ids of this state dir the bound generation's registry cites
+    /// (`GenerationScope::cited_runs`): never pruned, not counted in
+    /// `keep_runs` (lineage D3).
+    pub keep_cited: BTreeSet<String>,
 }
 
 /// What [`evaluate`] produced; [`write_run_dir`] writes it.
@@ -375,7 +379,21 @@ pub(crate) async fn prepare(env: &BacktestEnv, job: BacktestJob) -> Result<Prepa
         caps: risk_caps(&env.sections),
         backtests_dir: env.backtests_dir.clone(),
         keep_runs: bt.keep_runs,
+        keep_cited: cited_runs(&env.sections, &env.backtests_dir),
     })
+}
+
+/// The runs of `backtests_dir` (`<state dir>/backtests`) the bound
+/// generation's registry cites; empty when unbound.
+fn cited_runs(s: &SandboxSections, backtests_dir: &std::path::Path) -> BTreeSet<String> {
+    let state = backtests_dir
+        .parent()
+        .and_then(std::path::Path::file_name)
+        .and_then(|n| n.to_str());
+    match (state, s.generation.as_deref()) {
+        (Some(state), Some(g)) => g.cited_runs.get(state).cloned().unwrap_or_default(),
+        _ => BTreeSet::new(),
+    }
 }
 
 /// Step 3 (module table): the base arms, then each extra arm
@@ -448,6 +466,7 @@ mod tests {
     use crate::domain::backtest::engine::{SkipReason, Trade};
     use crate::domain::backtest::testkit::{nyse, utc, H};
     use crate::domain::calendar::Calendar;
+    use crate::domain::lineage::generation::GenerationScope;
     use crate::domain::marketdata::{Bar, FundingPoint};
     use crate::domain::observation::{ObsSource, Observation};
 
@@ -1313,6 +1332,57 @@ mod tests {
         ];
         want.sort();
         // 10 run dirs: the future one, the new one and the 8 newest old ones.
+        assert_eq!(left, want);
+    }
+
+    /// Lineage D3: a run the bound generation's registry cites is never
+    /// pruned and does not count in `keep_runs` — the oldest two of 13 are
+    /// cited, so with 10 kept the two uncited runs after them go.
+    #[tokio::test]
+    async fn retention_never_prunes_a_run_the_registry_cites() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = seeded(&tmp.path().join("state")).await;
+        let backtests = tmp.path().join("state/backtests");
+        std::fs::create_dir_all(&backtests).unwrap();
+        let old: Vec<String> = (1..=13)
+            .map(|d| format!("202609{d:02}T120000Z-old_run"))
+            .collect();
+        for id in &old {
+            std::fs::create_dir(backtests.join(id)).unwrap();
+        }
+        let scope = GenerationScope {
+            id: "W1".into(),
+            bound_kinds: BTreeMap::from([("weekend_window".into(), "cap".into())]),
+            available_kinds: BTreeSet::from(["weekend_window".into()]),
+            // The state dir is `<tmp>/state`: its name is the locator's state.
+            cited_runs: BTreeMap::from([(
+                "state".into(),
+                BTreeSet::from([old[0].clone(), old[1].clone()]),
+            )]),
+            ..Default::default()
+        };
+        let mut e = env(store, &backtests);
+        let mut s = sections_with("keep_runs = 10");
+        s.generation = Some(Arc::new(scope));
+        e.sections = Arc::new(s);
+        let p = prepare(&e, job(SpecSource::Strategy("weekend_fade".into())))
+            .await
+            .unwrap();
+        assert_eq!(
+            p.keep_cited,
+            BTreeSet::from([old[0].clone(), old[1].clone()])
+        );
+        let mut run = evaluate(&p, Vec::new()).unwrap();
+        write_run_dir(&p, &mut run).unwrap();
+        let mut left: Vec<String> = std::fs::read_dir(&backtests)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        left.sort();
+        // Kept: the 2 cited, the new run and the 9 newest uncited (old[4..]).
+        let mut want: Vec<String> = old[..2].iter().chain(&old[4..]).cloned().collect();
+        want.push(run.report.run_id.clone());
+        want.sort();
         assert_eq!(left, want);
     }
 

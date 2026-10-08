@@ -19,13 +19,17 @@
 //! | an opt-in tool (`domain::tools::WORKSPACE_TOOLS`) no capability binds | refused (closed world) |
 //! | any other tool (base tools no capability binds) | allowed |
 //! | a strategy kind | allowed only when one of the generation's capabilities binds `strategy_kind:<kind>` |
+//!
+//! [`GenerationScope::cited_runs`]: every backtest run dir the registry cites
+//! (`run:<state>/<run id>` in any record), by state — run-dir retention never
+//! prunes one (`application/backtest/run_dir.rs::prune_runs`, lineage D3).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use super::registry::Registry;
-use super::value::{Binding, EvidenceRef, PinTarget, Time};
+use super::value::{Binding, EvidenceRef, Locator, PinTarget, Time};
 use crate::domain::tools::WORKSPACE_TOOLS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +172,9 @@ pub struct GenerationScope {
     pub available_tools: BTreeSet<String>,
     /// The strategy kinds the generation's capabilities bind.
     pub available_kinds: BTreeSet<String>,
+    /// Every run the registry cites (`run:<state>/<run id>`), by state name:
+    /// never pruned by run-dir retention (module doc).
+    pub cited_runs: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl GenerationScope {
@@ -206,6 +213,15 @@ impl GenerationScope {
                         }
                     }
                 }
+            }
+        }
+        for u in registry.locator_uses() {
+            if let Locator::Run { state, run_id, .. } = u.locator {
+                scope
+                    .cited_runs
+                    .entry(state.clone())
+                    .or_default()
+                    .insert(run_id.clone());
             }
         }
         Ok(scope)

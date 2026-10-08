@@ -550,7 +550,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # seed = 7                                  # bootstrap seed: a rerun prints the same numbers
 # gate = "xl_gate"                          # the [decision_loops.<name>] the Jev gate arm runs
 # max_candidates = 50000                    # a run past it stops before any arm or file (1–1000000)
-# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache)
+# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache or a run the lineage registry cites)
 #
 # [backtest.costs."hyperliquid:xyz:"]       # per side; the longest id prefix wins
 # taker_fee_bps = 0.9
