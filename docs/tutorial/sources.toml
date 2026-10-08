@@ -238,6 +238,33 @@ sources = [
   "src/bootstrap/decision.rs",
 ]
 
+[pages.evidence]
+sources = [
+  "src/domain/evidence.rs",
+  "src/domain/evidence_coverage.rs",
+  "src/domain/xm/grade.rs",
+  "src/domain/xm/regrade.rs",
+  "src/ports/evidence.rs",
+  "src/application/evidence.rs",
+  "src/adapters/outbound/evidence/",
+  "src/adapters/inbound/cli/evidence.rs",
+  "lineage/evidence/",
+]
+
+[pages.lineage]
+sources = [
+  "src/domain/lineage/",
+  "src/ports/lineage.rs",
+  "src/application/lineage/",
+  "src/adapters/outbound/lineage/",
+  "src/config/lineage.rs",
+  "src/config/lineage_tests.rs",
+  "src/config/sections.rs",
+  "src/adapters/inbound/cli/lineage.rs",
+  "lineage/generations/",
+  "lineage/locks.toml",
+]
+
 # ── Runtime ───────────────────────────────────────────────────────────────
 
 [pages.decision-loop]

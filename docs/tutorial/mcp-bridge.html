@@ -190,8 +190,8 @@
         <li>A run with Tengu tools: the engine writes a temp <code>--mcp-config</code>. No <code>workspace</code> set: the run gets a temp dir as its workspace. One server, <code>tengu-tools</code> = this binary + <code>mcp-bridge</code>, plus an env block of names and paths.</li>
         <li>The CLI starts the bridge on stdio. <code>--allowedTools</code> names each tool as <code>mcp__tengu-tools__&lt;name&gt;</code>; <code>--strict-mcp-config</code> keeps every other MCP server out.</li>
         <li>The bridge loads <code>TENGU_CONFIG</code> exactly like any Tengu process and takes <code>[agents.&lt;TENGU_BRIDGE_AGENT&gt;]</code>: scopes, sandbox sections, no-shell rule, memory.</li>
-        <li>No config file or no such agent: a warning, then the built-in <code>main</code> agent with <code>TENGU_BRIDGE_SCOPES</code>, the engine's copy of the agent's scopes.</li>
-        <li>It registers the same catalog as in-process, keeps only <code>TENGU_BRIDGE_TOOLS</code>, adds shell skills and <code>[[mcp_servers]]</code> proxies, and wraps it all in <code>SanitizedToolExecutor</code>.</li>
+        <li>No config file or no such agent: a warning, then the built-in <code>main</code> agent with <code>TENGU_BRIDGE_SCOPES</code> (the engine's copy of its scopes); a loaded config's <code>[generation]</code> still applies.</li>
+        <li>It registers the same catalog as in-process, keeps only <code>TENGU_BRIDGE_TOOLS</code> minus any tool the <code>[generation]</code> refuses, adds shell skills and <code>[[mcp_servers]]</code> proxies, and wraps it all in <code>SanitizedToolExecutor</code>.</li>
         <li>Each <code>tools/call</code> gets call id <code>mcp:&lt;process nonce&gt;:&lt;JSON-RPC id&gt;</code> and the run's conversation, read from the transcript the engine keeps current.</li>
         <li>The tool runs inside its scope. Text and errors are redacted, then cut at <code>max_mcp_result_chars</code> (50 000) before they go back to the CLI.</li>
         <li>In a <code>run-agent</code> step, <code>compress_and_store</code> writes the summary file and answers <code>stored — stop now</code>; the engine stops the CLI. Anywhere else it is refused.</li>
@@ -320,6 +320,7 @@
   <ul class="checks">
     <li><span><b>Same tools, same rules.</b> The bridge registers the same catalog and resolves scopes with the same function as the in-process executor.</span></li>
     <li><span><b>Only listed tools.</b> Registration keeps only <code>TENGU_BRIDGE_TOOLS</code>; a call to any other name gets the agent's real tool list back.</span></li>
+    <li><span><b>Inside the generation.</b> In a sandbox with <code>[generation]</code>, a tool outside it is neither listed by <code>tools/list</code> nor registered, as in-process (<a href="lineage.html">Lineage and generations</a>).</span></li>
     <li><span><b>Nothing secret leaves.</b> Text and typed rows go through <code>SanitizedToolExecutor</code>; errors are redacted in the call handler.</span></li>
     <li><span><b>Bounded results.</b> At most <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code> (default 50 000) plus a <code>[truncated — showing …]</code> footer.</span></li>
     <li><span><b>No replayed orders.</b> A fresh nonce per bridge process: two sessions with the same JSON-RPC ids place two orders (tested).</span></li>
@@ -368,7 +369,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>

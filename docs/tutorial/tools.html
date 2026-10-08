@@ -188,7 +188,7 @@
       <ol class="captions">
         <li>An agent block lists <code>tools</code> (the allow-list) and <code>workspace_tools</code> (opt-ins). An empty <code>tools</code> means every default tool.</li>
         <li><code>agent_base_tools</code> walks the catalog: default rows, memory rows when memory is on, opt-in rows that are named (an opt-in memory row, <code>persistent_store</code>, also needs memory on). A non-empty <code>tools</code> keeps only listed names.</li>
-        <li><code>register_catalog</code> builds each needed plugin once and registers only allowed tools. The in-process executor and the MCP bridge call this same function.</li>
+        <li><code>register_catalog</code> builds each needed plugin once and registers only allowed tools, none outside a bound <code>[generation]</code>. The in-process executor and the MCP bridge call this same function.</li>
         <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace. A hardened sandbox drops its shell.</li>
         <li>The model asks for a call. The executor publishes an activity line first; an unknown name fails with the sorted list of this agent's tools.</li>
         <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, memory, secrets, conversation, agent config, call id.</li>
@@ -344,6 +344,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
     <li><span><b>Secrets stay out.</b> Text, observations and error messages pass <code>SanitizedToolExecutor</code> before a model sees them.</span></li>
+    <li><span><b>Generation-bound.</b> In a sandbox with <code>[generation]</code>, a tool outside it is neither advertised nor registered, with a warning, on top of the load-time refusal (<a href="lineage.html">Lineage and generations</a>).</span></li>
   </ul>
 </section>
 
@@ -375,7 +376,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
         <tr><td><code>src/adapters/outbound/tools/mod.rs</code></td><td><code>catalog()</code>, <code>advertised_defs</code>, <code>register_catalog</code></td></tr>
         <tr><td><code>src/domain/tools.rs</code></td><td>opt-in names: <code>WORKSPACE_TOOLS</code>, exec and signing lists</td></tr>
         <tr><td><code>src/ports/tool.rs</code></td><td><code>Tool</code>, <code>ToolPlugin</code>, <code>ToolCtx</code>, <code>ToolOutput</code></td></tr>
-        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>agent_base_tools</code>, <code>build_tool_executor</code>, scope map, fallback scope</td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>agent_base_tools</code>, <code>build_tool_executor</code>, <code>within_generation</code>, scope map, fallback scope</td></tr>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>ToolRegistry</code>, <code>PluginToolExecutor</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset</td></tr>
         <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td>argument helpers, workspace path checks</td></tr>
@@ -388,7 +389,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>

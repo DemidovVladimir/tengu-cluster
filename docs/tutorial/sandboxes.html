@@ -367,7 +367,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     </div>
     <div class="sbx" data-tags="open hard loops">
       <h3>xlab</h3>
-      <div class="tags"><span class="chip data">open · 2 hosts</span><span class="chip guard">hardened</span><span class="chip jev">1 loop</span></div>
+      <div class="tags"><span class="chip data">open · 2 hosts</span><span class="chip guard">hardened</span><span class="chip jev">1 loop</span><span class="chip data">W1</span></div>
       <p>History first: backfill, backtest, Jev replayed on old bars.</p>
       <div class="agents">xl_architect · xl_jev</div>
     </div>
@@ -379,7 +379,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     </div>
     <div class="sbx" data-tags="open hard feeds">
       <h3>xmarket-weekend</h3>
-      <div class="tags"><span class="chip data">open · 1 host</span><span class="chip guard">hardened</span><span class="chip hands">5 feeds</span></div>
+      <div class="tags"><span class="chip data">open · 1 host</span><span class="chip guard">hardened</span><span class="chip hands">5 feeds</span><span class="chip data">W1</span></div>
       <p>The weekend fade on paper. Feeds call tools directly; no LLM in the loop.</p>
       <div class="agents">xm_weekend</div>
     </div>
@@ -401,6 +401,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span class="chip guard">hardened</span><span><b>builtin_tools_profile = "none"</b>A <code>claude_code</code> agent in a <code>[risk]</code> or signer sandbox without it.</span></li>
     <li><span class="chip guard">hardened</span><span><b>[[mcp_servers]] are not allowed</b>Also: any scope granting <code>shell_bins</code>.</span></li>
     <li><span class="chip bad">loop</span><span><b>decision_loops.&lt;n&gt;.agent: no [agents.&lt;a&gt;] block</b>A loop names an agent that does not exist.</span></li>
+    <li><span class="chip guard">generation</span><span><b>tool `&lt;t&gt;` is bound by capability `&lt;c&gt;`, which generation `W1` does not include</b>Also: an opt-in tool no capability binds, a sandbox the generation does not list, a drifted frozen pin (<a href="lineage.html">Lineage and generations</a>).</span></li>
   </ul>
 </section>
 
@@ -417,6 +418,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span><b>Children see the same file.</b> <code>run-agent</code> reloads it by sandbox name; the bridge reads the absolute <code>TENGU_CONFIG</code>.</span></li>
     <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, state dir and rate limits.</span></li>
     <li><span><b>Hardened means hardened.</b> With <code>[risk]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
+    <li><span><b>Bound sandboxes stay in their generation.</b> With <code>[generation]</code>, every load checks the sandbox against <code>lineage/generations/&lt;id&gt;.toml</code>; xlab and xmarket-weekend bind W1.</span></li>
   </ul>
 </section>
 
@@ -451,7 +453,8 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
       <tbody>
         <tr><td><code>src/config/mod.rs</code></td><td><code>Config</code>, <code>AgentConfig</code>, defaults, <code>Config::load</code>, validation, <code>fold_default_scopes</code></td></tr>
         <tr><td><code>src/config/paths.rs</code></td><td><code>TENGU_HOME</code>, the default config path, <code>~</code> expansion, a file's sandbox name</td></tr>
-        <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections</code>: what tools read at call time</td></tr>
+        <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections</code>: what tools read at call time, the bound generation's scope included</td></tr>
+        <tr><td><code>src/config/lineage.rs</code></td><td><code>[generation]</code>: the binding <code>Config::load</code> checks</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>rules for a <code>[risk]</code> or signer sandbox</td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td><code>load_sandbox_or</code>: <code>--sandbox</code>, the <code>TENGU_CONFIG</code> pin, egress</td></tr>
         <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td><code>-c</code>, the base load, every subcommand's <code>--sandbox</code></td></tr>
@@ -464,7 +467,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
 </article>
 </main>
 </div>

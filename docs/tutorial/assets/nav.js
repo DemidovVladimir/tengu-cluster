@@ -46,6 +46,8 @@ window.TUTORIAL = {
 
     { slug: "history", chapter: "research", title: "Market history", blurb: "Backfill public history into one warehouse before asking anything." },
     { slug: "backtest", chapter: "research", title: "Backtests", blurb: "A pure engine that proves no future bar can change a past decision." },
+    { slug: "evidence", chapter: "research", title: "Forward evidence", blurb: "Freeze what a forward run recorded, then grade it from the books it saw." },
+    { slug: "lineage", chapter: "research", title: "Lineage and generations", blurb: "Every idea, run and verdict as a record; a frozen generation cannot drift." },
 
     { slug: "ops", chapter: "operate", title: "Diagnose and deploy", blurb: "doctor, prune, Docker and the Tor proxy." }
   ]

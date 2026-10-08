@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Forward evidence · Tengu</title>
+<meta name="description" content="tengu evidence: freeze what a forward run recorded into a read-only, hashed vault, verify it, map recorder coverage, grade a paper ledger and replay rule W from the recorded books.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: record explorer, coverage grid, ledger breaker, look-ahead gate */
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .widget label.tick { display: flex; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .widget select { font: inherit; font-family: var(--font-mono); font-size: .82rem; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; max-width: 100%; }
+  .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; font-size: .88rem; margin: 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--font-mono); font-size: .8rem; color: var(--ink); overflow-wrap: anywhere; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg button { font: inherit; font-size: .8rem; border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .items { display: grid; gap: 6px; }
+  .items details { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); min-width: 0; }
+  .items details[open] { border-color: var(--accent); }
+  .items summary { cursor: pointer; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+  .items summary .pth { font-family: var(--font-mono); font-size: .8rem; color: var(--ink); overflow-wrap: anywhere; min-width: 0; flex: 1 1 220px; }
+  .items .body { padding: 0 12px 12px; display: grid; gap: 8px; }
+  .items .nt { font-size: .84rem; color: var(--muted); }
+  .chip.lbl { color: var(--muted); font-weight: 500; font-family: var(--font-mono); font-size: .7rem; padding: 1px 8px; }
+  .chip.kind { color: var(--data); background: var(--data-soft); font-family: var(--font-mono); font-size: .7rem; padding: 1px 8px; }
+  .tabpanel pre.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tabpanel .pad { padding: 14px 16px; display: grid; gap: 12px; }
+  .cov-wrap { overflow-x: auto; }
+  .cov { display: grid; grid-template-columns: 52px repeat(10, minmax(22px, 1fr)); gap: 3px; min-width: 300px; }
+  .cov .h { font-family: var(--font-mono); font-size: .68rem; color: var(--faint); text-align: center; }
+  .cov .k { font-family: var(--font-mono); font-size: .74rem; color: var(--ink); align-self: center; }
+  .cov .c { height: 28px; border-radius: 5px; border: 1.5px solid var(--line); background: var(--sunk); display: grid; place-items: center; font-family: var(--font-mono); font-size: .66rem; color: var(--muted); }
+  .cov .c.live { background: var(--hands-soft); border-color: var(--hands); }
+  .cov .c.bf { background: var(--brain-soft); border-color: var(--brain); color: var(--brain); }
+  .cov .c.miss { background: transparent; border-color: var(--bad); border-style: dashed; color: var(--bad); }
+  .cov .c.abs { background: transparent; border-style: dotted; color: var(--faint); }
+  .cov-key { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .8rem; color: var(--muted); padding: 0; margin: 0; list-style: none; }
+  .cov-key i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--line); vertical-align: -2px; margin-right: 5px; }
+  .cov-key i.live { background: var(--hands-soft); border-color: var(--hands); }
+  .cov-key i.bf { background: var(--brain-soft); border-color: var(--brain); }
+  .cov-key i.miss { border-color: var(--bad); border-style: dashed; }
+  .cov-key i.abs { border-style: dotted; }
+  .out { font-size: .76rem; }
+  .nw { white-space: nowrap; }
+  .out .lv { color: var(--hands); } .out .bf { color: var(--brain); } .out .ms { color: var(--bad); }
+  .radios { display: grid; gap: 4px; }
+  .radios label.tick { font-size: .85rem; }
+  .ckgrid { display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+  .ck { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); font-size: .8rem; color: var(--muted); transition: border-color .25s; }
+  .ck .st { grid-row: span 2; align-self: start; font-family: var(--font-mono); font-size: .68rem; font-weight: 600; padding: 2px 6px; border-radius: 4px; border: 1px solid currentColor; color: var(--ok); }
+  .ck b { font-family: var(--font-mono); font-size: .8rem; color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+  .ck.fail { border-color: var(--bad); } .ck.fail .st { color: var(--bad); }
+  .exitline { font-family: var(--font-mono); font-size: .8rem; overflow-wrap: anywhere; }
+  .rules { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .rules .card p { font-size: .86rem; }
+  code.f { white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Forward evidence</div>
+  <h1>Forward evidence</h1>
+  <p class="lede">Grade a forward run from the files it wrote. <code>tengu evidence</code> freezes them into a hashed, read-only vault, then verifies the vault, maps recorder gaps, grades the paper ledger and replays rule W from the recorded books.</p>
+  <ul class="facts">
+    <li><b>12</b> reconciliation checks per account</li>
+    <li>relative tolerance <b>1e-9</b></li>
+    <li>book ≤ <b>60 s</b> from the instant (default)</li>
+    <li>W1 vault: <b>486</b> files, <b>23</b> items</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks, seal, verify</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> coverage, grade, regrade</li>
+    <li><span class="chip data">data</span> state dir, vault, records</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Freeze once, read many times</span>
+    <h2 id="s-flow">From a run's state dir to a graded result</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 450" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">A forward run writes its state dir. snapshot checks every source named in a plan record, copies the items into a new vault, hashes them, writes MANIFEST.json, seals the vault and rewrites the record. verify re-hashes the vault against the record; coverage, grade and regrade read the vault copies, with market.db as the second source.</title>
+        <path class="e" id="p-run-state" d="M110 98 L110 150" data-at="1"/>
+        <path class="e" id="p-state-snap" d="M200 192 L250 192" data-at="2-3"/>
+        <path class="e" id="p-rec-snap" d="M340 98 L340 150" data-at="2,5"/>
+        <path class="e" id="p-snap-vault" d="M340 250 L340 306" data-at="3-4"/>
+        <path class="e" id="p-rec-ver" d="M430 62 L500 62" data-at="6"/>
+        <path class="e" id="p-vault-ver" d="M430 324 C 468 324, 462 84, 500 84" data-at="6"/>
+        <path class="e" id="p-vault-cov" d="M430 340 C 472 340, 464 184, 500 184" data-at="7"/>
+        <path class="e" id="p-vault-grade" d="M430 356 C 470 356, 466 292, 500 292" data-at="8"/>
+        <path class="e" id="p-vault-reg" d="M430 372 C 468 372, 468 392, 500 392" data-at="9"/>
+        <path class="e dash" id="p-mdb-cov" d="M720 184 L680 184" data-at="7"/>
+        <path class="e dash" id="p-mdb-reg" d="M780 220 C 780 330, 740 398, 680 398" data-at="9"/>
+
+        <g class="n" data-at="1">
+          <rect x="20" y="40" width="180" height="58" rx="8"/>
+          <text x="110" y="64" text-anchor="middle" class="t-title">Forward run</text>
+          <text x="110" y="83" text-anchor="middle" class="t-small t-mono">tengu run --sandbox &lt;s&gt;</text>
+        </g>
+        <g class="n data" data-at="1-3">
+          <rect x="20" y="150" width="180" height="84" rx="8"/>
+          <text x="110" y="176" text-anchor="middle" class="t-title">State dir</text>
+          <text x="110" y="196" text-anchor="middle" class="t-small t-mono">~/.tengu/state/&lt;s&gt;/</text>
+          <text x="110" y="214" text-anchor="middle" class="t-small">ledger · history · logs</text>
+        </g>
+        <g class="n data" data-at="1-2,5-6">
+          <rect x="250" y="26" width="180" height="72" rx="8"/>
+          <text x="340" y="50" text-anchor="middle" class="t-title">Record file</text>
+          <text x="340" y="69" text-anchor="middle" class="t-small t-mono">lineage/evidence/</text>
+          <text x="340" y="86" text-anchor="middle" class="t-small">plan → captured</text>
+        </g>
+        <g class="n guard" data-at="2-5">
+          <rect x="250" y="150" width="180" height="100" rx="10"/>
+          <text x="340" y="176" text-anchor="middle" class="t-kanji k">守</text>
+          <text x="340" y="198" text-anchor="middle" class="t-title t-mono">snapshot</text>
+          <text x="340" y="217" text-anchor="middle" class="t-small">check · copy · hash</text>
+          <text x="340" y="234" text-anchor="middle" class="t-small">manifest · chmod a-w</text>
+        </g>
+        <g class="n data" data-at="3-9">
+          <rect x="250" y="306" width="180" height="84" rx="8"/>
+          <text x="340" y="332" text-anchor="middle" class="t-title">Read-only vault</text>
+          <text x="340" y="351" text-anchor="middle" class="t-small t-mono">state/evidence/&lt;vault&gt;/</text>
+          <text x="340" y="369" text-anchor="middle" class="t-small t-mono">+ MANIFEST.json</text>
+        </g>
+        <g class="n guard" data-at="6">
+          <rect x="500" y="26" width="180" height="72" rx="8"/>
+          <text x="590" y="50" text-anchor="middle" class="t-title t-mono">verify</text>
+          <text x="590" y="69" text-anchor="middle" class="t-small">re-hash vs the record</text>
+          <text x="590" y="86" text-anchor="middle" class="t-small">all MATCH or exit 1</text>
+        </g>
+        <g class="n hands" data-at="7">
+          <rect x="500" y="136" width="180" height="72" rx="8"/>
+          <text x="590" y="160" text-anchor="middle" class="t-title t-mono">coverage</text>
+          <text x="590" y="179" text-anchor="middle" class="t-small">rows on a cadence grid</text>
+          <text x="590" y="196" text-anchor="middle" class="t-small">gaps labelled by source</text>
+        </g>
+        <g class="n hands" data-at="8">
+          <rect x="500" y="246" width="180" height="72" rx="8"/>
+          <text x="590" y="270" text-anchor="middle" class="t-title t-mono">grade</text>
+          <text x="590" y="289" text-anchor="middle" class="t-small">ledger rows → trades</text>
+          <text x="590" y="306" text-anchor="middle" class="t-small">12 checks per account</text>
+        </g>
+        <g class="n hands" data-at="9">
+          <rect x="500" y="356" width="180" height="72" rx="8"/>
+          <text x="590" y="380" text-anchor="middle" class="t-title t-mono">regrade</text>
+          <text x="590" y="399" text-anchor="middle" class="t-small">rule W from the books</text>
+          <text x="590" y="416" text-anchor="middle" class="t-small">depth walk · funding</text>
+        </g>
+        <g class="n data" data-at="7,9">
+          <rect x="720" y="148" width="120" height="72" rx="8"/>
+          <text x="780" y="172" text-anchor="middle" class="t-title t-mono">market.db</text>
+          <text x="780" y="191" text-anchor="middle" class="t-small">1m bars, funding</text>
+          <text x="780" y="208" text-anchor="middle" class="t-small">second source</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">items: path, kind, labels</text></g>
+        <g class="pop badge" data-at="2"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">one problem ⇒ nothing made</text></g>
+        <g class="pop badge" data-at="3"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">copy hash = source hash</text></g>
+        <g class="pop badge" data-at="4"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">MANIFEST.json · chmod a-w</text></g>
+        <g class="pop badge" data-at="5"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">captured once, never again</text></g>
+        <g class="pop badge" data-at="6"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">all MATCH, else exit 1</text></g>
+        <g class="pop badge" data-at="7"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">slot = [k·c, (k+1)·c)</text></g>
+        <g class="pop badge" data-at="8"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">one FAIL ⇒ exit 1</text></g>
+        <g class="pop badge" data-at="9"><rect x="240" y="404" width="200" height="22" rx="11"/><text x="340" y="419" text-anchor="middle">no book ⇒ MISSING, never 0</text></g>
+
+        <circle class="tok" r="6" data-path="p-run-state" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-state-snap" data-at="2"/>
+        <circle class="tok" r="5" data-path="p-rec-snap" data-at="2" data-delay="400"/>
+        <circle class="tok" r="5" data-path="p-state-snap" data-at="3" data-dur="900"/>
+        <circle class="tok guard" r="6" data-path="p-snap-vault" data-at="3" data-delay="600"/>
+        <circle class="tok guard" r="6" data-path="p-snap-vault" data-at="4"/>
+        <circle class="tok guard" r="6" data-path="p-rec-snap" data-at="5" data-reverse/>
+        <circle class="tok" r="6" data-path="p-rec-ver" data-at="6"/>
+        <circle class="tok guard" r="6" data-path="p-vault-ver" data-at="6" data-delay="300"/>
+        <circle class="tok hands" r="6" data-path="p-vault-cov" data-at="7"/>
+        <circle class="tok" r="5" data-path="p-mdb-cov" data-at="7" data-delay="500" data-dur="800"/>
+        <circle class="tok hands" r="6" data-path="p-vault-grade" data-at="8"/>
+        <circle class="tok hands" r="6" data-path="p-vault-reg" data-at="9"/>
+        <circle class="tok" r="5" data-path="p-mdb-reg" data-at="9" data-delay="500"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li>A forward run (<code>tengu run</code>) writes its state dir: <code>ledger.db</code>, recorder day files, logs, heartbeat. A plan record in <code>lineage/evidence/</code> names each item to keep.</li>
+        <li><code>snapshot</code> checks every source first: it exists, its kind matches, no symlink or special file, no non-empty SQLite <code class="f">-wal</code>. One problem and nothing is created.</li>
+        <li>The vault dir is created once; an existing one is refused. Each file is copied (an APFS clone on macOS), hashed before and after; a source that changed fails.</li>
+        <li><code>MANIFEST.json</code> lists every file as path, sha256 and bytes, sorted. Then <code>chmod a-w</code> clears the write bits of every file and dir.</li>
+        <li>The record file is rewritten with <code>captured_at</code>, <code>manifest_sha256</code> and, per item, <code>sha256</code>, <code>files</code>, <code>bytes</code>. A captured record is never snapshotted again.</li>
+        <li><code>verify</code> re-hashes the vault against the record: the manifest, every file, every item. Anything but all <code>MATCH</code> exits 1.</li>
+        <li><code>coverage</code> lays one schema's rows on a cadence grid: swept slots are <code>LIVE_RECORDED</code>; gaps are <code>BACKFILLED</code> from <code>market.db</code> bars, else <code>MISSING</code>.</li>
+        <li><code>grade</code> rebuilds a paper ledger's trades from its raw rows, read-only, and runs 12 reconciliation checks per account. One <code>FAIL</code> exits 1.</li>
+        <li><code>regrade</code> replays rule W from recorded rows: signals from <code>mkt_ctx/1</code>, fills by walking <code>hl_book/1</code> depth, fees, funding. A gap is <code>MISSING</code>, never 0.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-rec">
+  <div class="sec-head">
+    <span class="kicker">What a record says</span>
+    <h2 id="s-rec">Two labels on every item</h2>
+    <p>Class says where a figure sits between development and live money. Provenance says how the bytes came to exist. Both are fixed sets in <code>domain/evidence.rs</code>.</p>
+  </div>
+  <div class="grid two">
+    <div class="card guard">
+      <h3>Evidence class</h3>
+      <p><code>DEVELOPMENT</code> · <code>HOLDOUT</code> · <code>FORWARD_PAPER</code> · <code>LIVE_MICRO</code> · <code>LIVE_PRODUCTION</code> · <code>NONE</code> for docs, code and config, which are not market observations.</p>
+    </div>
+    <div class="card data">
+      <h3>Provenance</h3>
+      <p><code>LIVE_RECORDED</code> while it happened · <code>BACKFILLED</code> later from an archive or API · <code>MISSING</code> never recorded · <code>NOT_APPLICABLE</code> · <code>DERIVED</code> computed by tengu, rerunnable · <code>REPORTED</code> a figure in a doc whose inputs are gone.</p>
+    </div>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tab-w1" aria-selected="true">The W1 record</button>
+      <button type="button" aria-controls="tab-shape">Plan → captured</button>
+      <button type="button" aria-controls="tab-tree">Tree hash</button>
+    </div>
+    <div class="tabpanel" id="tab-w1">
+      <div class="pad">
+        <dl class="kv">
+          <dt>file</dt><dd>lineage/evidence/w1-2026-10-06.toml</dd>
+          <dt>vault</dt><dd>&lt;TENGU_HOME&gt;/state/evidence/w1-2026-10-06/</dd>
+          <dt>captured_at</dt><dd>2026-10-06T09:39:35Z</dd>
+          <dt>manifest_sha256</dt><dd>931da65978c3137c9cc37b52e1ffe65e70f57bf99124160032e11bf36ccecafa</dd>
+          <dt>items</dt><dd>23 (15 FILE, 8 DIR) · 486 files · 2,379,149,677 bytes</dd>
+        </dl>
+        <div class="seg" role="group" aria-label="Filter by evidence class" id="w1-filter"></div>
+        <div class="items" id="w1-items" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="tabpanel" id="tab-shape" hidden><pre><span class="c"># the plan you write: no captured_at, no hashes (values from the W1 record)</span>
+id    = <span class="s">"w1-2026-10-06"</span>      <span class="c"># must equal the file stem</span>
+title = <span class="s">"W1 weekend forward paper run 2026-10-02 → 2026-10-05 (rule W, capped $100 + shadow): raw evidence"</span>
+vault = <span class="s">"w1-2026-10-06"</span>      <span class="c"># one path segment under &lt;TENGU_HOME&gt;/state/evidence/</span>
+
+<span class="k">[[items]]</span>
+path       = <span class="s">"xmarket-weekend/ledger.db"</span>               <span class="c"># vault-relative</span>
+source     = <span class="s">"~/.tengu/state/xmarket-weekend/ledger.db"</span>  <span class="c"># ~/&lt;path&gt; or absolute, only read</span>
+kind       = <span class="s">"FILE"</span>                                    <span class="c"># FILE | DIR</span>
+provenance = <span class="s">"LIVE_RECORDED"</span>
+class      = <span class="s">"FORWARD_PAPER"</span>
+role       = <span class="s">"ledger"</span>
+
+<span class="c"># what snapshot adds (all of them, or none: a record is a plan or captured)</span>
+captured_at     = <span class="s">"2026-10-06T09:39:35Z"</span>
+manifest_sha256 = <span class="s">"931da65978c3137c9cc37b52e1ffe65e70f57bf99124160032e11bf36ccecafa"</span>
+<span class="c"># per item</span>
+sha256 = <span class="s">"7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e"</span>
+files  = <span class="n">1</span>
+bytes  = <span class="n">1847296</span>
+
+<span class="c"># refused before anything is copied: an absolute or climbing path (/, \, empty, . or ..),
+# a path listed twice or twice ignoring case, an item inside another,
+# MANIFEST.json (any case) as the first segment, an empty source, no items</span></pre></div>
+    <div class="tabpanel" id="tab-tree" hidden><pre class="wrap"><span class="c"># a DIR item's sha256 = sha256 of one line "&lt;sha256&gt;  &lt;relpath&gt;\n" per regular file,
+# sorted bytewise by relpath: what shasum -a 256 prints, sorted. Example files from the test:</span>
+961b6dd3ede3cb8ecbaacbd68de040cd78eb2ed5889130cceb4c49268ea4d506  a.db       <span class="c"># "aa"</span>
+3e744b9dc39389baf0c5a0660589b8402f3dbb49b89b3e75f2c9355852a3c677  b.db       <span class="c"># "bbb"</span>
+2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6  sub/c.log  <span class="c"># "c"</span>
+<span class="k">tree hash</span> a493fbac5ddbc6d46ebe8af5fb231e195bc1103faccc291fa2e68f535113331c
+
+<span class="c"># write "BBB" into b.db: one line changes, so the tree hash does</span>
+dcdb704109a454784b81229d2b05f368692e758bfa33cb61d04c1b93791b0273  b.db
+<span class="k">tree hash</span> b5dc02fcda982911f2285423f1170e981acb08759b542a44e2148466c8d5bd5f  <span class="c"># verify: b.db MISMATCH, item MISMATCH</span>
+
+<span class="c"># an empty dir: sha256 of nothing, files 0; it verifies MATCH, not ABSENT</span>
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+<span class="c"># check one by hand, outside tengu:</span>
+(cd &lt;dir&gt; &amp;&amp; find . -type f | sed 's|^\./||' | LC_ALL=C sort | while read f; do shasum -a 256 "$f"; done) | shasum -a 256</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-cov">
+  <div class="sec-head">
+    <span class="kicker">Try it: punch holes in a recorder</span>
+    <h2 id="s-cov">Coverage: live, backfilled, missing</h2>
+    <p>The example from the coverage test: ten 1-minute slots (example instants), three keys. A slot counts only if a key has an <code>ok</code> or <code>partial</code> row in it. Toggle the second source and the gaps.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label class="tick" for="cv-bars"><input type="checkbox" id="cv-bars" checked> <code class="f">--bars market.db</code> (1m)</label>
+      <label class="tick" for="cv-b4"><input type="checkbox" id="cv-b4"> B has a bar at minute 4</label>
+      <label class="tick" for="cv-b7"><input type="checkbox" id="cv-b7"> B has a bar at minute 7</label>
+      <label class="tick" for="cv-sw4"><input type="checkbox" id="cv-sw4"> the recorder swept minute 4</label>
+    </div>
+    <div class="cov-wrap"><div class="cov" id="cv-grid" aria-label="Slots by key"></div></div>
+    <ul class="cov-key">
+      <li><i class="live"></i>recorded (ok / partial)</li>
+      <li><i class="bf"></i>gap, a 1m bar exists (0 = no trade)</li>
+      <li><i class="miss"></i>gap, no bar</li>
+      <li><i class="abs"></i>rows, none ok (absent)</li>
+    </ul>
+    <pre class="out" id="cv-out" aria-live="polite"></pre>
+    <p class="note">A <b>sweep gap</b> is a run of slots no key covers: the recorder wrote nothing. A <b>key gap</b> is one key missing while others were recorded. A gap is <code>BACKFILLED</code> for a key only if <b>every</b> gap minute has a bar; a 0-trade bar is counted <code>flat</code>, a stale price. Use <code class="f">--bars</code> for price streams such as <code>mkt_ctx/1</code>, never for books.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-grade">
+  <div class="sec-head">
+    <span class="kicker">Try it: break a tiny ledger</span>
+    <h2 id="s-grade">Grade: twelve checks that must all pass</h2>
+    <p>The test ledger: short 2 @ 10, one funding hour received 0.002, cover 2 @ 9. Net 1.983 USD, 991.5 bps of its 20 USD entry (example values). Pick one fault; the lights are what the code reports.</p>
+  </div>
+  <div class="widget">
+    <div class="radios" role="radiogroup" aria-label="One fault in the ledger" id="gr-faults"></div>
+    <div class="ckgrid" id="gr-checks" aria-live="polite"></div>
+    <div class="widget-row"><span class="verdict ok" id="gr-verdict"></span><span class="exitline" id="gr-exit"></span></div>
+    <p class="note">A trade runs from flat to flat per instrument, in <code>(ts_ms, id)</code> order; a flip closes one trade and opens the next, its fee split by quantity. Net = realized − fees − funding paid; bps of the filled entry notional. No closed trade ⇒ <code>mean_net_bps</code> is <code>MISSING</code>, not 0.</p>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-regrade">
+  <div class="sec-head">
+    <span class="kicker">Try it: move the signal instant</span>
+    <h2 id="s-regrade">Regrade: rule W from the books it saw</h2>
+    <p>The independent check of the paper fills, and the grader of rules nobody traded (a preregistration). Example instants; read windows use the CLI defaults.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="rg-off">
+        <span><code class="f">--signal-at</code> = entry <span class="readout" id="rg-off-out">+0 min</span></span>
+        <input type="range" id="rg-off" min="-180" max="180" step="5" value="0">
+      </label>
+      <label class="tick" for="rg-allow"><input type="checkbox" id="rg-allow"> <code class="f">--allow-signal-after-entry</code></label>
+      <label for="rg-book"><code class="f">--fill-book</code>
+        <select id="rg-book"><option value="as-of" selected>as-of (default)</option><option value="next">next</option></select>
+      </label>
+    </div>
+    <dl class="kv" id="rg-kv"></dl>
+    <div class="widget-row"><span class="verdict ok" id="rg-verdict" aria-live="polite"></span></div>
+    <p class="exitline" id="rg-msg"></p>
+  </div>
+  <div class="rules">
+    <div class="card data"><h3>Price at T</h3><p>The latest <code>mkt_ctx/1</code> row at or before T, within its max age; <code>mid</code>, else <code>mark</code>. A failed row or no price ⇒ <code>MISSING</code> with the reason.</p></div>
+    <div class="card hands"><h3>Signal, selection</h3><p>s = ln(P<sub>signal</sub> / P<sub>anchor</sub>) in bps; 0 is <code>flat</code>. <code class="f">--top-n</code>: largest |s| ≥ <code class="f">--min-abs-signal-bps</code>, ties by id. Fade = −sign(s), follow = sign(s).</p></div>
+    <div class="card hands"><h3>Entry, exit</h3><p>Walk <code class="f">--notional-usd</code> into the recorded book; thin depth fills less. The exit walks the entry quantity back; short of it ⇒ <code>MISSING</code>.</p></div>
+    <div class="card hands"><h3>Fees</h3><p><code class="f">--taker-fee-bps F</code> per side, or <code class="f">--fees recorded</code>: the row's <code>taker_fee_bps</code> at entry and exit. One of the two is required.</p></div>
+    <div class="card data"><h3>Funding</h3><p>Each hour entry &lt; h ≤ exit: the recorded <code>funding_1h</code> × <code>oracle</code>, else <code>market.db</code>'s rate × the 1m close ending at h, else <code>MISSING</code>.</p></div>
+    <div class="card guard"><h3>Cross-checks</h3><p><code class="f">--compare-ledger</code>: per name vs the ledger trade opened in [entry, exit]. <code class="f">--expect-signals</code>: prices equal to 1e-9, s within 0.05 bps.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">Verdicts and exit codes</span>
+    <h2 id="s-out">What a command can report</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>MATCH</b>sha256 and bytes as recorded; an item also by its file count.</span></li>
+    <li><span class="chip bad">diff</span><span><b>MISMATCH</b>Same path, other hash or size.</span></li>
+    <li><span class="chip bad">gone</span><span><b>ABSENT</b>In the manifest or the record, not in the vault.</span></li>
+    <li><span class="chip warn">new</span><span><b>EXTRA</b>In the vault, not in the manifest. Every item can match and verify still fails.</span></li>
+    <li><span class="chip data">n/a</span><span><b>MISSING</b>grade / regrade: no source for a value. Printed with the reason, never counted as 0.</span></li>
+    <li><span class="chip warn">flag</span><span><b>LOOK-AHEAD</b>regrade's line 1 (JSON <code>look_ahead</code>) when an allowed signal follows the entry.</span></li>
+    <li><span class="chip ok">0</span><span><b>exit 0</b>verify all MATCH, grade all PASS; coverage and regrade printed their report.</span></li>
+    <li><span class="chip bad">1</span><span><b>exit 1</b>Not MATCH, a FAIL, or a refusal: vault exists, record captured, live WAL, bad instants.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Originals are only read.</b> Every SQLite file opens <code>immutable=1</code>, read-only: no <code class="f">-wal</code> or <code class="f">-shm</code> created, no migration, no retention sweep.</span></li>
+    <li><span><b>A live WAL is refused.</b> A database with a non-empty <code class="f">-wal</code> beside it is not read. Snapshot copies one only when its <code class="f">-wal</code> is an item too; a dir holding one is refused.</span></li>
+    <li><span><b>All or nothing.</b> Every source is checked before the vault dir exists; one bad source creates nothing.</span></li>
+    <li><span><b>Created once.</b> An existing vault, or a record that already holds <code>captured_at</code> or a hash, is refused.</span></li>
+    <li><span><b>A copy is its source.</b> Each file is hashed before and after the copy; never copied over an existing vault file.</span></li>
+    <li><span><b>Sealed.</b> <code>chmod a-w</code> on every file and dir; <code>MANIFEST.json</code> is created new and never lists itself.</span></li>
+    <li><span><b>No silent look-ahead.</b> A signal after the entry is refused unless allowed, then flagged on line 1.</span></li>
+    <li><span><b>No substitutes.</b> A selected name without a usable book stays a <code>MISSING</code> leg; the next name is not graded in its place.</span></li>
+    <li><span><b>Nothing else runs.</b> No config, no LLM, no network. Ids and hashes are printed in full.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Freeze, verify, grade the W1 weekend</h2>
+    <p>From the repo root, on the machine that holds the vault. Instants are example values; times take RFC 3339, epoch ms or a UTC date. Every command takes <code class="f">--format text|json</code>. Neighbours: <a href="history.html">Market history</a>, <a href="backtest.html">Backtests</a>, <a href="paper-desk.html">Paper desk</a>, <a href="lineage.html">Lineage</a> (cites vault files as <code>vault:&lt;snapshot&gt;/&lt;path&gt;</code>).</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu evidence snapshot --record lineage/evidence/&lt;id&gt;.toml</span>
+<span class="ln o"># a plan only: copies, hashes, seals; rewrites the record; prints vault, manifest_sha256, one row per item</span>
+<span class="ln cmd"><span class="p">$ </span>tengu evidence verify lineage/evidence/w1-2026-10-06.toml</span>
+<span class="ln o"># on an intact vault:</span>
+<span class="ln o">MANIFEST.json MATCH  expected <span class="hl">931da65978c3137c9cc37b52e1ffe65e70f57bf99124160032e11bf36ccecafa</span>  actual <span class="hl">931da65978c3137c9cc37b52e1ffe65e70f57bf99124160032e11bf36ccecafa</span></span>
+<span class="ln o">files 486 MATCH of 486 listed</span>
+<span class="ln cmd"><span class="p">$ </span>tengu evidence coverage --history ~/.tengu/state/evidence/w1-2026-10-06/xmarket-weekend/history \</span>
+<span class="ln cmd">    --schema mkt_ctx/1 --from 2026-10-02T19:18:55Z --to 2026-10-05T14:00:30Z --cadence-secs 60 \</span>
+<span class="ln cmd">    --bars ~/.tengu/state/evidence/w1-2026-10-06/xlab/market.db --per-key</span>
+<span class="ln o"># slots, swept, keys; timeline LIVE_RECORDED / BACKFILLED / MISSING; sweep gaps; key gaps</span>
+<span class="ln cmd"><span class="p">$ </span>tengu evidence grade --ledger ~/.tengu/state/evidence/w1-2026-10-06/xmarket-weekend/ledger.db</span>
+<span class="ln o"># per account: trades, totals, risk verdicts, PASS / FAIL × 12; exit 1 on any FAIL</span>
+<span class="ln cmd"><span class="p">$ </span>tengu evidence regrade --history ~/.tengu/state/evidence/w1-2026-10-06/xmarket-weekend/history \</span>
+<span class="ln cmd">    --anchor 2026-10-03T00:00:00Z --entry 2026-10-04T22:00:00Z --exit 2026-10-05T13:00:00Z \</span>
+<span class="ln cmd">    --top-n 4 --min-abs-signal-bps 50 --notional-usd 25 --fees recorded --fill-book next \</span>
+<span class="ln cmd">    --market-db ~/.tengu/state/evidence/w1-2026-10-06/xlab/market.db \</span>
+<span class="ln cmd">    --compare-ledger ~/.tengu/state/evidence/w1-2026-10-06/xmarket-weekend/ledger.db --compare-account xmarket-weekend</span>
+<span class="ln o"># summary, one row per selected leg (MISSING with the reason), then replay vs ledger per name</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/evidence.rs</code></td><td>record, item, class, provenance; path rules; the tree hash</td></tr>
+        <tr><td><code>src/domain/evidence_coverage.rs</code></td><td>slots, sweep and key gaps, the second source, the timeline</td></tr>
+        <tr><td><code>src/domain/xm/grade.rs</code></td><td>ledger rows → trades, totals, verdicts, the 12 checks</td></tr>
+        <tr><td><code>src/domain/xm/regrade.rs</code></td><td>price and book picks, depth walks, fees, funding, look-ahead flag, cross-checks</td></tr>
+        <tr><td><code>src/ports/evidence.rs</code></td><td><code>Vault</code>, <code>LedgerSource</code>, <code>RecordedHistory</code>, <code>BackfillSource</code></td></tr>
+        <tr><td><code>src/application/evidence.rs</code></td><td>the use cases: snapshot, verify, coverage, grade, regrade</td></tr>
+        <tr><td><code>src/adapters/outbound/evidence/mod.rs</code></td><td>the immutable read-only SQLite open; the live-WAL refusal</td></tr>
+        <tr><td><code>src/adapters/outbound/evidence/vault.rs</code></td><td><code>FsVault</code>: create once, copy and hash, manifest, seal</td></tr>
+        <tr><td><code>src/adapters/outbound/evidence/ledger_reader.rs</code></td><td>a paper <code>ledger.db</code>, binary 6fcb455's schema or later</td></tr>
+        <tr><td><code>src/adapters/outbound/evidence/recorded.rs</code></td><td>recorder day files; <code>market.db</code> bars and funding</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/evidence.rs</code></td><td><code>tengu evidence</code> flags, text and JSON output, exit codes</td></tr>
+        <tr><td><code>lineage/evidence/</code></td><td>the committed records: <code>w1-2026-10-06.toml</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: W1 record explorer (lineage/evidence/w1-2026-10-06.toml, verbatim),
+   coverage grid (domain/evidence_coverage.rs::coverage), ledger breaker
+   (domain/xm/grade.rs tests), look-ahead gate (application/evidence.rs::regrade) */
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function n3(x) { return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+  /* --- the W1 record --- */
+  var ITEMS = [
+    { p: "xmarket-weekend/ledger.db", s: "~/.tengu/state/xmarket-weekend/ledger.db", k: "FILE", h: "7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e", f: 1, b: 1847296, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "ledger", n: "Paper ledger of binary 6fcb455 (old schema: no funding_owed, orders.fingerprint, accounts.sandbox): capped xmarket-weekend ($100) + shadow xmarket-weekend-shadow ($10,000); accounts + deposits created 2026-10-01T01:31:57Z in the dry run, no trade before 2026-10-04T22:00Z. Inventory sha256 7df5297031821797c97c157046e260561802205e3262c75c7b46da250819c67e." },
+    { p: "xmarket-weekend/history", s: "~/.tengu/state/xmarket-weekend/history", k: "DIR", h: "954920eab43d3fc22bec0d48270008338bede2565336ee886de0463a288b0a33", f: 7, b: 1250553856, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "recorder", n: "Recorder day files (obs_history, every row source = live; hl_book/1 with full 20-level books, every schema with data): 20261001.db is the pre-run dry run 01:31:57–07:04:04Z (+ its empty -wal and leftover -shm); 20261002–20261005 the run 2026-10-02T19:18:55Z → 2026-10-05T14:00:30Z." },
+    { p: "xmarket-weekend/run-logs", s: "~/.tengu/state/xmarket-weekend/run-logs", k: "DIR", h: "5fddd2d85620f2f846ee94fdc73b5ebe3bc8b17809df292cafa62aeb042e536a", f: 5, b: 33497326, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "log", n: "pane.log (tmux capture of tengu run, RUST_LOG=info,tengu=debug), supervisor.log, watch.state are live records; supervise.sh and watch.sh are the operator scripts (watch.sh edited 2026-10-03T09:12Z during the outage)." },
+    { p: "xmarket-weekend/run-xmarket-weekend.json", s: "~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json", k: "FILE", h: "f6664c4eb0e00ec0d266191e247a6f46e1c80e195d9cfdbfe5cf8a94b1a4415a", f: 1, b: 2301, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "heartbeat", n: "Final heartbeat: state stopped, SIGINT, feed counters." },
+    { p: "xmarket-weekend/runtime.db", s: "~/.tengu/state/xmarket-weekend/runtime.db", k: "FILE", h: "13d2855856185a896c8b8d7e98f8d2ac6f42bc4fb26cdb9aeaf8e358c2c3ae61", f: 1, b: 12288, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "runtime", n: "Leases (0 rows after the clean stop)." },
+    { p: "xmarket/ledger.db", s: "~/.tengu/state/xmarket/ledger.db", k: "FILE", h: "2a80df7c156183e4df59fbdd7ad1d137c8a2632a36fd790c7b346535ac3b9068", f: 1, b: 81920, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "ledger", n: "Desk ledger (newer schema of tengu-desk-2026-10-02): only the $100 deposit, no trading." },
+    { p: "xmarket/history", s: "~/.tengu/state/xmarket/history", k: "DIR", h: "48b5c9e340fd7cc9a916771cccb817348f524ed6cda12b823dde501057a2a8b0", f: 5, b: 415797248, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "recorder", n: "Desk recorder (binary tengu-desk-2026-10-02, not 6fcb455): mkt_ctx/1 + mkt_instrument/1 features only (data NULL), hl_book/1 for hyperliquid:xyz:AAPL, hyperliquid:xyz:NVDA, hyperliquid:xyz:TSLA only; 20261001.db pre-run 02:28–13:07Z. Not a byte-equivalent copy of the weekend recorder." },
+    { p: "xmarket/run-logs", s: "~/.tengu/state/xmarket/run-logs", k: "DIR", h: "f0d10e51c31bcd1443a7dbc75ba104471358ae82bc05dd821e018e6a3b787a9d", f: 3, b: 20969962, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "log", n: "Desk pane.log + supervisor.log (live) and supervise.sh (script)." },
+    { p: "xmarket/run-xmarket.json", s: "~/.tengu/state/xmarket/run-xmarket.json", k: "FILE", h: "be929a21f03d0db4d2292438226d688024f835555c55eea1dd7546d61f8a3d17", f: 1, b: 1919, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "heartbeat", n: "Desk final heartbeat (feeds hl_book / hl_ctx / risk_day / xm_exits)." },
+    { p: "xmarket/research/weekend-2026-10-02", s: "~/.tengu/state/xmarket/research/weekend-2026-10-02", k: "DIR", h: "d292f32092c002476e6d0cf0bc692ba9d5c0f3336ce19c0f05f4af910aab238b", f: 24, b: 238756097, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "research", n: "A mix: LIVE_RECORDED = the independent 5-min curl sampler (ctx.jsonl, l2book.jsonl, rhj.jsonl, sampler.log, errors.log; 2026-10-02T23:30Z → 2026-10-05T13:57Z, not in egress.jsonl); documents = prereg-saturday-fade.md (Saturday-entry prereg written 2026-10-03T12:36:41Z, correction appended 12:56:02Z; body before the correction sha256 ea4d709b87a54b54b3b2a77a3469284d9cf3e394022f05db22eb00b9c88bc10e) and plan-weekday-night-fade-xlab.md; the *.sql files are ad-hoc queries over xlab market.db 1h bars (BACKFILLED inputs, DEVELOPMENT) whose outputs were never stored." },
+    { p: "xmarket/research/replay-2026-09-26", s: "~/.tengu/state/xmarket/research/replay-2026-09-26", k: "DIR", h: "d2ffd5f9f1a0eed2e55e4d964737c6358c9a3ff867d341c8e29db9782eec0f7b", f: 7, b: 1698436, pv: "BACKFILLED", c: "DEVELOPMENT", r: "golden", n: "Rule W replay golden for the 2026-09-26 weekend: 5m candles of all xyz markets, meta snapshots, the 75-name universe, golden output (74 names, +95.5 bps mean)." },
+    { p: "xmarket/research/wave_d_notes.md", s: "~/.tengu/state/xmarket/research/wave_d_notes.md", k: "FILE", h: "98afec4055d5c74c8c05acffca6bc16125b01be82855de3d9a7033606e5e4ee0", f: 1, b: 10277, pv: "NOT_APPLICABLE", c: "NONE", r: "doc", n: "Wave D design constraints for rule W (universe 75, fees, risk sizing, shadow account rules)." },
+    { p: "xlab/backtests", s: "~/.tengu/state/xlab/backtests", k: "DIR", h: "9cce5669bf9ec4dac4d7aa9323ee70bc5d69b18ca1ba89140fab05c049c0af66", f: 405, b: 174595925, pv: "DERIVED", c: "DEVELOPMENT", r: "run-dir", n: "63 xlab run dirs + decision-cache.db (1616 Jev answers, typesafe/jev-1.13-20260917, 2026-10-01) + holdout-reads.jsonl (4 reads). Runs with a split hold their HOLDOUT halves inside report.json / report.md (class HOLDOUT for those figures); the two 2026-10-05 weeknight runs read their holdout without a holdout-reads row. No run between 2026-10-02T18:38:33Z and 2026-10-05T14:03:28Z." },
+    { p: "xlab/market.db", s: "~/.tengu/state/xlab/market.db", k: "FILE", h: "b5a0dc45e37660f8f66be0eb401b3adc67dcd4ef47758c71cafc1951dc503ac7", f: 1, b: 96423936, pv: "BACKFILLED", c: "DEVELOPMENT", r: "warehouse", n: "History warehouse (bars 1h + 1m, funding, ctx), every row backfilled; the weekend-window 1m bars / 1h refresh / funding were fetched 2026-10-05T14:01:16Z → 14:20:24Z, after the run stopped (egress sessions history-backfill:1791208874503, history-backfill:1791209536916, history-backfill:1791209690803). Its -wal is empty (0 B): market.db copied alone." },
+    { p: "xlab/logs", s: "~/.tengu/state/xlab/logs", k: "DIR", h: "acc87ffae6aa70a80a1d7e32065fe449e2f67968a9d5c95f34e81becc724facd", f: 15, b: 1614546, pv: "DERIVED", c: "DEVELOPMENT", r: "log", n: "Architect turns 1–4, the 2026-10-01 1h backfill log, Jev gate check / replay, strategy library run." },
+    { p: "tengu-logs/egress.jsonl", s: "~/.tengu/logs/egress.jsonl", k: "FILE", h: "af5c810f9b2d0d454ac5c85ea27f7ba24cafe633bbb656a52d6ab8a13d1a5184", f: 1, b: 31663524, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "log", n: "Egress audit 2026-09-19T22:17:16Z → 2026-10-05T14:20:26Z: the run's traffic (pid 31380 weekend, pid 31386 desk) plus earlier sessions and the post-run backfill; the sampler's curl calls are not in it." },
+    { p: "tengu-logs/tengu.log", s: "~/.tengu/logs/tengu.log", k: "FILE", h: "2c92818adb608ef66541137c532968c2c4759d97c4f0e055e090b98bedee53a2", f: 1, b: 45071880, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "log", n: "Both runners interleaved 2026-10-02 → 2026-10-05 (+ earlier sessions from 2026-09-15 and the desk pre-run 18:58:04–18:58:44Z)." },
+    { p: "tengu-logs/risk.jsonl", s: "~/.tengu/logs/risk.jsonl", k: "FILE", h: "48eb153350461c31c6aeae879fe2590f804bcf4ce92a2c42cb6aa5f6ca69f6ef", f: 1, b: 1117546, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "log", n: "156 risk verdict lines 2026-10-04T22:00:00.703Z → 2026-10-05T13:00:10.374Z = the ledger's risk_decisions mirror (canonical: the ledger)." },
+    { p: "tengu-logs/decisions.jsonl", s: "~/.tengu/logs/decisions.jsonl", k: "FILE", h: "fa69ebb2778693a565c6ec0b1301fc804f278b308be3d4d4eb3e4a513aab2b07", f: 1, b: 62194, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "log", n: "82 Jev decision lines 2026-09-24 → 2026-09-29; none in the run window (rule W ran as a tool feed, loops: {})." },
+    { p: "ext/xmarket-weekend-ws/observations.db", s: "~/xmarket-weekend-ws/.tengu/observations.db", k: "FILE", h: "3f0b9d111cdeab8f5abc48f52195ea19b2dc57958362be470e6dca15a2bf3d5b", f: 1, b: 1097728, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "observation-cache", n: "Weekend workspace observation cache (latest row per key, 424 rows): the 74 xm_weekend_signal/1 rows + the final xm_weekend/1:2026-10-02 row. Its 7-day retention purge would delete the xm_weekend/1:2026-10-02 row after ~2026-10-12." },
+    { p: "ext/xmarket-workspace/observations.db", s: "~/xmarket-workspace/.tengu/observations.db", k: "FILE", h: "5975ae81dbe7f3f9cc557c7f22c92abddf69c17923cc1276b70d2d89cdc28ce5", f: 1, b: 573440, pv: "LIVE_RECORDED", c: "FORWARD_PAPER", r: "observation-cache", n: "Desk workspace observation cache." },
+    { p: "ext/binaries/tengu-6fcb455", s: "~/.cache/tengu-xm.noindex/weekend/tengu-6fcb455", k: "FILE", h: "e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72", f: 1, b: 30640528, pv: "NOT_APPLICABLE", c: "NONE", r: "binary", n: "The frozen weekend binary, commit 6fcb455bae5553e2d51390e4cedd334779ca0d9c; expected sha256 e2c3bb8f88f25d4a6a9275200b7b248ac8a052db16e344fb674da4e208320c72." },
+    { p: "ext/binaries/tengu-desk-2026-10-02", s: "~/.cache/tengu-xm.noindex/weekend/tengu-desk-2026-10-02", k: "FILE", h: "13ee5f988dc100e140d3cd73da233aca4a7ef14581151ac67ce5be65c786e8a0", f: 1, b: 33059504, pv: "NOT_APPLICABLE", c: "NONE", r: "binary", n: "The desk recorder binary (built 2026-10-02T19:18:50Z), commit UNKNOWN; inventory sha256 13ee5f988dc100e140d3cd73da233aca4a7ef14581151ac67ce5be65c786e8a0." }
+  ];
+  var PROV = { LIVE_RECORDED: "ok", BACKFILLED: "warn", DERIVED: "data", NOT_APPLICABLE: "lbl", MISSING: "bad", REPORTED: "warn" };
+  var filter = "all";
+  var fbox = $("w1-filter");
+  ["all", "FORWARD_PAPER", "DEVELOPMENT", "NONE"].forEach(function (c) {
+    var n = c === "all" ? ITEMS.length : ITEMS.filter(function (i) { return i.c === c; }).length;
+    var b = document.createElement("button");
+    b.type = "button"; b.setAttribute("data-c", c);
+    b.textContent = (c === "all" ? "all" : c) + " · " + n;
+    b.addEventListener("click", function () { filter = c; items(); });
+    fbox.appendChild(b);
+  });
+  function items() {
+    Array.prototype.forEach.call(fbox.children, function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-c") === filter ? "true" : "false"); });
+    var box = $("w1-items");
+    box.innerHTML = "";
+    ITEMS.filter(function (i) { return filter === "all" || i.c === filter; }).forEach(function (i) {
+      var d = document.createElement("details");
+      d.innerHTML =
+        "<summary><span class=\"pth\">" + esc(i.p) + "</span>" +
+        "<span class=\"chip kind\">" + i.k + "</span>" +
+        "<span class=\"chip " + (PROV[i.pv] || "lbl") + "\">" + i.pv + "</span>" +
+        "<span class=\"chip lbl\">" + i.c + "</span>" +
+        "<span class=\"chip lbl\">" + esc(i.r) + "</span></summary>" +
+        "<div class=\"body\"><dl class=\"kv\">" +
+        "<dt>source</dt><dd>" + esc(i.s) + "</dd>" +
+        "<dt>sha256</dt><dd>" + i.h + (i.k === "DIR" ? " (tree hash)" : "") + "</dd>" +
+        "<dt>files · bytes</dt><dd>" + n3(i.f) + " · " + n3(i.b) + "</dd></dl>" +
+        (i.n ? "<p class=\"nt\">" + esc(i.n) + "</p>" : "") + "</div>";
+      box.appendChild(d);
+    });
+  }
+  items();
+
+  /* --- coverage: the algorithm of domain/evidence_coverage.rs on 10 example slots --- */
+  var BASE = Date.UTC(2026, 9, 4, 22, 0, 0); /* example window start */
+  function at(m) { return new Date(BASE + m * 60000).toISOString(); }
+  function runs(flags) {
+    var out = [], s = null;
+    flags.forEach(function (g, i) { if (g && s === null) s = i; if (!g && s !== null) { out.push([s, i]); s = null; } });
+    if (s !== null) out.push([s, flags.length]);
+    return out;
+  }
+  function fill(bars, key, a, b) {
+    var have = bars[key] || {}, f = { minutes: 0, backfilled: 0, flat: 0 };
+    for (var m = a; m < b; m++) { f.minutes++; if (m in have) { f.backfilled++; if (have[m] === 0) f.flat++; } }
+    f.label = f.minutes > 0 && f.backfilled === f.minutes ? "BACKFILLED" : "MISSING";
+    return f;
+  }
+  function cov() {
+    var N = 10, useBars = $("cv-bars").checked, sw4 = $("cv-sw4").checked;
+    var A = [0, 1, 2, 5, 6, 7, 8, 9], B = [0, 1, 2, 5, 6, 8, 9];
+    if (sw4) { A.push(4); B.push(4); }
+    var streams = [
+      { key: "mkt_ctx/1:x:A", id: "A", covered: A, rows: A.length },
+      { key: "mkt_ctx/1:x:B", id: "B", covered: B, rows: B.length },
+      { key: "mkt_ctx/1:x:C", id: "C", covered: [], rows: 10 }
+    ];
+    var bars = { A: {}, B: { 3: 1 } };
+    for (var m = 0; m < N; m++) bars.A[m] = m === 3 ? 0 : 4;
+    if ($("cv-b4").checked) bars.B[4] = 1;
+    if ($("cv-b7").checked) bars.B[7] = 1;
+    var src = "market.db 1m";
+    var swept = [], live = [], never = [];
+    for (var i = 0; i < N; i++) swept.push(false);
+    streams.forEach(function (s) {
+      var c = []; for (var i = 0; i < N; i++) c.push(false);
+      s.covered.forEach(function (t) { c[t] = true; swept[t] = true; });
+      if (c.some(Boolean)) live.push({ s: s, cov: c }); else if (s.rows > 0) never.push(s.key);
+    });
+    var sruns = runs(swept.map(function (x) { return !x; }));
+    var inSweep = {}; sruns.forEach(function (r) { for (var i = r[0]; i < r[1]; i++) inSweep[i] = true; });
+    var gaps = sruns.map(function (r) {
+      var g = { a: r[0], b: r[1], bf: 0, miss: [], bars: 0, flat: 0 };
+      live.forEach(function (l) {
+        if (!useBars) { g.miss.push(l.s.key); return; }
+        var f = fill(bars, l.s.id, r[0], r[1]);
+        g.bars += f.backfilled; g.flat += f.flat;
+        if (f.label === "BACKFILLED") g.bf++; else g.miss.push(l.s.key);
+      });
+      return g;
+    });
+    var complete = 0, own = [];
+    live.forEach(function (l) {
+      var o = runs(l.cov.map(function (c, i) { return !c && !inSweep[i]; }));
+      if (!o.length) complete++;
+      o.forEach(function (r) { own.push({ key: l.s.key, a: r[0], b: r[1], label: useBars ? fill(bars, l.s.id, r[0], r[1]).label : "MISSING" }); });
+    });
+    var tl = [], cur = 0;
+    function pushLive(a, b) { if (b > a) tl.push([a, b, "LIVE_RECORDED", live.length, ""]); }
+    gaps.forEach(function (g) {
+      pushLive(cur, g.a);
+      if (g.bf > 0) tl.push([g.a, g.b, "BACKFILLED", g.bf, src + ": " + g.bars + " bars, " + g.flat + " flat (n = 0)"]);
+      if (g.miss.length) tl.push([g.a, g.b, "MISSING", g.miss.length, useBars ? "no " + src + " bar for every minute" : "no second source"]);
+      cur = g.b;
+    });
+    pushLive(cur, N);
+    /* grid */
+    var grid = $("cv-grid"), h = "<span></span>";
+    for (var i = 0; i < N; i++) h += "<span class=\"h\">" + i + "</span>";
+    streams.forEach(function (s) {
+      var l = live.filter(function (x) { return x.s === s; })[0];
+      h += "<span class=\"k\">" + s.id + "</span>";
+      for (var i = 0; i < N; i++) {
+        var cls = "abs", t = "";
+        if (l) {
+          if (l.cov[i]) cls = "live";
+          else if (useBars && i in bars[s.id]) { cls = "bf"; t = bars[s.id][i] === 0 ? "0" : ""; }
+          else cls = "miss";
+        }
+        h += "<span class=\"c " + cls + "\">" + t + "</span>";
+      }
+    });
+    grid.innerHTML = h;
+    /* text, as coverage_text prints it (example instants) */
+    var nOwn = own.length, keysOwn = {}, slotsOwn = 0;
+    own.forEach(function (o) { keysOwn[o.key] = 1; slotsOwn += o.b - o.a; });
+    var lab = { LIVE_RECORDED: "lv", BACKFILLED: "bf", MISSING: "ms" };
+    var t = "mkt_ctx/1  " + at(0) + " → " + at(N) + "  cadence 60 s\n" +
+      "slots " + N + "  swept " + swept.filter(Boolean).length + "  keys " + streams.length + " (live " + live.length + ", complete " + complete + ", never covered " + never.length + ")\n" +
+      (useBars ? "second source " + src + "\n" : "") +
+      (never.length ? "never covered: " + never.join(", ") + "\n" : "") + "timeline:\n";
+    tl.forEach(function (r) { t += "  " + at(r[0]) + "  " + at(r[1]) + "  <span class=\"" + lab[r[2]] + "\">" + r[2] + "</span>  " + r[3] + (r[4] ? "  " + esc(r[4]) : "") + "\n"; });
+    t += "sweep gaps: " + gaps.length + "\n";
+    gaps.forEach(function (g) { t += "  " + at(g.a) + " → " + at(g.b) + "  " + (g.b - g.a) + " slot(s)  backfilled keys " + g.bf + "  missing keys " + g.miss.length + "  bars " + g.bars + " (flat " + g.flat + ")\n"; });
+    t += "key gaps outside sweep gaps: " + nOwn + " over " + Object.keys(keysOwn).length + " keys (" + slotsOwn + " slots)\n";
+    own.forEach(function (o) { t += "  " + o.key + "  " + at(o.a) + " → " + at(o.b) + "  " + (o.b - o.a) + " slot(s)  " + (o.label === "BACKFILLED" ? "Backfilled" : "Missing") + "\n"; });
+    $("cv-out").innerHTML = t;
+  }
+  ["cv-bars", "cv-b4", "cv-b7", "cv-sw4"].forEach(function (i) { $(i).addEventListener("change", cov); });
+  cov();
+
+  /* --- grade: the 12 checks; each fault = one test case of domain/xm/grade.rs --- */
+  var CHECKS = [
+    ["cash_sum", "Σ non-deposit cash = final − initial; each balance = previous + amount"],
+    ["trades_vs_cash", "Σ trade net = final − initial; no funding row outside a trade"],
+    ["funding_formula", "payment = qty × oracle × rate"],
+    ["flat_at_end", "flat after the last fill; positions qty 0; no funding_owed row"],
+    ["risk_verdicts", "every order has its verdict row; every filled order an allow"],
+    ["cash_journal", "each fill and funding row has its cash row, right amount"],
+    ["fills_chain", "qty_before / qty_after = running size; realized at average cost"],
+    ["orders_vs_fills", "filled_qty, avg_px, fee_usd = the order's fills"],
+    ["positions_table", "realized, fees, funding = Σ the rows"],
+    ["chronology", "verdict ≤ order ≤ fill timestamps"],
+    ["funding_qty", "a funding row's qty = the size the fills hold at its hour"],
+    ["funding_hours", "every hour held has a funding or funding_owed row, once"]
+  ];
+  var FAULTS = [
+    ["none", "intact ledger", []],
+    ["cash", "the cash row of the cover says 1.5, not 1.991", ["cash_sum", "cash_journal"]],
+    ["pay", "the funding row's payment is −0.003, not −0.002", ["trades_vs_cash", "funding_formula", "cash_journal", "positions_table"]],
+    ["deny", "the cover's risk verdict is a deny", ["risk_verdicts"]],
+    ["open", "the positions row still holds qty −1", ["flat_at_end"]],
+    ["sign", "funding booked as qty +2 (sign flipped), cash rows follow", ["funding_qty"]],
+    ["hour", "cover at 2 h 0.5 s: the 2 h funding hour never booked", ["funding_hours"]]
+  ];
+  var fl = $("gr-faults");
+  FAULTS.forEach(function (f, i) {
+    var l = document.createElement("label");
+    l.className = "tick"; l.setAttribute("for", "gf-" + f[0]);
+    l.innerHTML = "<input type=\"radio\" name=\"gf\" id=\"gf-" + f[0] + "\" value=\"" + i + "\"" + (i ? "" : " checked") + "> " + f[1];
+    fl.appendChild(l);
+  });
+  function grade() {
+    var f = FAULTS[+document.querySelector("input[name=gf]:checked").value], bad = f[2];
+    $("gr-checks").innerHTML = CHECKS.map(function (c, i) {
+      var x = bad.indexOf(c[0]) >= 0;
+      return "<div class=\"ck" + (x ? " fail" : "") + "\"><span class=\"st\">" + (x ? "FAIL" : "PASS") + "</span><b>" + (i + 1) + " " + c[0] + "</b><span>" + c[1] + "</span></div>";
+    }).join("");
+    var v = $("gr-verdict");
+    v.className = bad.length ? "verdict bad" : "verdict ok";
+    v.textContent = bad.length ? bad.length + " of 12 FAIL · exit 1" : "12 of 12 PASS · exit 0";
+    $("gr-exit").textContent = bad.length ? "Error: reconciliation FAIL: acct" : "";
+  }
+  fl.addEventListener("change", grade);
+  grade();
+
+  /* --- regrade: instants and the look-ahead refusal (example instants, CLI defaults) --- */
+  var H = 3600000, ANCHOR = Date.UTC(2026, 9, 3, 0, 0, 0), ENTRY = Date.UTC(2026, 9, 4, 22, 0, 0), EXIT = Date.UTC(2026, 9, 5, 13, 0, 0);
+  function iso(ms) { return new Date(ms).toISOString(); }
+  function nw(ms) { return "<span class=\"nw\">" + iso(ms) + "</span>"; }
+  function regrade() {
+    var off = +$("rg-off").value, allow = $("rg-allow").checked, next = $("rg-book").value === "next";
+    var sig = ENTRY + off * 60000;
+    $("rg-off-out").textContent = (off >= 0 ? "+" : "") + off + " min";
+    function book(t) { return next ? "first hl_book/1 in [" + nw(t) + ", " + nw(t + 60000) + "]" : "last hl_book/1 in [" + nw(t - 60000) + ", " + nw(t) + "]"; }
+    var first = (Math.floor(ENTRY / H) + 1) * H, hours = 0;
+    for (var h = first; h <= EXIT; h += H) hours++;
+    $("rg-kv").innerHTML =
+      "<dt>anchor price</dt><dd>last mkt_ctx/1 in [" + nw(ANCHOR - 600000) + ", " + nw(ANCHOR) + "]</dd>" +
+      "<dt>signal price</dt><dd>last mkt_ctx/1 in [" + nw(sig - 120000) + ", " + nw(sig) + "]</dd>" +
+      "<dt>entry fill</dt><dd>" + book(ENTRY) + "</dd>" +
+      "<dt>exit fill</dt><dd>" + book(EXIT) + "</dd>" +
+      "<dt>funding hours</dt><dd>" + hours + ", " + nw(first) + " → " + nw(EXIT) + ", each a row within 120 s</dd>";
+    var v = $("rg-verdict"), msg = $("rg-msg");
+    if (sig > ENTRY && !allow) {
+      v.className = "verdict bad"; v.textContent = "refused · exit 1";
+      msg.textContent = "Error: signal at " + sig + " is after the entry at " + ENTRY + ": the selection would read prices from after the positions opened (look-ahead) — refused; pass --allow-signal-after-entry to grade it anyway, flagged LOOK-AHEAD";
+    } else if (sig > ENTRY) {
+      v.className = "verdict warn"; v.textContent = "graded, flagged";
+      msg.innerHTML = "line 1: LOOK-AHEAD: signal " + nw(sig) + " after entry " + nw(ENTRY);
+    } else {
+      v.className = "verdict ok"; v.textContent = sig === ENTRY ? "graded: signal read at the entry" : "graded: signal before the entry, no flag";
+      msg.textContent = "anchor < entry < exit and anchor < signal < exit hold.";
+    }
+  }
+  ["rg-off", "rg-allow", "rg-book"].forEach(function (i) { $(i).addEventListener("input", regrade); $(i).addEventListener("change", regrade); });
+  regrade();
+})();
+</script>
+</body>
+</html>
