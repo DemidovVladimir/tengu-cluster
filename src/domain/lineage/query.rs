@@ -69,8 +69,9 @@ pub struct AttemptRow {
     pub families: Vec<String>,
 }
 
-/// `spec_sha256` → variant ids.
-fn variants_by_hash(reg: &Registry) -> BTreeMap<&str, Vec<&Variant>> {
+/// `spec_sha256` → the variants carrying it (also a strategy ranking's
+/// standing, `domain/backtest/ranking.rs`).
+pub(crate) fn variants_by_hash(reg: &Registry) -> BTreeMap<&str, Vec<&Variant>> {
     let mut m: BTreeMap<&str, Vec<&Variant>> = BTreeMap::new();
     for v in reg.variants.values() {
         if let Some(h) = &v.spec.spec_sha256 {

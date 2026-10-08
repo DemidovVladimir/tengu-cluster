@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Strategy ranking · Tengu</title>
-<meta name="description" content="Strategy ranking: a preregistered ranking contract in the lineage registry, sealed before any ranking; the [strategy_ranking] sandbox section; the cohort identity every backtest report records; run-dir retention that keeps every cited run.">
+<meta name="description" content="Strategy ranking: a preregistered ranking contract in the lineage registry, sealed before any ranking; the [strategy_ranking] sandbox section; the cohort identity every backtest report records; the pure ranker that selects one run per strategy and cohort and orders them weakest first; run-dir retention that keeps every cited run.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -25,7 +25,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">史</span> Research · Strategy ranking</div>
   <h1>Strategy ranking</h1>
-  <p class="lede">A ranking orders a sandbox's strategies from weakest to strongest on the same data. Its rules sit in a lineage record, sealed before any ranking exists. Today the contract, its load checks, the run identity and retention are built; the ranker and publisher come next.</p>
+  <p class="lede">A ranking orders a sandbox's strategies from weakest to strongest on the same data, under rules sealed in a lineage record first. Built: the contract, its load checks, the run identity, retention and the pure ranker; the publisher comes next.</p>
   <ul class="facts">
     <li><b>2</b> draft contracts, both unsealed</li>
     <li><b>15</b> daily · <b>8</b> weekend strategies</li>
@@ -139,12 +139,43 @@
   <p class="note">The weekend contract <code>rank.xlab-w2.weekend.v1</code> ranks the eight weekend-window strategies on Mondays only (<code>days = ["Mon"]</code>), cutoff 12:00 New York, after the weekend's exits close.</p>
 </section>
 
+<section class="sec" aria-labelledby="s-ranker">
+  <div class="sec-head">
+    <span class="kicker">The ranker (pure)</span>
+    <h2 id="s-ranker">From runs to rows</h2>
+    <p>For one ranking date, each listed strategy brings a finished run, a failure or a stale-data flag. Checks run in this order; the first that applies keeps a run out, and the ranking lists it with its reason.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Reason</th><th>List</th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td><code>not_in_contract</code></td><td>dropped</td><td>the strategy is not in <code>strategies</code></td></tr>
+        <tr><td><code>failed:&lt;stage&gt;</code> · <code>stale</code> · <code>missing</code></td><td>failed</td><td>no run: a stage failed, data too old for <code>[freshness]</code>, or no input at all</td></tr>
+        <tr><td><code>holdout_present</code></td><td>ineligible</td><td>a split run: the holdout was read</td></tr>
+        <tr><td><code>arm_missing</code></td><td>ineligible</td><td>the report has no arm of the contract's name</td></tr>
+        <tr><td><code>cohort_unknown:&lt;field&gt;</code></td><td>ineligible</td><td>a cohort field the report does not record (a report from before 2026-10-08)</td></tr>
+        <tr><td><code>cohort_mismatch:&lt;field&gt;</code></td><td>ineligible</td><td><code>from_ms</code> ≠ the contract's <code>from</code>, or <code>to_ms</code> / <code>data_through_ms</code> ≠ the cutoff</td></tr>
+        <tr><td><code>superseded_run</code></td><td>dropped</td><td>a newer run of the strategy in the same cohort is judged instead</td></tr>
+        <tr><td><code>excluded_status</code></td><td>ineligible</td><td>a variant in <code>exclude_status</code></td></tr>
+        <tr><td><code>insufficient_trades</code> · <code>insufficient_periods</code> · <code>funding_incomplete</code></td><td>ineligible</td><td>below <code>min_trades</code> or <code>min_periods</code>, above <code>max_funding_incomplete</code></td></tr>
+        <tr><td><code>metric_missing:&lt;key&gt;</code> · <code>non_finite:&lt;key&gt;</code></td><td>ineligible</td><td>a rated figure is absent (never read as 0), NaN or infinite</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note"><b>Standing.</b> <code>evidence_tier</code> is the highest result class of PASS experiments of the variants carrying the run's <code>spec_sha256</code>, else <code>NONE</code>; a PENDING forward lifts nothing. <code>verdict</code> is their weakest status: REJECTED 0, UNREGISTERED / INCONCLUSIVE / SUPERSEDED 1, REGISTERED / ACTIVE 2, SURVIVING 3.</p>
+  <div class="term-wrap"><pre class="term"><span class="ln"># example row: tier NONE · UNREGISTERED · CI low −3.00 bps · mean +20.00 bps · best-2 share 0.30 · max DD 120 bps</span>
+<span class="ln">rating = [0, 1, -300, 2000, -30, -12000]   # round(x / 0.01); a leading "-" negates</span>
+<span class="ln"># rows sort ascending by this tuple, then by strategy id: rank 1 = the weakest of its cohort</span></pre></div>
+</section>
+
 <section class="sec" aria-labelledby="s-states">
   <div class="sec-head">
     <span class="kicker">Outcomes</span>
-    <h2 id="s-states">What verify and load say</h2>
+    <h2 id="s-states">What verify, load and the ranker say</h2>
   </div>
   <ul class="states">
+    <li><span class="chip ok">ok</span><span><b>COMPLETE</b>Every listed strategy has a run, ranked or listed as ineligible. Under <code>on_missing = "EXCLUDE"</code>, failed strategies are listed and the rest is ranked.</span></li>
+    <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run.</span></li>
     <li><span class="chip warn">warn</span><span><b>ranking_unsealed</b>No <code>[[sealed]]</code> row: a draft. Both repo contracts are here.</span></li>
     <li><span class="chip bad">error</span><span><b>invalid_field</b>A shape rule: empty or repeated strategies, cohort fields or rating keys, an unknown zone, a bad cutoff, <code>from</code> not a UTC day, an arm other than research or capped.</span></li>
     <li><span class="chip bad">error</span><span><b>seal_mismatch</b>A sealed contract whose values changed since.</span></li>
@@ -163,6 +194,10 @@
     <li><span><b>A seal is never redone.</b> <code>seal</code> refuses a contract already sealed or not <code>preregistered = true</code>.</span></li>
     <li><span><b>Costs count.</b> <code>costs_sha256</code> moves when a resolved cost moves; <code>spec_sha256</code> does not.</span></li>
     <li><span><b>Cited runs stay.</b> In a sandbox bound to no generation too, retention keeps the <code>[strategy_ranking]</code> registry's cited runs.</span></li>
+    <li><span><b>Missing is never zero.</b> A rated figure that is absent, NaN or infinite makes the run ineligible; it is never ranked as 0.</span></li>
+    <li><span><b>One run per strategy and cohort.</b> The newest run id is judged; an older run never stands in for an ineligible newer one.</span></li>
+    <li><span><b>Cohorts never mix.</b> Runs rank together only when every cohort field is equal; each cohort gets its own table.</span></li>
+    <li><span><b>Same data, same hash.</b> <code>content_sha256</code> leaves out run ids, report hashes and the generation time, so a rerun on the same data hashes the same.</span></li>
   </ul>
 </section>
 
@@ -189,6 +224,7 @@
         <tr><td><code>src/domain/lineage/ranking.rs</code></td><td><code>RankingContract</code>, cohort fields, rating keys, shape rules</td></tr>
         <tr><td><code>src/domain/lineage/validate.rs</code></td><td><code>ranking_unsealed</code>, the shape findings</td></tr>
         <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code> and its load rules</td></tr>
+        <tr><td><code>src/domain/backtest/ranking.rs</code></td><td><code>RunFacts</code>, <code>StrategyStanding</code>, <code>select</code>, <code>rank</code>, <code>ranking.md</code>, <code>content_sha256</code></td></tr>
         <tr><td><code>src/application/backtest/mod.rs</code></td><td>the cohort identity, the cited runs retention keeps</td></tr>
         <tr><td><code>lineage/rankings/</code></td><td>the two draft contracts</td></tr>
       </tbody>
