@@ -6,6 +6,18 @@
 
 ---
 
+## Strategy ranking built, unsealed (Thu 2026-10-08, branch `feature/strategy-ranking`)
+
+| Item | State |
+|---|---|
+| Doc | `docs/strategy-ranking-automation-2026-10-08.md` (audit A1–A12 as built, deviations, SR-0–SR-8 states, operator decisions) · tutorial `docs/tutorial/strategy-ranking.html` |
+| Built | record kind `ranking` (`lineage/rankings/`, `tengu lineage seal ranking:<id>`, Warn `ranking_unsealed`) · cohort identity in `report.json` (`generation`, `instruments_sha256`, `costs_sha256`) · `[strategy_ranking]` + retention of cited runs in unbound sandboxes · pure ranker `domain/backtest/ranking.rs` · coordinator `application/ranking/` (seal check, DST-correct date + cutoff, lease `ranking:<id>`, manifest resume, freshness, backtests, publish dated + `latest`) · `tengu ranking run \| show` · opt-in tool `strategy_ranking` (every engine; capability `intel.strategy_ranking` CANDIDATE) · xlab-w2: contracts listed, private `xl_ranker`, feeds `history_refresh` / `strategy_ranking_daily` / `strategy_ranking_weekend`, `keep_runs = 200` |
+| Commits | `caacdc0be446ce9d7628beacbc31ef0992855c1f`, `42584f85ca739b7ee6a0df408726e05488d5deec`, `5a4682e8f0c7fce262f94895e2fe9b134f71e4ae`, `7c7a7cdc5df01f1b117abbc8b0c3a30dcff5b78d`, `6573e24f44da1eb35ff2f7930348cbd884fa1239`, `6a99fe212062036833b8a4bb28e3a6457573262d` + the SR-8 docs |
+| Tests | domain ranker + contract + validate unit tests; `application::ranking::tests` (lease, resume, publish order, stale, DST, `a_forward_grade_changes_only_later_dates`); `tests/strategy_ranking.rs` on the binary; conformance case `strategy_ranking_hl`; engine-matrix set `xlab_rank` (offline local leg) |
+| G-WKND (merge) | after weekend #2's Monday snapshot (Mon 2026-10-12): the frozen weekend binary's W1 load refuses the unknown `lineage/rankings/` dir |
+| G-SR1 (operator) | both contracts committed **unsealed**: seal as drafted or change first (strategy set, rating order, cohort fields — `instruments_sha256` + `costs_sha256` split xlab-w2 into several cohorts — cutoffs, the weekend contract's `days`). Until then every ranking is refused; nothing ran on `~/.tengu/state/xlab` |
+| Open | INCOMPLETE is terminal (rerun = delete the date dir) · a run cut by shutdown keeps its lease ≤ 15 min · the W1 `xlab` sandbox shares the state dir and can prune xlab-w2 runs no `latest.json` cites · live matrix legs `*_xlab_rank` and `tengu run --sandbox xlab-w2` not run |
+
 ## Operator Review #1 = APPROVE (Thu 2026-10-08)
 
 | Item | Answer |

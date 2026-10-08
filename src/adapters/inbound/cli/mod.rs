@@ -7,6 +7,7 @@ mod doctor;
 mod evidence;
 mod history;
 mod lineage;
+mod ranking;
 mod risk;
 mod run_agent;
 mod skill;
@@ -140,6 +141,17 @@ enum Commands {
         sandbox: Option<String>,
         #[command(flatten)]
         args: backtest::BacktestArgs,
+    },
+    /// Strategy rankings of a [strategy_ranking] sandbox (no LLM): `run`
+    /// one ranking date of a sealed contract — freshness, one backtest per
+    /// strategy, rank, publish <state dir>/strategy-rankings/<contract>/<date>/
+    /// and latest — under a lease, resumable; `show` a published ranking.md.
+    Ranking {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: ranking::RankingAction,
     },
     /// Preserve and grade forward evidence (docs/lineage-2026-10-06.md § 3):
     /// `snapshot` a record into a read-only vault, `verify` it, recorder
@@ -510,7 +522,12 @@ pub(crate) async fn run() -> Result<()> {
             .expect("Failed to set tracing subscriber");
     } else if matches!(
         cli.command,
-        Some(Commands::History { .. } | Commands::Risk { .. } | Commands::Backtest { .. })
+        Some(
+            Commands::History { .. }
+                | Commands::Risk { .. }
+                | Commands::Backtest { .. }
+                | Commands::Ranking { .. }
+        )
     ) {
         // stdout carries JSON lines / the operator's text; logs go to stderr.
         tracing_subscriber::fmt()
@@ -644,6 +661,10 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Backtest { sandbox, args } => {
             let config = load_sandbox_or(sandbox, config)?;
             backtest::run_backtest(&config, args).await
+        }
+        Commands::Ranking { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            ranking::run_ranking_command(&config, action).await
         }
         Commands::Eval {
             skills,
@@ -809,6 +830,7 @@ fn replacing_sandbox(command: &Option<Commands>) -> Option<&str> {
         | Commands::Decide { sandbox, .. }
         | Commands::History { sandbox, .. }
         | Commands::Backtest { sandbox, .. }
+        | Commands::Ranking { sandbox, .. }
         | Commands::Risk { sandbox, .. } => sandbox.as_deref(),
         _ => None,
     }
@@ -838,6 +860,16 @@ mod tests {
         assert_eq!(
             replacing_sandbox(&command(&["tengu", "run", "--sandbox", "xmarket"])),
             Some("xmarket")
+        );
+        assert_eq!(
+            replacing_sandbox(&command(&[
+                "tengu",
+                "ranking",
+                "run",
+                "--sandbox",
+                "xlab-w2"
+            ])),
+            Some("xlab-w2")
         );
         assert_eq!(replacing_sandbox(&command(&["tengu", "chat"])), None);
         assert_eq!(replacing_sandbox(&command(&["tengu", "status"])), None);

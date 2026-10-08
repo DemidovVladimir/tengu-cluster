@@ -419,6 +419,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, state dir and rate limits.</span></li>
     <li><span><b>Hardened means hardened.</b> With <code>[risk]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
     <li><span><b>Bound sandboxes stay in their generation.</b> With <code>[generation]</code>, every load checks the sandbox against <code>lineage/generations/&lt;id&gt;.toml</code>; xlab and xmarket-weekend bind W1.</span></li>
+    <li><span><b>Ranking contracts fit the sandbox.</b> With <code>[strategy_ranking]</code>, every load refuses an unknown contract, one of another sandbox, or a contract strategy missing from <code>[backtest.strategies]</code> (<a href="strategy-ranking.html">Strategy ranking</a>).</span></li>
   </ul>
 </section>
 
@@ -453,8 +454,9 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
       <tbody>
         <tr><td><code>src/config/mod.rs</code></td><td><code>Config</code>, <code>AgentConfig</code>, defaults, <code>Config::load</code>, validation, <code>fold_default_scopes</code></td></tr>
         <tr><td><code>src/config/paths.rs</code></td><td><code>TENGU_HOME</code>, the default config path, <code>~</code> expansion, a file's sandbox name</td></tr>
-        <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections</code>: what tools read at call time, the bound generation's scope included</td></tr>
+        <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections</code>: what tools read at call time, the bound generation's scope and the <code>[strategy_ranking]</code> section included</td></tr>
         <tr><td><code>src/config/lineage.rs</code></td><td><code>[generation]</code>: the binding <code>Config::load</code> checks</td></tr>
+        <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code>: the ranking contracts a sandbox runs, their load rules</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>rules for a <code>[risk]</code> or signer sandbox</td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td><code>load_sandbox_or</code>: <code>--sandbox</code>, the <code>TENGU_CONFIG</code> pin, egress</td></tr>
         <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td><code>-c</code>, the base load, every subcommand's <code>--sandbox</code></td></tr>

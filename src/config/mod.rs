@@ -17,6 +17,7 @@ pub(crate) mod runtime;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
+pub(crate) mod strategy_ranking;
 pub(crate) mod xmarket;
 
 use serde::{Deserialize, Serialize};
@@ -256,6 +257,18 @@ pub struct Config {
     #[serde(skip)]
     pub generation_scope:
         Option<std::sync::Arc<crate::domain::lineage::generation::GenerationScope>>,
+
+    /// `[strategy_ranking]` — the strategy-ranking contracts this sandbox runs
+    /// and their lineage registry (`config/strategy_ranking.rs`); run-dir
+    /// retention keeps every run that registry cites. Absent = none.
+    #[serde(default)]
+    pub strategy_ranking: Option<strategy_ranking::StrategyRankingConfig>,
+
+    /// Runtime (never in TOML): `[strategy_ranking]` resolved by
+    /// `Config::load` (`strategy_ranking::section_errors`) →
+    /// `SandboxSections::ranking`.
+    #[serde(skip)]
+    pub ranking_section: Option<std::sync::Arc<strategy_ranking::RankingSection>>,
 
     /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
     /// `None` for the default user config. Populated by `load_sandbox_or` in
@@ -1171,11 +1184,14 @@ impl Config {
         // Pins hash the raw text (no `${VAR}` substitution), as `verify --pins`.
         let (generation_errors, scope) = lineage::binding_errors(&config, path, &raw);
         errors.extend(generation_errors);
+        let (ranking_errors, ranking) = strategy_ranking::section_errors(&config, path);
+        errors.extend(ranking_errors);
         Self::fail_on(errors)?;
         for warning in config.validation_warnings() {
             tracing::warn!(path = %path.display(), "{warning}");
         }
         config.generation_scope = scope.map(std::sync::Arc::new);
+        config.ranking_section = ranking.map(std::sync::Arc::new);
         config.loaded_from = Some(path.to_path_buf());
         config.fold_default_scopes();
         Ok(config)
@@ -1239,6 +1255,7 @@ impl Config {
             weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
             backtest: self.backtest.clone(),
             generation: self.generation_scope.clone(),
+            ranking: self.ranking_section.clone(),
         }
     }
 
@@ -1698,6 +1715,8 @@ impl Default for Config {
             skill_lifecycle: None,
             generation: None,
             generation_scope: None,
+            strategy_ranking: None,
+            ranking_section: None,
             sandbox_name: None,
             loaded_from: None,
         }

@@ -137,6 +137,28 @@ interval = "1h"
 calendar = "us_equity"
 direction = "fade"
 
+# The xlab_rank set's `strategy_ranking`: the two move triggers of the test
+# contract rank.test.v1 (tests/fixtures/strategy_ranking/lineage). A contract
+# names its sandbox, so the leg runs a copy of this file at
+# <tmp>/sandboxes/rank-test/config.toml + [strategy_ranking] (the test adds it).
+[backtest.strategies.rank_fade]
+kind = "move_trigger"
+universe = "@matrix"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+
+[backtest.strategies.rank_follow]
+kind = "move_trigger"
+universe = "@matrix"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "follow"
+hold_bars = 3
+
 # [risk] turns Privy signing off: both signing tools need an explicit scope
 # without wallets (src/config/risk.rs).
 [default_scopes.sign_and_send_transaction]
@@ -178,6 +200,11 @@ env_reads = ["HL_API_URL", "GECKO_API_URL"]
 [default_scopes.backtest]
 fs_roots = ["/nonexistent/tengu-engine-matrix"]
 
+# `strategy_ranking` runs the contract's backtests on the same market.db and
+# writes <state dir>/strategy-rankings/: no network, no env.
+[default_scopes.strategy_ranking]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
 # The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
 # require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
 # workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
@@ -212,7 +239,7 @@ env_reads = ["HL_API_URL"]
 engine = "openrouter"
 model = "google/gemini-2.5-flash-lite"
 description = "Engine-matrix fixture: OpenRouter google/gemini-2.5-flash-lite."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "strategy_ranking"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.gemini.limits]
@@ -222,7 +249,7 @@ max_tool_rounds = 10
 engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
 description = "Engine-matrix fixture: OpenRouter anthropic/claude-haiku-4.5."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "strategy_ranking"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.haiku.limits]

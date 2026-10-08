@@ -11,7 +11,8 @@
 //! | experiments of one family | `holdout_seen_before` (a CLEAN HOLDOUT overlapping another experiment's DEVELOPMENT that ran not after it; Warn under `split_by = "INSTRUMENTS"` or a same-day order), `window_unknown` (Warn: a CLEAN HOLDOUT / DEVELOPMENT window with an UNKNOWN bound) |
 //! | episodes | alternatives, incidents, `future_leakage` |
 //! | capabilities · generations | `binding_conflict`, `capability_version_missing`, frozen_at, commits, pins |
-//! | `locks.toml` | `frozen_manifest_changed` (`Registry::frozen_digest`: the manifest + its listed capability records), `seal_mismatch` |
+//! | ranking contracts | shape (`RankingContract::shape_errors` → `invalid_field`), `ranking_unsealed` (Warn) |
+//! | `locks.toml` | `frozen_manifest_changed` (`Registry::frozen_digest`: the manifest + its listed capability records), `seal_mismatch` (a sealed ranking contract changed since included) |
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,6 +46,7 @@ pub(super) fn run(reg: &Registry) -> Vec<Finding> {
     v.capabilities();
     v.generations();
     v.evidence_records();
+    v.rankings();
     v.locks();
     v.locators();
     let mut out = v.out;
@@ -767,6 +769,32 @@ impl Checks<'_> {
         }
     }
 
+    /// A ranking contract's shape (`RankingContract::shape_errors`), and an
+    /// unsealed one (`ranking_unsealed`, Warn: a draft awaiting the
+    /// operator's review; the publisher refuses it). A sealed one changed
+    /// since: `seal_mismatch` ([`Checks::locks`]).
+    fn rankings(&mut self) {
+        let reg = self.reg;
+        for c in reg.rankings.values() {
+            let at = label(RecordKind::Ranking, &c.id);
+            for e in c.shape_errors() {
+                self.err("invalid_field", &at, e);
+            }
+            let key = format!("{}:{}", RecordKind::Ranking, c.id);
+            if !reg.locks.sealed.iter().any(|s| s.record == key) {
+                self.warn(
+                    "ranking_unsealed",
+                    &at,
+                    format!(
+                        "not sealed: no ranking runs under it until the operator reviews it and \
+                         runs `tengu lineage seal {key}`"
+                    ),
+                );
+            }
+            self.evidence_refs(&at, &c.evidence);
+        }
+    }
+
     fn locks(&mut self) {
         let reg = self.reg;
         let at = "locks.toml";
@@ -888,5 +916,164 @@ impl Checks<'_> {
             }
         }
         self.out.extend(found);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::locks::Sealed;
+    use super::super::ranking::tests::CONTRACT;
+    use super::super::ranking::RankingContract;
+    use super::super::registry::tests::minimal;
+    use super::super::value::Time;
+    use super::*;
+    use crate::domain::lineage::pins::toml_digest;
+
+    /// The minimal registry with the test contract (`ranking/rank.t`) as
+    /// `text`, its file digest recorded.
+    fn with_contract(text: &str) -> Registry {
+        let mut r = minimal();
+        let c: RankingContract = toml::from_str(text).unwrap();
+        r.digests.insert(
+            (RecordKind::Ranking, c.id.clone()),
+            toml_digest(text).unwrap(),
+        );
+        r.rankings.insert(c.id.clone(), c);
+        r
+    }
+
+    /// `ranking:rank.t` sealed as `text`.
+    fn seal(r: &mut Registry, text: &str) {
+        r.locks.sealed.push(Sealed {
+            record: "ranking:rank.t".into(),
+            sha256: toml_digest(text).unwrap(),
+            sealed_at: "2026-10-08T13:00:00Z".parse().unwrap(),
+        });
+    }
+
+    fn found(r: &Registry) -> Vec<(Severity, String, String, String)> {
+        r.validate()
+            .into_iter()
+            .map(|f| (f.severity, f.code, f.record, f.message))
+            .collect()
+    }
+
+    #[test]
+    fn ranking_contract_shape_errors_name_their_field() {
+        type Edit = fn(&mut RankingContract);
+        let cases: [(Edit, &str); 17] = [
+            (|c| c.preregistered = false, "preregistered: must be true"),
+            (
+                |c| c.registered_at = Time::Unknown,
+                "registered_at: UNKNOWN",
+            ),
+            (|c| c.sandbox = "a/b".into(), "sandbox: `a/b`"),
+            (
+                |c| c.evidence_class = crate::domain::evidence::EvidenceClass::Holdout,
+                "evidence_class: HOLDOUT",
+            ),
+            (|c| c.arm = "jev".into(), "arm: `jev`"),
+            (|c| c.tz = "Asia/Tokyo".into(), "tz: `Asia/Tokyo`"),
+            (|c| c.cutoff = "24:00".into(), "cutoff: `24:00`"),
+            (|c| c.days = vec!["Funday".into()], "days: `Funday`"),
+            (
+                |c| c.days = vec!["Mon".into(), "mon".into()],
+                "days: `mon` listed twice",
+            ),
+            (
+                |c| c.from = "2026-03-01T05:00:00Z".parse().unwrap(),
+                "from: `2026-03-01T05:00:00Z`",
+            ),
+            (|c| c.strategies.clear(), "strategies: empty"),
+            (
+                |c| c.strategies.push("Rule-W".into()),
+                "strategies: `Rule-W` is not a strategy name",
+            ),
+            (
+                |c| c.strategies.push("rule_w".into()),
+                "strategies: `rule_w` listed twice",
+            ),
+            (|c| c.cohort.truncate(0), "cohort: empty"),
+            (
+                |c| {
+                    let neg = "-ci95_lo_bps".parse().unwrap();
+                    c.rating.order.push(neg);
+                },
+                "rating.order: `ci95_lo_bps` listed twice",
+            ),
+            (|c| c.rating.quantum = 0.0, "rating.quantum: 0"),
+            (
+                |c| c.eligibility.min_trades = 0,
+                "eligibility.min_trades: 0",
+            ),
+        ];
+        for (edit, prefix) in cases {
+            let mut r = with_contract(CONTRACT);
+            seal(&mut r, CONTRACT);
+            edit(r.rankings.get_mut("rank.t").unwrap());
+            let f = found(&r);
+            let hit = f.iter().find(|(s, code, rec, msg)| {
+                *s == Severity::Error
+                    && code == "invalid_field"
+                    && rec == "ranking/rank.t"
+                    && msg.starts_with(prefix)
+            });
+            assert!(hit.is_some(), "{prefix}: {f:#?}");
+        }
+        // Empty rating order and a duplicate cohort field.
+        let mut r = with_contract(CONTRACT);
+        let c = r.rankings.get_mut("rank.t").unwrap();
+        c.rating.order.clear();
+        c.cohort.push(c.cohort[0]);
+        let msgs: Vec<String> = found(&r).into_iter().map(|f| f.3).collect();
+        assert!(msgs
+            .iter()
+            .any(|m| m == "rating.order: empty — list the rating keys"));
+        assert!(msgs
+            .iter()
+            .any(|m| m == "cohort: `generation` listed twice"));
+    }
+
+    #[test]
+    fn an_unsealed_ranking_contract_warns_ranking_unsealed() {
+        let r = with_contract(CONTRACT);
+        let f = found(&r);
+        assert_eq!(f.len(), 1, "{f:#?}");
+        assert_eq!(
+            (f[0].0, f[0].1.as_str(), f[0].2.as_str()),
+            (Severity::Warn, "ranking_unsealed", "ranking/rank.t")
+        );
+        assert!(
+            f[0].3.contains("tengu lineage seal ranking:rank.t"),
+            "{}",
+            f[0].3
+        );
+        assert!(!crate::domain::lineage::has_errors(&r.validate()));
+        // Sealed: clean. A ranking has no outcome in the registry to precede.
+        let mut r = r;
+        seal(&mut r, CONTRACT);
+        assert_eq!(found(&r), vec![]);
+        assert_eq!(r.first_outcome(RecordKind::Ranking, "rank.t"), None);
+    }
+
+    #[test]
+    fn a_ranking_contract_changed_after_its_seal_is_seal_mismatch() {
+        let changed = CONTRACT.replace("min_trades = 20", "min_trades = 10");
+        let mut r = with_contract(&changed);
+        seal(&mut r, CONTRACT);
+        let f = found(&r);
+        assert!(
+            f.iter().any(|(s, code, rec, msg)| *s == Severity::Error
+                && code == "seal_mismatch"
+                && rec == "ranking/rank.t"
+                && msg.contains(&toml_digest(&changed).unwrap())
+                && msg.contains(&toml_digest(CONTRACT).unwrap())),
+            "{f:#?}"
+        );
+        // A comment or layout change keeps the digest: still sealed.
+        let commented = format!("# reviewed by the operator\n{CONTRACT}");
+        let mut r = with_contract(&commented);
+        seal(&mut r, CONTRACT);
+        assert_eq!(found(&r), vec![]);
     }
 }
