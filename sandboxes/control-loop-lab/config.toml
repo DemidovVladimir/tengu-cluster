@@ -12,8 +12,10 @@
 #
 # QUICKSTART — from the repo root (`--sandbox` resolves sandboxes/<name>/ from the cwd).
 # ALWAYS an isolated home: the weekend run owns ~/.tengu (decisions.jsonl, state).
+# Export it first: tengu also loads the nearest .env up from the cwd (a worktree
+# under the main checkout reads that .env: TENGU_HOME=~/.tengu); an exported value wins.
 #   export TENGU_HOME="$HOME/tengu-lab/home"        # never ~/.tengu; never `tengu prune`
-#   export OPENROUTER_API_KEY=…                     # Jev; a worktree has no .env
+#   export OPENROUTER_API_KEY=…                     # Jev
 #   mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
 #   cargo build --release
 #   target/release/tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json
@@ -77,7 +79,7 @@ act_at = 0.8                          # below → `escalated`, the event stops
 escalate = false                      # no orchestrator here: escalation = stop + audit line
 history = 4
 max_steps = 3
-world = { tick = "feed/1:tick" }      # the tick feed's health row (missing under `tengu decide`)
+world = { tick = "feed/1:tick" }      # the tick feed's health row (`tengu decide` sees it only while a `tengu run` keeps it ≤ 60 s old)
 world_max_age_secs = 60
 
 [decision_loops.demo.actions.hold]
