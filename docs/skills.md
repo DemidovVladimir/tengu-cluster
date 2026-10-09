@@ -4,7 +4,7 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 
 **Code:** `src/application/skills/registry.rs` (parse, discover, registry), `src/application/skills/lifecycle/` (metrics, eval, evolve, scanner).
 
-## Inventory (`skills/`, 2026-10-08)
+## Inventory (`skills/`, 2026-10-09)
 
 | Skill | Kind | Purpose | Loaded by |
 |---|---|---|---|
@@ -28,7 +28,7 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 | API reference | + `base_url` (alias `homepage`) | no | Documentation for `http_request` — the agent calls the API itself |
 | Shell (classic) | none: `# <tool_name>`, `## Parameters`, `## Execution` with a fenced command | yes | A named tool; the template runs with parameter substitution |
 
-An agent that runs no shell (`[risk]` or a `[solana]` signer sandbox: `AgentConfig::hardened`) loads no shell skill (`SkillRegistry::with_shell_skills`, warn naming them).
+An agent that runs no shell (`[risk]`, `[soe]` or a `[solana]` signer sandbox: `AgentConfig::hardened`) loads no shell skill (`SkillRegistry::with_shell_skills`, warn naming them).
 
 ## Loading
 

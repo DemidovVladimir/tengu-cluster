@@ -43,12 +43,12 @@ Claude sees each tool as `mcp__tengu-tools__<name>` (e.g. `mcp__tengu-tools__per
 
 ## Dispatch
 
-The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor` inside a `SanitizedToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): the whole catalog (workspace, memory, cache, skill lifecycle, http, crypto, skill tools, Solana, Hyperliquid, xm, xlab — `market_history`, `backtest`, `strategy_ranking` —, sources — `source_evidence` —, `agentic_memory` under `postgres_memory`), the agent's shell skills, and the `[[mcp_servers]]` the engine passed. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits the executor directly.
+The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor` inside a `SanitizedToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): the whole catalog (workspace, memory, cache, skill lifecycle, http, crypto, skill tools, Solana, Hyperliquid, xm, xlab — `market_history`, `backtest`, `strategy_ranking` —, sources — `source_evidence` —, SOE — `soe_view`, `soe_propose`, `soe_challenge` —, `agentic_memory` under `postgres_memory`), the agent's shell skills, and the `[[mcp_servers]]` the engine passed. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits the executor directly.
 
 | Tool kind | In the bridge |
 |---|---|
 | Catalog rows | `register_catalog`, as in-process |
-| Shell skills | `bootstrap::tools::agent_skill_registry` over `TENGU_BRIDGE_WORKSPACE`, as `run-agent` loads them: `skill_packages` of the agent **plus every requested name** (a composed plan step's `skills` reach the bridge only through its parent's tool list); none when the agent runs no shell (`no_shell_fallback`: a `[risk]` / signer sandbox) |
+| Shell skills | `bootstrap::tools::agent_skill_registry` over `TENGU_BRIDGE_WORKSPACE`, as `run-agent` loads them: `skill_packages` of the agent **plus every requested name** (a composed plan step's `skills` reach the bridge only through its parent's tool list); none when the agent runs no shell (`no_shell_fallback`: a `[risk]`, `[soe]` or signer sandbox) |
 | `[[mcp_servers]]` | only the servers the Claude Code engine names in `TENGU_BRIDGE_MCP_SERVERS` (their `{server}__{tool}` names in the allow-list), each taken from the loaded config's `[[mcp_servers]]` (`resolve_mcp_servers`; a whole server object is accepted too — standalone, tests); a standalone bridge proxies none. The CLI runs with `--strict-mcp-config`, so the bridge is its only MCP server |
 | `compress_and_store` | `StepSummary` (no plugin): with `TENGU_BRIDGE_SUMMARY_FILE` (a `run-agent` step) the `summary` is written there → `stored — stop now`, and the step uses it as its IPC summary (+ the `agentic_memory` write); the engine then ends the CLI run once the round's other calls are answered (`claude_code.rs`); without the file the call is refused naming why ("give your summary as plain text") |
 
@@ -78,6 +78,7 @@ Environment set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_j
 | `TENGU_BRIDGE_SUMMARY_FILE` | A `run-agent` step's summary file: `compress_and_store` writes there (§ Dispatch) |
 | `TENGU_EGRESS` | The parent's **resolved** `[egress]` policy (proxy, allow/deny hosts, audit path); wins over the loaded config's `[egress]` |
 | `TENGU_SECRETS_LOADED` | Names of the vault vars the parent loaded (names only); the bridge registers their inherited values for redaction |
+| `TENGU_AGENT_NAME`, `TENGU_AGENT_SKILL_SHA256` | Not in the file — inherited from a `run-agent` step's env: the `soe_*` tools' stage agent and skill stamp (`tools/soe/mod.rs`; the agent falls back to `TENGU_BRIDGE_AGENT`) |
 | `TENGU_SESSION_ID`, `TENGU_PERSISTENT_STORE_CHUNK_SIZE`, `TENGU_PERSISTENT_STORE_CHUNK_OVERLAP` | Forwarded from the parent env when set. No secret value is ever written (`OPENROUTER_API_KEY`, vault values, `$VAR` / `${VAR}` values arrive by inheritance; unit test: the file's keys ⊆ this table, no `${VAR}`-expanded value anywhere in it) |
 
 Shape of the temp `--mcp-config` file:
@@ -116,7 +117,7 @@ Then every `WORKSPACE_TOOLS` name in `TENGU_BRIDGE_TOOLS` joins the agent's `wor
 | Topic | Bridge |
 |---|---|
 | Scopes | `resolve_tool_scopes(workspace, agent.scopes, …, agent.no_shell_fallback)` — the in-process call |
-| `no_shell` | from the agent (`no_shell_fallback`: a signer or `[risk]` sandbox); the permissive fallback then has no `shell_bins` and no shell skill loads |
+| `no_shell` | from the agent (`no_shell_fallback`: a signer, `[risk]` or `[soe]` sandbox); the permissive fallback then has no `shell_bins` and no shell skill loads |
 | Tools list | `TENGU_BRIDGE_TOOLS` = what the parent advertised, which follows the agent's `tools` on every surface (`bootstrap::tools::agent_base_tools`; `[[mcp_servers]]` tools too) — a tool outside it runs nowhere |
 | Conversation | the run's transcript ending in the call (§ Dispatch) — in-process: the loop's messages |
 | Workspace | `TENGU_BRIDGE_WORKSPACE`; a `run-agent` step always sends one — the agent's, else the step's temp dir (the executor's too) |
@@ -195,7 +196,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 ### Conformance harness (`x-bridge-conformance-test`)
 
-`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 75 cases with default features (76 with `postgres_memory`: the `.gated()` `agentic_memory` case) on 8 threads, < 10 s — `market_history` fetches through the mock into the side's `market.db` (HL captures moved to the current hours; GeckoTerminal) and reads back; `backtest` runs a library move trigger and an inline spec on those bars (run dirs compared file by file), refuses a bad spec (every problem named) and a sandbox without `[backtest]`; `strategy_ranking` runs a ranking date on those bars; `source_evidence` reads a `sources.db` seeded by `tengu sources import` (TED change-notice capture) before and after the change; besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
+`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 79 cases with default features (80 with `postgres_memory`: the `.gated()` `agentic_memory` case) on 8 threads, < 10 s — `market_history` fetches through the mock into the side's `market.db` (HL captures moved to the current hours; GeckoTerminal) and reads back; `backtest` runs a library move trigger and an inline spec on those bars (run dirs compared file by file), refuses a bad spec (every problem named) and a sandbox without `[backtest]`; `strategy_ranking` runs a ranking date on those bars; `source_evidence` reads a `sources.db` seeded by `tengu sources import` (TED change-notice capture) before and after the change, and is refused without `[sources]`; the `soe_*` tools run on the fixture state root `tests/fixtures/soe/state/` (`soe_view` head / candidates / history / packet + an unknown run, `soe_propose` + its duplicate refused, `soe_challenge` + an unknown target and a closed stage refused, `soe_view` without `[sources]` refused); besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
 
 | Must match (both sides normalised) | How |
 |---|---|
@@ -231,6 +232,7 @@ Every tool must work under every engine — `openrouter`, `local` and, through t
 | Still open | Why |
 |---|---|
 | The live `local` legs | run on the operator's PC (`TENGU_MATRIX_LOCAL_BASE_URL`), never on the dev Mac; offline mock legs cover the local path meanwhile |
+| The live xlab_rank, sources and soe legs (`strategy_ranking`, `source_evidence`, `soe_*`) | not run yet on any engine; their bridge conformance cases and offline mock legs pass (`docs/engine-backends.md` § Engine matrix) |
 | `agentic_memory` live | needs `--features postgres_memory` + Postgres (`TENGU_MEMORY_DATABASE_URL`) |
 | Privy signing, Solana `send` | never run (operator rule): the refusal and `simulate` paths are what the matrix runs |
 

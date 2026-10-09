@@ -10,7 +10,7 @@ One TOML file per sandbox holds the channel settings, `[egress]`, the planner an
 | 2 | Vault `<TENGU_HOME>/secrets.vault` → env (`TENGU_MASTER_PASSWORD` or a prompt on `/dev/tty`: Enter skips it, `</dev/null` does not; a process with no controlling terminal skips it with a warning). An inherited `TENGU_SECRETS_LOADED` means an ancestor `tengu` opened it — no prompt. `mcp-bridge`, `run-agent`, `agentic-memory-server` never prompt | `outbound/secrets.rs` |
 | 3 | Base config: `-c/--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`); a missing file = `Config::default()` (one `main` agent, `openrouter`, `anthropic/claude-sonnet-4.6`); `TENGU_CONFIG` pinned to that path | `cli/mod.rs::run`, `config/paths.rs` |
 | 4 | `--sandbox <s>`: `sandboxes/<s>/config.toml` **relative to the cwd** replaces the base config wholesale (the base still loads first — an invalid base fails the command); `TENGU_CONFIG` re-pinned to the absolute sandbox file; its `[egress]` installed | `bootstrap/sandbox.rs::load_sandbox_or` |
-| 5 | `Config::load`: read → `${VAR}` substitution (`${UPPER_CASE}` only; an unset var stays literal) → TOML parse → validation (+ a hardened sandbox's config-file reach rule) → warnings logged → `fold_default_scopes` (default scopes into every agent, `~` in `fs_roots`, hardened flag, signer path, the sandbox sections tools read) | `config/mod.rs` |
+| 5 | `Config::load`: read → `${VAR}` substitution (`${UPPER_CASE}` only; an unset var stays literal, with a warn) → TOML parse → validation, all errors at once (+ a hardened sandbox's config-file reach rule, the `[generation]` binding, `[strategy_ranking]`) → warnings logged → `fold_default_scopes` (default scopes into every agent, `~` in `fs_roots`, hardened flag, signer path, the sandbox sections tools read) | `config/mod.rs` |
 | 6 | Children: `run-agent` gets the sandbox name over IPC and the resolved policy as `TENGU_EGRESS`; `tengu mcp-bridge` loads `TENGU_CONFIG` and runs tools as `[agents.<TENGU_BRIDGE_AGENT>]` | `outbound/subprocess_runner.rs`, `inbound/mcp_bridge.rs` |
 
 The sandbox name of a config file = `<name>` of `…/sandboxes/<name>/config.toml` however it was loaded (`-c` and `TENGU_CONFIG` included), else `default` — the paper ledger's account owner (`config/sections.rs`).
@@ -56,6 +56,8 @@ tengu chat                                     # or: tengu chat --sandbox lping
 | `[sources]` | `SourcesConfig` (`sources.rs`) | no source registry (`tengu sources` and `source_evidence` refuse: `sources_state_missing`) | **error** (every registry row too) |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`skill_lifecycle.rs`) | `tengu skill evolve` refuses | ignored |
 | `[soe]` | `SoeConfig` (`soe.rs`) | not an SOE sandbox (`tengu soe cycle` / `replay` refuse: `soe_config_missing`) | **error** |
+| `[generation]` | `GenerationBinding` (`lineage.rs`) | unbound (no capability / pin check) | **error** |
+| `[studio]` | `StudioConfig` (`studio.rs`) | `control = false` (read-only Studio) | **error** |
 
 ## Agents — `[agents.<id>]`
 
@@ -306,7 +308,7 @@ Every field required (no defaults); `[risk]` and `[paper]` come together. Exampl
 | `[default_scopes.sign_and_send_transaction]` + `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing off |
 | hardened sandbox | § Hardened sandboxes |
 
-## Hardened sandboxes (`[risk]` or a `[solana]` signer)
+## Hardened sandboxes (`[risk]`, `[soe]` or a `[solana]` signer)
 
 | Rule | Enforced |
 |---|---|
@@ -314,8 +316,10 @@ Every field required (no defaults); `[risk]` and `[paper]` come together. Exampl
 | no `[[mcp_servers]]`; no scope grants `shell_bins`; tools without a scope run no shell; no shell skill loads | load + runtime |
 | the signer key, `<TENGU_HOME>/state`, `kill_switch_file` and the config file outside every `fs_roots` and `workspace` | load |
 | a plan step's `compose` only narrows its base agent's tools / skills | `run-agent` |
+| `write_file` also refuses the system-prompt files (`MEMORY.md`, `USER.md`, `IDENTITY.md`, `PROFILE.md`, `CONTEXT.md`) | runtime (`AgentConfig::hardened`) |
+| `[studio] control = true` refused; Studio never starts or stops a hardened runtime | load + `tengu studio` |
 
-Source: `src/config/hardening.rs`.
+Source: `src/config/hardening.rs` (`requires_hardened_claude_code`).
 
 ## Request budgets — `[rate_limits.<name>]`
 
@@ -390,6 +394,23 @@ The ranking contracts a sandbox runs (`lineage/rankings/<id>.toml`); `tengu rank
 | `[backtest]` present; every contract strategy is a `[backtest.strategies.<name>]` | |
 | no Error finding on a contract (shape: `invalid_field`) — `seal_mismatch` excepted: an unsealed or changed contract loads, the publisher refuses it at run time | |
 
+## Generation binding — `[generation]`
+
+A sandbox bound to one generation of the lineage registry (`lineage/generations/<id>.toml`). Bound today: `xlab`, `xmarket-weekend` (`W1`, frozen), `soe` (`SOE-G0`). Doc: `docs/lineage-2026-10-06.md` § 1, § 4.
+
+| Field | Rules |
+|---|---|
+| `id` | a `generations/<id>.toml` that lists this sandbox in `sandboxes` |
+| `registry` | the lineage registry dir, relative to this config file (`"../../lineage"`) |
+
+| Load rule (`config/lineage.rs::binding_errors`) | |
+|---|---|
+| the registry loads; no Error finding on the generation (`frozen_manifest_changed`, `capability_version_missing`, its references) and no `binding_conflict` | |
+| every agent tool (`tools`, `workspace_tools`), `[feeds.*]` tool and `[decision_loops.*]` action tool passes `GenerationScope::tool_refusal`: a tool a capability binds must be bound by one of the generation's; an opt-in tool no capability binds is refused (closed world) | |
+| every `[backtest.strategies.*]` kind passes `kind_refusal` | |
+| a `FROZEN` generation's `config:` / `spec:` pins recompute equal (`… pin … drifted: pinned <hash>, now <hash>`) — edit a pinned section in a new sandbox bound to a new generation, never W1 | |
+| `[studio] control = true` refused (a frozen design is view-only) | `config/studio.rs` |
+
 ## Sources — `[sources]` (O2 source registry)
 
 One row per approved external source; records go to the append-only `<TENGU_HOME>/state/<state>/sources.db` (never `market.db`). Read by `tengu sources` (the operator's fetch / import / asof / purge / kill switch) and the read-only `source_evidence` tool. Doc: `docs/source-evidence-2026-10-08.md`; example: `sandboxes/soe/config.toml`.
@@ -417,20 +438,20 @@ The kill switch is not TOML: `tengu sources disable` appends a row to `sources.d
 | Key | Kind | Default | Meaning |
 |---|---|---|---|
 | `kind` | — | required | `tool` (call a tool) \| `tick` (send a loop event) \| `job` (run a named application job); `poll`, `stream`, `ws`, `rows` refused (not built) |
-| `every_secs` | both | — | 1 s – 7 d on the UTC grid |
-| `windows` | both | `[]` | `{ days, from, to, every_secs }` local in `tz`, replaces `every_secs` inside; ≤ 32 |
-| `at` | both | `[]` | `"Sun 18:00"`, `"daily 09:00"` in `tz`; ≤ 64 |
-| `tz` | both | `UTC` | `America/New_York` \| `Europe/Paris` \| `UTC` |
-| `jitter_pct` | both | 0 | 0–50 |
-| `run_on_start` · `required` | both | `false` · `false` | `required`: `tengu doctor --live` fails when down or stale |
-| `stale_after_secs` | both | 3 × longest interval (≥ 60); without `every_secs`: 8 days | ≥ 1 |
+| `every_secs` | all | — | 1 s – 7 d on the UTC grid |
+| `windows` | all | `[]` | `{ days, from, to, every_secs }` local in `tz`, replaces `every_secs` inside; ≤ 32 |
+| `at` | all | `[]` | `"Sun 18:00"`, `"daily 09:00"` in `tz`; ≤ 64 |
+| `tz` | all | `UTC` | `America/New_York` \| `Europe/Paris` \| `UTC` |
+| `jitter_pct` | all | 0 | 0–50 |
+| `run_on_start` · `required` | all | `false` · `false` | `required`: `tengu doctor --live` fails when down or stale |
+| `stale_after_secs` | all | 3 × longest interval (≥ 60); without `every_secs`: 8 days | ≥ 1 |
 | `agent`, `tool` | tool | required | the agent must be able to call the tool (`tools` / `workspace_tools`) |
 | `args` · `each` | tool | `{}` | `each = { coin = [...] }` fans out (≤ 500 calls a run; a key not also in `args`) |
 | `concurrency` | tool | 1 | 1–32 |
 | `target` · `event` | tick | required · `{}` | a `[decision_loops.<target>]`; the scheduler adds `ts_ms` |
-| `job` | job | required | one name of the closed list `config/feeds.rs` `JOBS` — today `soe_cycle` (needs `[soe]`); never a command from config. No `agent`, `tool`, `args`, `each`, `concurrency`, `target`, `event` |
+| `job` | job | required | one name of the closed list `config/feeds.rs` `JOBS` — today `soe_cycle` (needs `[soe]`: the week's SOE cycle for the ISO week of the slot in `tz`, decided at the slot time; a frozen week is a no-op — `application/soe/job.rs`); never a command from config. No `agent`, `tool`, `args`, `each`, `concurrency`, `target`, `event` |
 
-At least one of `every_secs`, `windows`, `at`; names `[a-z0-9_-]+`. Call ids `feed:<name>:<slot ms>:<i>`.
+At least one of `every_secs`, `windows`, `at`; names `[a-z0-9_-]+`. Call ids `feed:<name>:<slot ms>:<i>`. A strategy ranking runs as a `kind = "tool"` feed of `strategy_ranking` (`sandboxes/xlab-w2`).
 
 ## SOE — `[soe]` (Software Opportunity Engine cycle)
 
@@ -444,12 +465,20 @@ The weekly cycle's stage agents and limits; its state root is the `[sources]` st
 
 | Load rule with `[soe]` (`config/soe.rs::validation_errors`; the load fails) | |
 |---|---|
-| `[sources]` present; the state root outside every git work tree; an `operator.toml` there with no group / other permission bit | |
+| `[sources]` present; the state root outside every git work tree; an existing `operator.toml` there with no group / other permission bit (metadata reads only: a load creates nothing) | |
 | every agent lists `tools`, all inside `domain::tools::SOE_ALLOWED` (`soe_view`, `soe_propose`, `soe_challenge`, `source_evidence`, `read_file`, `list_directory`, `view_skill`, `skill_resource`); `workspace_tools` too | |
 | a deny-all `[default_scopes.<t>]` (no keys) for `http_request`, `write_file`, `run_command`, `sign_and_send_transaction`, `sign_message`; an agent's own scope for one stays deny-all | |
-| no `[decision_loops]`, `[[mcp_servers]]`, `[risk]`, `[paper]`, `[xmarket]`, `[backtest]`, `[solana]` signer, `[telegram]`, `[webhooks]`; feeds of `kind = "job"` only | |
+| no `[decision_loops]`, `[[mcp_servers]]`, `[risk]`, `[paper]`, `[xmarket]`, `[backtest]`, `[solana]` signer, `[telegram]` (enabled or users), `[webhooks]` (enabled or endpoints); feeds of `kind = "job"` only | |
 | `[egress] allow_hosts` inside the hosts of the `[sources.registry.*]` rows (non-empty under `network = "open"`) | |
 | hardened (§ Hardened sandboxes): every `claude_code` agent `builtin_tools_profile = "none"`, no shell fallback | |
+
+## Studio — `[studio]` (`tengu studio`)
+
+| Field | Default | Rules |
+|---|---|---|
+| `control` | `false` | `true` = `tengu studio` may Play (start this sandbox's runtime in its own process), Stop it (graceful drain) and send a scenario event; `false` = read-only unless `tengu studio --allow-control`. A load error in a `[generation]`-bound or hardened sandbox, where control is always refused (`--allow-control` too) |
+
+Set only in `control-loop-lab`. Server: `--features studio`, loopback only. Code `config/studio.rs` (`control_policy`); doc `docs/studio-2026-10-08.md`.
 
 ## Skill lifecycle — `[skill_lifecycle]`
 
@@ -463,7 +492,15 @@ The weekly cycle's stage agents and limits; its state root is the `[sources]` st
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Ten today: `jev-exec`, `lping`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes (`soe`: the O2 source registry, rows off, one read-only agent — `docs/source-evidence-2026-10-08.md`). Every one and `config.example.toml` must load (`config::risk::tests::every_sandbox_and_the_example_load`).
+`sandboxes/<name>/config.toml`, run from the repo root. Eleven today: `control-loop-lab`, `jev-exec`, `lping`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes.
+
+| Sandbox | What its config shows |
+|---|---|
+| `control-loop-lab` | the safe control-loop reference run: one Jev loop, two feeds, `[studio] control = true`; nothing touches money, keys, the shell or the network (`docs/control-loop-lab-2026-10-08.md`) |
+| `soe` | the SOE weekly cycle: `[sources]` (rows off), `[soe]` with `soe_architect` / `soe_critic` (`claude_code`, built-ins off), the read-only `soe_reader`, `[feeds.soe_week]` (`kind = "job"`), bound to `SOE-G0` (`docs/soe-2026-10-08.md`) |
+| `xlab-w2` | `[strategy_ranking]` (contracts `rank.xlab-w2.daily.v1`, `rank.xlab-w2.weekend.v1`, unsealed until G-SR1), `strategy_ranking` on the private `xl_ranker` + its feeds `strategy_ranking_daily` / `_weekend`, unbound (no `[generation]`), `[backtest] keep_runs = 200` (cited runs never pruned) |
+
+Every one and `config.example.toml` must load (`config::risk::tests::every_sandbox_and_the_example_load`).
 
 ```bash
 tengu chat --sandbox lping
@@ -489,6 +526,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | `TENGU_SECRETS_LOADED` | `outbound/secrets.rs` | set by the first `tengu` that opens the vault | names of vault vars; children never prompt, register them for redaction |
 | `TENGU_SESSION_ID` | `bootstrap/orchestrator.rs`, `engines/claude_code.rs`, `tools/agentic_memory/`, `outbound/memory/embedder.rs`, `outbound/egress.rs`, `tools/xm/exec_common.rs` | fresh UUID | session shared by planner + runner |
 | `TENGU_AGENT_NAME` · `TENGU_AGENT_IPC` | set by `run-agent` (`cli/run_agent.rs`) · by its parent (`outbound/subprocess_runner.rs`, `=1`); read by `agentic_memory`, the egress audit, `cli/risk.rs`, `bootstrap/sandbox.rs` | unset | agent of a child process · IPC mode (`run-agent` refuses without `=1`); either set ⇒ `tengu risk halt` / `resume` refused |
+| `TENGU_AGENT_SKILL_SHA256` | set by `run-agent` (`cli/run_agent.rs`); read by the `soe_*` tools (`tools/soe/mod.rs`) | unset = the tool hashes the agent's skills itself | the step's skill identity (`outbound/soe/runner.rs::skill_sha256`), stamped into SOE proposals / challenges; a Claude Code bridge inherits it |
 | `TENGU_MEMORY_DATABASE_URL` | `tools/agentic_memory/` | — (required for `postgres_memory`) | Postgres + pgvector DSN |
 | `TENGU_WIKI_COMPILER_MODEL` | `tools/agentic_memory/` | `anthropic/claude-sonnet-4-6` | `compile_wiki` model |
 | `TENGU_EGRESS` | `outbound/egress.rs::install` | unset | resolved `[egress]` handed to children (JSON); wins over the child's config |
@@ -509,7 +547,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | Claude CLI child env | `engines/claude_code.rs` | — | strips a parent Claude Code session's vars (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_*` but auth / provider) and `ANTHROPIC_API_KEY` |
 | `LYREBIRD_RS_DIR` · `NETWORK` · `SANDBOX` | `Makefile` | `../lyrebird-rs` · the config's `[egress] network` · none | Tor image source · compose network · sandbox config to mount |
 | `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `openrouter,telegram` · 7080 | image features · host port |
-| Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_REGEN_SOURCE_EVAL` (the source eval set), `TENGU_CAPTURE_FIXTURES` |
+| Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_REGEN_SOURCE_EVAL` (the source eval set), `TENGU_REGEN_GOLDEN` (Studio graph goldens), `TENGU_REGEN_SOE_STATE` (the SOE fixture state root), `SOE_CASE` (one synthetic SOE cycle case), `TENGU_CAPTURE_FIXTURES` |
 
 ## Feature flags
 
@@ -520,6 +558,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | `claude_code` | off | Claude Code CLI backend |
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `tengu agentic-memory-server` |
 | `webhooks` | off | `tengu webhooks`, webhook routes under `tengu run` |
+| `studio` | off | the `tengu studio` local server (loopback; `web/studio/` embedded); `tengu studio graph` works without it |
 
 ## Validation summary
 
@@ -528,7 +567,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
 | no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
 | `workspace_tools` outside `WORKSPACE_TOOLS` | `[telegram] tool_approvals` / `approve_only` set (not implemented) |
-| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[strategy_ranking]`, `[sources]`, `[feeds]`, `[decision_loops]` rules (sections above) | |
+| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[generation]`, `[strategy_ranking]`, `[sources]`, `[soe]`, `[studio]`, `[feeds]`, `[decision_loops]` rules (sections above) | an unset `${VAR}` (stays literal) |
 
 ## Reset
 
@@ -540,12 +579,13 @@ tengu prune --sandbox <name> --hard      # empties each workspace root (every ch
 
 | Fact | Detail |
 |---|---|
-| Never pruned | `<TENGU_HOME>/state` beyond `state/flows` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`), the `[sources]` state dir (`sources.db`) and `solana-writes.db`; the sandbox config, secrets, managed skills |
+| Never pruned | `<TENGU_HOME>/state` beyond `state/flows` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`, `strategy-rankings/`), the `[sources]` state dir (`sources.db`; with `[soe]` the SOE state root: `operator.toml`, `cycles/`, `replays/`, the state logs) and `solana-writes.db`; the sandbox config, secrets, managed skills |
 | `--hard` | needs `--sandbox` (without it: global state only, with a note); the workspaces are the agents' `workspace` dirs — an xmarket workspace loses its `.tengu/observations.db`; does not clear the Postgres `agentic_memory` store — `make clean` does (global, destructive) |
-| Logs | every prune deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts) |
+| Logs | every prune deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts —, `maps/`, the execution traces `trace/<sandbox>/`) |
 | Manual | `rm -rf ~/.tengu` wipes everything, the paper ledgers and `market.db` included |
 
 ## Related
 - `docs/architecture-2026-04-27.md` (canonical) · `docs/code-map.md` §3
 - `docs/engine-backends.md` · `docs/skills.md` · `docs/tools.md` · `docs/webhooks-2026-05-11.md`
 - `docs/runtime-2026-09-30.md` · `docs/xmarket-risk-paper-2026-09-30.md` · `docs/xlab-2026-10-01.md` · `docs/source-evidence-2026-10-08.md`
+- `docs/lineage-2026-10-06.md` · `docs/strategy-ranking-automation-2026-10-08.md` · `docs/soe-2026-10-08.md` · `docs/studio-2026-10-08.md`
