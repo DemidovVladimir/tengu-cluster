@@ -88,3 +88,5 @@ One trade was removed before computing outcomes: KIOXIA, weekend ending 2026-09-
 - Underlying from Robinhood historicals (no overnight ATS prints; hourly only since 2026-06-30), not the official opening auction.
 - Fees are formula-derived, not confirmed by a fill; growth mode is a deployer switch that can raise them 10×. trade.xyz's off-hours oracle and mark rules (the likely cause of the weekend overshoot) were not read.
 - Analysis scripts were throwaway (Rust-only repo) and lived in the session scratchpad; the numbers above are the record.
+
+Status (2026-10-08): the off-hours oracle / mark rules were read and measured (P8, [`p8-hip3-oracle-2026-10-08.md`](p8-hip3-oracle-2026-10-08.md)); fees observed per name — 9.0 bps on `hyperliquid:xyz:BMNR`, `hyperliquid:xyz:MSTR`, `hyperliquid:xyz:PURRDAT`, `hyperliquid:xyz:STRC` (P9, [`p9-cost-liquidity-2026-10-08.md`](p9-cost-liquidity-2026-10-08.md)); rule W's forward paper test runs each weekend — 1 of the 12 its M3 go needs ([`w1-p0-weekend-2026-10-06.md`](w1-p0-weekend-2026-10-06.md)); xlab reproduces this study on history ([`xlab-2026-10-01.md`](xlab-2026-10-01.md) § 14).

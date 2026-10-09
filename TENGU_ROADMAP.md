@@ -4,7 +4,8 @@
 **Purpose:** Operational execution plan for coding agents  
 **Companion document:** `TENGU_HANDOFF.md`  
 **Start condition:** The current weekend experiment has completed and its raw evidence has been preserved.  
-**Default rule:** Never continue to the next gated phase merely because the previous phase produced code. Continue only after its validation gate passes.
+**Default rule:** Never continue to the next gated phase merely because the previous phase produced code. Continue only after its validation gate passes.  
+**Status (2026-10-08):** P0–P5 done (`docs/lineage-2026-10-06.md`, W1 frozen) · Operator Review #1 = APPROVE (`docs/w1-review-2026-10-06.md` § Verdict) · P6–P11 done (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no change beats rule W, no W2 candidate (G11 FAIL for stop 300), W1 kept · P12 / P13 not started; Operator Review #2 not reached · forward rule W evidence continues each weekend (weekend #2 sealed: `lineage/experiments/fwd.rule_w.2026-10-09.toml`, `docs/forward-evidence-runbook-2026-10-08.md`; M3 tally 1 / 12).
 
 ## 1. Agent Operating Rules
 
