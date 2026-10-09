@@ -476,12 +476,21 @@ fn render(
     let o = &p.ops;
     let _ = writeln!(
         out,
-        "\n## 4. Cost and operator hours\n\nDoes the system save scarce time?\n\n| Measure | Value |\n|---|---|\n| Stage latency | {} ms |\n| Tokens (prompt · completion) | {} · {} |\n| Cost | {} |\n| Failed stages | {} |\n| Source failures | {} |\n| Operator correction | {} min |\n| Operator research | {} h |",
+        "\n## 4. Cost and operator hours\n\nDoes the system save scarce time?\n\n| Measure | Value |\n|---|---|\n| Stage latency | {} ms |\n| Tokens (prompt · completion) | {} · {}{} |\n| Cost | {} |\n| Failed stages | {} |\n| Source failures | {} |\n| Operator correction | {} min |\n| Operator research | {} h |",
         o.latency_ms,
         o.prompt_tokens,
         o.completion_tokens,
+        if o.tokens_unknown_stages == 0 {
+            String::new()
+        } else {
+            format!(
+                " + UNKNOWN ({} stage(s) ended with no reply)",
+                o.tokens_unknown_stages
+            )
+        },
         o.cost.as_ref().map_or(
-            "UNKNOWN (a cycle without token prices, or currencies differ)".to_string(),
+            "UNKNOWN (a cycle without token prices, a stage's tokens unknown, or currencies differ)"
+                .to_string(),
             |(m, c)| format!("{m} {c}")
         ),
         o.failed_stages,

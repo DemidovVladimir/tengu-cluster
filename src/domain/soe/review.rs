@@ -19,7 +19,7 @@
 //! | `cycles` (portfolio counts, tests, allocation, unsupported claims, grade) | is the output consistently useful? |
 //! | `calibration` (resolved forecast items, `forecast::calibration`) | is confidence calibrated? |
 //! | `misses` per [`FailureClass`] | which failure class dominates? |
-//! | `ops` (latency, tokens, cost — unknown when any cycle's is — failed stages, source failures, correction minutes, research hours) | does it save scarce time? |
+//! | `ops` (latency, tokens — and the stages whose tokens are unknown — cost — unknown when any cycle's is — failed stages, source failures, correction minutes, research hours) | does it save scarce time? |
 //! | `sources` (each source the cycles cited, its terms stated or not) | is expansion justified and lawful? |
 //! | `lanes` (`O6A` service / integration · `O6B` acquisition / partnership, by mechanism) | which lane, if any? |
 //! | `stop_flags` · `enough_cycles` | § 14 conditions met · ≥ [`MIN_LIVE_CYCLES`] cycles |
@@ -365,6 +365,9 @@ pub struct OpsTotals {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub failed_stages: usize,
+    /// Stages whose tokens are unknown (no reply): the token totals leave
+    /// them out and the cost is none (`ops::StageRun::tokens_unknown`).
+    pub tokens_unknown_stages: usize,
     pub source_failures: usize,
     /// Σ cycle costs when every one is known in one currency; else none.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -415,6 +418,7 @@ impl ReviewPacket {
             prompt_tokens: 0,
             completion_tokens: 0,
             failed_stages: 0,
+            tokens_unknown_stages: 0,
             source_failures: 0,
             cost: None,
             correction_minutes: 0,
@@ -457,6 +461,7 @@ impl ReviewPacket {
             ops.prompt_tokens = ops.prompt_tokens.saturating_add(o.prompt_tokens);
             ops.completion_tokens = ops.completion_tokens.saturating_add(o.completion_tokens);
             ops.failed_stages += o.failed_stages;
+            ops.tokens_unknown_stages += o.tokens_unknown.len();
             ops.source_failures += o.source_failures.len();
             cost = Some(match (cost, &o.cost) {
                 (None, Cost::Known { amount, currency }) => Some((*amount, *currency)),

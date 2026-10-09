@@ -7,7 +7,7 @@
 //! |---|---|
 //! | Week | the ISO week of the slot's local date in the feed's `tz` (a `Mon 07:00` Paris tick names that Monday's week, whatever the UTC date) |
 //! | Decision time | the slot time — the schedule's, not the clock's: a retry of the slot decides at the same instant |
-//! | Already frozen | `cycles/<week>/` frozen, or the forecast log holds the week (`cycle_already_frozen`) ⇒ `Done`, nothing written |
+//! | Already frozen | `cycles/<week>/` frozen, or the forecast log holds the week (`cycle_already_frozen`) ⇒ `Done`, nothing written — but a frozen cycle's lost state-log lines (a run stopped between its freeze and its appends) are resumed first (`cycle::resume_learn`) |
 //! | Profile | `<state root>/operator.toml`, loaded each run (`config::soe::load_profile_with_text`; synthetic refused in a sandbox); missing, invalid, in-repo, loose-mode or unsigned ⇒ `Failed` before anything is created |
 //! | Inputs | the source store opened each run (no `sources.db` yet = an empty packet); `[soe]` agents, limits and token prices; the generation pin; no active candidate — a shadow cycle runs no experiment (O5 waits for Operator Review #2) |
 //! | Failed | any other refusal or error of the cycle ⇒ `Failed` (`fatal`) with its message; the feed's at-tick window retries it for 15 min — a dir claimed and never frozen answers `cycle_unfinished` at once, so a retry never runs a stage twice |
@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use chrono::Datelike;
 use tracing::{info, warn};
 
-use super::cycle::{run_cycle, CycleEnv, CycleParams, ProfileIn, Target};
+use super::cycle::{resume_learn, run_cycle, CycleEnv, CycleParams, ProfileIn, Target};
 use super::submit::GenerationPin;
 use super::CYCLE_ALREADY_FROZEN;
 use crate::config::soe::{load_profile_with_text, SoeConfig};
@@ -82,7 +82,17 @@ impl SoeCycleJob {
         let week = self.week_of(slot_ms)?;
         let dir = RunDir::Cycle(week.to_string());
         if self.store.status(&dir)? == RunStatus::Frozen {
-            return Ok(format!("{dir} is frozen already: nothing to do"));
+            // A run stopped after its freeze (a shutdown that aborted it)
+            // gets its state-log lines here, on the slot's retry.
+            let (resumed, _) = resume_learn(&*self.store)?;
+            return Ok(if resumed.is_empty() {
+                format!("{dir} is frozen already: nothing to do")
+            } else {
+                format!(
+                    "{dir} is frozen already; state-log lines resumed for {}",
+                    resumed.join(", ")
+                )
+            });
         }
         let (profile, text) = load_profile_with_text(&self.profile_path, self.allow_synthetic)
             .map_err(|e| anyhow!(e))?;

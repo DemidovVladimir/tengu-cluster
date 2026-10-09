@@ -13,13 +13,14 @@
 //! | Cases | `replays/<run id>.<case id>/` per case | `run_cycle` (`Target::Replay`: the `knowable` clock, no carry, no state log); `DEVELOPMENT` cases always, `HOLDOUT` cases only with `holdout` — otherwise not run, only counted |
 //! | Stages | (the case dir) | the case's recorded drafts when it has any ([`RecordedStages`]: through `submit_*` like a tool, stamped `engine = model = "recorded"`, the set's sha256 as `skill_sha256`; a refused draft fails the stage, fail-soft); else the caller's runner — none (`--no-llm`) proposes nothing: a `HOLD` week |
 //! | Score | — | `domain::soe::replay`: `score_case` per case, `summarize` per split, `rank_stability` of each decided week at `scale_bps`, the unsupported claims of its proposals |
-//! | Count | `holdout-reads.jsonl` | with `holdout`: one `soe.holdout_read/1` line after the runs, before any report; unrecordable ⇒ no report (the report dir stays open) |
+//! | Count | `holdout-reads.jsonl` | with `holdout`: one `soe.holdout_read/1` line right after the claim, before any case runs (a frozen holdout case dir is readable at once, and a run that stops part-way still counted its read); unrecordable ⇒ nothing runs (the report dir stays open) |
 //! | Report | `report.json` (`soe.replay_report/1`, canonical), `report.md`, `MANIFEST.json` (frozen); one `replays.jsonl` line (`soe.replay_run/1`) | case rows: answer, portfolio and decision sha256, stability, unsupported claims; label, outcome note and score only for development cases and counted holdout cases |
 //!
 //! | Holdout read line | Value |
 //! |---|---|
 //! | fields | `schema`, `via = "replay"`, `run`, `set`, `set_version`, `set_sha256`, `cases` (the holdout ids read), `generation`, `policy_sha256`, `profile_sha256`, `read_at_ms` — ids and hashes in full |
 //! | `#n` | the line's place among the reads of its `set_sha256` up to its own line (a concurrent read never takes its number); the line number is the ledger's |
+//! | `read_at_ms` | the clock when the line is written: before the holdout cases run |
 //!
 //! Same set, profile, generation, stage records and run id ⇒ the same case
 //! dirs (`decision_sha256`) and the same `report.json` bytes.
@@ -453,11 +454,10 @@ pub(crate) async fn run_replay(
         .claim(&dir)
         .with_context(|| format!("claim {dir} in {}", env.store.root_display()))?;
 
-    let mut rows = Vec::new();
-    for c in &run {
-        let out = run_case(env, set, p, c).await?;
-        rows.push(row(env, p, c, out, true)?);
-    }
+    // Counted before any holdout case runs: a case dir is readable
+    // (`tengu soe show`) the moment it freezes, and a run that stops part-way
+    // writes no report — a read is never left uncounted (overcounting is the
+    // safe side).
     let holdout_ids: Vec<String> = run
         .iter()
         .filter(|c| c.split == Split::Holdout)
@@ -468,6 +468,11 @@ pub(crate) async fn run_replay(
     } else {
         None
     };
+    let mut rows = Vec::new();
+    for c in &run {
+        let out = run_case(env, set, p, c).await?;
+        rows.push(row(env, p, c, out, true)?);
+    }
     let dev: Vec<&CaseRow> = rows
         .iter()
         .filter(|r| r.split == Split::Development)
@@ -861,6 +866,94 @@ mod tests {
             bench.store.status(&RunDir::Replay("r-4".into())).unwrap(),
             RunStatus::Absent
         );
+    }
+
+    /// Answers every stage with nothing; notes how many holdout reads the
+    /// ledger held when each case's stage ran.
+    struct LedgerProbe {
+        store: std::sync::Arc<crate::application::soe::tests::MemCycleStore>,
+        seen: Mutex<Vec<(String, usize)>>,
+    }
+
+    #[async_trait]
+    impl StageRunner for LedgerProbe {
+        async fn run(&self, req: &StageRequest) -> Result<StageReply> {
+            let reads = self.store.lines(StateLog::HoldoutReads)?.len();
+            self.seen
+                .lock()
+                .unwrap()
+                .push((req.dir.id().to_string(), reads));
+            Ok(StageReply {
+                ok: true,
+                ..StageReply::default()
+            })
+        }
+    }
+
+    /// The read is counted before a holdout case runs — a frozen case dir
+    /// is readable at once, so a run that stops after it never leaves an
+    /// uncounted read.
+    #[tokio::test]
+    async fn holdout_read_counted_before_a_holdout_case_runs() {
+        let bench = Bench::new();
+        let mut set = set_of(&bench, &CASES);
+        for c in &mut set.cases {
+            c.proposals.clear();
+            c.challenges.clear();
+        }
+        let probe = LedgerProbe {
+            store: std::sync::Arc::clone(&bench.store),
+            seen: Mutex::new(Vec::new()),
+        };
+        let env = CycleEnv {
+            sources: Some(&bench.sources),
+            registry: &bench.registry,
+            store: &*bench.store,
+            runner: Some(&probe),
+            clock: &bench.clock,
+            profile: ProfileIn {
+                record: &bench.profile.record,
+                sha256: &bench.profile.sha256,
+                text: &bench.text,
+            },
+        };
+        let set_in = SetIn {
+            record: &set,
+            sha256: SET_SHA,
+        };
+        run_replay(&env, set_in, &params("r-p", true))
+            .await
+            .unwrap();
+        let seen = probe.seen.lock().unwrap().clone();
+        let holdout: Vec<&(String, usize)> = seen
+            .iter()
+            .filter(|(d, _)| d.contains("high-ticket"))
+            .collect();
+        assert_eq!(
+            holdout,
+            [&("r-p.high-ticket-integration".to_string(), 1)],
+            "{seen:?}"
+        );
+        assert!(seen.iter().all(|(_, n)| *n == 1), "{seen:?}");
+        // Without `holdout` nothing is counted, whatever runs.
+        let probe_dev = LedgerProbe {
+            store: std::sync::Arc::clone(&bench.store),
+            seen: Mutex::new(Vec::new()),
+        };
+        let env = CycleEnv {
+            runner: Some(&probe_dev),
+            ..env
+        };
+        run_replay(&env, set_in, &params("r-q", false))
+            .await
+            .unwrap();
+        assert_eq!(bench.store.lines(StateLog::HoldoutReads).unwrap().len(), 1);
+        assert!(probe_dev
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(d, _)| !d.contains("high-ticket")));
     }
 
     /// A replay writes `replays/` only: no `cycles/` dir, no live state log

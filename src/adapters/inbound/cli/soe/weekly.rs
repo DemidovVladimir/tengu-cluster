@@ -6,7 +6,7 @@
 //!
 //! | Command | Does | Exit 1 when |
 //! |---|---|---|
-//! | `cycle [--week] [--at] [--offline \| --no-llm]` | one live cycle → `cycles/<week>/`, frozen, then the state logs; prints the week, the stages, the hashes | refused (`cycle_already_frozen`, `cycle_unfinished`, `cycle_out_of_order`, an unsigned profile, `--at` after now or outside `--week`) or failed |
+//! | `cycle [--week] [--at] [--offline \| --no-llm]` | one live cycle → `cycles/<week>/`, frozen, then the state logs — under the sandbox's leases (`runtime:<sandbox>`, `state:<SOE state root>`, as `tengu run` holds them); prints the week, the stages, the hashes | a lease held (a `tengu run` of the sandbox, another cycle); refused (`cycle_already_frozen`, `cycle_unfinished`, `cycle_out_of_order`, an unsigned profile, `--at` after now or outside `--week`) or failed |
 //! | `replay --set <file> [--run-id] [--holdout] [--offline \| --no-llm] [--scale-bps]` | a `soe.replay_set/1` under `replays/` (never `cycles/`); holdout cases only with `--holdout` — a counted read; prints `report.md` | refused (`profile_mismatch`, `holdout_empty`, `replay_run_exists`, the set's load rules) |
 //! | `grade <cycle> --file <toml>` | the operator's `soe.cycle_grade/1` → `grades.jsonl` | the file names another cycle; refused (`cycle_not_frozen`, `stale_grade`, the record's codes) |
 //! | `resolve <cycle> [--file <toml>]` | forecast items → `resolutions.jsonl`: `EVIDENCE_APPEARS` from the source store (with a config), the rest from the answers file (`cycle_id`, `[[resolutions]]` `item`, `hit`, `observed_at`, `evidence`, `resolved_by`) | refused (`cycle_not_frozen`, `duplicate`, `evidence_before_freeze`, …) |
@@ -35,6 +35,7 @@ use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::secrets::{process_secret_registry, secrets_file_path};
 use crate::adapters::outbound::soe::store::FsCycleStore;
 use crate::adapters::outbound::sources::open_source_store;
+use crate::application::runtime::{LeaseTiming, Supervisor};
 use crate::application::soe::cycle::{
     run_cycle, CycleEnv, CycleParams, ProfileIn, Target, MEMO, PORTFOLIO, STAGES,
 };
@@ -45,6 +46,7 @@ use crate::application::soe::grade::{
 use crate::application::soe::replay::{run_replay, ReplayParams, SetIn, REPORT_MD};
 use crate::application::soe::review::{build_review, ReviewRange, PACKET_MD};
 use crate::application::soe::submit::{head, read_json};
+use crate::bootstrap::runtime::{LeasePlan, OwnerLeases};
 use crate::bootstrap::soe::{generation_pin, stage_runner};
 use crate::config::paths::resolve_tengu_home;
 use crate::config::sections::SandboxSections;
@@ -211,6 +213,35 @@ fn cell(s: &str) -> String {
     s.replace(['\n', '\r'], " ")
 }
 
+/// `f` under the sandbox's leases (`bootstrap::runtime::LeasePlan`:
+/// `runtime:<sandbox>`, then `state:<SOE state root>`), renewed while it
+/// runs: a live cycle never runs beside `tengu run`'s `soe_cycle` job or
+/// another `tengu soe cycle` — two at once would fork the forecast chain.
+/// Held ⇒ refused, naming the holder; lost while running ⇒ a warning.
+async fn under_leases<T>(
+    plan: &LeasePlan,
+    f: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let timing = LeaseTiming::default();
+    let owner = OwnerLeases::take(plan, timing.ttl_ms).await?;
+    let mut supervisor = Supervisor::new();
+    owner.keep(&mut supervisor, timing);
+    let stopper = supervisor.stopper();
+    let out = f.await;
+    supervisor
+        .shutdown(tokio::time::Instant::now() + std::time::Duration::from_secs(5))
+        .await;
+    owner.release().await;
+    if let Some(stop) = stopper.cause().filter(|s| s.failed) {
+        eprintln!(
+            "warning: {} while the cycle ran — another process may own the SOE state root; run \
+             `tengu soe verify`",
+            stop.reason
+        );
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // cycle
 // ---------------------------------------------------------------------------
@@ -265,7 +296,7 @@ pub(in crate::adapters::inbound::cli) async fn cycle(
         active: BTreeMap::new(),
         token_prices: soe.token_prices,
     };
-    let out = run_cycle(&env, &params).await?;
+    let out = under_leases(&LeasePlan::of(&config), run_cycle(&env, &params)).await?;
     let stages: Value = read_json(&*store, &out.dir, STAGES)?.unwrap_or(Value::Null);
     let p = &out.portfolio;
     if c.format == Format::Json {
@@ -854,4 +885,47 @@ pub(in crate::adapters::inbound::cli) fn show(c: &Common, run: &str) -> Result<(
         None => println!("files: {}", list_or(&files, "none")),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A live cycle takes the sandbox's leases: refused while a `tengu run`
+    /// of the sandbox holds them (nothing runs), run once they are free —
+    /// and freed again after.
+    #[tokio::test]
+    async fn cycle_waits_for_no_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = LeasePlan {
+            sandbox: "soe".into(),
+            state_dir: dir.path().to_path_buf(),
+            ledger: false,
+            soe_state: Some(dir.path().to_path_buf()),
+        };
+        let held = OwnerLeases::take(&plan, 60_000).await.unwrap();
+        let ran = std::sync::atomic::AtomicBool::new(false);
+        let e = under_leases(&plan, async {
+            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{e:#}").contains("sandbox `soe` is already running"),
+            "{e:#}"
+        );
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(held.release().await);
+        let n = under_leases(&plan, async { Ok(7) }).await.unwrap();
+        assert_eq!(n, 7);
+        // Released: a runner takes them again.
+        let again = OwnerLeases::take(&plan, 60_000).await.unwrap();
+        assert_eq!(
+            again.resources(),
+            ["runtime:soe", "state:{}"]
+                .map(|r| r.replace("{}", &dir.path().file_name().unwrap().to_string_lossy()))
+        );
+        assert!(again.release().await);
+    }
 }

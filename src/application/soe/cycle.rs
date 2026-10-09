@@ -6,10 +6,11 @@
 //!
 //! | Step | Writes (run dir) | Rule |
 //! |---|---|---|
+//! | Resume | live only: the state logs | an earlier frozen cycle with no forecast-log line (stopped between its freeze and its appends) gets them from its own frozen files first ([`resume_learn`]) — so a rerun of that week repairs it, and the next week chains after it |
 //! | Refuse | — | a frozen run (`cycle_already_frozen`), one claimed and never frozen (`cycle_unfinished`), an unsigned profile, a bad generation pin, agent or limit, a broken forecast log or a decision before its last line's freeze (`cycle_out_of_order`, live) — before anything is created |
 //! | Observe | `head.json`, `packet.json`, `profile.toml` | `application::sources::evidence_as_of` at `decided_at` — the `captured` clock for a live cycle (what was read by then), `knowable` for a replay; the packet is the stages' only fact input |
 //! | Carry | `carried.json` | live only: the previous frozen cycle's candidates outside its rejected list (`REJECT`, `REPRICE`) — verbatim records, never rewritten — and the challenges on them, each re-checked against this packet with its forecast set aside (it stays frozen in its own cycle); one that fails is dropped, with why |
-//! | Architect | `phase-propose.json` + its tools' `proposals.jsonl` | `StageRunner` with [`architect_goal`]: run, cycle, decision time, the packet's sha256, carried ids — never source text; no runner ⇒ skipped |
+//! | Architect | `phase-propose.json` + its tools' `proposals.jsonl` | `StageRunner` with [`architect_goal`]: run, cycle, decision time, the packet's sha256, the profile's sha256 and the generation pin (both in the stage cache key), carried ids — never source text; no runner ⇒ skipped |
 //! | Challenge | `phase-challenge.json` + `challenges.jsonl` | the Critic on the week's candidates ([`critic_goal`]); no runner or no candidate ⇒ skipped |
 //! | Decide | `phase-closed.json`, `decided.json`, `portfolio.json` | new + carried proposals (a re-proposed carried candidate is superseded) and challenges (a carried one whose target or field is gone is dropped) → `decide_week` with the active map |
 //! | Report | `memo.md`, `forecast.json`, `forecast-line.json` (live), `inputs.json`, `stages.json`, `ops.json`, `candidates.jsonl`, `episodes.jsonl` | `render_memo` + the cycle section; the new proposals' forecasts frozen at `decided_at`; the cycle's identity (packet, proposals, challenges, profile, policy = the rank order, generation, active map, budget); one candidate event and one `OpportunityEpisode` per decided candidate (C20) |
@@ -214,14 +215,32 @@ fn record_sha256<T: Serialize>(r: &T) -> Result<String> {
     Ok(canonical_sha256(&serde_json::to_value(r)?))
 }
 
+/// What a stage's answer depends on beside the packet: the signed profile
+/// (its gates and rank keys are what `soe_propose`'s preview and `soe_view
+/// candidates` show) and the generation pin — in the goal, so the stage
+/// cache key (`outbound/soe/cache.rs`) changes with either and a rerun under
+/// another profile never replays a stage recorded under the old one.
+fn identity_lines(h: &RunHead, profile_sha256: &str) -> String {
+    format!(
+        "profile_sha256: {profile_sha256}\ngeneration: {} {}\n",
+        h.generation.id, h.generation.sha256
+    )
+}
+
 /// The Architect's user turn (module table): ids and hashes only.
-pub(crate) fn architect_goal(h: &RunHead, records: usize, carried: &Carried) -> String {
+pub(crate) fn architect_goal(
+    h: &RunHead,
+    profile_sha256: &str,
+    records: usize,
+    carried: &Carried,
+) -> String {
     let mut g = format!(
-        "soe_stage: ARCHITECT\nrun: {}\ncycle: {}\ndecided_at: {}\npacket_sha256: {}\npacket_records: {records}\nmax_proposals: {}\nforecast_max_weeks: {}\n",
+        "soe_stage: ARCHITECT\nrun: {}\ncycle: {}\ndecided_at: {}\npacket_sha256: {}\npacket_records: {records}\n{}max_proposals: {}\nforecast_max_weeks: {}\n",
         h.run,
         h.cycle_id,
         h.decided_at(),
         h.packet_sha256,
+        identity_lines(h, profile_sha256),
         h.max_proposals,
         h.forecast_max_weeks
     );
@@ -242,13 +261,18 @@ pub(crate) fn architect_goal(h: &RunHead, records: usize, carried: &Carried) -> 
 }
 
 /// The Critic's user turn: ids and hashes only.
-pub(crate) fn critic_goal(h: &RunHead, candidates: &[MechanismProposal]) -> String {
+pub(crate) fn critic_goal(
+    h: &RunHead,
+    profile_sha256: &str,
+    candidates: &[MechanismProposal],
+) -> String {
     let mut g = format!(
-        "soe_stage: CHALLENGE\nrun: {}\ncycle: {}\ndecided_at: {}\npacket_sha256: {}\ncandidates:\n",
+        "soe_stage: CHALLENGE\nrun: {}\ncycle: {}\ndecided_at: {}\npacket_sha256: {}\n{}candidates:\n",
         h.run,
         h.cycle_id,
         h.decided_at(),
-        h.packet_sha256
+        h.packet_sha256,
+        identity_lines(h, profile_sha256)
     );
     for p in candidates {
         let o = p.opportunity();
@@ -263,14 +287,19 @@ async fn run_stage(
     req: StageRequest,
 ) -> (StageRun, StageLine) {
     let t = clock.now_ms();
-    let reply = match runner.run(&req).await {
-        Ok(r) => r,
-        Err(e) => StageReply {
-            ok: false,
-            error: Some(format!("{e:#}")),
-            latency_ms: elapsed(clock, t),
-            ..StageReply::default()
-        },
+    // No reply (a crash, a timeout): no metrics came back — the tokens are
+    // unknown, never 0 (`ops::StageRun::tokens_unknown`).
+    let (reply, tokens_unknown) = match runner.run(&req).await {
+        Ok(r) => (r, false),
+        Err(e) => (
+            StageReply {
+                ok: false,
+                error: Some(format!("{e:#}")),
+                latency_ms: elapsed(clock, t),
+                ..StageReply::default()
+            },
+            true,
+        ),
     };
     let sum = |f: fn(&crate::domain::metrics::MetricsRecord) -> u32| -> u64 {
         reply.metrics.iter().map(|m| u64::from(f(m))).sum()
@@ -283,6 +312,7 @@ async fn run_stage(
         prompt_tokens: sum(|m| m.prompt_tokens),
         completion_tokens: sum(|m| m.completion_tokens),
         ok: reply.ok,
+        tokens_unknown,
     };
     let line = StageLine {
         stage: req.stage,
@@ -588,14 +618,7 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
         max_proposals: p.max_proposals,
         forecast_max_weeks: p.forecast_max_weeks,
     };
-    let observe = StageRun {
-        stage: Stage::Observe,
-        agent: None,
-        latency_ms: elapsed(env.clock, t0),
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        ok: true,
-    };
+    let observe = local_run(Stage::Observe, elapsed(env.clock, t0));
     env.store
         .claim(&dir)
         .with_context(|| format!("claim {dir} in {}", env.store.root_display()))?;
@@ -647,6 +670,13 @@ fn preflight(env: &CycleEnv, p: &CycleParams, dir: &RunDir) -> Result<Option<Log
     if !problems.is_empty() {
         bail!("cycle {dir} refused: {}", problems.join("; "));
     }
+    // Live: an earlier cycle's lost appends first, so this one (or its
+    // rerun, refused below) chains after it (module table: Resume).
+    let lines = if dir.is_replay() {
+        Vec::new()
+    } else {
+        resume_learn(env.store)?.1
+    };
     match env.store.status(dir)? {
         RunStatus::Frozen => bail!(
             "{CYCLE_ALREADY_FROZEN}: {dir} in {} is frozen — a cycle runs once; replay it under replays/",
@@ -660,27 +690,6 @@ fn preflight(env: &CycleEnv, p: &CycleParams, dir: &RunDir) -> Result<Option<Log
     }
     if dir.is_replay() {
         return Ok(None);
-    }
-    let lines: Vec<LogLine> = env
-        .store
-        .lines(StateLog::ForecastLog)?
-        .iter()
-        .enumerate()
-        .map(|(i, l)| {
-            serde_json::from_str(l)
-                .with_context(|| format!("{} line {}", StateLog::ForecastLog.file_name(), i + 1))
-        })
-        .collect::<Result<_>>()?;
-    if let Err(e) = verify_chain(&lines) {
-        bail!(
-            "{}: {} — nothing appends to a broken chain: {}",
-            crate::domain::soe::value::codes::CHAIN_BROKEN,
-            StateLog::ForecastLog.file_name(),
-            e.iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
     }
     if lines.iter().any(|l| l.cycle_id == dir.id()) {
         bail!(
@@ -702,6 +711,77 @@ fn preflight(env: &CycleEnv, p: &CycleParams, dir: &RunDir) -> Result<Option<Log
         }
     }
     Ok(lines.last().cloned())
+}
+
+/// `forecast-log.jsonl`, parsed and `verify_chain`ed (`chain_broken` else).
+fn forecast_log(store: &dyn CycleStore) -> Result<Vec<LogLine>> {
+    let lines: Vec<LogLine> = store
+        .lines(StateLog::ForecastLog)?
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            serde_json::from_str(l)
+                .with_context(|| format!("{} line {}", StateLog::ForecastLog.file_name(), i + 1))
+        })
+        .collect::<Result<_>>()?;
+    if let Err(e) = verify_chain(&lines) {
+        bail!(
+            "{}: {} — nothing appends to a broken chain: {}",
+            crate::domain::soe::value::codes::CHAIN_BROKEN,
+            StateLog::ForecastLog.file_name(),
+            joined(&e)
+        );
+    }
+    Ok(lines)
+}
+
+/// Module table: Resume — every frozen live cycle with no forecast-log line
+/// (stopped between its freeze and its appends: a crash, a shutdown that
+/// aborted the job) gets its appends from its own frozen files, in the
+/// cycle's order — `candidates.jsonl`, `episodes.jsonl` (each line once:
+/// those already appended are skipped), then `forecast-line.json` — only
+/// when that line follows the chain's tip; else `chain_broken`, nothing
+/// appended. The cycles resumed and the log after.
+pub(crate) fn resume_learn(store: &dyn CycleStore) -> Result<(Vec<String>, Vec<LogLine>)> {
+    let mut lines = forecast_log(store)?;
+    let mut resumed = Vec::new();
+    for id in store.cycles()? {
+        let dir = RunDir::Cycle(id.clone());
+        if lines.iter().any(|l| l.cycle_id == id) || store.status(&dir)? != RunStatus::Frozen {
+            continue;
+        }
+        let line: LogLine = submit::read_json(store, &dir, FORECAST_LINE)?
+            .with_context(|| format!("{dir}/{FORECAST_LINE}: missing in a frozen cycle"))?;
+        let tip = lines
+            .last()
+            .map_or(crate::domain::soe::forecast::GENESIS, |l| {
+                l.line_sha256.as_str()
+            });
+        if line.prev_sha256 != tip || line.cycle_id != id {
+            bail!(
+                "{}: {dir} froze without its {} line and cannot be resumed: its line follows {}, \
+                 the log ends at {tip} — `tengu soe verify` shows it",
+                crate::domain::soe::value::codes::CHAIN_BROKEN,
+                StateLog::ForecastLog.file_name(),
+                line.prev_sha256
+            );
+        }
+        for (log, name) in [
+            (StateLog::Candidates, CANDIDATES),
+            (StateLog::Episodes, EPISODES),
+        ] {
+            let have: BTreeSet<String> = store.lines(log)?.into_iter().collect();
+            let own = store.read(&dir, name)?.unwrap_or_default();
+            let own = String::from_utf8(own).with_context(|| format!("{dir}/{name}: not UTF-8"))?;
+            for l in own.lines().filter(|l| !have.contains(*l)) {
+                store.append_line(log, l)?;
+            }
+        }
+        store.append_line(StateLog::ForecastLog, &canonical_line(&line)?)?;
+        lines.push(line);
+        resumed.push(id);
+    }
+    Ok((resumed, lines))
 }
 
 /// A candidate event's schema (`candidates.jsonl`).
@@ -728,6 +808,7 @@ fn local_run(stage: Stage, latency_ms: u64) -> StageRun {
         prompt_tokens: 0,
         completion_tokens: 0,
         ok: true,
+        tokens_unknown: false,
     }
 }
 
@@ -921,7 +1002,12 @@ impl Claimed<'_> {
     async fn model_stages(&self, s: &mut Stages) -> Result<()> {
         let (store, p, dir) = (self.env.store, self.p, &self.dir);
         open_phase(store, dir, Phase::Propose)?;
-        let goal = architect_goal(&self.head, self.index.refs.len(), &self.carried);
+        let goal = architect_goal(
+            &self.head,
+            self.env.profile.sha256,
+            self.index.refs.len(),
+            &self.carried,
+        );
         self.stage(s, Stage::Architect, &p.architect, Ok(goal))
             .await;
         open_phase(store, dir, Phase::Challenge)?;
@@ -929,7 +1015,11 @@ impl Claimed<'_> {
         let goal = if candidates.is_empty() {
             Err("no candidate to challenge")
         } else {
-            Ok(critic_goal(&self.head, &candidates))
+            Ok(critic_goal(
+                &self.head,
+                self.env.profile.sha256,
+                &candidates,
+            ))
         };
         self.stage(s, Stage::Challenge, &p.critic, goal).await;
         open_phase(store, dir, Phase::Closed)

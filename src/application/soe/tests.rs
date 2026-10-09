@@ -30,7 +30,7 @@ use super::cycle::{
     run_cycle, CycleEnv, CycleOutcome, CycleParams, ProfileIn, Target, CANDIDATES, DECIDED,
     EPISODES, FORECAST, FORECAST_LINE, INPUTS, MEMO, PORTFOLIO, STAGES,
 };
-use super::freeze::{decision_sha256, verify, FileCheck, OPS};
+use super::freeze::{decision_sha256, verify, verify_state, FileCheck, LogState, OPS};
 use super::submit::{submit_challenge, submit_proposal, GenerationPin, PACKET};
 use crate::config::soe::{load_profile, Loaded};
 use crate::config::sources::SourcesConfig;
@@ -40,12 +40,12 @@ use crate::domain::metrics::{MetricsKind, MetricsRecord};
 use crate::domain::soe::challenge::Challenge;
 use crate::domain::soe::episode::OpportunityEpisode;
 use crate::domain::soe::forecast::{verify_chain, Forecast, LogLine};
-use crate::domain::soe::ops::{CycleOps, Stage};
+use crate::domain::soe::ops::{Cost, CycleOps, Stage, TokenPrices};
 use crate::domain::soe::portfolio::{Allocation, PortfolioAction, WeeklyPortfolio};
 use crate::domain::soe::profile::OperatorProfile;
 use crate::domain::soe::proposal::{MechanismProposal, Provenance};
 use crate::domain::soe::record::from_json;
-use crate::domain::soe::value::{codes, Est, Minor};
+use crate::domain::soe::value::{codes, Currency, Est, Minor};
 use crate::domain::source::testkit::{copy_of, rec, Src};
 use crate::domain::source::{Coverage, Purge, SourceRecord};
 use crate::ports::clock::SimClock;
@@ -1524,6 +1524,105 @@ async fn frozen_cycle_refused() {
     assert!(bad.store.snapshot().logs.values().all(Vec::is_empty));
 }
 
+/// A run stopped between its freeze and its state-log appends (a crash, a
+/// shutdown that aborted the job) loses no line: a rerun of the week puts
+/// back exactly what was lost — each line once — and is still refused; the
+/// next week chains after it instead of past it. A frozen cycle whose line
+/// no longer follows the tip is never appended (`chain_broken`).
+#[tokio::test]
+async fn stopped_after_freeze_resumes_its_log_lines() {
+    let case = load_case("weekly_rerun_w41");
+    let lose = |bench: &Bench| {
+        let mut m = bench.store.mem.lock().unwrap();
+        m.logs.get_mut(&StateLog::ForecastLog).unwrap().pop();
+        // The stop came in the middle of the episodes.
+        m.logs.get_mut(&StateLog::Episodes).unwrap().pop();
+    };
+    let bench = Bench::new();
+    bench.run_case(&case, Target::Cycle).await;
+    let whole = bench.store.snapshot().logs;
+    assert!(whole[&StateLog::Episodes].len() >= 2, "{whole:?}");
+    lose(&bench);
+    let s = verify_state(&*bench.store).unwrap();
+    assert_eq!(s.log, [("2026-W41".to_string(), LogState::Missing)]);
+    // The week's rerun: refused, the lines back — in order, none twice.
+    let (again, _) = bench.try_case(&case, Target::Cycle, |_| {}).await;
+    let e = format!("{:#}", again.unwrap_err());
+    assert!(
+        e.starts_with("cycle_already_frozen: cycles/2026-W41"),
+        "{e}"
+    );
+    assert_eq!(bench.store.snapshot().logs, whole);
+    assert!(verify_state(&*bench.store).unwrap().ok());
+
+    // The next week instead: it resumes W41 first, then chains after it.
+    let bench = Bench::new();
+    bench.run_case(&case, Target::Cycle).await;
+    lose(&bench);
+    let p = bench.params("2026-W42", t("2026-10-12T12:00:00Z"), Target::Cycle);
+    bench.cycle(None, &p).await.unwrap();
+    let s = verify_state(&*bench.store).unwrap();
+    assert!(s.ok(), "{s:?}");
+    let ids: Vec<String> = bench
+        .store
+        .lines(StateLog::ForecastLog)
+        .unwrap()
+        .iter()
+        .map(|l| serde_json::from_str::<LogLine>(l).unwrap().cycle_id)
+        .collect();
+    assert_eq!(ids, ["2026-W41", "2026-W42"]);
+    assert!(
+        bench.store.snapshot().logs[&StateLog::Episodes].starts_with(&whole[&StateLog::Episodes])
+    );
+
+    // A lost line the chain has moved past is never appended.
+    let bench = Bench::new();
+    bench.run_case(&case, Target::Cycle).await;
+    {
+        // An intact one-line chain whose tip is another cycle's line.
+        let mut m = bench.store.mem.lock().unwrap();
+        let mut f: Forecast = serde_json::from_slice(
+            &m.dirs[&RunDir::Cycle("2026-W41".into())][crate::application::soe::cycle::FORECAST],
+        )
+        .unwrap();
+        f.cycle_id = "2026-W40".into();
+        let other = crate::domain::soe::forecast::log_line(None, &f).unwrap();
+        let log = m.logs.get_mut(&StateLog::ForecastLog).unwrap();
+        log.clear();
+        log.push(canonical_json(&serde_json::to_value(&other).unwrap()));
+    }
+    assert!(verify_chain(
+        &bench
+            .store
+            .lines(StateLog::ForecastLog)
+            .unwrap()
+            .iter()
+            .map(|l| serde_json::from_str::<LogLine>(l).unwrap())
+            .collect::<Vec<_>>()
+    )
+    .is_ok());
+    let before = bench.store.snapshot().logs;
+    let e = format!(
+        "{:#}",
+        bench
+            .cycle(
+                None,
+                &bench.params("2026-W42", t("2026-10-12T12:00:00Z"), Target::Cycle)
+            )
+            .await
+            .unwrap_err()
+    );
+    assert!(e.starts_with("chain_broken: "), "{e}");
+    assert_eq!(bench.store.snapshot().logs, before);
+    assert_eq!(
+        bench
+            .store
+            .status(&RunDir::Cycle("2026-W42".into()))
+            .unwrap(),
+        RunStatus::Absent
+    );
+}
+
 /// Fail-soft stages: an Architect that fails writes nothing and the week is
 /// a valid `HOLD`; one that fails late keeps what its tools wrote.
 #[tokio::test]
@@ -1552,8 +1651,29 @@ async fn architect_failure_holds_not_errors() {
     assert_eq!(stages[1]["note"], "no candidate to challenge");
     let ops: CycleOps = serde_json::from_str(file(&files, OPS)).unwrap();
     assert_eq!(ops.failed_stages, 1);
+    // No reply: its tokens are unknown, never 0 (§ 13 no silent unknown).
+    assert_eq!(ops.tokens_unknown, [Stage::Architect]);
+    assert!(ops.stages[1].tokens_unknown);
     assert!(file(&files, MEMO).contains("| ARCHITECT | `soe-architect` | FAILED |"));
     assert!(verify(&*bench.store, &out.dir).unwrap().ok());
+    // … and so is the cost, prices or not.
+    let priced = Bench::new();
+    let mut runner = ScriptedRunner::new(priced.store.clone(), Vec::new(), Vec::new());
+    runner.architect = Ending::Err;
+    let mut p = priced.params("2026-W41", t("2026-10-05T12:00:00Z"), Target::Cycle);
+    p.token_prices = Some(TokenPrices {
+        currency: Currency::Usd,
+        prompt_per_million: "3.00".parse().unwrap(),
+        completion_per_million: "15.00".parse().unwrap(),
+    });
+    let out = priced.cycle(Some(&runner), &p).await.unwrap();
+    let ops: CycleOps = serde_json::from_str(file(&priced.store.dir(&out.dir), OPS)).unwrap();
+    assert_eq!(
+        ops.cost,
+        Cost::Unknown {
+            reason: "tokens unknown: ARCHITECT ended with no reply".into()
+        }
+    );
 
     // Late failure: the draft landed before the child failed — decided.
     let bench = Bench::new();
@@ -1564,6 +1684,10 @@ async fn architect_failure_holds_not_errors() {
     assert_eq!(out.portfolio.held[0].id, "news-automation");
     let ops: CycleOps = serde_json::from_str(file(&bench.store.dir(&out.dir), OPS)).unwrap();
     assert_eq!(ops.failed_stages, 1);
+    assert!(
+        ops.tokens_unknown.is_empty(),
+        "a failed reply reports its tokens"
+    );
 
     // No runner at all (`--no-llm`): both stages skipped, a valid empty week.
     let bench = Bench::new();
@@ -1708,6 +1832,16 @@ async fn architect_sees_only_cycle_packets() {
             head["packet_sha256"].as_str().unwrap()
         )));
         assert!(r.goal.contains("cycle: 2026-W41") && r.goal.contains("run: cycles/2026-W41"));
+        // The profile and the generation the stage answers under: part of
+        // the stage cache key (`outbound/soe/cache.rs` hashes the goal), so
+        // a re-signed profile never replays a stage recorded under the old.
+        let g = generation();
+        for line in [
+            format!("profile_sha256: {}", bench.profile.sha256),
+            format!("generation: {} {}", g.id, g.sha256),
+        ] {
+            assert!(r.goal.lines().any(|l| l == line), "{line} in {}", r.goal);
+        }
         for leak in ["example.org", "Other events", "record_id", "@", "p-late"] {
             assert!(!r.goal.contains(leak), "{leak} in {}", r.goal);
         }

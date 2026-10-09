@@ -164,7 +164,7 @@
         <tr><td><code>portfolio &lt;dir&gt; --as-of &lt;t&gt;</code></td><td>the week as the O3 allocation builds it, every candidate new: ranked with their actions and why each ranks above the next, held, rejected, a note per candidate, next information; JSON = its canonical JSON</td><td>as <code>check</code>, for any file in the dir</td></tr>
         <tr><td><code>sensitivity &lt;opportunity.toml&gt;</code></td><td>the tornado: each input at ± <code>--scale-bps</code> (default 2000), the time-adjusted change, the verdict, gates added or removed</td><td>as <code>check</code>; a scale outside 1..=10000 is a usage error</td></tr>
         <tr><td><code>eval &lt;cases dir&gt;</code></td><td>ok or <code>FAIL</code> per case with every difference; classes without a case</td><td>any case fails, or is refused (another profile id)</td></tr>
-        <tr><td><code>cycle [--week] [--at] [--offline | --no-llm]</code></td><td>one live week, frozen under <code>cycles/&lt;week&gt;/</code>; the stages and the hashes</td><td>the week ran already, was left unfinished, or is earlier than the last one (<code>cycle_out_of_order</code>)</td></tr>
+        <tr><td><code>cycle [--week] [--at] [--offline | --no-llm]</code></td><td>one live week, frozen under <code>cycles/&lt;week&gt;/</code>, under the sandbox's leases; the stages and the hashes</td><td>a <code>tengu run</code> of the sandbox holds the leases; the week ran already, was left unfinished, or is earlier than the last one (<code>cycle_out_of_order</code>)</td></tr>
         <tr><td><code>replay --set &lt;file&gt; [--holdout]</code></td><td>the labelled dates as weeks under <code>replays/</code>; the report</td><td>another profile's labels; a run id used before; <code>--holdout</code> with no holdout case</td></tr>
         <tr><td><code>grade &lt;week&gt; --file</code> · <code>resolve &lt;week&gt;</code></td><td>one grade line · the forecast items resolved now and still pending</td><td>the week is not frozen; a stale version; evidence from before the freeze</td></tr>
         <tr><td><code>review</code> · <code>verify</code> · <code>show</code></td><td>the Review #2 packet · every frozen run re-hashed and the chain · one run</td><td>the state is not intact; the run is absent</td></tr>
@@ -385,7 +385,7 @@
       <thead><tr><th>O4 record</th><th>Rule</th></tr></thead>
       <tbody>
         <tr><td>Forecast log</td><td>frozen with the week, each line hashes the previous; resolved only by evidence seen after the freeze; calibration in whole basis points</td></tr>
-        <tr><td>Cycle ops</td><td>latency and tokens per stage, source failures; cost unknown without prices</td></tr>
+        <tr><td>Cycle ops</td><td>latency and tokens per stage, source failures; cost unknown without prices, or when a stage ended with no reply (its tokens unknown, never 0)</td></tr>
         <tr><td>Review #2 packet</td><td>cycles, grades, calibration, misses, ops, source terms, lanes; stop flags from roadmap § 14. The operator decides.</td></tr>
       </tbody>
     </table>
@@ -407,7 +407,7 @@
         <tr><td>Carry</td><td><code>carried.json</code></td><td>last week's candidates outside its rejected list, with their challenges, copied as they were and checked again</td></tr>
         <tr><td>Architect · Critic</td><td><code>proposals.jsonl</code>, <code>challenges.jsonl</code></td><td>each in its own phase; the goal holds ids and the packet's sha256, never source text; a failed stage is recorded and the week goes on</td></tr>
         <tr><td>Decide · report</td><td><code>decided.json</code>, <code>portfolio.json</code>, <code>memo.md</code>, <code>forecast.json</code>, <code>inputs.json</code>, <code>stages.json</code>, <code>ops.json</code></td><td><code>decide_week</code>; forecasts frozen at the decision time; the inputs, policy and generation hashed</td></tr>
-        <tr><td>Freeze · learn</td><td><code>MANIFEST.json</code>; <code>candidates.jsonl</code>, <code>episodes.jsonl</code></td><td>the dir becomes read-only; a live week appends its events, one episode per candidate and a chained forecast line to the state logs</td></tr>
+        <tr><td>Freeze · learn</td><td><code>MANIFEST.json</code>; <code>candidates.jsonl</code>, <code>episodes.jsonl</code></td><td>the dir becomes read-only; a live week appends its events, one episode per candidate and a chained forecast line to the state logs; a stop in between is resumed from the frozen dir by the next live week, a rerun of the week or the job's retry (<code>resume_learn</code>)</td></tr>
       </tbody>
     </table>
   </div>
@@ -444,7 +444,7 @@
         <tr><td>No side effect</td><td>deny-all scopes for <code>http_request</code>, <code>write_file</code>, <code>run_command</code> and the two signing tools; no loops, MCP servers, trading or inbound sections; feeds of kind <code>job</code> only</td></tr>
         <tr><td>Network</td><td><code>[egress] allow_hosts</code> equals the registry rows' hosts</td></tr>
         <tr><td><code>FsCycleStore</code></td><td>run dirs claimed once, files written once, appends one line per write, freeze = manifest then read-only</td></tr>
-        <tr><td>Stage runners</td><td>one <code>tengu run-agent</code> child per stage, behind a cache keyed by the sha256 of agent, model, skill, stage and goal: a rerun asks no model; offline, a miss names the full key</td></tr>
+        <tr><td>Stage runners</td><td>one <code>tengu run-agent</code> child per stage, behind a cache keyed by the sha256 of agent, model, skill, stage and goal (which names the profile and generation sha256): a rerun asks no model; offline, a miss names the full key</td></tr>
         <tr><td><code>soe_cycle</code> job</td><td>the slot's ISO week, decided at the slot; a frozen week is a no-op; no signed profile ⇒ the run fails before anything is created, and the at-tick slot retries for 15 min</td></tr>
         <tr><td>Lease</td><td><code>tengu run</code> of an <code>[soe]</code> sandbox owns its state root: <code>state:&lt;sources.state&gt;</code>, <code>runtime.db</code> inside it</td></tr>
       </tbody>
@@ -501,7 +501,7 @@
       <thead><tr><th>Step</th><th>Writes</th><th>Rule</th></tr></thead>
       <tbody>
         <tr><td>Replay</td><td><code>replays/&lt;run&gt;/</code> + one dir per case; <code>replays.jsonl</code></td><td>each labelled date of a <code>soe.replay_set/1</code> runs as a cycle at that date; recorded drafts pass the tools' checks; scored for agreement, <code>HOLD</code> precision and recall, misses, unsupported claims and rank stability</td></tr>
-        <tr><td>Holdout read</td><td><code>holdout-reads.jsonl</code></td><td>holdout cases run only when asked; the read is logged before any label shows, and the report says which read of this set it is</td></tr>
+        <tr><td>Holdout read</td><td><code>holdout-reads.jsonl</code></td><td>holdout cases run only when asked; the read is logged before any holdout case runs, and the report says which read of this set it is</td></tr>
         <tr><td>Grade</td><td><code>grades.jsonl</code></td><td>the operator's six 1–5 grades, correction minutes and misses, on frozen live weeks only; a regrade is the next version</td></tr>
         <tr><td>Resolve</td><td><code>resolutions.jsonl</code></td><td>each forecast item once: evidence knowable after the freeze, or the operator's answer; never evidence from before the freeze</td></tr>
         <tr><td>Review</td><td><code>reviews/&lt;day&gt;/packet.{json,md}</code>; <code>reviews.jsonl</code></td><td>the six roadmap sections, replays, integrity, the § 14 stop flags; the last line is the STOP: Operator Review #2 decides</td></tr>
@@ -670,7 +670,7 @@
     <li><span><b>The week never overspends.</b> Tests fit the profile's weekly hours and validation tranche; a diligence tranche is capped at the tranche and spends nothing.</span></li>
     <li><span><b>A forecast cannot be fixed later.</b> An edited, dropped or reordered log line breaks the chain; evidence from before the freeze resolves nothing.</span></li>
     <li><span><b>A week runs once.</b> A frozen run dir is refused, and a frozen dir refuses every write; a replay writes under <code>replays/</code>, never <code>cycles/</code>, and no live state log.</span></li>
-    <li><span><b>A holdout label needs a counted read.</b> Without one a holdout case is not run; with one the read is logged before any label, outcome or score shows.</span></li>
+    <li><span><b>A holdout label needs a counted read.</b> Without one a holdout case is not run; with one the read is logged before any holdout case runs — so before any label, outcome or score shows.</span></li>
     <li><span><b>Grades and resolutions are append-only.</b> Only a frozen live week takes them; a regrade is a new version and a resolved item is never resolved again.</span></li>
     <li><span><b>The review decides nothing.</b> The packet ends with the STOP line; no O5–O8 action exists.</span></li>
     <li><span><b>Same inputs, same cycle.</b> The same packet, profile, generation and stage records give the same bytes in every file but <code>ops.json</code>.</span></li>
@@ -679,7 +679,7 @@
     <li><span><b>Old candidates are never rewritten.</b> A rerun carries last week's records as they were; a new version replaces one only in the new week.</span></li>
     <li><span><b>An SOE sandbox has no hands.</b> A tool outside the closed list, a scope that grants a side-effect tool, an MCP server, a loop or a trading section fails the load.</span></li>
     <li><span><b>A recorded stage replays verbatim.</b> A cache hit re-submits the same drafts through the tools' checks; the decision bytes match the recorded run.</span></li>
-    <li><span><b>One owner per state root.</b> A second <code>tengu run</code> on the same <code>[sources] state</code> is refused and names the holder.</span></li>
+    <li><span><b>One owner per state root.</b> A second <code>tengu run</code> on the same <code>[sources] state</code> is refused and names the holder; so is <code>tengu soe cycle</code> while one runs — two live weeks at once would fork the forecast chain.</span></li>
   </ul>
 </section>
 
