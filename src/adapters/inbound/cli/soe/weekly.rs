@@ -6,7 +6,7 @@
 //!
 //! | Command | Does | Exit 1 when |
 //! |---|---|---|
-//! | `cycle [--week] [--at] [--offline \| --no-llm]` | one live cycle → `cycles/<week>/`, frozen, then the state logs — under the sandbox's leases (`runtime:<sandbox>`, `state:<SOE state root>`, as `tengu run` holds them); prints the week, the stages, the hashes | a lease held (a `tengu run` of the sandbox, another cycle); refused (`cycle_already_frozen`, `cycle_unfinished`, `cycle_out_of_order`, an unsigned profile, `--at` after now or outside `--week`) or failed |
+//! | `cycle [--week] [--at] [--offline \| --no-llm]` | one live cycle → `cycles/<week>/`, frozen, then the state logs — under the sandbox's leases (`runtime:<sandbox>`, `state:<SOE state root>`, as `tengu run` holds them), renewed before each stage, the freeze and each state-log line; prints the week, the stages, the hashes | a lease held (a `tengu run` of the sandbox, another cycle); lost while it runs (`lease_lost`: it stops at once and writes nothing more); refused (`cycle_already_frozen`, `cycle_unfinished`, `cycle_out_of_order`, an unsigned profile, `--at` after now or outside `--week`) or failed |
 //! | `replay --set <file> [--run-id] [--holdout] [--offline \| --no-llm] [--scale-bps]` | a `soe.replay_set/1` under `replays/` (never `cycles/`); holdout cases only with `--holdout` — a counted read; prints `report.md` | refused (`profile_mismatch`, `holdout_empty`, `replay_run_exists`, the set's load rules) |
 //! | `grade <cycle> --file <toml>` | the operator's `soe.cycle_grade/1` → `grades.jsonl` | the file names another cycle; refused (`cycle_not_frozen`, `stale_grade`, the record's codes) |
 //! | `resolve <cycle> [--file <toml>]` | forecast items → `resolutions.jsonl`: `EVIDENCE_APPEARS` from the source store (with a config), the rest from the answers file (`cycle_id`, `[[resolutions]]` `item`, `hit`, `observed_at`, `evidence`, `resolved_by`) | refused (`cycle_not_frozen`, `duplicate`, `evidence_before_freeze`, …) |
@@ -23,6 +23,7 @@
 //! | Output | text (default) or `--format json`; ids and hashes in full |
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -59,6 +60,7 @@ use crate::domain::soe::portfolio::{IsoWeek, WeeklyPortfolio};
 use crate::domain::soe::record::from_toml;
 use crate::domain::soe::review::CycleGrade;
 use crate::ports::clock::Clock;
+use crate::ports::runtime::{LeaseLost, Ownership, Unleased};
 use crate::ports::soe::{CycleStore, RunDir, RunStatus, StageRunner};
 use crate::ports::source_store::SourceStore;
 
@@ -217,25 +219,56 @@ fn cell(s: &str) -> String {
 /// `runtime:<sandbox>`, then `state:<SOE state root>`), renewed while it
 /// runs: a live cycle never runs beside `tengu run`'s `soe_cycle` job or
 /// another `tengu soe cycle` — two at once would fork the forecast chain.
-/// Held ⇒ refused, naming the holder; lost while running ⇒ a warning.
-async fn under_leases<T>(
-    plan: &LeasePlan,
-    f: impl std::future::Future<Output = Result<T>>,
-) -> Result<T> {
-    let timing = LeaseTiming::default();
+/// `f` gets the leases (`ports::runtime::Ownership`) and renews them before
+/// each irreversible write (`application::soe::cycle`: Fail-stop). Held ⇒
+/// refused, naming the holder. Lost while `f` runs ⇒ fail-stop: `f` is
+/// dropped at its next wait (its writes are synchronous between waits —
+/// none is torn; a stage's `run-agent` child is killed), the leases are
+/// released and the command fails `lease_lost` — never `f`'s result.
+async fn under_leases<T, F, Fut>(plan: &LeasePlan, f: F) -> Result<T>
+where
+    F: FnOnce(Arc<dyn Ownership>) -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    under_leases_with(plan, LeaseTiming::default(), f).await
+}
+
+/// [`under_leases`] with its lease timing (tests shorten it).
+async fn under_leases_with<T, F, Fut>(plan: &LeasePlan, timing: LeaseTiming, f: F) -> Result<T>
+where
+    F: FnOnce(Arc<dyn Ownership>) -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
     let owner = OwnerLeases::take(plan, timing.ttl_ms).await?;
     let mut supervisor = Supervisor::new();
     owner.keep(&mut supervisor, timing);
     let stopper = supervisor.stopper();
-    let out = f.await;
+    let leases = owner.ownership();
+    let out = tokio::select! {
+        biased;
+        lost = leases.lost() => Err(anyhow::Error::new(lost)),
+        out = f(Arc::clone(&leases)) => out,
+    };
     supervisor
         .shutdown(tokio::time::Instant::now() + std::time::Duration::from_secs(5))
         .await;
+    let lost = owner.lost();
     owner.release().await;
+    if let Some(lost) = lost {
+        if let Some(e) = out.as_ref().err().filter(|e| LeaseLost::of(e).is_none()) {
+            eprintln!("warning: the cycle failed before the loss too: {e:#}");
+        }
+        eprintln!(
+            "the cycle stopped at a lost lease: another process may own the SOE state root now — \
+             run `tengu soe verify`; a cycle dir left OPEN answers `cycle_unfinished` (move it \
+             aside to rerun the week), state-log lines it did not append are resumed by the next \
+             cycle"
+        );
+        return Err(anyhow::Error::new(lost));
+    }
     if let Some(stop) = stopper.cause().filter(|s| s.failed) {
         eprintln!(
-            "warning: {} while the cycle ran — another process may own the SOE state root; run \
-             `tengu soe verify`",
+            "warning: {} while the cycle ran — run `tengu soe verify`",
             stop.reason
         );
     }
@@ -272,7 +305,8 @@ pub(in crate::adapters::inbound::cli) async fn cycle(
     let store: Arc<dyn CycleStore> = Arc::new(FsCycleStore::new(&root));
     let sources = open_sources(&root)?;
     let runner = runner(&config, &soe, &root, Arc::clone(&store), mode)?;
-    let env = CycleEnv {
+    // The leases' `Ownership` replaces `Unleased` once they are taken.
+    let base = CycleEnv {
         sources: sources.as_deref(),
         registry: &registry,
         store: &*store,
@@ -283,6 +317,7 @@ pub(in crate::adapters::inbound::cli) async fn cycle(
             sha256: &profile.sha256,
             text: &text,
         },
+        owner: &Unleased,
     };
     let params = CycleParams {
         target: Target::Cycle,
@@ -296,7 +331,15 @@ pub(in crate::adapters::inbound::cli) async fn cycle(
         active: BTreeMap::new(),
         token_prices: soe.token_prices,
     };
-    let out = under_leases(&LeasePlan::of(&config), run_cycle(&env, &params)).await?;
+    let p = &params;
+    let out = under_leases(&LeasePlan::of(&config), |owner| async move {
+        let env = CycleEnv {
+            owner: &*owner,
+            ..base
+        };
+        run_cycle(&env, p).await
+    })
+    .await?;
     let stages: Value = read_json(&*store, &out.dir, STAGES)?.unwrap_or(Value::Null);
     let p = &out.portfolio;
     if c.format == Format::Json {
@@ -470,6 +513,7 @@ pub(in crate::adapters::inbound::cli) async fn replay(
             sha256: &profile.sha256,
             text: &text,
         },
+        owner: &Unleased,
     };
     let params = ReplayParams {
         run_id,
@@ -890,6 +934,35 @@ pub(in crate::adapters::inbound::cli) fn show(c: &Common, run: &str) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+    use crate::domain::observation::now_ms;
+    use crate::ports::runtime::RuntimeStore;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// The SOE plan of a temp state root: `runtime:soe` + `state:<dir>`.
+    fn plan(dir: &Path) -> LeasePlan {
+        LeasePlan {
+            sandbox: "soe".into(),
+            state_dir: dir.to_path_buf(),
+            ledger: false,
+            soe_state: Some(dir.to_path_buf()),
+        }
+    }
+
+    fn state_lease(dir: &Path) -> String {
+        format!("state:{}", dir.file_name().unwrap().to_string_lossy())
+    }
+
+    /// `state:<dir>` given to `thief` as though it had expired (a step
+    /// outlived the TTL and another process took the SOE state root).
+    async fn steal(dir: &Path) {
+        let store = SqliteRuntimeStore::open(dir).unwrap();
+        let l = store
+            .acquire_lease(&state_lease(dir), "thief", 60_000, now_ms() + 120_000)
+            .await
+            .unwrap();
+        assert!(l.granted, "{l:?}");
+    }
 
     /// A live cycle takes the sandbox's leases: refused while a `tengu run`
     /// of the sandbox holds them (nothing runs), run once they are free —
@@ -897,16 +970,11 @@ mod tests {
     #[tokio::test]
     async fn cycle_waits_for_no_runner() {
         let dir = tempfile::tempdir().unwrap();
-        let plan = LeasePlan {
-            sandbox: "soe".into(),
-            state_dir: dir.path().to_path_buf(),
-            ledger: false,
-            soe_state: Some(dir.path().to_path_buf()),
-        };
+        let plan = plan(dir.path());
         let held = OwnerLeases::take(&plan, 60_000).await.unwrap();
-        let ran = std::sync::atomic::AtomicBool::new(false);
-        let e = under_leases(&plan, async {
-            ran.store(true, std::sync::atomic::Ordering::SeqCst);
+        let ran = AtomicBool::new(false);
+        let e = under_leases(&plan, |_| async {
+            ran.store(true, Ordering::SeqCst);
             Ok(())
         })
         .await
@@ -915,17 +983,97 @@ mod tests {
             format!("{e:#}").contains("sandbox `soe` is already running"),
             "{e:#}"
         );
-        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!ran.load(Ordering::SeqCst));
         assert!(held.release().await);
-        let n = under_leases(&plan, async { Ok(7) }).await.unwrap();
+        let n = under_leases(&plan, |_| async { Ok(7) }).await.unwrap();
         assert_eq!(n, 7);
         // Released: a runner takes them again.
         let again = OwnerLeases::take(&plan, 60_000).await.unwrap();
         assert_eq!(
             again.resources(),
-            ["runtime:soe", "state:{}"]
-                .map(|r| r.replace("{}", &dir.path().file_name().unwrap().to_string_lossy()))
+            ["runtime:soe".to_string(), state_lease(dir.path())]
         );
         assert!(again.release().await);
+    }
+
+    /// Review P1: a cycle that loses `state:<root>` mid-run fail-stops — the
+    /// renewal task's loss drops it at its next wait (a stage that would
+    /// run for 30 s: nothing after it runs) and the command fails
+    /// `lease_lost`; a cycle that saw the loss and still answered `Ok` is
+    /// not believed either. The leases this process still held are freed;
+    /// the thief keeps its own.
+    #[tokio::test]
+    async fn a_lost_lease_fails_the_command_not_the_cycle_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan(dir.path());
+        let fast = LeaseTiming {
+            ttl_ms: 60_000,
+            renew_ms: 20,
+        };
+        let after = AtomicBool::new(false);
+        let t0 = std::time::Instant::now();
+        let e = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            under_leases_with(&plan, fast, |owner| {
+                let (dir, after) = (dir.path(), &after);
+                async move {
+                    owner.ensure().await?;
+                    steal(dir).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    after.store(true, Ordering::SeqCst);
+                    Ok(7)
+                }
+            }),
+        )
+        .await
+        .expect("stopped at the loss, not after the stage")
+        .unwrap_err();
+        let msg = format!("{e:#}");
+        assert!(
+            LeaseLost::of(&e).is_some()
+                && msg.starts_with(&format!(
+                    "lease_lost: lease `{}` lost to `thief`",
+                    state_lease(dir.path())
+                )),
+            "{msg}"
+        );
+        assert!(!after.load(Ordering::SeqCst));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10));
+        let store = SqliteRuntimeStore::open(dir.path()).unwrap();
+        let probe = |r: String| {
+            let store = &store;
+            async move {
+                store
+                    .acquire_lease(&r, "probe", 60_000, now_ms())
+                    .await
+                    .unwrap()
+            }
+        };
+        assert!(probe("runtime:soe".into()).await.granted, "released");
+        let state = probe(state_lease(dir.path())).await;
+        assert_eq!(
+            (state.granted, state.current_holder.as_str()),
+            (false, "thief")
+        );
+        store.release_lease("runtime:soe", "probe").await.unwrap();
+
+        // The loss seen by the cycle's own renewal, its answer `Ok` anyway.
+        let dir = tempfile::tempdir().unwrap();
+        let plan = self::plan(dir.path());
+        let slow = LeaseTiming {
+            ttl_ms: 60_000,
+            renew_ms: 60_000,
+        };
+        let e = under_leases_with(&plan, slow, |owner| {
+            let dir = dir.path();
+            async move {
+                steal(dir).await;
+                assert!(owner.ensure().await.is_err());
+                Ok(7)
+            }
+        })
+        .await
+        .unwrap_err();
+        assert!(LeaseLost::of(&e).is_some(), "{e:#}");
     }
 }

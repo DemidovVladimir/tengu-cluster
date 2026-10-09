@@ -226,7 +226,7 @@
         <li>Webhook endpoints with <code>loop = "&lt;name&gt;"</code> feed the same dispatcher. A loop runs one event at a time, in arrival order; at most 4 run across all loops.</li>
         <li>A loop with 64 events already waiting refuses the next: a webhook gets 429, a tick counts it dropped. A burst cannot pile up tasks.</li>
         <li>Every 5 s: <code>run-&lt;sandbox&gt;.json</code> plus <code>loop/1</code> and <code>feed/1</code> rows. <code>tengu doctor --live</code> fails on a beat older than 30 s or a required feed down or stale; Studio's <code>/api/v1/health</code> serves the same verdict (<code>read_live</code>).</li>
-        <li>The lease is renewed every 10 s. If another holder took it, or renewal keeps failing until it expires, the run stops as failed and exits non-zero.</li>
+        <li>The lease is renewed every 10 s. If another holder took it, it lapsed and another holder had it since, or renewal keeps failing until it expires, the run stops as failed and exits non-zero. A job writing under it (the SOE cycle) renews it before each write too and stops at the loss.</li>
         <li>SIGINT or SIGTERM: new events refused (503), queued ones dropped, running ones get up to 20 s, then abort. Leases released. A second signal exits 130.</li>
       </ol>
     </div>
@@ -362,7 +362,7 @@
   <ul class="checks">
     <li><span><b>One runner per sandbox, one owner per ledger.</b> Both leases are taken in one go or not at all; a held one refuses the start. An <code>[soe]</code> sandbox also leases its <code>[sources]</code> state dir, where <code>runtime.db</code> then lives.</span></li>
     <li><span><b>A crash frees itself.</b> A dead runner's lease expires after 30 s; a new one takes over then.</span></li>
-    <li><span><b>Losing the lease stops the run.</b> Another holder, or failed renewals past expiry, end it as failed.</span></li>
+    <li><span><b>Losing the lease stops the run and its writers.</b> Another holder, a lapse another holder used, or failed renewals past expiry, end it as failed — lost for good. A writer under the leases (<code>Ownership</code>: the SOE cycle of <code>tengu run</code> or <code>tengu soe cycle</code>) renews them before each irreversible write and drops a running stage at the loss, so nothing is written after it.</span></li>
     <li><span><b>A loop never runs two events at once</b>, and no more than <code>max_decisions_in_flight</code> run across loops.</span></li>
     <li><span><b>Bursts are bounded.</b> Past <code>max_queued_per_loop</code> waiting events, the next is refused and counted.</span></li>
     <li><span><b>No replay storms.</b> Missed feed slots are skipped; a clock stepping back does not stall a feed.</span></li>
@@ -405,7 +405,7 @@
       <tbody>
         <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play</td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, feeds, health, shutdown; <code>read_live</code> (the <code>--live</code> verdict, shared with Studio)</td></tr>
-        <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, lease keeper</td></tr>
+        <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, <code>HeldLeases</code> (the leases the keeper and the writers share: one expiry each, one sticky loss), lease keeper</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td><code>LoopDispatch</code>: turn, permits, queue bound, drain</td></tr>
         <tr><td><code>src/application/runtime/feeds.rs</code></td><td>the feed runner: fire, fan-out, backoff, health</td></tr>
         <tr><td><code>src/application/runtime/health.rs</code></td><td>heartbeat task, <code>loop/1</code> / <code>feed/1</code> rows</td></tr>
@@ -416,7 +416,7 @@
         <tr><td><code>src/config/runtime.rs</code> · <code>feeds.rs</code> · <code>rate_limits.rs</code></td><td><code>[runtime]</code>, <code>[feeds.*]</code>, <code>[rate_limits.*]</code></td></tr>
         <tr><td><code>src/adapters/outbound/runtime_store.rs</code></td><td><code>runtime.db</code> leases, atomic heartbeat file</td></tr>
         <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes, system clock</td></tr>
-        <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store, <code>RuntimeJob</code> (a job feed's run) and clock ports (<code>SimClock</code> for replay)</td></tr>
+        <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store, <code>RuntimeJob</code> (a job feed's run), <code>Ownership</code> (<code>ensure</code> before a write, <code>lost</code> to race a wait; <code>LeaseLost</code>, <code>Unleased</code>) and clock ports (<code>SimClock</code> for replay)</td></tr>
       </tbody>
     </table>
   </div>

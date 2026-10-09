@@ -11,6 +11,7 @@
 //! | Profile | `<state root>/operator.toml`, loaded each run (`config::soe::load_profile_with_text`; synthetic refused in a sandbox); missing, invalid, in-repo, loose-mode or unsigned ⇒ `Failed` before anything is created |
 //! | Inputs | the source store opened each run (no `sources.db` yet = an empty packet); `[soe]` agents, limits and token prices; the generation pin; no active candidate — a shadow cycle runs no experiment (O5 waits for Operator Review #2) |
 //! | Failed | any other refusal or error of the cycle ⇒ `Failed` (`fatal`) with its message; the feed's at-tick window retries it for 15 min — a dir claimed and never frozen answers `cycle_unfinished` at once, so a retry never runs a stage twice |
+//! | Lease lost | the runtime's leases ([`SoeCycleJob::owner`]) are renewed before each stage, the freeze and each state-log append (resumed lines too), and an in-flight stage is dropped (its `run-agent` child killed) once one is lost: `Failed` with `lease_lost`, nothing more written — the runtime stops on the same loss |
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -30,7 +31,7 @@ use crate::domain::observation::ErrorClass;
 use crate::domain::soe::portfolio::IsoWeek;
 use crate::domain::tz::Zone;
 use crate::ports::clock::Clock;
-use crate::ports::runtime::{JobOutcome, RuntimeJob};
+use crate::ports::runtime::{JobOutcome, Ownership, RuntimeJob};
 use crate::ports::soe::{CycleStore, RunDir, RunStatus, StageRunner};
 use crate::ports::source_store::SourceStore;
 
@@ -53,6 +54,8 @@ pub(crate) struct SoeCycleJob {
     pub zone: Zone,
     pub generation: GenerationPin,
     pub soe: SoeConfig,
+    /// The runtime's leases (`tengu run`): asked before every irreversible write.
+    pub owner: Arc<dyn Ownership>,
 }
 
 impl SoeCycleJob {
@@ -84,7 +87,7 @@ impl SoeCycleJob {
         if self.store.status(&dir)? == RunStatus::Frozen {
             // A run stopped after its freeze (a shutdown that aborted it)
             // gets its state-log lines here, on the slot's retry.
-            let (resumed, _) = resume_learn(&*self.store)?;
+            let (resumed, _) = resume_learn(&*self.store, &*self.owner).await?;
             return Ok(if resumed.is_empty() {
                 format!("{dir} is frozen already: nothing to do")
             } else {
@@ -103,6 +106,7 @@ impl SoeCycleJob {
             store: &*self.store,
             runner: self.runner.as_deref(),
             clock: &*self.clock,
+            owner: &*self.owner,
             profile: ProfileIn {
                 record: &profile.record,
                 sha256: &profile.sha256,
@@ -164,6 +168,7 @@ mod tests {
         generation, registry, MemCycleStore, MemSourceStore, ScriptedRunner, CLOCK_MS,
     };
     use crate::ports::clock::SimClock;
+    use crate::ports::runtime::LeaseLost;
     use crate::ports::soe::StateLog;
 
     fn utc(s: &str) -> i64 {
@@ -193,6 +198,7 @@ mod tests {
                 "architect = \"soe-architect\"\ncritic = \"soe-critic\"\nmax_proposals = 12\nforecast_max_weeks = 12",
             )
             .unwrap(),
+            owner: Arc::new(crate::ports::runtime::Unleased),
         }
     }
 
@@ -288,5 +294,59 @@ mod tests {
         let e = failed(job(&store, fixture_profile()).run(mon, "r").await);
         assert!(e.starts_with("cycle_unfinished: cycles/2026-W41"), "{e}");
         assert_eq!(store.status(&w41).unwrap(), RunStatus::Open);
+    }
+
+    /// The runtime's leases, lost already (another process owns the root).
+    struct Lost;
+
+    #[async_trait]
+    impl Ownership for Lost {
+        async fn ensure(&self) -> Result<()> {
+            Err(LeaseLost {
+                reason: "lease `state:soe` lost to `thief`".into(),
+            }
+            .into())
+        }
+
+        async fn lost(&self) -> LeaseLost {
+            LeaseLost {
+                reason: "lease `state:soe` lost to `thief`".into(),
+            }
+        }
+    }
+
+    /// Module table: Lease lost — the job writes under the runtime's leases:
+    /// lost, the week's run fails `lease_lost` with nothing created, and a
+    /// frozen week's lost state-log lines are not resumed by this process.
+    #[tokio::test]
+    async fn a_lost_lease_fails_the_job_writing_nothing() {
+        let store = Arc::new(MemCycleStore::default());
+        let mut j = job(&store, fixture_profile());
+        j.owner = Arc::new(Lost);
+        let mon = utc("2026-10-05T05:00:00Z");
+        let e = failed(j.run(mon, "feed:soe_week:1").await);
+        assert!(
+            e.starts_with("lease_lost: lease `state:soe` lost to `thief`"),
+            "{e}"
+        );
+        assert!(store.snapshot().dirs.is_empty());
+
+        // Frozen, its forecast-log line lost: only an owner resumes it.
+        let j = job(&store, fixture_profile());
+        assert!(matches!(j.run(mon, "r").await, JobOutcome::Done { .. }));
+        store
+            .mem
+            .lock()
+            .unwrap()
+            .logs
+            .get_mut(&StateLog::ForecastLog)
+            .unwrap()
+            .clear();
+        let before = store.snapshot();
+        let mut j = job(&store, fixture_profile());
+        j.owner = Arc::new(Lost);
+        let e = failed(j.run(mon, "r").await);
+        assert!(e.starts_with("lease_lost: "), "{e}");
+        assert_eq!(store.snapshot(), before);
     }
 }

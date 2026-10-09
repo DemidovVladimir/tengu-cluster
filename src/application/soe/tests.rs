@@ -28,15 +28,18 @@ use serde_json::Value;
 
 use super::cycle::{
     run_cycle, CycleEnv, CycleOutcome, CycleParams, ProfileIn, Target, CANDIDATES, DECIDED,
-    EPISODES, FORECAST, FORECAST_LINE, INPUTS, MEMO, PORTFOLIO, STAGES,
+    EPISODES, FAILED, FORECAST, FORECAST_LINE, INPUTS, MEMO, PORTFOLIO, STAGES,
 };
 use super::freeze::{decision_sha256, verify, verify_state, FileCheck, LogState, OPS};
 use super::submit::{submit_challenge, submit_proposal, GenerationPin, PACKET};
+use crate::application::runtime::{keep_lease, HeldLeases, LeaseTiming, Supervisor};
 use crate::config::soe::{load_profile, Loaded};
 use crate::config::sources::SourcesConfig;
 use crate::domain::canonical::canonical_json;
 use crate::domain::lineage::value::Time;
 use crate::domain::metrics::{MetricsKind, MetricsRecord};
+use crate::domain::observation::now_ms;
+use crate::domain::runtime::{Heartbeat, RunnerLease};
 use crate::domain::soe::challenge::Challenge;
 use crate::domain::soe::episode::OpportunityEpisode;
 use crate::domain::soe::forecast::{verify_chain, Forecast, LogLine};
@@ -49,6 +52,7 @@ use crate::domain::soe::value::{codes, Currency, Est, Minor};
 use crate::domain::source::testkit::{copy_of, rec, Src};
 use crate::domain::source::{Coverage, Purge, SourceRecord};
 use crate::ports::clock::SimClock;
+use crate::ports::runtime::{LeaseLost, Ownership, RuntimeStore, Unleased};
 use crate::ports::soe::{
     valid_file_name, CycleStore, RunDir, RunStatus, StageReply, StageRequest, StageRunner,
     StateLog, CHALLENGES, MANIFEST, PROPOSALS,
@@ -710,6 +714,16 @@ impl Bench {
         runner: Option<&dyn StageRunner>,
         p: &CycleParams,
     ) -> Result<CycleOutcome> {
+        self.cycle_under(runner, p, &Unleased).await
+    }
+
+    /// [`Bench::cycle`] writing under `owner`'s leases.
+    pub(crate) async fn cycle_under(
+        &self,
+        runner: Option<&dyn StageRunner>,
+        p: &CycleParams,
+        owner: &dyn Ownership,
+    ) -> Result<CycleOutcome> {
         let env = CycleEnv {
             sources: Some(&self.sources),
             registry: &self.registry,
@@ -721,6 +735,7 @@ impl Bench {
                 sha256: &self.profile.sha256,
                 text: &self.text,
             },
+            owner,
         };
         run_cycle(&env, p).await
     }
@@ -754,6 +769,15 @@ impl Bench {
             let before = load_case(prev);
             Box::pin(self.run_case(&before, Target::Cycle)).await;
         }
+        let (mut runner, p) = self.script(case, target);
+        set(&mut runner);
+        let out = self.cycle(Some(&runner), &p).await;
+        (out, runner)
+    }
+
+    /// Store `case`'s records (not its `after` chain) and script its
+    /// stages: the runner and the cycle's params.
+    pub(crate) fn script(&self, case: &CycleCase, target: Target) -> (ScriptedRunner, CycleParams) {
         let (by, _) = build_records(&chain_specs(case));
         let own: BTreeSet<&str> = case.records.iter().map(|r| r.native.as_str()).collect();
         let stored: Vec<SourceRecord> = case
@@ -764,16 +788,14 @@ impl Bench {
             .collect();
         debug_assert!(stored.iter().all(|r| own.contains(r.native_id.as_str())));
         self.sources.add(&stored);
-        let mut runner = ScriptedRunner::new(
+        let runner = ScriptedRunner::new(
             self.store.clone(),
             drafts(&case.proposals, &by),
             drafts(&case.challenges, &by),
         );
-        set(&mut runner);
         let mut p = self.params(&case.week, ms(&case.decided_at), target);
         p.active = case.active.clone();
-        let out = self.cycle(Some(&runner), &p).await;
-        (out, runner)
+        (runner, p)
     }
 }
 
@@ -1621,6 +1643,299 @@ async fn stopped_after_freeze_resumes_its_log_lines() {
             .unwrap(),
         RunStatus::Absent
     );
+}
+
+/// `runtime.db`'s lease rule in memory (`outbound/runtime_store.rs`
+/// `ACQUIRE_SQL`): granted when free, expired or the holder's own; a
+/// renewal keeps `acquired_at_ms`. Resource → (holder, acquired, expires).
+#[derive(Default)]
+struct MemLeases(Mutex<BTreeMap<String, (String, i64, i64)>>);
+
+#[async_trait]
+impl RuntimeStore for MemLeases {
+    async fn acquire_lease(
+        &self,
+        resource: &str,
+        holder: &str,
+        ttl_ms: i64,
+        now_ms: i64,
+    ) -> Result<RunnerLease> {
+        let mut m = self.0.lock().unwrap();
+        let row = m.get(resource).cloned();
+        let granted = row
+            .as_ref()
+            .is_none_or(|(h, _, expires)| h == holder || *expires <= now_ms);
+        if granted {
+            let acquired = match &row {
+                Some((h, a, _)) if h == holder => *a,
+                _ => now_ms,
+            };
+            m.insert(resource.into(), (holder.into(), acquired, now_ms + ttl_ms));
+        }
+        let (current, acquired, expires) = m[resource].clone();
+        Ok(RunnerLease {
+            resource: resource.into(),
+            holder: holder.into(),
+            granted,
+            current_holder: current,
+            acquired_at_ms: acquired,
+            expires_at_ms: expires,
+        })
+    }
+
+    async fn release_lease(&self, resource: &str, holder: &str) -> Result<()> {
+        let mut m = self.0.lock().unwrap();
+        if m.get(resource).is_some_and(|(h, _, _)| h == holder) {
+            m.remove(resource);
+        }
+        Ok(())
+    }
+
+    async fn write_heartbeat(&self, _hb: &Heartbeat) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// `state:soe` held by `me`, as a cycle writes under it (`HeldLeases`, what
+/// `OwnerLeases` builds); [`Leased::steal`] gives it to `thief` as though
+/// it had expired — a stage outlived the TTL and another process took the
+/// SOE state root.
+struct Leased {
+    store: Arc<MemLeases>,
+    held: Arc<HeldLeases>,
+}
+
+const STATE_LEASE: &str = "state:soe";
+
+impl Leased {
+    async fn new() -> Leased {
+        let store = Arc::new(MemLeases::default());
+        let mine = store
+            .acquire_lease(STATE_LEASE, "me", 60_000, now_ms())
+            .await
+            .unwrap();
+        assert!(mine.granted);
+        let held = Arc::new(HeldLeases::new(store.clone(), vec![mine], 60_000));
+        Leased { store, held }
+    }
+
+    async fn steal(&self) {
+        let after_expiry = now_ms() + 120_000;
+        let l = self
+            .store
+            .acquire_lease(STATE_LEASE, "thief", 60_000, after_expiry)
+            .await
+            .unwrap();
+        assert!(l.granted, "{l:?}");
+    }
+}
+
+/// The scripted stages; once stage `at` has run — or, `hang`, as it starts
+/// (that stage never returns) — the lease is stolen and the store kept as
+/// it stood then.
+struct StealAt<'a> {
+    inner: &'a ScriptedRunner,
+    lease: &'a Leased,
+    at: Stage,
+    hang: bool,
+    seen: Mutex<Option<Mem>>,
+}
+
+impl StealAt<'_> {
+    async fn steal(&self) {
+        self.lease.steal().await;
+        *self.seen.lock().unwrap() = Some(self.inner.store.snapshot());
+    }
+
+    fn seen(&self) -> Mem {
+        self.seen.lock().unwrap().clone().expect("stolen")
+    }
+}
+
+#[async_trait]
+impl StageRunner for StealAt<'_> {
+    async fn run(&self, req: &StageRequest) -> Result<StageReply> {
+        if req.stage == self.at && self.hang {
+            self.inner.requests.lock().unwrap().push(req.clone());
+            self.steal().await;
+            return std::future::pending().await;
+        }
+        let reply = self.inner.run(req).await;
+        if req.stage == self.at {
+            self.steal().await;
+        }
+        reply
+    }
+}
+
+/// `lease`, stolen at the first renewal after `log` got its first line —
+/// a loss between two state-log appends.
+struct StealAfterLine<'a> {
+    lease: &'a Leased,
+    store: &'a MemCycleStore,
+    log: StateLog,
+    stolen: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait]
+impl Ownership for StealAfterLine<'_> {
+    async fn ensure(&self) -> Result<()> {
+        let first = !self.store.lines(self.log)?.is_empty()
+            && !self.stolen.swap(true, std::sync::atomic::Ordering::SeqCst);
+        if first {
+            self.lease.steal().await;
+        }
+        self.lease.held.ensure().await
+    }
+
+    async fn lost(&self) -> LeaseLost {
+        self.lease.held.lost().await
+    }
+}
+
+/// Fail-stop on a lost lease (`cycle.rs` module table; review P1): once
+/// the SOE state root's lease is another holder's, the cycle calls no
+/// further stage, freezes nothing, appends no state-log line, writes no
+/// `failed.json` — nothing at all — and fails `lease_lost`. Lost while the
+/// Architect ran: no Critic. Lost while the Critic runs (it never returns):
+/// the stage is dropped once the renewal task sees the loss. Lost between
+/// two state-log lines after the freeze: the lines stop, the next owner's
+/// cycle resumes the rest. Lost before the start: nothing is created.
+#[tokio::test]
+async fn a_lost_lease_stops_the_cycle_writing() {
+    let case = load_case("platform_rule_change");
+    let w41 = RunDir::Cycle("2026-W41".into());
+    let stages = |r: &ScriptedRunner| -> Vec<Stage> {
+        r.requests.lock().unwrap().iter().map(|q| q.stage).collect()
+    };
+    let lost = |e: &anyhow::Error| {
+        let msg = format!("{e:#}");
+        assert!(
+            LeaseLost::of(e).is_some()
+                && msg.starts_with("lease_lost: lease `state:soe` lost to `thief`"),
+            "{msg}"
+        );
+    };
+
+    // Lost while the Architect ran.
+    let bench = Bench::new();
+    let lease = Leased::new().await;
+    let (runner, p) = bench.script(&case, Target::Cycle);
+    let steal = StealAt {
+        inner: &runner,
+        lease: &lease,
+        at: Stage::Architect,
+        hang: false,
+        seen: Mutex::new(None),
+    };
+    let e = bench
+        .cycle_under(Some(&steal), &p, &*lease.held)
+        .await
+        .unwrap_err();
+    lost(&e);
+    assert_eq!(stages(&runner), [Stage::Architect], "no Critic");
+    assert_eq!(
+        bench.store.snapshot(),
+        steal.seen(),
+        "nothing written after"
+    );
+    let files = bench.store.dir(&w41);
+    assert!(files.contains_key(PROPOSALS) && !files.contains_key(FAILED));
+    assert_eq!(bench.store.status(&w41).unwrap(), RunStatus::Open);
+    assert!(bench.store.snapshot().logs.values().all(Vec::is_empty));
+
+    // Lost while the Critic runs: dropped at the renewal task's next tick.
+    let bench = Bench::new();
+    let lease = Leased::new().await;
+    let (runner, p) = bench.script(&case, Target::Cycle);
+    let steal = StealAt {
+        inner: &runner,
+        lease: &lease,
+        at: Stage::Challenge,
+        hang: true,
+        seen: Mutex::new(None),
+    };
+    let stopper = Supervisor::new().stopper();
+    let timing = LeaseTiming {
+        ttl_ms: 60_000,
+        renew_ms: 10,
+    };
+    let keeper = tokio::spawn(keep_lease(
+        Arc::clone(&lease.held),
+        0,
+        timing,
+        stopper.clone(),
+        stopper.subscribe(),
+    ));
+    let e = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        bench.cycle_under(Some(&steal), &p, &*lease.held),
+    )
+    .await
+    .expect("the hung stage is dropped")
+    .unwrap_err();
+    lost(&e);
+    keeper.await.unwrap();
+    assert!(stopper.cause().unwrap().failed);
+    assert_eq!(stages(&runner), [Stage::Architect, Stage::Challenge]);
+    assert_eq!(
+        bench.store.snapshot(),
+        steal.seen(),
+        "nothing written after"
+    );
+    assert_eq!(bench.store.status(&w41).unwrap(), RunStatus::Open);
+
+    // Lost between two state-log lines, after the freeze.
+    let bench = Bench::new();
+    let lease = Leased::new().await;
+    let (runner, p) = bench.script(&case, Target::Cycle);
+    let owner = StealAfterLine {
+        lease: &lease,
+        store: &bench.store,
+        log: StateLog::Candidates,
+        stolen: Default::default(),
+    };
+    let e = bench
+        .cycle_under(Some(&runner), &p, &owner)
+        .await
+        .unwrap_err();
+    lost(&e);
+    assert_eq!(bench.store.status(&w41).unwrap(), RunStatus::Frozen);
+    let logs = bench.store.snapshot().logs;
+    let n = |log: StateLog| logs.get(&log).map_or(0, Vec::len);
+    assert_eq!(
+        (
+            n(StateLog::Candidates),
+            n(StateLog::Episodes),
+            n(StateLog::ForecastLog)
+        ),
+        (1, 0, 0)
+    );
+    let own: Vec<String> = file(&bench.store.dir(&w41), CANDIDATES)
+        .lines()
+        .map(String::from)
+        .collect();
+    assert!(own.len() >= 2, "{own:?}");
+    // The next owner — another process's next week — resumes W41 first.
+    let next = bench.params("2026-W42", t("2026-10-12T12:00:00Z"), Target::Cycle);
+    bench.cycle(None, &next).await.unwrap();
+    let s = verify_state(&*bench.store).unwrap();
+    assert!(s.ok(), "{s:?}");
+    let log = bench.store.lines(StateLog::Candidates).unwrap();
+    assert_eq!(
+        log[..own.len()],
+        own[..],
+        "W41's lines, each once, in order"
+    );
+
+    // Lost before the cycle starts: nothing is created.
+    let bench = Bench::new();
+    let lease = Leased::new().await;
+    lease.steal().await;
+    let p = bench.params("2026-W41", t("2026-10-05T12:00:00Z"), Target::Cycle);
+    let e = bench.cycle_under(None, &p, &*lease.held).await.unwrap_err();
+    lost(&e);
+    assert_eq!(bench.store.snapshot(), Mem::default());
 }
 
 /// Fail-soft stages: an Architect that fails writes nothing and the week is

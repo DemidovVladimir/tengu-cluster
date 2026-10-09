@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
+
+| Finding | Fixed | Test |
+|---|---|---|
+| P1 `tengu soe cycle` kept writing after losing `runtime:<s>` / `state:<root>` | `ports::runtime::Ownership` (`HeldLeases`: the keeper's and the writers' one view — sticky loss, a renewal granted with another `acquired_at_ms` = lost); the cycle renews before each resumed line, the claim, each phase marker, each stage (raced by the loss), the freeze, each state-log line; lost ⇒ `lease_lost`, nothing more written (no `failed.json`); `under_leases` drops the cycle and fails `lease_lost`, never its result; the `soe_cycle` job writes under `Runtime::ownership` | `application::soe::tests::a_lost_lease_stops_the_cycle_writing` · `application::soe::job::tests::a_lost_lease_fails_the_job_writing_nothing` · `cli::soe::weekly::tests::a_lost_lease_fails_the_command_not_the_cycle_result` · `application::runtime::tests::a_lapsed_lease_retaken_since_is_lost_for_good` |
+| P2 ranking published after its last renewal | renewed before the dated ranking, `latest`, the terminal and the FAILED manifest; a lapse re-taken since is a loss | `application::ranking::tests::a_lease_lost_before_publish_publishes_nothing` |
+
 ## 2026-10-08/09: strategy ranking, SOE O0–O4, Studio — on `main` @ `f7ac9a5636e2493e3839e896cba9951a2d41aefb`
 
 All squash-merged (#39–#45); this session's branches deleted, their tips kept as `archive/<branch>` tags (older branches: operator decision). Every commit, PR, branch, tag and open gate: `handoff_for_check.md` (repo root). Checked against the code 2026-10-09.

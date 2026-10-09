@@ -197,7 +197,7 @@
         <li>The backtest runs from <code>from</code> to the cutoff, data through the cutoff, no split, rules arms only. Its run dir lands in <code>backtests/</code>; the manifest is rewritten after each strategy.</li>
         <li><code>report.json</code> is read back and hashed. The standing (evidence tier, verdict) comes from the registry reloaded at this run, read as of the cutoff: a PASS decided after the cutoff lifts nothing, so a later forward grade lifts only later dates, even when an earlier date is ranked again.</li>
         <li>The pure ranker: <code>select</code> keeps one run per strategy and cohort and lists every other with its reason; <code>rank</code> sorts each cohort ascending by the rating tuple.</li>
-        <li>Publish: the dated <code>ranking.json</code> and <code>ranking.md</code>; on COMPLETE, <code>latest.md</code> then <code>latest.json</code>; the manifest's final status last. INCOMPLETE keeps the old <code>latest</code>.</li>
+        <li>Publish, each step under a renewed lease: the dated <code>ranking.json</code> and <code>ranking.md</code>; on COMPLETE, <code>latest.md</code> then <code>latest.json</code>; the manifest's final status last. INCOMPLETE keeps the old <code>latest</code>. A lost lease stops here with nothing written over the new holder.</li>
         <li>Run-dir retention past <code>keep_runs</code> never deletes a run the registry cites or a run <code>latest.json</code> names, and does not count it.</li>
       </ol>
     </div>
@@ -428,7 +428,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     <li><span class="chip warn">warn</span><span><b>INCOMPLETE</b>A listed strategy failed, went stale or is missing under <code>on_missing = "INCOMPLETE"</code>, or no strategy produced a run. Dated files written, <code>latest</code> kept, CLI exit 1, tool error.</span></li>
     <li><span class="chip warn">warn</span><span><b>RUNNING · FAILED</b>A manifest that stopped mid-run, or a publish that failed. The next run resumes it.</span></li>
     <li><span class="chip bad">error</span><span><b>contract_unsealed · contract_changed</b>The publisher refuses before writing anything.</span></li>
-    <li><span class="chip bad">error</span><span><b>ranking_busy · ranking_lease_lost</b>Another run holds the contract's lease, or took it mid-run (a step outlived the 15-min TTL): this run then writes nothing more.</span></li>
+    <li><span class="chip bad">error</span><span><b>ranking_busy · ranking_lease_lost</b>Another run holds the contract's lease, or took it mid-run (a step outlived the 15-min TTL). The lease is renewed before each strategy, each manifest write and each publish write (the dated ranking, <code>latest</code>): once lost, this run writes nothing more — no ranking, no <code>latest</code>, no final or FAILED manifest.</span></li>
     <li><span class="chip bad">error</span><span><b>not_a_ranking_day · cutoff_not_reached · before_from</b>The date is not one of <code>days</code>, its cutoff is still ahead, or it is not after <code>from</code>.</span></li>
     <li><span class="chip warn">warn</span><span><b>ranking_unsealed</b>No <code>[[sealed]]</code> row: a draft. Both repo contracts are here.</span></li>
     <li><span class="chip bad">error</span><span><b>invalid_field</b>A shape rule: empty or repeated strategies, cohort fields or rating keys, an unknown zone, a bad cutoff, <code>from</code> not a UTC day, an arm other than research or capped.</span></li>

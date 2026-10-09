@@ -4,7 +4,8 @@
 //! | Piece | Role |
 //! |---|---|
 //! | [`Supervisor`] | named long-running tasks sharing one stop signal (`tokio::sync::watch`); a task that ends before the stop fails the run; shutdown waits until a deadline, then aborts |
-//! | [`keep_lease`] | renews `runtime:<sandbox>` every `renew_ms`; a lost lease stops the run (failed) |
+//! | [`HeldLeases`] | the process's leases as its renewal tasks and its writers share them (`ports::runtime::Ownership`): one known expiry per lease, one sticky loss — a use case renews them before every irreversible write (`ensure`) and races its long waits against the loss (`lost`) |
+//! | [`keep_lease`] | renews one lease of [`HeldLeases`] (`runtime:<sandbox>`, `state:<dir>`) every `renew_ms`; a lost lease stops the run (failed) |
 //! | [`loops::LoopDispatch`] | loop events: one at a time per loop, `[runtime] max_decisions_in_flight` across loops, drain on shutdown |
 //! | [`health::HealthBoard`] | heartbeat file + `loop/1` / `feed/1` rows every `[runtime] heartbeat_secs`; `FeedWriter` for the scheduler |
 //! | [`feeds::run_feed`] | one `[feeds.<n>]`: fire on its schedule (`Clock`), call the agent's tool or tick a loop, back off on errors, report health |
@@ -14,9 +15,10 @@ pub(crate) mod health;
 pub(crate) mod loops;
 
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use futures::FutureExt;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -25,7 +27,7 @@ use tracing::{error, warn};
 
 use crate::domain::observation::now_ms;
 use crate::domain::runtime::{RunnerLease, LEASE_RENEW_MS, LEASE_TTL_MS};
-use crate::ports::runtime::RuntimeStore;
+use crate::ports::runtime::{LeaseLost, Ownership, RuntimeStore};
 
 /// Why the runtime stops. The first request wins.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,17 +170,142 @@ impl Default for LeaseTiming {
     }
 }
 
-/// Renew `lease` every `timing.renew_ms` until the stop signal. Refused ⇒
-/// another runner took it: stop (failed). A store error retries until the
-/// lease would have expired, then stops (failed).
-pub(crate) async fn keep_lease(
+/// What a renewal that met a store error needs left on the known expiry to
+/// keep the lease ([`HeldLeases`]): room for the write it guards.
+pub(crate) const EXPIRY_GUARD_MS: i64 = 1_000;
+
+/// The leases one process holds (`bootstrap::runtime::OwnerLeases`), shared
+/// by its renewal tasks ([`keep_lease`]) and its writers ([`Ownership`]):
+/// one known expiry per lease, one sticky loss (the first wins; a lost
+/// lease is never owned again, even when it is free once more).
+///
+/// | A renewal of a lease | Means |
+/// |---|---|
+/// | granted, `acquired_at_ms` as taken | still this process's: its known expiry moves |
+/// | granted, another `acquired_at_ms` | it lapsed and another holder had it since (the store keeps `acquired_at_ms` only across the same holder): lost |
+/// | refused | another holder has it: lost |
+/// | a store error with ≥ [`EXPIRY_GUARD_MS`] left before the known expiry | still this process's until then (no one can take it earlier); retried |
+/// | a store error with less left | lost — a write after it could land past the expiry |
+pub(crate) struct HeldLeases {
     store: Arc<dyn RuntimeStore>,
-    lease: RunnerLease,
+    ttl_ms: i64,
+    /// As taken: resource, holder, `acquired_at_ms`.
+    leases: Vec<RunnerLease>,
+    /// The newest granted expiry of each lease.
+    expires: Mutex<Vec<i64>>,
+    lost: watch::Sender<Option<LeaseLost>>,
+}
+
+impl HeldLeases {
+    /// `leases` as taken (granted), each renewed for `ttl_ms` from now.
+    pub(crate) fn new(store: Arc<dyn RuntimeStore>, leases: Vec<RunnerLease>, ttl_ms: i64) -> Self {
+        let expires = leases.iter().map(|l| l.expires_at_ms).collect();
+        Self {
+            store,
+            ttl_ms,
+            leases,
+            expires: Mutex::new(expires),
+            lost: watch::channel(None).0,
+        }
+    }
+
+    /// The loss so far, if any.
+    pub(crate) fn lost_now(&self) -> Option<LeaseLost> {
+        self.lost.borrow().clone()
+    }
+
+    /// Record a loss — the first wins — and return the one in force.
+    fn lose(&self, reason: String) -> LeaseLost {
+        let first = LeaseLost { reason };
+        let mine = first.clone();
+        self.lost.send_if_modified(|l| {
+            if l.is_some() {
+                return false;
+            }
+            *l = Some(first);
+            true
+        });
+        self.lost_now().unwrap_or(mine)
+    }
+
+    fn known_expiry(&self, i: usize) -> i64 {
+        self.expires.lock().unwrap_or_else(|p| p.into_inner())[i]
+    }
+
+    /// Renew lease `i` (table above); `Err` = lost, now or before.
+    pub(crate) async fn renew(&self, i: usize) -> Result<(), LeaseLost> {
+        if let Some(lost) = self.lost_now() {
+            return Err(lost);
+        }
+        let lease = &self.leases[i];
+        let now = now_ms();
+        let known = self.known_expiry(i);
+        match self
+            .store
+            .acquire_lease(&lease.resource, &lease.holder, self.ttl_ms, now)
+            .await
+        {
+            Ok(l) if l.granted && l.acquired_at_ms == lease.acquired_at_ms => {
+                let mut e = self.expires.lock().unwrap_or_else(|p| p.into_inner());
+                e[i] = e[i].max(l.expires_at_ms);
+                Ok(())
+            }
+            Ok(l) if l.granted => Err(self.lose(format!(
+                "lease `{}` lapsed and another holder had it since this process took it \
+                 (acquired at {} ms then, {} ms now)",
+                lease.resource, lease.acquired_at_ms, l.acquired_at_ms
+            ))),
+            Ok(l) => Err(self.lose(format!(
+                "lease `{}` lost to `{}` — another runner took over",
+                l.resource, l.current_holder
+            ))),
+            Err(e) if now + EXPIRY_GUARD_MS >= known => Err(self.lose(format!(
+                "lease `{}` not renewed before it expired: {e:#}",
+                lease.resource
+            ))),
+            Err(e) => {
+                let error = format!("{e:#}");
+                warn!(resource = %lease.resource, %error, "lease renewal failed; retrying");
+                Ok(())
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Ownership for HeldLeases {
+    async fn ensure(&self) -> anyhow::Result<()> {
+        for i in 0..self.leases.len() {
+            self.renew(i).await?;
+        }
+        Ok(())
+    }
+
+    async fn lost(&self) -> LeaseLost {
+        let mut rx = self.lost.subscribe();
+        let lost = rx
+            .wait_for(Option::is_some)
+            .await
+            .ok()
+            .and_then(|l| l.clone());
+        match lost {
+            Some(l) => l,
+            // The sender lives as long as `self`: unreachable.
+            None => std::future::pending().await,
+        }
+    }
+}
+
+/// Renew lease `i` of `held` every `timing.renew_ms` until the stop signal
+/// ([`HeldLeases::renew`]: a store error retries until the lease would have
+/// expired). Lost ⇒ stop (failed), the loss's reason as the stop's.
+pub(crate) async fn keep_lease(
+    held: Arc<HeldLeases>,
+    i: usize,
     timing: LeaseTiming,
     stopper: Stopper,
     mut stop: StopRx,
 ) {
-    let mut expires_at = lease.expires_at_ms;
     let mut tick = tokio::time::interval(Duration::from_millis(timing.renew_ms.max(1)));
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     tick.tick().await; // the first tick is immediate; the lease is fresh
@@ -187,36 +314,9 @@ pub(crate) async fn keep_lease(
             _ = stopped(&mut stop) => return,
             _ = tick.tick() => {}
         }
-        let now = now_ms();
-        match store
-            .acquire_lease(&lease.resource, &lease.holder, timing.ttl_ms, now)
-            .await
-        {
-            Ok(l) if l.granted => expires_at = l.expires_at_ms,
-            Ok(l) => {
-                stopper.stop(
-                    format!(
-                        "lease `{}` lost to `{}` — another runner took over",
-                        l.resource, l.current_holder
-                    ),
-                    true,
-                );
-                return;
-            }
-            Err(e) if now >= expires_at => {
-                stopper.stop(
-                    format!(
-                        "lease `{}` not renewed before it expired: {e:#}",
-                        lease.resource
-                    ),
-                    true,
-                );
-                return;
-            }
-            Err(e) => {
-                let error = format!("{e:#}");
-                warn!(resource = %lease.resource, %error, "lease renewal failed; retrying");
-            }
+        if let Err(lost) = held.renew(i).await {
+            stopper.stop(lost.reason, true);
+            return;
         }
     }
 }
@@ -333,14 +433,20 @@ mod tests {
         renew_ms: 10,
     };
 
+    /// `lease` held through `store`, renewed for `FAST.ttl_ms`.
+    fn held(store: Arc<dyn RuntimeStore>, lease: RunnerLease) -> Arc<HeldLeases> {
+        Arc::new(HeldLeases::new(store, vec![lease], FAST.ttl_ms))
+    }
+
     #[tokio::test]
     async fn lease_lost_to_another_runner_stops_as_failed() {
         let store = Arc::new(FakeLeases(Mutex::new(vec![Ok(true), Ok(false)])));
         let sup = Supervisor::new();
         let stopper = sup.stopper();
+        let leases = held(store, lease(now_ms() + 60_000));
         keep_lease(
-            store,
-            lease(now_ms() + 60_000),
+            Arc::clone(&leases),
+            0,
             FAST,
             stopper.clone(),
             stopper.subscribe(),
@@ -349,6 +455,14 @@ mod tests {
         let stop = stopper.cause().unwrap();
         assert!(stop.failed);
         assert!(stop.reason.contains("lost to `other`"), "{}", stop.reason);
+        // The writers see the same loss, for good.
+        assert_eq!(leases.lost_now().unwrap().reason, stop.reason);
+        let e = format!("{:#}", leases.ensure().await.unwrap_err());
+        assert!(
+            e.starts_with("lease_lost: lease `runtime:s` lost to `other`"),
+            "{e}"
+        );
+        assert_eq!(leases.lost().await.reason, stop.reason);
     }
 
     #[tokio::test]
@@ -358,8 +472,8 @@ mod tests {
         let stopper = Supervisor::new().stopper();
         // Already expired: the first failed renewal stops the run.
         keep_lease(
-            store.clone(),
-            lease(now_ms() - 1),
+            held(store.clone(), lease(now_ms() - 1)),
+            0,
             FAST,
             stopper.clone(),
             stopper.subscribe(),
@@ -371,6 +485,15 @@ mod tests {
             "{stop:?}"
         );
         assert_eq!(store.0.lock().unwrap().len(), 2, "stopped after one try");
+        // Before the known expiry a store error is retried: still owned.
+        let store = Arc::new(FakeLeases(Mutex::new(vec![
+            Err(anyhow::anyhow!("database is locked")),
+            Ok(true),
+        ])));
+        let leases = held(store, lease(now_ms() + 60_000));
+        leases.ensure().await.unwrap();
+        leases.ensure().await.unwrap();
+        assert!(leases.lost_now().is_none());
     }
 
     #[tokio::test]
@@ -385,7 +508,54 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
             s2.stop("SIGINT", false);
         });
-        keep_lease(store, lease(now_ms() + 60_000), FAST, stopper.clone(), rx).await;
+        let leases = held(store, lease(now_ms() + 60_000));
+        keep_lease(Arc::clone(&leases), 0, FAST, stopper.clone(), rx).await;
         assert!(!stopper.cause().unwrap().failed);
+        assert!(leases.lost_now().is_none(), "a stop is not a loss");
+    }
+
+    /// A lease that lapsed while this process slept (another holder took
+    /// it, ran, released it) is granted again on renewal — with another
+    /// `acquired_at_ms`: lost, and never owned again though it is ours in
+    /// the store once more. An `Unleased` caller is always owned.
+    #[tokio::test]
+    async fn a_lapsed_lease_retaken_since_is_lost_for_good() {
+        use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+        use crate::ports::runtime::Unleased;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SqliteRuntimeStore::open(dir.path()).unwrap());
+        let r = lease_resource("s");
+        let now = now_ms();
+        let mine = store
+            .acquire_lease(&r, "me", 1_000, now - 5_000)
+            .await
+            .unwrap();
+        assert!(mine.granted);
+        let leases = Arc::new(HeldLeases::new(store.clone(), vec![mine], 60_000));
+        // Expired at now − 4 s: another holder ran and released meanwhile.
+        let other = store
+            .acquire_lease(&r, "other", 1_000, now - 3_000)
+            .await
+            .unwrap();
+        assert!(other.granted);
+        store.release_lease(&r, "other").await.unwrap();
+        let e = format!("{:#}", leases.ensure().await.unwrap_err());
+        assert!(
+            e.starts_with("lease_lost: lease `runtime:s` lapsed and another holder had it"),
+            "{e}"
+        );
+        let again = format!("{:#}", leases.ensure().await.unwrap_err());
+        assert_eq!(again, e, "sticky");
+        assert!(LeaseLost::of(&leases.ensure().await.unwrap_err()).is_some());
+        let stopper = Supervisor::new().stopper();
+        keep_lease(leases, 0, FAST, stopper.clone(), stopper.subscribe()).await;
+        assert!(stopper.cause().unwrap().reason.contains("lapsed"));
+        Unleased.ensure().await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), Unleased.lost())
+                .await
+                .is_err(),
+            "never lost"
+        );
     }
 }
