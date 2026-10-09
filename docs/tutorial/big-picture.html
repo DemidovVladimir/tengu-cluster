@@ -255,7 +255,7 @@
   <div class="procs" data-inview>
     <div class="proc"><b>env</b><span><code>TENGU_AGENT_IPC=1</code> guard</span><span><code>TENGU_EGRESS</code> resolved policy</span><span><code>TENGU_CONFIG</code> inherited</span></div>
     <div class="proc"><b>stdin · AgentIpcInput</b><span><code>goal</code> + upstream outputs, <code>agent_name</code>, <code>session_id</code>, <code>step_id</code>, <code>sandbox_config</code>, <code>plan_state</code>, <code>compose</code></span></div>
-    <div class="proc"><b>stdout · AgentIpcOutput</b><span><code>status</code> ok or failed, <code>output</code>, <code>summary</code>, <code>metrics</code>, <code>tools</code></span></div>
+    <div class="proc"><b>stdout · AgentIpcOutput</b><span><code>status</code> ok (<code>output</code>, <code>summary</code>) or failed (<code>error</code>, <code>output</code>); <code>metrics</code>, <code>tools</code></span></div>
     <div class="proc"><b>stderr</b><span>the child's logs, read by the parent into its own log; a failed exit quotes the last 40 lines</span></div>
   </div>
 </section>
@@ -329,6 +329,30 @@ step_timeout_secs = <span class="n">600</span></pre></div>
   <span class="k">"tools"</span>: [ { <span class="k">"name"</span>: <span class="s">"sol_price"</span>, <span class="k">"ok"</span>: <span class="n">true</span> },
              { <span class="k">"name"</span>: <span class="s">"compress_and_store"</span>, <span class="k">"ok"</span>: <span class="n">true</span> } ]
 }</pre></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-beyond">
+  <div class="sec-head">
+    <span class="kicker">Beyond chat</span>
+    <h2 id="s-beyond">Other front doors, same binary</h2>
+    <p>No planner on these roads. The sandbox column is an example of one that carries the section the command needs.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Command</th><th>Sandbox</th><th>What runs</th><th>Page</th></tr></thead>
+      <tbody>
+        <tr><td><code>tengu run</code></td><td><code>xmarket</code></td><td>feeds and decision loops in one long-running process, under a lease</td><td><a href="runtime.html">tengu run</a></td></tr>
+        <tr><td><code>tengu decide</code></td><td><code>lping</code>, <code>jev-exec</code></td><td>one event through a decision loop: Jev picks, tools act</td><td><a href="decision-loop.html">Decision loop</a></td></tr>
+        <tr><td><code>tengu risk</code></td><td><code>xmarket</code></td><td>the paper ledger's risk state; every order tool runs the gate itself</td><td><a href="paper-desk.html">Paper desk</a></td></tr>
+        <tr><td><code>tengu history</code> · <code>tengu backtest</code></td><td><code>xlab</code></td><td>backfill public history into <code>market.db</code>, replay a strategy on it</td><td><a href="history.html">Market history</a> · <a href="backtest.html">Backtests</a></td></tr>
+        <tr><td><code>tengu evidence</code></td><td>none</td><td>freeze a forward run into a read-only vault, then grade it</td><td><a href="evidence.html">Forward evidence</a></td></tr>
+        <tr><td><code>tengu lineage</code></td><td>none</td><td>the <code>lineage/</code> registry: records, seals, frozen generation W1</td><td><a href="lineage.html">Lineage</a></td></tr>
+        <tr><td><code>tengu ranking</code></td><td><code>xlab-w2</code></td><td>rank strategies weakest first under a sealed contract; no LLM</td><td><a href="strategy-ranking.html">Strategy ranking</a></td></tr>
+        <tr><td><code>tengu sources</code></td><td><code>soe</code></td><td>fetch or import approved-source facts with provenance; as-of reads; no LLM</td><td><a href="source-evidence.html">Source evidence</a></td></tr>
+        <tr><td><code>tengu soe</code></td><td>none (signed private profile)</td><td>gate and rank software opportunities offline; no network, no LLM</td><td><a href="soe.html">Software opportunities</a></td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 

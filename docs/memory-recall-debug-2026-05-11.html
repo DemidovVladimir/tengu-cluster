@@ -273,7 +273,7 @@
   </tbody>
 </table>
 
-<p class="cite">Sources: <code>src/config/mod.rs:703–808</code> (MemoryConfig + defaults), <code>src/application/orchestrator/planner.rs:252–636</code> (ring buffer, persist_user_message, recall blocks), <code>src/bootstrap/::run_turn_inner</code> ≈ line 1105–1160 (memory_manager strip on planner turn), <code>src/adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary:584–616</code> (one Postgres row per step summary; text-only when the embed fails), <code>src/adapters/outbound/tools/agentic_memory/mod.rs:41–145</code> (write / recall helpers), <code>src/adapters/outbound/subprocess_runner.rs:26–79</code> (AgentIpcInput shape), <code>docs/context-management-2026-04-27.md §What we deliberately do NOT have</code> (no retrieval over prior turns of current session for chat loop).</p>
+<p class="cite">Sources: <code>src/config/mod.rs:955–1054</code> (MemoryConfig + defaults), <code>src/application/orchestrator/planner.rs:252–700</code> (ring buffer, persist_user_message, recall blocks), <code>src/bootstrap/orchestrator.rs::run_turn_inner</code> ≈ line 200–246 (memory_manager strip on planner turn), <code>src/adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary:13–46</code> (one Postgres row per step summary; text-only when the embed fails), <code>src/adapters/outbound/tools/agentic_memory/mod.rs:43–143</code> (write / recall helpers), <code>src/adapters/outbound/subprocess_runner.rs:26–79</code> (AgentIpcInput shape), <code>docs/context-management-2026-04-27.md §What we deliberately do NOT have</code> (no retrieval over prior turns of current session for chat loop).</p>
 
 <!-- ============================================================== -->
 <h2 id="simulator">2 · Simulator — flip knobs, see what the planner gets</h2>
@@ -364,13 +364,13 @@
 <p class="small">Scenario: user types <code>M1</code> on turn N; planner emits <code>Direct{response:R1}</code>; user types <code>M2</code> on turn N+1 referring to R1. Trace shows what's persisted, read, and dropped at each step.</p>
 
 <div class="trace">
-  <div class="step write"><span class="role">Turn N · write</span> User msg <code>M1</code> → <code>RagPlanner.session_history.push(M1)</code> <span class="info">(in-RAM ring buffer, USER side only)</span> <span class="cite"><code>planner.rs:382</code></span></div>
-  <div class="step write"><span class="role">Turn N · write</span> <code>persist_user_message(M1)</code> → <code>agentic_memory user events</code> row, <code>session_id=$sid</code>, <code>step_id=None</code> <span class="cite"><code>planner.rs:557</code></span></div>
-  <div class="step read"><span class="role">Turn N · read</span> <code>load_registry_block</code> reads the file-backed <code>TENGU_PLANNER_REGISTRY.md</code> (regenerated from the <code>[agents.*]</code> blocks that carry a <code>description</code>, plus skills, core tools, MCP tools) <span class="info">(no embedding, no similarity score — the planner LLM reads every entry)</span> <span class="cite"><code>planner.rs:336</code> · <code>shared_files.rs::render_registry</code></span></div>
+  <div class="step write"><span class="role">Turn N · write</span> User msg <code>M1</code> → <code>RagPlanner.session_history.push(M1)</code> <span class="info">(in-RAM ring buffer, USER side only)</span> <span class="cite"><code>planner.rs:291</code></span></div>
+  <div class="step write"><span class="role">Turn N · write</span> <code>persist_user_message(M1)</code> → <code>agentic_memory user events</code> row, <code>session_id=$sid</code>, <code>step_id=None</code> <span class="cite"><code>planner.rs:446</code></span></div>
+  <div class="step read"><span class="role">Turn N · read</span> <code>load_registry_block</code> reads the file-backed <code>TENGU_PLANNER_REGISTRY.md</code> (regenerated from the <code>[agents.*]</code> blocks that carry a <code>description</code>, plus skills, core tools, MCP tools) <span class="info">(no embedding, no similarity score — the planner LLM reads every entry)</span> <span class="cite"><code>planner.rs:252</code> · <code>shared_files.rs::render_registry</code></span></div>
   <div class="step note"><span class="role">Turn N · build</span> Planner combines: <code>system + roster + cross_session_block (empty, OFF) + history_block (just M1) + session_recall (empty, OFF) + user_message</code></div>
-  <div class="step note"><span class="role">Turn N · build</span> <code>run_turn_with_system</code> nils <code>memory_manager</code> for this call — chat-side recall NEVER fires <span class="cite"><code>bootstrap/:1150</code></span></div>
+  <div class="step note"><span class="role">Turn N · build</span> <code>run_turn_with_system</code> nils <code>memory_manager</code> for this call — chat-side recall NEVER fires <span class="cite"><code>bootstrap/orchestrator.rs:242</code></span></div>
   <div class="step read"><span class="role">Turn N · LLM</span> Planner emits <code>{"kind":"direct","response":"R1"}</code></div>
-  <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #1</span> R1 is NEVER pushed into <code>session_history</code> (ring buffer ignores assistant side) <span class="cite"><code>planner.rs:382–394</code></span></div>
+  <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #1</span> R1 is NEVER pushed into <code>session_history</code> (ring buffer ignores assistant side) <span class="cite"><code>planner.rs:291–320</code></span></div>
   <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #2</span> R1 is NEVER persisted to <code>agentic_memory step outputs</code> on TUI path — Fix H persists Direct only on webhook path (step_id <code>webhook-handler</code>) <span class="cite"><code>adapters/inbound/webhooks.rs::run_one_shot → persist_webhook_output</code></span></div>
   <div class="step amnesia"><span class="role">Turn N · drop</span> <span class="note-tag">AMNESIA #3</span> R1 is NEVER persisted to <code>agentic_memory user events</code> either (that's user-msgs-only)</div>
   <div class="step note"><span class="role">Turn N · UI</span> R1 lands in chat <code>state.messages</code> as Assistant. <span class="info">Useful only on the chat-engine path — bypassed when planner is entry point.</span></div>
@@ -382,8 +382,8 @@
   <div class="step amnesia"><span class="role">Turn N+1 · build</span> <span class="note-tag">AMNESIA #4</span> Planner sees only its own roster + your <em>previous user message</em>. It cannot see its own R1. <span class="info">If M2 = "what did you just tell me?" the planner has to guess.</span></div>
   <div class="step note"><span class="role">Turn N+1 · LLM</span> If planner dispatches a subagent, see next…</div>
 
-  <div class="step amnesia"><span class="role">Subagent · IPC</span> <span class="note-tag">AMNESIA #5</span> Child receives only <code>goal</code> + ids in <code>AgentIpcInput</code>. No messages, no prior turns, no R1, no M1 (<code>plan_state</code> carries the accepted plan, not dialog). <span class="cite"><code>runner.rs:26–79</code></span></div>
-  <div class="step amnesia"><span class="role">Subagent · IPC</span> <span class="note-tag">AMNESIA #6</span> Subagent's own working context: empty <code>messages</code> array. Its only handle on dialog is the one-sentence <code>goal</code> the planner wrote. <span class="cite"><code>adapters/inbound/cli/run_agent.rs::run_agent_subprocess ≈ 858</code></span></div>
+  <div class="step amnesia"><span class="role">Subagent · IPC</span> <span class="note-tag">AMNESIA #5</span> Child receives only <code>goal</code> + ids in <code>AgentIpcInput</code>. No messages, no prior turns, no R1, no M1 (<code>plan_state</code> carries the accepted plan, not dialog). <span class="cite"><code>subprocess_runner.rs:26–79</code></span></div>
+  <div class="step amnesia"><span class="role">Subagent · IPC</span> <span class="note-tag">AMNESIA #6</span> Subagent's own working context: empty <code>messages</code> array. Its only handle on dialog is the one-sentence <code>goal</code> the planner wrote. <span class="cite"><code>adapters/inbound/cli/run_agent.rs::run_agent_subprocess ≈ 371</code></span></div>
   <div class="step amnesia"><span class="role">Subagent · end</span> <span class="note-tag">AMNESIA #7</span> If subagent doesn't call <code>compress_and_store</code>, Phase 5c + Fix C save the final text — <em>but only for subagent-dispatched turns</em>. Direct verdicts don't reach this code path.</div>
 </div>
 
@@ -397,31 +397,31 @@
       <td>Embedder = <code>text-embedding-3-small</code></td>
       <td>Cosine, 1536-dim, pinned (Postgres schema hardcodes <code>vector(1536)</code>). Used only for the Postgres memory lanes — planner registry routing is file-backed and never embeds. Embed calls go through <code>egress::policy().llm_api_client</code> (Tor by default, <code>[egress] network = "tor"</code>).</td>
       <td>Score is raw cosine similarity with no floor. Marginal hits (0.18) are returned.</td>
-      <td><code>config.rs:788</code>; <code>memory/vector/embedder.rs::DEFAULT_EMBEDDING_MODEL</code>; <code>agentic_memory/mod.rs:1029</code></td>
+      <td><code>domain/memory.rs:9</code>; <code>adapters/outbound/memory/embedder.rs</code>; <code>agentic_memory/mod.rs:1076</code></td>
     </tr>
     <tr>
       <td>No score-threshold filter in search code</td>
       <td><code>recall_step_outputs_for_session_with_vec</code> filters by <code>session_id</code> / <code>kind</code> in SQL, but never <code>score >= X</code>. Top-K is taken regardless.</td>
       <td>Irrelevant rows in the recall block. Worse: planner LLM may trust them and answer wrong.</td>
-      <td><code>outbound/tools/agentic_memory/mod.rs:114, 834</code></td>
+      <td><code>outbound/tools/agentic_memory/mod.rs:114, 881</code></td>
     </tr>
     <tr>
       <td>Over-fetch = <code>top_k + 2</code></td>
       <td>Session / kind filters run inside the SQL <code>WHERE</code>; <code>recall_user_messages_with_vec</code> fetches <code>top_k + 2</code> then drops exact matches of the current message.</td>
       <td>Thin margin: if the filtered subset is sparse, you get &lt;K rows. No re-fetch loop.</td>
-      <td><code>outbound/tools/agentic_memory/mod.rs:96–130</code></td>
+      <td><code>outbound/tools/agentic_memory/mod.rs:96–112</code></td>
     </tr>
     <tr>
       <td>Step summary = ONE <code>memory_events</code> row</td>
       <td>No chunking and no char cap (the Qdrant-era Fix D 24K cap went with Phase 6). An oversize summary fails the embed call and lands text-only (FTS-only recall).</td>
       <td>Long pipeline summaries lose the vector lane entirely; chunked multi-row writes are still an open item.</td>
-      <td><code>adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary:584</code>; <code>agentic_memory/mod.rs::write_step_summary_with_embedding:41</code></td>
+      <td><code>adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary:13</code>; <code>agentic_memory/mod.rs::write_step_summary_with_embedding:43</code></td>
     </tr>
     <tr>
       <td>Self-similarity of current message</td>
       <td>The current user message is embedded; recall returns past user messages similar to it. Often the most similar match is the user's own prior phrasing.</td>
       <td>Recall surfaces the user's own words back at the planner. Adds noise, not signal.</td>
-      <td><code>agentic_memory/mod.rs:107</code> (exact-match filter — only catches literal duplicates, not paraphrases); recall runs BEFORE persist (<code>planner.rs:661–668</code>)</td>
+      <td><code>agentic_memory/mod.rs:108</code> (exact-match filter — only catches literal duplicates, not paraphrases); recall runs BEFORE persist (<code>planner.rs:538–545</code>)</td>
     </tr>
     <tr>
       <td>Short-utterance embeddings</td>
@@ -439,19 +439,19 @@
       <td>Embedding dim validated (1536)</td>
       <td><code>pgvector_literal</code> rejects any non-1536 / non-finite vector; the write degrades to a text-only row and recall to FTS-only, at warn.</td>
       <td>Fixed in Phase 6 — a wrong-dim embedder no longer disappears data, but the vector lane silently drops out (watch the warn line).</td>
-      <td><code>agentic_memory/mod.rs:585–605, 842–851, 1029</code></td>
+      <td><code>agentic_memory/mod.rs:632–660, 891, 1076</code></td>
     </tr>
     <tr>
       <td>Embed-call fail-soft</td>
       <td>Fix E caches the user-message embedding once per turn. If that one call fails, every downstream lane gets <code>None</code> and degrades. Logged at warn.</td>
       <td>One blip in OpenRouter embed quota — or the Tor proxy being down (egress is fail-closed) — ⇒ silent recall miss for that turn.</td>
-      <td><code>planner.rs:320–334</code></td>
+      <td><code>planner.rs:237, 522</code></td>
     </tr>
     <tr>
       <td>Write durability</td>
       <td>Plain <code>INSERT INTO memory_events</code>, committed before the call returns. Immediate next-turn read sees the write.</td>
       <td>OK. No async-gap. (This is one of the few things <em>not</em> broken.)</td>
-      <td><code>agentic_memory/mod.rs:585</code></td>
+      <td><code>agentic_memory/mod.rs:632</code></td>
     </tr>
   </tbody>
 </table>
@@ -527,7 +527,7 @@
     <tr>
       <td><span class="priority-1">3</span></td>
       <td><strong>Also push assistant responses into the ring buffer</strong> with a role marker — and consider <code>session_recent_n</code> as "turn pairs" not "user messages".</td>
-      <td><code>planner.rs:236</code> + <code>update_and_format_history</code></td>
+      <td><code>planner.rs:169</code> + <code>update_and_format_history</code></td>
       <td>Trivial but high-impact. Today's bug is that <code>session_history</code> is a single string list with no role.</td>
       <td>Tiny. ~10 LoC + format change in <code>format_history</code>.</td>
     </tr>
@@ -631,24 +631,24 @@ grep "session_id=$TENGU_SESSION_ID" &lt;your-log-file&gt; | head -20
 <details open>
 <summary>Memory write path</summary>
 <ul>
-  <li><code>src/application/orchestrator/planner.rs:557–636</code> — <code>persist_user_message</code> (writes user msg to <code>agentic_memory user events</code>, <code>kind=message</code>; fail-soft)</li>
-  <li><code>src/adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary:584–616</code> — one <code>kind=step_output</code> row per step summary (embed best-effort, text-only on failure); called from the <code>compress_and_store</code> intercept (≈ 984) and the backstop (≈ 1039)</li>
-  <li><code>src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess ≈ 1039</code> — Fix C backstop (writes <code>final_text</code> when subagent skips <code>compress_and_store</code>)</li>
+  <li><code>src/application/orchestrator/planner.rs:446</code> — <code>persist_user_message</code> (writes user msg to <code>agentic_memory user events</code>, <code>kind=message</code>; fail-soft)</li>
+  <li><code>src/adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary:13–46</code> — one <code>kind=step_output</code> row per step summary (embed best-effort, text-only on failure); called from the <code>compress_and_store</code> intercept (≈ 510), the bridged-summary path (≈ 596) and the backstop (≈ 613)</li>
+  <li><code>src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess ≈ 613</code> — Fix C backstop (writes <code>final_text</code> when subagent skips <code>compress_and_store</code>)</li>
   <li><code>src/adapters/inbound/webhooks.rs::persist_webhook_output</code> (step_id <code>webhook-handler</code>) — Fix H backstop (webhook path Direct-verdict persistence)</li>
-  <li><code>src/adapters/outbound/tools/agentic_memory/mod.rs:41–95</code> — <code>write_step_summary_with_embedding</code> / <code>write_user_message_with_embedding</code> → <code>PostgresMemoryStore::insert_event_with_embedding</code> (585)</li>
+  <li><code>src/adapters/outbound/tools/agentic_memory/mod.rs:43–94</code> — <code>write_step_summary_with_embedding</code> / <code>write_user_message_with_embedding</code> → <code>PostgresMemoryStore::insert_event_with_embedding</code> (632)</li>
 </ul>
 </details>
 
 <details open>
 <summary>Memory read path</summary>
 <ul>
-  <li><code>src/application/orchestrator/planner.rs:336</code> — <code>load_registry_block</code> (file-backed <code>TENGU_PLANNER_REGISTRY.md</code>; no embedding, no score)</li>
-  <li><code>src/application/orchestrator/planner.rs:382</code> — <code>update_and_format_history</code> (in-RAM ring buffer; USER side only)</li>
-  <li><code>src/application/orchestrator/planner.rs:423</code> — <code>cross_session_recall_block</code> (gated by <code>cross_session_msg_top_k</code>; default 0)</li>
-  <li><code>src/application/orchestrator/planner.rs:492</code> — <code>session_output_recall_block</code> (Fix A; gated by <code>within_session_output_top_k</code>; default 0)</li>
-  <li><code>src/application/orchestrator/planner.rs:729</code> — <code>replan</code> (cross_plan_top_k recall; only fires on replan)</li>
-  <li><code>src/adapters/outbound/tools/agentic_memory/mod.rs:96–145</code> — <code>recall_user_messages_with_vec</code> / <code>recall_step_outputs_for_session_with_vec</code> / <code>recall_step_outputs_with_vec</code> → <code>recall_events_hybrid</code> (834; pgvector cosine, FTS fallback)</li>
-  <li><code>src/bootstrap/:1150</code> — <code>memory_manager = None</code> when planner system override is set (chat-side recall BYPASSED)</li>
+  <li><code>src/application/orchestrator/planner.rs:252</code> — <code>load_registry_block</code> (file-backed <code>TENGU_PLANNER_REGISTRY.md</code>; no embedding, no score)</li>
+  <li><code>src/application/orchestrator/planner.rs:291</code> — <code>update_and_format_history</code> (in-RAM ring buffer; USER side only)</li>
+  <li><code>src/application/orchestrator/planner.rs:332</code> — <code>cross_session_recall_block</code> (gated by <code>cross_session_msg_top_k</code>; default 0)</li>
+  <li><code>src/application/orchestrator/planner.rs:391</code> — <code>session_output_recall_block</code> (Fix A; gated by <code>within_session_output_top_k</code>; default 0)</li>
+  <li><code>src/application/orchestrator/planner.rs:603</code> — <code>replan</code> (cross_plan_top_k recall; only fires on replan)</li>
+  <li><code>src/adapters/outbound/tools/agentic_memory/mod.rs:96–143</code> — <code>recall_user_messages_with_vec</code> / <code>recall_step_outputs_for_session_with_vec</code> / <code>recall_step_outputs_with_vec</code> → <code>recall_events_hybrid</code> (881; pgvector cosine, FTS fallback)</li>
+  <li><code>src/bootstrap/orchestrator.rs:242</code> — <code>memory_manager = None</code> when planner system override is set (chat-side recall BYPASSED)</li>
 </ul>
 </details>
 
@@ -656,8 +656,8 @@ grep "session_id=$TENGU_SESSION_ID" &lt;your-log-file&gt; | head -20
 <summary>IPC boundary</summary>
 <ul>
   <li><code>src/adapters/outbound/subprocess_runner.rs:26–79</code> — <code>AgentIpcInput</code> shape (no history field; <code>plan_state</code> carries the accepted plan)</li>
-  <li><code>src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess ≈ 858</code> — child starts with <code>[System(base template + skills + plan), User(goal)]</code></li>
-  <li><code>src/main.rs:744</code> — exports <code>TENGU_AGENT_NAME</code> = the <code>[agents.&lt;name&gt;]</code> key (with <code>TENGU_SESSION_ID</code>, stamped onto <code>agentic_memory capture</code> rows)</li>
+  <li><code>src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess ≈ 371</code> — child starts with <code>[System(base template + skills + plan), User(goal)]</code></li>
+  <li><code>src/adapters/inbound/cli/run_agent.rs:221</code> — exports <code>TENGU_AGENT_NAME</code> = the <code>[agents.&lt;name&gt;]</code> key (with <code>TENGU_SESSION_ID</code>, stamped onto <code>agentic_memory capture</code> rows)</li>
   <li><code>src/bootstrap/orchestrator.rs::build_orchestrator</code> + <code>resolve_session_id</code> — Fix B unified <code>session_id</code></li>
 </ul>
 </details>
@@ -665,7 +665,7 @@ grep "session_id=$TENGU_SESSION_ID" &lt;your-log-file&gt; | head -20
 <details>
 <summary>Config knobs</summary>
 <ul>
-  <li><code>src/config/mod.rs:703–808</code> — <code>MemoryConfig</code> struct + all default fns</li>
+  <li><code>src/config/mod.rs:955–1054</code> — <code>MemoryConfig</code> struct + all default fns</li>
   <li>Defaults: <code>enabled=false</code>, <code>embedding_model=text-embedding-3-small</code>, <code>store_path=~/.tengu/memory/</code>, <code>session_recent_n=10</code>, <code>cross_plan_top_k=5</code>, <code>cross_session_msg_top_k=0</code>, <code>within_session_output_top_k=0</code>, <code>max_recall_entries=5</code>, <code>max_recall_tokens=600</code>, <code>persistent_store_chunk_size=1000</code>, <code>persistent_store_chunk_overlap=200</code> (Qdrant-era <code>vector_size</code> / <code>ttl_days</code> are ignored)</li>
   <li><code>TENGU_MEMORY_DATABASE_URL</code> — Postgres DSN (loopback or compose-internal <code>postgres-memory</code>; not routed through <code>[egress]</code>). Embedding calls are.</li>
 </ul>

@@ -2,18 +2,18 @@
 
 One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage-2026-10-06.md`.
 
-| Dir / file | Record | Key fields |
-|---|---|---|
-| `families/<id>.toml` | hypothesis family | `hypothesis`, `role`, `status`, `origin*`, `preceded_by`, `controls`, `[prior_search]` |
-| `variants/<id>.toml` | one variant of a family | `family`, `parent` (`ROOT`), `[[changed]]`, `preregistered`, `[spec]` |
-| `experiments/<id>.toml` | hypothesis → config → evidence → result → verdict | `kind`, `[[windows]]`, `[[results]]` (`extract`), `[verdict]`, `validity` |
-| `episodes/<id>.toml` | Experience episode | `[context]`, `[[information]]`, `[[alternatives]]`, `[decision]`, `[quality]` |
-| `incidents/<id>.toml` | operational / data incident | `class`, `strategy_impact`, `[[data_impact]]` |
-| `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` |
-| `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` |
-| `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 |
-| `rankings/<id>.toml` | strategy-ranking contract (`domain/lineage/ranking.rs`) | `sandbox`, `strategies`, `tz`, `cutoff`, `days`, `from`, `cohort`, `on_missing`, `[freshness]`, `[eligibility]`, `[rating]` |
-| `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only |
+| Dir / file | Record | Key fields | Files (2026-10-08) |
+|---|---|---|---:|
+| `families/<id>.toml` | hypothesis family | `hypothesis`, `role`, `status`, `origin*`, `preceded_by`, `controls`, `[prior_search]` | 14 |
+| `variants/<id>.toml` | one variant of a family | `family`, `parent` (`ROOT`), `[[changed]]`, `preregistered`, `[spec]` | 49 |
+| `experiments/<id>.toml` | hypothesis → config → evidence → result → verdict | `kind`, `[[windows]]`, `[[results]]` (`extract`), `[verdict]`, `validity` | 37 |
+| `episodes/<id>.toml` | Experience episode | `[context]`, `[[information]]`, `[[alternatives]]`, `[decision]`, `[quality]` | 3 |
+| `incidents/<id>.toml` | operational / data incident | `class`, `strategy_impact`, `[[data_impact]]` | 8 |
+| `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` | 19 (17 in W1; `intel.strategy_ranking`, `intel.source_evidence`: CANDIDATE, no generation) |
+| `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` | 1 (W1, FROZEN) |
+| `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 | 1 |
+| `rankings/<id>.toml` | strategy-ranking contract (`domain/lineage/ranking.rs`) | `sandbox`, `strategies`, `tz`, `cutoff`, `days`, `from`, `cohort`, `on_missing`, `[freshness]`, `[eligibility]`, `[rating]` | 2 (unsealed) |
+| `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only | — |
 
 | Rule | Value |
 |---|---|

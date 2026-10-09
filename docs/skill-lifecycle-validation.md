@@ -102,17 +102,17 @@ Confirm: `./target/debug/tengu doctor` lists both agents (`main`, `skill-improve
 ## 1. Unit test suite (no API key, no cost)
 
 ```bash
-cargo test --bin tengu skill_lifecycle:: -- --nocapture 2>&1 | tail -5
-cargo test --bin tengu eval_builder::    -- --nocapture 2>&1 | tail -5
-cargo test --bin tengu plugins::         -- --nocapture 2>&1 | tail -5
+cargo test --bin tengu skills::lifecycle:: -- --nocapture 2>&1 | tail -5
+cargo test --bin tengu inbound::eval::    -- --nocapture 2>&1 | tail -5
+cargo test --bin tengu outbound::tools:: -- --nocapture 2>&1 | tail -5
 ```
 
 Expected:
 
 ```
-test result: ok. N passed; 0 failed ...      (skill_lifecycle — ≈88 as of 2026-09-18)
-test result: ok. N passed; 0 failed ...      (eval_builder   — 29)
-test result: ok. N passed; 0 failed ...      (plugins        — ≈97 default features; `postgres_memory` adds more)
+test result: ok. N passed; 0 failed ...      (application/skills/lifecycle)
+test result: ok. N passed; 0 failed ...      (adapters/inbound/eval.rs)
+test result: ok. N passed; 0 failed ...      (adapters/outbound/tools — `postgres_memory` adds more)
 ```
 
 Counts drift; the invariant is `0 failed`. If any fail, investigate before running live smokes.
@@ -121,22 +121,22 @@ Specific test groups worth knowing:
 
 | Module | What it covers |
 |--------|----------------|
-| `skill_lifecycle::config::tests` | `[skill_lifecycle]` TOML parsing + defaults |
-| `skill_lifecycle::metrics::tests` | `validate_metrics` invariants |
-| `skill_lifecycle::metric_kinds::shell_check::tests` | shell-check pass/fail/timeout |
-| `skill_lifecycle::metric_kinds::llm_judge::tests` | judge JSON parse + prose-wrapped output |
-| `skill_lifecycle::metric_kinds::tool_assertion::tests` | `value_matches`, `value_equals`, `value_in` |
-| `skill_lifecycle::metric_kinds::script::tests` | shell-script metric JSON parse |
-| `skill_lifecycle::metric_kinds::dialog_replay::tests` | current-dialog slice → delegate metric |
-| `skill_lifecycle::metric_kinds::description_trigger::tests` | should/shouldn't-trigger judge, holdout split |
-| `skill_lifecycle::scanner::tests` · `audit::tests` · `learner_state::tests` | threat patterns, `skills/.audit.jsonl`, `state/<learner>.json` |
-| `skill_lifecycle::storage::tests` | `metrics.json` round-trip, rolling window, retention pruning |
-| `skill_lifecycle::fixtures::tests` | YAML round-trip + transcript→fixture extraction |
-| `skill_lifecycle::scratch_worktree::tests` | git worktree + non-git fallback |
-| `skill_lifecycle::evolve::tests` | `pick_target_metric`, `pick_best`, `apply_proposal_to_skill_md` |
-| `skill_lifecycle::approval_gate::tests` | terminal diff + keystroke parsing |
-| `plugins::skill_lifecycle::distill::tests` | `skill_distill` tool — atomic write, collision, invalid name, seeded `evals/config.toml` |
-| `plugins::manage_skill::tests` · `plugins::view_skill::tests` | in-chat write / read API, `editable_by_learner` refusal, fuzzy patch |
+| `config::skill_lifecycle::tests` | `[skill_lifecycle]` TOML parsing + defaults |
+| `skills::lifecycle::metrics::tests` | `validate_metrics` invariants |
+| `skills::lifecycle::metric_kinds::shell_check::tests` | shell-check pass/fail/timeout |
+| `skills::lifecycle::metric_kinds::llm_judge::tests` | judge JSON parse + prose-wrapped output |
+| `skills::lifecycle::metric_kinds::tool_assertion::tests` | `value_matches`, `value_equals`, `value_in` |
+| `skills::lifecycle::metric_kinds::script::tests` | shell-script metric JSON parse |
+| `skills::lifecycle::metric_kinds::dialog_replay::tests` | current-dialog slice → delegate metric |
+| `skills::lifecycle::metric_kinds::description_trigger::tests` | should/shouldn't-trigger judge, holdout split |
+| `skills::lifecycle::scanner::tests` · `audit::tests` · `learner_state::tests` | threat patterns, `skills/.audit.jsonl`, `state/<learner>.json` |
+| `skills::lifecycle::storage::tests` | `metrics.json` round-trip, rolling window, retention pruning |
+| `skills::lifecycle::fixtures::tests` | YAML round-trip + transcript→fixture extraction |
+| `skills::lifecycle::scratch_worktree::tests` | git worktree + non-git fallback |
+| `skills::lifecycle::evolve::tests` | `pick_target_metric`, `pick_best`, `apply_proposal_to_skill_md` |
+| `skills::lifecycle::approval_gate::tests` | terminal diff + keystroke parsing |
+| `outbound::tools::skill_lifecycle::distill::tests` | `skill_distill` tool — atomic write, collision, invalid name, seeded `evals/config.toml` |
+| `outbound::tools::manage_skill::tests` · `outbound::tools::view_skill::tests` | in-chat write / read API, `editable_by_learner` refusal, fuzzy patch |
 
 ---
 
@@ -155,7 +155,7 @@ Expected: `eval`, `skill` (with subcommands: `evolve`, `metrics`, `accept-propos
 Expected flags:
 - `--sandbox <NAME>` — load config from `sandboxes/<NAME>/config.toml`
 - `--judge-model <M>` — override the judge model
-- `--concurrency <N>` — parallel rows
+- `--concurrency <N>` — parallel rows (only `1` is implemented; `> 1` is refused)
 - `--format table|json`
 - `--out <DIR>` — override `evals/runs/<ts>/`
 - `--filter <GLOB>` — subset rows by id
@@ -314,9 +314,9 @@ Expected: a JSON object with `pass`, `score`, `notes` — the judge's substantiv
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "`[skill_lifecycle]` config missing" | No `[skill_lifecycle]` block in config | Add per section 0.3 |
-| "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`agentic_memory`, `shared_cache`, `persistent_store`, `skill_distill`, `apply_improver_proposal`, `manage_skill`) | Fix the name; the list lives in `src/config/mod.rs::validate_agent` + `domain::tools::WORKSPACE_TOOLS` |
-| "yaml prompts parse failed" | Fixtures file is wrong schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}`, not `{schema_version, fixtures: [...]}` |
-| Every row fails with "agent only described skill_distill in text" | `SkillLifecyclePlugin` not registered → tool not advertised to LLM | Check `src/adapters/outbound/tools/mod.rs::register_catalog` for the `SkillLifecyclePlugin` block (`want_distill \|\| want_apply_improver`) |
+| "agents.<id>.workspace_tools: unknown tool 'X' (valid: …)" | Name not in the allow-list (`domain::tools::WORKSPACE_TOOLS`: memory, skill-lifecycle, Solana, Hyperliquid, xm, xlab and sources names — the error lists them all) | Fix the name; checked in `src/config/mod.rs::validate_agent` |
+| "yaml prompts parse failed" | Fixtures file is neither schema | `skills/<name>/evals/prompts.yaml` must be a flat list of `{id, prompt, expected, ...}` or the `{schema_version, fixtures: [...]}` file the skill tools write (`eval.rs` reads both) |
+| Every row fails with "agent only described skill_distill in text" | `skill_distill` not advertised to the LLM | The eval agent must opt in (`skill_distill` in `workspace_tools` or `tools`); the row is the `catalog()` entry in `src/adapters/outbound/tools/mod.rs` (`SkillLifecyclePlugin`) |
 | llm_judge fails with "model does not support assistant prefill" | Old prefill-based judge prompt | Verify commit `6d88028` or later — `LlmJudgeKind::run` should build the prompt with `""` prefill |
 
 ---
@@ -338,7 +338,7 @@ Expected behaviour:
 4. **Scratch worktree created** at `.tengu/worktrees/evolve-skill-creator-<ts>/` (visible in process state; cleaned on exit).
 5. **Improver dispatch** — one call to `claude-opus-4-7`, returning a JSON proposal with `body_markdown`, `rationale`, optionally `metrics`.
 6. **Cycle rescore** — full eval inside the scratch worktree.
-7. **Best-cycle selection** — if no regression > 0.05 on non-target metrics, the cycle is a valid candidate.
+7. **Best-cycle selection** — a cycle is a valid candidate when the target beats its baseline and no non-target metric (passing ones included) drops > 0.05.
 8. **Approval gate** renders:
 
    ```
@@ -482,7 +482,7 @@ worktree_stale_hours = 0
 
 ## 9. Distillation — from a live conversation
 
-The `skill_distill` tool is advertised to any agent that lists it in `workspace_tools` (or, for a subagent block, in `tools`). Exercising it requires a conversation, not the eval runner. In-chat lifecycle verbs ("create skill from our dialog", "evaluate", "adjust yourself") route to `[agents.learning-agent]` + `manage_skill` instead — `skills/orchestrator/SKILL.md`.
+The `skill_distill` tool is advertised to any agent that lists it in `workspace_tools` (or, for a subagent block, in `tools`). Exercising it requires a conversation, not the eval runner. In-chat lifecycle verbs ("create skill from our dialog", "evaluate", "adjust yourself") route to `[agents.learning-agent]` + `manage_skill` instead — `skills/orchestrator/SKILL.md`; no shipped sandbox defines that agent, add one first.
 
 ### 9.1 Interactive TUI
 
@@ -534,9 +534,9 @@ cargo build --bin tengu
 export OPENROUTER_API_KEY=sk-or-...
 
 # Unit tests (no cost)
-cargo test --bin tengu skill_lifecycle:: --quiet
-cargo test --bin tengu eval_builder:: --quiet
-cargo test --bin tengu plugins:: --quiet
+cargo test --bin tengu skills::lifecycle:: --quiet
+cargo test --bin tengu inbound::eval:: --quiet
+cargo test --bin tengu outbound::tools:: --quiet
 
 # Config sanity
 ./target/debug/tengu doctor

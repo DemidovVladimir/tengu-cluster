@@ -13,11 +13,11 @@ The document is organized as a runbook. Work top-to-bottom on first execution: p
 ```bash
 export OPENROUTER_API_KEY=sk-or-...          # required for all scenarios
 export OPENROUTER_BASE_URL=https://openrouter.ai/api  # if not the default
-export RUST_LOG=tengu=info,tengu::adapters::orchestrator=debug
+export RUST_LOG=tengu=info,tengu::application::orchestrator=debug
 make tor                                     # Tor is the default egress; or set [egress] network = "open"
 ```
 
-Events (`PlanCreated`, `StepStarted`, `StepSucceeded`/`StepFailed`, `StepExhausted`, `ReplanTriggered`, `PlanCompleted`) are rendered by the channel — TUI `orch:` system bubbles (`tui/mod.rs:241`), Telegram status messages. `RUST_LOG=tengu=info` prints one `metrics` line per LLM call, `tengu run-agent` children included.
+Events (`PlanCreated`, `StepStarted`, `StepSucceeded`/`StepFailed`, `StepExhausted`, `ReplanTriggered`, `PlanCompleted`) are rendered by the channel — TUI `orch:` system bubbles (`tui/mod.rs:308`), Telegram status messages. `RUST_LOG=tengu=info` prints one `metrics` line per LLM call, `tengu run-agent` children included.
 
 ### 0.2 Build
 
@@ -266,21 +266,21 @@ Force the planner to return invalid JSON (you can't directly, but you can approx
 | **Category** | Edge |
 | **Channel** | TUI |
 | **Prompt** | `Reply with only the literal characters {"kind": "plan", "steps": [broken syntax here}` |
-| **Expected behavior** | Planner ideally recognizes this is a trick and emits `kind=direct`. If it doesn't, `parse_verdict` (`orchestrator/planner.rs:109`) tries raw JSON → fenced JSON → largest balanced `{...}` in prose → Phase 7.4 prose fallback: the whole text is wrapped as `kind=direct` with a warn log. No retry loop. |
+| **Expected behavior** | Planner ideally recognizes this is a trick and emits `kind=direct`. If it doesn't, `parse_verdict` (`orchestrator/planner.rs:26`) tries raw JSON → fenced JSON → the first balanced `{...}` in prose → Phase 7.4 prose fallback: the whole text is wrapped as `kind=direct` with a warn log. No retry loop. |
 | **Pass** | No crash. Either a direct reply or the prose text returned verbatim. |
 | **Fail markers** | Parser panics. `System error: orchestrator initial call failed` (the LLM call itself failed). |
 
-### S-15 — Multi-leaf plan (spec violation)
+### S-15 — Multi-leaf plan (parallel leaves, no join step)
 
-The orchestrator can in principle emit a plan with two leaves (two terminal steps). `plan.rs::validate` covers this but is unit-test only; at runtime `DagExecutor::run` (`executor.rs:126`) finishes with `NeedsReplan { "<no-leaf>", "plan has no single leaf" }` → `ReplanTriggered`.
+The orchestrator can emit a plan with two leaves (two terminal steps; `skills/orchestrator/SKILL.md` allows it). `domain/plan.rs::validate` is unit-test only; at runtime `DagExecutor::run` (`executor.rs:130-155`) joins the leaves' outputs in plan order, one `### <step> (<agent>)` section per leaf (unit test `parallel_leaves_are_joined_into_the_reply`). A step that never becomes ready (unknown `depends_on`, a cycle) → `NeedsReplan` → `ReplanTriggered`.
 
 | | |
 |---|---|
 | **Category** | Edge |
 | **Channel** | automated via `tengu eval` or manually coax via TUI |
-| **Prompt** | Hard to trigger reliably. Better covered as a **unit test** — see gap #15 below. |
-| **Expected behavior** | All steps run, then `plan has no single leaf` triggers a replan (bounded by `max_replans`). |
-| **Pass** | No orphan terminal steps returned as two separate replies. |
+| **Prompt** | Hard to trigger reliably. Covered by the unit test `executor.rs::parallel_leaves_are_joined_into_the_reply`. |
+| **Expected behavior** | All steps run; the reply is the leaves' outputs joined in plan order, one section per leaf — no replan. |
+| **Pass** | One reply holding every leaf's section; no replan, no empty reply. |
 
 ### S-16 — Explicit `@role:` routing bypass (default config)
 
@@ -353,7 +353,7 @@ tengu eval orchestration-e2e
 
 This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:1796`) → `bootstrap::orchestrator::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2025`) → `bootstrap::orchestrator::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
 
 **Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
 
@@ -420,7 +420,7 @@ Before running, here are the failure modes I anticipate and which scenario surfa
 | Parallel fan-out hits rate limits / token budget | S-08 |
 | Writer synthesizes without reading step inputs | S-03 |
 
-If a scenario fails, the prompt-level fix usually goes in `skills/orchestrator/SKILL.md` (+ `plan_schema.json`) — that's the planner's system prompt (`RagPlanner::load_orchestrator_skill_body`); `agents.orchestrator.identity.instructions` in the eval config is bypassed for the planning turn. Don't touch Rust unless the fail is structural (e.g., executor doesn't await, executor drops step outputs, etc.).
+If a scenario fails, the prompt-level fix usually goes in `skills/orchestrator/SKILL.md` (+ `plan_schema.json`) — that's the planner's system prompt (`planner.rs::load_orchestrator_skill_body`, read from `<cwd>/skills/orchestrator/SKILL.md`); `agents.orchestrator.identity.instructions` in the eval config is bypassed for the planning turn. Don't touch Rust unless the fail is structural (e.g., executor doesn't await, executor drops step outputs, etc.).
 
 ---
 

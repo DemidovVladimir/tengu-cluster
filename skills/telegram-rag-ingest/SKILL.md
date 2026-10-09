@@ -88,10 +88,10 @@ If nothing crosses a plausible relevance bar, say so honestly. Do not fabricate 
 - **Chunking is character-based**, not token-aware. Defaults: 1000 chars per chunk, 200 chars overlap (see `[memory] persistent_store_chunk_size` / `persistent_store_chunk_overlap`). Very dense or code-heavy material may split awkwardly at token boundaries.
 - **HTML stored via `http_request` → `write_file`** is raw markup unless you strip boilerplate. Chunks will contain noise like `<script>` tags and nav menus.
 - **Memory is per-agent-workspace**, shared across every user who talks to that agent. It is not per-Telegram-user. Don't store anything one user wouldn't want another to find via search.
-- **Backend is configurable** (`disk` or `qdrant`), but the tool interface is identical — your behavior does not change by backend.
+- **Backend is the workspace's disk vector store** (bincode, one file per workspace) — not the Postgres Open Brain (`agentic_memory`).
 
 ## Where data lives on disk
 
-Chunk manifests live at `<workspace>/.tengu/storage/<file_id>/manifest.json` alongside the raw file. Vector entries are written to the configured memory store (Qdrant or bincode disk file).
+Chunk manifests live at `<workspace>/.tengu/storage/<file_id>/manifest.json` alongside the raw file. Vector entries are written to the workspace's disk vector store (`<workspace>/memory/vectors.bin`).
 
-**Note for the model**: configuration of this feature is the human operator's job, not yours. If a runtime error tells you the tool isn't wired up, surface that error verbatim — do not lecture the user about TOML configuration. Configuration instructions previously lived here and were causing the model to parrot them as if the feature were disabled; they have been moved to `docs/SESSION_HANDOFF.md` where humans look.
+**Note for the model**: configuration of this feature is the human operator's job, not yours. If a runtime error tells you the tool isn't wired up, surface that error verbatim — do not lecture the user about TOML configuration. Configuration instructions previously lived here and were causing the model to parrot them as if the feature were disabled; they now live in the operator docs (`docs/tools.md`, `docs/configuration.md` § `[memory]`, `sandboxes/storage-test/config.toml`).

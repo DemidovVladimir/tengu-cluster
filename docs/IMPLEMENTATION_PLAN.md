@@ -1,9 +1,12 @@
 # Tengu-cluster — Implementation Plan
 
-> **Status (2026-10-02):** the v2 redesign (phases 0–7.2 below) is done. Five
-> phases have shipped since 2026-09-23: hexagonal layout, typed observations +
-> decision loops, Solana writes, xmarket W1, xlab. Their state, commits and next
-> steps: [§ Since 2026-09-23](#since-2026-09-23--what-shipped). Running state:
+> **Status (2026-10-08):** the v2 redesign (phases 0–7.2 below) is done. Since
+> 2026-09-23 shipped: hexagonal layout, typed observations + decision loops,
+> Solana writes, xmarket W1, xlab (both merged to `main` 2026-10-02), decision-loop
+> sequences + execution maps, the visual tutorial, the lineage registry + evidence
+> vault (W1 frozen, TENGU_ROADMAP P0–P5), Phases 6–11, strategy ranking and SOE
+> O0–O2. Their state, commits and next steps:
+> [§ Since 2026-09-23](#since-2026-09-23--what-shipped). Running state:
 > `docs/SESSION_HANDOFF.md` (top).
 >
 > **Superseded note (2026-05-14):** old retrieval-first phases are kept for
@@ -25,7 +28,7 @@
 > | 0 — baseline | ✅ done | Config blocks, manual checklist. `phase-0-checks.sh` retired 2026-09 (hard-failed on Qdrant, which is gone) |
 > | 1 — legacy vector facade | ✅ done → removed | `src/adapters/rag/` + `tengu registry` CLI deleted in Phase 6 (2026-05-14) |
 > | 2 — agents + orchestrator skill | ✅ done → revised | `agents/*.toml` replaced by `[agents.<name>]` in `sandboxes/<name>/config.toml` (2026-09-18); `skills/orchestrator/` |
-> | 3 — runner subprocess | ✅ done | `runner.rs`, run-agent subcommand, IPC |
+> | 3 — runner subprocess | ✅ done | `adapters/outbound/subprocess_runner.rs` (was `runner.rs`), run-agent subcommand, IPC |
 > | 4 — dual-mode planner | ✅ done | `RagPlanner`, build_orchestrator branch |
 > | 4b — SubprocessRunner cutover | ✅ done | impl WorkerHandle for subprocess |
 > | 4c — SKILL.md as planner prompt | ✅ done | run_*_with_system + tool stripping |
@@ -53,7 +56,7 @@
 
 ## Since 2026-09-23 — what shipped
 
-Commit hashes in full. `main` = merged; `feature/xmarket` = local branch, not pushed (HEAD `699bb83e79e3dac2f76ca9cbef69b3573b31252d`).
+Commit hashes in full. `main` = merged. `feature/xmarket` (HEAD `699bb83e79e3dac2f76ca9cbef69b3573b31252d`) merged to `main` 2026-10-02: #20 `131af134b57191850c249008a50b2ec05a59ed53` (xmarket W1), #21 `b7dc915149cc025cc9466748905ab18ca46e075a` (xlab).
 
 | Phase | Dates | Status | Key commits | Docs | Next |
 |---|---|---|---|---|---|
@@ -62,6 +65,12 @@ Commit hashes in full. `main` = merged; `feature/xmarket` = local branch, not pu
 | 6b — Solana write tools | 2026-09-29 | ✅ `main`: steps 1–6 in #18, 7–9 in #19; `simulate` verified live, `send` never run | `ff90d131039a3c169a4f082ad1f13a7bd0e24418` · `90c4dcc02cf85756d3e4331a8c68f60206eedbba` · Rust-only cleanup `9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8` | `docs/typed-observations-2026-09-24.md` § Write tools | first live send on a dedicated wallet (operator's go) |
 | X — xmarket wave W1 | 2026-09-30 → 10-01 | ✅ `feature/xmarket`: 34 items + W1 gate passed | [§ X below](#x--xmarket-w1-34-items) | `docs/xmarket-tracker-2026-09-29.md` § 0, `docs/xmarket-build-plan-2026-09-30.md`, `docs/runtime-2026-09-30.md`, `docs/xmarket-risk-paper-2026-09-30.md` | operator decisions → W2 |
 | XL — xlab, history first | 2026-10-01 | ✅ `feature/xmarket`: built, adversarial review (17 confirmed) fixed | [§ XL below](#xl--xlab-history-first-harness) | `docs/xlab-2026-10-01.md` | xlab § 12 |
+| DL — loop sequences + execution maps | 2026-10-07 | ✅ `main` (#27, #29) | `e31436fa4054bba4a8be11e8414b77ff476fbefc` · `8efeffafcd37a7a82ff2d91e0427ad344fac6fe8` | `docs/decision-loop-plan-2026-09-24.md`, `skills/execution-map/SKILL.md` | — |
+| T — visual tutorial + code-findings fixes | 2026-10-07 → 10-08 | ✅ `main` (#31, #38) | `c9cae71fbe659e704fb910b8ef0d33b75287ce74` · `cbe3a1af5fcffd35015116f9bd150bf2a806f750` | `docs/tutorial/`, `docs/code-findings-2026-10-07.md` | every code change updates its pages (`tests/tutorial_map.rs`) |
+| L — lineage registry + evidence vault, W1 frozen (TENGU_ROADMAP P0–P5) | 2026-10-06 | ✅ `main` (#32); Operator Review #1 = APPROVE | `e81b162af8f52e4fb1ab103c2392a373d03805cf` | `docs/lineage-2026-10-06.md`, `docs/w1-review-2026-10-06.md` | forward evidence every weekend (`docs/forward-evidence-runbook-2026-10-08.md`) |
+| P6–P11 — decision evaluation, news labels, HIP-3 oracle, cost model v2, stops | 2026-10-08 | ✅ `main` (#33–#36); no W2 change beats rule W, W1 kept | `b2494707e71d05166fe75df2e4338f0aa7949941` · `b0ca497df3bc427ded2af78aa71e57b76d67f66d` · `eaa0df180a3328198a9b6025716dd320ba3228b2` · `acdef66fc45252cba181a351cbc237ed6886ad57` | `docs/p{6,7,8,9,10}-*-2026-10-08.md` | weekend #2 sealed (#37 `5784d9fce06727e087ff7b8b2c82f6a24e46810f`) |
+| SR — strategy ranking | 2026-10-08 | ✅ `main` (#40); contracts unsealed until the operator seals one | `117b2595b0864066502d156aca42c7180494d67a` | `docs/strategy-ranking-automation-2026-10-08.md` | operator seals a contract |
+| SOE O0–O2 — opportunity domain, economics + gates, source evidence (SEC, TED) | 2026-10-08 | ✅ `main` (#41); offline `tengu soe`, `tengu sources`, tool `source_evidence` | `bc9bc12a038654ac4941c714abcfa777c99af631` | `docs/soe-2026-10-08.md`, `docs/source-evidence-2026-10-08.md` | `docs/soe-2026-10-08.md` |
 
 ### X — xmarket W1 (34 items)
 
@@ -99,6 +108,8 @@ Commit hashes in full. `main` = merged; `feature/xmarket` = local branch, not pu
 Results (xlab § 14, after the review fixes): rule W +50.4 bps (n 1,500, CI +15.7 … +81.5, t 2.9 clustered by weekend); liquid entries' holdout +72.2 (CI +6.3 … +130.9); every other library strategy no-go after costs; Jev gate +28.9 bps vs rules, CI −23.5 … +81.6 — no evidence yet that Jev adds value.
 
 ### Next (2026-10-02)
+
+Status (2026-10-08): #1 → Operator Review #1 = APPROVE (`docs/w1-review-2026-10-06.md`); #2 → Phases 6–11 found no W2 change that beats rule W, W1 kept; next is forward evidence every weekend (`docs/forward-evidence-runbook-2026-10-08.md`). Current order: `CLAUDE.md` § Open items, `docs/SESSION_HANDOFF.md`.
 
 | # | What | Where |
 |---|---|---|

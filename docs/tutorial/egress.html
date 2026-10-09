@@ -334,7 +334,7 @@
   <div class="sec-head">
     <span class="kicker">sandboxes/*/config.toml on main</span>
     <h2 id="s-sbx">Who runs Tor, who runs open</h2>
-    <p>Open sandboxes reach blocked APIs or need low latency. The trading ones still keep a host ceiling and <code>https_only</code>.</p>
+    <p>Open sandboxes reach blocked APIs or need low latency. The trading, research and source ones still keep a host ceiling and <code>https_only</code>.</p>
   </div>
   <div class="shelf" data-inview>
     <div class="sbx tor"><h3>tor-check</h3><span class="chip guard">tor</span><small>Explicit <code>network = "tor"</code>: the egress probe.</small></div>
@@ -344,6 +344,7 @@
     <div class="sbx open"><h3>xmarket-weekend</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>https_only</span></div></div>
     <div class="sbx open"><h3>xlab</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>api.geckoterminal.com</span><span>https_only</span></div></div>
     <div class="sbx open"><h3>xlab-w2</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>api.geckoterminal.com</span><span>www.sec.gov</span><span>data.sec.gov</span><span>https_only</span></div></div>
+    <div class="sbx open"><h3>soe</h3><span class="chip warn">open</span><div class="hosts"><span>www.sec.gov</span><span>data.sec.gov</span><span>api.ted.europa.eu</span><span>https_only</span></div></div>
     <div class="sbx open"><h3>lping</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
     <div class="sbx open"><h3>jev-exec</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
     <div class="sbx open"><h3>unlimited</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
@@ -401,7 +402,7 @@
   <div class="sec-head">
     <span class="kicker">src/adapters/outbound/http_class.rs</span>
     <h2 id="s-cls">When a request fails</h2>
-    <p>Venue clients (Solana RPC, Hyperliquid, GeckoTerminal, Jev) sort failures into one class. Only the two green ones are worth a retry.</p>
+    <p>Venue and source clients (Solana RPC, Hyperliquid, GeckoTerminal, SEC EDGAR, EU TED, Jev) sort failures into one class. Only the two green ones are worth a retry.</p>
   </div>
   <div class="cls">
     <div><b>"max usage reached" · -32429</b><i>quota_exhausted</i>quota text wins over the status</div>
