@@ -1,6 +1,6 @@
-<svg viewBox="0 0 1200 3200" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
-  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest and their files (2026-04-27, synced 2026-10-02)</title>
-  <desc id="desc">Six stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); and the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes).</desc>
+<svg viewBox="0 0 1200 3650" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run and their files (2026-04-27, synced 2026-10-08)</title>
+  <desc id="desc">Seven stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); and research lineage, rankings and sources (2026-10-06 to 2026-10-08: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine).</desc>
   <style>
     .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
     .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
@@ -32,6 +32,10 @@
     .pill-xm   { fill: #be123c; }
     .pill-xl   { fill: #1e40af; }
     .pill-par  { fill: #57534e; }
+    .pill-lin  { fill: #4d7c0f; }
+    .pill-rnk  { fill: #be185d; }
+    .pill-src  { fill: #115e59; }
+    .pill-soe  { fill: #9a3412; }
     .panel { fill: #ffffff; stroke: #e2e8f0; }
     .arrow { stroke: #475569; stroke-width: 1.6; fill: none; }
     .arrow-fat { stroke: #1e293b; stroke-width: 2.4; fill: none; }
@@ -49,10 +53,10 @@
     </marker>
   </defs>
 
-  <rect x="0" y="0" width="1200" height="3200" fill="#ffffff" />
+  <rect x="0" y="0" width="1200" height="3650" fill="#ffffff" />
 
   <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response, and what runs without one</text>
-  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-02 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer)</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-08 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer) · section 7: lineage, rankings, sources</text>
 
   <g transform="translate(20, 56)">
     <rect width="1160" height="50" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
@@ -198,7 +202,7 @@
     <text x="10" y="234" class="file">outbound/memory/embedder.rs</text>
     <text x="10" y="246" class="small">OpenRouter text-embedding-3-small</text>
     <text x="10" y="268" class="file">outbound/memory/builtin.rs</text>
-    <text x="10" y="280" class="small">BuiltinMemoryProvider (MEMORY.md)</text>
+    <text x="10" y="280" class="small">BuiltinMemoryProvider (vector prefetch)</text>
     <text x="10" y="302" class="file">bootstrap/memory.rs</text>
     <text x="10" y="314" class="small">builds the MemoryManager</text>
   </g>
@@ -255,15 +259,15 @@
     <rect width="224" height="330" rx="6" class="panel" />
     <rect x="0" y="0" width="224" height="22" rx="6" class="pill-skl" />
     <text x="10" y="15" class="pt">skills/  -  prompt fragments</text>
-    <text x="10" y="40" class="h3">Three-tier scanner:</text>
+    <text x="10" y="40" class="h3">Skill dirs, first wins:</text>
     <text x="10" y="56" class="small">1. ~/.tengu/skills/   (managed)</text>
     <text x="10" y="70" class="small">2. .tengu/skills/   (workspace dot)</text>
-    <text x="10" y="84" class="small">3. skills/   (workspace root)</text>
-    <text x="10" y="98" class="small">later tiers shadow earlier</text>
-    <text x="10" y="120" class="file">shared_files.rs::</text>
-    <text x="10" y="132" class="file">  scan_skill_summaries</text>
-    <text x="10" y="144" class="small">walks all 3 dirs, parses SKILL.md</text>
-    <text x="10" y="156" class="small">frontmatter (YAML), dedupes by name</text>
+    <text x="10" y="84" class="small">3. skills/ (project) · 4. cwd skills/</text>
+    <text x="10" y="98" class="small">an earlier dir shadows a later one</text>
+    <text x="10" y="120" class="file">registry.rs::skill_directories</text>
+    <text x="10" y="132" class="small">one list: the planner registry's scan,</text>
+    <text x="10" y="144" class="small">run-agent, view_skill, skill_resource</text>
+    <text x="10" y="156" class="small">frontmatter (YAML), first name wins</text>
     <text x="10" y="178" class="file">skills/orchestrator/SKILL.md</text>
     <text x="10" y="190" class="small">SPECIAL - the planner system prompt</text>
     <text x="10" y="202" class="file">  + plan_schema.json</text>
@@ -289,7 +293,7 @@
     <text x="10" y="128" class="file">domain/plan.rs</text>
     <text x="10" y="140" class="small">Plan, Step, AgentCompose</text>
     <text x="10" y="160" class="file">executor.rs</text>
-    <text x="10" y="172" class="small">DagExecutor - parallel ready_steps</text>
+    <text x="10" y="172" class="small">DagExecutor: parallel, cancel aborts</text>
     <text x="10" y="192" class="file">retry.rs</text>
     <text x="10" y="204" class="small">RetryPolicy (3 attempts default)</text>
     <text x="10" y="224" class="file">replan.rs</text>
@@ -559,18 +563,18 @@
   <path d="M 430 2110 L 430 2124 L 937 2124 L 937 2112" class="arrow-dash" marker-end="url(#ah-dash)" />
   <text x="440" y="2140" class="small" font-style="italic">a tool feed may call an exec tool directly (xm_exits, xm_weekend_fade): clock work, no LLM, no Jev</text>
   <text x="20" y="2160" class="small">health: run-&lt;s&gt;.json + loop/1 + feed/1 rows every heartbeat_secs → tengu doctor --sandbox &lt;s&gt; --live (tengu run healthcheck) · SIGINT / SIGTERM drain ≤ shutdown_grace_secs · a second runner exits 1</text>
-  <text x="20" y="2174" class="small">today: xmarket + xmarket-weekend run tool feeds only; Jev loops live in lping, jev-exec and xlab (xl_gate, replayed by tengu backtest --gate)</text>
+  <text x="20" y="2174" class="small">today: xmarket, xmarket-weekend and xlab-w2 (history refresh + strategy rankings) run tool feeds only; Jev loops live in lping (incl. exec chains), jev-exec and xlab / xlab-w2 (xl_gate)</text>
 
   <text x="20" y="2206" class="h3">B. tengu backtest --sandbox &lt;s&gt;  -  market.db → resolve / prepare → candidates → [Jev gate] → evaluate → run dir     (docs/xlab-2026-10-01.md)</text>
 
   <g transform="translate(20, 2218)">
     <rect width="173" height="100" rx="6" class="lane-mem" />
     <text x="8" y="18" class="h3">0. market.db</text>
-    <text x="8" y="34" class="body">tengu history backfill,</text>
+    <text x="8" y="34" class="body">history backfill · events,</text>
     <text x="8" y="48" class="body">import-hl-archive / -json</text>
-    <text x="8" y="64" class="file">outbound/backfill/</text>
+    <text x="8" y="64" class="file">outbound/backfill/ (+ sec)</text>
     <text x="8" y="76" class="file">outbound/market_data.rs</text>
-    <text x="8" y="92" class="small">bars · funding · ctx</text>
+    <text x="8" y="92" class="small">bars · funding · ctx · events</text>
   </g>
   <path d="M 195 2268 L 214 2268" class="arrow" marker-end="url(#ah)" />
 
@@ -711,24 +715,26 @@
     <rect width="284" height="310" rx="6" class="panel" />
     <rect x="0" y="0" width="284" height="22" rx="6" class="pill-tls" />
     <text x="10" y="15" class="pt">tool families (opt-in)</text>
-    <text x="10" y="42" class="h3">Solana LP read (10)</text>
+    <text x="10" y="42" class="h3">Solana LP read (11)</text>
     <text x="10" y="56" class="small">sol_price, dlmm_pools, dlmm_pool,</text>
     <text x="10" y="68" class="small">dlmm_positions, jup_perps, solana_wallet,</text>
-    <text x="10" y="80" class="small">solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide</text>
-    <text x="10" y="102" class="h3">Solana write (5): simulate by default</text>
-    <text x="10" y="116" class="small">solana_close_token_accounts, jupiter_swap,</text>
-    <text x="10" y="128" class="small">dlmm_open_position, dlmm_close_position,</text>
-    <text x="10" y="140" class="small">jup_perps_order · send = signer + wallet grant</text>
-    <text x="10" y="162" class="h3">Hyperliquid (2)</text>
-    <text x="10" y="176" class="small">hl_ctx → mkt_ctx/1, hl_book → hl_book/1</text>
-    <text x="10" y="188" class="file">outbound/hyperliquid/info.rs (HlInfo)</text>
-    <text x="10" y="210" class="h3">xmarket (6) · xlab (2)</text>
+    <text x="10" y="80" class="small">solana_tx, lp_snapshot, lp_swap_plan,</text>
+    <text x="10" y="92" class="small">hedge_decide, lp_decide</text>
+    <text x="10" y="110" class="h3">Solana write (5): simulate by default</text>
+    <text x="10" y="124" class="small">solana_close_token_accounts, jupiter_swap,</text>
+    <text x="10" y="136" class="small">dlmm_open_position, dlmm_close_position,</text>
+    <text x="10" y="148" class="small">jup_perps_order · send = signer + wallet grant</text>
+    <text x="10" y="166" class="h3">Hyperliquid (2)</text>
+    <text x="10" y="180" class="small">hl_ctx → mkt_ctx/1, hl_book → hl_book/1</text>
+    <text x="10" y="192" class="file">outbound/hyperliquid/info.rs (HlInfo)</text>
+    <text x="10" y="210" class="h3">xmarket (6) · xlab (3) · sources (1)</text>
     <text x="10" y="224" class="small">risk_status, paper_positions; exec: paper_order,</text>
     <text x="10" y="236" class="small">paper_close, xm_exits, xm_weekend_fade</text>
-    <text x="10" y="248" class="small">market_history, backtest (read-only)</text>
-    <text x="10" y="270" class="file">domain/tools.rs::WORKSPACE_TOOLS</text>
-    <text x="10" y="282" class="small">rate_limit.rs · http_class.rs · backoff.rs</text>
-    <text x="10" y="302" class="small" font-style="italic">hidden: tengu tool list prints every name</text>
+    <text x="10" y="248" class="small">market_history, backtest, strategy_ranking</text>
+    <text x="10" y="260" class="small">source_evidence (read-only, never fetches)</text>
+    <text x="10" y="276" class="file">domain/tools.rs::WORKSPACE_TOOLS</text>
+    <text x="10" y="288" class="small">rate_limit.rs · http_class.rs · backoff.rs</text>
+    <text x="10" y="304" class="small" font-style="italic">tengu tool list: 47 names (default build)</text>
   </g>
 
   <g transform="translate(20, 2744)">
@@ -807,37 +813,190 @@
     <rect width="284" height="310" rx="6" class="panel" />
     <rect x="0" y="0" width="284" height="22" rx="6" class="pill-agt" />
     <text x="10" y="15" class="pt">sandboxes  -  what runs where</text>
-    <text x="10" y="44" class="file">lping</text>
-    <text x="108" y="44" class="small">Solana LP loops (dry run)</text>
-    <text x="10" y="62" class="file">jev-exec</text>
-    <text x="108" y="62" class="small">architect → tengu decide → Jev</text>
-    <text x="10" y="80" class="file">xmarket</text>
-    <text x="108" y="80" class="small">paper desk M0, tengu run, $100</text>
-    <text x="10" y="98" class="file">xmarket-weekend</text>
-    <text x="108" y="98" class="small">rule W on paper, tool feeds</text>
-    <text x="10" y="116" class="file">xlab</text>
-    <text x="108" y="116" class="small">history research, backtests</text>
-    <text x="10" y="134" class="file">tor-check</text>
-    <text x="108" y="134" class="small">Tor egress check</text>
-    <text x="10" y="152" class="file">storage-test</text>
-    <text x="108" y="152" class="small">persistent_store test</text>
-    <text x="10" y="170" class="file">unlimited</text>
-    <text x="108" y="170" class="small">one agent over Telegram</text>
-    <text x="10" y="214" class="small">network open: lping, jev-exec, unlimited,</text>
-    <text x="10" y="226" class="small">xmarket, xmarket-weekend, xlab (allow_hosts:</text>
-    <text x="10" y="238" class="small">Hyperliquid; xlab also GeckoTerminal)</text>
-    <text x="10" y="260" class="small">[risk] sandboxes: hardened (no shell, no</text>
-    <text x="10" y="272" class="small">foreign MCP, claude_code built-ins off)</text>
-    <text x="10" y="294" class="small" font-style="italic">one config per sandbox:</text>
-    <text x="10" y="306" class="small" font-style="italic">sandboxes/&lt;n&gt;/config.toml</text>
+    <text x="10" y="40" class="file">lping</text>
+    <text x="108" y="40" class="small">Solana LP loops + exec chains</text>
+    <text x="10" y="56" class="file">jev-exec</text>
+    <text x="108" y="56" class="small">architect → tengu decide → Jev</text>
+    <text x="10" y="72" class="file">xmarket</text>
+    <text x="108" y="72" class="small">paper desk M0, tengu run, $100</text>
+    <text x="10" y="88" class="file">xmarket-weekend</text>
+    <text x="108" y="88" class="small">rule W on paper, W1-bound</text>
+    <text x="10" y="104" class="file">xlab</text>
+    <text x="108" y="104" class="small">history research, W1-bound</text>
+    <text x="10" y="120" class="file">xlab-w2</text>
+    <text x="108" y="120" class="small">W2 research, SEC, rankings</text>
+    <text x="10" y="136" class="file">soe</text>
+    <text x="108" y="136" class="small">source layer O2, read-only</text>
+    <text x="10" y="152" class="file">tor-check</text>
+    <text x="108" y="152" class="small">Tor egress check</text>
+    <text x="10" y="168" class="file">storage-test</text>
+    <text x="108" y="168" class="small">persistent_store test</text>
+    <text x="10" y="184" class="file">unlimited</text>
+    <text x="108" y="184" class="small">one agent over Telegram</text>
+    <text x="10" y="210" class="small">network open: all but tor-check and</text>
+    <text x="10" y="222" class="small">storage-test; allow_hosts ceilings: xmarket*,</text>
+    <text x="10" y="234" class="small">xlab*, soe (HL, Gecko, SEC, TED)</text>
+    <text x="10" y="256" class="small">[risk] sandboxes: hardened (no shell, no</text>
+    <text x="10" y="268" class="small">foreign MCP, claude_code built-ins off)</text>
+    <text x="10" y="290" class="small" font-style="italic">one config per sandbox:</text>
+    <text x="10" y="302" class="small" font-style="italic">sandboxes/&lt;n&gt;/config.toml</text>
   </g>
 
-  <g transform="translate(20, 3078)">
+  <!-- ===================== SECTION 7 — research lineage, rankings, sources ===================== -->
+  <text x="20" y="3088" class="h2">section 7 - research lineage, rankings, sources - 2026-10-06 → 2026-10-08</text>
+  <line x1="20" y1="3094" x2="1180" y2="3094" stroke="#cbd5e1" />
+
+  <text x="20" y="3118" class="h3">C. tengu ranking run --sandbox &lt;s&gt;  -  sealed contract → date → lease → backtests → rank → publish     (docs/strategy-ranking-automation-2026-10-08.md)</text>
+
+  <g transform="translate(20, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-orch" />
+    <text x="8" y="18" class="h3">1. contract sealed</text>
+    <text x="8" y="34" class="body">[[sealed]] ranking:&lt;id&gt;</text>
+    <text x="8" y="48" class="body">hashes the file now</text>
+    <text x="8" y="64" class="file">application/ranking/</text>
+    <text x="8" y="76" class="file">lineage/ranking.rs</text>
+    <text x="8" y="92" class="small">else contract_unsealed</text>
+  </g>
+  <path d="M 195 3180 L 214 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(217, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-plan" />
+    <text x="8" y="18" class="h3">2. date + cutoff</text>
+    <text x="8" y="34" class="body">newest date in tz whose</text>
+    <text x="8" y="48" class="body">cutoff passed (DST-safe)</text>
+    <text x="8" y="64" class="file">ranking_date</text>
+    <text x="8" y="76" class="file">domain/tz.rs</text>
+    <text x="8" y="92" class="small">published date ⇒ returned</text>
+  </g>
+  <path d="M 392 3180 L 411 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(414, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-exec" />
+    <text x="8" y="18" class="h3">3. lease + manifest</text>
+    <text x="8" y="34" class="body">ranking:&lt;id&gt; in runtime.db</text>
+    <text x="8" y="48" class="body">TTL 15 min, resumable</text>
+    <text x="8" y="64" class="file">ranking/store.rs</text>
+    <text x="8" y="76" class="file">manifest.json</text>
+    <text x="8" y="92" class="small">held ⇒ ranking_busy</text>
+  </g>
+  <path d="M 589 3180 L 608 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(611, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-tool" />
+    <text x="8" y="18" class="h3">4. freshness → backtest</text>
+    <text x="8" y="34" class="body">old data ⇒ STALE; else</text>
+    <text x="8" y="48" class="body">prepare → evaluate</text>
+    <text x="8" y="64" class="file">application/backtest/</text>
+    <text x="8" y="76" class="file">write_run_dir</text>
+    <text x="8" y="92" class="small">to = cutoff, never a holdout</text>
+  </g>
+  <path d="M 786 3180 L 805 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(808, 3130)">
+    <rect width="173" height="100" rx="6" class="lane-sub" />
+    <text x="8" y="18" class="h3">5. select → rank</text>
+    <text x="8" y="34" class="body">per cohort, weakest</text>
+    <text x="8" y="48" class="body">first; reasons listed</text>
+    <text x="8" y="64" class="file">backtest/ranking.rs</text>
+    <text x="8" y="76" class="file">RunFacts · select · rank</text>
+    <text x="8" y="92" class="small">content_sha256 (rerun-stable)</text>
+  </g>
+  <path d="M 983 3180 L 1002 3180" class="arrow" marker-end="url(#ah)" />
+
+  <g transform="translate(1005, 3130)">
+    <rect width="174" height="100" rx="6" class="lane-mem" />
+    <text x="8" y="18" class="h3">6. publish</text>
+    <text x="8" y="34" class="body">&lt;date&gt;/ranking.{json,md}</text>
+    <text x="8" y="48" class="body">latest.md → latest.json</text>
+    <text x="8" y="64" class="file">strategy-rankings/</text>
+    <text x="8" y="76" class="file">&lt;contract&gt;/</text>
+    <text x="8" y="92" class="small">INCOMPLETE keeps latest</text>
+  </g>
+  <text x="20" y="3250" class="small">callers: tengu ranking run | show (cli/ranking.rs) · tool strategy_ranking (tools/xlab/rank.rs): xlab-w2's ranking feeds under tengu run (agent xl_ranker) · no LLM, no network, never a holdout read</text>
+
+  <g transform="translate(20, 3266)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-lin" />
+    <text x="10" y="15" class="pt">lineage + evidence (2026-10-06)</text>
+    <text x="10" y="40" class="file">lineage/  (repo)</text>
+    <text x="10" y="52" class="small">one TOML per record · locks.toml append-only</text>
+    <text x="10" y="72" class="file">domain/lineage/ · config/lineage.rs</text>
+    <text x="10" y="84" class="small">Registry::validate, pins · [generation] checked</text>
+    <text x="10" y="96" class="small">at every Config::load (W1 FROZEN)</text>
+    <text x="10" y="116" class="file">domain/evidence{,_coverage}.rs</text>
+    <text x="10" y="128" class="small">vault pinned by sha256; coverage:</text>
+    <text x="10" y="140" class="small">LIVE_RECORDED / BACKFILLED / MISSING</text>
+    <text x="10" y="158" class="file">domain/xm/{grade,regrade}.rs</text>
+    <text x="10" y="170" class="small">12 ledger checks · rule W from recorded books</text>
+    <text x="10" y="188" class="file">domain/backtest/evaluation.rs</text>
+    <text x="10" y="200" class="small">rules · Jev · HOLD — W1's Jev UNPROVEN</text>
+    <text x="10" y="218" class="file">outbound/{lineage,evidence}/</text>
+    <text x="10" y="230" class="small">read-only; SQLite immutable=1</text>
+    <text x="10" y="246" class="small" font-style="italic">tengu lineage … seal · tengu evidence …</text>
+  </g>
+
+  <g transform="translate(312, 3266)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-rnk" />
+    <text x="10" y="15" class="pt">strategy ranking (2026-10-08)</text>
+    <text x="10" y="40" class="file">domain/lineage/ranking.rs</text>
+    <text x="10" y="52" class="small">contract: strategies, cohort, eligibility,</text>
+    <text x="10" y="64" class="small">rating — sealed before any outcome</text>
+    <text x="10" y="84" class="file">domain/backtest/ranking.rs</text>
+    <text x="10" y="96" class="small">select → rank, weakest first (pure)</text>
+    <text x="10" y="116" class="file">application/ranking/{mod,store}.rs</text>
+    <text x="10" y="128" class="small">run_ranking: lease, manifest, freshness,</text>
+    <text x="10" y="140" class="small">backtest, rank, publish</text>
+    <text x="10" y="160" class="file">config/strategy_ranking.rs</text>
+    <text x="10" y="172" class="small">[strategy_ranking] registry, contracts</text>
+    <text x="10" y="192" class="file">tools/xlab/rank.rs · cli/ranking.rs</text>
+    <text x="10" y="204" class="small">strategy_ranking run | latest · tengu ranking</text>
+    <text x="10" y="242" class="small" font-style="italic">retention keeps the runs latest.json cites</text>
+  </g>
+
+  <g transform="translate(604, 3266)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-src" />
+    <text x="10" y="15" class="pt">source evidence - O2 (2026-10-08)</text>
+    <text x="10" y="40" class="file">domain/source/</text>
+    <text x="10" y="52" class="small">SourceRecord, as-of view (captured ·</text>
+    <text x="10" y="64" class="small">knowable), packet source_asof/1 (fenced)</text>
+    <text x="10" y="84" class="file">config/sources.rs</text>
+    <text x="10" y="96" class="small">[sources] rows sec_edgar, ted_search —</text>
+    <text x="10" y="108" class="small">shipped disabled; terms + retention to enable</text>
+    <text x="10" y="128" class="file">outbound/sources/{store,sec,ted}.rs</text>
+    <text x="10" y="140" class="small">sources.db append-only · fetch_gate</text>
+    <text x="10" y="160" class="file">tools/sources/  ·  cli/sources.rs</text>
+    <text x="10" y="172" class="small">source_evidence: read-only · tengu sources</text>
+    <text x="10" y="184" class="small">list | fetch | import | asof | purge | …</text>
+    <text x="10" y="204" class="small">sandbox soe: soe_reader, closed world</text>
+    <text x="10" y="242" class="small" font-style="italic">agents never fetch; the operator does</text>
+  </g>
+
+  <g transform="translate(896, 3266)">
+    <rect width="284" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="284" height="22" rx="6" class="pill-soe" />
+    <text x="10" y="15" class="pt">SOE - O0–O2, offline (2026-10-08)</text>
+    <text x="10" y="40" class="file">domain/soe/</text>
+    <text x="10" y="52" class="small">exact money (minor units), unknown-safe Est,</text>
+    <text x="10" y="64" class="small">economics (downside / base / upside), hard</text>
+    <text x="10" y="76" class="small">gates PASS / HOLD / REJECT, capability fit,</text>
+    <text x="10" y="88" class="small">ranking + the HOLD week, eval cases</text>
+    <text x="10" y="108" class="file">config/soe.rs</text>
+    <text x="10" y="120" class="small">signed private profile (0600, never in git)</text>
+    <text x="10" y="140" class="file">cli/soe.rs</text>
+    <text x="10" y="152" class="small">tengu soe init | check | portfolio |</text>
+    <text x="10" y="164" class="small">sensitivity | eval</text>
+    <text x="10" y="184" class="small">no sandbox config, egress, LLM or fetch</text>
+    <text x="10" y="242" class="small" font-style="italic">imports: soe → source, never back</text>
+  </g>
+
+  <g transform="translate(20, 3536)">
     <rect width="1160" height="96" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>
     <text x="10" y="54" class="small">tui/mod.rs - build_orchestrator - RagPlanner::plan - SubprocessRunner::run_step - run_agent_subprocess - http_request - compress_and_store. That is the chat turn.</text>
-    <text x="10" y="68" class="small">Other flows: tengu backtest --sandbox xlab --strategy weekend_fade (no LLM) → cli/backtest.rs → application/backtest/ → domain/backtest/engine.rs → the run dir;</text>
-    <text x="10" y="82" class="small">tengu run --sandbox xmarket (runbook at the top of its config) → inbound/run.rs → bootstrap/runtime.rs → application/runtime/feeds.rs → tools/xm/exec_common.rs.</text>
+    <text x="10" y="68" class="small">Other flows: tengu backtest --sandbox xlab --strategy weekend_fade (no LLM) → cli/backtest.rs → application/backtest/ → domain/backtest/engine.rs → the run dir; tengu ranking run → application/ranking/;</text>
+    <text x="10" y="82" class="small">tengu run --sandbox xmarket (runbook at the top of its config) → inbound/run.rs → bootstrap/runtime.rs → application/runtime/feeds.rs → tools/xm/exec_common.rs · tengu lineage verify --pins.</text>
   </g>
 </svg>

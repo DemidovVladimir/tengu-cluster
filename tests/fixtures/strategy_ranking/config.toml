@@ -1,0 +1,59 @@
+# Strategy-ranking acceptance sandbox (tests/strategy_ranking.rs): copied to
+# <tmp>/sandboxes/rank-test/config.toml beside a copy of ./lineage (the
+# contract rank.test.v1 names sandbox `rank-test`); TENGU_HOME is a temp dir,
+# market.db seeded by `tengu history import-json` from
+# tests/fixtures/xlab/dataset_xyz_TSLA_1h.json (67 xyz:TSLA hours + funding).
+# No network: nothing here fetches.
+
+runtime_profile = "auto"
+
+[egress]
+network = "open"
+allow_hosts = ["api.hyperliquid.xyz"]
+
+[memory]
+enabled = false
+
+[xmarket]
+state = "rank-test"
+
+[backtest]
+bootstrap = 200
+seed = 7
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.universes]
+tsla = ["hyperliquid:xyz:TSLA"]
+
+# Fade, then follow, a ≥ 25 bps hourly move; out after 3 bars.
+[backtest.strategies.rank_fade]
+kind = "move_trigger"
+universe = "@tsla"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+
+[backtest.strategies.rank_follow]
+kind = "move_trigger"
+universe = "@tsla"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "follow"
+hold_bars = 3
+
+[agents.ranker]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-haiku-4.5"
+description = "Ranks the test strategies."
+tools = ["strategy_ranking"]
+
+[strategy_ranking]
+registry = "../../lineage"
+contracts = ["rank.test.v1"]

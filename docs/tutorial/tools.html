@@ -58,7 +58,7 @@
   <p class="lede">Every built-in tool is one row in <code>catalog()</code>. Default rows are on for every agent; opt-in rows need their name in <code>tools</code> or <code>workspace_tools</code>. The same rows feed chat, plan steps, loops and the Claude Code bridge.</p>
   <ul class="facts">
     <li><b>12</b> default tools, <b>+2</b> with <code>[memory]</code></li>
-    <li><b>32</b> opt-in names</li>
+    <li><b>33</b> opt-in names</li>
     <li>scope check within <b>30</b> lines of <code>execute</code></li>
     <li>tool name ≤ <b>64</b> chars</li>
   </ul>
@@ -246,6 +246,7 @@
     <div class="bar"><span class="lbl">hyperliquid</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
     <div class="bar"><span class="lbl">soe</span><span class="track"><span class="fill" style="--w:18.8%"></span></span><span class="val">3</span></div>
     <div class="bar"><span class="lbl">xlab</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
+    <div class="bar"><span class="lbl">sources</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
     <div class="bar"><span class="lbl">http</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
   </div>
   <div class="famcards" id="famcards"></div>
@@ -340,7 +341,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
   <ul class="checks">
     <li><span><b>One row, every surface.</b> Chat, plan steps, loops, <code>tengu tool</code> and the MCP bridge all register through <code>register_catalog</code>.</span></li>
     <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
-    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 32 fails the config.</span></li>
+    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 33 fails the config.</span></li>
     <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
     <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
@@ -414,10 +415,11 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     ["solana_close_token_accounts", "solana", 1, 0], ["jupiter_swap", "solana", 1, 0], ["dlmm_close_position", "solana", 1, 0], ["dlmm_open_position", "solana", 1, 0], ["jup_perps_order", "solana", 1, 0],
     ["hl_ctx", "hyperliquid", 1, 0], ["hl_book", "hyperliquid", 1, 0],
     ["risk_status", "xm paper", 1, 0], ["paper_order", "xm paper", 1, 0], ["paper_close", "xm paper", 1, 0], ["xm_exits", "xm paper", 1, 0], ["xm_weekend_fade", "xm paper", 1, 0], ["paper_positions", "xm paper", 1, 0],
-    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0],
+    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0], ["strategy_ranking", "xlab", 1, 0],
+    ["source_evidence", "sources", 1, 0],
     ["soe_view", "soe", 1, 0], ["soe_propose", "soe", 1, 0], ["soe_challenge", "soe", 1, 0]
   ];
-  var FAMS = ["workspace", "memory", "http", "crypto (Privy)", "skills", "solana", "hyperliquid", "xm paper", "xlab", "soe"];
+  var FAMS = ["workspace", "memory", "http", "crypto (Privy)", "skills", "solana", "hyperliquid", "xm paper", "xlab", "sources", "soe"];
   var OPT = C.filter(function (r) { return r[2]; }).map(function (r) { return r[0]; });
   var ALL = C.map(function (r) { return r[0]; });
   var SOL = ["http_request", "read_file", "list_directory", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order"];

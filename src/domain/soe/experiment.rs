@@ -16,7 +16,7 @@
 //! The first stage with cash lacking a stop rule is a gate (`NO_STAGED_STOP_RULE`,
 //! O1 W4), not a parse error: [`ExperimentSpec::first_spend`] finds it.
 
-// Consumers land with the gates and ranking (O1 W4–W5).
+// `Threshold::met` waits for O3 (grading an experiment's result).
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};

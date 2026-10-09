@@ -47,6 +47,16 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 // xmarket workspace.
 pub(crate) const MARKET_HISTORY: &str = "market_history";
 pub(crate) const BACKTEST: &str = "backtest";
+/// Strategy rankings of a `[strategy_ranking]` sandbox (`tools/xlab/rank.rs`):
+/// runs the ranking coordinator (`application/ranking/`) or reads a
+/// published ranking; its state is the state dir's (`strategy-rankings/`).
+pub(crate) const STRATEGY_RANKING: &str = "strategy_ranking";
+
+// Source family (O2, `adapters/outbound/tools/sources/`) — read-only typed
+// rows over the sandbox's source store (`<sources state dir>/sources.db`);
+// one `sources` plugin. Agents never fetch: the operator does
+// (`tengu sources fetch`).
+pub(crate) const SOURCE_EVIDENCE: &str = "source_evidence";
 
 // SOE family (O3, `adapters/outbound/tools/soe/`) — the weekly cycle's
 // stage tools over the private SOE state root (`<sources state dir>/cycles/`,
@@ -143,6 +153,8 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
     BACKTEST,
+    STRATEGY_RANKING,
+    SOURCE_EVIDENCE,
     SOE_VIEW,
     SOE_PROPOSE,
     SOE_CHALLENGE,
@@ -171,14 +183,13 @@ pub(crate) const SOLANA_WRITE_TOOLS: &[&str] = &[
 /// The closed world of a Software Opportunity Engine sandbox (`[soe]`,
 /// `config/soe.rs`): every tool one of its agents may list — reads, the two
 /// stage writes into the open run dir (`soe_propose`, `soe_challenge`), skill
-/// docs. No write, contact, spend, publish or shell tool. `source_evidence`
-/// (O2) joins the catalog with its tool; until then the name is no catalog
-/// tool and the load warns it is dropped.
+/// docs, and the O2 `source_evidence` read. No write, contact, spend, publish
+/// or shell tool.
 pub(crate) const SOE_ALLOWED: &[&str] = &[
     SOE_VIEW,
     SOE_PROPOSE,
     SOE_CHALLENGE,
-    "source_evidence",
+    SOURCE_EVIDENCE,
     "read_file",
     "list_directory",
     "view_skill",

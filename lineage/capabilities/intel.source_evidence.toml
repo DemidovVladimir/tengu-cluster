@@ -1,0 +1,9 @@
+id = "intel.source_evidence"
+title = "Source evidence as of t (sources.db, O2)"
+class = "INTELLIGENCE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "CANDIDATE"
+contract = "tool_schema:source_evidence"
+bindings = ["tool:source_evidence"]
+notes = "Read-only rows source_asof/1 over <state dir>/sources.db (SEC EDGAR filings, EU TED notices): the as-of evidence packet in captured or knowable mode, paged to its newest records, free text fenced. Never fetches (tengu sources fetch is the operator's). No generation binds it; the soe sandbox (unbound) holds it. Offline-tested only: the 12 dated replay cases of src/domain/source/eval.rs, bridge conformance and the offline local leg; no live engine leg run yet."

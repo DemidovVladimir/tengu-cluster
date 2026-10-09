@@ -367,7 +367,7 @@
 
 <div class="header">
   <h1>Tengu-Cluster · Context Management Explorer</h1>
-  <div class="sub">2026-04-27 · canonical reference · 7 layers · ~25 mechanisms · companion to <a href="context-management-2026-04-27.md">.md</a> + <a href="context-management-2026-04-27.svg">.svg</a></div>
+  <div class="sub">2026-04-27 · checked against the code 2026-10-08 · canonical reference · 7 layers · 31 mechanisms · companion to <a href="context-management-2026-04-27.md">.md</a> + <a href="context-management-2026-04-27.svg">.svg</a></div>
 </div>
 
 <div class="tabs">
@@ -387,7 +387,7 @@
     <div class="stat-box"><div class="num">7</div><div class="lbl">Layers</div></div>
     <div class="stat-box"><div class="num" id="stat-mechs">…</div><div class="lbl">Mechanisms</div></div>
     <div class="stat-box"><div class="num">0</div><div class="lbl">LLM-driven summarisers</div></div>
-    <div class="stat-box"><div class="num">10</div><div class="lbl">Tunable knobs</div></div>
+    <div class="stat-box"><div class="num" id="stat-knobs">…</div><div class="lbl">Tunable knobs</div></div>
   </div>
 
   <h2>The seven layers</h2>
@@ -399,7 +399,7 @@
 
 <!-- ============ MECHANISMS ============ -->
 <div class="panel" id="panel-mechs">
-  <h2>All ~25 mechanisms — searchable, filterable</h2>
+  <h2>All 31 mechanisms — searchable, filterable</h2>
   <div class="mech-controls">
     <input type="text" class="mech-search" id="mech-search" placeholder="Filter by name, file, knob, description…">
     <div class="layer-filter" id="layer-filter"></div>
@@ -421,7 +421,7 @@
 
 <!-- ============ CONFIG ============ -->
 <div class="panel" id="panel-config">
-  <h2>All tunable knobs — defaults from <code>config.rs</code></h2>
+  <h2>All tunable knobs — defaults from <code>src/config/mod.rs</code></h2>
   <input type="text" class="mech-search" id="config-search" placeholder="Filter knobs…" style="margin-bottom: 16px;">
   <table class="data-table">
     <thead>
@@ -478,12 +478,12 @@ const LAYERS = [
     desc: "Auto-compact layer. Runs at the top of every chat turn before per-turn assembly. Three guards: turn-count trim, threshold-triggered prefix compaction, hard token-budget stop." },
   { n: 2, key: "l2", color: "#2DD4BF", title: "Per-turn assembly",
     where: "src/application/chat/prompt_budget.rs · application/chat/service.rs",
-    desc: "What the model actually sees. Sliding history window, memory recall, fencing, grounding, skill bodies." },
+    desc: "What the model actually sees. Sliding history window, memory recall, grounding, identity + skill bodies." },
   { n: 3, key: "l3", color: "#A78BFA", title: "Inner tool-calling loop",
     where: "src/application/chat/tool_loop.rs::collect_engine_response",
     desc: "Round-by-round mid-loop compaction. Per-result truncation + first-line-clipping of older rounds. Closest thing to /compact." },
   { n: 4, key: "l4", color: "#F59E0B", title: "MCP bridge (Claude Code path)",
-    where: "src/adapters/outbound/engines/claude_code.rs",
+    where: "src/adapters/outbound/engines/claude_code.rs (sets it) · src/adapters/inbound/mcp_bridge.rs (cuts)",
     desc: "Single hard cap on bridge-routed tool results. Only governor on the Claude Code engine path — Layer 3 doesn't fire there." },
   { n: 5, key: "l5", color: "#4ADE80", title: "Subagent IPC",
     where: "src/adapters/outbound/subprocess_runner.rs · adapters/inbound/cli/run_agent.rs::run_agent_subprocess",
@@ -495,29 +495,29 @@ const LAYERS = [
     where: "src/adapters/outbound/tools/memory/persistent_store.rs",
     desc: "Char-window file splitter for vector-storage. Orthogonal to LLM context — surfaces only via memory_search or the chat-side recall block." },
   { n: 8, key: "l8", color: "#22D3EE", title: "Observability (metrics)",
-    where: "src/domain/metrics.rs",
+    where: "src/domain/metrics.rs · src/application/metrics.rs",
     desc: "Records what every other layer produced — token counts, latency, per-context-layer attribution. Tracing baseline always-on; bus broadcast + TUI bubble opt-in. Never mutates a prompt. Added 2026-04-28." },
 ];
 
 const MECHS = [
   // Layer 0
-  { n: 1, layer: 0, title: "estimate_tokens_approx", where: "token.rs:4",
+  { n: 1, layer: 0, title: "estimate_tokens_approx", where: "domain/token.rs:11",
     body: "<code>text.len() / 4</code> heuristic. Used everywhere a token count is needed.",
     pills: ["~4 chars/token", "no tokeniser"], tags: ["token", "estimate", "heuristic"] },
-  { n: 2, layer: 0, title: "truncate_at_boundary / truncate_with_suffix", where: "token.rs:24-38",
-    body: "UTF-8-safe slice point + \"truncate + append marker only when actually clipped\". Used by all per-call truncations.",
+  { n: 2, layer: 0, title: "truncate_at_boundary / truncate_with_suffix", where: "domain/token.rs:38-57",
+    body: "UTF-8-safe slice point (<code>truncate_tool_result</code>, <code>fit_tool_result</code>, the bridge's <code>truncate_mcp_result</code>) + \"truncate + append marker only when actually clipped\" (display clipping in <code>inbound/activity.rs</code> / <code>channel.rs</code>).",
     pills: ["UTF-8 safe", "lazy suffix"], tags: ["truncate", "boundary", "utf8"] },
 
   // Layer 1
-  { n: 3, layer: 1, title: "enforce_history_turn_limit", where: "application/chat/flow.rs:61",
-    body: "Drains everything before the Nth user-turn from the end. Per-scope defaults.",
-    pills: ["main=40", "group=30", "pipe=25", "default=20"], tags: ["turn", "limit", "history", "scope"] },
+  { n: 3, layer: 1, title: "enforce_history_turn_limit", where: "application/chat/flow.rs:62",
+    body: "Drains everything before the Nth user-turn from the end. Per-scope defaults; the default scope <code>per-sender</code> falls in \"other\".",
+    pills: ["main=40", "group=30", "pipe=25", "other=20"], tags: ["turn", "limit", "history", "scope"] },
   { n: 4, layer: 1, title: "maybe_compact_flow ★", where: "application/chat/flow.rs:165",
     star: true,
     body: "<strong>Closest thing to /compact.</strong> When flow_token_usage ≥ threshold: replace older messages with a single synthetic Assistant message containing a truncated concatenation of those messages. Not LLM-summarised.",
-    pills: ["ratio 0.82-0.88", "keep 24-60 turns", "summary 15% input"], tags: ["compact", "flow", "auto", "summary", "threshold"] },
-  { n: 5, layer: 1, title: "max_tokens_per_flow hard stop", where: "application/chat/service.rs:309",
-    body: "If flow_token_usage ≥ max_tokens_per_flow after Layer 1 compaction, the turn returns a system notice <em>\"Flow token limit reached. Use /reset…\"</em>",
+    pills: ["ratio 0.82-0.88", "keep history limit / 2 (10-20)", "summary 15% input"], tags: ["compact", "flow", "auto", "summary", "threshold"] },
+  { n: 5, layer: 1, title: "max_tokens_per_flow hard stop", where: "application/chat/service.rs:337",
+    body: "If flow_token_usage ≥ max_tokens_per_flow after Layer 1 compaction, the turn returns a system notice <em>\"Flow token limit reached. Use /reset…\"</em>. Also: an empty assembled prompt → <em>\"Context budget exhausted…\"</em> (:418); ≥ 80 % used after the reply → <em>\"⚠️ Token budget: N% used…\"</em> (:479).",
     pills: ["100_000 tokens"], tags: ["budget", "flow", "stop", "reset"] },
 
   // Layer 2
@@ -527,34 +527,34 @@ const MECHS = [
   { n: 7, layer: 2, title: "assemble_recent_history", where: "prompt_budget.rs:8",
     body: "Newest contiguous suffix of <code>state.messages</code> that fits <code>history_budget</code>. Hard ceiling of 20 messages.",
     pills: ["MAX_HISTORY_MESSAGES = 20"], tags: ["history", "window", "sliding", "suffix"] },
-  { n: 8, layer: 2, title: "Memory recall block", where: "application/chat/service.rs:326 / planner.rs",
-    body: "Planner roster comes from root <code>TENGU_PLANNER_REGISTRY.md</code>. Runtime planner recall uses Postgres <code>agentic_memory</code> with <code>postgres_memory</code>; otherwise planner memory lanes stay empty.",
-    pills: ["top-K = 5", "max_recall_tokens = 600", "session_recent_n = 10", "cross_plan_top_k = 5"],
+  { n: 8, layer: 2, title: "Memory recall block", where: "application/chat/service.rs:352 / planner.rs",
+    body: "Chat side: top <code>max_recall_entries</code> hits of the in-process <code>MemoryManager</code> (disk bincode store) as one System message <code>[Relevant memories]</code> — not fenced; <code>max_recall_tokens</code> is reserved, not enforced. Planner side: roster from root <code>TENGU_PLANNER_REGISTRY.md</code>; recall lanes read Postgres <code>agentic_memory</code> with <code>postgres_memory</code>, otherwise they stay empty.",
+    pills: ["top-K = 5", "max_recall_tokens: not enforced", "session_recent_n = 10", "cross_plan_top_k = 5"],
     tags: ["recall", "memory", "postgres", "top-k"] },
-  { n: 9, layer: 2, title: "cross_session_msg_top_k", where: "MemoryConfig",
+  { n: 9, layer: 2, title: "cross_session_msg_top_k", where: "MemoryConfig · orchestrator/planner.rs:332",
     body: "When > 0, planner-side surfaces similar messages from prior sessions. Off by default. Reads Postgres <code>agentic_memory</code> when <code>postgres_memory</code> is enabled.",
     pills: ["default 0 (off)"], tags: ["recall", "cross-session", "planner", "messages"] },
-  { n: 10, layer: 2, title: "&lt;memory-context&gt; fencing", where: "fencing.rs",
-    body: "Wraps recall in <code>&lt;memory-context&gt;...&lt;/memory-context&gt;</code> + system note. Prevents the model from treating recalled text as new user input.",
-    pills: ["+50 tok overhead"], tags: ["fencing", "memory", "recall", "context"] },
-  { n: 11, layer: 2, title: "Grounding nudge / suppress_grounding_nudge", where: "application/chat/service.rs:248-322",
-    body: "If user message contains <em>last/latest/recent/...</em>, inject a system msg \"verify, do not trust recall\" AND skip memory recall this turn. Planner-side <code>run_turn_with_system</code> sets suppress=true.",
-    pills: ["7 trigger words", "skips recall when triggered"], tags: ["grounding", "nudge", "fresh", "planner"] },
-  { n: 12, layer: 2, title: "Skill body / file caps", where: "application/skills/registry.rs:1103-1159",
-    body: "Three nested truncations: per-file in a skill, per-skill-set total, per-skill recall context.",
-    pills: ["max_skill_context_tokens = 16_000", "max_file_tokens = 2_000"],
+  { n: 10, layer: 2, title: "&lt;memory-context&gt; fencing", where: "application/memory/fencing.rs",
+    body: "Wraps text in <code>&lt;memory-context&gt;...&lt;/memory-context&gt;</code> + system note. Only caller: <code>injector::for_turn</code> on <code>ChatOrchestratorPortImpl::run_orchestrator_turn</code> — no live path calls it (the planner uses <code>run_orchestrator_turn_with_system_metered</code>). The chat recall block (#8) is not fenced.",
+    pills: ["no live caller"], tags: ["fencing", "memory", "recall", "context"] },
+  { n: 11, layer: 2, title: "Grounding nudge / suppress_grounding_nudge", where: "application/chat/service.rs:255 · :349",
+    body: "If user message contains <em>last/latest/recent/...</em> (whole words), inject a system msg \"verify, do not trust recall\" AND skip memory recall this turn. Planner calls set suppress=true (<code>bootstrap/orchestrator.rs::run_turn_inner</code>, when a system prompt override is passed).",
+    pills: ["7 trigger words", "whole words", "skips recall when triggered"], tags: ["grounding", "nudge", "fresh", "planner"] },
+  { n: 12, layer: 2, title: "Identity / skill / prompt caps", where: "application/skills/registry.rs:1253-1360",
+    body: "<code>build_system_prompt_with_tools</code>, knobs <code>[agents.&lt;n&gt;.prompt_budget]</code>: <code>max_file_tokens</code> per identity instructions and per workspace file (IDENTITY.md / PROFILE.md / CONTEXT.md); <code>max_skill_context_tokens</code> per skill fragment; <code>max_total_tokens</code> on the whole prompt — a skill past it is dropped with a warn.",
+    pills: ["max_file_tokens = 2_000", "max_skill_context_tokens = 16_000", "max_total_tokens = 32_000"],
     tags: ["skill", "file", "system-prompt", "truncate"] },
   { n: 13, layer: 2, title: "truncate_to_token_budget", where: "prompt_budget.rs:41",
-    body: "Char-cap using ~4 chars/token. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by skill_builder + maybe_compact_flow.",
+    body: "Char-cap using ~4 chars/token. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by <code>build_system_prompt_with_tools</code> (#12) + <code>maybe_compact_flow</code>.",
     pills: ["char-cap", "[truncated] marker"], tags: ["truncate", "char", "budget"] },
 
   // Layer 3
-  { n: 14, layer: 3, title: "truncate_tool_result", where: "application/chat/tool_loop.rs",
+  { n: 14, layer: 3, title: "truncate_tool_result", where: "application/chat/tool_loop.rs:406 (tool_result_content)",
     body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. <strong>Local engines</strong> (<code>Engine::tool_result_char_cap</code>): <code>fit_tool_result</code> — a result within 1/8 of <code>context_window</code> × 4 chars stays whole; above it a typed row's <code>data</code> → <code>data: &lt;n&gt; bytes in observation &lt;key&gt;</code>, then the cut, footer included; <code>run-agent</code> applies the same rules (<code>tool_result_content</code> + older rounds cut to line 1) for every engine.",
     pills: ["max_tool_result_chars = 300_000", "local: window / 8 × 4 chars"], tags: ["truncate", "tool", "result", "char", "local", "compact"] },
-  { n: 15, layer: 3, title: "compact_tool_result ★ (mid-loop)", where: "adapters/outbound/engines/mod.rs:921",
+  { n: 15, layer: 3, title: "compact_tool_result ★ (mid-loop)", where: "application/chat/tool_loop.rs:458 (caller :226)",
     star: true,
-    body: "<strong>Closest to /compact at the inner-loop level.</strong> After round ≥ 1, walks <code>messages[..compact_cutoff]</code> and rewrites every Role::Tool to first-line-only.",
+    body: "<strong>Closest to /compact at the inner-loop level.</strong> After round ≥ 1, <code>compact_older_tool_results</code> walks <code>messages[..compact_cutoff]</code> and rewrites every Role::Tool to first-line-only. <code>run-agent</code> does the same from turn 1. A limit of 0 does not disable it (every older result becomes <code>…</code>).",
     pills: ["compact_result_limit = 200", "fires round ≥ 1", "first-line clip"],
     tags: ["compact", "tool", "result", "loop", "first-line"],
     code: `<span class="kw">fn</span> <span class="fn">compact_tool_result</span>(content: &amp;<span class="kw">str</span>, limit: <span class="kw">usize</span>) -&gt; <span class="kw">String</span> {
@@ -566,33 +566,33 @@ const MECHS = [
     <span class="kw">while</span> end &gt; <span class="num">0</span> &amp;&amp; !first_line.is_char_boundary(end) { end -= <span class="num">1</span>; }
     <span class="fn">format!</span>(<span class="str">"{}…"</span>, &amp;first_line[..end])
 }` },
-  { n: 16, layer: 3, title: "[OUTPUT_TRUNCATED] auto-continue", where: "adapters/outbound/engines/mod.rs:706",
-    body: "Inverse mechanism. When the model's text response ends with the sentinel, inject a user msg \"Continue from where you left off\" and re-roll. Extends, doesn't cut.",
+  { n: 16, layer: 3, title: "[OUTPUT_TRUNCATED] auto-continue", where: "application/chat/tool_loop.rs:135",
+    body: "Inverse mechanism. OpenRouter / local end the text with the sentinel on a length cut (<code>openrouter.rs:308</code>, <code>local.rs:140</code>); when a reply with no tool calls ends with it (tools offered, rounds left), the loop injects a user msg \"Continue from where you left off\" and re-rolls. Extends, doesn't cut. Not in <code>run-agent</code>.",
     pills: ["sentinel literal", "extends not cuts"], tags: ["truncate", "auto-continue", "sentinel"] },
-  { n: 17, layer: 3, title: "max_tool_rounds hard stop", where: "adapters/outbound/engines/mod.rs:665",
-    body: "Hard cap on inner-loop rounds. After exhaust, forces one final <code>tools=[]</code> turn to extract a closing message.",
+  { n: 17, layer: 3, title: "max_tool_rounds hard stop", where: "config/mod.rs:579 · tool_loop.rs:231",
+    body: "Hard cap on inner-loop rounds. After exhaust, forces one final <code>tools=[]</code> turn to extract a closing message. Claude Code counts tool calls instead and kills the CLI past the cap.",
     pills: ["default = 70"], tags: ["rounds", "limit", "tool", "loop"] },
-  { n: 18, layer: 3, title: "token_budget mid-loop early-exit", where: "adapters/outbound/engines/mod.rs:683",
-    body: "If <code>total_input_delta + total_output_delta &gt; budget</code>, break loop with warn log. Used on the eval path; chat path passes None today.",
-    pills: ["per-flow", "warn log on exit"], tags: ["budget", "early-exit", "tokens", "eval"] },
+  { n: 18, layer: 3, title: "token_budget mid-loop early-exit", where: "application/chat/tool_loop.rs:114",
+    body: "If <code>total_input_delta + total_output_delta &gt; budget</code>, break loop with warn log. Every caller passes None today (chat, eval, webhooks, <code>tengu tool turn</code>, doctor); chat enforces its own flow budget (#5).",
+    pills: ["None on every caller", "warn log on exit"], tags: ["budget", "early-exit", "tokens", "eval"] },
 
   // Layer 4
-  { n: 19, layer: 4, title: "max_mcp_result_chars (bridge cap)", where: "adapters/outbound/engines/claude_code.rs:551",
-    body: "Caps each tool result returned to the Claude Code CLI through the MCP bridge. <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire in-process (OpenRouter, local: chat and <code>run-agent</code>).",
-    pills: ["50_000 chars", "TENGU_BRIDGE_MAX_RESULT_CHARS"], tags: ["mcp", "bridge", "claude-code", "cap"] },
+  { n: 19, layer: 4, title: "max_mcp_result_chars (bridge cap)", where: "config/mod.rs:598 → claude_code.rs:223 → inbound/mcp_bridge.rs:634",
+    body: "Caps each tool result returned to the Claude Code CLI through the MCP bridge. Knob <code>[agents.&lt;n&gt;.limits] max_mcp_result_chars</code>; the engine writes it into the bridge env as <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>, <code>tengu mcp-bridge</code> cuts (<code>truncate_mcp_result</code>). <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire in-process (OpenRouter, local: chat and <code>run-agent</code>).",
+    pills: ["50_000 chars", "TENGU_BRIDGE_MAX_RESULT_CHARS (set by the engine)"], tags: ["mcp", "bridge", "claude-code", "cap"] },
 
   // Layer 5
-  { n: 20, layer: 5, title: "Fresh subprocess context", where: "subprocess_runner.rs::AgentIpcInput",
+  { n: 20, layer: 5, title: "Fresh subprocess context", where: "subprocess_runner.rs:26 (AgentIpcInput)",
     body: "Child <code>tengu run-agent</code> starts with empty messages. Payload: goal/agent_name/max_turns/session_id/step_id/sandbox_config/plan_state — model/tools/skills travel empty; the child re-loads the same sandbox config and takes them from its own <code>[agents.&lt;name&gt;]</code> block. By design — no parent-history leakage.",
     pills: ["IPC over JSON stdin/stdout"], tags: ["subprocess", "ipc", "fresh", "isolation"] },
-  { n: 21, layer: 5, title: "compress_and_store ★ durable summary", where: "outbound/tools/skill_lifecycle/compress_and_store.rs (def) · main.rs:971 (intercept)",
+  { n: 21, layer: 5, title: "compress_and_store ★ durable summary", where: "outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs:497 (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge)",
     star: true,
     body: "Implicitly appended to every subagent's tools (definition only — no plugin handler). OpenRouter / local: <code>run-agent</code> intercepts the call out-of-band and ends the loop after the round. Claude Code: the step's bridge writes the summary file and answers <code>stored — stop now</code>; the engine ends the CLI run after the round. A model that just stops: the backstop writes the final text. <code>postgres_memory</code> persists the summary to Postgres <code>agentic_memory</code> (<code>try_persist_agentic_step_summary</code>), embeddings when available.",
     pills: ["implicit append", "Open Brain memory", "backstop"], tags: ["compress", "summary", "subagent", "postgres", "step"] },
-  { n: 22, layer: 5, title: "Phase 5c middle-ground protocol", where: "main.rs:1075",
+  { n: 22, layer: 5, title: "Phase 5c middle-ground protocol", where: "inbound/cli/run_agent.rs:642",
     body: "Three-row verdict table: ✓ called → Ok · ✗ but text → Ok+warn · ✗ no text → Failed. Graceful degradation lets non-protocol-respecting models still succeed if they produce text.",
     pills: ["3 rows", "graceful degradation"], tags: ["protocol", "verdict", "ipc", "phase-5c"] },
-  { n: 23, layer: 5, title: "Subprocess max_turns", where: "subprocess_runner.rs:43 · run_step",
+  { n: 23, layer: 5, title: "Subprocess max_turns", where: "subprocess_runner.rs:43 · run_step :355",
     body: "Hard cap on the subagent mini-loop = the agent block's <code>limits.max_tool_rounds</code> (serde default 20 only for payloads without the field) — engine turns on OpenRouter / local, <strong>tool calls</strong> of the one CLI run on Claude Code. Hits the compress_and_store warn path on exhaust. Wall clock per step: <code>limits.step_timeout_secs</code> via <code>run_with_timeout</code>.",
     pills: ["max_tool_rounds = 70", "step_timeout_secs = 600"], tags: ["subagent", "turns", "limit", "timeout"] },
 
@@ -610,24 +610,24 @@ const MECHS = [
     pills: ["chunk_size = 1000", "overlap = 200"], tags: ["chunk", "persistent_store", "file", "embed"] },
 
   // Layer 8 (added 2026-04-28)
-  { n: 27, layer: 8, title: "MetricsRecord — one per LLM/embedding call ★", where: "metrics.rs",
+  { n: 27, layer: 8, title: "MetricsRecord — one per LLM/embedding call ★", where: "domain/metrics.rs:43",
     star: true,
-    body: "<strong>The unit of observability.</strong> kind in {Planner, Subagent, Embedding}, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layers, step_id, session_id. Token counts come from <code>StreamEvent::Usage</code> the engine layer already produced. <code>record()</code> always emits a structured tracing line + best-effort bus broadcast.",
-    pills: ["3 kinds", "tracing always-on", "bus best-effort", "fail-soft"],
+    body: "<strong>The unit of observability.</strong> kind in {Planner, Subagent, Embedding, WikiCompiler, Decision}, prompt/completion/total tokens, prompt chars+bytes, response chars, latency, layers, step_id, session_id. Token counts come from <code>StreamEvent::Usage</code> the engine layer already produced. <code>record()</code> always emits a structured tracing line + best-effort bus broadcast.",
+    pills: ["5 kinds", "tracing always-on", "bus best-effort", "fail-soft"],
     tags: ["metrics", "tokens", "telemetry", "record"] },
   { n: 28, layer: 8, title: "Per-context-layer attribution (planner only)", where: "orchestrator/planner.rs::emit_planner_metrics",
-    body: "<code>MetricsRecord.layers</code> carries one <code>MetricsLayer { name, chars, bytes }</code> per planner-prompt section: system / roster / cross_session / history / recall / failure / user_message. Built BEFORE the LLM call from the same strings the planner just composed. <strong>Approximate</strong> — engine-side framing isn't counted; sum-of-layers ≠ prompt_tokens. Treat as relative attribution for \"which planner block bloated this turn\".",
-    pills: ["7 layer names", "approximate", "planner-only"],
+    body: "<code>MetricsRecord.layers</code> carries one <code>MetricsLayer { name, chars, bytes }</code> per planner-prompt section — plan: system / roster / cross_session / history / session_recall / user_message; replan: system / roster / cross_session / history / recall / failure / user_message. Built BEFORE the LLM call from the same strings the planner just composed. <strong>Approximate</strong> — engine-side framing isn't counted; sum-of-layers ≠ prompt_tokens. Treat as relative attribution for \"which planner block bloated this turn\".",
+    pills: ["8 layer names", "approximate", "planner-only"],
     tags: ["metrics", "layers", "attribution", "planner", "approximate"] },
-  { n: 29, layer: 8, title: "Three surfaces, one record", where: "metrics.rs + tui/mod.rs",
+  { n: 29, layer: 8, title: "Three surfaces, one record", where: "application/metrics.rs + inbound/tui/mod.rs",
     body: "Tracing baseline (RUST_LOG=tengu=info — info line per call, debug for layer detail), in-process broadcast bus (<code>OnceLock&lt;broadcast::Sender&gt;</code>), orchestrator-event bus (bridge in build_orchestrator re-broadcasts as <code>OrchestratorEvent::MetricsRecorded</code>). TUI bubble opt-in via <code>TENGU_TUI_METRICS=1</code>.",
     pills: ["RUST_LOG=tengu=info", "TENGU_TUI_METRICS=1", "OrchestratorEvent::MetricsRecorded"],
     tags: ["metrics", "surfaces", "tracing", "bus", "tui"] },
   { n: 30, layer: 8, title: "AgentIpcOutput.metrics — IPC plumbing", where: "subprocess_runner.rs + adapters/inbound/cli/run_agent.rs::run_agent_subprocess",
-    body: "Subagent records cross the subprocess boundary in <code>AgentIpcOutput::{Ok,Failed}.metrics: Vec&lt;MetricsRecord&gt;</code>. <code>run_agent_subprocess</code> records one per <code>run_single_engine_turn</code>; <code>SubprocessRunner::run_step</code> re-emits each on the parent's global sink. <code>#[serde(default, skip_serializing_if = \"Vec::is_empty\")]</code> keeps the payload byte-compatible with older child binaries.",
+    body: "Subagent records cross the subprocess boundary in <code>AgentIpcOutput::{Ok,Failed}.metrics: Vec&lt;MetricsRecord&gt;</code>. <code>run_agent_subprocess</code> records one per <code>run_single_engine_turn</code>; <code>SubprocessRunner::run_step</code> re-emits each on the parent's global sink via <code>metrics::forward</code> (bus only — the child's tracing line already arrived in the forwarded stderr). <code>#[serde(default, skip_serializing_if = \"Vec::is_empty\")]</code> keeps the payload byte-compatible with older child binaries.",
     pills: ["one record per inner-loop turn", "byte-compatible", "default empty"],
     tags: ["metrics", "ipc", "subagent", "subprocess", "round-trip"] },
-  { n: 31, layer: 8, title: "AggregatorState — TUI rollup", where: "metrics.rs + tui/mod.rs",
+  { n: 31, layer: 8, title: "AggregatorState — TUI rollup", where: "domain/metrics.rs:180 + inbound/tui/mod.rs",
     body: "Lightweight in-process rollup: overall + by-agent + by-kind + last record. Renders one System bubble per call when <code>TENGU_TUI_METRICS=1</code>: <code>metrics: tok in/out 4.5k/812 · last subagent (2.1k) · session 12.3k · researcher 8.7k</code>. Aggregator absorbs records even when the panel is OFF — flipping it on mid-session shows real numbers, not zero.",
     pills: ["overall + by-agent + by-kind", "absorbs even when off", "fmt_tokens compact"],
     tags: ["metrics", "aggregator", "tui", "rollup", "bubble"] },
@@ -636,33 +636,33 @@ const MECHS = [
 const STEPS = [
   { title: "User types message", layer: null,
     what: "TUI / Telegram / chat builder pushes the new message into <code>state.messages</code>. flow_token_usage += estimate(content).",
-    hits: ["application/chat/service.rs:296 — flow_token_usage tracking", "Layer 0 #1 — token estimation"] },
+    hits: ["application/chat/service.rs:324 — flow_token_usage tracking", "Layer 0 #1 — token estimation"] },
   { title: "Layer 1 — turn-count trim", layer: 1,
-    what: "<code>enforce_history_turn_limit</code> drops everything before the Nth user turn (default 20-40 per scope). If <code>max_history_turns = 0</code>, clears all.",
+    what: "<code>enforce_history_turn_limit</code> drops everything before the Nth user turn (default 20-40 per scope). A configured <code>max_history_turns = 0</code> counts as 1 (<code>flow.rs::resolve_history_turn_limit</code>).",
     hits: ["#3 enforce_history_turn_limit"] },
   { title: "Layer 1 — auto-compact", layer: 1,
-    what: "If <code>flow_token_usage &gt;= threshold</code> (~85% of max), <code>maybe_compact_flow</code> replaces the prefix with a synthetic <code>[Flow compaction summary]</code> message. Concatenates older messages, truncates to ~15% of input budget.",
+    what: "If <code>flow_token_usage &gt;= threshold</code> (0.82–0.88 of <code>max_tokens_per_flow</code>, per scope), <code>maybe_compact_flow</code> replaces the prefix with a synthetic <code>[Flow compaction summary]</code> message. Concatenates older messages, truncates to ~15% of input budget.",
     hits: ["#4 maybe_compact_flow ★", "#13 truncate_to_token_budget", "#5 max_tokens_per_flow hard stop (if exceeded after compaction → return notice)"] },
   { title: "Layer 2 — budget arithmetic", layer: 2,
     what: "<code>compute_total_input_budget</code> calculates remaining input budget after reserved output, system prompt, and memory block. <code>history_budget</code> is what's left for the sliding window.",
     hits: ["#6 compute_total_input_budget", "#13 truncate_to_token_budget (skill bodies in system prompt)"] },
   { title: "Layer 2 — memory recall", layer: 2,
-    what: "If memory manager is configured AND grounding nudge wasn't triggered, query the configured memory backend for top-K relevant entries. Bounded by <code>max_recall_tokens</code>. Wrap in <code>&lt;memory-context&gt;</code> fence.",
-    hits: ["#8 memory recall block", "#10 fencing", "#9 cross_session_msg_top_k"] },
+    what: "If a memory manager is configured AND the grounding nudge wasn't triggered, query its vector store for the top <code>max_recall_entries</code> hits and send them as one <code>[Relevant memories]</code> System message — not fenced, not token-capped (<code>max_recall_tokens</code> is reserved). Planner calls run with no memory manager.",
+    hits: ["#8 memory recall block", "#10 fencing (no live caller)", "#9 cross_session_msg_top_k (planner side)"] },
   { title: "Layer 2 — sliding history + grounding", layer: 2,
     what: "<code>assemble_recent_history</code> picks newest 1-20 messages that fit <code>history_budget</code>. If user said \"latest/recent/...\", inject grounding nudge AND skip memory recall.",
     hits: ["#7 assemble_recent_history", "#11 grounding nudge"] },
   { title: "Layer 3 — engine call (round 0)", layer: 3,
-    what: "Stream model. Get back text + tool_calls. If model emits <code>[OUTPUT_TRUNCATED]</code> sentinel, inject continue and re-roll.",
+    what: "Stream model. Get back text + tool_calls. If a reply without tool calls ends with the <code>[OUTPUT_TRUNCATED]</code> sentinel (OpenRouter / local length cut), inject continue and re-roll.",
     hits: ["#16 [OUTPUT_TRUNCATED] auto-continue"] },
   { title: "Layer 3 — execute tools (round 0)", layer: 3,
-    what: "<code>compact_cutoff = messages.len()</code>. For each tool_call: execute, then <code>truncate_tool_result</code> at 300K chars, push as Role::Tool. Round 0 keeps full bodies.",
+    what: "<code>compact_cutoff = messages.len()</code>. For each tool_call: execute, then <code>tool_result_content</code> — <code>truncate_tool_result</code> at 300K chars (local engines: <code>fit_tool_result</code>, window / 8 × 4) — push as Role::Tool. Round 0 keeps full bodies.",
     hits: ["#14 truncate_tool_result"] },
   { title: "Layer 3 — round 1 + compaction", layer: 3,
     what: "Engine call again. Execute new tool calls. Then: <code>if round &gt;= 1</code>, walk <code>messages[..compact_cutoff]</code>, rewrite every Role::Tool in place via <code>compact_tool_result</code> at 200 chars (first-line only). This repeats every subsequent round.",
     hits: ["#15 compact_tool_result ★", "#17 max_tool_rounds (default 70)", "#18 token_budget early-exit"] },
   { title: "Layer 4 — bridge cap (Claude Code path)", layer: 4,
-    what: "If running on Claude Code engine, every tool result returned through the MCP bridge is capped at <code>max_mcp_result_chars</code> (50K) before Claude even sees it. <strong>Layer 3 doesn't fire on this path.</strong>",
+    what: "If running on Claude Code engine, <code>tengu mcp-bridge</code> caps every tool result at <code>max_mcp_result_chars</code> (50K, handed over as <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>) before Claude even sees it. <strong>Layer 3 doesn't fire on this path.</strong>",
     hits: ["#19 max_mcp_result_chars"] },
   { title: "Layer 5 — subagent dispatch", layer: 5,
     what: "If the planner emits a multi-step plan, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> per step (unknown agent names fail before any spawn). Child gets fresh empty messages — never inherits parent history — and takes <code>[agents.&lt;name&gt;]</code> from the same sandbox config. compress_and_store is implicitly appended to its tools.",
@@ -687,10 +687,12 @@ const SYMPTOMS = [
     cause: "Layer 1 #4 fired — flow tokens crossed compaction threshold. Adjust <code>compaction_threshold_ratio</code> or <code>compaction_keep_turns</code>." },
   { layer: 2, sym: "Model ignores recalled memory and re-asks for info user already gave",
     cause: "Layer 2 #11 — grounding nudge triggered by trigger words (last/latest/etc.). Memory recall was skipped this turn by design." },
-  { layer: 2, sym: "<code>&lt;memory-context&gt;</code> fences leak into the model's reply",
-    cause: "Layer 2 #10 — model is treating fence as text not as a system signal. The instruction note exists; bug is upstream (model not respecting fences)." },
+  { layer: 2, sym: "Model treats recalled memories as if the user just said them",
+    cause: "Layer 2 #8 — the chat recall block is a plain <code>[Relevant memories]</code> System message; the <code>&lt;memory-context&gt;</code> fence (#10) is on no live path." },
   { layer: 2, sym: "Skills look truncated mid-paragraph in system prompt",
-    cause: "Layer 2 #12 — <code>max_file_tokens</code> = 2_000 default cap on per-file skill content. Bump or split the skill." },
+    cause: "Layer 2 #12 — <code>max_skill_context_tokens</code> = 16_000 per skill fragment (identity instructions / IDENTITY.md / PROFILE.md / CONTEXT.md: <code>max_file_tokens</code> = 2_000). Bump <code>[agents.&lt;n&gt;.prompt_budget]</code> or split the skill." },
+  { layer: 2, sym: "A skill is missing from the system prompt entirely",
+    cause: "Layer 2 #12 — <code>max_total_tokens</code> = 32_000 dropped it; the log has a <code>Skill context DROPPED</code> warn naming it." },
   { layer: 3, sym: "<code>[truncated — showing X of Y chars]</code> appears in tool output",
     cause: "Layer 3 #14 — <code>max_tool_result_chars</code> = 300K. Bump or paginate tool implementation." },
   { layer: 3, sym: "Model loops on the same tool call",
@@ -698,7 +700,7 @@ const SYMPTOMS = [
   { layer: 3, sym: "\"Engine stream timed out\" without progress",
     cause: "Not strictly context-management but related: <code>stream_event_timeout_secs</code> = 120. Slow first-token latency on big context." },
   { layer: 4, sym: "Claude Code subagent stops citing old tool results",
-    cause: "Layer 4 #19 — bridge cap hides them. Bump <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>." },
+    cause: "Layer 4 #19 — bridge cap hides them. Bump <code>[agents.&lt;n&gt;.limits] max_mcp_result_chars</code> (the engine sets the bridge's <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code> from it)." },
   { layer: 5, sym: "\"model finished without calling compress_and_store\" warn",
     cause: "Layer 5 #22 (Phase 5c) — graceful path; final assistant text became the summary. Common with Claude Code subagents." },
   { layer: 5, sym: "Planner picks the same agent on replan despite obvious progress",
@@ -718,39 +720,41 @@ const SYMPTOMS = [
 ];
 
 const CONFIG = [
-  { layer: 1, knob: "flow.max_history_turns", def: "20-40 (per-scope)", where: "[agents.<name>.flow] + application/chat/flow.rs:46", what: "User-turn count cap on history before per-turn assembly." },
-  { layer: 1, knob: "flow.compaction_threshold_ratio", def: "0.82-0.88 (per-scope)", where: "application/chat/flow.rs:97", what: "Fraction of max_tokens_per_flow that triggers maybe_compact_flow." },
-  { layer: 1, knob: "flow.compaction_keep_turns", def: "history limit / 2 (10-20)", where: "application/chat/flow.rs", what: "Number of recent user turns kept verbatim during flow compaction; clamped below the history limit." },
-  { layer: 1, knob: "flow.compaction_summary_max_tokens", def: "auto (15% input budget)", where: "application/chat/flow.rs:130", what: "Max tokens for the compaction summary message." },
-  { layer: 1, knob: "limits.max_tokens_per_flow", def: "100_000", where: "config.rs:401", what: "Per-flow lifetime budget. Hard stop returns reset notice." },
-  { layer: 2, knob: "limits.context_window", def: "1_000_000", where: "config.rs:407", what: "Model context window. Feeds reserved_output_tokens arithmetic." },
-  { layer: 2, knob: "limits.max_output_tokens_per_turn", def: "engine-default", where: "config.rs:409", what: "Reserved output tokens per turn." },
+  { layer: 1, knob: "flow.max_history_turns", def: "20-40 (per-scope)", where: "[agents.&lt;name&gt;.flow] · config/mod.rs:523 · application/chat/flow.rs:47", what: "User-turn count cap on history before per-turn assembly." },
+  { layer: 1, knob: "flow.compaction_threshold_ratio", def: "0.82-0.88 (per-scope)", where: "config/mod.rs:525 · application/chat/flow.rs:104", what: "Fraction of max_tokens_per_flow that triggers maybe_compact_flow." },
+  { layer: 1, knob: "flow.compaction_keep_turns", def: "history limit / 2 (10-20)", where: "config/mod.rs:527 · application/chat/flow.rs:116", what: "Number of recent user turns kept verbatim during flow compaction; clamped below the history limit." },
+  { layer: 1, knob: "flow.compaction_summary_max_tokens", def: "auto (15% input budget)", where: "config/mod.rs:529 · application/chat/flow.rs:139", what: "Max tokens for the compaction summary message." },
+  { layer: 1, knob: "limits.max_tokens_per_flow", def: "100_000", where: "config/mod.rs:560", what: "Per-flow lifetime budget. Hard stop returns reset notice; ≥ 80 % used adds a budget warning." },
+  { layer: 2, knob: "limits.context_window", def: "1_000_000", where: "config/mod.rs:569", what: "Model context window. Feeds reserved_output_tokens arithmetic (local engines: set the served window)." },
+  { layer: 2, knob: "limits.max_output_tokens_per_turn", def: "engine-default (window / 8, 256–16_384)", where: "config/mod.rs:571", what: "Reserved output tokens per turn." },
   { layer: 2, knob: "MAX_HISTORY_MESSAGES", def: "20 (hardcoded)", where: "prompt_budget.rs:12", what: "Hard ceiling on history-window mechanism." },
-  { layer: 2, knob: "memory.max_recall_entries", def: "5", where: "config.rs:709", what: "Top-K results from memory recall." },
-  { layer: 2, knob: "memory.max_recall_tokens", def: "600", where: "config.rs:711", what: "Total token budget for recall block." },
-  { layer: 2, knob: "memory.session_recent_n", def: "10", where: "config.rs:725", what: "Recent same-session messages reloaded each turn." },
-  { layer: 2, knob: "memory.cross_session_msg_top_k", def: "0 (off)", where: "config.rs:741", what: "Cross-session message recall — opt-in." },
-  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config.rs:730", what: "Top-K for replan recall over prior step outputs." },
-  { layer: 2, knob: "memory.within_session_output_top_k", def: "0 (off)", where: "config.rs:754", what: "Within-session step-output recall on plan() — opt-in, recommended 3–5." },
-  { layer: 2, knob: "prompt_budget.max_skill_context_tokens", def: "16_000", where: "config.rs:815", what: "Total skill-body cap in system prompt." },
-  { layer: 2, knob: "prompt_budget.max_file_tokens", def: "2_000", where: "config.rs:813", what: "Per-file cap inside a skill." },
-  { layer: 3, knob: "limits.max_tool_rounds", def: "70", where: "config.rs:411", what: "Hard cap on inner-loop rounds; also the subagent turn cap per plan step." },
-  { layer: 3, knob: "limits.max_tool_result_chars", def: "300_000", where: "config.rs:413", what: "Per-tool-result char cap (mechanism #14)." },
-  { layer: 3, knob: "limits.compact_result_limit", def: "200", where: "config.rs:425", what: "First-line clip threshold for in-place compaction (#15)." },
-  { layer: 4, knob: "limits.max_mcp_result_chars", def: "50_000", where: "config.rs:430", what: "MCP bridge cap for Claude Code engine." },
+  { layer: 2, knob: "memory.max_recall_entries", def: "5", where: "config/mod.rs:962", what: "Top-K hits of the chat-side memory recall." },
+  { layer: 2, knob: "memory.max_recall_tokens", def: "600", where: "config/mod.rs:964", what: "Reserved — not enforced today (ChatRuntimeService.max_recall_tokens is dead code)." },
+  { layer: 2, knob: "memory.session_recent_n", def: "10", where: "config/mod.rs:979", what: "Recent user messages of this session the planner shows each turn (in-memory ring, lost on restart)." },
+  { layer: 2, knob: "memory.cross_session_msg_top_k", def: "0 (off)", where: "config/mod.rs:995", what: "Cross-session message recall — opt-in." },
+  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config/mod.rs:984", what: "Top-K for replan recall over prior step outputs; 0 = off." },
+  { layer: 2, knob: "memory.within_session_output_top_k", def: "0 (off)", where: "config/mod.rs:1009", what: "Within-session step-output recall on plan() — opt-in, recommended 3–5." },
+  { layer: 2, knob: "prompt_budget.max_file_tokens", def: "2_000", where: "config/mod.rs:1068", what: "Per identity instructions and per workspace file (IDENTITY.md / PROFILE.md / CONTEXT.md)." },
+  { layer: 2, knob: "prompt_budget.max_skill_context_tokens", def: "16_000", where: "config/mod.rs:1070", what: "Per skill context fragment." },
+  { layer: 2, knob: "prompt_budget.max_total_tokens", def: "32_000", where: "config/mod.rs:1072", what: "Whole system prompt; a skill fragment past it is dropped with a warn." },
+  { layer: 3, knob: "limits.max_tool_rounds", def: "70", where: "config/mod.rs:579", what: "Hard cap on inner-loop rounds (Claude Code: tool calls); also the subagent turn cap per plan step." },
+  { layer: 3, knob: "limits.max_tool_result_chars", def: "300_000", where: "config/mod.rs:581", what: "Per-tool-result char cap (mechanism #14)." },
+  { layer: 3, knob: "limits.compact_result_limit", def: "200", where: "config/mod.rs:593", what: "First-line clip threshold for in-place compaction (#15); 0 does not disable it." },
+  { layer: 4, knob: "limits.max_mcp_result_chars", def: "50_000", where: "config/mod.rs:598", what: "MCP bridge cap for Claude Code engine (reaches the bridge as TENGU_BRIDGE_MAX_RESULT_CHARS)." },
   { layer: 5, knob: "AgentIpcInput.max_turns (= limits.max_tool_rounds)", def: "70", where: "subprocess_runner.rs:43 · run_step", what: "Subagent mini-loop turn cap, taken from the agent block; serde default 20 only for payloads without the field." },
-  { layer: 5, knob: "limits.step_timeout_secs", def: "600", where: "config/mod.rs · subprocess_runner.rs::run_with_timeout", what: "Wall-clock cap for one plan step; the parent kills the child after it." },
-    { layer: 6, knob: "TENGU_PLANNER_REGISTRY.md", def: "root file", where: "orchestrator/shared_files.rs", what: "Generated planner roster loaded into the planner prompt." },
-  { layer: 7, knob: "memory.persistent_store_chunk_size", def: "1000", where: "config.rs:716", what: "File chunk window in chars." },
-  { layer: 7, knob: "memory.persistent_store_chunk_overlap", def: "200", where: "config.rs:719", what: "Overlap between adjacent chunks." },
+  { layer: 5, knob: "limits.step_timeout_secs", def: "600", where: "config/mod.rs:603 · subprocess_runner.rs::run_with_timeout", what: "Wall-clock cap for one plan step; the parent kills the child after it." },
+  { layer: 6, knob: "TENGU_PLANNER_REGISTRY.md", def: "root file", where: "orchestrator/shared_files.rs", what: "Generated planner roster loaded into the planner prompt." },
+  { layer: 7, knob: "memory.persistent_store_chunk_size", def: "1000", where: "config/mod.rs:969", what: "File chunk window in chars." },
+  { layer: 7, knob: "memory.persistent_store_chunk_overlap", def: "200", where: "config/mod.rs:972", what: "Overlap between adjacent chunks." },
   { layer: 8, knob: "RUST_LOG=tengu=info", def: "(unset)", where: "application/metrics.rs::record", what: "Always-on tracing baseline. One info line per LLM/embedding call. Bump to debug to also see per-layer breakdown." },
-  { layer: 8, knob: "TENGU_TUI_METRICS", def: "(unset)", where: "tui/mod.rs", what: "Set to 1 to enable the TUI rolling-totals System bubble after each call." },
+  { layer: 8, knob: "TENGU_TUI_METRICS", def: "(unset)", where: "inbound/tui/mod.rs:295", what: "Set to 1 to enable the TUI rolling-totals System bubble after each call." },
 ];
 
 // =====================================================================
 // RENDERING
 // =====================================================================
 document.getElementById("stat-mechs").textContent = MECHS.length;
+document.getElementById("stat-knobs").textContent = CONFIG.length;
 
 // ---- LAYER STACK ----
 const layerStack = document.getElementById("layer-stack");

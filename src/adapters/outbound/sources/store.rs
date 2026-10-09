@@ -1,7 +1,8 @@
 //! `SqliteSourceStore` — `ports::source_store::SourceStore` over ONE database
 //! per `[sources]` state dir, `<state dir>/sources.db` (O2): outside every
-//! workspace and fs root (load rule, `config/sources.rs`), file mode 0600 (raw
-//! bodies may hold contact data). WAL (`synchronous = NORMAL`: a power cut
+//! workspace and fs root (load rule, `config/sources.rs`), mode 0600 for the
+//! database, its WAL and the WAL index (raw bodies may hold contact data;
+//! the file is created 0600 before SQLite opens it). WAL (`synchronous = NORMAL`: a power cut
 //! may lose the last commit, which a re-fetch reads again — later, never
 //! earlier) + busy_timeout; every call runs on `spawn_blocking`;
 //! `user_version = 2` (2: + `switches`; a version-1 file gains the table on
@@ -158,7 +159,7 @@ const PUT_SWITCH_SQL: &str =
 
 const SWITCHES_SQL: &str = "
 SELECT source_id, enabled, at_ms, reason FROM switches
-WHERE (?1 IS NULL OR source_id = ?1) ORDER BY at_ms, rowid";
+WHERE (?1 IS NULL OR source_id = ?1) ORDER BY rowid";
 
 /// Every statement, for the append-only check.
 #[cfg(test)]
@@ -199,6 +200,9 @@ impl SqliteSourceStore {
         std::fs::create_dir_all(state_dir)
             .with_context(|| format!("create {}", state_dir.display()))?;
         let path: PathBuf = sources_db(state_dir);
+        // Owner-only before SQLite opens it: the WAL and its index are
+        // created with the database file's mode.
+        owner_only(&path)?;
         let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
@@ -234,16 +238,31 @@ impl SqliteSourceStore {
     }
 }
 
-/// `chmod 600` (raw bodies may hold contact data).
-fn owner_only(path: &Path) -> Result<()> {
+/// `sources.db` and its `-wal` / `-shm` mode 0600 (raw bodies may hold
+/// contact data, and the WAL holds the same pages): the database file is
+/// created 0600 when missing (an empty file is a new database to SQLite,
+/// which then creates the WAL and its index with that mode); every one of
+/// the three that exists is narrowed to 0600.
+fn owner_only(db: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("chmod 600 {}", path.display()))?;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(db)
+            .with_context(|| format!("create {}", db.display()))?;
+        for suffix in ["", "-wal", "-shm"] {
+            let p = PathBuf::from(format!("{}{suffix}", db.display()));
+            if p.exists() {
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))
+                    .with_context(|| format!("chmod 600 {}", p.display()))?;
+            }
+        }
     }
     #[cfg(not(unix))]
-    let _ = path;
+    let _ = db;
     Ok(())
 }
 
@@ -809,6 +828,45 @@ mod tests {
 
     fn json(r: &SourceRecord) -> String {
         serde_json::to_string(r).unwrap()
+    }
+
+    /// The WAL and its index hold the same pages as the database (raw
+    /// bodies included): each is owner-only while the store is open, and a
+    /// file left wider by an older binary is narrowed on open.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn db_wal_and_shm_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+        let db = sources_db(dir.path());
+        let files = [
+            db.clone(),
+            PathBuf::from(format!("{}-wal", db.display())),
+            PathBuf::from(format!("{}-shm", db.display())),
+        ];
+        let store = SqliteSourceStore::open(dir.path()).unwrap();
+        let sec = rec(Src::SEC, "0000000001-26-000001", T0, T0 + H, T0 + H);
+        store.commit(batch(vec![sec])).await.unwrap();
+        for f in &files {
+            assert!(f.is_file(), "{} missing", f.display());
+            assert_eq!(mode(f), 0o600, "{}: {:o}", f.display(), mode(f));
+        }
+        // A file left 0644 (an earlier binary) is narrowed on the next open.
+        for f in &files {
+            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let again = SqliteSourceStore::open(dir.path()).unwrap();
+        for f in &files {
+            assert_eq!(
+                mode(f),
+                0o600,
+                "{} after reopen: {:o}",
+                f.display(),
+                mode(f)
+            );
+        }
+        drop((store, again));
     }
 
     #[tokio::test]
@@ -1439,7 +1497,8 @@ mod tests {
     }
 
     /// Critic U10: the runtime kill switch is an append log — every row
-    /// kept, the newest per source wins; a version-1 file gains the table.
+    /// kept, the last appended per source wins (never the clock); a
+    /// version-1 file gains the table.
     #[tokio::test]
     async fn switches_append_and_the_newest_wins() {
         let (dir, store) = open();
@@ -1483,6 +1542,22 @@ mod tests {
             assert!(store.set_switch(&bad).await.is_err(), "{bad:?}");
         }
         assert_eq!(store.switches(None).await.unwrap().len(), 2);
+        // A clock stepped back: the disable appended last is stamped before
+        // the enable before it — still off (append order, never the clock).
+        store
+            .set_switch(&row(true, T0 + 3 * H, "lifted"))
+            .await
+            .unwrap();
+        store
+            .set_switch(&row(false, T0 + 2 * H, "stop now"))
+            .await
+            .unwrap();
+        let rows = store.switches(Some("ted_search")).await.unwrap();
+        assert_eq!(rows.last().unwrap().reason, "stop now");
+        assert_eq!(
+            switched_off(&rows, "ted_search").map(|s| s.reason.as_str()),
+            Some("stop now")
+        );
         // Cursors list by source.
         assert!(store.cursors(None).await.unwrap().is_empty());
         let a = rec(Src::SEC, "0000000001-26-000001", T0, T0 + H, T0 + H);

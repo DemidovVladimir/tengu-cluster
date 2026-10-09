@@ -177,15 +177,30 @@ fn init_writes_an_unsigned_private_template_once() {
         assert_eq!(mode, 0o600);
     }
 
-    // Every deciding command refuses it until it is signed.
+    // The four money values are the operator's: left REQUIRED, the file is
+    // no profile yet; once set (synthetic values here) it is an unsigned one.
+    // Every deciding command refuses it either way.
+    assert_eq!(written.matches("= \"REQUIRED\"").count(), 4, "{written}");
     let opp = fixtures().join("week/opportunities/erp-integration.toml");
     let cases = fixtures().join("cases");
-    for args in [
+    let deciding = [
         vec!["soe", "check", arg(&opp)],
         vec!["soe", "sensitivity", arg(&opp)],
         vec!["soe", "eval", arg(&cases)],
-    ] {
-        let o = tengu(home.path(), &args);
+    ];
+    for args in &deciding {
+        let o = tengu(home.path(), args);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", text(&o));
+        assert!(
+            text(&o).contains("invalid_profile:"),
+            "{args:?}: {}",
+            text(&o)
+        );
+    }
+    let set = written.replace("= \"REQUIRED\"", "= \"1.00\"");
+    std::fs::write(&path, &set).unwrap();
+    for args in &deciding {
+        let o = tengu(home.path(), args);
         assert_eq!(o.status.code(), Some(1), "{args:?}: {}", text(&o));
         assert!(
             text(&o).contains("operator_profile_unsigned: "),
@@ -193,6 +208,7 @@ fn init_writes_an_unsigned_private_template_once() {
             text(&o)
         );
     }
+    std::fs::write(&path, &written).unwrap();
 
     // Never overwritten.
     let o = tengu(home.path(), &["soe", "init"]);

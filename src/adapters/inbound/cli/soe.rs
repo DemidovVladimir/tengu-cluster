@@ -9,7 +9,7 @@
 //!
 //! | Command | Prints | Exit 1 when |
 //! |---|---|---|
-//! | `init` | writes the UNSIGNED profile template — the PRD § 14 proposed values, no capability — at `--profile`, mode 0600 (new dirs 0700); its path + sha256 | the file exists (never overwritten); the path sits inside a git work tree (`profile_in_repo`) |
+//! | `init` | writes the UNSIGNED profile template — generic values, the four money values `REQUIRED` (the operator's, never in public source), no capability — at `--profile`, mode 0600 (new dirs 0700), whole or not at all (a synced temp file hard-linked into place); its path + sha256 | the file exists (never overwritten); the path sits inside a git work tree (`profile_in_repo`) |
 //! | `check <opportunity.toml> [--cited F] [--as-of T]` | the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information, the hashes | the profile or the opportunity is refused; the gates refuse (`future_leakage`, an unknown time) |
 //! | `portfolio <dir> --as-of T [--week YYYY-Www] [--cited F]` | the week as `allocate::allocate` builds it (C4: the one portfolio builder; every candidate new — no test under way offline): ranked with their actions (`CHEAP_TEST` within the weekly hours and tranche, else `HOLD`) and why each ranks above the next, held (`DILIGENCE`, `CHEAP_TEST`, `HOLD`), rejected (`REPRICE`, `REJECT`), a note per candidate, the next information; json = its canonical JSON | as `check`, for any `<id>.toml` in `<dir>` |
 //! | `sensitivity <opportunity.toml> [--scale-bps 2000] [--cited F] [--as-of T]` | the tornado: each input at ± the scale — fields scaled, the base time-adjusted contribution, the verdict, gates added / removed | as `check` |
@@ -90,7 +90,7 @@ pub(crate) struct SoeArgs {
 
 #[derive(Subcommand)]
 pub(super) enum SoeAction {
-    /// Write the UNSIGNED profile template (the PRD § 14 proposed values) —
+    /// Write the UNSIGNED profile template (money values `REQUIRED`) —
     /// never over an existing file, never inside a git work tree.
     Init,
     /// One opportunity: three scenarios, the hard gates, rank keys, next information.
@@ -365,11 +365,14 @@ fn profile_line(p: &Loaded<OperatorProfile>) -> String {
 // init
 // ---------------------------------------------------------------------------
 
-/// The `init` template: the PRD § 14 proposed values, UNSIGNED. Never read as
+/// The `init` template, UNSIGNED, the four money values `REQUIRED` (they are the
+/// operator's; the source is public). Never read as
 /// a default — every deciding command refuses it until the operator signs it.
 const PROFILE_TEMPLATE: &str = r#"# The SOE operator profile — PRIVATE (docs/soe-2026-10-08.md § 2).
 # Written by `tengu soe init` as an UNSIGNED template. The values below are
-# the PRD § 14 proposals, not decisions. Review every one, add your
+# generic starting points, not decisions. The four money values are left
+# "REQUIRED" on purpose: the repository is public and they are yours (your
+# PRD § 14 lists the proposals). Set them, review the rest, add your
 # capabilities, then sign: set `signed_by` to your name and `signed_at` to
 # the time you signed (RFC 3339 UTC, e.g. 2026-10-12T09:00:00Z). Every
 # `tengu soe` command that decides refuses this file until then.
@@ -390,17 +393,17 @@ profit_basis = "PRE_TAX"
 # minus owner hours x shadow_hourly_rate) or CASH.
 contribution_basis = "TIME_ADJUSTED"
 # Max gross cash exposure per opportunity.
-max_cash_exposure = "30000.00"
+max_cash_exposure = "REQUIRED"
 # Min net contribution per active month after the ramp.
-min_monthly_contribution = "5000.00"
+min_monthly_contribution = "REQUIRED"
 # What one owner hour costs.
-shadow_hourly_rate = "100.00"
+shadow_hourly_rate = "REQUIRED"
 # Max base-case payback.
 max_payback_months = 12
 # Owner hours a week for research and validation.
 weekly_owner_hours = 8
 # Max validation tranche before reapproval.
-max_validation_tranche = "1000.00"
+max_validation_tranche = "REQUIRED"
 # Max one-off delivery length.
 max_one_off_delivery_weeks = 6
 # Germany / EU by default; anything beyond is an explicit entry.
@@ -434,8 +437,8 @@ rank_order = [
 # capacity_hours_per_week = "UNKNOWN"   # or { low = …, base = …, high = … }
 # delivery_cost_per_hour = "UNKNOWN"
 # dependencies = []
-# as_of = "{valid_from}"
-# valid_until = "UNKNOWN"
+# as_of = "{valid_from}"            # counts from the day after this one
+# valid_until = "YYYY-MM-DD"        # its last day; UNKNOWN never counts as active
 capabilities = []
 "#;
 
@@ -446,6 +449,12 @@ fn profile_template(day: &str) -> String {
         .replace("{unsigned}", UNSIGNED)
 }
 
+/// `text` with every `REQUIRED` money value set to a placeholder amount —
+/// only to check that the template is a profile once the operator fills it.
+fn required_set(text: &str) -> String {
+    text.replace("= \"REQUIRED\"", "= \"1.00\"")
+}
+
 /// Today, UTC (`YYYY-MM-DD`).
 fn today() -> String {
     chrono::Utc::now()
@@ -454,9 +463,18 @@ fn today() -> String {
         .to_string()
 }
 
-/// `text` into a new file at `path`: mode 0600, new parent dirs 0700; an
-/// existing file is never touched.
+/// `text` into a new file at `path`, all or nothing: mode 0600, new parent
+/// dirs 0700; an existing file is never touched. The text is written and
+/// synced to a private temp file beside it, then hard-linked into place —
+/// a link never replaces a file, and a failed write leaves no partial
+/// profile that a rerun would refuse to replace.
 fn create_private(path: &Path, text: &str) -> Result<()> {
+    let exists = || {
+        anyhow!(
+            "profile_exists: {}: never overwritten — edit it, or move it away first",
+            path.display()
+        )
+    };
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         let mut b = std::fs::DirBuilder::new();
         b.recursive(true);
@@ -468,24 +486,39 @@ fn create_private(path: &Path, text: &str) -> Result<()> {
         b.create(dir)
             .with_context(|| format!("create {}", dir.display()))?;
     }
-    let mut o = std::fs::OpenOptions::new();
-    o.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        o.mode(0o600);
+    if path.symlink_metadata().is_ok() {
+        return Err(exists());
     }
-    let mut f = match o.open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
-            "profile_exists: {}: never overwritten — edit it, or move it away first",
-            path.display()
-        ),
-        Err(e) => return Err(e).with_context(|| format!("create {}", path.display())),
-    };
-    f.write_all(text.as_bytes())?;
-    f.sync_all()?;
-    Ok(())
+    let name = path
+        .file_name()
+        .ok_or_else(|| anyhow!("{}: not a file path", path.display()))?;
+    let tmp = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    let published = (|| -> Result<()> {
+        let mut o = std::fs::OpenOptions::new();
+        o.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            o.mode(0o600);
+        }
+        let mut f = o
+            .open(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(text.as_bytes())
+            .and_then(|()| f.sync_all())
+            .with_context(|| format!("write {}", tmp.display()))?;
+        match std::fs::hard_link(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists()),
+            Err(e) => Err(e).with_context(|| format!("create {}", path.display())),
+        }
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    published
 }
 
 fn init(path: &Path, day: &str, format: Format) -> Result<()> {
@@ -498,8 +531,9 @@ fn init(path: &Path, day: &str, format: Format) -> Result<()> {
         );
     }
     let text = profile_template(day);
-    // The template is a valid profile, unsigned.
-    let p = from_toml::<OperatorProfile>(&text).map_err(|errs| {
+    // The template is a valid profile, unsigned, once its `REQUIRED` money
+    // values are set.
+    let p = from_toml::<OperatorProfile>(&required_set(&text)).map_err(|errs| {
         anyhow!(
             "the profile template is invalid:\n{}",
             errs.iter()
@@ -523,8 +557,8 @@ fn init(path: &Path, day: &str, format: Format) -> Result<()> {
         path.display()
     );
     println!(
-        "Its values are the PRD § 14 proposals, not decisions: review each, add your \
-         [[capabilities]], then sign (signed_by, signed_at). Until then every deciding \
+        "Set the four REQUIRED money values (yours: your PRD § 14 lists the proposals), \
+         review the rest, add your [[capabilities]], then sign (signed_by, signed_at). Until then every deciding \
          `tengu soe` command refuses it (operator_profile_unsigned)."
     );
     Ok(())
@@ -1001,10 +1035,31 @@ fn eval(p: &Loaded<OperatorProfile>, dir: &Path, format: Format) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::soe::matching::active_at;
+
+    /// The template with the four `REQUIRED` money values set (synthetic
+    /// round values, not the operator's).
+    fn with_money(text: &str) -> String {
+        [
+            ("max_cash_exposure", "10.00"),
+            ("min_monthly_contribution", "1.00"),
+            ("shadow_hourly_rate", "1.00"),
+            ("max_validation_tranche", "1.00"),
+        ]
+        .iter()
+        .fold(text.to_string(), |t, (k, v)| {
+            t.replace(&format!("{k} = \"REQUIRED\""), &format!("{k} = \"{v}\""))
+        })
+    }
 
     #[test]
-    fn init_template_is_a_valid_unsigned_profile() {
+    fn init_template_carries_no_operator_money() {
         let text = profile_template("2026-10-12");
+        // The money values are the operator's: the template refuses to parse
+        // until they are set (the public source never holds them).
+        assert_eq!(text.matches("= \"REQUIRED\"").count(), 4, "{text}");
+        assert!(from_toml::<OperatorProfile>(&text).is_err());
+        let text = with_money(&text);
         let p = from_toml::<OperatorProfile>(&text).unwrap_or_else(|e| panic!("{e:?}"));
         assert!(!p.is_signed() && !p.synthetic);
         assert_eq!(p.signed_by, UNSIGNED);
@@ -1013,6 +1068,30 @@ mod tests {
         assert!(p.capabilities.is_empty());
         assert!(!text.contains("{valid_from}") && !text.contains("{unsigned}"));
         assert!(!text.to_lowercase().contains("salary ="));
+
+        // The commented capability example, filled in as it says, counts
+        // from the next day (an UNKNOWN `valid_until` never would).
+        let example: String = text
+            .lines()
+            .skip_while(|l| *l != "# [[capabilities]]")
+            .take_while(|l| l.starts_with('#'))
+            .map(|l| format!("{}\n", l.trim_start_matches("# ")))
+            .collect();
+        assert!(
+            example.contains("valid_until = \"YYYY-MM-DD\""),
+            "{example}"
+        );
+        let filled = format!(
+            "{}{}",
+            text.replace("capabilities = []\n", ""),
+            example.replace("YYYY-MM-DD", "2027-10-12")
+        );
+        let p = from_toml::<OperatorProfile>(&filled).unwrap_or_else(|e| panic!("{e:?}"));
+        let c = &p.capabilities[0];
+        let at = |s: &str| s.parse::<Time>().unwrap();
+        assert!(!active_at(c, &at("2026-10-12T12:00:00Z")));
+        assert!(active_at(c, &at("2026-10-13T12:00:00Z")));
+        assert!(!active_at(c, &at("2027-10-13T00:00:00Z")));
     }
 
     #[test]
@@ -1032,13 +1111,41 @@ mod tests {
             assert_eq!(mode(&path), 0o600);
             assert_eq!(mode(path.parent().unwrap()), 0o700);
         }
+        // Published whole through a temp file that is gone afterwards.
+        let listing = |dir: &Path| -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let dir = path.parent().unwrap();
+        assert_eq!(listing(dir), ["operator.toml"]);
         std::fs::write(&path, "edited").unwrap();
         let e = init(&path, "2026-10-13", Format::Text).unwrap_err();
         assert!(e.to_string().starts_with("profile_exists: "), "{e}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited");
-        // The loader refuses the template: unsigned.
+        assert_eq!(listing(dir), ["operator.toml"]);
+        // A dangling symlink at the path is not replaced either.
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("link/operator.toml");
+            std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(tmp.path().join("nowhere"), &link).unwrap();
+            let e = init(&link, "2026-10-12", Format::Text).unwrap_err();
+            assert!(e.to_string().starts_with("profile_exists: "), "{e}");
+            assert!(!tmp.path().join("nowhere").exists());
+            assert_eq!(listing(link.parent().unwrap()), ["operator.toml"]);
+        }
+        // The loader refuses the template: no profile until the money values
+        // are set, then unsigned.
         let fresh = tmp.path().join("other/operator.toml");
         init(&fresh, "2026-10-12", Format::Json).unwrap();
+        let e = load_profile(&fresh, false).unwrap_err();
+        assert!(e.starts_with("invalid_profile"), "{e}");
+        let set = required_set(&std::fs::read_to_string(&fresh).unwrap());
+        std::fs::write(&fresh, set).unwrap();
         let e = load_profile(&fresh, false).unwrap_err();
         assert!(e.starts_with("operator_profile_unsigned: "), "{e}");
     }

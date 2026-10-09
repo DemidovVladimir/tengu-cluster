@@ -23,7 +23,8 @@
 //! | Why | a rounded figure never flatters a candidate |
 //! | Scenario pick ([`Est::pick`]) | downside = each input's adverse end, upside = its favorable end, base = base; [`Better`] says which end is favorable |
 
-// Consumers land with the SOE records, economics and gates (O1 W2–W5).
+// `Converted`, `Money` arithmetic, `Est::unknown` / `point` and a few codes
+// wait for O2 (source amounts) and O3.
 #![allow(dead_code)]
 
 use std::cmp::Ordering;

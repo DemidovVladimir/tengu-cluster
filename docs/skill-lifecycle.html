@@ -573,7 +573,7 @@
     </div>
     <div class="stat">
       <div class="stat-value">~210</div>
-      <div class="stat-label">Unit tests (skill_lifecycle · eval_builder · plugins)</div>
+      <div class="stat-label">Unit tests (skills::lifecycle · inbound::eval · outbound::tools)</div>
     </div>
     <div class="stat">
       <div class="stat-value">~$1.00</div>
@@ -600,7 +600,7 @@
     from the current conversation. The tool writes files atomically; no LLM call runs inside the tool.
     In-chat lifecycle verbs ("create skill from our dialog", "evaluate", "adjust yourself") route to
     <code style="color:var(--accent);font-family:var(--mono);">[agents.learning-agent]</code> +
-    <code style="color:var(--accent);font-family:var(--mono);">manage_skill</code> instead.
+    <code style="color:var(--accent);font-family:var(--mono);">manage_skill</code> instead (no shipped sandbox defines that agent — add one first).
   </p>
 
   <div class="steps">
@@ -760,7 +760,7 @@
     Picks the lowest gated metric as target. Creates a scratch git worktree. Dispatches the
     <code style="color:var(--accent);font-family:var(--mono);">skill-improver</code> agent through
     <code style="color:var(--accent);font-family:var(--mono);">ChatServiceFactory::run_turn</code> for up to N cycles.
-    Best-cycle selection filters regressions &gt; 0.05 on non-target gated metrics. User approves before anything touches the real SKILL.md.
+    Best-cycle selection keeps cycles whose target beats its baseline and filters drops &gt; 0.05 on any non-target metric (passing ones included). User approves before anything touches the real SKILL.md.
   </p>
 
   <h3 style="margin-top:24px;margin-bottom:12px;font-size:16px;color:var(--text);">The loop</h3>
@@ -804,7 +804,7 @@
       <div class="timeline-dot">5</div>
       <div class="timeline-card">
         <h4>Best-cycle selection</h4>
-        <p><code>pick_best</code>: filter cycles that regress any non-target gated metric by more than 0.05. Among survivors, pick highest target pass_rate, tie-break by fewer body lines added.</p>
+        <p><code>pick_best</code>: keep cycles whose target beats its baseline and no non-target metric (passing ones included) drops by more than 0.05. Among survivors, pick highest target pass_rate, tie-break by fewer body lines added, then the earliest cycle.</p>
       </div>
     </div>
     <div class="timeline-item">
@@ -1025,7 +1025,7 @@ Rationale:
     <span class="section-num">7 · Code</span>
     <h2>Where everything lives</h2>
   </div>
-  <p class="lead">Each component, its file, and its entry point. All paths relative to the repo root.</p>
+  <p class="lead">Each component, its file, and its entry point. Paths relative to <code>src/</code>; <code>skill_lifecycle/</code> = <code>application/skills/lifecycle/</code>, <code>outbound/</code> = <code>adapters/outbound/</code>.</p>
 
   <div class="code-refs">
     <div class="code-ref">
@@ -1035,18 +1035,18 @@ Rationale:
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Plugin registration</div>
-      <div class="code-ref-path">bootstrap/</div>
-      <div class="code-ref-fn">fn register_catalog — want_distill || want_apply_improver; ManageSkillPlugin · ViewSkillPlugin · WORKSPACE_TOOLS</div>
+      <div class="code-ref-path">adapters/outbound/tools/mod.rs · domain/tools.rs</div>
+      <div class="code-ref-fn">fn catalog — one ToolEntry row per tool (SkillLifecyclePlugin · ManageSkillPlugin · ViewSkillPlugin), read by register_catalog · WORKSPACE_TOOLS</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Config parsing</div>
-      <div class="code-ref-path">skill_lifecycle/config.rs</div>
+      <div class="code-ref-path">config/skill_lifecycle.rs</div>
       <div class="code-ref-fn">struct SkillLifecycleConfig</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">workspace_tools allowlist</div>
-      <div class="code-ref-path">config.rs</div>
-      <div class="code-ref-fn">fn validate_agent — valid_workspace_tools array</div>
+      <div class="code-ref-path">config/mod.rs</div>
+      <div class="code-ref-fn">fn validate_agent — against domain/tools.rs::WORKSPACE_TOOLS</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Metric types + trait</div>
@@ -1120,8 +1120,8 @@ Rationale:
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Evolve loop</div>
-      <div class="code-ref-path">skill_lifecycle/evolve.rs</div>
-      <div class="code-ref-fn">fn run_evolve · fn pick_target_metric · fn pick_best</div>
+      <div class="code-ref-path">adapters/inbound/evolve.rs · application/skills/lifecycle/evolve.rs</div>
+      <div class="code-ref-fn">fn run_evolve (driver) · fn pick_target_metric · fn pick_best</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Approval gate</div>
@@ -1135,17 +1135,17 @@ Rationale:
     </div>
     <div class="code-ref">
       <div class="code-ref-title">Improver dispatch seam</div>
-      <div class="code-ref-path">orchestrator/wiring.rs</div>
-      <div class="code-ref-fn">trait ChatServiceFactory::run_turn</div>
+      <div class="code-ref-path">ports/orchestration.rs</div>
+      <div class="code-ref-fn">trait ChatServiceFactory::run_turn (impl bootstrap/orchestrator.rs::RuntimeChatServiceFactory)</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">CLI chat factory</div>
-      <div class="code-ref-path">bootstrap/</div>
+      <div class="code-ref-path">bootstrap/orchestrator.rs</div>
       <div class="code-ref-fn">fn build_cli_chat_factory</div>
     </div>
     <div class="code-ref">
       <div class="code-ref-title">CLI dispatch</div>
-      <div class="code-ref-path">main.rs</div>
+      <div class="code-ref-path">adapters/inbound/cli/mod.rs · cli/skill.rs</div>
       <div class="code-ref-fn">Commands::Eval · Commands::Skill { SkillAction::Evolve · Metrics · AcceptProposal · Remove · List · Doctor · Export · Install · Seed }</div>
     </div>
   </div>

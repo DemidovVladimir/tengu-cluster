@@ -1,7 +1,7 @@
 # Compression / Compaction in Tengu-Cluster
 
 > **This is a focused slice — Layer 5 only.** For the full picture across
-> all 7 layers and ~25 mechanisms, read
+> all 7 layers and 31 mechanisms, read
 > [`context-management-2026-04-27.md`](./context-management-2026-04-27.md)
 > (or the interactive `.html`).
 >
@@ -36,11 +36,11 @@ intermediate reasoning) gets distilled by the LLM itself into a single
 short summary string. That string — and only that string — is what
 persists across plan/replan cycles.
 
-### Two dispatch paths
+### Three dispatch paths
 
 | Path | When | Where it runs |
 |---|---|---|
-| **A — Out-of-band** | OpenRouter / local subagents | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), breaks the loop after that round. |
+| **A — Out-of-band** | OpenRouter / local subagents | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` (`:497`) intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), answers `stored`, breaks the loop after that round. |
 | **B — Bridge** | Claude Code subagents | The step's bridge (`mcp_bridge.rs::StepSummary`) writes `summary` to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the step summary (+ the same `postgres_memory` write). |
 | **C — Backstop** | a subagent that never calls it | `compress_called` stays false; `run-agent` writes the final assistant text via `try_persist_agentic_step_summary`. |
 
@@ -52,7 +52,7 @@ summary only travels back to the parent over IPC.
 
 ### Phase 5c — middle-ground protocol *(graceful degradation)*
 
-`main.rs:1075` decides the IPC verdict:
+`adapters/inbound/cli/run_agent.rs:642` decides the IPC verdict:
 
 | `compress_and_store` called? | final_text non-empty? | Verdict |
 |---|---|---|
@@ -66,8 +66,11 @@ reliably call protocol tools but do produce useful text.
 
 ### Read path
 `RagPlanner::replan` (legacy planner type name) reads prior step outputs from
-Postgres `agentic_memory` via pgvector first and FTS fallback when
-`postgres_memory` is enabled. Planner routing no longer depends on a vector DB.
+Postgres `agentic_memory` (`RecallStore::recall_step_outputs`, top
+`[memory] cross_plan_top_k`, default 5) via pgvector first and FTS fallback
+when `postgres_memory` is enabled; `plan()` reads this session's outputs too
+when `within_session_output_top_k > 0`. Planner routing no longer depends on
+a vector DB.
 
 ---
 
@@ -75,7 +78,7 @@ Postgres `agentic_memory` via pgvector first and FTS fallback when
 
 **File:** `src/adapters/outbound/tools/memory/persistent_store.rs::chunk_text`
 
-A char-window splitter with overlap. Defaults from `MemoryConfig`:
+A char-window splitter with overlap (`:54`). Defaults from `[memory]` (`MemoryConfig`):
 
 ```
 persistent_store_chunk_size    = 1000
@@ -104,8 +107,8 @@ Three helpers used by the runtime when assembling a turn:
 - `truncate_to_token_budget(content, max_tokens)` — char-cap using the
   shared `~4 chars/token` heuristic, appends `"\n\n[truncated]"`.
 - `reserved_output_tokens` / `compute_total_input_budget` — arithmetic
-  over the model's context window with a 1/50 adaptive floor and
-  `max(64, capped_output / 4)` headroom.
+  over the model's context window with a `ctx / 50` adaptive floor
+  (clamped to 64–2 048) and `max(64, capped_output / 4)` headroom.
 
 This is **budget enforcement**, not compression in any LLM sense. There is
 no summarisation pass — oldest turns simply drop off the end.
@@ -122,8 +125,8 @@ no summarisation pass — oldest turns simply drop off the end.
   agents, skills, and tools.
 - `src/adapters/outbound/tools/agentic_memory/mod.rs` — Open Brain Postgres memory
   (`postgres_memory`) that receives the step summaries.
-- `REDESIGN.md` § 7 — original spec for the `compress_and_store` protocol (file removed 2026-10-07; last version: `git show 9f0e98f96704eca960575d6c453c5dabb5487d65:REDESIGN.md`).
+- `REDESIGN.md` § 7 (runner IPC) + § 8 (`compress_and_store` tool) — original spec for the protocol (file removed 2026-10-07; last version: `git show 9f0e98f96704eca960575d6c453c5dabb5487d65:REDESIGN.md`).
 
 ---
 
-*Last updated 2026-09-18.*
+*Last updated 2026-10-08 (checked against the code).*

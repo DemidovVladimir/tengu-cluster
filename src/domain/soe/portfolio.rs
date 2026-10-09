@@ -36,7 +36,8 @@
 //! | `[[facts]] text, url` | `url` a `url:https://…` locator — a `repo:` / `state:` / `vault:` / `run:` one is private (`private_locator`) |
 //! | `thesis`, `disclosed_assumptions[]`, `experiment_update?`, `generated_from_sha256` | text · text · text · 64 hex |
 
-// Consumers land with ranking and allocation (O1 W5, O3).
+// `PublicBrief` waits for its O7 sanitizer; `IsoWeek` accessors and
+// `is_hold` for the O3 allocation.
 #![allow(dead_code)]
 
 use std::fmt;

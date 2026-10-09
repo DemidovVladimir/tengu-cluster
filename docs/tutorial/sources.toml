@@ -266,6 +266,22 @@ sources = [
   "lineage/locks.toml",
 ]
 
+[pages.strategy-ranking]
+sources = [
+  "src/domain/lineage/ranking.rs",
+  "src/domain/lineage/validate.rs",
+  "src/domain/backtest/ranking.rs",
+  "src/config/strategy_ranking.rs",
+  "src/application/backtest/mod.rs",
+  "src/application/ranking/",
+  "src/adapters/inbound/cli/ranking.rs",
+  "src/adapters/outbound/tools/xlab/rank.rs",
+  "lineage/rankings/",
+  "lineage/capabilities/intel.strategy_ranking.toml",
+  "sandboxes/xlab-w2/config.toml",
+  "tests/strategy_ranking.rs",
+]
+
 # ── Runtime ───────────────────────────────────────────────────────────────
 
 [pages.decision-loop]
@@ -423,6 +439,7 @@ sources = [
   "src/config/sources.rs",
   "src/ports/source_store.rs",
   "src/adapters/outbound/sources/",
+  "src/adapters/outbound/tools/sources/",
   "src/application/sources.rs",
   "src/adapters/inbound/cli/sources.rs",
 ]

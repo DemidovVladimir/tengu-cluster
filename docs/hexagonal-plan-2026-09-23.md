@@ -1,5 +1,7 @@
 # Hexagonal rewrite — plan (2026-09-23)
 
+Status (2026-10-08): phases 0–6 done; `tests/layering_lint.rs` `EXCEPTIONS` is empty (`RULES` / `FORBIDDEN` as in the table below). The target tree is the 2026-09-23 snapshot — the tree has grown since (e.g. `engines/local.rs`, `domain/{lineage,soe,source,backtest}/`, `application/{ranking,lineage,decision_loop,backtest}/`, `ports/{source_store,lineage,evidence}.rs`); the current file list is `docs/code-map.md`.
+
 Supersedes the 2026-09-12 "flat `src/adapters/`" rule. One branch `refactor/hexagonal`, one PR, one commit per phase. Every phase: `cargo check` (default + `--all-features`), `cargo test --bin tengu`, `cargo test --test scope_lint --test layering_lint`, `cargo fmt --check`.
 
 ## Dependency rule (enforced by `tests/layering_lint.rs`)

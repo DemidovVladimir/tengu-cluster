@@ -15,7 +15,7 @@
 //! | `records` fidelity | facts, events, conflicts, issues, demand and citations of a packet filtered like the seeds are exact; freshness counts (parse failures, partial parses) cover the whole source — seed by `source` (or nothing) for them |
 //! | `cursor` | the only mutable row: one value per `(source_id, query_key)`, moved only inside a committed batch |
 //! | `purge` | raw retention: `response` bodies fetched before `raw_before_ms` dropped (sha256, size and metadata kept; `terms` bodies never); record retention: records read before `records_before_ms` deleted; a purge that removed something leaves a tombstone ([`Purge`]) in the same transaction |
-//! | `set_switch` · `switches` | the runtime kill switch of a source (critic U10, `tengu sources disable` / `enable`): rows appended, never updated; the newest per source wins ([`switched_off`]) — off refuses every fetch whatever the registry says; on lifts only a runtime off (a row with `enabled = false` stays off) |
+//! | `set_switch` · `switches` | the runtime kill switch of a source (critic U10, `tengu sources disable` / `enable`): rows appended, never updated; the last appended per source wins ([`switched_off`]: append order, never the clock) — off refuses every fetch whatever the registry says; on lifts only a runtime off (a row with `enabled = false` stays off) |
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -186,14 +186,17 @@ pub(crate) struct SourceSwitch {
     pub reason: String,
 }
 
-/// The newest switch of `source_id` among `rows`, when it is off.
+/// The last appended switch of `source_id` among `rows` (append order, as
+/// [`SourceStore::switches`] returns them), when it is off. Never the
+/// clock: an `enable` stamped later than a `disable` appended after it (a
+/// clock stepped back) never lifts that disable.
 pub(crate) fn switched_off<'a>(
     rows: &'a [SourceSwitch],
     source_id: &str,
 ) -> Option<&'a SourceSwitch> {
     rows.iter()
-        .filter(|s| s.source_id == source_id)
-        .max_by_key(|s| s.at_ms)
+        .rev()
+        .find(|s| s.source_id == source_id)
         .filter(|s| !s.enabled)
 }
 
@@ -232,6 +235,6 @@ pub(crate) trait SourceStore: Send + Sync {
     async fn purges(&self, source_id: Option<&str>) -> anyhow::Result<Vec<Purge>>;
     /// Append one runtime switch row (module table).
     async fn set_switch(&self, switch: &SourceSwitch) -> anyhow::Result<()>;
-    /// Switch rows of `source_id` (all when `None`), oldest first.
+    /// Switch rows of `source_id` (all when `None`), in append order.
     async fn switches(&self, source_id: Option<&str>) -> anyhow::Result<Vec<SourceSwitch>>;
 }

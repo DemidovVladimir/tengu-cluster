@@ -1,18 +1,19 @@
-# lineage/ — the experiment, variant, Experience, capability and generation registry
+# lineage/ — the experiment, variant, Experience, capability, generation and ranking-contract registry
 
 One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage-2026-10-06.md`.
 
-| Dir / file | Record | Key fields |
-|---|---|---|
-| `families/<id>.toml` | hypothesis family | `hypothesis`, `role`, `status`, `origin*`, `preceded_by`, `controls`, `[prior_search]` |
-| `variants/<id>.toml` | one variant of a family | `family`, `parent` (`ROOT`), `[[changed]]`, `preregistered`, `[spec]` |
-| `experiments/<id>.toml` | hypothesis → config → evidence → result → verdict | `kind`, `[[windows]]`, `[[results]]` (`extract`), `[verdict]`, `validity` |
-| `episodes/<id>.toml` | Experience episode | `[context]`, `[[information]]`, `[[alternatives]]`, `[decision]`, `[quality]` |
-| `incidents/<id>.toml` | operational / data incident | `class`, `strategy_impact`, `[[data_impact]]` |
-| `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` |
-| `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` |
-| `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 |
-| `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only |
+| Dir / file | Record | Key fields | Files (2026-10-08) |
+|---|---|---|---:|
+| `families/<id>.toml` | hypothesis family | `hypothesis`, `role`, `status`, `origin*`, `preceded_by`, `controls`, `[prior_search]` | 14 |
+| `variants/<id>.toml` | one variant of a family | `family`, `parent` (`ROOT`), `[[changed]]`, `preregistered`, `[spec]` | 49 |
+| `experiments/<id>.toml` | hypothesis → config → evidence → result → verdict | `kind`, `[[windows]]`, `[[results]]` (`extract`), `[verdict]`, `validity` | 37 |
+| `episodes/<id>.toml` | Experience episode | `[context]`, `[[information]]`, `[[alternatives]]`, `[decision]`, `[quality]` | 3 |
+| `incidents/<id>.toml` | operational / data incident | `class`, `strategy_impact`, `[[data_impact]]` | 8 |
+| `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` | 19 (17 in W1; `intel.strategy_ranking`, `intel.source_evidence`: CANDIDATE, no generation) |
+| `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` | 1 (W1, FROZEN) |
+| `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 | 1 |
+| `rankings/<id>.toml` | strategy-ranking contract (`domain/lineage/ranking.rs`) | `sandbox`, `strategies`, `tz`, `cutoff`, `days`, `from`, `cohort`, `on_missing`, `[freshness]`, `[eligibility]`, `[rating]` | 2 (unsealed) |
+| `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only | — |
 
 | Rule | Value |
 |---|---|
@@ -25,12 +26,16 @@ One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage
 ## Add a record
 
 1. Copy a record of the same kind (examples: `tests/fixtures/lineage/registry/`), set `id` = the new file stem.
-2. A preregistration: `preregistered = true`, then `tengu lineage seal variant:<id>` (or `experiment:<id>`) **before** its outcome.
+2. A preregistration: `preregistered = true`, then `tengu lineage seal variant:<id>` (or `experiment:<id>`, `ranking:<id>`) **before** its outcome. A ranking contract unsealed = Warn `ranking_unsealed` (a draft for the operator's review); the publisher runs only a sealed one.
 3. Freezing a generation: set `status = "FROZEN"` + `frozen_at`, then append a `[[frozen]]` row with the digest `tengu lineage generation <id>` prints.
 
 ## Bind a sandbox to a generation
 
 `[generation] id = "W1"`, `registry = "../../lineage"` in `sandboxes/<name>/config.toml`; the generation lists `<name>` in `sandboxes`. Every load then refuses a tool or strategy kind outside its capabilities, and a FROZEN generation whose lock or `config:` / `spec:` pins changed.
+
+## Run a ranking contract
+
+`[strategy_ranking] registry = "../../lineage"`, `contracts = ["<id>"]` in `sandboxes/<name>/config.toml` (the contract's `sandbox` = `<name>`). `tengu ranking run --sandbox <name>` (or the `strategy_ranking` tool, a feed) refuses the contract until `tengu lineage seal ranking:<id>` and after any later edit (`contract_changed`): a changed policy is a new id (`….v2`). Retention keeps every run the registry cites, bound or not. Doc: `docs/strategy-ranking-automation-2026-10-08.md`.
 
 ## Verify
 

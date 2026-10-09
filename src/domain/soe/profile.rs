@@ -12,7 +12,7 @@
 //! | `currency` | the reporting currency; every money knob is in it |
 //! | `profit_basis` · `contribution_basis` | `PRE_TAX` `POST_TAX` · `TIME_ADJUSTED` `CASH` |
 //! | money knobs | `max_cash_exposure` > 0 · `max_validation_tranche` > 0 and ≤ `max_cash_exposure` · `min_monthly_contribution` ≥ 0 · `shadow_hourly_rate` ≥ 0 |
-//! | count knobs | `max_payback_months` ≥ 1 · `weekly_owner_hours` 1..=168 · `max_one_off_delivery_weeks` ≥ 1 |
+//! | count knobs | `max_payback_months` 1..=600 (the payback scan) · `weekly_owner_hours` 1..=168 · `max_one_off_delivery_weeks` ≥ 1 |
 //! | lists | `jurisdictions_allow`, `channels_allow`, `languages`, `exclusions`: non-empty entries, no repeats (an empty list allows nothing) |
 //! | `public_cadence` | `NONE` `WEEKLY` `MONTHLY` `ON_EVIDENCE` |
 //! | `rank_order` | [`RankKey`]s, ≥ 1, no repeats — the only ranking order (ties: id ascending) |
@@ -21,11 +21,9 @@
 //! No salary field: existing income enters only through `shadow_hourly_rate`
 //! (PRD § 4).
 
-// Consumers land with the economics, gates, ranking and loader (O1 W3–W7).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
+use super::economics::PAYBACK_SCAN_MONTHS;
 use super::record::{Problems, SoeRecord};
 use super::value::{codes, Better, Currency, Est, Minor, SchemaTag};
 use crate::domain::lineage::value::{Locator, Time, TimeOrder};
@@ -217,6 +215,14 @@ impl SoeRecord for OperatorProfile {
         ] {
             p.check(v >= 1, codes::INVALID_FIELD, field, "must be ≥ 1");
         }
+        // The run-rate month and the payback scan: beyond the scan a payback
+        // is NOT_REACHED anyway (and the figures would need that many months).
+        p.check(
+            self.max_payback_months <= PAYBACK_SCAN_MONTHS,
+            codes::INVALID_FIELD,
+            "max_payback_months",
+            format_args!("at most {PAYBACK_SCAN_MONTHS} (the payback scan)"),
+        );
         p.check(
             self.weekly_owner_hours <= 168,
             codes::INVALID_FIELD,
@@ -414,6 +420,20 @@ pub(crate) mod tests {
         let mut empty = synthetic();
         empty.rank_order.clear();
         assert_eq!(codes_of(validate(&empty)), vec!["invalid_field"]);
+        // The payback knob stays within the payback scan (the economics size
+        // their month series by it): a typo is refused, never allocated.
+        let mut long = synthetic();
+        long.max_payback_months = PAYBACK_SCAN_MONTHS;
+        assert!(validate(&long).is_ok());
+        for months in [PAYBACK_SCAN_MONTHS + 1, u32::MAX] {
+            long.max_payback_months = months;
+            let e = validate(&long).unwrap_err();
+            assert_eq!(e.len(), 1, "{e:?}");
+            assert_eq!(
+                e[0].to_string(),
+                "invalid_field: max_payback_months: at most 600 (the payback scan)"
+            );
+        }
 
         // A template: UNSIGNED parses (the loader refuses it), unknown time ok.
         let mut t = synthetic();

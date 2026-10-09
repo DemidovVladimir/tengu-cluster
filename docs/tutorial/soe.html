@@ -136,7 +136,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li><code>tengu soe init</code> writes an <code>UNSIGNED</code> profile template with the PRD's proposed values to <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>: mode 0600, never inside a git work tree, never over an existing file.</li>
+        <li><code>tengu soe init</code> writes an <code>UNSIGNED</code> profile template (generic values; the four money values <code>REQUIRED</code>, since they are yours and the source is public) to <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>: mode 0600, never inside a git work tree, never over an existing file.</li>
         <li>The operator reviews every value, adds capabilities and signs (<code>signed_by</code>, <code>signed_at</code>). Until then every deciding command refuses it: <code>operator_profile_unsigned</code>.</li>
         <li>Inputs: opportunity files (<code>soe.opportunity/1</code>), the views of the source records they cite (<code>--cited</code>) and one decision time (<code>--as-of</code>).</li>
         <li>The economics turn each input range into downside, base and upside figures, in integer minor units of the profile's currency. A figure that needs an unknown input names it.</li>
@@ -159,7 +159,7 @@
     <table>
       <thead><tr><th>Command</th><th>Prints</th><th>Exit 1 when</th></tr></thead>
       <tbody>
-        <tr><td><code>init</code></td><td>writes the <code>UNSIGNED</code> template (the PRD's proposed values, no capability), mode 0600; its path and sha256</td><td>the file exists (<code>profile_exists</code>); the path is inside a git work tree (<code>profile_in_repo</code>)</td></tr>
+        <tr><td><code>init</code></td><td>writes the <code>UNSIGNED</code> template (generic values, money <code>REQUIRED</code>, no capability), mode 0600; its path and sha256</td><td>the file exists (<code>profile_exists</code>); the path is inside a git work tree (<code>profile_in_repo</code>)</td></tr>
         <tr><td><code>check &lt;opportunity.toml&gt;</code></td><td>the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information</td><td>the profile or the file is refused; the decision is before the opportunity (<code>future_leakage</code>)</td></tr>
         <tr><td><code>portfolio &lt;dir&gt; --as-of &lt;t&gt;</code></td><td>the week as the O3 allocation builds it, every candidate new: ranked with their actions and why each ranks above the next, held, rejected, a note per candidate, next information; JSON = its canonical JSON</td><td>as <code>check</code>, for any file in the dir</td></tr>
         <tr><td><code>sensitivity &lt;opportunity.toml&gt;</code></td><td>the tornado: each input at ± <code>--scale-bps</code> (default 2000), the time-adjusted change, the verdict, gates added or removed</td><td>as <code>check</code>; a scale outside 1..=10000 is a usage error</td></tr>
@@ -249,7 +249,7 @@
         <tr><td>cash contribution</td><td>revenue − variable cost − fixed costs</td></tr>
         <tr><td>time-adjusted contribution</td><td>cash contribution − owner hours × <code>shadow_hourly_rate</code></td></tr>
         <tr><td>initial capital</td><td>acquisition + setup + validation + working capital</td></tr>
-        <tr><td>payback</td><td>first month the running sum covers the initial capital; none in 600 months is <code>NOT_REACHED</code></td></tr>
+        <tr><td>payback</td><td>first month the running sum covers the initial capital; none in 600 months is <code>NOT_REACHED</code>, whatever the ramp (so <code>max_payback_months</code> is at most 600)</td></tr>
         <tr><td>expected loss</td><td>Σ probability × impact, a low–high range</td></tr>
         <tr><td>another currency</td><td>converted through <code>economics.fx</code>; without it every money figure is unknown</td></tr>
       </tbody>
@@ -279,11 +279,11 @@
       <thead><tr><th>Gate</th><th><code>REJECT</code> when</th><th><code>HOLD</code> when</th></tr></thead>
       <tbody>
         <tr><td>cash exposure · tranche</td><td>above <code>max_cash_exposure</code> · a stage above <code>max_validation_tranche</code></td><td>an amount unknown</td></tr>
-        <tr><td>contribution · payback</td><td>base below <code>min_monthly_contribution</code> · above <code>max_payback_months</code></td><td>the upside reaches the target and a staged test exists (<code>BELOW_TARGET_WITH_PATH</code>)</td></tr>
+        <tr><td>contribution · payback</td><td>base below <code>min_monthly_contribution</code> · above <code>max_payback_months</code></td><td>the upside reaches the target and a live staged test exists (<code>BELOW_TARGET_WITH_PATH</code>)</td></tr>
         <tr><td>bounds</td><td>owner time, support, payment access or scope <code>UNBOUNDED</code></td><td><code>UNKNOWN</code>, or the owner hours unknown</td></tr>
         <tr><td>evidence</td><td>—</td><td>no cited record supports it at the decision time; one demand event only; a contradiction</td></tr>
         <tr><td>legal · deal</td><td>a red flag</td><td>a legal risk not resolved; a deal block not verified</td></tr>
-        <tr><td>jurisdictions · stop rule · downside</td><td>— · the first spend has no stop rule · —</td><td>outside <code>jurisdictions_allow</code> · no experiment · a max-loss term unknown</td></tr>
+        <tr><td>jurisdictions · stop rule · downside</td><td>— · the first spend has no stop rule · —</td><td>outside <code>jurisdictions_allow</code> · no experiment, or one expired by the decision (<code>expires_at</code>) · a max-loss term unknown</td></tr>
       </tbody>
     </table>
   </div>
@@ -307,7 +307,7 @@
         <tr><td><code>EVIDENCE_CONFIDENCE</code></td><td><code>HIGH</code>: a supporting fact, nothing contested · <code>MEDIUM</code>: two or more supporting events · <code>LOW</code></td><td>higher</td></tr>
         <tr><td><code>TIME_ADJUSTED_BASE</code></td><td>base time-adjusted contribution</td><td>higher</td></tr>
         <tr><td><code>PAYBACK_BASE</code></td><td>base cash payback</td><td>lower</td></tr>
-        <tr><td><code>DAYS_TO_DECISIVE_EVIDENCE</code></td><td>whole days to the end of the experiment deadline</td><td>lower</td></tr>
+        <tr><td><code>DAYS_TO_DECISIVE_EVIDENCE</code></td><td>whole days to the end of the experiment deadline; a deadline that may have passed is unknown, never 0</td><td>lower</td></tr>
         <tr><td><code>REVERSIBILITY</code> · <code>DEFENSIBILITY</code></td><td>the opportunity's tier</td><td>higher</td></tr>
         <tr><td><code>CAPABILITY_FIT</code></td><td>the weakest required skill: <code>PROVEN</code> &gt; <code>CLAIMED</code> &gt; <code>STALE</code> &gt; <code>MISSING</code></td><td>higher</td></tr>
         <tr><td><code>CONCENTRATION_MAX</code></td><td>the largest concentration share</td><td>lower</td></tr>
@@ -616,7 +616,7 @@
   <div class="sec-head">
     <span class="kicker">The operator's numbers stay private</span>
     <h2 id="s-profile">Loading the operator profile</h2>
-    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. <code>tengu soe init</code> writes it once, unsigned, with the PRD's proposed values for the operator to review. Each check refuses with a code. The code never falls back to a built-in value.</p>
+    <p>The profile lives at <code>&lt;TENGU_HOME&gt;/state/soe/operator.toml</code>. <code>tengu soe init</code> writes it once, unsigned, with the four money values left <code>REQUIRED</code> for the operator to set. Each check refuses with a code. The code never falls back to a built-in value.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -656,11 +656,12 @@
     <li><span><b>No look-ahead in the gates.</b> A record knowable only after the decision time — or later the same day — changes nothing then, not even the explanation.</span></li>
     <li><span><b>One post is not demand.</b> A single customer-demand event holds; news and social posts support nothing.</span></li>
     <li><span><b>Only what passes ranks.</b> A held or rejected candidate never gets a rank, and the order comes only from the signed profile.</span></li>
+    <li><span><b>A void test decides nothing.</b> An experiment that may have expired by the decision holds the candidate and is no bounded path; a deadline that may have passed is unknown on the days key, never 0.</span></li>
     <li><span><b>Copies count once.</b> Records sharing an event key are one confirmation.</span></li>
     <li><span><b>One row per opportunity.</b> A weekly rerun takes each id at its latest version known at the decision; a later version is ignored.</span></li>
     <li><span><b>A public brief cites public links only.</b> A <code>repo:</code>, <code>state:</code>, <code>vault:</code> or <code>run:</code> locator is refused (<code>private_locator</code>).</span></li>
     <li><span><b>Unsigned never decides.</b> <code>check</code>, <code>portfolio</code>, <code>sensitivity</code> and <code>eval</code> refuse an unsigned profile, an <code>init</code> template included.</span></li>
-    <li><span><b>The profile is never overwritten.</b> <code>init</code> creates the file only when none exists, mode 0600, and never inside a git work tree.</span></li>
+    <li><span><b>The profile is never overwritten.</b> <code>init</code> creates the file only when none exists, whole or not at all (a synced temp file hard-linked into place), mode 0600, and never inside a git work tree.</span></li>
     <li><span><b>Same inputs, same week.</b> A <code>portfolio</code> rerun prints the same bytes, whatever the file order.</span></li>
     <li><span><b>One portfolio builder.</b> <code>tengu soe portfolio</code> and every weekly cycle build the week with the O3 allocation; no command contacts, spends or publishes.</span></li>
     <li><span><b>The chain only moves forward.</b> A live week decided before the last frozen one is refused (<code>cycle_out_of_order</code>); replay it instead.</span></li>

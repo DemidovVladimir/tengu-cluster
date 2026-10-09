@@ -3,7 +3,8 @@
 **Repository:** `DemidovVladimir/tengu-cluster`  
 **Document purpose:** Current product/architecture context and implementation instructions for coding agents.  
 **Status:** Active source of product intent.  
-**Current target:** Establish measurable W1 → W2 evolution using the existing X Market and X Lab systems.
+**Current target:** Establish measurable W1 → W2 evolution using the existing X Market and X Lab systems.  
+**State (2026-10-08):** `TENGU_ROADMAP.md` P0–P11 done — W1 frozen (`lineage/generations/W1.toml`) and kept: no W2 change beat rule W (`docs/p10-w2-candidate-2026-10-08.md`); forward rule W evidence accrues each weekend; W2 research runs in the unbound sandbox `xlab-w2` (strategy rankings built, contracts unsealed).
 
 ---
 

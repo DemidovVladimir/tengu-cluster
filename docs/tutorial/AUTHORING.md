@@ -19,12 +19,14 @@ here (operator rule: JS only inside docs HTML).
 | When | Do |
 |---|---|
 | You change code under a path listed in `sources.toml` | Re-read the changed code, update every page whose `sources` match, bump its footer date (`Checked against the code on YYYY-MM-DD.`) — same commit |
-| You add / move / delete a source file | Update `sources` paths (`cargo test --test tutorial_map` fails on a dead path or an unmapped `src/` file) |
+| You add / move / delete a source file | Update `sources` paths, or `[glue] sources` for a file that only wires modules (`cargo test --test tutorial_map` fails on a dead path, an unmapped `src/` file, a page missing from `nav.js` or `sources.toml`, a page without the shared assets, a `<title>` or the footer, or a link to a missing page) |
 | You add a feature | New `<slug>.html` + one `nav.js` entry + one `[pages.<slug>]` block |
 | Behaviour unchanged (refactor, rename inside a file) | Page stays; still check names / paths the page shows |
 
-Claude Code also gets a reminder from the Stop hook in `.claude/settings.json`
-when `src/` changed and `docs/tutorial/` did not.
+Claude Code also gets a reminder from the `PostToolUse` hook in
+`.claude/settings.json` (matcher `Edit|Write|MultiEdit`): after every edit of a
+`src/**/*.rs` file it names that file and asks for the pages, the footer date and
+`cargo test --test tutorial_map`. It is a reminder only; the test is the gate.
 
 ## Page anatomy (in order)
 

@@ -44,7 +44,7 @@
 //! | an assumption or the `fx` rate dated after `as_of` | `future_leakage` |
 //! | a negative amount; `fx` not from `currency`; a `VERIFIED` diligence block without evidence | `invalid_field` |
 
-// Consumers land with the economics, gates and ranking (O1 W3–W5).
+// `Mechanism::ALL` is read by tests only.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};

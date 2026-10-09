@@ -286,6 +286,7 @@
       <dl><dt>kind</dt><dd>job <code>soe_cycle</code>, in an <code>[soe]</code> sandbox (example block in <code>config.example.toml</code>): the week's SOE cycle, Architect and Critic as <code>run-agent</code> children</dd><dt>when</dt><dd><code>at = ["Mon 07:00"]</code> Europe/Paris</dd><dt>stale</dt><dd>idle between ticks: 8 days</dd></dl></div>
   </div>
   <p class="note"><code>job</code> names come from a closed list in <code>config/feeds.rs</code> (only <code>soe_cycle</code>), never a command from config. A job run settles like one call: <code>Done</code> = an item, <code>Failed</code> = a failed call of its class, so the at-tick slot retries for 15 min. Kinds <code>poll</code>, <code>stream</code>, <code>ws</code> and <code>rows</code> are refused at config load: not built yet. <code>tool</code>, <code>tick</code> and <code>job</code> run.</p>
+  <p class="note"><b>Elsewhere.</b> <code>sandboxes/xlab-w2</code> runs three at-tick tool feeds in New York time: <code>history_refresh</code> (daily 05:00, Mon 12:05), then the daily and weekend <a href="strategy-ranking.html">strategy rankings</a> (daily 06:00, Mon 13:00). A ranking that comes back INCOMPLETE, or a contract not sealed yet, fails the call.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-back">

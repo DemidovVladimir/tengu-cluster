@@ -1,6 +1,6 @@
 <svg viewBox="0 0 980 1284" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
   <title id="title">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture comparison, April 2026</title>
-  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, routing, five trading-runtime axes added 2026-10-02 (typed results + decision loops, long-running runtime, money safety, research on history, engine parity), and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18 and 2026-10-02; Hermes and PI cells on the new axes state only what the snapshot establishes, else "not covered by this snapshot"; the "landed today" boxes are historical.</desc>
+  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, routing, five trading-runtime axes added 2026-10-02 (typed results + decision loops, long-running runtime, money safety, research on history, engine parity), and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18, 2026-10-02 and 2026-10-08 (lineage + forward evidence, sealed strategy rankings, source evidence, counts, skill scanner); Hermes and PI cells on the new axes state only what the snapshot establishes, else "not covered by this snapshot"; the "landed today" boxes are historical.</desc>
   <style>
     .h1 { font-size: 16px; font-weight: 700; fill: #0f172a; }
     .h2 { font-size: 12px; font-weight: 700; fill: #0f172a; letter-spacing: .4px; text-transform: uppercase; }
@@ -25,7 +25,7 @@
   </style>
 
   <text x="20" y="26" class="h1">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture snapshot</text>
-  <text x="20" y="44" class="small">April 26, 2026 snapshot · Tengu facts refreshed 2026-09-18 and 2026-10-02 (local engine · typed decisions · risk gate · backtests · engine parity) · companion to docs/tengu-analysis.html</text>
+  <text x="20" y="44" class="small">April 26, 2026 snapshot · Tengu facts refreshed 2026-09-18, 10-02, 10-08 (typed decisions · risk gate · backtests · rankings · lineage · parity) · companion to docs/tengu-analysis.html</text>
 
   <g transform="translate(20, 58)">
     <rect width="940" height="22" rx="4" class="row" />
@@ -58,7 +58,7 @@
     <text x="10" y="16" class="h3">Surfaces</text>
     <text x="10" y="30" class="body">TUI · Telegram · webhooks · tengu run (24/7)</text>
     <circle cx="296" cy="26" r="3" class="added" />
-    <text x="10" y="42" class="small">+ tengu decide · backtest · history (CLI)</text>
+    <text x="10" y="42" class="small">+ CLI: decide · backtest · ranking · lineage · evidence · soe</text>
     <rect x="317" y="0" width="305" height="44" rx="4" class="col-hermes" />
     <text x="327" y="16" class="h3">Surfaces</text>
     <text x="327" y="30" class="body">CLI · TG · Discord · Slack · WA · Signal</text>
@@ -89,7 +89,7 @@
     <text x="10" y="128" class="h3">Model + tools</text>
     <text x="10" y="142" class="body">OpenRouter · local · Claude Code engines</text>
     <circle cx="296" cy="138" r="3" class="added" />
-    <text x="10" y="154" class="mono">PluginToolExecutor · 44 tools · MCP</text>
+    <text x="10" y="154" class="mono">PluginToolExecutor · 47 tools · MCP</text>
     <text x="10" y="165" class="small">every tool on every engine · Tor-by-default egress</text>
     <rect x="317" y="112" width="305" height="56" rx="4" class="col-hermes" />
     <text x="327" y="128" class="h3">Model + tools</text>
@@ -106,7 +106,7 @@
     <text x="10" y="190" class="h3">State / persistence</text>
     <text x="10" y="204" class="body">Postgres agentic_memory (pgvector) + disk store</text>
     <circle cx="296" cy="212" r="3" class="added" />
-    <text x="10" y="216" class="small">+ SQLite: observations · paper ledger · market.db</text>
+    <text x="10" y="216" class="small">+ SQLite: observations · ledger · market.db · sources.db</text>
     <rect x="317" y="174" width="305" height="44" rx="4" class="col-hermes" />
     <text x="327" y="190" class="h3">State / persistence</text>
     <text x="327" y="204" class="body">SQLite (FTS5) + Honcho dialectic model</text>
@@ -159,7 +159,7 @@
     <text x="10" y="34" class="small">how the agent grows</text>
     <text x="10" y="50" class="small">its own capabilities</text>
     <rect x="162" y="0" width="265" height="68" rx="4" class="row" />
-    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">3-tier scanner (managed/ws/dot)</text>
+    <circle cx="172" cy="14" r="4" class="ok" /><text x="182" y="18" class="body">skill scanner (managed · ws · cwd)</text>
     <circle cx="172" cy="32" r="4" class="ok" /><text x="182" y="36" class="body">orchestrator SKILL.md as prompt</text>
     <circle cx="172" cy="50" r="4" class="miss" /><text x="182" y="54" class="body">no autonomous evolution</text>
     <text x="172" y="65" class="small">skill_distill exists, not in loop</text>
@@ -271,7 +271,7 @@
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="172" cy="14" r="4" class="added" /><text x="182" y="18" class="body">market.db + backfill (HL, Gecko, S3)</text>
     <circle cx="172" cy="32" r="4" class="added" /><text x="182" y="36" class="body">spec DSL · pure engine · Jev replay</text>
-    <text x="172" y="52" class="small">holdout reads counted · time-integrity checks</text>
+    <text x="172" y="52" class="small">time-integrity · sealed rankings · lineage + vaults</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="unk" /><text x="449" y="18" class="body">not covered by this snapshot</text>
     <rect x="696" y="0" width="244" height="60" rx="4" class="row" />
@@ -286,7 +286,7 @@
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="172" cy="14" r="4" class="added" /><text x="182" y="18" class="body">openrouter · local · claude_code</text>
     <circle cx="172" cy="32" r="4" class="added" /><text x="182" y="36" class="body">lint + bridge conformance + live matrix</text>
-    <text x="172" y="52" class="small">via tengu mcp-bridge · 15 tool sets</text>
+    <text x="172" y="52" class="small">via tengu mcp-bridge · 17 tool sets</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">200+ providers · 6 terminal backends</text>
     <circle cx="439" cy="32" r="4" class="unk" /><text x="449" y="36" class="body">per-tool parity checks: not covered</text>
@@ -334,6 +334,6 @@
     <rect x="0" y="0" width="940" height="54" rx="4" class="row-alt" />
     <text x="10" y="17" class="small"><tspan font-weight="700" fill="#7c3aed">Tengu</tspan> is doctrinally sharp (LLM=heart · Open Brain / Karpathy LLM Wiki=brain · tools=hands) but light on agent-layer features —</text>
     <text x="10" y="31" class="small"><tspan font-weight="700" fill="#0284c7">Hermes</tspan> wins on breadth (platforms, scheduler, self-improving skills, multi-tenant); <tspan font-weight="700" fill="#059669">PI/Cowork</tspan> wins on UX (artifacts, computer-use, MCP marketplace).</text>
-    <text x="10" y="45" class="small">Since 2026-09 <tspan font-weight="700" fill="#7c3aed">Tengu</tspan> adds a trading runtime: typed observations + Jev loops, an in-tool risk gate + paper ledger, history-first backtests, engine parity.</text>
+    <text x="10" y="45" class="small">Since 2026-09 <tspan font-weight="700" fill="#7c3aed">Tengu</tspan> adds a trading runtime: typed observations + Jev loops, in-tool risk gate + paper ledger, history-first backtests, engine parity, lineage + evidence, sealed rankings.</text>
   </g>
 </svg>

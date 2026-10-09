@@ -595,6 +595,7 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
             entity: None,
             event_key: None,
             published_from_ms: None,
+            published_to_ms: None,
         },
     )
     .await?;

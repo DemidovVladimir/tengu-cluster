@@ -702,6 +702,106 @@ mod tests {
         assert!(e.contains("info-fetch"), "{e}");
     }
 
+    /// `sandboxes/xlab-w2`'s strategy-ranking feeds (SR-6): they load and
+    /// validate on the private ranker; the refresh fans out over exactly the
+    /// ranked universes (a name left out would go STALE); each ranking feed
+    /// runs a listed contract after its cutoff and after its refresh, at the
+    /// same New York times across both DST changes.
+    #[test]
+    fn xlab_w2_feeds_validate() {
+        use crate::domain::schedule::next_fire;
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/xlab-w2/config.toml");
+        let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(validation_errors(&cfg), Vec::<String>::new());
+        let names: Vec<&str> = cfg.feeds.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "history_refresh",
+                "strategy_ranking_daily",
+                "strategy_ranking_weekend"
+            ]
+        );
+        let ranker = &cfg.agents["xl_ranker"];
+        assert!(ranker.description.is_none() && !ranker.default);
+        for f in cfg.feeds.values() {
+            assert_eq!(f.agent.as_deref(), Some("xl_ranker"));
+            assert!(f.required);
+        }
+        // The refresh: every ranked name, once, in the universes' order.
+        let refresh = &cfg.feeds["history_refresh"];
+        let bt = cfg.backtest.as_ref().unwrap();
+        let want: Vec<Value> = ["xyz_stocks", "crypto"]
+            .iter()
+            .flat_map(|u| bt.universes[*u].iter())
+            .map(|id| json!({"interval": "1h", "fetch": true, "instrument": id}))
+            .collect();
+        assert_eq!(want.len(), 79);
+        assert_eq!(refresh.calls(), want);
+        assert_eq!(refresh.concurrency(), 1);
+        // Each contract a feed runs is listed in [strategy_ranking].
+        let section = cfg.ranking_section.as_ref().unwrap();
+        for (feed, contract) in [
+            ("strategy_ranking_daily", "rank.xlab-w2.daily.v1"),
+            ("strategy_ranking_weekend", "rank.xlab-w2.weekend.v1"),
+        ] {
+            let f = &cfg.feeds[feed];
+            assert_eq!(f.tool.as_deref(), Some("strategy_ranking"));
+            assert_eq!(
+                f.calls(),
+                vec![json!({"action": "run", "contract": contract})]
+            );
+            assert!(section.contracts.iter().any(|c| c == contract), "{feed}");
+        }
+        // Fire times (UTC) in summer and winter time: the refresh after each
+        // cutoff (daily 00:00, Mon 12:00 New York), each ranking after it.
+        let ms = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .timestamp_millis()
+        };
+        let fire = |feed: &str, after: &str| {
+            let s = cfg.feeds[feed].schedule().unwrap();
+            let at = next_fire(&s, ms(after), None).unwrap().at_ms;
+            chrono::DateTime::from_timestamp_millis(at)
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        for (after, refresh, daily, weekend) in [
+            // EDT: New York = UTC − 4.
+            (
+                "2026-10-11T12:00:00Z",
+                "2026-10-12T09:00:00Z",
+                "2026-10-12T10:00:00Z",
+                "2026-10-12T17:00:00Z",
+            ),
+            // EST from Sun 2026-11-01: UTC − 5.
+            (
+                "2026-11-01T12:00:00Z",
+                "2026-11-02T10:00:00Z",
+                "2026-11-02T11:00:00Z",
+                "2026-11-02T18:00:00Z",
+            ),
+            // EDT again from Sun 2027-03-14.
+            (
+                "2027-03-14T12:00:00Z",
+                "2027-03-15T09:00:00Z",
+                "2027-03-15T10:00:00Z",
+                "2027-03-15T17:00:00Z",
+            ),
+        ] {
+            assert_eq!(fire("history_refresh", after), refresh, "{after}");
+            assert_eq!(fire("strategy_ranking_daily", after), daily, "{after}");
+            assert_eq!(fire("strategy_ranking_weekend", after), weekend, "{after}");
+        }
+        // The Monday refresh after the weekend cutoff, before its ranking.
+        assert_eq!(
+            fire("history_refresh", "2026-10-12T09:30:00Z"),
+            "2026-10-12T16:05:00Z"
+        );
+    }
+
     #[test]
     fn unknown_keys_are_parse_errors() {
         let e = toml::from_str::<Config>(&format!(

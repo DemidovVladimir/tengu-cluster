@@ -17,8 +17,14 @@
 //!
 //! | Query | Effect |
 //! |---|---|
-//! | `source` · `entity` · `event_key` · `published_from_ms` | keep the records that match all set filters; events, conflicts, issues and citations follow the kept records; confidence still counts every current record of a kept event (a copy without the entity still corroborates) |
+//! | `source` · `entity` · `event_key` · `published_from_ms` · `published_to_ms` (exclusive) | keep the records that match all set filters; events, conflicts, issues and citations follow the kept records; confidence still counts every current record of a kept event (a copy without the entity still corroborates) |
 //! | freshness | the queried source, else every source of the registry, the view and the coverage |
+//!
+//! | Page ([`EvidencePacket::page`]) | Rule |
+//! |---|---|
+//! | Kept | the `limit` current records (facts · pending · expired · withdrawn · unparsed) newest by `visible_ms`, then record id |
+//! | Follows them | superseded pairs, events, conflicts, issues and citations, as in the build; demand, freshness and inferences stay whole |
+//! | `omitted` | how many current records the page left out (the headline and the text say so); `0` is not serialized |
 //!
 //! | Text rule | Value |
 //! |---|---|
@@ -29,8 +35,6 @@
 //! A record purge deletes evidence: a later replay of an earlier t misses
 //! what it removed. The view never shows a purge before its `purged_ms`; the
 //! store's tombstones name every purge.
-
-#![allow(dead_code)] // consumers (CLI, tool) land with the next O2 steps
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,6 +75,9 @@ pub struct AsOfQuery {
     pub event_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published_from_ms: Option<i64>,
+    /// Exclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_to_ms: Option<i64>,
 }
 
 impl AsOfQuery {
@@ -82,6 +89,7 @@ impl AsOfQuery {
                 .map_or(true, |e| r.entities.contains(e))
             && self.event_key.as_ref().map_or(true, |k| *k == r.event_key)
             && self.published_from_ms.map_or(true, |f| r.published_ms >= f)
+            && self.published_to_ms.map_or(true, |t| r.published_ms < t)
     }
 }
 
@@ -226,6 +234,13 @@ pub struct EvidencePacket {
     pub citations: Vec<Citation>,
     /// Analysis a caller attached: never a fact, never counted.
     pub inferences: Vec<Inference>,
+    /// Current records left out by [`EvidencePacket::page`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub omitted: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 fn fact_row(c: &Current) -> FactRow {
@@ -445,6 +460,7 @@ impl EvidencePacket {
             freshness,
             citations,
             inferences: Vec::new(),
+            omitted: 0,
         }
     }
 
@@ -455,6 +471,109 @@ impl EvidencePacket {
             + self.expired.len()
             + self.withdrawn.len()
             + self.unparsed.len()
+    }
+
+    /// The packet cut to its `limit` newest current records (module table:
+    /// page); unchanged when it holds no more.
+    pub fn page(&self, limit: usize) -> EvidencePacket {
+        if self.rows() <= limit {
+            return self.clone();
+        }
+        let mut order: Vec<(i64, &str)> = Vec::with_capacity(self.rows());
+        for f in self.facts.iter().chain(&self.pending).chain(&self.expired) {
+            order.push((f.visible_ms, &f.record_id));
+        }
+        order.extend(self.withdrawn.iter().map(|w| (w.visible_ms, &*w.record_id)));
+        order.extend(self.unparsed.iter().map(|u| (u.visible_ms, &*u.record_id)));
+        order.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+        let kept: BTreeSet<&str> = order.iter().take(limit).map(|(_, id)| *id).collect();
+        let keep_rows = |rows: &[FactRow]| -> Vec<FactRow> {
+            rows.iter()
+                .filter(|f| kept.contains(f.record_id.as_str()))
+                .cloned()
+                .collect()
+        };
+        let facts = keep_rows(&self.facts);
+        let pending = keep_rows(&self.pending);
+        let expired = keep_rows(&self.expired);
+        let withdrawn: Vec<WithdrawnRow> = self
+            .withdrawn
+            .iter()
+            .filter(|w| kept.contains(w.record_id.as_str()))
+            .cloned()
+            .collect();
+        let unparsed: Vec<UnparsedRow> = self
+            .unparsed
+            .iter()
+            .filter(|u| kept.contains(u.record_id.as_str()))
+            .cloned()
+            .collect();
+        let mut events_kept: BTreeSet<&str> = BTreeSet::new();
+        for f in facts.iter().chain(&pending).chain(&expired) {
+            events_kept.insert(&f.event_key);
+        }
+        events_kept.extend(withdrawn.iter().map(|w| w.event_key.as_str()));
+        events_kept.extend(unparsed.iter().map(|u| u.event_key.as_str()));
+        let superseded: Vec<Supersession> = self
+            .superseded
+            .iter()
+            .filter(|s| kept.contains(s.old.as_str()) || kept.contains(s.new.as_str()))
+            .cloned()
+            .collect();
+        let mut cited: BTreeSet<&str> = kept.clone();
+        for s in &superseded {
+            cited.insert(&s.old);
+            cited.insert(&s.new);
+        }
+        let last_facts = withdrawn
+            .iter()
+            .filter_map(|w| w.last_fact.as_deref())
+            .chain(unparsed.iter().filter_map(|u| u.last_fact.as_deref()));
+        cited.extend(last_facts);
+        let citations: Vec<Citation> = self
+            .citations
+            .iter()
+            .filter(|c| cited.contains(c.record_id.as_str()))
+            .cloned()
+            .collect();
+        let events: Vec<EventRow> = self
+            .events
+            .iter()
+            .filter(|e| events_kept.contains(e.event_key.as_str()))
+            .cloned()
+            .collect();
+        let conflicts: Vec<Conflict> = self
+            .conflicts
+            .iter()
+            .filter(|c| events_kept.contains(c.event_key.as_str()))
+            .cloned()
+            .collect();
+        let issues: Vec<Issue> = self
+            .issues
+            .iter()
+            .filter(|i| kept.contains(i.record_id.as_str()))
+            .cloned()
+            .collect();
+        EvidencePacket {
+            schema: self.schema.clone(),
+            as_of_ms: self.as_of_ms,
+            mode: self.mode,
+            query: self.query.clone(),
+            facts,
+            pending,
+            expired,
+            withdrawn,
+            unparsed,
+            superseded,
+            events,
+            conflicts,
+            issues,
+            demand: self.demand.clone(),
+            freshness: self.freshness.clone(),
+            citations,
+            inferences: self.inferences.clone(),
+            omitted: self.omitted + (self.rows() - limit),
+        }
     }
 
     /// The LLM text (module table: text rule). Line 1 = the headline.
@@ -468,12 +587,21 @@ impl EvidencePacket {
             q.event_key.as_ref().map(|k| format!("event={k}")),
             q.published_from_ms
                 .map(|f| format!("published_from={}", fmt_time(f))),
+            q.published_to_ms
+                .map(|t| format!("published_to={}", fmt_time(t))),
         ]
         .into_iter()
         .flatten()
         .collect();
         if !filters.is_empty() {
             out.line(format!("query {}", filters.join(" ")));
+        }
+        if self.omitted > 0 {
+            out.line(format!(
+                "omitted {} older current record(s): the {} newest by visible time are listed — narrow the query for the rest",
+                self.omitted,
+                self.rows()
+            ));
         }
         for (label, rows) in [
             ("fact", &self.facts),
@@ -942,7 +1070,7 @@ impl Observed for EvidencePacket {
 
     /// Counts only (the scope is in the key): always well under 200 chars.
     fn headline(&self) -> String {
-        format!(
+        let mut h = format!(
             "source_asof {} {}: {} facts · {} pending · {} expired · {} withdrawn · {} unparsed · {} conflicts · {} issues",
             fmt_time(self.as_of_ms),
             self.mode.as_str(),
@@ -953,7 +1081,11 @@ impl Observed for EvidencePacket {
             self.unparsed.len(),
             self.conflicts.len(),
             self.issues.len()
-        )
+        );
+        if self.omitted > 0 {
+            h.push_str(&format!(" · {} omitted", self.omitted));
+        }
+        h
     }
 
     fn features(&self) -> Features {
@@ -993,11 +1125,13 @@ impl Observed for EvidencePacket {
         set_int(&mut f, "purges", sum(|x| x.purges.len()));
         set_int(&mut f, "citations", n(self.citations.len()));
         set_int(&mut f, "inferences", n(self.inferences.len()));
+        set_int(&mut f, "omitted", n(self.omitted));
         f
     }
 
-    /// `absent` without a current record; `partial` with a failed fetch,
-    /// a coverage gap or an unparsed / partial record; else `ok`.
+    /// `absent` without a current record (listed or omitted); `partial`
+    /// with a failed fetch, a coverage gap or an unparsed / partial record;
+    /// else `ok`.
     fn status(&self) -> ObsStatus {
         let degraded = self.freshness.iter().any(|f| {
             !f.failed.is_empty()
@@ -1005,7 +1139,7 @@ impl Observed for EvidencePacket {
                 || f.partial_parses > 0
                 || f.queries.iter().any(|q| !q.gaps.is_empty())
         });
-        if self.rows() == 0 {
+        if self.rows() == 0 && self.omitted == 0 {
             ObsStatus::Absent
         } else if degraded {
             ObsStatus::Partial
@@ -1381,5 +1515,101 @@ mod tests {
             (pk.demand.status, pk.demand.events),
             (DemandStatus::Aggregate, 2)
         );
+    }
+
+    #[test]
+    fn a_page_keeps_the_newest_records_and_says_how_many_it_left_out() {
+        let p = policies(&[Src::SEC]);
+        // Filing k published and read k hours after T0; the second is
+        // corrected by the last, the third failed to parse.
+        let mut records: Vec<SourceRecord> = (0..6)
+            .map(|k| {
+                let at = T0 + k * H;
+                rec(Src::SEC, &format!("0000000001-26-00000{k}"), at, at, at)
+            })
+            .collect();
+        records[3] = unparsed_of(&records[3], "row 4: bad acceptanceDateTime");
+        let fix = correction_of(
+            &records[1],
+            "0000000001-26-000009",
+            T0 + 9 * H,
+            T0 + 9 * H,
+            |r| sec_mut(r).title = "Other events (corrected)".into(),
+        );
+        records.push(fix.clone());
+        let full = build(&records, &[], &[], &p, T0 + D);
+        assert_eq!((full.rows(), full.omitted), (6, 0));
+        assert_eq!(
+            full.page(6),
+            full,
+            "a page that holds everything is the packet"
+        );
+
+        let page = full.page(2);
+        let ids: Vec<&str> = page.facts.iter().map(|f| f.record_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [records[5].record_id.as_str(), fix.record_id.as_str()],
+            "the two newest by visible time"
+        );
+        assert!(page.unparsed.is_empty());
+        assert_eq!((page.rows(), page.omitted), (2, 4));
+        // The correction's pair and both ends' citations follow the kept row.
+        assert_eq!(page.superseded.len(), 1);
+        let cited: Vec<&str> = page
+            .citations
+            .iter()
+            .map(|c| c.record_id.as_str())
+            .collect();
+        assert_eq!(cited.len(), 3, "{cited:?}");
+        assert!(cited.contains(&records[1].record_id.as_str()));
+        assert_eq!(page.events.len(), 2);
+        assert_eq!(
+            (page.freshness.clone(), page.demand.clone()),
+            (full.freshness.clone(), full.demand.clone())
+        );
+        // Paging again adds up; the headline, text and features say so.
+        assert_eq!(page.page(1).omitted, 5);
+        assert!(
+            page.headline().ends_with(" · 4 omitted"),
+            "{}",
+            page.headline()
+        );
+        assert!(page.render_text().contains(
+            "omitted 4 older current record(s): the 2 newest by visible time are listed"
+        ));
+        assert_eq!(page.features()["omitted"], json!(4));
+        assert_eq!(
+            full.page(0).status(),
+            ObsStatus::Partial,
+            "omitted is not absent"
+        );
+        // `omitted` 0 is not on the wire; a packet without it still reads.
+        let v = serde_json::to_value(&full).unwrap();
+        assert!(v.get("omitted").is_none());
+        let back: EvidencePacket =
+            serde_json::from_value(serde_json::to_value(&page).unwrap()).unwrap();
+        assert_eq!(back, page);
+
+        // Published-before (exclusive) narrows like published-from.
+        let input = AsOfInput {
+            records: &records,
+            coverage: &[],
+            purges: &[],
+            policies: &p,
+        };
+        let q = AsOfQuery {
+            published_from_ms: Some(T0 + H),
+            published_to_ms: Some(T0 + 4 * H),
+            ..AsOfQuery::default()
+        };
+        let window = EvidencePacket::build(&input, T0 + D, AsOfMode::Captured, &q);
+        assert_eq!((window.facts.len(), window.unparsed.len()), (1, 1));
+        assert_eq!(window.facts[0].record_id, records[2].record_id);
+        assert!(window.render_text().contains(&format!(
+            "query published_from={} published_to={}",
+            fmt_time(T0 + H),
+            fmt_time(T0 + 4 * H)
+        )));
     }
 }

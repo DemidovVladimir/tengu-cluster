@@ -21,21 +21,21 @@ flowchart TB
         direction LR
         TUI[tui/mod.rs]
         TG[adapters/inbound/telegram.rs]
-        CLI[main.rs CLI]
+        CLI[adapters/inbound/cli/ CLI]
     end
 
-    subgraph Harness["Harness (src/adapters/)"]
+    subgraph Harness["Harness (src/)"]
         direction TB
         CR[bootstrap/<br/><i>build_tool_executor<br/>build_cli_chat_factory</i>]
-        Engine[adapters/outbound/engines/mod.rs<br/><i>ToolExecutor trait<br/>collect_engine_response</i>]
-        Orch[orchestrator/<br/><i>Orchestrator::handle<br/>ChatServiceFactory</i>]
-        Mem[memory/<br/><i>MemoryManager<br/>injector · writer</i>]
+        Engine[application/chat/tool_loop.rs<br/><i>collect_engine_response<br/>ports/engine.rs ToolExecutor trait</i>]
+        Orch[application/orchestrator/<br/><i>Orchestrator::handle<br/>ports/orchestration.rs ChatServiceFactory</i>]
+        Mem[application/memory/<br/><i>MemoryManager<br/>injector · writer</i>]
     end
 
     subgraph SL["Skill Lifecycle (new)"]
         direction TB
-        SLC[skill_lifecycle/<br/>config<br/>metrics · metric_kinds<br/>storage · fixtures<br/>scratch_worktree<br/>evolve · approval_gate<br/>scanner · audit · learner_state]
-        Plugin[outbound/tools/skill_lifecycle/<br/><i>SkillDistillTool · ApplyImproverProposalTool</i><br/>plugins/manage_skill · view_skill]
+        SLC[application/skills/lifecycle/<br/>metrics · metric_kinds<br/>storage · fixtures<br/>scratch_worktree<br/>evolve · approval_gate<br/>scanner · audit · learner_state]
+        Plugin[outbound/tools/skill_lifecycle/<br/><i>SkillDistillTool · ApplyImproverProposalTool</i><br/>outbound/tools/manage_skill · view_skill]
         Eval[adapters/inbound/eval.rs<br/><i>run_skill<br/>EvalJudgeClient</i>]
     end
 
@@ -53,7 +53,7 @@ flowchart TB
     U -->|tengu eval / skill evolve / skill metrics| CLI
     TUI & TG --> CR
     CLI --> Eval
-    CLI -->|skill evolve| SLC
+    CLI -->|skill evolve: inbound/evolve.rs| SLC
 
     CR -->|builds| Engine
     CR -->|builds factory for| Orch
@@ -79,8 +79,8 @@ flowchart TB
 **Key insights from the diagram:**
 
 - **Two entry points for the subsystem** — agents call `skill_distill` via the normal tool loop (from a live chat), or the user runs `tengu eval / skill evolve` from the CLI.
-- **`ChatServiceFactory::run_turn(agent, text)`** at [orchestrator/wiring.rs:49](../src/application/orchestrator/wiring.rs) is the one-call seam for evolve's skill-improver dispatch. No `Orchestrator` DAG needed for that — it's a single-turn RPC.
-- **`adapters/inbound/eval.rs` owns row execution** (per-row agent dispatch, per-row LLM judge); **`skill_lifecycle/` owns the typed `metrics:` contract** and rolling storage. Integration point: [adapters/inbound/eval.rs:~1250](../src/adapters/inbound/eval.rs) in `run_skill`, where `finalize_run` is called.
+- **`ChatServiceFactory::run_turn(agent, text)`** at [ports/orchestration.rs:133](../src/ports/orchestration.rs) (impl `bootstrap/orchestrator.rs::RuntimeChatServiceFactory`) is the one-call seam for evolve's skill-improver dispatch. No `Orchestrator` DAG needed for that — it's a single-turn RPC.
+- **`adapters/inbound/eval.rs` owns row execution** (per-row agent dispatch, per-row LLM judge); **`skill_lifecycle/` owns the typed `metrics:` contract** and rolling storage. Integration point: [adapters/inbound/eval.rs:~1423](../src/adapters/inbound/eval.rs) in `run_skill`, where `finalize_run` is called.
 
 ---
 
@@ -124,14 +124,14 @@ The three flows form a **closed loop**: a distilled skill can be evaluated, a fa
 
 ## 3. Distillation — sequence diagram
 
-Trigger: the user finishes a workflow and says "save this as a skill." The agent (which has `skill_distill` in its `workspace_tools`, or in `tools` on a subagent block) invokes the tool. The tool writes files atomically — no LLM call from inside the tool itself. (In-chat lifecycle verbs routed by the planner go to `[agents.learning-agent]` + `manage_skill` instead — `skills/orchestrator/SKILL.md`.)
+Trigger: the user finishes a workflow and says "save this as a skill." The agent (which has `skill_distill` in its `workspace_tools`, or in `tools` on a subagent block) invokes the tool. The tool writes files atomically — no LLM call from inside the tool itself. (In-chat lifecycle verbs routed by the planner go to `[agents.learning-agent]` + `manage_skill` instead — `skills/orchestrator/SKILL.md`; no shipped sandbox defines that agent, add one first.)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor U as User
     participant A as LLM Agent<br/>(claude-sonnet-4-6)
-    participant E as adapters/outbound/engines/mod.rs<br/>collect_engine_response
+    participant E as application/chat/tool_loop.rs<br/>collect_engine_response
     participant T as SkillDistillTool<br/>outbound/tools/skill_lifecycle/distill.rs
     participant F as fixtures.rs<br/>extract_fixtures
     participant FS as Filesystem
@@ -160,9 +160,9 @@ sequenceDiagram
 **Cache-discipline invariant:** the new skill does NOT activate in the current conversation — `loaded_in_current_conversation: false` is returned explicitly. This is enforced by not modifying the runtime's `ToolRegistry` post-skill-distill. The skill becomes available when the next session starts.
 
 **Code pointers:**
-- Tool def: [`outbound/tools/skill_lifecycle/distill.rs`](../src/adapters/outbound/tools/skill_lifecycle/distill.rs) — ~470 lines.
+- Tool def: [`outbound/tools/skill_lifecycle/distill.rs`](../src/adapters/outbound/tools/skill_lifecycle/distill.rs) — ~790 lines with tests.
 - Schema redaction logic: [`fixtures.rs::redact_args`](../src/application/skills/lifecycle/fixtures.rs).
-- Plugin registration: [`adapters/outbound/tools/mod.rs::register_catalog`](../src/bootstrap/tools.rs) — `want_distill || want_apply_improver` block (single registration point for the in-process executor AND the MCP bridge).
+- Plugin registration: [`adapters/outbound/tools/mod.rs::catalog`](../src/adapters/outbound/tools/mod.rs) — one `ToolEntry` row each for `skill_distill` and `apply_improver_proposal` (opt-in, `domain/tools.rs::WORKSPACE_TOOLS`); `register_catalog` reads it for the in-process executor AND the MCP bridge.
 
 ---
 
@@ -174,7 +174,7 @@ Trigger: `tengu eval <skill>`. Runs fixtures against the skill's configured agen
 sequenceDiagram
     autonumber
     actor U as User
-    participant CLI as main.rs<br/>Commands::Eval
+    participant CLI as cli/mod.rs<br/>Commands::Eval
     participant EB as adapters/inbound/eval.rs::run
     participant D as discover_skills<br/>load_skill_metrics
     participant R as run_skill + run_row
@@ -233,10 +233,10 @@ sequenceDiagram
 | 2 | Runner error | Config missing, LLM unavailable, fixture file broken |
 
 **Code pointers:**
-- CLI dispatch: [`main.rs` `Commands::Eval`](../src/main.rs) (~line 444).
-- Runner entry: [`adapters/inbound/eval.rs::run`](../src/adapters/inbound/eval.rs) (~line 76).
+- CLI dispatch: [`cli/mod.rs` `Commands::Eval`](../src/adapters/inbound/cli/mod.rs) (~line 709).
+- Runner entry: [`adapters/inbound/eval.rs::run`](../src/adapters/inbound/eval.rs) (~line 82).
 - Frontmatter loader: `adapters/inbound/eval.rs::load_skill_metrics`.
-- Integration point with `skill_lifecycle`: [`adapters/inbound/eval.rs::run_skill`](../src/adapters/inbound/eval.rs) (~line 1157; `finalize_run` call ~line 1250).
+- Integration point with `skill_lifecycle`: [`adapters/inbound/eval.rs::run_skill`](../src/adapters/inbound/eval.rs) (~line 1329; `finalize_run` call ~line 1423).
 - Judge adapter: `adapters/inbound/eval.rs::EvalJudgeClient` — wraps the existing `Arc<dyn Engine>` into the `JudgeClient` trait.
 
 ---
@@ -296,10 +296,10 @@ stateDiagram-v2
 sequenceDiagram
     autonumber
     actor U as User
-    participant CLI as main.rs<br/>Commands::SkillEvolve
-    participant EV as skill_lifecycle::<br/>evolve::run_evolve
+    participant CLI as cli/skill.rs<br/>SkillAction::Evolve
+    participant EV as adapters/inbound/<br/>evolve::run_evolve
     participant SW as scratch_worktree::<br/>sweep_stale_worktrees
-    participant EB as eval_builder::<br/>run_skill
+    participant EB as inbound/eval.rs::<br/>run_skill
     participant CS as ChatServiceFactory<br/>(RuntimeChatServiceFactory)
     participant IM as Improver agent<br/>(claude-opus-4-7)
     participant AG as approval_gate::render<br/>+ read_decision
@@ -372,11 +372,11 @@ sequenceDiagram
 ```
 
 **Code pointers:**
-- Orchestrator: [`skill_lifecycle/evolve.rs::run_evolve`](../src/application/skills/lifecycle/evolve.rs) (~line 378).
-- Best-cycle logic: [`skill_lifecycle/evolve.rs::pick_best`](../src/application/skills/lifecycle/evolve.rs) (~line 110).
+- Driver: [`adapters/inbound/evolve.rs::run_evolve`](../src/adapters/inbound/evolve.rs) (~line 79).
+- Best-cycle logic: [`application/skills/lifecycle/evolve.rs::pick_best`](../src/application/skills/lifecycle/evolve.rs) (~line 105).
 - Scratch worktree: [`skill_lifecycle/scratch_worktree.rs`](../src/application/skills/lifecycle/scratch_worktree.rs).
 - Approval gate: [`skill_lifecycle/approval_gate.rs`](../src/application/skills/lifecycle/approval_gate.rs).
-- Improver dispatch seam: [`orchestrator/wiring.rs::ChatServiceFactory`](../src/application/orchestrator/wiring.rs) line 49.
+- Improver dispatch seam: [`ports/orchestration.rs::ChatServiceFactory`](../src/ports/orchestration.rs) line 132.
 
 ---
 
@@ -516,22 +516,30 @@ workspace/
 │                   2026-04-21-...skill-metrics-evolution-phase2.md}
 │
 ├── src/
-│   ├── main.rs                       # Commands::Eval / Commands::Skill { SkillAction::Evolve | Metrics | AcceptProposal | Remove | List | Doctor | Export | Install | Seed }
-│   └── adapters/
-│       ├── adapters/inbound/eval.rs           # run, run_skill, run_row, load_skill_metrics, EvalJudgeClient
-│       ├── bootstrap/        # register_catalog, WORKSPACE_TOOLS, compute_base_tools, build_cli_chat_factory
-│       ├── config.rs                 # Config.skill_lifecycle field, workspace_tools validator (validate_agent)
-│       ├── orchestrator/wiring.rs    # ChatServiceFactory trait (the seam for improver dispatch)
-│       ├── outbound/tools/skill_lifecycle/
-│       │   ├── mod.rs                # SkillLifecyclePlugin, tool_defs(), SKILL_DISTILL_TOOL_NAME
-│       │   ├── distill.rs            # SkillDistillTool (also seeds evals/config.toml)
-│       │   ├── apply_improver_proposal.rs  # back-compat alias for manage_skill(patch)
-│       │   └── compress_and_store.rs # tool def only — runner intercepts the call
-│       ├── outbound/tools/manage_skill/     # unified in-chat write API (create / edit_body / patch / add_resource / remove_resource / delete)
-│       ├── outbound/tools/view_skill/       # unified in-chat read API (list / read / read_resource)
-│       ├── outbound/tools/skill_resource/   # back-compat alias for view_skill
-│       └── skill_lifecycle/
-│           ├── config.rs             # SkillLifecycleConfig TOML schema
+│   ├── main.rs                       # mod decls + main → adapters::inbound::cli::run
+│   ├── adapters/inbound/
+│   │   ├── cli/mod.rs                # Commands::Eval / Commands::Skill { SkillAction::Evolve | Metrics | AcceptProposal | Remove | List | Doctor | Export | Install | Seed }
+│   │   ├── cli/skill.rs              # run_skill_command (the SkillAction bodies)
+│   │   ├── eval.rs                   # run, run_skill, run_row, load_skill_metrics, EvalJudgeClient
+│   │   └── evolve.rs                 # run_evolve (the evolve loop driver)
+│   ├── bootstrap/orchestrator.rs     # build_cli_chat_factory
+│   ├── config/mod.rs                 # Config.skill_lifecycle field, workspace_tools validator (validate_agent)
+│   ├── config/skill_lifecycle.rs     # SkillLifecycleConfig TOML schema
+│   ├── domain/tools.rs               # WORKSPACE_TOOLS (opt-in names), DEFAULT_TOOLS
+│   ├── ports/orchestration.rs        # ChatServiceFactory trait (the seam for improver dispatch)
+│   ├── adapters/outbound/tools/
+│   │   ├── mod.rs                    # catalog(), register_catalog, advertised_defs
+│   │   ├── skill_lifecycle/
+│   │   │   ├── mod.rs                # SkillLifecyclePlugin, distill_tool_defs(), apply_improver_tool_defs(), metric_spec_schema()
+│   │   │   ├── distill.rs            # SkillDistillTool (also seeds evals/config.toml)
+│   │   │   ├── apply_improver_proposal.rs  # opt-in; whole-body / resource proposal writer
+│   │   │   └── compress_and_store.rs # tool def only — runner intercepts the call
+│   │   ├── manage_skill/             # unified in-chat write API (create / edit_body / patch / add_resource / remove_resource / delete)
+│   │   ├── view_skill/               # unified in-chat read API (list / read / read_resource)
+│   │   └── skill_resource/           # back-compat alias for view_skill
+│   └── application/skills/
+│       ├── registry.rs               # skill loader: skill_directories, SkillGate (requires_bins / requires_env / os)
+│       └── lifecycle/
 │           ├── metrics.rs            # MetricSpec, MetricKind, MetricOutcome, validate_metrics
 │           ├── metric_kinds/
 │           │   ├── shell_check.rs
@@ -542,12 +550,12 @@ workspace/
 │           │   └── description_trigger.rs  # should/shouldn't-trigger judge
 │           ├── storage.rs            # finalize_run, prune_old_run_dirs, MetricsJson
 │           ├── fixtures.rs           # YAML read/write, extract_fixtures, redact_args
-│           ├── evolve.rs             # run_evolve, pick_best, apply_proposal_to_skill_md
+│           ├── evolve.rs             # pick_target_metric, pick_best, apply_proposal_to_skill_md (pure logic)
 │           ├── approval_gate.rs      # render + read_decision
 │           ├── scratch_worktree.rs   # create/remove/sweep_stale_worktrees
 │           ├── scanner.rs            # threat patterns (tengu skill install / doctor)
 │           ├── audit.rs              # skills/.audit.jsonl writer
-│           └── learner_state.rs      # skills/<name>/state/<learner_id>.json
+│           └── learner_state.rs      # skills/<name>/state/<learner_id>.json (landed, not wired)
 │
 ├── skills/
 │   ├── skill-creator/                # canonical dogfood
@@ -593,21 +601,21 @@ How the active config (`sandboxes/<name>/config.toml` via `--sandbox`, else `~/.
 flowchart LR
     subgraph TOML["sandboxes/<name>/config.toml"]
         direction TB
-        cfg_sl["[skill_lifecycle]<br/>improver_agent<br/>fixture_runner_agent (optional, unused)<br/>max_per_run_reports<br/>worktree_stale_hours"]
+        cfg_sl["[skill_lifecycle]<br/>improver_agent<br/>fixture_runner_agent (optional, unused)<br/>default_max_evolve_cycles · default_rolling_window<br/>max_per_run_reports<br/>worktree_stale_hours"]
         cfg_imp["[agents.skill-improver]<br/>engine, model, tools, identity"]
-        cfg_fr["[agents.learning-agent]<br/>tools = [view_skill, manage_skill, …]<br/>description ⇒ planner-routable"]
+        cfg_fr["[agents.learning-agent] (no shipped sandbox defines it)<br/>tools = [view_skill, manage_skill, …]<br/>description ⇒ planner-routable"]
         cfg_main["[agents.main]<br/>workspace_tools = [skill_distill]"]
     end
 
     subgraph Load["Load time (tengu startup)"]
         direction TB
-        parse[config.rs<br/>Config::load]
-        validate[validate_agent<br/>allowlist: agentic_memory, shared_cache, persistent_store,<br/>skill_distill, apply_improver_proposal, manage_skill]
+        parse[config/mod.rs<br/>Config::load]
+        validate[validate_agent<br/>allowlist: domain/tools.rs::WORKSPACE_TOOLS<br/>(memory, skill lifecycle, Solana, HL, xm, xlab, sources)]
     end
 
     subgraph Runtime["Runtime wiring"]
         direction TB
-        cbt[channel_runtime::<br/>compute_base_tools]
+        cbt[bootstrap/tools.rs::<br/>agent_base_tools]
         bte[build_tool_executor / MCP bridge]
         reg[register_catalog<br/>SkillLifecyclePlugin · ManageSkillPlugin · ViewSkillPlugin]
         bccf[build_cli_chat_factory<br/>for tengu skill evolve]
@@ -640,7 +648,7 @@ flowchart LR
 | `[skill_lifecycle]` block | `"[skill_lifecycle] config missing; needed for tengu skill evolve"` |
 | `[agents.skill-improver]` | Improver dispatch fails (unknown agent) |
 | `"skill_distill"` not in `workspace_tools` / `tools` | Agent sees no `skill_distill` in its tools list — describes the call in prose instead of invoking |
-| Typo in `workspace_tools` | Config load error: `agents.<id>.workspace_tools: unknown tool 'X' (valid: agentic_memory, shared_cache, persistent_store, skill_distill, apply_improver_proposal, manage_skill)` |
+| Typo in `workspace_tools` | Config load error: `agents.<id>.workspace_tools: unknown tool 'X' (valid: <every WORKSPACE_TOOLS name>)`; a misspelled name in `tools` only warns at load (a shell skill's tool is a legal name) |
 | `SkillLifecyclePlugin` not registered in `register_catalog` | Agent sees the tool name but calling it fails: `"Tool 'skill_distill' is not available to this agent"` |
 
 ---
@@ -657,16 +665,16 @@ User: I want to check the balance of a wallet address on Ethereum mainnet.
 
 Agent: I'll fetch the balance from an RPC endpoint.
   [tool_call: http_request url="https://eth.llamarpc.com" method="POST"
-              body='{"jsonrpc":"2.0","method":"eth_getBalance","params":["0xcaD88...","latest"],"id":1}']
+              body='{"jsonrpc":"2.0","method":"eth_getBalance","params":["0xcaD88677CA87a7815728C72D74B4ff4982d54Fc1","latest"],"id":1}']
   [tool_result: {"jsonrpc":"2.0","id":1,"result":"0x1bc16d674ec80000"}]
 
 Agent: The raw result is 0x1bc16d674ec80000 wei. Converting...
   [tool_call: hex_to_uint256 hex="0x1bc16d674ec80000"]
   [tool_result: "2000000000000000000"]
 
-Agent: That's 2 ETH. Let me also save this to persistent_store for later reference.
-  [tool_call: persistent_store action="set" key="last_balance_0xcaD88" value='{"eth":2.0,"ts":"..."}']
-  [tool_result: "ok: last_balance_0xcaD88 (45 bytes)"]
+Agent: That's 2 ETH. Let me also save this to shared_cache for later reference.
+  [tool_call: shared_cache operation="put" namespace="balances" key="last_balance_0xcaD88677CA87a7815728C72D74B4ff4982d54Fc1" value='{"eth":2.0,"ts":"..."}']
+  [tool_result: "ok: balances/last_balance_0xcaD88677CA87a7815728C72D74B4ff4982d54Fc1 (22 bytes)"]
 
 Agent: Confirmed: 2.0 ETH. Saved.
 
@@ -684,7 +692,7 @@ The agent (since it has `workspace_tools = ["skill_distill"]`) now invokes the d
     "name": "eth-balance-check",
     "description": "Use when checking the ETH balance of a specific wallet address on Ethereum mainnet via a public RPC endpoint, with the result converted to ETH decimals and optionally persisted.",
     "from_message_index": 0,
-    "body_markdown": "## Overview\n\nThis skill fetches the current ETH balance of a wallet address on Ethereum mainnet, converts the raw wei result to ETH decimals, and optionally persists the result.\n\n## When to Use\n\n- The user wants to know the ETH balance of a specific address.\n- A public RPC endpoint (e.g. eth.llamarpc.com) is acceptable — no Alchemy/Infura key required.\n- The target chain is Ethereum mainnet (chain_id 1).\n\n## Procedure\n\n1. **Fetch raw balance.** Call `http_request` with a `POST` to a public Ethereum RPC. The JSON-RPC body must specify `eth_getBalance` with the address and `\"latest\"` as parameters.\n2. **Convert wei → ETH.** Parse the hex result. Use `hex_to_uint256` to get the decimal wei, then divide by 10^18 for ETH.\n3. **Persist (optional).** If the user wants the balance tracked across sessions, use `persistent_store` with `action: set`, key prefixed `last_balance_<short_address>`, and value JSON containing `{eth, ts}`.\n\n## Common Mistakes\n\n1. **Wrong chain ID.** This skill is mainnet-only. For testnets, use a different RPC endpoint and the appropriate chain_id.\n2. **Assuming latest ≠ confirmed.** `latest` returns unconfirmed state. For higher safety, use `finalized`.\n3. **Truncating wei manually.** `hex_to_uint256` is the correct conversion — do not attempt hex→decimal math inline.\n",
+    "body_markdown": "## Overview\n\nThis skill fetches the current ETH balance of a wallet address on Ethereum mainnet, converts the raw wei result to ETH decimals, and optionally persists the result.\n\n## When to Use\n\n- The user wants to know the ETH balance of a specific address.\n- A public RPC endpoint (e.g. eth.llamarpc.com) is acceptable — no Alchemy/Infura key required.\n- The target chain is Ethereum mainnet (chain_id 1).\n\n## Procedure\n\n1. **Fetch raw balance.** Call `http_request` with a `POST` to a public Ethereum RPC. The JSON-RPC body must specify `eth_getBalance` with the address and `\"latest\"` as parameters.\n2. **Convert wei → ETH.** Parse the hex result. Use `hex_to_uint256` to get the decimal wei, then divide by 10^18 for ETH.\n3. **Persist (optional).** If the user wants the balance tracked across sessions, use `shared_cache` with `operation: put`, namespace `balances`, key `last_balance_<full address>`, and value JSON containing `{eth, ts}`.\n\n## Common Mistakes\n\n1. **Wrong chain ID.** This skill is mainnet-only. For testnets, use a different RPC endpoint and the appropriate chain_id.\n2. **Assuming latest ≠ confirmed.** `latest` returns unconfirmed state. For higher safety, use `finalized`.\n3. **Truncating wei manually.** `hex_to_uint256` is the correct conversion — do not attempt hex→decimal math inline.\n",
     "metrics": [
       {
         "kind": "shell_check",
@@ -740,8 +748,8 @@ skills/eth-balance-check/
 │               args_schema: {url: "<elided>", method: "POST", body: "<elided>"}
 │             - tool: hex_to_uint256
 │               args_schema: {hex: "0x1bc16d674ec80000"}
-│             - tool: persistent_store
-│               args_schema: {action: "set", key: "<elided>", value: "<elided>"}
+│             - tool: shared_cache
+│               args_schema: {operation: "put", namespace: "balances", key: "<elided>", value: "<elided>"}
 │           metrics: [eth_balance_format, procedure_quality]
 └── metrics/
     └── procedure_quality.md    (stub rubric — user fills in)
@@ -788,7 +796,7 @@ Flow (see Section 5):
 3. Cycle 1: `skill-improver` (claude-opus-4-7) is handed the current SKILL.md body, failing fixture transcripts, and the rubric. It returns a revised `body_markdown` with rationale.
 4. Cycle 1 rescore inside scratch.
 5. Cycle 2 if target not yet healed.
-6. `pick_best` selects the cycle with highest `procedure_quality` pass_rate + no regression > 0.05 on other gated metrics.
+6. `pick_best` selects, among cycles whose `procedure_quality` beats its baseline with no other metric (passing ones included) dropping > 0.05, the highest `procedure_quality` pass_rate.
 7. Approval gate shows diff + delta.
 8. User accepts → `SKILL.md` updated; `evolve_log.md` appended; sanity re-eval runs.
 
@@ -823,10 +831,10 @@ max_tokens_per_flow = 50_000
 | Thing | File | Entry point |
 |-------|------|-------------|
 | `skill_distill` tool def | `outbound/tools/skill_lifecycle/distill.rs` | `SkillDistillTool::execute` |
-| Plugin registration | `bootstrap/` | `register_catalog` (`want_distill || want_apply_improver`; also registers `ManageSkillPlugin`, `ViewSkillPlugin`) |
-| Workspace-tools opt-in names | `bootstrap/` | `WORKSPACE_TOOLS` |
-| Config parsing | `skill_lifecycle/config.rs` | `SkillLifecycleConfig` |
-| Workspace-tools allowlist | `config.rs` | `validate_agent` — `valid_workspace_tools` array (keep in sync with `WORKSPACE_TOOLS`) |
+| Plugin registration | `adapters/outbound/tools/mod.rs` | `catalog()` rows (`SkillLifecyclePlugin` for `skill_distill` / `apply_improver_proposal`, `ManageSkillPlugin`, `ViewSkillPlugin`), read by `register_catalog` |
+| Workspace-tools opt-in names | `domain/tools.rs` | `WORKSPACE_TOOLS` |
+| Config parsing | `config/skill_lifecycle.rs` | `SkillLifecycleConfig` |
+| Workspace-tools allowlist | `config/mod.rs` | `validate_agent` — checks against `domain/tools.rs::WORKSPACE_TOOLS` |
 | Metric types | `skill_lifecycle/metrics.rs` | `MetricSpec`, `MetricKind`, `JudgeClient` |
 | `shell_check` metric | `skill_lifecycle/metric_kinds/shell_check.rs` | `ShellCheckKind::run` |
 | `llm_judge` metric | `skill_lifecycle/metric_kinds/llm_judge.rs` | `LlmJudgeKind::run`, `extract_json_object` |
@@ -843,12 +851,12 @@ max_tokens_per_flow = 50_000
 | Fixture YAML + extraction | `skill_lifecycle/fixtures.rs` | `extract_fixtures`, `redact_args`, `read_fixtures`, `write_fixtures` |
 | Eval runner | `adapters/inbound/eval.rs` | `run`, `run_skill`, `run_row`, `load_skill_metrics` |
 | Judge adapter | `adapters/inbound/eval.rs` | `EvalJudgeClient::judge` |
-| Evolve core | `skill_lifecycle/evolve.rs` | `run_evolve`, `pick_target_metric`, `pick_best`, `apply_proposal_to_skill_md` |
+| Evolve core | `adapters/inbound/evolve.rs` · `skill_lifecycle/evolve.rs` | `run_evolve` (driver) · `pick_target_metric`, `pick_best`, `apply_proposal_to_skill_md` |
 | Approval gate | `skill_lifecycle/approval_gate.rs` | `render`, `read_decision` |
 | Scratch worktree | `skill_lifecycle/scratch_worktree.rs` | `create_scratch`, `remove_scratch`, `sweep_stale_worktrees` |
-| Improver dispatch seam | `orchestrator/wiring.rs` | `ChatServiceFactory::run_turn` |
-| CLI factory | `bootstrap/` | `build_cli_chat_factory` |
-| CLI dispatch | `main.rs` | `Commands::Eval`, `Commands::Skill { SkillAction::Evolve \| Metrics \| AcceptProposal \| Remove \| List \| Doctor \| Export \| Install \| Seed }`; `skill_doctor` reads `[agents.*].skill_packages` of the active config |
+| Improver dispatch seam | `ports/orchestration.rs` | `ChatServiceFactory::run_turn` (impl `bootstrap/orchestrator.rs::RuntimeChatServiceFactory`) |
+| CLI factory | `bootstrap/orchestrator.rs` | `build_cli_chat_factory` |
+| CLI dispatch | `adapters/inbound/cli/mod.rs` + `cli/skill.rs` | `Commands::Eval`, `Commands::Skill { SkillAction::Evolve \| Metrics \| AcceptProposal \| Remove \| List \| Doctor \| Export \| Install \| Seed }`; `skill_doctor` reads `[agents.*].skill_packages` of the active config |
 
 ---
 

@@ -59,6 +59,7 @@ default_lens = "eco"
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
 #   + xmarket risk (typed): risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade (private agent only) — needs [xmarket] + [risk] + [paper]; scope examples under "Risk + paper trading" below
 #   + xlab (typed, ttl 0): market_history, backtest — need [xmarket] (backtest also [backtest]); scope examples under "Backtests" below
+#   + sources (typed, ttl 0, read-only): source_evidence — needs [sources]; scope example under "Source registry" below
 #   `tengu tool list` (hidden) prints every catalog name.
 
 # OpenRouter model examples (just change the model line):
@@ -537,6 +538,22 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # id = "W1"
 # registry = "../../lineage"                # relative to this config file
 
+# --- Strategy ranking (lineage contracts; docs/strategy-ranking-automation-2026-10-08.md) ---
+# The ranking contracts this sandbox runs (`lineage/rankings/<id>.toml`, sealed
+# with `tengu lineage seal ranking:<id>` before any ranking). `Config::load`
+# refuses an unknown contract, one of another sandbox, a contract strategy
+# missing from [backtest.strategies] and a contract shape error; an unsealed or
+# changed contract loads (the publisher refuses it). Run-dir retention keeps
+# every run this registry cites, bound to a generation or not.
+# Callers: `tengu ranking run|show --sandbox <s> [--contract <id>]` (a cron
+# entry), the opt-in tool `strategy_ranking` (`action` run | latest) and a
+# `kind = "tool"` feed on a private agent (sandboxes/xlab-w2: history_refresh
+# 05:00, then strategy_ranking_daily 06:00 New York). Output:
+# <state dir>/strategy-rankings/<contract id>/<YYYY-MM-DD>/ + latest.{md,json}.
+# [strategy_ranking]
+# registry = "../../lineage"                # relative to this config file
+# contracts = ["rank.xlab-w2.daily.v1"]
+
 # --- Backtests (xlab; needs [xmarket]) ---
 # `tengu backtest --sandbox <s> --strategy <name>` (or `--spec <file.json>`) runs a
 # strategy spec on <TENGU_HOME>/state/<xmarket.state>/market.db (filled by `tengu
@@ -550,7 +567,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # seed = 7                                  # bootstrap seed: a rerun prints the same numbers
 # gate = "xl_gate"                          # the [decision_loops.<name>] the Jev gate arm runs
 # max_candidates = 50000                    # a run past it stops before any arm or file (1–1000000)
-# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache or a run the lineage registry cites)
+# keep_runs = 100                           # run dirs kept in <state dir>/backtests (oldest pruned on write; 0 = all, else ≥ 10; never the decision cache, a run the [generation] or [strategy_ranking] registry cites, or one a published ranking's latest.json cites)
 #
 # [backtest.costs."hyperliquid:xyz:"]       # per side; the longest id prefix wins
 # taker_fee_bps = 0.9
@@ -631,8 +648,24 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # store_raw = true
 # jurisdiction = "EU"
 # language = "en"
-# query = "publication-date >= {from} AND publication-date <= {to}"   # ted_search only: {from} / {to} required
+# query = "publication-date >= {from} AND publication-date <= {to}"   # ted_search only: {from} / {to} required, each replaced by the day read (YYYYMMDD)
 # # listing_max_age_days = 2                # registry_marketplace only (required there)
+
+# Each row's budget (src/config/rate_limits.rs) — sandboxes/soe:
+# [rate_limits.sec]                         # SEC fair access: ≤ 10 requests / s with a declared User-Agent
+# per_minute = 300
+# burst = 5
+# [rate_limits.ted]                         # TED publishes no limit: 1 / s assumed
+# per_minute = 60
+# burst = 2
+#
+# Only the operator fetches: `tengu sources --sandbox <s> list | fetch | import |
+# asof | terms | purge | disable | enable` (docs/source-evidence-2026-10-08.md).
+# Agents read through the opt-in tool source_evidence (the as-of evidence packet
+# of sources.db, no fetch argument); sources.db is its own state, outside every
+# fs root. Its scope: the workspace (observation store), no host, no env.
+# [default_scopes.source_evidence]
+# fs_roots = ["~/soe-ws"]                   # = the agent's workspace
 
 # --- Software Opportunity Engine cycle (O3; needs [sources]; sandboxes/soe) ---
 # The weekly cycle (docs/soe-2026-10-08.md § 10): the Architect proposes

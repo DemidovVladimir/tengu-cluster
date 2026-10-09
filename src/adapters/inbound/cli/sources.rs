@@ -8,7 +8,7 @@
 //! | `list` | every registry row: kind, enabled (TOML), runtime switch, class / trust, retention, license; then every cursor and the newest fetch per query — full ids |
 //! | `fetch --source <id> [--from] [--to] [--ciks <list>]` | `sec_edgar`: the CIKs of `--ciks`, else the row's `entities`, from `--from` (required); `ted_search`: the row's query, one publication day at a time (`--from` omitted = the day after the cursor); a disabled, unreviewed or switched-off row is refused before any request; prints the run table; exit 1 when any row failed |
 //! | `import --source <id> --file <json> --observed-at <t>` | `ted_search` only: a saved search reply read as if fetched at `t` (offline: fixtures, evaluation sets) — the fetch's gate and records, no coverage; parsed now, so captured mode sees it from now, knowable mode from each notice's publication |
-//! | `asof --at <t> [--mode captured\|knowable] [--source] [--entity] [--event] [--published-from <t>] [--text]` | the evidence packet `source_asof/1` (`application::sources::evidence_as_of`): canonical JSON, or with `--text` its fenced text |
+//! | `asof --at <t> [--mode captured\|knowable] [--source] [--entity] [--event] [--published-from <t>] [--published-to <t>] [--text]` | the evidence packet `source_asof/1` (`application::sources::evidence_as_of`): canonical JSON, or with `--text` its fenced text |
 //! | `purge [--source <id>]` | each row's retention (`raw_retention_days`, `record_retention_days`; `0` = forever) applied now; prints each tombstone |
 //! | `terms --source <id> --file <saved page>` | the terms page the operator reviewed (critic U9): refused unless its sha256 is the row's `terms_sha256`; kept whole as a `terms` snapshot, never purged; `list` shows whether it is stored |
 //! | `disable --source <id> --reason <text>` · `enable --source <id> --reason <text>` | the runtime kill switch (critic U10): a row appended to `sources.db` — off refuses every fetch and import of the source at once, whatever the TOML says; `enable` lifts only that (a row with `enabled = false` stays off) |
@@ -32,7 +32,9 @@ use crate::adapters::outbound::sources::sec::{sec_source_fetch, source_sec_clien
 use crate::adapters::outbound::sources::ted::{
     source_ted_client, ted_import, ted_source_fetch, TedFetch,
 };
-use crate::adapters::outbound::sources::{fetch_gate, open_source_store, sources_state_dir};
+use crate::adapters::outbound::sources::{
+    existing_source_store, fetch_gate, open_source_store, sources_state_dir,
+};
 use crate::application::sources::{evidence_as_of, purge_request, AsOfRequest};
 use crate::config::sections::SandboxSections;
 use crate::config::sources::{sources_db, SourceEntry, SourceKind, SourcesConfig};
@@ -100,6 +102,9 @@ pub(super) enum SourcesAction {
         /// Keep records published at or after this.
         #[arg(long)]
         published_from: Option<String>,
+        /// Keep records published before this (exclusive).
+        #[arg(long)]
+        published_to: Option<String>,
         /// The packet's text (free text fenced) instead of JSON.
         #[arg(long)]
         text: bool,
@@ -187,6 +192,7 @@ pub(super) async fn run_sources(config: &Config, action: SourcesAction) -> Resul
             entity,
             event,
             published_from,
+            published_to,
             text,
         } => {
             let req = AsOfRequest {
@@ -196,6 +202,7 @@ pub(super) async fn run_sources(config: &Config, action: SourcesAction) -> Resul
                 entity,
                 event_key: event,
                 published_from_ms: published_from.as_deref().map(time).transpose()?,
+                published_to_ms: published_to.as_deref().map(time).transpose()?,
             };
             println!("{}", asof(&sections, &req, text).await?);
         }
@@ -251,19 +258,9 @@ fn row<'a>(registry: &'a SourcesConfig, id: &str) -> Result<&'a SourceEntry> {
     })
 }
 
-/// The store when `sources.db` exists (a reader creates nothing).
-fn existing_store(sections: &SandboxSections) -> Result<Option<std::sync::Arc<dyn SourceStore>>> {
-    let dir = sources_state_dir(sections)?;
-    if sources_db(dir).exists() {
-        Ok(Some(open_source_store(sections)?))
-    } else {
-        Ok(None)
-    }
-}
-
 async fn list(sections: &SandboxSections) -> Result<String> {
     let registry = registry(sections)?;
-    let store = existing_store(sections)?;
+    let store = existing_source_store(sections)?;
     let switches = match &store {
         Some(s) => s.switches(None).await?,
         None => Vec::new(),
@@ -495,7 +492,7 @@ async fn import(
 
 async fn asof(sections: &SandboxSections, req: &AsOfRequest, text: bool) -> Result<String> {
     let registry = registry(sections)?;
-    let store = existing_store(sections)?;
+    let store = existing_source_store(sections)?;
     let packet = evidence_as_of(store.as_deref(), registry, req).await?;
     Ok(if text {
         packet.render_text()
@@ -509,7 +506,7 @@ async fn purge(sections: &SandboxSections, only: Option<&str>, now: i64) -> Resu
     if let Some(id) = only {
         row(registry, id)?;
     }
-    let Some(store) = existing_store(sections)? else {
+    let Some(store) = existing_source_store(sections)? else {
         return Ok("nothing stored yet: nothing to purge\n".into());
     };
     let mut out = String::new();
@@ -735,6 +732,7 @@ mod tests {
             entity: None,
             event_key: None,
             published_from_ms: None,
+            published_to_ms: None,
         }
     }
 

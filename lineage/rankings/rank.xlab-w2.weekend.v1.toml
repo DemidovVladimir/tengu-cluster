@@ -1,0 +1,52 @@
+# DRAFT — UNSEALED. The operator reviews this contract (SR-1 stop,
+# docs/strategy-ranking-automation-2026-10-08.md "Weekend job") before
+# `tengu lineage seal ranking:rank.xlab-w2.weekend.v1`; until then
+# `tengu lineage verify` warns `ranking_unsealed` and no ranking runs under it.
+# Run by [feeds.strategy_ranking_weekend] of sandboxes/xlab-w2 (Mondays after
+# the cutoff, New York). A contract of its own, not the daily one run twice:
+# the daily contract publishes one ranking per date, so a second feed of it
+# would be a no-op; this one fixes its own cadence (Mondays), cutoff (after the
+# weekend's Monday exits close) and strategy set (the weekend windows).
+id = "rank.xlab-w2.weekend.v1"
+title = "xlab-w2 weekend strategy ranking v1 — the weekend windows after each weekend, weakest to strongest"
+notes = """
+Weekly development evidence, ranked on Mondays once the weekend's exits have closed: the \
+weekend_window strategies rerun on [from, Monday 12:00 New York) — no split, the holdout never \
+read, rules arms only (evaluation NOT_GATED: no Jev). Left out: the four labelled strategies \
+(no SEC event refresh feed). A holiday Monday's weekend exits on Tuesday and is counted the \
+next week."""
+preregistered = true
+registered_at = "2026-10-08T17:11:25Z"
+sandbox = "xlab-w2"
+evidence_class = "DEVELOPMENT"
+arm = "research"
+tz = "America/New_York"
+cutoff = "12:00"   # data_through = Monday 12:00 New York: the 09:30 exits' bars have closed
+days = ["Mon"]     # ranks on Mondays only
+from = "2026-03-01" # decisions [from, cutoff)
+strategies = [
+    "weekend_fade",
+    "weekend_fade_liquid",
+    "weekend_fade_top4",
+    "weekend_fade_top4_stop300",
+    "weekend_fade_top4_stop500",
+    "weekend_fade_top4_net_of_cost",
+    "weekend_fade_top4_stop500_net_of_cost",
+    "weekend_follow",
+]
+cohort = ["generation", "evidence_class", "arm", "instruments_sha256", "costs_sha256", "interval", "from_ms", "to_ms", "data_through_ms"]
+on_missing = "INCOMPLETE"  # a listed strategy FAILED / STALE ⇒ status INCOMPLETE, latest kept
+
+[freshness]
+max_lag_bars = 2   # every instrument's newest stored bar closes ≥ cutoff − 2 bars, else STALE
+
+[eligibility]
+min_trades = 20
+min_periods = 8
+max_funding_incomplete = 0
+exclude_status = ["SUPERSEDED"]
+
+[rating]   # lexicographic, ascending = weaker first
+order = ["evidence_tier", "verdict", "ci95_lo_bps", "mean_net_bps", "-best2_periods_share", "-max_drawdown_bps"]
+quantum = 0.01   # numeric keys compared as round(x / quantum)
+tie_break = "strategy_asc"

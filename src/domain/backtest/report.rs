@@ -6,7 +6,7 @@
 //!
 //! | Piece | Holds |
 //! |---|---|
-//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, data through (`data_through_ms`: the newest row read, the rerun bound), instruments, candidates, arms, skips by reason (a label skip by class: `label_skipped:NEWS`), data notes (incl. applied share splits and a labelled spec's class counts and uncovered instruments); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
+//! | [`BacktestReport`] | run id, strategy, kind, interval, spec + sha256, from / to, split, data through (`data_through_ms`: the newest row read, the rerun bound), cohort identity (`generation`, `instruments_sha256`, `costs_sha256` — what a strategy ranking compares; absent in reports before 2026-10-08), instruments, candidates, arms, skips by reason (a label skip by class: `label_skipped:NEWS`), data notes (incl. applied share splits and a labelled spec's class counts and uncovered instruments); when the Jev gate arm ran: its comparisons, calibration and `gate` (`GateSummary`: counts, cache, cost) |
 //! | [`ArmReport`] | candidates offered, summary, split halves (in-sample / holdout), refusals by rule, drops by reason |
 //! | Drawdown | research arms (`research`, `rules`, `jev`): USD + bps of one trade's notional; capped arms: USD + % of `initial_cash_usd` (`stats.rs`) |
 //! | `backtest/1` row | subject = the run id; line 1 ≤ 200 chars, ids whole (figures are dropped first); ≤ 32 scalar features of the primary arm (`research`, else the first) + `capped_*` + split halves + the first comparison + the gate's `jev_*` in the slots left (`t_stat` is clustered by period, `sharpe` annualised by the rate of periods with trades — `stats.rs`); `partial` with an error per data gap kind (missing prices, exits without a price, funding hours without a row) |
@@ -98,6 +98,19 @@ pub struct BacktestReport {
     /// before 2026-10-08 (lineage D1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_through_ms: Option<i64>,
+    /// The `[generation]` the sandbox was bound to; `None` = unbound (or a
+    /// report written before 2026-10-08).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
+    /// sha256 hex of the canonical JSON of the sorted ids the run read
+    /// (`exclude` out). `None` in reports written before 2026-10-08.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruments_sha256: Option<String>,
+    /// sha256 hex of the canonical JSON `{id: its resolved cost or null}`
+    /// over those ids — `[backtest.costs]` is outside `spec_sha256`. `None`
+    /// in reports written before 2026-10-08.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub costs_sha256: Option<String>,
     pub n_instruments: usize,
     pub n_candidates: usize,
     pub arms: BTreeMap<String, ArmReport>,
@@ -171,6 +184,9 @@ impl BacktestReport {
             to_ms: params.to_ms,
             split,
             data_through_ms: None,
+            generation: None,
+            instruments_sha256: None,
+            costs_sha256: None,
             n_instruments,
             n_candidates: set.candidates.len(),
             arms: BTreeMap::new(),
@@ -306,6 +322,16 @@ impl BacktestReport {
             ("Spec sha256", format!("`{}`", self.spec_sha256)),
         ] {
             let _ = writeln!(m, "| {k} | {v} |");
+        }
+        if self.instruments_sha256.is_some() || self.costs_sha256.is_some() {
+            let code = |x: &Option<String>| x.as_ref().map_or("—".into(), |h| format!("`{h}`"));
+            let _ = writeln!(
+                m,
+                "| Cohort | generation {} · instruments sha256 {} · costs sha256 {} |",
+                self.generation.as_deref().unwrap_or("none (unbound)"),
+                code(&self.instruments_sha256),
+                code(&self.costs_sha256)
+            );
         }
         let _ = writeln!(m, "\n## Summary\n");
         let _ = writeln!(
@@ -932,5 +958,45 @@ mod tests {
             .lines()
             .all(|l| l.starts_with("backtest") || l.contains(" n=") || l.contains(':')));
         assert!(BacktestReport::arm_line("x", &r.arms["capped"]).starts_with("x n="));
+    }
+
+    /// A report written before the cohort identity (2026-10-08: the
+    /// engine-matrix stored run) parses with the three fields `None`, writes
+    /// none back, and `report.md` shows no cohort row; filled, they round-trip
+    /// and the row names them in full.
+    #[test]
+    fn a_report_without_identity_fields_parses() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/xlab/run_conf_rows/report.json"),
+        )
+        .unwrap();
+        let r: BacktestReport = serde_json::from_str(&text).unwrap();
+        assert_eq!(r.run_id, "20261001T182112Z-conf_rows");
+        assert_eq!(
+            (&r.generation, &r.instruments_sha256, &r.costs_sha256),
+            (&None, &None, &None)
+        );
+        let back = serde_json::to_value(&r).unwrap();
+        for k in ["generation", "instruments_sha256", "costs_sha256"] {
+            assert!(back.get(k).is_none(), "{k}");
+        }
+        assert!(!r.render_markdown().contains("| Cohort |"));
+        let mut with = r.clone();
+        with.generation = Some("W1".into());
+        with.instruments_sha256 = Some("c".repeat(64));
+        with.costs_sha256 = Some("d".repeat(64));
+        let again: BacktestReport =
+            serde_json::from_value(serde_json::to_value(&with).unwrap()).unwrap();
+        assert_eq!(again, with);
+        let md = with.render_markdown();
+        assert!(
+            md.contains(&format!(
+                "| Cohort | generation W1 · instruments sha256 `{}` · costs sha256 `{}` |",
+                "c".repeat(64),
+                "d".repeat(64)
+            )),
+            "{md}"
+        );
     }
 }

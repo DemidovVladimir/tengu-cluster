@@ -906,8 +906,12 @@ mod tests {
                 "{id}: the operator hashes the terms page"
             );
         }
-        use crate::domain::tools::{SIDE_EFFECT_TOOLS, SOE_ALLOWED};
-        assert_eq!(cfg.agents["soe_reader"].tools, ["source_evidence"]);
+        use crate::domain::tools::{
+            SIDE_EFFECT_TOOLS, SOE_ALLOWED, SOURCE_EVIDENCE, WORKSPACE_TOOLS,
+        };
+        assert_eq!(cfg.agents["soe_reader"].tools, [SOURCE_EVIDENCE]);
+        // A catalog tool (opt-in), so the agent holds it.
+        assert!(WORKSPACE_TOOLS.contains(&SOURCE_EVIDENCE));
         for (id, a) in &cfg.agents {
             assert!(
                 !a.tools.is_empty(),

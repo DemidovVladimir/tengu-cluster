@@ -4,17 +4,18 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 
 **Code:** `src/application/skills/registry.rs` (parse, discover, registry), `src/application/skills/lifecycle/` (metrics, eval, evolve, scanner).
 
-## Inventory (`skills/`, 2026-10-02)
+## Inventory (`skills/`, 2026-10-08)
 
 | Skill | Kind | Purpose | Loaded by |
 |---|---|---|---|
-| `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) | Privy agentic wallets: create / manage wallets, policies, transactions | no sandbox lists it |
+| `privy-agentic-wallets` | API reference (`base_url: https://api.privy.io`) — a git submodule pinned at `7f104aa118a891aca85cfebbd68bf9f4a2cd85e7` with no `.gitmodules` entry: empty in a fresh clone or worktree | Privy agentic wallets: create / manage wallets, policies, transactions | no sandbox lists it |
+| `execution-map` | documentation | Architect → Jev: the execution-map JSON for `tengu decide --map` (`config/execution_map.rs`) — fields, narrowing rules, outcomes | no sandbox lists it |
 | `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | no sandbox lists it |
 | `telegram-rag-ingest` | documentation | Resources shared in Telegram (attachments, URLs, text) → searchable vector memory; answer from it later (`http_request` → `write_file` → `persistent_store`) | `storage-test` → `storage` |
-| `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab` → `xl_architect` |
+| `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab`, `xlab-w2` → `xl_architect` |
 | `soe-architect` | documentation (+ `resources/proposal.example.json`) | SOE Architect stage: read the run's packet, at least two mechanisms + `HOLD`, ranges with evidence ids or `UNKNOWN`, never a computed field; `soe_propose` call shapes and the draft format | `soe` → `soe_architect` |
 | `soe-critic` | documentation | SOE Critic stage: the seven challenge kinds and their conservative-only effects; `soe_challenge` flat call shape | `soe` → `soe_critic` |
-| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping`, `xmarket`) — read by the planner from the cwd, not through `skill_packages` |
+| `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping` only) — read by the planner from `<cwd>/skills/orchestrator/SKILL.md` (`planner.rs`), not through `skill_packages`; its lifecycle-verb rows need a `learning-agent` block no sandbox ships |
 | `skill-eval` | documentation | Points to `tengu eval` / `tengu skill metrics` / `tengu skill evolve` | none |
 | `german-teacher` · `spanish-teacher` | documentation, learner-facing (`resources/`, `evals/prompts.yaml`) | Teacher-seeded skills (`tengu skill seed`), `editable_by_learner: true`; read their materials with `skill_resource` | none |
 | `orchestration-e2e` | no `SKILL.md` — `evals/` only | 9 eval rows + an orchestrated eval config (`tengu eval orchestration-e2e`) | `tengu eval` |
@@ -87,7 +88,7 @@ metrics:                    # optional: accuracy metrics (below)
 | `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
 | `learner_facing` | written by `skill seed` / `manage_skill create` | marker; the per-learner state module (`skills/<name>/state/<learner_id>.json`, `lifecycle/learner_state.rs`) is landed but not wired |
 
-`requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading (2026-10-08): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
+`requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading of frontmatter skills (2026-10-08, `registry.rs::SkillGate`, checked on every `reload`): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
 
 ## Metrics & Evolution
 
@@ -119,9 +120,9 @@ Writers refuse agent / CLI state paths (`.tengu/`, `.claude/`, `skills/` via `wr
 
 | Command | Purpose |
 |---------|---------|
-| `tengu eval [<skill>...] [--sandbox] [--judge-model] [--concurrency] [--format table\|json] [--out] [--filter] [--keep-workspace] [--keep-runs] [--no-persist] [--max-runs]` | Replay `evals/prompts.yaml` (or `prompts.md`) fixtures, score each via the skill's metrics, write `metrics.json` + append `metrics/history.jsonl`, per-row transcripts under `evals/runs/<ts>/`. No skill = every skill with evals; judge default `anthropic/claude-opus-4-7` |
+| `tengu eval [<skill>...] [--sandbox] [--judge-model] [--concurrency] [--format table\|json] [--out] [--filter] [--keep-workspace] [--keep-runs] [--no-persist] [--max-runs]` | Replay `evals/prompts.yaml` (or `prompts.md`) fixtures, score each via the skill's metrics, write `metrics.json` + append `metrics/history.jsonl`, per-row transcripts under `evals/runs/<ts>/`. No skill = every skill with evals; judge default `anthropic/claude-opus-4-7`; `--concurrency` > 1 is refused (not implemented) |
 | `tengu skill metrics <skill> [--last N]` | Rolling `metrics.json` + recent history entries (read-only, no API calls) |
-| `tengu skill evolve <skill> [--max-cycles] [--target-metric] [--base-branch] [--sandbox]` | Bounded rewrite → rescore loop: baseline eval, target = the lowest gated metric, `skill-improver` in a scratch git worktree for N cycles, best cycle (no regression > 0.05 on other gated metrics), diff + metric delta, y/n/d/o prompt |
+| `tengu skill evolve <skill> [--max-cycles] [--target-metric] [--base-branch] [--sandbox]` | Bounded rewrite → rescore loop: baseline eval, target = the lowest gated metric, `skill-improver` in a scratch git worktree for N cycles, best cycle (target beats its baseline, no other metric drops > 0.05 — passing ones included), diff + metric delta, y/n/d/o prompt |
 | `tengu skill accept-proposal <path>` | Reserved for auto-trigger follow-up (no-op in v1) |
 | `tengu skill list [--tier T]` | Walk the tiers; name, tier, metrics health |
 | `tengu skill remove <name> [--tier T] [--yes]` | Delete a skill dir (default tier `project`) |

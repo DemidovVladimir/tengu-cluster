@@ -15,6 +15,7 @@ use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
 use super::soe::SoeConfig;
 use super::sources::SourcesConfig;
+use super::strategy_ranking::RankingSection;
 use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
 use crate::domain::calendar::Calendar;
@@ -75,6 +76,11 @@ pub struct SandboxSections {
     /// by the `soe_cycle` job and the `soe_*` tools; its state root is
     /// [`SandboxSections::sources_state_dir`] (critic C8).
     pub soe: Option<Arc<SoeConfig>>,
+    /// `[strategy_ranking]` resolved (`config/strategy_ranking.rs`): the
+    /// contracts, their registry and the run dirs it cites — kept by
+    /// run-dir retention bound or not (`application/backtest/mod.rs`);
+    /// `None` = no ranking.
+    pub ranking: Option<Arc<RankingSection>>,
 }
 
 impl SandboxSections {

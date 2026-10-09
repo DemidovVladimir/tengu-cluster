@@ -4,7 +4,7 @@ End-to-end acceptance check for the work landed across PRs #6 → #13, updated 2
 
 Runs in ~30 minutes of your time. Automated parts cost ~$0.50–$1.00 in OpenRouter API fees.
 
-**2026-10-02:** § 9 (xmarket paper desk) and § 10 (xlab history-first research) cover the `feature/xmarket` work — operator-runnable; `tengu` commands checked against `tengu <cmd> --help`, test filters against the test sources; § 10's numbers were re-run on a copy of `market.db` on 2026-10-02.
+**2026-10-08:** § 11 adds the lineage registry, strategy ranking and SOE offline checks; § 9–10 agent lists follow the current sandboxes. **2026-10-02:** § 9 (xmarket paper desk) and § 10 (xlab history-first research) cover the `feature/xmarket` work — operator-runnable; `tengu` commands checked against `tengu <cmd> --help`, test filters against the test sources; § 10's numbers were re-run on a copy of `market.db` on 2026-10-02.
 
 ---
 
@@ -15,7 +15,7 @@ cd /Users/vladimirdemidov/development/tengu-cluster
 git log --oneline -5
 
 export OPENROUTER_API_KEY=sk-or-...
-export RUST_LOG=tengu=info,tengu::adapters::orchestrator=debug
+export RUST_LOG=tengu=info,tengu::application::orchestrator=debug
 
 # Egress is Tor by default: start the proxy, or put `[egress] network = "open"` in the config
 make tor                              # Arti + lyrebird-rs on 127.0.0.1:9050 (needs ../lyrebird-rs)
@@ -35,10 +35,10 @@ If fail: something in the current tree doesn't compile — stop, diagnose.
 
 ```bash
 ls src/application/memory/
-ls src/application/memory/vector/
+ls src/adapters/outbound/memory/
 ```
 
-**Expect:** `builtin.rs`, `context_block.rs`, `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `provider.rs`, `vector.rs`, `writer.rs` + `vector/{disk.rs,embedder.rs}`. No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/outbound/tools/agentic_memory/`).
+**Expect:** `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `writer.rs` + `outbound/memory/{builtin.rs,disk_vector.rs,embedder.rs,mod.rs}` (ports in `src/ports/memory.rs`). No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/outbound/tools/agentic_memory/`).
 
 ### 1.2 Orchestrator subsystem files exist
 
@@ -46,7 +46,7 @@ ls src/application/memory/vector/
 ls src/application/orchestrator/
 ```
 
-**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `plan.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `wiring.rs`. No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1). The worker lives outside the module: `src/adapters/outbound/subprocess_runner.rs` (`SubprocessRunner`).
+**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `wiring.rs` (the plan types live in `src/domain/plan.rs`). No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1). The worker lives outside the module: `src/adapters/outbound/subprocess_runner.rs` (`SubprocessRunner`).
 
 ### 1.3 Legacy files are gone
 
@@ -268,7 +268,7 @@ Type these one at a time in the TUI and observe:
 Look up the HTTP status codes for 200 and 404, then write a two-sentence summary contrasting them.
 ```
 
-**Expected event sequence** (TUI `orch:` system bubbles — `OrchestratorEvent` rendered in `tui/mod.rs:241`; `RUST_LOG=tengu=info` adds one `metrics` line per LLM call, children included):
+**Expected event sequence** (TUI `orch:` system bubbles — `OrchestratorEvent` rendered in `tui/mod.rs:308`; `RUST_LOG=tengu=info` adds one `metrics` line per LLM call, children included):
 1. `orch: plan created (2 steps)` — s2 depends on s1
 2. `orch: ▶ s1 [researcher]` — a `tengu run-agent` child spawns
 3. `orch: ✓ s1`
@@ -317,6 +317,7 @@ Add to `sandboxes/smoke/config.toml` (the token is an env var, not a config key)
 ```toml
 [telegram]
 enabled = true
+allowed_users = ["<your Telegram user id>"]   # or TENGU_TELEGRAM_ALLOWED_USERS — without either `tengu telegram` refuses to start
 ```
 
 ```bash
@@ -344,6 +345,7 @@ For each validation section, record:
 | 6. Telegram (optional) | pass / skip | |
 | 9. xmarket paper desk | pass / fail | `doctor --live` exit code, feeds live, ledger owner |
 | 10. xlab research | pass / fail | research-arm n · mean vs the expected rows, gate cache hits |
+| 11. Lineage · ranking · SOE | pass / fail | failing test names |
 
 If anything fails:
 - §1 or §2 fail → code regression. Don't proceed.
@@ -395,7 +397,7 @@ cargo test --test engine_matrix offline_local_xm
 ### 9.2 Config + run + live health
 
 ```bash
-"$T" doctor --sandbox xmarket </dev/null                 # exit 0: agents xm, xm_architect, xm_executor; network open, allow api.hyperliquid.xyz
+"$T" doctor --sandbox xmarket </dev/null                 # exit 0: agents xm_architect, xm_executor (no planner); network open, allow api.hyperliquid.xyz
 tmux new -s xm                                            # then, in the pane (foreground — never with &: the vault prompt stops a background job)
 nice -n 10 "$T" run --sandbox xmarket
 # second terminal:
@@ -445,7 +447,7 @@ cargo test --bin tengu domain::backtest::checks           # 5 tests: time integr
 cargo test --bin tengu config::backtest                   # 6 tests: [backtest] load rules, the strategy library checked at load
 TENGU_CONFORMANCE_ONLY=market_history cargo test --test bridge_conformance bridge_matches_in_process
 TENGU_CONFORMANCE_ONLY=backtest cargo test --test bridge_conformance bridge_matches_in_process
-cargo test --test engine_matrix offline_local_xlab        # offline_local_xlab + offline_local_xlab_holdout
+cargo test --test engine_matrix offline_local_xlab        # offline_local_xlab + _xlab_holdout + _xlab_rank
 ```
 
 ### 10.2 Config + data
@@ -493,8 +495,24 @@ Each run prints its run dir `~/.tengu/state/xlab/backtests/<run id>/` (`report.j
 cargo test --features claude_code --test engine_matrix xlab -- --ignored --nocapture --test-threads 1
 ```
 
-**Expect:** 8 legs (`openrouter_gemini_*`, `openrouter_haiku_*`, `claude_code_*`, `local_*` × `xlab`, `xlab_holdout`). 2026-10-01: haiku-4.5 and the Claude CLI pass both sets; gemini-2.5-flash-lite calls every tool but may misquote numbers — re-run; `local_*` skipped without `TENGU_MATRIX_LOCAL_BASE_URL`.
+**Expect:** 12 legs (`openrouter_gemini_*`, `openrouter_haiku_*`, `claude_code_*`, `local_*` × `xlab`, `xlab_holdout`, `xlab_rank`). 2026-10-01 (before `xlab_rank`): haiku-4.5 and the Claude CLI pass both sets; gemini-2.5-flash-lite calls every tool but may misquote numbers — re-run; `local_*` skipped without `TENGU_MATRIX_LOCAL_BASE_URL`.
 
-### 10.6 Architect turn (live, optional, ≈ $0.14–0.37 a turn on Sonnet)
+### 10.6 Architect turn (live, optional; `xl_architect` = `claude-opus-5-5` through the Claude CLI, the operator's subscription)
 
 `"$T" chat --sandbox xlab` → "test a weekend follow placebo on the holdout split". **Expect:** `backtest` with a split shows the in-sample half only; one `"holdout": true` read adds a line to `~/.tengu/state/xlab/backtests/holdout-reads.jsonl`; the verdict is judged on the holdout line.
+
+---
+
+## 11. Lineage · strategy ranking · SOE (offline, no LLM, no network)
+
+Docs: `docs/lineage-2026-10-06.md`, `docs/strategy-ranking-automation-2026-10-08.md`, `docs/soe-2026-10-08.md`, `docs/source-evidence-2026-10-08.md`. Each test runs the built binary with `TENGU_HOME` in a temp dir.
+
+```bash
+cargo test --test lineage_cli          # fixture registry: verify, seal (variant + ranking contract), report, trace; the repo lineage/: W1 frozen, every pin recomputes
+cargo test --test strategy_ranking     # tengu ranking on a sealed test contract: publish, rerun no-op, resume, INCOMPLETE keeps latest, unsealed refused
+cargo test --test soe_cli              # tengu soe: eval on the 16 fixture cases, check / portfolio / sensitivity, profile refusals
+cargo test --test engine_matrix offline_local_sources   # source_evidence through run-agent on the local mock
+"$T" lineage verify --pins </dev/null  # exit 0 on the repo registry
+```
+
+**Pass:** every test `ok`, `lineage verify --pins` exit 0.

@@ -15,7 +15,7 @@
 //! | `report <family> --forward <experiment> [--state xlab]…` | the 21 Rule-W acceptance answers (handoff § 57) with their source fields | no such record |
 //! | `capabilities [--generation ID]` | every capability (class, version, permission, lifecycle, bindings, contract, generations) | no such generation |
 //! | `generation <ID>` | the generation, its frozen digest (manifest + listed capability records) against its lock, every pin OK / DRIFT / UNRESOLVED | no such generation |
-//! | `seal <variant:ID \| experiment:ID>` | appends `[[sealed]] record, sha256 (the file's digest), sealed_at (now)` to `locks.toml` | already sealed, not `preregistered = true`, its outcome already known, or the registry has errors on it |
+//! | `seal <variant:ID \| experiment:ID \| ranking:ID>` | appends `[[sealed]] record, sha256 (the file's digest), sealed_at (now)` to `locks.toml` (a ranking contract: what the publisher checks before it ranks) | already sealed, not `preregistered = true`, its outcome already known, or the registry has errors on it |
 //!
 //! `--format text|json` on every view.
 
@@ -101,7 +101,7 @@ pub(super) enum LineageAction {
     },
     /// A generation, its lock and its pins (OK / DRIFT / UNRESOLVED).
     Generation { id: String },
-    /// Seal a preregistration: variant:<id> or experiment:<id>.
+    /// Seal a preregistration: variant:<id>, experiment:<id> or ranking:<id>.
     Seal { record: String },
 }
 
@@ -530,6 +530,7 @@ fn seal(dir: &Path, record: &str) -> Result<()> {
     }
     let preregistered = match kind {
         RecordKind::Variant => reg.variants.get(&id).map(|v| v.preregistered),
+        RecordKind::Ranking => reg.rankings.get(&id).map(|c| c.preregistered),
         _ => reg.experiments.get(&id).map(|x| x.preregistered),
     }
     .ok_or_else(|| anyhow!("no {kind} `{id}`"))?;

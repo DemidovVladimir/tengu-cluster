@@ -329,6 +329,7 @@ async fn from_evidence(
             entity: None,
             event_key: Some(event_key.to_string()),
             published_from_ms: None,
+            published_to_ms: None,
         },
     )
     .await?;

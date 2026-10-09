@@ -11,9 +11,6 @@
 //! | `[[concentration]]` | `dimension` (`CLIENT` `PLATFORM` `CHANNEL` `SUPPLIER` `JURISDICTION`), `name`, `share` (bps); one row per (dimension, name) |
 //! | `[bounds]` | `owner_time`, `support`, `payment_access`, `scope`: `BOUNDED` `UNBOUNDED` `UNKNOWN` |
 
-// Consumers land with the economics and gates (O1 W3–W4).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use super::record::{stated, Problems};

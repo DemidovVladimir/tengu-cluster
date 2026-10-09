@@ -1,5 +1,7 @@
 # Portable Agentic Memory Plugin (2026-05-15)
 
+Status (2026-10-08): the standalone plugin is built outside this repo (sibling `../portable-memory`, not a tengu dependency). In tengu only the spike remains — the `agentic_memory` tool (`capture`, `recall`, `ingest_source`, `promote`, `compile_wiki`, `lint`; no `propose_behavior` / `apply_approved`) and `tengu agentic-memory-server` (MCP stdio, `--features postgres_memory`).
+
 ## Decision
 
 | Topic | Decision |

@@ -4,7 +4,7 @@ Precise map of how orchestration was built, how it runs, and where every piece l
 
 Covers: construction history, runtime pipeline, parallel + sequential + diamond execution, retention.
 
-Current shape (post-#13): planner = `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), step memory = Postgres `agentic_memory` (`postgres_memory`). `OrchestratorAgentPlanner`, in-process `ChatWorker`, `roster.rs`, `telemetry.rs`, `orchestrator/config.rs`, `vector/qdrant.rs` are gone. Line numbers below are as of 2026-09-18.
+Current shape (post-#13): planner = `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), step memory = Postgres `agentic_memory` (`postgres_memory`). `OrchestratorAgentPlanner`, in-process `ChatWorker`, `roster.rs`, `telemetry.rs`, `orchestrator/config.rs`, `vector/qdrant.rs` are gone. Paths are under `src/` (hexagonal layout); line numbers as of 2026-10-08 (`main` at bc9bc12a038654ac4941c714abcfa777c99af631). Only the chat turn's orchestration is covered here — `tengu run`, backtests, rankings, lineage and sources run without a planner: `docs/architecture-2026-04-27.md` §1b, §2.7–2.17.
 
 ---
 
@@ -50,24 +50,24 @@ flowchart TB
     end
 
     subgraph Orchestration["Orchestrator subsystem<br/><code>src/application/orchestrator/</code>"]
-        Handle["Orchestrator::handle<br/><code>mod.rs:93</code>"]
-        Replan["replan::drive<br/><code>replan.rs:12</code>"]
-        Planner["RagPlanner<br/><code>planner.rs:234</code><br/>TENGU_PLANNER_REGISTRY.md"]
-        Executor["DagExecutor::run<br/><code>executor.rs:38</code>"]
-        Retry["RetryPolicy<br/><code>retry.rs</code>"]
+        Handle["Orchestrator::handle<br/><code>mod.rs:86</code>"]
+        Replan["replan::drive<br/><code>replan.rs:13</code>"]
+        Planner["RagPlanner<br/><code>planner.rs:151</code><br/>TENGU_PLANNER_REGISTRY.md"]
+        Executor["DagExecutor::run<br/><code>executor.rs:26</code>"]
+        Retry["RetryPolicy<br/><code>retry.rs:13</code>"]
         Events["EventBus<br/><code>events.rs</code>"]
     end
 
     subgraph PlannerTurn["Planner-side LLM turn (tools=[])"]
-        Port["ChatOrchestratorPortImpl<br/><code>wiring.rs:91</code>"]
-        Write["MemoryWriter<br/><code>memory/writer.rs</code>"]
-        Factory["RuntimeChatServiceFactory<br/><code>bootstrap/:1007</code>"]
+        Port["ChatOrchestratorPortImpl<br/><code>wiring.rs:19</code>"]
+        Write["MemoryWriter<br/><code>application/memory/writer.rs</code>"]
+        Factory["RuntimeChatServiceFactory<br/><code>bootstrap/orchestrator.rs:98</code>"]
         ChatRT["ChatRuntimeService<br/><code>application/chat/service.rs</code>"]
-        EngineCall["collect_engine_response<br/><code>adapters/outbound/engines/mod.rs:640</code>"]
+        EngineCall["collect_engine_response<br/><code>application/chat/tool_loop.rs:65</code>"]
     end
 
     subgraph Workers["Worker step dispatch (subprocess)"]
-        Runner["SubprocessRunner::run_step<br/><code>runner.rs:261</code>"]
+        Runner["SubprocessRunner::run_step<br/><code>adapters/outbound/subprocess_runner.rs:316</code>"]
         Child["tengu run-agent<br/><code>adapters/inbound/cli/run_agent.rs::run_agent_subprocess</code><br/>own LLM + tools loop"]
         AM["Postgres agentic_memory<br/><code>outbound/tools/agentic_memory/</code><br/>compress_and_store"]
     end
@@ -109,17 +109,17 @@ flowchart TB
      │       │       │        │
      ▼       ▼       ▼        ▼   (each provides a ChatServiceFactory for the planner turn)
 ┌────────────────────────────────────────┐
-│   Orchestrator::handle                 │   orchestrator/mod.rs:93
-│    └─▶ replan::drive                   │   orchestrator/replan.rs:12
-│         ├─▶ RagPlanner::plan           │   orchestrator/planner.rs:638
+│   Orchestrator::handle                 │   orchestrator/mod.rs:86
+│    └─▶ replan::drive                   │   orchestrator/replan.rs:13
+│         ├─▶ RagPlanner::plan           │   orchestrator/planner.rs:518
 │         │    ├ ensure_planner_registry │   orchestrator/shared_files.rs:80
-│         │    ├ ChatOrchestratorPortImpl│   orchestrator/wiring.rs:91 (tools=[])
-│         │    └ parse_verdict           │   orchestrator/planner.rs:109
+│         │    ├ ChatOrchestratorPortImpl│   orchestrator/wiring.rs:19 (tools=[])
+│         │    └ parse_verdict           │   orchestrator/planner.rs:26
 │         ├─▶ set_active_plan + TENGU_PLAN.md   shared_files.rs:39 / :128
-│         └─▶ DagExecutor::run           │   orchestrator/executor.rs:38
-│              ├─▶ RetryPolicy           │   orchestrator/retry.rs:37
-│              └─▶ SubprocessRunner      │   runner.rs:261
-│                   └ tengu run-agent    │   main.rs:635 (own LLM + tools loop)
+│         └─▶ DagExecutor::run           │   orchestrator/executor.rs:26
+│              ├─▶ run_step_with_retry   │   orchestrator/retry.rs:37
+│              └─▶ SubprocessRunner      │   outbound/subprocess_runner.rs:316
+│                   └ tengu run-agent    │   inbound/cli/run_agent.rs:79 (own LLM + tools loop)
 │                        └ compress_and_store → Postgres agentic_memory
 └────────────────────────────────────────┘
         │
@@ -163,7 +163,7 @@ sequenceDiagram
         Exec-->>Channel: emit StepStarted
         Exec->>Retry: run_step_with_retry
         Retry->>Runner: run_step(step, step_inputs)
-        Runner->>Runner: agents.get(step.agent) — fail fast if unknown
+        Runner->>Runner: agents.get(step.agent) with a description — else Err, no spawn
         Runner->>Child: spawn; AgentIpcInput on stdin<br/>(goal + step_inputs, plan_state, sandbox_config)
         Child->>Child: LLM + tools loop (max_tool_rounds)
         Child->>Mem: compress_and_store / summary backstop
@@ -174,9 +174,9 @@ sequenceDiagram
     end
 
     alt all succeed
-        Exec-->>Orch: ExecResult::Done{leaf_output}
+        Exec-->>Orch: ExecResult::Done{leaf output; parallel leaves joined}
         Orch-->>Channel: emit PlanCompleted
-    else step exhausted
+    else step exhausted (in-flight steps aborted)
         Exec-->>Orch: ExecResult::NeedsReplan
         Orch-->>Channel: emit ReplanTriggered
         Orch->>Plan: replan(prompt, prior_plan, failed_id, error)
@@ -191,24 +191,25 @@ sequenceDiagram
 
 | Step in diagram | File | Line |
 |---|---|---|
-| Channel builds snapshots | `adapters/inbound/telegram.rs::execute_orchestrator_turn` | 1420 (loop 1451, publish 1538, handle 1551) |
-|  | `tui/mod.rs` | ~189 (construct), 798 (snapshot write), 804 (handle) |
-|  | `adapters/inbound/webhooks.rs` | 257 |
-| `Orchestrator::handle` | `orchestrator/mod.rs` | 93 |
-| `replan::drive` | `orchestrator/replan.rs` | 12 |
-| `RagPlanner::plan` / `parse_verdict` | `orchestrator/planner.rs` | 638 / 109 |
-| Registry + active plan | `orchestrator/shared_files.rs` | `ensure_planner_registry` 80, `routable_agents` 168, `set_active_plan` 39 |
-| `DagExecutor::run` | `orchestrator/executor.rs` | 38 |
-| `ready_steps` | `orchestrator/plan.rs` | 91 |
-| `tokio::spawn` per step | `orchestrator/executor.rs` | 74 |
-| `render_step_inputs` | `orchestrator/executor.rs` | 136 |
-| `run_step_with_retry` | `orchestrator/retry.rs` | 37 |
-| `SubprocessRunner::run_step` / `run_with_timeout` | `runner.rs` | 261 / 183 |
-| `run_agent_subprocess` (child) | `main.rs` | 635 |
-| `ChatOrchestratorPortImpl` (planner LLM turn) | `orchestrator/wiring.rs` | 91 |
-| `ChatServiceFactory` trait | `orchestrator/wiring.rs` | 49 |
-| `MemoryWriter::sync_turn` (planner turn only) | `memory/writer.rs` | 11 |
-| `collect_engine_response` | `adapters/outbound/engines/mod.rs` | 640 |
+| Channel builds snapshots | `adapters/inbound/telegram.rs::execute_orchestrator_turn` | 1459 (hot-reload 1467, snapshot loop 1493, publish 1568, handle 1596) |
+|  | `adapters/inbound/tui/mod.rs` | 245 (snapshots), 262 (`build_orchestrator`), 904 (snapshot write), 910 (handle) |
+|  | `adapters/inbound/webhooks.rs` | 485 |
+| `Orchestrator::handle` | `application/orchestrator/mod.rs` | 86 |
+| `replan::drive` | `application/orchestrator/replan.rs` | 13 |
+| `RagPlanner::plan` / `parse_verdict` | `application/orchestrator/planner.rs` | 518 / 26 |
+| Registry + active plan | `application/orchestrator/shared_files.rs` | `ensure_planner_registry` 80, `routable_agents` 168, `set_active_plan` 39, `write_plan_state` 128 |
+| `DagExecutor::run` | `application/orchestrator/executor.rs` | 26 |
+| `ready_steps` | `domain/plan.rs` | 91 |
+| `tokio::spawn` per step | `application/orchestrator/executor.rs` | 63 |
+| `abort_in_flight` (cancel / exhaustion) | `application/orchestrator/executor.rs` | 161 |
+| `render_step_inputs` | `application/orchestrator/executor.rs` | 167 |
+| `run_step_with_retry` | `application/orchestrator/retry.rs` | 37 |
+| `SubprocessRunner::run_step` / `run_with_timeout` | `adapters/outbound/subprocess_runner.rs` | 316 / 191 |
+| `run_agent_subprocess` (child) | `adapters/inbound/cli/run_agent.rs` | 79 |
+| `ChatOrchestratorPortImpl` (planner LLM turn) | `application/orchestrator/wiring.rs` | 19 |
+| `ChatServiceFactory` trait | `ports/orchestration.rs` | 132 |
+| `MemoryWriter::sync_turn` (planner turn only) | `application/memory/writer.rs` | 12 |
+| `collect_engine_response` | `application/chat/tool_loop.rs` | 65 |
 
 ---
 
@@ -255,15 +256,15 @@ T+22.9s  orchestrator:plan_completed  cancelled=false
 
 ### Key invariant proved
 
-`s2` starts **only after** `s1 succeeds` (gap between lines 4 and 5 above). `DagExecutor::run` at `executor.rs:38` loops:
+`s2` starts **only after** `s1 succeeds` (gap between lines 4 and 5 above). `DagExecutor::run` at `executor.rs:26` loops:
 
-1. `let ready = plan.ready_steps(&completed)` — `s2` is NOT in ready while `s1` is in-flight (its dep isn't completed).
-2. When s1 succeeds, `completed.insert(s1)`, next iteration includes s2 in ready.
-3. `render_step_inputs` at `executor.rs:136` builds `<step-input from="s1">...</step-input>` and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`).
+1. `for step in plan.ready_steps(&completed)` — `s2` is NOT in ready while `s1` is in-flight (its dep isn't completed).
+2. When s1 succeeds, `completed_outputs.insert(s1, output)`, next iteration includes s2 in ready.
+3. `render_step_inputs` at `executor.rs:167` builds `<step-input from="s1">...</step-input>` and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`).
 
 ### Code reference
 
-`orchestrator/plan.rs:91` — `Plan::ready_steps`:
+`domain/plan.rs:91` — `Plan::ready_steps`:
 ```rust
 pub fn ready_steps(&self, completed: &HashSet<StepId>) -> Vec<&Step> {
     self.steps
@@ -341,7 +342,7 @@ T+15.2s  orchestrator:plan_completed
 
 ### Code reference
 
-`orchestrator/executor.rs:62` — the loop (spawn at `:74`):
+`application/orchestrator/executor.rs:49` — the dispatch loop (spawn at `:63`):
 ```rust
 for step in plan.ready_steps(&completed) {
     if in_flight.contains(&step.id) {
@@ -358,7 +359,7 @@ for step in plan.ready_steps(&completed) {
 }
 ```
 
-Every ready step gets its own `tokio::spawn`. `FuturesUnordered` awaits whichever completes first — no ordering between parallel siblings.
+Every ready step gets its own `tokio::spawn`. `FuturesUnordered` awaits whichever completes first — no ordering between parallel siblings. An exhausted step, a panic or a cancel aborts every sibling still running (`abort_in_flight`, `:161`; the dropped `run-agent` child is `kill_on_drop`). Parallel leaves with no join step are joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`).
 
 ---
 
@@ -445,7 +446,7 @@ The planner's first plan was valid topology but used an invented agent name `ana
 
 ```mermaid
 flowchart TB
-    A["Plan #1 — s1:analyst ..."] --> B{"SubprocessRunner::run_step<br/>agents.get(&quot;analyst&quot;) — runner.rs:261"}
+    A["Plan #1 — s1:analyst ..."] --> B{"SubprocessRunner::run_step<br/>agents.get(&quot;analyst&quot;) — subprocess_runner.rs:316"}
     B -->|Err: no agents.analyst block| C["run_step_with_retry<br/>3 attempts"]
     C -->|all fail| D["StepExhausted"]
     D --> E["ReplanTriggered"]
@@ -461,27 +462,31 @@ flowchart TB
 ```
 T+0.0s   plan_created  steps=[s1:analyst(deps=[]), ...]   ← bad agent
 T+0.1s   step_started  s1:analyst
-T+0.2s   step_failed   s1 attempt=1 err=step s1: agent "analyst" has no `[agents.analyst]` block ...
-T+0.3s   step_failed   s1 attempt=2 err=(same)
-T+0.4s   step_failed   s1 attempt=3 err=(same)
-T+0.5s   step_exhausted  s1
-T+0.5s   replan_triggered  step s1: agent "analyst" has no `[agents.analyst]` block ...
-T+3.2s   plan_created  steps=[s1:researcher(deps=[]), ...]   ← repaired plan
+T+0.1s   step_failed   s1 attempt=1 err=no agent 'analyst' in the active config — the planner picked 'analyst' but there is no `[agents.analyst]` block (routable agents: [...]) ...
+T+1.1s   step_failed   s1 attempt=2 err=(same)          ← after the 1 s wait
+T+4.1s   step_failed   s1 attempt=3 err=(same)          ← after the 3 s wait
+T+4.1s   step_exhausted  s1
+T+4.1s   replan_triggered  no agent 'analyst' in the active config ...
+T+6.8s   plan_created  steps=[s1:researcher(deps=[]), ...]   ← repaired plan
 ...continues normally
 ```
 
 ### Code reference
 
-- Unknown agent fails fast (no spawn): `runner.rs::run_step` (`:261`) — `agents` = the parent config's `[agents.*]`; the planner only sees the `description`-bearing subset (`shared_files::routable_agents`). `plan.rs::validate` (`:104`) is topology-only and exercised by unit tests, not the runtime path.
-- Retry at step level: `orchestrator/retry.rs::run_step_with_retry` (`:37`) — 3 attempts, backoff 1s/3s/9s, then `StepExhausted`
-- Replan driver: `orchestrator/replan.rs::drive` (`:12`):
+- Unknown agent fails fast (no spawn): `adapters/outbound/subprocess_runner.rs::run_step` (`:316`) — only `[agents.*]` blocks with a `description` count, the same subset the planner sees (`shared_files::routable_agents`); the retry policy still runs its attempts around the error. `domain/plan.rs::validate` (`:104`) is topology-only, `#[allow(dead_code)]`, exercised by unit tests, not the runtime path.
+- Retry at step level: `application/orchestrator/retry.rs::run_step_with_retry` (`:37`) — 3 attempts (`max_attempts_per_step`), waits 1 s then 3 s (9 s for any later attempt), then `StepExhausted`
+- Replan driver: `application/orchestrator/replan.rs::drive` (`:13`), abridged:
 
 ```rust
 ExecResult::NeedsReplan { failed, error } => {
-    if replans_left == 0 { /* bail */ }
+    if replans_left == 0 { /* PlanCompleted: "Unable to complete the request after N replans…" */ }
     replans_left -= 1;
-    events.emit(ReplanTriggered { reason: error.clone() });
-    plan = planner.replan(user_msg, plan, failed, error).await?;
+    let _ = events.send(OrchestratorEvent::ReplanTriggered { reason: error.clone() });
+    match planner.replan(user_message, &plan, &failed.0, &error).await {
+        Ok(PlannerVerdict::Plan { plan: new_plan }) => plan_opt = Some(new_plan),
+        Ok(PlannerVerdict::Direct { response }) => return response,
+        Err(err) => return format!("System error: replan call failed: {}", err),
+    }
 }
 ```
 
@@ -508,23 +513,23 @@ flowchart TB
     BuildService --> Loop["collect_engine_response + tool loop"]
 ```
 
-**Code:** `adapters/inbound/telegram.rs:1420` — `execute_orchestrator_turn`. Snapshot loop at lines 1451–1536. Publish at 1538. Handle at 1551.
+**Code:** `adapters/inbound/telegram.rs:1459` — `execute_orchestrator_turn`. Hot-reload at 1467, snapshot loop from 1493. Publish at 1568. Handle at 1596.
 
 ### 8.2 TUI (per-turn snapshot)
 
-Same shape; the engine thread's `ChatRequest::UserMessage` branch (`tui/mod.rs:705`) writes snapshots (`:798`) before `rt.block_on(orch.handle(text))` (`:804`).
+Same shape; the engine thread's `ChatRequest::UserMessage` branch (`tui/mod.rs:800`) writes snapshots (`:904`) before `rt.block_on(orch.handle(text))` (`:910`).
 
-**Code:** `tui/mod.rs:189` — snapshots + `build_orchestrator`; `:798` — same snapshot pattern.
+**Code:** `tui/mod.rs:245` — snapshots, `:262` — `build_orchestrator`; `:904` — same snapshot pattern.
 
-### 8.3 Eval (per-step factory closure)
+### 8.3 Eval (planner-turn factory closure)
 
-The eval runner doesn't need snapshots — it rebuilds the per-agent ChatRuntimeService inside each `run_turn` call, using the `EvalRowAccum` to thread the row's stubs + observation tap across every worker step.
+The eval runner doesn't need snapshots — `EvalChatServiceFactory::run_turn` rebuilds the agent's engine + tools + prompt per call, with `EvalRowAccum` threading the row's stubs + observation tap. Only the planner turn goes through it.
 
-**Code:** `adapters/inbound/eval.rs::run_row_via_orchestrator` (`:1796`), `EvalChatServiceFactory` (`:1632`) — search for the comment "Shared state threaded through every worker step" (`:1803`). Row stubs apply to the planner turn; worker steps run as real `tengu run-agent` children and their metrics cross the IPC boundary (`AgentIpcOutput.metrics`).
+**Code:** `adapters/inbound/eval.rs::run_row_via_orchestrator` (`:2025`), `EvalChatServiceFactory` (`:1844`) — the comment "Shared state threaded through every worker step" (`:2035`) predates `SubprocessRunner`: `build_orchestrator` wires the runner, so worker steps run as real `tengu run-agent` children (no stubs) and their metrics cross the IPC boundary (`AgentIpcOutput.metrics`).
 
 ### 8.4 Webhooks (one-shot turn per POST)
 
-`adapters/inbound/webhooks.rs:257` — `build_orchestrator` per request, `session_id = webhook-<name>-<uuid>`. Canonical doc: `docs/webhooks-2026-05-11.md`.
+`adapters/inbound/webhooks.rs:485` — `build_orchestrator` per request, `session_id = webhook-<name>-<uuid>`. Canonical doc: `docs/webhooks-2026-05-11.md`.
 
 ---
 
@@ -558,24 +563,26 @@ flowchart TB
 
 | Artifact | Retention knob | Default | Location |
 |---|---|---|---|
-| `evals/runs/<ts>/` | `--keep-runs N` | 10 | `adapters/inbound/eval.rs::prune_old_run_dirs` |
-| `skills/<name>/metrics/runs/<ts>/` | `--max-runs N` | 10 | `adapters/inbound/eval.rs::finalize_run` (passed via `RunSkillOptions.max_per_run_reports`) |
+| `evals/runs/<ts>/` | `--keep-runs N` (pruned at start; ignored with `--out`) | 10 | `adapters/inbound/eval.rs::prune_old_run_dirs` |
+| `skills/<name>/metrics/runs/<ts>/` | `--max-runs N` (`0` = no pruning) | 10 | `application/skills/lifecycle/storage.rs::finalize_run` (passed via `RunSkillOptions.max_per_run_reports`) |
 | `metrics.json` | always kept (rolling) | — | — |
 | `history.jsonl` | always appended | — | — |
 
-### 9.3 `--no-persist` — skip all writes
+### 9.3 `--no-persist` — skip transcripts and metrics
 
 ```mermaid
 flowchart LR
     Args["--no-persist"] --> Skip["RunSkillOptions.persist = false"]
-    Skip --> Skip1["run_row: skip write_transcript"]
-    Skip --> Skip2["run_skill: skip report.json"]
-    Skip --> Skip3["finalize_run: early-return (no metrics.json / history.jsonl write)"]
+    Skip --> Skip1["run_row: persist_transcript = false (no transcript)"]
+    Skip --> Skip3["run_skill: finalize_run not called (no metrics.json / history.jsonl / metrics/runs write)"]
+    Args -.still.-> Kept["eval::run: evals/runs/&lt;ts&gt;/ created + report.json written"]
 
     Summary["in-memory SkillReport still returned"] -.prints.-> Terminal["table/JSON summary to stdout"]
 
     Skip --> Summary
 ```
+
+The flag's help text says it also skips `report.json`; the code does not (`adapters/inbound/eval.rs` `run`: `create_dir_all(&out_dir)`, then `std::fs::write(report_path, …)` with no `no_persist` check).
 
 ### 9.4 Example — 100 runs, bounded
 
@@ -588,7 +595,7 @@ With default retention:
 
 **Total bound: ~112 files regardless of run count.**
 
-With `--no-persist`: **0 files written**.
+With `--no-persist`: **1 file per run** (`evals/runs/<ts>/report.json`, still bounded by `--keep-runs`).
 
 ### 9.5 `.gitignore` rules
 
@@ -612,7 +619,7 @@ So even if retention fires AFTER a run (pruning last time), nothing between runs
 ### Iterate without polluting repo
 ```bash
 ./target/release/tengu eval orchestration-e2e --no-persist --filter parallel_fan_out
-# Zero files written, single row, ~$0.05
+# Only evals/runs/<ts>/report.json written (gitignored), single row, ~$0.05
 ```
 
 ### Interactive (TUI, orchestrated sandbox)
@@ -639,18 +646,18 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 |---|---|---|
 | **Orchestrator public API** | `src/application/orchestrator/mod.rs` | `Orchestrator::new`, `::handle`, `::subscribe`, `::cancel` |
 | **Replan loop** | `src/application/orchestrator/replan.rs` | `drive(planner, msg, worker, policy, max_replans, events, cancel)` |
-| **Planner** | `src/application/orchestrator/planner.rs` | `Planner` trait, `RagPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` |
-| **Planner registry + plan state** | `src/application/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry`, `set_active_plan`, `write_plan_state`, `enumerate_mcp_tools` |
-| **DAG executor** | `src/application/orchestrator/executor.rs` | `DagExecutor::run`, `WorkerHandle` trait, `ExecResult`, `render_step_inputs` |
-| **Worker (subprocess)** | `src/adapters/outbound/subprocess_runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput` |
-| **Subagent child** | `src/main.rs` | `run_agent_subprocess` (loads parent config, `[agents.<name>]`, LLM + tools loop, `compress_and_store`) |
+| **Planner** | `src/application/orchestrator/planner.rs` | `RagPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` (trait `Planner`: `src/ports/orchestration.rs`) |
+| **Planner registry + plan state** | `src/application/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry` (tool list from the `ToolDirectory` port), `set_active_plan` / `active_plan`, `write_plan_state`, `scan_skill_summaries` |
+| **DAG executor** | `src/application/orchestrator/executor.rs` | `DagExecutor::run`, `ExecResult`, `render_step_inputs`, `abort_in_flight` (trait `WorkerHandle`: `src/ports/orchestration.rs`) |
+| **Worker (subprocess)** | `src/adapters/outbound/subprocess_runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput`, `forward_child_log` |
+| **Subagent child** | `src/adapters/inbound/cli/run_agent.rs` | `run_agent_subprocess` (loads parent config, `[agents.<name>]`, LLM + tools loop, `compress_and_store`), `try_persist_agentic_step_summary` |
 | **Retry** | `src/application/orchestrator/retry.rs` | `RetryPolicy`, `run_step_with_retry`, backoff `{1s, 3s, 9s}` |
-| **Plan types + topology** | `src/domain/plan.rs` | `Step`, `StepId`, `Plan::ready_steps`, `Plan::validate`, `Plan::single_leaf` |
+| **Plan types + topology** | `src/domain/plan.rs` | `Step`, `StepId`, `AgentCompose`, `Plan::ready_steps`, `Plan::leaves`; `Plan::validate` (dead code), `Plan::single_leaf` (tests only) |
 | **Events** | `src/application/orchestrator/events.rs` | `OrchestratorEvent`, `EventBus`, `new_bus()` |
-| **ChatServiceFactory wiring** | `src/application/orchestrator/wiring.rs` | `ChatServiceFactory` trait, `ChatOrchestratorPortImpl` (planner turn; `ChatWorker` removed) |
-| **Telegram channel dispatch** | `src/adapters/inbound/telegram.rs` | `execute_orchestrator_turn` (line 1420), orchestrator_snapshots field (line 514) |
-| **TUI channel dispatch** | `src/adapters/inbound/tui/mod.rs` | orchestrator branch in engine thread (~line 798) |
-| **Webhook channel dispatch** | `src/adapters/inbound/webhooks.rs` | `build_orchestrator` per POST (line 257) |
+| **ChatServiceFactory wiring** | `src/application/orchestrator/wiring.rs` | `ChatOrchestratorPortImpl` (planner turn; `ChatWorker` removed); trait `ChatServiceFactory`: `src/ports/orchestration.rs` |
+| **Telegram channel dispatch** | `src/adapters/inbound/telegram.rs` | `execute_orchestrator_turn` (line 1459), orchestrator_snapshots field (line 534) |
+| **TUI channel dispatch** | `src/adapters/inbound/tui/mod.rs` | orchestrator branch in engine thread (~line 904) |
+| **Webhook channel dispatch** | `src/adapters/inbound/webhooks.rs` | `build_orchestrator` per POST (line 485) |
 | **Eval channel dispatch** | `src/adapters/inbound/eval.rs` | `run_row_via_orchestrator`, `EvalChatServiceFactory` |
 | **Eval retention** | `src/adapters/inbound/eval.rs` | `prune_old_run_dirs`, `EvalArgs::keep_runs` / `no_persist` / `max_per_run_reports` |
 | **Memory provider** | `src/ports/memory.rs` | `MemoryProvider` trait |
@@ -658,7 +665,7 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 | **Pre-turn injection** | `src/application/memory/injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock` |
 | **Post-turn write** | `src/application/memory/writer.rs` | `sync_turn(mgr, agent, user, asst)` — spawned |
 | **Fenced block** | `src/application/memory/fencing.rs` | `build_memory_context_block`, `sanitize_context` |
-| **Builtin provider** | `src/adapters/outbound/memory/builtin.rs` | `BuiltinMemoryProvider` |
+| **Builtin provider** | `src/adapters/outbound/memory/builtin.rs` | `BuiltinMemoryProvider` (vector `prefetch` + `sync_turn`) |
 | **Vector store trait** | `src/ports/memory.rs` | `VectorStore` trait: `write`, `search`, `delete`, `clear_all`, `entry_count`, `storage_bytes` |
 | **Disk store** | `src/adapters/outbound/memory/disk_vector.rs` | `DiskVectorStore`, bincode-backed |
 | **Agentic memory (Postgres)** | `src/adapters/outbound/tools/agentic_memory/mod.rs` | `AgenticMemoryPlugin` (`postgres_memory` feature) — step summaries, planner recall lanes |
