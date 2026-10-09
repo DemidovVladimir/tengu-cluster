@@ -521,11 +521,6 @@ pub struct AgentConfig {
     /// Read as [`AgentConfig::hardened`].
     #[serde(skip)]
     pub no_shell_fallback: bool,
-    /// Runtime (never in TOML): `[solana] signer_key_file`, expanded — set
-    /// by `Config::fold_default_scopes` so the Solana write tools can load
-    /// the key at send time (`tools/solana/write_common.rs`).
-    #[serde(skip)]
-    pub signer_key_file: Option<PathBuf>,
     /// Runtime (never in TOML): sandbox-level sections tools read at call
     /// time (`config/sections.rs`) — one `Arc` shared by every agent, set by
     /// `Config::fold_default_scopes`.
@@ -1304,11 +1299,9 @@ impl Config {
     /// children load the parent config through this same path.
     pub fn fold_default_scopes(&mut self) {
         let hardened = hardening::requires_hardened_claude_code(self);
-        let signer_key_file = self.solana.signer_path();
         let sections = std::sync::Arc::new(self.sandbox_sections());
         for agent in self.agents.values_mut() {
             agent.no_shell_fallback = hardened;
-            agent.signer_key_file = signer_key_file.clone();
             agent.sandbox = std::sync::Arc::clone(&sections);
             for (tool, scope) in &self.default_scopes {
                 agent
@@ -1360,6 +1353,7 @@ impl Config {
             soe: self.soe.clone().map(std::sync::Arc::new),
             ranking: self.ranking_section.clone(),
             a2a: self.a2a.clone().map(std::sync::Arc::new),
+            privy_wallet_id: self.solana.privy_wallet_id.clone(),
         }
     }
 
@@ -1809,7 +1803,6 @@ impl Default for Config {
                 local: None,
                 codex: None,
                 no_shell_fallback: false,
-                signer_key_file: None,
                 sandbox: Default::default(),
             },
         );

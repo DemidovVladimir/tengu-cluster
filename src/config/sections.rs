@@ -86,6 +86,9 @@ pub struct SandboxSections {
     /// (`outbound/tools/a2a/`) and the server `tengu a2a serve` runs;
     /// `None` = no A2A.
     pub a2a: Option<Arc<A2aConfig>>,
+    /// `[solana] privy_wallet_id` (`config/solana.rs`): the Privy wallet the
+    /// Solana write tools' `mode = "send"` signs with; `None` = simulate only.
+    pub privy_wallet_id: Option<String>,
 }
 
 impl SandboxSections {

@@ -25,6 +25,15 @@ use crate::domain::observation::{
 };
 use crate::domain::solana_tx::MAX_COMPUTE_UNITS;
 
+/// A Privy wallet id (`[solana] privy_wallet_id`): 1-64 chars
+/// `[A-Za-z0-9_-]` — it goes into the URL path `/v1/wallets/<id>/rpc`.
+pub fn valid_privy_wallet_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
 /// Lease / pending / fence resource of a wallet.
 pub fn wallet_resource(wallet: &str) -> String {
     format!("wallet:{wallet}")

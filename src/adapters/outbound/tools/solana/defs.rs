@@ -125,7 +125,7 @@ fn mode() -> Value {
         "type": "string",
         "enum": ["simulate", "send"],
         "default": "simulate",
-        "description": "simulate (default): build and simulate as the wallet — no key, nothing sent. send: sign with [solana] signer_key_file and send — only for an agent whose scope for this tool lists the wallet.",
+        "description": "simulate (default): build and simulate as the wallet — no key, nothing sent. send: sign with the [solana] privy_wallet_id Privy wallet (through the seal proxy) and send — only for an agent whose scope for this tool lists the wallet.",
     })
 }
 
