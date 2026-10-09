@@ -61,7 +61,7 @@
 | Check | Result |
 |---|---|
 | `cargo fmt --all --check` | exit 0 |
-| `cargo clippy --all-features --all-targets` | exit 0 with 102 warnings (71 bin + 30 test-only + 1 `tests/bridge_conformance.rs`). **None are in the #40–#44 SOE / source / ranking / studio / trace files.** All 8 changed files that do have warnings have them on lines from before #40 (blame: `51c16256`, `9cc0939f`, `131af134`, `e83cb7b5`) |
+| `cargo clippy --all-features --all-targets` | exit 0 with 102 warnings (71 bin + 30 test-only + 1 `tests/bridge_conformance.rs`). **None are in the #40–#44 SOE / source / ranking / studio / trace files.** All 8 changed files that do have warnings have them on lines from before #40 (blame: `51c16256e5a900ccafa30c2c618bdb34da4ee32a`, `9cc0939ff6f213b250f091fc5d94dc08676848de`, `131af134b57191850c249008a50b2ec05a59ed53`, `e83cb7b5aa1e2b1e809de6150745b43c227a6aec`) |
 | `cargo test --workspace` | 13 suites: 2130 passed, 0 failed, 101 ignored (unittests 2067). 4 compiler warnings, from before #40 |
 | `cargo test --workspace --features studio` | 13 suites: 2176 passed, 0 failed, 101 ignored (unittests 2113, 55 `studio::` lines) |
 | layering · scope · tutorial_map · code_map · language_policy · lineage_cli | 3 · 2 · 4 · 2 · 3 · 8 passed, 0 failed |

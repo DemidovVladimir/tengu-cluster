@@ -124,7 +124,7 @@ Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568
 | PRs #25 / #26 | merged 2026-10-08 (`aa73e42e2628987f6fe6e5b5b7da3482fec37ab2`, `746efca44e115f8888862599b0d5c366ccea9df1`); branches kept — lineage records cite their commits (`e5daae83febea00e549ce9b8cac83bddce12a0a2` also tagged `w1-forward-config-2026-10-02`) |
 | Docker | a bound sandbox loads `lineage/` (`COPY lineage` added); `make up SANDBOX=<s>` mounts at `/opt/tengu/sandboxes/<s>/config.toml` (`TENGU_CONTAINER_CONFIG`) so `../../lineage` resolves |
 | Known defects D1–D11 | `docs/w1-inventory-2026-10-06.md` § 5 — proposed for P6 |
-## Visual tutorial `docs/tutorial/` (2026-10-07, on `main` @ `9f0e98f`)
+## Visual tutorial `docs/tutorial/` (2026-10-07, on `main` @ `9f0e98f96704eca960575d6c453c5dabb5487d65`)
 
 | What | State |
 |---|---|

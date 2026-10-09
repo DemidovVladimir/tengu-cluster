@@ -217,7 +217,7 @@ Status: `☐ not started` · `🟡 working tree only` · `✅ committed + verifi
 
 | ID | Status | Task | Required evidence | Commit |
 |---|---:|---|---|---|
-| ST-00 | ✅ | Audit current runtime, loop, audits, event buses and active work; identify reuse vs gaps. | One terse table added below; no implementation yet. — Done: § 8 "Phase 0 audit result" (7 concerns, file:line at `10bdbb5`) + gap line. | `52cad0cf2badb4ec9a11457e862775dc242575a6` |
+| ST-00 | ✅ | Audit current runtime, loop, audits, event buses and active work; identify reuse vs gaps. | One terse table added below; no implementation yet. — Done: § 8 "Phase 0 audit result" (7 concerns, file:line at `10bdbb53a27390f6a67fd73826740befe05ababe`) + gap line. | `52cad0cf2badb4ec9a11457e862775dc242575a6` |
 | ST-01 | ✅ | Write acceptance matrix and exact commands for the lab. | Operator can predict every expected result before code changes. — Done: `docs/control-loop-lab-2026-10-08.md` (setup, quick start, env names, matrix A0–A15, troubleshooting, guarded cleanup); § 9 commands updated. | `52cad0cf2badb4ec9a11457e862775dc242575a6` |
 | ST-02 | ✅ config + guard test; live proof in ST-03 | Add `control-loop-lab` with reproducible scenarios and optional live mode. | CLI run shows all required scenarios; no real external write. — `sandboxes/control-loop-lab/{config.toml, scenarios/{normal,act,tool-error}.json, scenarios/{uncertain,act-dry}.map.json}`; no new tool; `config::decision_loop::tests::control_loop_lab_has_no_dangerous_surface` + `config::risk::tests::every_sandbox_and_the_example_load` pass. Optional live mode deferred (not needed for Gate 1). `uncertain.map.json` also turns dry-run on: a Jev confidence of exactly 1.0 passes `act_at = 1.0` (application/decision_loop/mod.rs:394, gate is `<`) and would otherwise write. | `52cad0cf2badb4ec9a11457e862775dc242575a6` |
 | ST-03 | ✅ | Record a baseline real-Jev CLI run. | Sanitized transcript, audit excerpts, health before/during/after, actual model and cost/latency. — Done: `docs/control-loop-lab-baseline-2026-10-08.md`. A0–A15 pass; A1–A4 3/3 each; Jev build `typesafe/jev-1.13-20260917`; 32 calls cost $0.000799134 at 267–679 ms; two runs (holders `Vladimirs-MacBook-Pro-2.local:74815:83519fb5-3839-45a3-9724-78322e317268`, `Vladimirs-MacBook-Pro-2.local:76105:f9ecbbab-7cea-4648-8025-cd26aefb5801`); `~/.tengu` untouched (sha256 proof). The run corrected 9 runbook details, listed in § Corrections of that doc: a parent `.env` is loaded, `decide` writes its logs to stdout, a tick's `t` is per process, cleanup leaves the observation store. | `7062b4c6bbe302b78f76d13b7c33b5af5aa6896a` |
@@ -238,7 +238,7 @@ Status: `☐ not started` · `🟡 working tree only` · `✅ committed + verifi
 
 ### Phase 0 audit result
 
-Read-only audit at `10bdbb5` (2026-10-08). Paths are `src/`-relative unless named; every ref was read at that commit.
+Read-only audit at `10bdbb53a27390f6a67fd73826740befe05ababe` (2026-10-08). Paths are `src/`-relative unless named; every ref was read at that commit.
 
 | Concern | Reuse exactly | Extend | Do not duplicate |
 |---|---|---|---|
