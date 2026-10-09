@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Execution trace · Tengu</title>
+<meta name="description" content="One ordered, redacted JSONL file of events per run: what fired, what Jev picked, which tool ran, how it ended, each event linked to its cause; read back with tengu trace or replayed in Studio.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: status text in the stage, envelope groups, event trees, bound widget */
+  svg .st-ok { fill: var(--ok); } svg .st-warn { fill: var(--warn); } svg .st-bad { fill: var(--bad); }
+  svg .t-faint { fill: var(--faint); }
+  .card.gi { border-top: 3px solid var(--accent); } .card.gl { border-top: 3px solid var(--jev); }
+  .card.gw { border-top: 3px solid var(--hands); } .card.gc { border-top: 3px solid var(--brain); }
+  pre .gi { color: var(--accent); } pre .gl { color: var(--jev); } pre .gw { color: var(--hands); } pre .gc { color: var(--brain); }
+  .card ul.kv { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: .86rem; color: var(--muted); }
+  .card ul.kv code { color: var(--ink); }
+  .ex-json { font-size: .78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .card .chip { justify-self: start; }
+  .tones { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tones span { font-family: var(--font-mono); font-size: .76rem; border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; padding: 2px 8px; background: var(--panel); }
+  .t-green { border-left-color: var(--ok) !important; } .t-amber { border-left-color: var(--warn) !important; }
+  .t-red { border-left-color: var(--bad) !important; } .t-plain { border-left-style: dashed !important; border-left-color: var(--faint) !important; }
+  .tree-wrap { padding: 14px 16px; overflow-x: auto; }
+  .tree, .tree ul { list-style: none; margin: 0; padding: 0; }
+  .tree ul { margin-left: 12px; padding-left: 16px; border-left: 1px dashed var(--line); }
+  .tree li { position: relative; padding: 3px 0; }
+  .tree ul > li::before { content: ""; position: absolute; left: -16px; top: 15px; width: 13px; border-top: 1px dashed var(--line); }
+  .ev { display: inline-flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; padding: 2px 8px; background: var(--panel); max-width: 100%; }
+  .ev b { font-family: var(--font-mono); font-size: .8rem; font-weight: 500; color: var(--ink); }
+  .ev code { font-size: .74rem; color: var(--muted); background: none !important; padding: 0 !important; }
+  .ev small { font-size: .76rem; color: var(--muted); }
+  .tree .root-note { font-size: .82rem; color: var(--faint); font-style: italic; }
+  .ctrls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .ctrls label { display: flex; gap: 8px; align-items: center; font-size: .88rem; color: var(--muted); }
+  .flds { display: flex; flex-wrap: wrap; gap: 6px; }
+  .fld { font-family: var(--font-mono); font-size: .78rem; border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; background: var(--panel); transition: opacity .3s, border-color .3s; overflow-wrap: anywhere; }
+  .fld i { font-style: normal; color: var(--faint); margin-left: 4px; }
+  .fld.pin { border-color: var(--guard); }
+  .fld.pin::before { content: "pinned "; color: var(--guard); font-size: .7rem; }
+  .fld.gone { text-decoration: line-through; opacity: .5; border-style: dashed; }
+  .meter { position: relative; height: 14px; background: var(--sunk); border-radius: 7px; overflow: hidden; }
+  .meter .fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--jev); border-radius: 7px; transition: width .3s; }
+  .meter .lim { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--heart); }
+  .meter-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 84px; gap: 10px; align-items: center; font-size: .8rem; }
+  .meter-row span { font-family: var(--font-mono); color: var(--muted); }
+  .meter-row .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .bound-out { font-family: var(--font-mono); font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · Execution trace</div>
+  <h1>Execution trace</h1>
+  <p class="lede">Every run writes one ordered file of events: what fired, what Jev picked, which tool ran, how it ended. Each event names its cause, so a run reads as a tree. Secrets and URLs are scrubbed before each write.</p>
+  <ul class="facts">
+    <li>schema <b>v1</b></li>
+    <li>payload ≤ <b>4096</b> bytes</li>
+    <li>follow: <b>250 ms</b> poll · <b>256</b> buffered</li>
+    <li>a subagent hands back ≤ <b>512</b> events</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> planner</li>
+    <li><span class="chip jev"><span class="k">決</span> Jev</span> typed choice</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> actions, tools</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> the sink: seq, scrub, bound</li>
+    <li><span class="chip data">data</span> observations, files</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">A real run, event by event</span>
+    <h2 id="s-flow">One recorded decide</h2>
+    <p>The lab's <code>tengu decide</code> run <code>71650e67-fb10-4aac-8a5a-a1c837c1cee8</code> of 2026-10-08, in file order, as today's code writes it. Indent = parent link (<code>docs/studio-trace-evidence-2026-10-08.md</code>).</p>
+  </div>
+  <figure class="stage" data-stage data-interval="3800">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 476" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Twelve events of one tengu decide run, in seq order, each indented under its parent: run.opened, the trigger.decide root, an observation read, Jev's answer, the selected action, the tool's start and finish, the action's outcome, a second step that holds, and trigger.completed. Each event passes the trace sink into one JSONL file that tengu trace and Studio read.</title>
+        <text x="20" y="24" class="t-small">seq</text>
+        <text x="56" y="24" class="t-small">event · indent = parent</text>
+        <text x="318" y="24" class="t-small">status</text>
+        <text x="392" y="24" class="t-small">node_id</text>
+
+        <path class="e" id="p-emit" d="M566 250 C590 250 586 82 608 82" data-at="1-9"/>
+        <path class="e" id="p-write" d="M725 124 L725 174" data-at="1-9"/>
+        <path class="e flow" id="p-read" d="M725 260 L725 310" data-at="10"/>
+
+        <g class="pop" data-at="1-">
+          <g class="n" data-at="1,10">
+            <circle cx="32" cy="50" r="11"/><text x="32" y="54" text-anchor="middle" class="t-mono">1</text>
+            <rect x="56" y="36" width="150" height="28" rx="6"/><text x="66" y="54" class="t-mono">run.opened</text>
+            <text x="318" y="54" class="t-mono st-ok">ok</text>
+            <text x="392" y="54" class="t-mono t-faint">null</text>
+          </g>
+        </g>
+        <g class="pop" data-at="2-">
+          <g class="n" data-at="2,10">
+            <circle cx="32" cy="86" r="11"/><text x="32" y="90" text-anchor="middle" class="t-mono">2</text>
+            <rect x="56" y="72" width="150" height="28" rx="6"/><text x="66" y="90" class="t-mono">trigger.decide</text>
+            <text x="318" y="90" class="t-mono st-warn">running</text>
+            <text x="392" y="90" class="t-mono">trigger:decide</text>
+          </g>
+        </g>
+        <g class="pop" data-at="3-">
+          <path class="e" d="M68 100 L68 122 L80 122" data-at="3,10"/>
+          <g class="n data" data-at="3,10">
+            <circle cx="32" cy="122" r="11"/><text x="32" y="126" text-anchor="middle" class="t-mono">3</text>
+            <rect x="82" y="108" width="150" height="28" rx="6"/><text x="92" y="126" class="t-mono">observation.read</text>
+            <text x="318" y="126" class="t-mono st-warn">missing</text>
+            <text x="392" y="126" class="t-mono">world:demo/tick</text>
+          </g>
+        </g>
+        <g class="pop" data-at="4-">
+          <path class="e" d="M68 100 L68 158 L80 158" data-at="4,10"/>
+          <g class="n jev" data-at="4,10">
+            <circle cx="32" cy="158" r="11"/><text x="32" y="162" text-anchor="middle" class="t-mono">4</text>
+            <rect x="82" y="144" width="150" height="28" rx="6"/><text x="92" y="162" class="t-mono">jev.completed</text>
+            <text x="318" y="162" class="t-mono st-ok">ok</text>
+            <text x="392" y="162" class="t-mono">jev:demo</text>
+          </g>
+        </g>
+        <g class="pop" data-at="5-">
+          <path class="e" d="M94 172 L94 194 L106 194" data-at="5,10"/>
+          <g class="n hands" data-at="5,10">
+            <circle cx="32" cy="194" r="11"/><text x="32" y="198" text-anchor="middle" class="t-mono">5</text>
+            <rect x="108" y="180" width="150" height="28" rx="6"/><text x="118" y="198" class="t-mono">action.selected</text>
+            <text x="318" y="198" class="t-mono st-warn">running</text>
+            <text x="392" y="198" class="t-mono">action:demo/write_marker</text>
+          </g>
+        </g>
+        <g class="pop" data-at="6-">
+          <path class="e" d="M120 208 L120 230 L132 230" data-at="6,10"/>
+          <g class="n hands" data-at="6,10">
+            <circle cx="32" cy="230" r="11"/><text x="32" y="234" text-anchor="middle" class="t-mono">6</text>
+            <rect x="134" y="216" width="150" height="28" rx="6"/><text x="144" y="234" class="t-mono">tool.started</text>
+            <text x="318" y="234" class="t-mono st-warn">running</text>
+            <text x="392" y="234" class="t-mono">tool:lab/write_file</text>
+          </g>
+        </g>
+        <g class="pop" data-at="6-">
+          <path class="e" d="M146 244 L146 266 L158 266" data-at="6,10"/>
+          <g class="n hands" data-at="6,10">
+            <circle cx="32" cy="266" r="11"/><text x="32" y="270" text-anchor="middle" class="t-mono">7</text>
+            <rect x="160" y="252" width="150" height="28" rx="6"/><text x="170" y="270" class="t-mono">tool.completed</text>
+            <text x="318" y="270" class="t-mono st-ok">ok</text>
+            <text x="392" y="270" class="t-mono">tool:lab/write_file</text>
+          </g>
+        </g>
+        <g class="pop" data-at="7-">
+          <path class="e" d="M120 208 L120 302 L132 302" data-at="7,10"/>
+          <g class="n hands" data-at="7,10">
+            <circle cx="32" cy="302" r="11"/><text x="32" y="306" text-anchor="middle" class="t-mono">8</text>
+            <rect x="134" y="288" width="150" height="28" rx="6"/><text x="144" y="306" class="t-mono">action.completed</text>
+            <text x="318" y="306" class="t-mono st-ok">ok</text>
+            <text x="392" y="306" class="t-mono">action:demo/write_marker</text>
+          </g>
+        </g>
+        <g class="pop" data-at="8-">
+          <path class="e" d="M68 100 L68 338 L80 338" data-at="8,10"/>
+          <g class="n data" data-at="8,10">
+            <circle cx="32" cy="338" r="11"/><text x="32" y="342" text-anchor="middle" class="t-mono">9</text>
+            <rect x="82" y="324" width="150" height="28" rx="6"/><text x="92" y="342" class="t-mono">observation.read</text>
+            <text x="318" y="342" class="t-mono st-warn">missing</text>
+            <text x="392" y="342" class="t-mono">world:demo/tick</text>
+          </g>
+        </g>
+        <g class="pop" data-at="8-">
+          <path class="e" d="M68 100 L68 374 L80 374" data-at="8,10"/>
+          <g class="n jev" data-at="8,10">
+            <circle cx="32" cy="374" r="11"/><text x="32" y="378" text-anchor="middle" class="t-mono">10</text>
+            <rect x="82" y="360" width="150" height="28" rx="6"/><text x="92" y="378" class="t-mono">jev.completed</text>
+            <text x="318" y="378" class="t-mono st-ok">ok</text>
+            <text x="392" y="378" class="t-mono">jev:demo</text>
+          </g>
+        </g>
+        <g class="pop" data-at="8-">
+          <path class="e" d="M94 388 L94 410 L106 410" data-at="8,10"/>
+          <g class="n hands" data-at="8,10">
+            <circle cx="32" cy="410" r="11"/><text x="32" y="414" text-anchor="middle" class="t-mono">11</text>
+            <rect x="108" y="396" width="150" height="28" rx="6"/><text x="118" y="414" class="t-mono">action.selected</text>
+            <text x="318" y="414" class="t-mono st-ok">ok</text>
+            <text x="392" y="414" class="t-mono">action:demo/hold</text>
+          </g>
+        </g>
+        <g class="pop" data-at="9-">
+          <path class="e" d="M68 100 L68 446 L80 446" data-at="9,10"/>
+          <g class="n" data-at="9,10">
+            <circle cx="32" cy="446" r="11"/><text x="32" y="450" text-anchor="middle" class="t-mono">12</text>
+            <rect x="82" y="432" width="150" height="28" rx="6"/><text x="92" y="450" class="t-mono">trigger.completed</text>
+            <text x="318" y="450" class="t-mono st-ok">ok</text>
+            <text x="392" y="450" class="t-mono">trigger:decide</text>
+          </g>
+        </g>
+
+        <g class="n guard" data-at="1-9">
+          <rect x="610" y="40" width="230" height="84" rx="8"/>
+          <text x="725" y="66" text-anchor="middle" class="t-title">Trace sink</text>
+          <text x="725" y="86" text-anchor="middle" class="t-small">next seq under one lock</text>
+          <text x="725" y="104" text-anchor="middle" class="t-small">scrub · bound · one write</text>
+        </g>
+        <g class="n data" data-at="1-10">
+          <rect x="610" y="176" width="230" height="84" rx="8"/>
+          <text x="725" y="202" text-anchor="middle" class="t-title t-mono">&lt;run_id&gt;.jsonl</text>
+          <text x="725" y="222" text-anchor="middle" class="t-small">logs/trace/&lt;sandbox&gt;/</text>
+          <text x="725" y="240" text-anchor="middle" class="t-small">one line per event</text>
+        </g>
+        <g class="n" data-at="10">
+          <rect x="610" y="312" width="230" height="84" rx="8"/>
+          <text x="725" y="338" text-anchor="middle" class="t-title">Readers</text>
+          <text x="725" y="358" text-anchor="middle" class="t-small">tengu trace runs · show</text>
+          <text x="725" y="376" text-anchor="middle" class="t-small">Studio: replay · live</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">fresh run_id = a new file</text></g>
+        <g class="pop badge" data-at="2"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">root: no parent</text></g>
+        <g class="pop badge" data-at="3"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">no tick row yet: missing</text></g>
+        <g class="pop badge" data-at="4"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">legal set pinned</text></g>
+        <g class="pop badge" data-at="5"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">written before the call</text></g>
+        <g class="pop badge" data-at="6"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">finish ← start</text></g>
+        <g class="pop badge" data-at="7"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">the loop's own outcome</text></g>
+        <g class="pop badge" data-at="8"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">terminal: no tool runs</text></g>
+        <g class="pop badge" data-at="9"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">closes the run</text></g>
+        <g class="pop badge" data-at="10"><rect x="600" y="420" width="250" height="22" rx="11"/><text x="725" y="435" text-anchor="middle">same file, seq order</text></g>
+
+        <circle class="tok guard" r="6" data-path="p-emit" data-at="1-9" data-dur="900"/>
+        <circle class="tok guard" r="5" data-path="p-emit" data-at="6,8" data-delay="700" data-dur="900"/>
+        <circle class="tok" r="6" data-path="p-write" data-at="1-9" data-delay="900" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-read" data-at="10"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu decide</code> opens a recording: a fresh <code>run_id</code>, a new file, first line <code>run.opened</code> with <code>kind</code> and <code>pid</code>. A decide run has no <code>runtime_id</code>.</li>
+        <li>The root <code>trigger.decide</code> (running) carries the loop name and the event. It has no parent: everything this run does next hangs under it.</li>
+        <li>Step 1 reads the loop's <code>world</code>: one <code>observation.read</code> per alias. No <code>tengu run</code> feeds <code>tick</code> here, so the row is <code>missing</code>.</li>
+        <li>One Jev call. <code>jev.completed</code> keeps the answers, the model and the legal set offered; its <code>artifact</code> names the <code>decisions.jsonl</code> line (key <code>decision_id</code>).</li>
+        <li>Jev picked <code>write_marker</code> at 0.89, above <code>act_at</code> 0.8. <code>action.selected</code> (running) is written before the tool runs, with the full call id.</li>
+        <li><code>TracedExecutor</code> wraps the call: <code>tool.started</code> with the args, then <code>tool.completed</code> with the result's first line, its size and <code>duration_ms</code>. The finish hangs under the start.</li>
+        <li><code>action.completed</code> (ok) carries the outcome the loop computed. A failed tool makes it <code>failed</code>; no rule is judged twice.</li>
+        <li>Step 2: <code>observation.read</code>, then <code>jev.completed</code>, and Jev picks <code>hold</code>. A terminal action is one <code>action.selected</code> with status ok; no tool runs.</li>
+        <li><code>trigger.completed</code> (ok, 793 ms, the outcomes) closes the run: 12 events, <code>seq</code> 1 to 12, no gap, every parent an earlier event.</li>
+        <li>Readers take the same file: <code>tengu trace show</code> prints it in <code>seq</code> order, and Studio replays it or follows it live.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-who">
+  <div class="sec-head">
+    <span class="kicker">What a run is</span>
+    <h2 id="s-who">One process, one recording</h2>
+    <p>A run = one file <code>&lt;TENGU_HOME&gt;/logs/trace/&lt;sandbox&gt;/&lt;run_id&gt;.jsonl</code> (sandbox <code>default</code> for a <code>-c</code> config). A restart never appends to an old run.</p>
+  </div>
+  <div class="grid">
+    <div class="card guard"><h3><code>tengu run</code></h3><span class="chip data">kind run</span><p>One file per start. <code>runtime_id</code> = the lease holder. Feeds, loops, webhook requests, escalations. Ends <code>runtime.stopped</code>.</p></div>
+    <div class="card jev"><h3><code>tengu decide</code></h3><span class="chip data">kind decide</span><p>One file per call, no <code>runtime_id</code>. Root <code>trigger.decide</code> or <code>trigger.map</code>; ends <code>trigger.completed</code> or <code>trigger.failed</code>.</p></div>
+    <div class="card hands"><h3><code>tengu webhooks</code></h3><span class="chip data">kind webhooks</span><p>One file per process, <code>runtime_id</code> = its lease holder. Each request is a <code>trigger.webhook</code> root. Ends <code>run.closed</code>.</p></div>
+    <div class="card heart"><h3><span><code>tengu chat</code> · <code>tengu telegram</code></span></h3><span class="chip data">kind chat · telegram</span><p>Only with <code>[orchestrator]</code>: one file per process, its plans and steps. Ends <code>run.closed</code>.</p></div>
+    <div class="card heart"><h3><code>tengu eval</code></h3><span class="chip data">kind eval</span><p>Only with <code>[orchestrator]</code>: one file per orchestrated row. Ends <code>run.closed</code>.</p></div>
+    <div class="card data"><h3><code>tengu studio</code></h3><span class="chip data">kind studio</span><p>With control on: its own file of <code>studio.*</code> requests and verdicts. Play starts a runtime in the process, which writes its own <code>run</code> file.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-env">
+  <div class="sec-head">
+    <span class="kicker">One shape for every event</span>
+    <h2 id="s-env">One event</h2>
+    <p>Example: seq 7 of the run above (ids as recorded; <code>ts_ms</code> and the home path are illustrative). One line in the file; wrapped here. Every field is always present, <code>null</code> when unknown.</p>
+  </div>
+  <div class="grid two">
+<pre class="ex-json">{
+  <span class="gi">"schema_version"</span>: 1,
+  <span class="gi">"event_id"</span>: "71650e67-fb10-4aac-8a5a-a1c837c1cee8:7",
+  <span class="gi">"seq"</span>: 7,
+  <span class="gi">"ts_ms"</span>: 1791491777841,
+  <span class="gi">"sandbox"</span>: "control-loop-lab",
+  <span class="gi">"config_hash"</span>: "a68882899f1aacfe0dde95eb5c6c1a9490750886c5af79b11255437044b4b40f",
+  <span class="gi">"runtime_id"</span>: null,
+  <span class="gi">"run_id"</span>: "71650e67-fb10-4aac-8a5a-a1c837c1cee8",
+  <span class="gl">"session_id"</span>: "decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4",
+  <span class="gl">"correlation_id"</span>: "decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4",
+  <span class="gl">"parent_event_id"</span>: "71650e67-fb10-4aac-8a5a-a1c837c1cee8:6",
+  <span class="gl">"call_id"</span>: "demo:decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4:1",
+  <span class="gw">"component"</span>: "tool",
+  <span class="gw">"kind"</span>: "tool.completed",
+  <span class="gw">"node_id"</span>: "tool:lab/write_file",
+  <span class="gw">"status"</span>: "ok",
+  <span class="gw">"duration_ms"</span>: 0,
+  <span class="gc">"payload"</span>: {
+    "line1": "File 'out/marker.txt' written (12 bytes)",
+    "text_bytes": 40,
+    "tool": "write_file"
+  },
+  <span class="gc">"artifact"</span>: {
+    "file": "/home/op/tengu-lab/home/logs/decisions.jsonl",
+    "key": "demo:decide-demo-e6c5a282-95f4-4ee5-801f-f29708b126b4:1"
+  }
+}</pre>
+    <div class="grid" style="grid-template-columns: minmax(0, 1fr);">
+      <div class="card gi"><h3>Who and where</h3><ul class="kv">
+        <li><code>event_id</code> = <code>&lt;run_id&gt;:&lt;seq&gt;</code>, the same live and in replay</li>
+        <li><code>seq</code> 1, 2, … in file order; <code>ts_ms</code> the sink's clock unless the event brings its own</li>
+        <li><code>config_hash</code> = sha256 of the parsed config; <code>runtime_id</code> = the lease holder <code>&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt;</code>, or null</li>
+      </ul></div>
+      <div class="card gl"><h3>Links</h3><ul class="kv">
+        <li><code>parent_event_id</code>: the event that caused this one</li>
+        <li><code>session_id</code>: <code>&lt;feed&gt;:&lt;slot ms&gt;</code>, <code>decide-&lt;loop&gt;-&lt;uuid&gt;</code>, <code>webhook-&lt;endpoint&gt;-&lt;uuid&gt;</code>, a chat session</li>
+        <li><code>correlation_id</code>: the event's own, else the session, else the runtime, else the run</li>
+        <li><code>call_id</code>: the tool call, <code>{loop}:{session}:{t}</code> or <code>feed:&lt;f&gt;:&lt;slot&gt;:&lt;i&gt;</code></li>
+      </ul></div>
+      <div class="card gw"><h3>What happened</h3><ul class="kv">
+        <li><code>kind</code> = <code>&lt;family&gt;.&lt;what&gt;</code>; <code>node_id</code> = a Studio graph node</li>
+        <li><code>status</code>, <code>duration_ms</code> of the thing reported</li>
+      </ul></div>
+      <div class="card gc"><h3>Content</h3><ul class="kv">
+        <li><code>payload</code>: a scrubbed summary, ≤ 4096 bytes</li>
+        <li><code>artifact</code>: where the full record lives (file + key)</li>
+      </ul></div>
+    </div>
+  </div>
+  <div class="tones" aria-label="The ten statuses, by tone">
+    <span class="t-green">ok</span>
+    <span class="t-red">failed</span><span class="t-red">refused</span>
+    <span class="t-amber">pending</span><span class="t-amber">running</span><span class="t-amber">escalated</span><span class="t-amber">dropped</span><span class="t-amber">stale</span><span class="t-amber">missing</span>
+    <span class="t-plain">skipped</span>
+  </div>
+  <p class="note">Ten statuses; each has one tone, set in Rust (<code>Status::tone</code>): green, red, amber, or plain for logged-not-run. Grey is never a status: Studio greys an action outside the step's legal set (<a href="studio.html">Studio graph and trace</a>).</p>
+</section>
+
+<section class="sec" aria-labelledby="s-nest">
+  <div class="sec-head">
+    <span class="kicker">Parent links</span>
+    <h2 id="s-nest">How events nest</h2>
+    <p>Each event points at its cause, so a run reads as a tree. Siblings appear in file order. Pick a source.</p>
+  </div>
+  <div class="tabs">
+    <div class="tablist">
+      <button type="button" aria-controls="tree-run" aria-selected="true">tengu run</button>
+      <button type="button" aria-controls="tree-hook">Webhook request</button>
+      <button type="button" aria-controls="tree-plan">Plan and steps</button>
+    </div>
+    <div class="tabpanel" id="tree-run"><div class="tree-wrap">
+      <ul class="tree">
+        <li><span class="ev t-green"><b>run.opened</b> <code>runtime:&lt;s&gt;</code> <small>kind, pid</small></span></li>
+        <li><span class="ev t-amber"><b>runtime.starting</b> <small>holder, leases</small></span></li>
+        <li><span class="ev t-amber"><b>runtime.running</b> <small>loops, feeds</small></span></li>
+        <li><span class="ev t-amber"><b>feed.fired</b> <code>feed:tick</code> <small>a tick feed</small></span>
+          <ul>
+            <li><span class="ev t-amber"><b>loop.queued</b> <code>loop:demo</code> <small>counters</small></span>
+              <ul>
+                <li><span class="ev t-amber"><b>loop.started</b> <small>waited_ms</small></span>
+                  <ul>
+                    <li><span class="ev t-green"><b>observation.read</b> <code>world:demo/tick</code> <small>ok · stale · missing · failed</small></span></li>
+                    <li><span class="ev t-green"><b>jev.completed</b> <code>jev:demo</code> <small>answers, legal set</small></span>
+                      <ul>
+                        <li><span class="ev t-amber"><b>action.selected</b> <code>action:demo/&lt;a&gt;</code> <small>args, call id</small></span>
+                          <ul>
+                            <li><span class="ev t-amber"><b>tool.started</b> <code>tool:&lt;agent&gt;/&lt;tool&gt;</code></span>
+                              <ul><li><span class="ev t-green"><b>tool.completed</b> <small>· tool.failed</small></span></li></ul>
+                            </li>
+                            <li><span class="ev t-green"><b>action.completed</b> <small>· action.refused</small></span></li>
+                          </ul>
+                        </li>
+                        <li><span class="ev t-amber"><b>action.escalated</b> <code>gate:demo/act_at</code> <small>· action.rejected</small></span></li>
+                      </ul>
+                    </li>
+                    <li><span class="ev t-green"><b>loop.completed</b> <small>· loop.failed</small></span></li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+            <li><span class="ev t-green"><b>feed.tick_sent</b> <small>· feed.dropped · feed.skipped</small></span></li>
+          </ul>
+        </li>
+        <li><span class="ev t-amber"><b>feed.fired</b> <code>feed:probe</code> <small>a tool feed</small></span>
+          <ul>
+            <li><span class="ev t-amber"><b>tool.started</b> <code>tool:lab/read_file</code></span>
+              <ul><li><span class="ev t-red"><b>tool.failed</b> <small>· tool.completed</small></span></li></ul>
+            </li>
+            <li><span class="ev t-red"><b>feed.failed</b> <small>· feed.completed · feed.retrying</small></span></li>
+          </ul>
+        </li>
+        <li><span class="ev t-amber"><b>runtime.stopping</b> <small>reason, grace</small></span>
+          <ul><li><span class="ev t-green"><b>runtime.stopped</b> <small>drain, lease_released</small></span></li></ul>
+        </li>
+      </ul>
+    </div></div>
+    <div class="tabpanel" id="tree-hook" hidden><div class="tree-wrap">
+      <ul class="tree">
+        <li><span class="ev t-amber"><b>trigger.webhook</b> <code>trigger:webhook/&lt;e&gt;</code> <small>endpoint, body size; never the body or a header</small></span>
+          <ul>
+            <li><span class="ev t-amber"><b>loop.queued</b> <code>loop:&lt;l&gt;</code> <small>a loop endpoint</small></span>
+              <ul>
+                <li><span class="ev t-amber"><b>loop.started</b></span>
+                  <ul>
+                    <li><span class="ev t-green"><b>observation.read</b> <small>· jev.* · action.* · tool.*, as under tengu run</small></span></li>
+                    <li><span class="ev t-green"><b>loop.completed</b> <small>· loop.failed</small></span></li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+            <li><span class="ev t-green"><b>plan.created</b> <code>planner</code> <small>an agent endpoint: see Plan and steps</small></span></li>
+            <li><span class="ev t-green"><b>webhook.responded</b> <small>2xx ok · 401 / 429 / 503 refused · 500 failed</small></span></li>
+          </ul>
+        </li>
+      </ul>
+      <p class="note">Recorded by <code>tengu webhooks</code>, <code>tengu run</code> and Studio Play. The answer comes before the work ends: both endpoint kinds answer 202 once the event is queued or the turn is spawned, so <code>webhook.responded</code> often sits between <code>loop.queued</code> and <code>loop.started</code>.</p>
+    </div></div>
+    <div class="tabpanel" id="tree-plan" hidden><div class="tree-wrap">
+      <ul class="tree">
+        <li><span class="root-note">root: a webhook's trigger.webhook, an escalation's cause, or none (a chat or telegram message, an eval row)</span>
+          <ul>
+            <li><span class="ev t-green"><b>plan.created</b> <code>planner</code> <small>steps, agents; never the goal</small></span>
+              <ul>
+                <li><span class="ev t-amber"><b>step.started</b> <code>agent:&lt;a&gt;</code></span>
+                  <ul>
+                    <li><span class="ev t-amber"><b>tool.started</b> <code>tool:&lt;a&gt;/&lt;t&gt;</code> <small>from the run-agent child</small></span>
+                      <ul><li><span class="ev t-green"><b>tool.completed</b> <small>· tool.failed</small></span></li></ul>
+                    </li>
+                    <li><span class="ev t-green"><b>metrics.recorded</b> <small>subagent tokens, no node</small></span></li>
+                    <li><span class="ev t-green"><b>step.completed</b> <small>· step.retrying · step.failed</small></span></li>
+                  </ul>
+                </li>
+                <li><span class="ev t-green"><b>plan.completed</b> <small>ok · failed · dropped (cancelled)</small></span></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+      </ul>
+      <p class="note">A replan: <code>plan.replanned</code> hangs under the last <code>step.failed</code>, the next <code>plan.created</code> under it. A step's tool calls run in its <code>run-agent</code> child; the child hands them back over IPC and the parent writes them under <code>step.started</code>.</p>
+    </div></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-bound">
+  <div class="sec-head">
+    <span class="kicker">Try it: grow a payload</span>
+    <h2 id="s-bound">Bounded, never cut</h2>
+    <p>A <code>jev.completed</code> payload with one slot of <i>n</i> labels (example sizes). Over 4096 bytes, whole fields go, largest first; the legal set is pinned and goes last. The rule is <code>bound_payload</code>, run here in the page.</p>
+  </div>
+  <div class="widget">
+    <div class="ctrls">
+      <label for="nlab">labels offered <input type="range" id="nlab" min="1" max="500" step="1" value="200"> <span class="readout" id="nlab-out">200</span></label>
+      <label for="pin"><input type="checkbox" id="pin" checked> pin the legal set (as <code>jev.*</code> do)</label>
+    </div>
+    <div class="meter-row"><span>before</span><div class="meter"><span class="fill" id="m-before"></span><span class="lim" id="m-lim"></span></div><span class="v" id="v-before"></span></div>
+    <div class="meter-row"><span>written</span><div class="meter"><span class="fill" id="m-after"></span><span class="lim" id="m-lim2"></span></div><span class="v" id="v-after"></span></div>
+    <div class="flds" id="flds" aria-live="polite"></div>
+    <p class="bound-out" id="bound-out"></p>
+    <span class="verdict ok" id="bound-verdict"></span>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-states">
+  <div class="sec-head">
+    <span class="kicker">Three states</span>
+    <h2 id="s-states">What a recorded run is now</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">live</span><span><b>live</b>The run of the runtime that holds the lease now, not closed.</span></li>
+    <li><span class="chip data">closed</span><span><b>closed</b>Its last event ends it: <code>runtime.stopped</code>, <code>trigger.completed</code> / <code>trigger.failed</code> (or a failed root), <code>run.closed</code>, <code>studio.stopped</code>.</span></li>
+    <li><span class="chip warn">open</span><span><b>open</b>No closing event, not the lease holder's: a decide still going, or a process that died before its last line.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Safety</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>Scrubbed before the write.</b> In every payload string and object key: registered secrets become <code>[REDACTED]</code>, then URLs become <code>&lt;url&gt;</code>. A <code>run-agent</code> child scrubs its events too, before they cross the IPC.</span></li>
+    <li><span><b>Bounded, never cut.</b> A payload over 4096 bytes loses whole fields and says which (<code>_dropped</code>, <code>_bytes</code>). A string, id or number is never shortened.</span></li>
+    <li><span><b>Summaries, not contents.</b> A tool event keeps its args and the result's first line and size; a webhook event the body size, never the body or a header; a plan event counts, sizes and an error's first line, never the goal, a message or the answer.</span></li>
+    <li><span><b>One event, one line, in order.</b> The next <code>seq</code> is taken under the lock the write holds; one <code>write_all</code> per line. A failed write keeps its <code>seq</code> for the next event: no gap.</span></li>
+    <li><span><b>One writer per file.</b> A <code>run-agent</code> child keeps at most 512 tool events and hands them back over IPC; the parent writes them under the step.</span></li>
+    <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
+    <li><span><b>No path from input.</b> A run id must be a lowercase UUID, a sandbox name letters, digits, <code>.</code> <code>_</code> <code>-</code>, before any file opens.</span></li>
+    <li><span><b>Replay order is <code>seq</code>, never the clock.</b> Readers sort by <code>seq</code> and keep one copy of each <code>event_id</code>; a partial last line is skipped.</span></li>
+    <li><span><b>Fail-soft.</b> No writable trace dir: the run goes on with no trace and a warning. A failed write warns; the run goes on.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-gaps">
+  <div class="sec-head">
+    <span class="kicker">Not covered yet</span>
+    <h2 id="s-gaps">What is not recorded</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Not recorded</th><th>What the run shows instead</th></tr></thead>
+      <tbody>
+        <tr><td class="wrap">A typed scope refusal</td><td class="wrap"><code>tool.failed</code> with the refusal text</td></tr>
+        <tr><td class="wrap">A <code>claude_code</code> plan step's tool calls (they run in its MCP bridge process)</td><td class="wrap">only <code>step.*</code></td></tr>
+        <tr><td class="wrap">The tool calls of a <code>run-agent</code> child that ends without its IPC output (an engine error mid-loop, a step-timeout kill)</td><td class="wrap">only <code>step.retrying</code> / <code>step.failed</code></td></tr>
+        <tr><td class="wrap">The end of a step aborted because a sibling step was exhausted or the turn was cancelled</td><td class="wrap">its <code>step.started</code>, no outcome event</td></tr>
+        <tr><td class="wrap">An escalation <code>tengu run</code> triggers before its recording reaches the escalator (the first feed slot of the start)</td><td class="wrap">the loop's <code>action.escalated</code>; no <code>plan.*</code></td></tr>
+        <tr><td class="wrap">A planner's <code>RagQueried</code> (the query is user text)</td><td class="wrap">nothing, by design</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Record a run, read it back</h2>
+    <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab-2026-10-08.md</code>). <code>tengu trace</code> prints JSON lines, ids in full; logs go to stderr. Ids below are from the example run.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln o"># export TENGU_HOME="$HOME/tengu-lab/home" first — never ~/.tengu</span>
+<span class="ln cmd"><span class="p">$ </span>echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event - | jq -r .run_id</span>
+<span class="ln o">71650e67-fb10-4aac-8a5a-a1c837c1cee8</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace runs --sandbox control-loop-lab | jq -c '{run_id, kind, events, last_kind}'</span>
+<span class="ln o">{"run_id":"71650e67-fb10-4aac-8a5a-a1c837c1cee8","kind":"decide","events":12,"last_kind":"trigger.completed"}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run 71650e67-fb10-4aac-8a5a-a1c837c1cee8 | jq -r '[.seq, .kind, .status, (.parent_event_id // "-" | sub(".*:"; ""))] | @tsv'</span>
+<span class="ln o">1   run.opened         ok        -</span>
+<span class="ln o">2   trigger.decide     running   -</span>
+<span class="ln o">4   jev.completed      ok        2</span>
+<span class="ln o">5   action.selected    running   4</span>
+<span class="ln o">7   tool.completed     ok        6</span>
+<span class="ln o">12  trigger.completed  ok        2</span>
+<span class="ln o"># some rows left out; the last column is the parent's seq</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run 71650e67-fb10-4aac-8a5a-a1c837c1cee8 --after 7</span>
+<span class="ln o"># seq 8 to 12 only: the resume point</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
+<span class="ln o"># every event, then each new one as it lands, until Ctrl-C; resume with --after &lt;last seq&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run ../etc</span>
+<span class="ln o er">Error: run id `../etc`: not a run id (a lowercase UUID, as `tengu trace runs` prints)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>
+<span class="ln o"># the same file in the browser: Runs → pick one → step or drag through its seq (<a href="studio.html">Studio</a>)</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/trace.rs</code></td><td>the envelope, <code>RunKind</code>, <code>Component</code>, <code>Status</code> + tone, <code>scrub_value</code>, <code>bound_payload</code>, replay order, <code>RunSummary</code>, <code>RunState</code></td></tr>
+        <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> (write each event once, fail-soft) · <code>TraceReader</code> (runs, events, last seq, follow)</td></tr>
+        <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL file per run: <code>run.opened</code>, stamp, scrub, bound, write; list, page, follow</td></tr>
+        <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + ids) for loops and feeds; <code>run.closed</code></td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the cause (<code>parent_event_id</code>, session) per task; <code>TracedExecutor</code> (<code>tool.*</code>); <code>DraftBuffer</code> / <code>replay_child</code></td></tr>
+        <tr><td><code>src/application/orchestrator/trace.rs</code></td><td><code>TraceBridge</code>: <code>plan.*</code>, <code>step.*</code>, <code>metrics.recorded</code></td></tr>
+        <tr><td><code>src/bootstrap/runtime.rs</code></td><td><code>runtime.*</code>, the <code>tengu run</code> recording</td></tr>
+        <tr><td><code>src/application/runtime/feeds.rs</code> · <code>loops.rs</code></td><td><code>feed.*</code> · <code>loop.*</code></td></tr>
+        <tr><td><code>src/application/decision_loop/mod.rs</code></td><td><code>observation.read</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/decide.rs</code></td><td><code>trigger.decide</code> / <code>trigger.map</code> → <code>trigger.completed</code> / <code>trigger.failed</code></td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code>, <code>webhook.responded</code>; the <code>tengu webhooks</code> recording</td></tr>
+        <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code> · <code>inbound/cli/run_agent.rs</code></td><td>the step's trace ref to the child; the child's tool events back over IPC</td></tr>
+        <tr><td><code>src/adapters/inbound/studio/control.rs</code></td><td><code>studio.*</code>: Studio's own recording</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/trace.rs</code></td><td><code>tengu trace runs</code> · <code>tengu trace show</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Related: <a href="studio.html">Studio graph and trace</a> (the graph, the colours, the browser), <a href="runtime.html">tengu run</a>, <a href="decision-loop.html">Decision loop</a>, <a href="secrets.html">Secrets and redaction</a>. Full event contract: <code>docs/runtime-2026-09-30.md</code> § Trace.</p>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+</article>
+</main>
+</div>
+
+<script>
+/* page-only: bound_payload (domain/trace.rs) on an example jev.completed payload */
+(function () {
+  var MAX = 4096;
+  var n = document.getElementById("nlab"), nOut = document.getElementById("nlab-out"), pin = document.getElementById("pin");
+  var flds = document.getElementById("flds"), out = document.getElementById("bound-out"), verdict = document.getElementById("bound-verdict");
+  var mB = document.getElementById("m-before"), mA = document.getElementById("m-after"), vB = document.getElementById("v-before"), vA = document.getElementById("v-after");
+  var enc = window.TextEncoder ? new TextEncoder() : null;
+  var SCALE = 10000; /* bytes shown at full meter width */
+  ["m-lim", "m-lim2"].forEach(function (id) { document.getElementById(id).style.left = (MAX / SCALE * 100) + "%"; });
+  function len(v) { var s = JSON.stringify(v); return enc ? enc.encode(s).length : s.length; }
+  function payload(k) {
+    var labels = [], probs = {}, i;
+    for (i = 1; i <= k; i++) { labels.push("pool_" + i); probs["pool_" + i] = Math.round(10000 / k) / 10000; }
+    return {
+      act_at: 0.8,
+      answers: {
+        next_action: { choice: "write_marker", confidence: 0.89, probabilities: { hold: 0.07, read_probe: 0.01, write_marker: 0.92 } },
+        write_marker__pool: { choice: "pool_1", confidence: 0.81, probabilities: probs }
+      },
+      decision_id: "gen-dec-1791491777-jRTDHH7q6gLFhkBPI3MC",
+      latency_ms: 412,
+      legal: { hold: {}, read_probe: {}, write_marker: { pool: labels } },
+      legal_actions: ["hold", "read_probe", "write_marker"],
+      model: "typesafe/jev-1.13-20260917",
+      questions: ["next_action", "write_marker__pool"],
+      step: 0,
+      usage: { cost: 0.000022344 }
+    };
+  }
+  /* The Rust rule: unpinned fields first, largest first (ties by name); pinned ones after, the last named first. */
+  function bound(v, keep) {
+    var size = len(v);
+    if (size <= MAX) return { out: v, size: size, dropped: [], whole: false };
+    var keys = Object.keys(v);
+    var order = keys.map(function (k) { return { k: k, p: keep.indexOf(k), n: len(v[k]) }; });
+    order.sort(function (a, b) {
+      var ap = a.p < 0 ? 0 : 1, bp = b.p < 0 ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      if (a.p !== b.p) return b.p - a.p;
+      if (a.n !== b.n) return b.n - a.n;
+      return a.k < b.k ? -1 : a.k > b.k ? 1 : 0;
+    });
+    var o = {}, dropped = [];
+    keys.forEach(function (k) { o[k] = v[k]; });
+    function marked() {
+      var m = {};
+      Object.keys(o).forEach(function (k) { m[k] = o[k]; });
+      m._dropped = dropped.slice().sort(); m._bytes = size;
+      return m;
+    }
+    for (var i = 0; i < order.length; i++) {
+      if (dropped.length && len(marked()) <= MAX) break;
+      delete o[order[i].k]; dropped.push(order[i].k);
+    }
+    var res = marked();
+    if (len(res) > MAX) return { out: { _dropped: ["payload"], _bytes: size }, size: size, dropped: keys, whole: true };
+    return { out: res, size: size, dropped: dropped, whole: false };
+  }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function draw() {
+    var k = +n.value, keep = pin.checked ? ["legal_actions", "legal"] : [];
+    nOut.textContent = k;
+    var v = payload(k), r = bound(v, keep), after = len(r.out);
+    mB.style.width = Math.min(100, r.size / SCALE * 100) + "%";
+    mA.style.width = Math.min(100, after / SCALE * 100) + "%";
+    vB.textContent = r.size + " B"; vA.textContent = after + " B";
+    flds.innerHTML = Object.keys(v).map(function (f) {
+      var cls = "fld" + (keep.indexOf(f) >= 0 ? " pin" : "") + (r.dropped.indexOf(f) >= 0 ? " gone" : "");
+      return '<span class="' + cls + '">' + esc(f) + "<i>" + len(v[f]) + " B</i></span>";
+    }).join("");
+    if (!r.dropped.length) {
+      out.textContent = "no _dropped, no _bytes";
+      verdict.className = "verdict ok"; verdict.textContent = "Fits: written whole";
+      return;
+    }
+    out.textContent = '_dropped: ' + JSON.stringify(r.out._dropped) + ' · _bytes: ' + r.out._bytes;
+    var lostLegal = r.dropped.indexOf("legal") >= 0, lostNames = r.dropped.indexOf("legal_actions") >= 0;
+    if (r.whole) { verdict.className = "verdict bad"; verdict.textContent = "Nothing fits: the whole payload is replaced by its marker"; }
+    else if (!lostLegal) { verdict.className = "verdict ok"; verdict.textContent = "Over 4096 B: " + r.dropped.length + " field(s) dropped whole; legal set kept"; }
+    else if (!lostNames) { verdict.className = "verdict warn"; verdict.textContent = pin.checked ? "Even the legal set is too big: the action names stay" : "Unpinned: the legal set went before the small fields"; }
+    else { verdict.className = "verdict bad"; verdict.textContent = "Legal set and action names gone"; }
+  }
+  n.addEventListener("input", draw); pin.addEventListener("change", draw);
+  draw();
+})();
+</script>
+</body>
+</html>
