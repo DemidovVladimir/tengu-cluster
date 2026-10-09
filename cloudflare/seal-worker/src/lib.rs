@@ -116,13 +116,17 @@ fn clients(env: &Env, routes: &Routes) -> Res<Clients> {
     Ok(Clients::parse(&raw, routes)?)
 }
 
+/// A Worker secret, trimmed: a pasted or piped value often ends in a newline,
+/// which no header, path or query may carry.
 fn secret(env: &Env, name: &str) -> Res<String> {
-    env.secret(name).map(|s| s.to_string()).map_err(|_| {
-        fail(
-            Code::Misconfigured,
-            &format!("Worker secret {name} is not set — add it in Cloudflare"),
-        )
-    })
+    env.secret(name)
+        .map(|s| s.to_string().trim().to_string())
+        .map_err(|_| {
+            fail(
+                Code::Misconfigured,
+                &format!("Worker secret {name} is not set — add it in Cloudflare"),
+            )
+        })
 }
 
 fn session_key(env: &Env) -> Res<Vec<u8>> {

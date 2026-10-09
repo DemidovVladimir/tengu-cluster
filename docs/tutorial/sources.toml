@@ -248,6 +248,7 @@ sources = [
   "src/bootstrap/sandbox.rs",
   "src/adapters/inbound/telegram.rs",
   "src/adapters/outbound/solana/rpc.rs",
+  "src/adapters/outbound/tools/crypto/helpers.rs",
 ]
 
 [pages.evidence]

@@ -49,6 +49,7 @@ Each route sets exactly one key position — anything else is 403, so a session 
 | `telegram` | `https://api.telegram.org` | `TELEGRAM_BOT_TOKEN` | path `bot{secret}/`, `file/bot{secret}/` | — | `TELEGRAM_API_URL = "telegram"` |
 | `solana-rpc` | `https://mainnet.helius-rpc.com` | `HELIUS_API_KEY` | query `api-key` | — | `SOLANA_RPC_URL = "solana-rpc/?api-key=TENGU_SECRET"` |
 | `evm-rpc` | `https://eth-sepolia.g.alchemy.com/v2` | `ALCHEMY_API_KEY` | path `{secret}` | — | `EVM_RPC_URL = "evm-rpc/TENGU_SECRET"` |
+| `privy` | `https://api.privy.io` | `PRIVY_BASIC_AUTH` = base64 `<app id>:<app secret>` | header `Authorization: Basic {secret}` | `v1/wallets` | `PRIVY_API_URL = "privy"` + `strip` `PRIVY_APP_SECRET` (required) |
 
 `crates/tengu-seal` test `shipped_wrangler_toml_parses` parses the shipped `ROUTES` / `CLIENTS`.
 
@@ -71,9 +72,9 @@ Replies: the route's key (≥ 8 chars) → `[REDACTED]` in every header value; t
 | `[keys] strip` | env var names removed at load (`TELEGRAM_BOT_TOKEN`, `ALCHEMY_API_KEY`, …: local copies of Worker keys), on success and on failure; a name `[keys.env]` sets is a load error |
 | `install` | at `load_sandbox_or` (base config too) and again in `run-agent` / `mcp-bridge` children (reuse the parent's session: same canonical origin, > 5 min left; strip again — `.env` was re-read). Proxy canonical: lowercase host, no default port, no trailing slash. Exports `TENGU_KEYS_PROXY`, `TENGU_KEYS_SESSION_TOKEN`, `TENGU_KEYS_SESSION_EXP_MS` + `[keys.env]`; warns naming routes the Worker did not grant. On failure every `[keys.env]` var and the session vars are UNSET (warn) — a stray local key never bypasses the proxy |
 | Redaction | token name ends in `_TOKEN`; `cli/mod.rs::registry_after_keys` EXTENDS the startup registry after the export (never rebuilt: overwritten / stripped `.env` and vault values stay masked) |
-| Clients | OpenRouter engine, embeddings, Jev, wiki compiler: no code change. Solana RPC / EVM receipt poll: `auth_header_for` (proxy origin only). Telegram: `header_mode` (`<proxy>/` + `Tengu-Route`), placeholder token; with `TELEGRAM_API_URL` in `[keys.env]` and no session `tengu telegram` refuses to start — never a local token |
+| Clients | OpenRouter engine, embeddings, Jev, wiki compiler: no code change. Solana RPC / EVM receipt poll: `auth_header_for` (proxy origin only). Telegram: `header_mode` (`<proxy>/` + `Tengu-Route`), placeholder token; with `TELEGRAM_API_URL` in `[keys.env]` and no session `tengu telegram` refuses to start — never a local token. Privy wallet tools (`tools/crypto/helpers.rs::privy_request`): `PRIVY_API_URL` on the proxy → the session, no app secret (`PRIVY_APP_ID` / `PRIVY_WALLET_ID` stay local, not secrets); `[keys.env] PRIVY_API_URL` without `PRIVY_APP_SECRET` in `strip` is a load error (`config/keys.rs::FALLBACK_KEYS`), so no session = `Missing environment variable PRIVY_APP_SECRET`, never a local secret |
 | `tengu keys` (no vault unlock) | `setup [--proxy] [--agent-socket]` → `CLIENTS` lines with the routes this config uses (none: `["openrouter"]`) + `[keys]` block · `status` → routes, `[keys.env]` vs routes, session for `KeysConfig::routes()`, `/whoami`, `granted …` · `check <route> [--path p]` → a session for that one route, one GET: status, type, size, ms. All take `--sandbox` |
-| Not moved | wallet signing (`signer_key_file`, Privy) — separate "go"; local Postgres; Claude Code login; public HL / Gecko |
+| Not moved | Solana signer key file (`[solana] signer_key_file`); local Postgres; Claude Code login; public HL / Gecko |
 
 ## Set up (once) · revoke
 
@@ -110,6 +111,7 @@ Replies: the route's key (≥ 8 chars) → `[REDACTED]` in every header value; t
 |---|---|
 | fake secrets through httpbin (before the key-position hardening) | bearer 200, header template 200, wrong creds 401, echoed key masked, missing secret 500, dead upstream 502, path escape never forwarded, unknown route 400 |
 | hardened Worker, real OpenRouter key, `sandboxes/sealed-check` | Jev `convert` `0xff` → `255`, tool error, dry run, maps, `tengu run` + `doctor --live`, Studio Play / Send / Stop; N1 fail closed; key-exfiltration requests refused; `allow` refused `v1/keys`; a 6.5 MB reply streamed |
+| route `privy`, throwaway secret, upstream httpbin | `tengu tool call` `get_wallet_address` → `<proxy>/privy/v1/wallets/<id>` with the session, Worker added the Basic key (echoed, `masked` 1); `v1/apps` 403 (`allow`); `TENGU_SECRET` in the path 403; no session → `Missing environment variable PRIVY_APP_SECRET`, 0 calls to `api.privy.io`; config without `strip` refused. Not yet: a real Privy call |
 
 | Open | Note |
 |---|---|

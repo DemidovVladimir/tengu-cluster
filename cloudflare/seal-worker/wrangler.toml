@@ -49,6 +49,12 @@ ROUTES = '''
     "upstream": "https://eth-sepolia.g.alchemy.com/v2",
     "secret": "ALCHEMY_API_KEY",
     "path": ["{secret}"]
+  },
+  "privy": {
+    "upstream": "https://api.privy.io",
+    "secret": "PRIVY_BASIC_AUTH",
+    "header": "Authorization: Basic {secret}",
+    "allow": ["v1/wallets"]
   }
 }
 '''

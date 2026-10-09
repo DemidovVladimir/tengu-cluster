@@ -30,6 +30,11 @@ pub(crate) const SESSION_VALUE: &str = "@session";
 /// provider itself (`auth_header_for` covers every other client).
 pub(crate) const SESSION_VARS: &[(&str, &str)] = &[("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL")];
 
+/// A `[keys.env]` var that sends a provider through the proxy → the local
+/// key its client falls back to without it. That key must be in `strip`, so
+/// a failed session never falls back to a local key.
+pub(crate) const FALLBACK_KEYS: &[(&str, &str)] = &[("PRIVY_API_URL", "PRIVY_APP_SECRET")];
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeysConfig {
@@ -152,6 +157,13 @@ impl KeysConfig {
             if !var_name(name) || self.env.contains_key(name) {
                 errors.push(format!(
                     "keys.strip: '{name}' must be an env var name not set by [keys.env]"
+                ));
+            }
+        }
+        for (var, key) in FALLBACK_KEYS {
+            if self.env.contains_key(*var) && !self.strip.iter().any(|s| s == key) {
+                errors.push(format!(
+                    "keys.env.{var} needs '{key}' in keys.strip (else a failed session falls back to the local key)"
                 ));
             }
         }
@@ -325,6 +337,17 @@ mod tests {
         assert!(!cfg("https://:pw@p.example")
             .validation_errors(&[])
             .is_empty());
+    }
+
+    #[test]
+    fn a_routed_provider_strips_its_local_key() {
+        let mut c = cfg("https://p.example");
+        c.env.insert("PRIVY_API_URL".into(), "privy".into());
+        let errors = c.validation_errors(&[]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("PRIVY_APP_SECRET"), "{errors:?}");
+        c.strip = vec!["PRIVY_APP_SECRET".into()];
+        assert!(c.validation_errors(&[]).is_empty());
     }
 
     #[test]

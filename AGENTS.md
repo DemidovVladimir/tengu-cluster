@@ -799,8 +799,10 @@ These are not preferences. They're load-bearing.
   again; the redaction registry is extended after the export (`registry_after_keys`).
   Replies masked (text bodies ≤ 2 MiB, on bytes; larger stream on). Sessions are not
   refreshed in-process: restart a long `tengu run` before `session_hours` (≤ 168 h).
-  Proof sandbox `sealed-check`. Revoke = delete the `CLIENTS` line + deploy. Wallet
-  signing is not moved. Deploy with `npx wrangler` (cf hands Rust Workers to wrangler);
+  Proof sandbox `sealed-check`. Revoke = delete the `CLIENTS` line + deploy. Privy
+  wallet tools: route `privy` (`PRIVY_API_URL = "privy"`; `strip` must list
+  `PRIVY_APP_SECRET` — load error otherwise); the Solana signer key file is not moved.
+  Deploy with `npx wrangler` (cf hands Rust Workers to wrangler);
   a Cargo `strip = true` profile breaks worker-build.
 - **Telegram fails closed (2026-10-01)** — `tengu telegram` refuses to start
   without an allow-list (`[telegram] allowed_users` + `TENGU_TELEGRAM_ALLOWED_USERS`);

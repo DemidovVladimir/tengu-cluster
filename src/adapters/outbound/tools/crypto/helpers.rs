@@ -6,7 +6,8 @@
 //!
 //! | Step | Rule |
 //! |---|---|
-//! | env | `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID`, `CHAIN_ID`, `EVM_RPC_URL` read only through `ctx.scope.check_env_read` |
+//! | env | `PRIVY_APP_ID`, `PRIVY_APP_SECRET`, `PRIVY_WALLET_ID`, `PRIVY_API_URL` (when set), `CHAIN_ID`, `EVM_RPC_URL` read only through `ctx.scope.check_env_read` |
+//! | `[keys]` | `PRIVY_API_URL` / `EVM_RPC_URL` on the seal proxy carry the session; the Worker adds the key (`privy_request`) |
 //! | before sending | `egress::policy().check_url` (scheme, `[egress] allow_hosts` / `deny_hosts`, `https_only`) + `ctx.scope.check_net_host` — a denial sends nothing |
 //! | client | `ctx.http`: the egress tool client (proxy per `[egress]`, redirects off) |
 //! | audit | one egress record per request (`tool`, host, path, verdict, status, ms) |
@@ -43,13 +44,42 @@ fn privy_env(ctx: &ToolCtx<'_>, name: &str) -> Result<String> {
     std::env::var(name).map_err(|_| anyhow::anyhow!("Missing environment variable {name}"))
 }
 
-/// `(app id, app secret, wallet id)`.
-fn privy_creds(ctx: &ToolCtx<'_>) -> Result<(String, String, String)> {
-    Ok((
-        privy_env(ctx, "PRIVY_APP_ID")?,
-        privy_env(ctx, "PRIVY_APP_SECRET")?,
-        privy_env(ctx, "PRIVY_WALLET_ID")?,
-    ))
+/// One Privy call to `/v1/wallets/<PRIVY_WALLET_ID><suffix>`: `(url, request)`.
+///
+/// | `PRIVY_API_URL` | Auth |
+/// |---|---|
+/// | unset (`https://api.privy.io`) | `Basic` from the local `PRIVY_APP_ID` + `PRIVY_APP_SECRET` |
+/// | the seal proxy's `privy` route (`[keys.env] PRIVY_API_URL = "privy"`) | the session; the Worker adds `Authorization: Basic …`, this process holds no app secret |
+///
+/// `PRIVY_APP_ID` (public) goes in `privy-app-id` either way.
+fn privy_request(
+    ctx: &ToolCtx<'_>,
+    method: reqwest::Method,
+    suffix: &str,
+) -> Result<(String, reqwest::RequestBuilder)> {
+    let app_id = privy_env(ctx, "PRIVY_APP_ID")?;
+    let wallet_id = privy_env(ctx, "PRIVY_WALLET_ID")?;
+    // Scope-checked only when set: unset keeps today's Privy scopes working.
+    let base = match std::env::var("PRIVY_API_URL") {
+        Ok(url) => {
+            ctx.scope.check_env_read("PRIVY_API_URL")?;
+            url
+        }
+        Err(_) => PRIVY_API_URL.to_string(),
+    };
+    let url = format!(
+        "{}/v1/wallets/{wallet_id}{suffix}",
+        base.trim_end_matches('/')
+    );
+    let req = ctx
+        .http
+        .request(method, &url)
+        .header("privy-app-id", &app_id);
+    let req = match crate::adapters::outbound::keys::auth_header_for(&url) {
+        Some(session) => req.header(reqwest::header::AUTHORIZATION, session),
+        None => req.basic_auth(&app_id, Some(privy_env(ctx, "PRIVY_APP_SECRET")?)),
+    };
+    Ok((url, req))
 }
 
 /// One egress audit record for a request to `url` by `tool`.
@@ -129,18 +159,12 @@ pub(crate) static WALLET_ADDRESS_CACHE: Mutex<Option<String>> = Mutex::new(None)
 pub(crate) async fn privy_wallet_address(ctx: &ToolCtx<'_>) -> Result<String> {
     // The scope and the gate hold for a cached answer too: the cache is
     // process-wide, the caller's permissions are not.
-    let (app_id, app_secret, wallet_id) = privy_creds(ctx)?;
-    let url = format!("{}/v1/wallets/{}", PRIVY_API_URL, wallet_id);
+    let (url, req) = privy_request(ctx, reqwest::Method::GET, "")?;
     let cached = WALLET_ADDRESS_CACHE.lock().unwrap().clone();
     if let Some(cached) = cached {
         gate(ctx, "get_wallet_address", &url)?;
         return Ok(cached);
     }
-    let req = ctx
-        .http
-        .get(&url)
-        .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id);
     let (status, body) = send_json(ctx, "get_wallet_address", &url, req).await?;
     if !status.is_success() {
         bail!("Privy wallet lookup failed: {} {:?}", status, body);
@@ -161,8 +185,6 @@ pub(crate) async fn privy_send_transaction(
     value: Option<&str>,
     chain_id: u64,
 ) -> Result<String> {
-    let (app_id, app_secret, wallet_id) = privy_creds(ctx)?;
-
     let hex_value = match value {
         Some(v) => {
             let parsed = alloy::primitives::U256::from_str_radix(v, 10)
@@ -177,17 +199,12 @@ pub(crate) async fn privy_send_transaction(
         transaction["data"] = json!(d);
     }
 
-    let url = format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id);
-    let req = ctx
-        .http
-        .post(&url)
-        .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id)
-        .json(&json!({
-            "method": "eth_sendTransaction",
-            "caip2": format!("eip155:{}", chain_id),
-            "params": { "transaction": transaction }
-        }));
+    let (url, req) = privy_request(ctx, reqwest::Method::POST, "/rpc")?;
+    let req = req.json(&json!({
+        "method": "eth_sendTransaction",
+        "caip2": format!("eip155:{}", chain_id),
+        "params": { "transaction": transaction }
+    }));
     let (status, body) = send_json(ctx, "sign_and_send_transaction", &url, req).await?;
     if !status.is_success() {
         bail!("Privy eth_sendTransaction failed: {} {:?}", status, body);
@@ -199,18 +216,11 @@ pub(crate) async fn privy_send_transaction(
 }
 
 pub(crate) async fn privy_personal_sign(ctx: &ToolCtx<'_>, message: &str) -> Result<String> {
-    let (app_id, app_secret, wallet_id) = privy_creds(ctx)?;
-
-    let url = format!("{}/v1/wallets/{}/rpc", PRIVY_API_URL, wallet_id);
-    let req = ctx
-        .http
-        .post(&url)
-        .basic_auth(&app_id, Some(&app_secret))
-        .header("privy-app-id", &app_id)
-        .json(&json!({
-            "method": "personal_sign",
-            "params": { "message": message, "encoding": "utf-8" }
-        }));
+    let (url, req) = privy_request(ctx, reqwest::Method::POST, "/rpc")?;
+    let req = req.json(&json!({
+        "method": "personal_sign",
+        "params": { "message": message, "encoding": "utf-8" }
+    }));
     let (status, body) = send_json(ctx, "sign_message", &url, req).await?;
     if !status.is_success() {
         bail!("Privy personal_sign failed: {} {:?}", status, body);

@@ -197,7 +197,7 @@
     <li><span><b>No session without the agent key.</b> A fresh signature by a key in <code>CLIENTS</code>, within ±60 s, bound to this Worker's origin.</span></li>
     <li><span><b>Revocation on the next request.</b> <code>CLIENTS</code> is read on every request, not only at <code>/session</code>.</span></li>
     <li><span><b>The session goes only to the proxy.</b> <code>auth_header_for</code> and <code>header_mode</code> return nothing for any other origin.</span></li>
-    <li><span><b>Fail closed.</b> If no session can be had, every <code>[keys.env]</code> var and the session vars are unset, so a stray local key cannot bypass the proxy. <code>tengu telegram</code> routed through the proxy refuses to start.</span></li>
+    <li><span><b>Fail closed.</b> If no session can be had, every <code>[keys.env]</code> var and the session vars are unset, so a stray local key cannot bypass the proxy. <code>tengu telegram</code> routed through the proxy refuses to start. The Privy wallet tools on route <code>privy</code> need <code>PRIVY_APP_SECRET</code> in <code>strip</code> (a load error otherwise), so without a session they fail rather than use a local secret.</span></li>
     <li><span><b>Local copies stripped.</b> <code>[keys] strip</code> names are removed at load, success or not, and again in every child. <code>@session</code> only for <code>OPENROUTER_API_KEY</code> next to an <code>OPENROUTER_BASE_URL</code> route.</span></li>
     <li><span><b>Never on disk.</b> The session lives in process env; its name ends in <code>_TOKEN</code>. The redaction registry is extended after the export, so old <code>.env</code> / vault values stay masked.</span></li>
     <li><span><b>Replies are masked.</b> Every header value; text, JSON and XML bodies up to 2 MiB, on bytes. A bigger body streams on unmasked past 2 MiB; event streams and binary pass through.</span></li>
@@ -222,7 +222,7 @@
 <span class="ln cmd"><span class="p">$ </span>npx wrangler secret put OPENROUTER_API_KEY</span>
 <span class="ln cmd"><span class="p">$ </span>tengu keys status</span>
 <span class="ln o">proxy:   https://tengu-seal.example.workers.dev</span>
-<span class="ln o">routes:  evm-rpc, openrouter, solana-rpc, telegram</span>
+<span class="ln o">routes:  evm-rpc, openrouter, privy, solana-rpc, telegram</span>
 <span class="ln o">[keys.env]:</span>
 <span class="ln o">  OPENROUTER_API_KEY ← @session</span>
 <span class="ln o">  OPENROUTER_BASE_URL ← openrouter</span>
@@ -247,11 +247,12 @@
         <tr><td><code>crates/tengu-seal/src/target.rs</code></td><td>upstream target from a route, key-position and <code>allow</code> checks, path checks, <code>split_path</code>, header filter, <code>mask</code> / <code>mask_bytes</code> / <code>maskable</code></td></tr>
         <tr><td><code>cloudflare/seal-worker/src/lib.rs</code></td><td>the Worker endpoints, forward, reply masking, the log line</td></tr>
         <tr><td><code>cloudflare/seal-worker/wrangler.toml</code></td><td><code>ROUTES</code>, <code>CLIENTS</code>, build, Workers Logs</td></tr>
-        <tr><td><code>src/config/keys.rs</code></td><td><code>[keys]</code>: proxy, client, agent socket, <code>strip</code>, <code>[keys.env]</code> (<code>@session</code> rule), <code>routes()</code>; guard test of <code>sandboxes/sealed-check</code></td></tr>
+        <tr><td><code>src/config/keys.rs</code></td><td><code>[keys]</code>: proxy, client, agent socket, <code>strip</code>, <code>[keys.env]</code> (<code>@session</code> rule; <code>FALLBACK_KEYS</code>: <code>PRIVY_API_URL</code> needs <code>PRIVY_APP_SECRET</code> stripped), <code>routes()</code>; guard test of <code>sandboxes/sealed-check</code></td></tr>
         <tr><td><code>src/adapters/outbound/keys/mod.rs</code></td><td>session for the routes asked, <code>install</code> (strip, env export at sandbox load and in children, fail closed), canonical proxy origin, <code>auth_header_for</code>, <code>header_mode</code></td></tr>
         <tr><td><code>src/adapters/outbound/keys/agent.rs</code></td><td>SSH-agent client: list keys, sign</td></tr>
         <tr><td><code>src/adapters/inbound/cli/keys.rs</code></td><td><code>tengu keys setup · status · check</code></td></tr>
         <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>Telegram through the proxy (placeholder token, <code>Tengu-Route</code>); refuses to start without a session</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/crypto/helpers.rs</code></td><td>Privy wallet tools: <code>PRIVY_API_URL</code> on the proxy → the session, no app secret here (<code>privy_request</code>)</td></tr>
         <tr><td><code>sandboxes/sealed-check/config.toml</code></td><td>end-to-end proof: Jev, loop, <code>tengu run</code>, Studio only through the Worker (<code>docs/sealed-check-2026-10-09.md</code>)</td></tr>
       </tbody>
     </table>
