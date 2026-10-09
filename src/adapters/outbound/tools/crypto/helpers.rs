@@ -240,12 +240,16 @@ pub(crate) async fn wait_for_receipt(
         if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
             bail!("Cancelled by /stop while waiting for receipt: {}", tx_hash);
         }
-        let req = ctx.http.post(&rpc_url).json(&json!({
+        let mut req = ctx.http.post(&rpc_url).json(&json!({
             "jsonrpc": "2.0",
             "method": "eth_getTransactionReceipt",
             "params": [tx_hash],
             "id": 1
         }));
+        // `[keys]`: an RPC URL that is the seal proxy carries the session.
+        if let Some(auth) = crate::adapters::outbound::keys::auth_header_for(&rpc_url) {
+            req = req.header(reqwest::header::AUTHORIZATION, auth);
+        }
         let (_, body) = send_json(ctx, "sign_and_send_transaction", &rpc_url, req).await?;
         if let Some(result) = body.get("result") {
             if !result.is_null() {

@@ -61,6 +61,17 @@ const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// Idle threshold before evicting a user state.
 const IDLE_EVICTION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1800);
 
+/// `[keys.env]` target for the Telegram blob: `TELEGRAM_API_URL = "telegram"`
+/// exports `<proxy>/s/<blob>`, and then no `TELEGRAM_BOT_TOKEN` is needed.
+const TELEGRAM_API_URL_ENV: &str = "TELEGRAM_API_URL";
+
+/// The seal-proxy Telegram URL, when `[keys]` exported one.
+fn sealed_api_url() -> Option<String> {
+    std::env::var(TELEGRAM_API_URL_ENV)
+        .ok()
+        .filter(|u| crate::adapters::outbound::keys::header_mode(u).is_some())
+}
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -109,8 +120,29 @@ impl TelegramPipe {
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .timeout(std::time::Duration::from_secs(60));
         }
+        // `[keys]`: `TELEGRAM_API_URL = <proxy>/s/<blob>` — the bot talks to
+        // the seal proxy with a placeholder token, which the Worker swaps for
+        // the sealed one; the real token never reaches this process.
+        let sealed =
+            sealed_api_url().and_then(|u| crate::adapters::outbound::keys::header_mode(&u));
+        if let Some((_, headers)) = &sealed {
+            let mut map = reqwest011::header::HeaderMap::new();
+            for (name, value) in headers {
+                let mut v = reqwest011::header::HeaderValue::from_str(value)
+                    .context("seal-proxy header")?;
+                v.set_sensitive(true);
+                map.insert(*name, v);
+            }
+            builder = builder.default_headers(map);
+        }
         let client = builder.build().context("building telegram http client")?;
-        Ok(teloxide::Bot::with_client(token, client))
+        Ok(match sealed {
+            Some((base, _)) => {
+                teloxide::Bot::with_client(crate::adapters::outbound::keys::PLACEHOLDER, client)
+                    .set_api_url(reqwest011::Url::parse(&base).context("seal-proxy url")?)
+            }
+            None => teloxide::Bot::with_client(token, client),
+        })
     }
 
     fn bot(&self) -> anyhow::Result<teloxide::Bot> {
@@ -563,8 +595,16 @@ impl TelegramSession {
         require_allowed_users(&allowed_users)?;
         info!(count = allowed_users.len(), "Telegram allowed users loaded");
 
-        let bot_token = std::env::var("TELEGRAM_BOT_TOKEN")
-            .map_err(|_| anyhow::anyhow!("TELEGRAM_BOT_TOKEN env var is required"))?;
+        // With a sealed `TELEGRAM_API_URL` the Worker holds the token and
+        // `build_bot` sends a placeholder; a local token is ignored.
+        let bot_token = match sealed_api_url() {
+            Some(_) => crate::adapters::outbound::keys::PLACEHOLDER.to_string(),
+            None => std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| {
+                anyhow::anyhow!(
+                    "TELEGRAM_BOT_TOKEN env var is required (or seal it: [keys.env] TELEGRAM_API_URL)"
+                )
+            })?,
+        };
 
         let memory_config = config.memory.clone();
 

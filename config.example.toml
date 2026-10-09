@@ -831,6 +831,22 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # audit = true                         # JSONL at <TENGU_HOME>/logs/egress.jsonl
 # audit_log = "~/.tengu/logs/egress.jsonl"   # another audit path (~ expanded)
 
+# --- Sealed keys (no provider key on this machine) ---
+# Each key is HPKE-sealed to the tengu-seal Cloudflare Worker, which opens it,
+# injects it and forwards. docs/sealed-keys-2026-10-09.md · tengu keys --help
+
+# [keys]
+# proxy = "https://tengu-seal.<subdomain>.workers.dev"   # Worker origin (allow_hosts must admit it)
+# pubkey = "<from tengu keys setup>"                     # pinned X25519 key; tengu keys seal encrypts to it
+# client = "tengu-attended"                              # ssh-agent key comment or SHA256:… fingerprint
+# agent_socket = "~/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
+# sealed_dir = "~/.tengu/sealed"                         # default <TENGU_HOME>/sealed
+# [keys.env]
+# OPENROUTER_BASE_URL = "openrouter"                     # → <proxy>/s/<sealed openrouter blob>
+# OPENROUTER_API_KEY = "@session"                        # → the session token (RAM only)
+# TELEGRAM_API_URL = "telegram"                          # bot uses a placeholder; no TELEGRAM_BOT_TOKEN
+# SOLANA_RPC_URL = "helius"                              # sealed with --inject url
+
 # --- Skill Lifecycle ---
 # Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
 # `tengu skill evolve <skill>`. All three drive the metrics: frontmatter

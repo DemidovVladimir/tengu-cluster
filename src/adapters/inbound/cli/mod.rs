@@ -6,6 +6,7 @@ mod decide;
 mod doctor;
 mod evidence;
 mod history;
+mod keys;
 mod lineage;
 mod ranking;
 mod risk;
@@ -272,6 +273,12 @@ enum Commands {
     Secret {
         #[command(subcommand)]
         action: SecretAction,
+    },
+    /// Sealed keys: provider keys live only inside blobs the tengu-seal
+    /// Cloudflare Worker opens (docs/sealed-keys-2026-10-09.md).
+    Keys {
+        #[command(subcommand)]
+        action: keys::KeysAction,
     },
     /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
     Prune {
@@ -888,6 +895,7 @@ pub(crate) async fn run() -> Result<()> {
             }
             Ok(())
         }
+        Commands::Keys { action } => keys::run_keys(&config, action).await,
         Commands::Skill { action } => run_skill_command(config, action).await,
         Commands::RunAgent => {
             // Handled by the early-return in main(); this arm is for
@@ -953,9 +961,13 @@ fn stdout_is_data(command: &Option<Commands>) -> bool {
 }
 
 /// Whether startup unlocks the secrets vault: every command but `tengu
-/// secret`, which opens it itself (one password prompt, not two).
+/// secret`, which opens it itself (one password prompt, not two), and
+/// `tengu keys`, which needs no vault secret.
 fn loads_vault_at_startup(command: &Option<Commands>) -> bool {
-    !matches!(command, Some(Commands::Secret { .. }))
+    !matches!(
+        command,
+        Some(Commands::Secret { .. } | Commands::Keys { .. })
+    )
 }
 
 #[cfg(test)]

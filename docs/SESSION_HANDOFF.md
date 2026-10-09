@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-10-09: sealed keys — branch `feature/sealed-keys` (`docs/sealed-keys-2026-10-09.md`)
+
+| Item | State |
+|---|---|
+| Built | `crates/tengu-seal` (HPKE blob, session, SSH signature, target rules — 23 tests) · `cloudflare/seal-worker` (Rust Worker + `KeyVault` Durable Object; wasm clippy clean, bundle 722 KB) · `[keys]` + `tengu keys setup / seal / status / check` · `install` at `load_sandbox_or` · RPC / Telegram session header · tutorial `sealed-keys.html` |
+| Verified | local `wrangler dev`: setup, seal, session, `/whoami`, every inject mode through httpbin (basic 200 / 401 wrong, bearer 200, placeholder 204, url 202, escape 400, url + path 403), env export at sandbox load |
+| Open (operator) | `npx wrangler login` + KV namespace + `npx wrangler deploy`; Secretive keys `tengu-attended` / `tengu-unattended`; rotate + seal OpenRouter / Telegram / Helius; then P0 numbers (CPU p95, Tor reachability of workers.dev) and opt-in per sandbox (`allow_hosts` sandboxes must list the Worker host; lping Solana scopes need it in `net_hosts`) |
+| Not moved | wallet signing (separate "go"), local Postgres, Claude Code login |
+
 ## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
 
 | Finding | Fixed | Test |
@@ -161,6 +170,7 @@ Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kep
 | E1 | repo `target/` | 89 GB | build cache | any time (rebuildable); disk was 94 % full | `cargo clean` |
 | E2 | `~/.cache/tengu-xm.noindex/main/` | 47 GB | build cache | any time | `rm -rf` |
 | E4 | `~/.cache/tengu-xm.noindex/seed/` | 6.2 GB | clone source for agent target dirs (`agents/<label>`, deleted after each agent), refreshed 2026-10-09 | any time (refresh before the next parallel build) | `rm -rf` |
+| E5 | `~/.cache/tengu-xm.noindex/agents/{sealed-tengu,seal-worker,sealed-crate,sa}/`, `~/development/tengu-sealed/` (worktree) | ~13 GB | sealed-keys build caches, the throwaway ssh-agent test key `sa/` (test-only, never allow-listed on a deployed Worker) and the `feature/sealed-keys` worktree | after the sealed-keys PR merges | `rm -rf` the dirs; `git worktree remove ~/development/tengu-sealed` |
 | F1 | `~/tengu-lab/` | 464 KB | control-loop-lab + Studio: workspace `control-loop-lab/{in,out}` (the lab agent's only fs roots, empty); the lab `TENGU_HOME` `home/` (312 KB: `logs/trace/<sandbox>/<run_id>.jsonl`, `logs/decisions.jsonl`, `logs/maps/`, `state/`) and the Studio validation home `home-validation-2026-10-09/` (152 KB: `logs/` + `state/`; its trace `cbd8cd05-30fb-4177-aa99-0b978f0e83e5` backs `docs/studio-evidence/`) | Studio / lab work finished (after Operator Review #3) | `rm -rf ~/tengu-lab` (only ever lab data — `docs/control-loop-lab-2026-10-08.md` reset steps) |
 | F2 | `~/.tengu/state/soe/` (+ workspace `~/soe-ws`) | none yet | SOE state root: signed `operator.toml`, `sources.db`, `cycles/`, `replays/`, `reviews/`, `eval/` — private (never in git); created by `tengu soe init` / the first `tengu sources fetch` | never without the operator: it holds the signed profile and the graded cycles of Operator Review #2 | back up first; `rm -rf` |
 

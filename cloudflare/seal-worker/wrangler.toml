@@ -1,0 +1,29 @@
+# tengu-seal Worker — see docs/sealed-keys-2026-10-09.md.
+# No secrets here: provider keys reach the Worker only inside sealed blobs,
+# and the private key is made by the KeyVault Durable Object on first use.
+name = "tengu-seal"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[build]
+command = "cargo install -q worker-build@0.8.7 && worker-build --release"
+
+# Client allow-list: key `clients:<OpenSSH fingerprint>` → {"label": "..."}.
+# Create once with `npx wrangler kv namespace create CLIENTS` and paste the id.
+[[kv_namespaces]]
+binding = "CLIENTS"
+id = "REPLACE_WITH_CLIENTS_KV_ID"
+
+[durable_objects]
+bindings = [{ name = "VAULT", class_name = "KeyVault" }]
+
+# Free plan: Durable Objects must be SQLite-backed.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["KeyVault"]
+
+# Workers Logs (free: 200k events/day, 3-day retention). One JSON line per
+# request: route, client label, upstream host, status, ms.
+[observability]
+enabled = true

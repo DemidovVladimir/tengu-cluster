@@ -12,6 +12,7 @@ pub(crate) mod evidence;
 pub(crate) mod history_sqlite;
 pub(crate) mod http_class;
 pub(crate) mod hyperliquid;
+pub(crate) mod keys;
 pub(crate) mod lineage;
 pub(crate) mod market_data;
 pub(crate) mod mcp_client;
