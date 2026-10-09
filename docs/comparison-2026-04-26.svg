@@ -1,6 +1,6 @@
 <svg viewBox="0 0 980 1284" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
   <title id="title">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture comparison, April 2026</title>
-  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, routing, five trading-runtime axes added 2026-10-02 (typed results + decision loops, long-running runtime, money safety, research on history, engine parity), and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18, 2026-10-02 and 2026-10-08 (lineage + forward evidence, sealed strategy rankings, source evidence, counts, skill scanner); Hermes and PI cells on the new axes state only what the snapshot establishes, else "not covered by this snapshot"; the "landed today" boxes are historical.</desc>
+  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, routing, five trading-runtime axes added 2026-10-02 (typed results + decision loops, long-running runtime, money safety, research on history, engine parity), and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18, 2026-10-02, 2026-10-08 (lineage + forward evidence, sealed strategy rankings, source evidence, counts, skill scanner) and 2026-10-09 (Tengu Studio surface, tool count); Hermes and PI cells on the new axes state only what the snapshot establishes, else "not covered by this snapshot"; the "landed today" boxes are historical.</desc>
   <style>
     .h1 { font-size: 16px; font-weight: 700; fill: #0f172a; }
     .h2 { font-size: 12px; font-weight: 700; fill: #0f172a; letter-spacing: .4px; text-transform: uppercase; }
@@ -56,7 +56,7 @@
   <g transform="translate(20, 132)">
     <rect x="0" y="0" width="305" height="44" rx="4" class="col-tengu" />
     <text x="10" y="16" class="h3">Surfaces</text>
-    <text x="10" y="30" class="body">TUI · Telegram · webhooks · tengu run (24/7)</text>
+    <text x="10" y="30" class="body">TUI · Telegram · webhooks · Studio · tengu run</text>
     <circle cx="296" cy="26" r="3" class="added" />
     <text x="10" y="42" class="small">+ CLI: decide · backtest · ranking · lineage · evidence · soe</text>
     <rect x="317" y="0" width="305" height="44" rx="4" class="col-hermes" />
@@ -89,7 +89,7 @@
     <text x="10" y="128" class="h3">Model + tools</text>
     <text x="10" y="142" class="body">OpenRouter · local · Claude Code engines</text>
     <circle cx="296" cy="138" r="3" class="added" />
-    <text x="10" y="154" class="mono">PluginToolExecutor · 47 tools · MCP</text>
+    <text x="10" y="154" class="mono">PluginToolExecutor · 50 tools · MCP</text>
     <text x="10" y="165" class="small">every tool on every engine · Tor-by-default egress</text>
     <rect x="317" y="112" width="305" height="56" rx="4" class="col-hermes" />
     <text x="327" y="128" class="h3">Model + tools</text>
@@ -286,7 +286,7 @@
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="172" cy="14" r="4" class="added" /><text x="182" y="18" class="body">openrouter · local · claude_code</text>
     <circle cx="172" cy="32" r="4" class="added" /><text x="182" y="36" class="body">lint + bridge conformance + live matrix</text>
-    <text x="172" y="52" class="small">via tengu mcp-bridge · 17 tool sets</text>
+    <text x="172" y="52" class="small">via tengu mcp-bridge · 18 tool sets</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">200+ providers · 6 terminal backends</text>
     <circle cx="439" cy="32" r="4" class="unk" /><text x="449" y="36" class="body">per-tool parity checks: not covered</text>

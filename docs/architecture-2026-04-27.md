@@ -1,4 +1,4 @@
-# Tengu-Cluster — Architecture Walkthrough (2026-04-27; layout 2026-09-23; synced 2026-10-08)
+# Tengu-Cluster — Architecture Walkthrough (2026-04-27; layout 2026-09-23; synced 2026-10-09)
 
 > Companions: `docs/architecture-2026-04-27.svg` (the picture), `docs/architecture-2026-04-27.html` (the explorer: walk a turn, the other flows, subsystem cards, searchable file map). Five minutes: the TL;DR, §1 (the chat turn), §1b (the `tengu run`, `tengu backtest` and `tengu ranking` flows). An hour: §2's file tables. Any single file: `docs/code-map.md`. One animated page per feature: `docs/tutorial/`.
 
@@ -20,7 +20,8 @@ That is the chat turn. Since 2026-09-24 the same binary also runs work with no c
 | `tengu lineage` + `tengu evidence` | `lineage/` registry (one TOML per record); W1 frozen, a sandbox's `[generation]` checked at every `Config::load`; read-only evidence vault, forward grade / regrade, rules · Jev · HOLD evaluation | §2.14 |
 | `tengu ranking run` + `strategy_ranking` | a sealed contract's backtests → one ranking per date, weakest first per cohort; a `[feeds.*]` of `tengu run` | §1b C · §2.15 |
 | `tengu sources` + `source_evidence` | SEC EDGAR / EU TED facts → append-only `sources.db`; the as-of evidence packet (no lookahead); agents never fetch | §2.16 |
-| `tengu soe` | Software Opportunity Engine, offline: gates, economics, ranking over a signed private profile | §2.17 |
+| `tengu soe` + `soe_*` tools | Software Opportunity Engine: offline gates, economics, ranking over a signed private profile (O1); the weekly cycle — Architect + Critic stage agents write drafts through tools, the pure domain decides, the run dir is frozen — plus replay, grades, the Review #2 packet (O3 / O4); a `kind = "job"` feed of `tengu run` | §2.17 |
+| `tengu trace` + `tengu studio` | every `tengu run` / `tengu decide` writes a correlated JSONL execution trace; Studio (a loopback browser page, `--features studio`) draws the validated workflow graph and the trace, Play / Stop only where `[studio] control` allows | §2.18 |
 
 **Code layout (2026-09-23):** hexagonal — `src/domain/` (data) ← `src/ports/` (traits) ← `src/application/` (use cases) ← `src/adapters/{inbound,outbound}/`, wired by `src/bootstrap/`; enforced by `tests/layering_lint.rs`. Every file, extension recipe and dependency: `docs/code-map.md` / `docs/code-map.html`.
 
@@ -130,7 +131,9 @@ No user message starts these. Same tools, scopes and egress as a chat turn; no p
 | Note | Detail |
 |---|---|
 | Clock work is a tool feed | exits, the weekend fade, the daily risk roll: `kind = "tool"` — no LLM, no Jev (`kind = "tick"` always reaches a Jev loop) |
-| Today | `xmarket` + `xmarket-weekend` run tool feeds only (no `[decision_loops]` there yet — tracker `jev-xmarket-loops-toml`); `xlab-w2` runs tool feeds (`history_refresh`, `strategy_ranking_daily`, `strategy_ranking_weekend` — §1b C); loops live in `lping` (`lp_watch`, `hedge_watch`, exec chains `hedge_exec`, `lp_exec`), `jev-exec`, `xlab` / `xlab-w2` (`xl_gate`, replayed by `tengu backtest --gate`) |
+| `kind = "job"` | a named application job from a closed list (`config/feeds.rs` `JOBS`: `soe_cycle`), never a command from config; `RuntimeJob::run(slot ms, "feed:<name>:<slot ms>")` (`ports/runtime.rs`), built by `bootstrap/runtime.rs::job_for` → `bootstrap/soe.rs` (§2.17); same backoff and health as a tool feed |
+| Trace | `bootstrap/runtime.rs::start` opens this process's recording (`<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, `runtime_id` = the lease holder): `runtime.*`, `feed.*`, `loop.*`, every loop step and tool call (§2.18) |
+| Today | `xmarket` + `xmarket-weekend` run tool feeds only (no `[decision_loops]` there yet — tracker `jev-xmarket-loops-toml`); `xlab-w2` runs tool feeds (`history_refresh`, `strategy_ranking_daily`, `strategy_ranking_weekend` — §1b C); `soe` runs one job feed (`soe_week` → `soe_cycle`); loops live in `lping` (`lp_watch`, `hedge_watch`, exec chains `hedge_exec`, `lp_exec`), `jev-exec`, `xlab` / `xlab-w2` (`xl_gate`, replayed by `tengu backtest --gate`), `control-loop-lab` (`demo`, fed by the tick feed `tick`; tool feed `probe`) |
 | Operator doc | `docs/runtime-2026-09-30.md` (§ Feeds, § Health, § Weekend run) |
 
 ### B. `tengu backtest` — market.db → resolve / prepare → candidates → [Jev gate] → evaluate → run dir
@@ -173,7 +176,7 @@ No user message starts these. Same tools, scopes and egress as a chat turn; no p
 
 ## §2 — The subsystems (file-by-file)
 
-Paths below are relative to `src/`. §2.1–2.6 serve the chat turn; §2.7–2.13 landed 2026-09-24 → 2026-10-01; §2.14–2.17 (lineage + evidence, strategy ranking, source evidence, SOE) 2026-10-06 → 2026-10-08.
+Paths below are relative to `src/`. §2.1–2.6 serve the chat turn; §2.7–2.13 landed 2026-09-24 → 2026-10-01; §2.14–2.17 (lineage + evidence, strategy ranking, source evidence, SOE) 2026-10-06 → 2026-10-09; §2.18 (execution trace + Tengu Studio) 2026-10-09.
 
 ### 2.1 Memory — `application/memory/` + ports + outbound stores
 
@@ -202,9 +205,9 @@ No `agents/` directory, no separate spec type. A subagent is an `[agents.<name>]
 | Routable ⇔ `description` set | `orchestrator/shared_files.rs::routable_agents` renders those blocks (+ `example_queries`) into `TENGU_PLANNER_REGISTRY.md` |
 | Private ⇔ no `description`, not `default` | the only agents that may hold an exec tool (xmarket) or a Solana `send` grant (and not a webhook endpoint's `agent`); never `@<id>:`-routable on Telegram |
 | Fields | `engine` (`openrouter` \| `local` \| `claude_code`), `model`, `description`, `example_queries`, `tools` (allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias), `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap per step), `limits.step_timeout_secs` (default 600), `identity`, `claude_code` |
-| Sandbox sections | `AgentConfig::sandbox` (`config/sections.rs`) — `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`, `[backtest]`, `[generation]` (resolved `GenerationScope`), `[sources]`, `[strategy_ranking]` reach tools on every surface |
+| Sandbox sections | `AgentConfig::sandbox` (`config/sections.rs`) — `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`, `[backtest]`, `[generation]` (resolved `GenerationScope`), `[sources]` (+ its state dir), `[soe]`, `[strategy_ranking]` reach tools on every surface |
 | Child lookup | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` loads the parent config first, then `config.agents.get(name)` (`compose.base_agent` when composed) |
-| Examples | `sandboxes/lping` (`lping` planner · `crypto_researcher` routable · `lp_executor` private), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private), `sandboxes/xlab-w2` (+ `xl_ranker` private, the ranking feeds' agent), `sandboxes/soe` (`soe_reader` default, `source_evidence` only · `soe_architect` · `soe_critic` stage agents) |
+| Examples | `sandboxes/lping` (`lping` planner · `crypto_researcher` routable · `lp_executor` private), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private), `sandboxes/xlab-w2` (+ `xl_ranker` private, the ranking feeds' agent), `sandboxes/soe` (`soe_reader` default, `source_evidence` only · `soe_architect` · `soe_critic` stage agents), `sandboxes/control-loop-lab` (`lab` private: the loop's and feeds' tools) |
 
 Edit a block + restart chat → the planner registry file is regenerated on the next planner turn. No rebuild required.
 
@@ -217,6 +220,7 @@ Edit a block + restart chat → the planner registry file is regenerated on the 
 | `xlab` | history-first research: `market.db`, `tengu backtest`, Architect; bound to generation W1 (frozen) | `open`, `allow_hosts` HL + GeckoTerminal |
 | `xlab-w2` | W2 research: an unbound copy of `xlab` sharing its state dir (`xlab`) + SEC events, `[strategy_ranking]` + ranking feeds | `open`, `allow_hosts` HL + GeckoTerminal + SEC |
 | `soe` | source layer (O2): `[sources]` rows (SEC EDGAR, EU TED, shipped disabled), one read-only agent; weekly cycle (O3): `[soe]`, two stage agents, the `soe_week` job; bound to SOE-G0 | `open`, `allow_hosts` SEC + TED |
+| `control-loop-lab` | the safe reference run of the control loop: loop `demo` (Jev), feeds `tick` + `probe`, `lab` with `read_file` / `write_file` / `list_directory` in its workspace; `[studio] control = true` (§2.18) | `open` (Jev only) |
 | `tor-check` · `storage-test` | Tor egress check · `persistent_store` test | `tor` |
 | `unlimited` | one OpenRouter agent over Telegram (`[telegram]`) | `open` |
 
@@ -283,11 +287,11 @@ Process-wide observability layer. Every successful planner call, `run-agent` ste
 | `application/runtime/mod.rs` | `Supervisor` (named tasks on one stop signal; early task death fails the run), `keep_lease` |
 | `application/runtime/loops.rs` | `LoopDispatch`: one event at a time per loop, `max_decisions_in_flight` across loops, ≤ `max_queued_per_loop` waiting (`Refused::QueueFull` ⇒ webhook 429); also used by `tengu webhooks` |
 | `application/runtime/health.rs` | `HealthBoard`: `<state dir>/run-<s>.json`, `loop/1:<name>`, `feed/1:<name>` (`FeedWriter`) |
-| `application/runtime/feeds.rs` | `run_feed`: tool / tick feeds, backoff per error class (`domain/backoff.rs`), at-tick slots retried 15 min |
+| `application/runtime/feeds.rs` | `run_feed`: tool / tick / job feeds, backoff per error class (`domain/backoff.rs`), at-tick slots retried 15 min; `feed.*` trace events |
 | `domain/runtime.rs` · `domain/schedule.rs` | leases + `live_verdict` (pure) · `next_fire` (grid, windows, at-ticks, DST) |
-| `ports/runtime.rs` · `outbound/runtime_store.rs` | `RuntimeStore` · `<state dir>/runtime.db` lease (acquire / renew / release, TTL takeover) |
+| `ports/runtime.rs` · `outbound/runtime_store.rs` | `RuntimeStore`, `RuntimeJob` · `<state dir>/runtime.db` lease (acquire / renew / release, TTL takeover) |
 | `ports/clock.rs` · `outbound/clock.rs` | `Clock` + `SimClock` · `SystemClock` |
-| `config/runtime.rs` · `config/feeds.rs` | `[runtime]` (grace, in-flight, queue, heartbeat) · `[feeds.<n>]` (validated against agents' tools and loops) |
+| `config/runtime.rs` · `config/feeds.rs` | `[runtime]` (grace, in-flight, queue, heartbeat) · `[feeds.<n>]` (validated against agents' tools, loops and the closed `JOBS` list) |
 | `cli/doctor.rs` | `tengu doctor --sandbox <s> --live` (healthcheck for a `tengu run` container) |
 
 Doc: `docs/runtime-2026-09-30.md`.
@@ -305,7 +309,7 @@ Outside the chat turn: Jev picks actions; tools execute. Docs: `docs/decision-lo
 | `bootstrap/decision.rs` | `build_decision_loop`, `agent_tool_executor` (`SanitizedToolExecutor`); replay: `build_replay_loop` (terminal-only, no history, no tools), `cached_decision_engine`, `build_gate` (K loops, each on its own `SimClock`) |
 | `outbound/decisions.rs` | `JevClient` — OpenRouter `/api/alpha/decisions` (`llm_api_client`), one retry on 429 / 5xx, circuit open 30 s after 3 failures |
 | `outbound/decision_cache.rs` | `CachedDecisionEngine` — key = sha256 hex of canonical `{model, state, questions}`; `<state dir>/backtests/decision-cache.db`; an offline miss is an error |
-| `cli/decide.rs` | `tengu decide --sandbox <s> --loop <n> [--event f.json]` · `tengu decide --sandbox <s> --map <file\|->` |
+| `cli/decide.rs` | `tengu decide --sandbox <s> --loop <n> [--event f.json]` · `tengu decide --sandbox <s> --map <file\|->` (the map kept as `<TENGU_HOME>/logs/maps/<sha256>.json`); every run records a trace (§2.18) |
 
 Audit: `<TENGU_HOME>/logs/decisions.jsonl` (one `write_all` per line, failed calls too); a replay's lines go to the run's `decisions.jsonl` instead.
 
@@ -333,6 +337,7 @@ Doc: `docs/typed-observations-2026-09-24.md`.
 | xmarket risk / paper (6) | `risk_status`, `paper_positions`; exec tools `paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` | `tools/xm/` (§2.11) |
 | xlab (3) | `market_history` (`mkt_history/1`), `backtest` (`backtest/1:<run id>`), `strategy_ranking` (`run` \| `latest`; no row — the ranking is its files) | `tools/xlab/` (§2.12, §2.15) |
 | Sources (1, read-only) | `source_evidence` (`source_asof/1`, the as-of evidence packet; agents never fetch) | `tools/sources/` (§2.16) |
+| SOE (3) | `soe_view` (`soe_view/1:<run>:<view>`, read-only), `soe_propose` (Architect draft, `<cycle>.pNN`), `soe_challenge` (Critic draft, `<cycle>.cNN`) — writes go through `application::soe::submit` into the open run dir; never a contact, spend or publish | `tools/soe/` (§2.17) |
 
 Shared: `outbound/rate_limit.rs` (`[rate_limits.<name>]`, per process), `outbound/http_class.rs` (HTTP → `ErrorClass`, URL scrubber), `domain/backoff.rs`. The hidden `tengu tool list` prints every catalog name (50 in a default build: 14 default + 36 opt-in; `agentic_memory` joins with `postgres_memory`). In a `[generation]`-bound sandbox the executor and the bridge drop a tool the generation refuses (`bootstrap/tools.rs::within_generation`; `Config::load` refuses listing one).
 
@@ -435,15 +440,58 @@ Facts from approved sources with full provenance, read as-of t. Docs: `docs/sour
 
 Sandbox `sandboxes/soe`: `soe_reader` (default, `source_evidence` only, Claude Code `builtin_tools_profile = "none"`), the O3 stage agents `soe_architect` · `soe_critic` (`docs/soe-2026-10-08.md` § 13) and one `kind = "job"` feed `soe_week`; no loops or `[[mcp_servers]]`; bound to SOE-G0.
 
-### 2.17 Software Opportunity Engine — SOE O0–O2 (2026-10-08)
+### 2.17 Software Opportunity Engine — SOE O0–O4 (2026-10-08 / 2026-10-09)
 
-Offline: no sandbox config, secrets, egress, LLM or fetch. Doc: `docs/soe-2026-10-08.md`, page `docs/tutorial/soe.html`.
+O1 commands run offline (no sandbox config, secrets, egress, LLM or fetch). The weekly cycle (O3) and its measures (O4) write the private SOE state `<TENGU_HOME>/state/<sources.state>/` only — no contact, spend, publish or deploy exists (O5–O8 wait for Operator Review #2). Doc: `docs/soe-2026-10-08.md` (§§ 10–13), page `docs/tutorial/soe.html`.
 
 | File | What it owns |
 |---|---|
-| `domain/soe/` | integer minor-unit money + unknown-safe `Est` (`value.rs`), records `soe.<record>/1`, economics (downside / base / upside), PRD § 7.2 hard gates (`PASS` / `HOLD` / `REJECT`), capability fit, ranking + the `HOLD` week, eval cases — pure; imports `domain/source/`, never the reverse |
-| `config/soe.rs` | the signed private profile `<TENGU_HOME>/state/soe/operator.toml` (0600, refused inside a git tree or unsigned), opportunity + record-dir + `--cited` loaders |
-| `cli/soe.rs` | `tengu soe init \| check \| portfolio \| sensitivity \| eval` — only `init` writes |
+| `domain/soe/` | integer minor-unit money + unknown-safe `Est` (`value.rs`), records `soe.<record>/1`, economics (downside / base / upside), PRD § 7.2 hard gates (`PASS` / `HOLD` / `REJECT`), capability fit, rank + `allocate::decide_week` (the one portfolio builder), proposals, challenges, forecasts, memo, replay sets, the review packet, eval cases — pure; imports `domain/source/`, never the reverse |
+| `config/soe.rs` | the signed private profile (0600, refused inside a git tree or unsigned; O1 default `<TENGU_HOME>/state/soe/operator.toml`, the cycle's `<state root>/operator.toml`), opportunity / record-dir / replay-set / `--cited` loaders; `[soe]` (`architect`, `critic`, `max_proposals`, `forecast_max_weeks`, `token_prices`) and its closed-world load rules (tools ⊆ `SOE_ALLOWED`, only `kind = "job"` feeds, no loops / `[risk]` / `[xmarket]` / signer / Telegram / webhooks; hardened) |
+| `ports/soe.rs` | `StageRunner` (one model stage as a sandbox agent; returns how it went, never a draft) · `CycleStore` (run dirs `cycles/` · `replays/` · `reviews/`, claimed once, frozen once; append-only state logs) |
+| `application/soe/` | `cycle.rs::run_cycle` (step table below), `submit.rs` (the tools' writes, phase markers), `freeze.rs` (`MANIFEST.json`, `verify_state`), `job.rs` (`SoeCycleJob`: the slot's ISO week, a frozen week a no-op), `replay.rs` (holdout only as a counted read), `grade.rs` (grade + resolve forecasts), `review.rs` (the Review #2 packet, last line the STOP) |
+| `adapters/outbound/soe/` | `store.rs` (`FsCycleStore`), `runner.rs` (`SubprocessStageRunner`: one `tengu run-agent` child per stage), `cache.rs` (`CachedStageRunner`: `stage-cache/<key>.jsonl`, key = canonical sha256 of `{agent, model, skill_sha256, stage, goal}`; an offline miss is an error) |
+| `bootstrap/soe.rs` | the `soe_cycle` job of a `kind = "job"` feed (`bootstrap/runtime.rs::job_for`): cycle store, source store, cached stage runner, generation pin, profile |
+| `tools/soe/` | `soe_view`, `soe_propose`, `soe_challenge` (§2.10); `soe_propose` only as `[soe] architect`, `soe_challenge` only as `[soe] critic` |
+| `cli/soe.rs` · `cli/soe/weekly.rs` | `tengu soe init \| check \| portfolio \| sensitivity \| eval` (O1; only `init` writes) · `tengu soe cycle \| replay \| grade \| resolve \| review \| verify \| show` (`--sandbox` or `-c`; `cycle` holds `runtime:<s>` + `state:<root>` as `tengu run` does) |
+
+| Cycle step (`run_cycle`) | Writes (run dir `cycles/<week>/`) | Rule |
+|---|---|---|
+| Refuse | — | `cycle_already_frozen`, `cycle_unfinished`, `cycle_out_of_order`, an unsigned profile — before anything is created |
+| Observe | `head.json`, `packet.json`, `profile.toml` | the as-of packet at `decided_at` (live: `captured`; replay: `knowable`) — the stages' only fact input |
+| Carry | `carried.json` | live: the previous frozen cycle's candidates not rejected, re-checked against this packet |
+| Architect · Challenge | `proposals.jsonl` · `challenges.jsonl` (+ phase markers) | the stage agent writes through `soe_propose` / `soe_challenge`; a failed stage is recorded, the week goes on (a `HOLD` week is valid) |
+| Decide · Report | `decided.json`, `portfolio.json`, `memo.md`, `forecast.json`, `inputs.json`, `stages.json`, `ops.json`, `candidates.jsonl`, `episodes.jsonl` | `decide_week`; forecasts frozen at `decided_at`; every file but `ops.json` reproducible (`freeze::decision_sha256`) |
+| Freeze · Learn | `MANIFEST.json`, read-only · state logs | live only: `candidates.jsonl`, `episodes.jsonl`, `forecast-log.jsonl` appended (a replay run adds one `replays.jsonl` line, + `holdout-reads.jsonl` for a counted read) |
+
+Sandbox `sandboxes/soe` (bound to SOE-G0): one job feed `soe_week` (`at = ["Mon 07:00"]`, `Europe/Paris`). Gate G-O0 open: no signed profile, no enabled source, no live cycle, live engine-matrix legs not run.
+
+### 2.18 Execution trace + Tengu Studio (2026-10-09)
+
+The trace is what Studio reads; the page draws what Rust computed (graph, colours, legality, health, control verdicts). Docs: `docs/studio-2026-10-08.md`, `docs/control-loop-lab-2026-10-08.md`, `docs/runtime-2026-09-30.md` § Trace, `TENGU_STUDIO_PLAN.md`; page `docs/tutorial/studio.html`.
+
+| File | What it owns |
+|---|---|
+| `domain/trace.rs` | the event envelope: `event_id` = `<run_id>:<seq>`, `seq`, `ts_ms`, `sandbox`, `config_hash`, `runtime_id`, `run_id`, `session_id`, `correlation_id`, `parent_event_id`, `call_id`, `component`, `kind` (`run.opened`, `jev.completed`, …), `node_id`, `status`, `duration_ms`, `payload` (redacted by `scrub_value`, bounded by `MAX_PAYLOAD_BYTES`), `artifact`; `Status::tone`, `RunState` — pure |
+| `ports/trace.rs` | `TraceSink` (one recording, fail-soft) · `TraceReader` (runs, events after a `seq`, follow live) |
+| `adapters/outbound/trace_store.rs` | `JsonlTraceSink` / `JsonlTraceReader`: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, first line `run.opened`, one `write_all` per event; follow = a 250 ms tail into a bounded channel (256) |
+| `application/trace_exec.rs` | `Cause` / `caused_by` (an event's parent) · `TracedExecutor` (`tool.started` → `tool.completed` / `tool.failed`, node `tool:<agent>/<tool>`) |
+| `bootstrap/trace.rs` | `open_sink` (a new recording per process; an unwritable dir ⇒ `NoopTrace` + a warn), `reader`, `run_path`. Records: `tengu run` (`runtime.*`, `feed.*`, `loop.*`, steps, tools), `tengu decide` (`trigger.*`, steps, tools); `tengu webhooks` not yet |
+| `cli/trace.rs` | `tengu trace runs \| show --run <id> [--after <seq>] [--follow]` — JSON lines; no config, read-only |
+| `domain/workflow.rs` | `WorkflowGraph`: nodes `runtime` · `trigger` · `feed` · `agent` · `loop` · `world` · `jev` · `gate` · `action` · `escalation` · `scope` · `tool` (layer + order computed in Rust); edges `fires` · `reads` · `asks` · `chooses` · `calls` · `binds` · `next` · `guards` · `escalates` · `owns`; `narrowed_out` = dropped by an execution map — pure |
+| `application/studio/` | `graph.rs::build_graph` (config + catalog tools + an optional map) · `stream` (`follow_run` / `follow_live`: bounded per client, resume by `seq`; served as SSE by `inbound/studio/sse.rs`) · `board` (`fold_run`: a run over its graph at a `seq`) · `inspect` (the config section + evidence behind a node) · `control` (Play / Stop / send-event rules) |
+| `bootstrap/studio.rs` | `graph_inputs`, `workflow_graph` (attrs scrubbed); `StudioContext` (`--features studio`): config, redacted graph, trace reader, state dir, scenarios `<sandbox dir>/scenarios/*.json`, kept maps `<TENGU_HOME>/logs/maps/<sha256>.json` (written by `tengu decide --map`) |
+| `config/studio.rs` | `[studio] control` (default `false`); `control_policy`: never in a `[generation]`-bound or hardened (`[risk]`, `[soe]`, signer) sandbox — `--allow-control` included |
+| `adapters/inbound/studio/` | axum server (`--features studio`): `GET /api/v1/` `meta`, `graph`, `health`, `runs`, `runs/:run_id/{events,board,stream}`, `nodes/:node_id`, `live/stream`, `control`; `POST /api/v1/control/{play,stop,event}`. `guard.rs`: loopback bind only, a per-process token in the URL fragment, Host / Origin / `Sec-Fetch-Site` checks, CSRF on every change request, CSP, no CORS |
+| `web/studio/` (repo root) | `index.html`, `studio.css`, `studio.js` — embedded (`assets.rs`, `include_str!`); draws only |
+| `cli/studio.rs` | `tengu studio --sandbox <s> [--port --bind --allow-control]` (the server; without the feature an error naming it) · `tengu studio graph [--map]` (every build) |
+
+| Control | Rule |
+|---|---|
+| Play | `tengu run`'s `start_session` inside the Studio process — the same leases; another holder ⇒ 409 (`attached`) |
+| Stop | the graceful drain of the runtime this Studio started |
+| send-event | one scenario into the owned runtime's loop (429 when its queue is full) |
+| Where | `sandboxes/control-loop-lab` (`[studio] control = true`) or `--allow-control`; the editor (ST-40) is design only until Operator Review #3 (`docs/studio-editor-design-2026-10-08.md`) |
 
 ---
 
@@ -466,8 +514,10 @@ Offline: no sandbox config, secrets, egress, LLM or fetch. Doc: `docs/soe-2026-1
 | `lineage/` (repo) | the registry: one TOML per record, `locks.toml` | humans; `tengu lineage seal` appends `[[sealed]]` | `tengu lineage`, `Config::load` (`[generation]`, `[strategy_ranking]`) | git |
 | `<TENGU_HOME>/state/evidence/<vault>/` | read-only copies of evidence + `MANIFEST.json` (sha256 per file) | `tengu evidence snapshot` (once, then `chmod a-w`) | `tengu evidence verify` / `grade` / `evaluate`, `tengu lineage verify --evidence` | none |
 | `<TENGU_HOME>/state/<sources.state>/sources.db` | raw snapshots (sha256), source records, coverage, cursors, tombstones, kill switches | `tengu sources fetch` / `import` / `terms` / `disable` / `enable` / `purge` | `tengu sources asof`, `source_evidence` | per-row retention (`raw_retention_days`, `record_retention_days`; 0 = forever) |
-| `<TENGU_HOME>/state/soe/operator.toml` | the signed private operator profile (0600) | `tengu soe init` (template), the operator | every other `tengu soe` command | none |
+| `<TENGU_HOME>/state/soe/operator.toml` | the signed private operator profile (0600) | `tengu soe init` (template), the operator | the O1 `tengu soe` commands | none |
+| `<TENGU_HOME>/state/<sources.state>/` (SOE state root, beside `sources.db`) | `operator.toml`; run dirs `cycles/<week>/`, `replays/<id>/`, `reviews/<day>/` (frozen: `MANIFEST.json` + read-only); `stage-cache/<key>.jsonl`; state logs `candidates`, `episodes`, `forecast-log`, `grades`, `resolutions`, `replays`, `reviews`, `holdout-reads` (`.jsonl`) | `tengu soe cycle` / `replay` / `grade` / `resolve` / `review`, the `soe_cycle` job; `soe_propose` / `soe_challenge` into an open run dir | `soe_view`, `tengu soe show` / `verify` / `review` | none (run dirs frozen, logs append-only) |
 | `<TENGU_HOME>/logs/{egress,decisions,risk}.jsonl` | network audit · Jev calls · risk verdict mirror | `egress.rs` · decision loops · `paper_store.rs` | operators | `tengu prune` deletes `logs/` |
+| `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` · `logs/maps/<sha256>.json` | one recording per `tengu run` / `tengu decide` process · the execution maps `tengu decide --map` ran | `JsonlTraceSink` (`bootstrap/trace.rs`) · `cli/decide.rs` | `tengu trace`, `tengu studio` | `tengu prune` deletes `logs/` |
 | `<TENGU_HOME>/state/solana-writes.db` | per-wallet send lease, pending sends, write fences | `outbound/solana/send.rs` | the next send | none |
 
 `<state dir>` = `<TENGU_HOME>/state/<[xmarket] state>` (else `<TENGU_HOME>/state`); outside every fs root and workspace; `tengu prune` never deletes `<TENGU_HOME>/state` beyond `state/flows` (layout: `config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout).
@@ -567,13 +617,22 @@ A preregistered variant, experiment or ranking contract is sealed (`tengu lineag
 
 `source_evidence` only reads `sources.db`; fetching is the operator's (`tengu sources fetch`), gated per row (`enabled`, reviewed `terms_sha256`, the runtime kill switch) before any request. Source text reaches a model fenced as untrusted data (`fence_untrusted`).
 
+### R. Models write data; the domain decides (SOE, 2026-10-09)
+
+The SOE stage agents never return a draft as text: `soe_propose` / `soe_challenge` write records through `application::soe::submit` (phase, limits, every check), and `domain::soe::allocate::decide_week` computes every figure, gate, rank and action. Frozen run dirs make a week reproducible from its inputs (`freeze::decision_sha256`).
+
+### S. The browser draws; Rust decides (Studio, 2026-10-09)
+
+Studio's page owns no workflow, risk, scope or colour rule: the graph (`domain/workflow.rs`, layout included), each status's tone (`Status::tone`), a run's board at a `seq` and every control verdict come from Rust over the trace each run writes once. Play / Stop never reach a `[generation]`-bound or hardened sandbox.
+
 **Workflow:**
 
 | To add | Edit | Rust? |
 |---|---|---|
 | Agent | `[agents.<name>]` block with a `description` in `sandboxes/<name>/config.toml` | no |
 | Skill | `skills/<name>/SKILL.md` | no |
-| Feed | `[feeds.<n>]` block (`kind = "tool"` or `"tick"`) | no |
+| Feed | `[feeds.<n>]` block (`kind = "tool"`, `"tick"` or `"job"`); a new job is Rust (`config/feeds.rs` `JOBS`) | no |
+| Studio scenario | `sandboxes/<sandbox>/scenarios/<name>.json` — an event object, sent as `tengu decide --event` would (`*.map.json` = execution maps, not scenarios) | no |
 | Decision loop | `[decision_loops.<n>]` block | no |
 | Strategy (xlab) | `[backtest.strategies.<n>]` or a JSON spec (six kinds) | no |
 | Lineage record | one `lineage/<dir>/<id>.toml` (+ `tengu lineage seal` before its outcome) | no |
@@ -615,9 +674,11 @@ The other flows and views:
 | `tengu lineage` / `tengu evidence` (no config, no LLM) | `tengu lineage verify --pins` · `tengu lineage trace fwd.rule_w.2026-10-02` · `tengu evidence verify lineage/evidence/w1-2026-10-06.toml` | `cli/lineage.rs` → `application/lineage/verify.rs` → `domain/lineage/registry.rs` |
 | `tengu backtest` (no LLM, no key) | `tengu backtest --sandbox xlab --strategy weekend_fade` (needs a filled `~/.tengu/state/xlab/market.db`: `docs/xlab-2026-10-01.md` § 10) | `cli/backtest.rs` → `application/backtest/mod.rs` → `domain/backtest/engine.rs` → the run dir |
 | `tengu run` | `tengu doctor --sandbox xmarket` then `tengu run --sandbox xmarket` (runbook at the top of `sandboxes/xmarket/config.toml`); never start another binary on a state dir a weekend run holds (`docs/SESSION_HANDOFF.md`) | `inbound/run.rs` → `bootstrap/runtime.rs` → `application/runtime/feeds.rs` → `tools/xm/exec_common.rs` |
+| `tengu studio` + `tengu trace` | under an isolated `TENGU_HOME` (never `~/.tengu`): `tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json`, then `tengu trace runs --sandbox control-loop-lab`; `cargo build --release --features studio` + `tengu studio --sandbox control-loop-lab` (runbook: `docs/control-loop-lab-2026-10-08.md`) | `cli/studio.rs` → `bootstrap/studio.rs` → `inbound/studio/` → `application/studio/` · `outbound/trace_store.rs` |
+| `tengu soe` (offline) | `tengu soe eval tests/fixtures/soe/cases --profile tests/fixtures/soe/profile.synthetic.toml --allow-synthetic` (a live cycle waits for G-O0: a signed profile) | `cli/soe.rs` → `domain/soe/` · weekly: `cli/soe/weekly.rs` → `application/soe/cycle.rs` |
 
 That's the whole story. Every other doc in `docs/` zooms into one of those layers.
 
 ---
 
-*Written 2026-04-27; last synced 2026-10-08 against `main` at bc9bc12a038654ac4941c714abcfa777c99af631 (added §1b C ranking flow, §2.14–2.17: lineage + evidence, strategy ranking, source evidence, SOE; mechanics P, Q; SEC events, labels, execution maps, `xlab-w2` / `soe` sandboxes; corrected: skill directory order, executor abort + parallel leaves, child log forwarding, tool count 47, `tengu prune` scope). Before that 2026-10-02 against `feature/xmarket` at 699bb83e79e3dac2f76ca9cbef69b3573b31252d (added §1b other flows, §2.7–2.13: `tengu run`, decision loops + replay, typed observations + recorder, tool families, xmarket risk / paper, xlab, engine parity; corrected: session-id resolution, plan-schema validation, metrics kinds and layers, bridge env, `AgentCompose` path). Companion files: `architecture-2026-04-27.svg` (the picture), `architecture-2026-04-27.html` (the explorer), `code-map.md` (every file), `SESSION_HANDOFF.md` (the running state log), `comparison-2026-04-26.md` (vs Hermes / PI).*
+*Written 2026-04-27; last synced 2026-10-09 against `main` at f7ac9a5636e2493e3839e896cba9951a2d41aefb (§2.17 SOE O3 / O4: weekly cycle, replay, grades, Review #2 packet, `soe_*` tools, the `kind = "job"` feed; §2.18 execution trace + Tengu Studio; `control-loop-lab`; mechanics R, S; stores: SOE state root, trace, maps). Before that 2026-10-08 against `main` at bc9bc12a038654ac4941c714abcfa777c99af631 (added §1b C ranking flow, §2.14–2.17: lineage + evidence, strategy ranking, source evidence, SOE; mechanics P, Q; SEC events, labels, execution maps, `xlab-w2` / `soe` sandboxes; corrected: skill directory order, executor abort + parallel leaves, child log forwarding, tool count 47, `tengu prune` scope). Before that 2026-10-02 against `feature/xmarket` at 699bb83e79e3dac2f76ca9cbef69b3573b31252d (added §1b other flows, §2.7–2.13: `tengu run`, decision loops + replay, typed observations + recorder, tool families, xmarket risk / paper, xlab, engine parity; corrected: session-id resolution, plan-schema validation, metrics kinds and layers, bridge env, `AgentCompose` path). Companion files: `architecture-2026-04-27.svg` (the picture), `architecture-2026-04-27.html` (the explorer), `code-map.md` (every file), `SESSION_HANDOFF.md` (the running state log), `comparison-2026-04-26.md` (vs Hermes / PI).*

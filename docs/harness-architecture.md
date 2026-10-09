@@ -1,6 +1,6 @@
 # Harness-Owned Orchestration + Memory — Architecture
 
-> **Historical snapshot (PR #6–#8, 2026-04) — banner refreshed 2026-10-08.** Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer); every file: `docs/code-map.md`; config: `docs/configuration.md`.
+> **Historical snapshot (PR #6–#8, 2026-04) — banner refreshed 2026-10-09.** Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer); every file: `docs/code-map.md`; config: `docs/configuration.md`.
 > Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). The flow below no longer runs as written. Corrected in place on 2026-10-02 and 2026-10-08: the file tables in § 3, the `build_orchestrator` signature in § 5, the eval dispatch in § 14.1. Still as of PR #8: the `tengu.toml` examples (§ 7, § 12), the line numbers in § 11, the sequence diagrams and cancel semantics (§ 4, § 10).
 
 | Then (this doc) | Now | Where |
@@ -14,7 +14,7 @@
 | flat `src/adapters/` | hexagonal layout since 2026-09-23 | `docs/code-map.md`, `tests/layering_lint.rs` |
 | `/stop` checked between dispatches; an in-flight worker finishes its LLM call | cancel, or an exhausted step, aborts every step still in flight (`abort_in_flight`; the `run-agent` child is `kill_on_drop`); a step that never becomes ready is a replan | `src/application/orchestrator/executor.rs` |
 | the single leaf's output is the reply | one leaf ⇒ its output; parallel leaves with no join step ⇒ joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`) | `src/application/orchestrator/executor.rs`, `src/domain/plan.rs` |
-| the chat turn only | + `tengu run` (feeds, loops, lease), decision loops (Jev) + replay, typed observations, xmarket risk / paper, xlab backtests (2026-09-24 → 2026-10-01); lineage + evidence, strategy ranking, source evidence, SOE (2026-10-06 → 2026-10-08) | `docs/architecture-2026-04-27.md` §1b, §2.7–2.17 |
+| the chat turn only | + `tengu run` (feeds, loops, lease), decision loops (Jev) + replay, typed observations, xmarket risk / paper, xlab backtests (2026-09-24 → 2026-10-01); lineage + evidence, strategy ranking, source evidence, SOE incl. the weekly cycle (2026-10-06 → 2026-10-09); execution trace + Tengu Studio (2026-10-09) | `docs/architecture-2026-04-27.md` §1b, §2.7–2.18 |
 
 This document describes the architecture that landed across PRs #6, #7, #8. It replaces the heart/brain/sensors doctrine and all prior skill-based orchestration.
 
