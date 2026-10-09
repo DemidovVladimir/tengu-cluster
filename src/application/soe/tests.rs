@@ -151,7 +151,7 @@ impl CycleStore for MemCycleStore {
         let m = self.mem.lock().unwrap();
         Ok(m.dirs
             .keys()
-            .filter(|d| !d.is_replay())
+            .filter(|d| matches!(d, RunDir::Cycle(_)))
             .map(|d| d.id().to_string())
             .collect())
     }
@@ -520,7 +520,7 @@ fn src(name: &str) -> Src {
     }
 }
 
-const MIN: i64 = 60_000;
+pub(crate) const MIN: i64 = 60_000;
 
 fn ms(t: &Time) -> i64 {
     t.earliest().expect("a known time")
