@@ -8,7 +8,7 @@
 
 ## 2026-10-08/09: strategy ranking, SOE O0–O4, Studio — on `main` @ `f7ac9a5636e2493e3839e896cba9951a2d41aefb`
 
-All squash-merged; branches `feature/strategy-ranking` and `feature/studio` deleted. Checked against the code 2026-10-09.
+All squash-merged (#39–#45); this session's branches deleted, their tips kept as `archive/<branch>` tags (older branches: operator decision). Every commit, PR, branch, tag and open gate: `handoff_for_check.md` (repo root). Checked against the code 2026-10-09.
 
 | PR | Squash on `main` | What |
 |---|---|---|
@@ -18,6 +18,7 @@ All squash-merged; branches `feature/strategy-ranking` and `feature/studio` dele
 | #42 | `e84e886c6d3d4dc985e408991fe66d1773140c01` | docs sweep A: README, architecture, context, research, memory / skills docs and 22 tutorial pages match the code |
 | #43 | `7cae230f61eddcc014b94521564b15a7b3ac817f` | SOE O3 / O4: weekly cycle, replay + grading, Review #2 packet, tools `soe_view` / `soe_propose` / `soe_challenge`, feed `kind = "job"` (`soe_cycle`), generation SOE-G0 |
 | #44 | `f7ac9a5636e2493e3839e896cba9951a2d41aefb` | Tengu Studio + control-loop-lab ST-00..ST-40: workflow graph, trace store, `tengu studio` / `tengu trace`, `web/studio/`, Play / Stop — § Studio below |
+| #45 | (this PR) | docs sweep B (agent guides, handoff, hub, code map, runtime / tool docs, 15 tutorial pages, feature docs), ST-90 clean room PASS, `docs/studio-evidence/`, `handoff_for_check.md` |
 
 ### Operator decisions open
 
