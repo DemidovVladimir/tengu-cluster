@@ -1034,7 +1034,7 @@ pub(crate) mod tests {
     /// Two equal automations: `act` (active, improving — a primary filing
     /// confirms it) and `new` (two independent demand posts); each stage
     /// 6 h, so the 10 h week holds one test.
-    fn active_vs_new(novelty_new: Tier, novelty_act: Tier) -> Week {
+    pub(crate) fn active_vs_new(novelty_new: Tier, novelty_act: Tier) -> Week {
         let f = filing("0000000001-26-000301", 3);
         let (p1, p2) = (post("p-31", 3), post("p-32", 2));
         let mut act = automation("act", "\"600.00\"");

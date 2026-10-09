@@ -157,6 +157,8 @@ pub(crate) struct CycleOutcome {
     pub manifest_sha256: String,
     pub episodes: usize,
     pub stages: Vec<StageRun>,
+    /// The decided week (`portfolio` is its portfolio): what replay scoring reads.
+    pub week: Week,
 }
 
 /// One model stage as `stages.json` keeps it (latency is `ops.json`'s).
@@ -839,12 +841,12 @@ impl Claimed<'_> {
         self.write_lines(CANDIDATES, &learned.events)?;
         self.write_lines(EPISODES, &learned.episodes)?;
         let line = match dir {
-            RunDir::Replay(_) => None,
             RunDir::Cycle(_) => {
                 let l = log_line(self.prev_line.as_ref(), &forecast).map_err(|e| anyhow!("{e}"))?;
                 self.write_json(FORECAST_LINE, &l)?;
                 Some(l)
             }
+            RunDir::Replay(_) | RunDir::Review(_) => None,
         };
 
         // Freeze, then learn (live only; the lines are the run dir's).
@@ -865,12 +867,13 @@ impl Claimed<'_> {
         Ok(CycleOutcome {
             dir: dir.clone(),
             cycle_id: self.head.cycle_id.clone(),
-            portfolio: week.portfolio,
+            portfolio: week.portfolio.clone(),
             inputs_sha256,
             decision_sha256: decision,
             manifest_sha256,
             episodes: learned.episodes.len(),
             stages: stages.runs,
+            week,
         })
     }
 

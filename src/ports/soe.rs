@@ -8,7 +8,7 @@
 //! | Port | Does | Impl |
 //! |---|---|---|
 //! | [`StageRunner`] | runs one model stage (`ARCHITECT` · `CHALLENGE`) as an agent of the sandbox; the agent's tools write its drafts into the run dir through `application::soe::{submit_proposal, submit_challenge}` — the runner returns only how the run went ([`StageReply`]), never a draft | a `run-agent` child per stage (`SubprocessRunner`); a cache keyed by the canonical sha256 of `{agent, model, skill_sha256, stage, goal}` that replays a recorded stage's records verbatim (an offline miss is an error naming the full key) |
-//! | [`CycleStore`] | the private SOE state `<TENGU_HOME>/state/<sources.state>/` (critic C8): run dirs `cycles/<cycle id>/` (live weekly cycles) and `replays/<run id>/` (replays — never `cycles/`), each claimed once and frozen once; the append-only state logs ([`StateLog`]) | `FsCycleStore` |
+//! | [`CycleStore`] | the private SOE state `<TENGU_HOME>/state/<sources.state>/` (critic C8): run dirs `cycles/<cycle id>/` (live weekly cycles), `replays/<run id>/` (replays — never `cycles/`) and `reviews/<id>/` (Operator Review #2 packets), each claimed once and frozen once; the append-only state logs ([`StateLog`]) | `FsCycleStore` |
 //!
 //! | `CycleStore` rule | Value |
 //! |---|---|
@@ -49,12 +49,14 @@ pub(crate) enum RunDir {
     Cycle(String),
     /// `replays/<run id>/` — a replay (eval set, rerun); never under `cycles/`.
     Replay(String),
+    /// `reviews/<id>/` — one Operator Review #2 packet as it was shown.
+    Review(String),
 }
 
 impl RunDir {
     pub(crate) fn id(&self) -> &str {
         match self {
-            RunDir::Cycle(id) | RunDir::Replay(id) => id,
+            RunDir::Cycle(id) | RunDir::Replay(id) | RunDir::Review(id) => id,
         }
     }
 
@@ -62,16 +64,17 @@ impl RunDir {
         matches!(self, RunDir::Replay(_))
     }
 
-    /// `cycles` · `replays`.
+    /// `cycles` · `replays` · `reviews`.
     pub(crate) fn space(&self) -> &'static str {
         match self {
             RunDir::Cycle(_) => "cycles",
             RunDir::Replay(_) => "replays",
+            RunDir::Review(_) => "reviews",
         }
     }
 
-    /// `cycles/<id>` · `replays/<id>`, from the text a tool is given; the id
-    /// a lineage id (`valid_id`).
+    /// `cycles/<id>` · `replays/<id>` · `reviews/<id>`, from the text a tool
+    /// is given; the id a lineage id (`valid_id`).
     pub(crate) fn parse(s: &str) -> Option<RunDir> {
         let (space, id) = s.trim_end_matches('/').split_once('/')?;
         if !valid_id(id) {
@@ -80,6 +83,7 @@ impl RunDir {
         match space {
             "cycles" => Some(RunDir::Cycle(id.to_string())),
             "replays" => Some(RunDir::Replay(id.to_string())),
+            "reviews" => Some(RunDir::Review(id.to_string())),
             _ => None,
         }
     }
@@ -120,19 +124,28 @@ pub(crate) enum StateLog {
     Episodes,
     /// One hash-chained `forecast::LogLine` per frozen live cycle.
     ForecastLog,
-    /// Operator grades (`soe.cycle_grade/1`).
+    /// Operator grades (`soe.cycle_grade/1`; a regrade is a later version).
     Grades,
     /// Holdout reads of a replay (`#n` = the line number).
     HoldoutReads,
+    /// One resolved forecast item per line (`soe.forecast_resolution/1`).
+    Resolutions,
+    /// One finished replay per line: its report dir and case dirs.
+    Replays,
+    /// One review packet built per line: its dir and digest.
+    Reviews,
 }
 
 impl StateLog {
-    pub(crate) const ALL: [StateLog; 5] = [
+    pub(crate) const ALL: [StateLog; 8] = [
         StateLog::Candidates,
         StateLog::Episodes,
         StateLog::ForecastLog,
         StateLog::Grades,
         StateLog::HoldoutReads,
+        StateLog::Resolutions,
+        StateLog::Replays,
+        StateLog::Reviews,
     ];
 
     pub(crate) fn file_name(self) -> &'static str {
@@ -142,6 +155,9 @@ impl StateLog {
             StateLog::ForecastLog => "forecast-log.jsonl",
             StateLog::Grades => "grades.jsonl",
             StateLog::HoldoutReads => "holdout-reads.jsonl",
+            StateLog::Resolutions => "resolutions.jsonl",
+            StateLog::Replays => "replays.jsonl",
+            StateLog::Reviews => "reviews.jsonl",
         }
     }
 }
@@ -218,6 +234,7 @@ mod tests {
                 "replays/r-2026-10-08.1/",
                 RunDir::Replay("r-2026-10-08.1".into()),
             ),
+            ("reviews/2026-11-02", RunDir::Review("2026-11-02".into())),
         ] {
             assert_eq!(RunDir::parse(text), Some(dir.clone()));
             assert_eq!(RunDir::parse(&dir.to_string()), Some(dir));

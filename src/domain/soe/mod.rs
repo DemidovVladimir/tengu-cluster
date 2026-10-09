@@ -28,6 +28,7 @@
 //! | `memo.rs` | O3 Report: `render_memo` — verdict, facts (confirmations), inference (fenced), computed (portfolio fields only), unsupported claims, unknowns, challenges, next information |
 //! | `forecast.rs` | O4 forecast log: `ForecastItem`, `Forecast` (`soe.forecast/1`, frozen with the portfolio), hash-chained `LogLine`s (`verify_chain`), `resolve` (evidence after the freeze only), integer `calibration` |
 //! | `review.rs` | O4 Operator Review #2: `CycleGrade` (`soe.cycle_grade/1`), `ReviewPacket::of` (cycles, calibration, misses, ops, sources, O6A / O6B lanes), roadmap § 14 `stop_flags` |
+//! | `replay.rs` | O4 historical replay: `ReplaySet` (`soe.replay_set/1`: labelled decision dates, `DEVELOPMENT` / `HOLDOUT`, optional recorded drafts) + scoring — label agreement, misses / false positives, `HOLD` precision / recall, `rank_stability` under the tornado |
 //! | `ops.rs` | O4 cycle ops: `StageRun`s, source failures, token totals, `Cost` (unknown without prices) |
 //!
 //! | Rule | Why |
@@ -59,6 +60,7 @@ pub(crate) mod profile;
 pub(crate) mod proposal;
 pub(crate) mod rank;
 pub(crate) mod record;
+pub(crate) mod replay;
 pub(crate) mod review;
 pub(crate) mod risk;
 pub(crate) mod value;

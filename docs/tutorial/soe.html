@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command, the O3 weekly allocation, memo and forecast log as pure code, and the weekly cycle that runs them.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command, the O3 weekly allocation, memo and forecast log as pure code, the weekly cycle that runs them, and the O4 replay, grades, forecast resolution and Operator Review #2 packet.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -450,6 +450,31 @@
   </ul>
 </section>
 
+<section class="sec" aria-labelledby="s-o4">
+  <div class="sec-head">
+    <span class="kicker">O4, shadow weeks</span>
+    <h2 id="s-o4">Replay, grades, forecasts and the review packet</h2>
+    <p>O4 measures how well the weeks choose before anything is spent or anyone is contacted. Each step appends to a private log or writes a frozen run dir. Nothing is rewritten.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Step</th><th>Writes</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>Replay</td><td><code>replays/&lt;run&gt;/</code> + one dir per case; <code>replays.jsonl</code></td><td>each labelled date of a <code>soe.replay_set/1</code> runs as a cycle at that date; recorded drafts pass the tools' checks; scored for agreement, <code>HOLD</code> precision and recall, misses, unsupported claims and rank stability</td></tr>
+        <tr><td>Holdout read</td><td><code>holdout-reads.jsonl</code></td><td>holdout cases run only when asked; the read is logged before any label shows, and the report says which read of this set it is</td></tr>
+        <tr><td>Grade</td><td><code>grades.jsonl</code></td><td>the operator's six 1–5 grades, correction minutes and misses, on frozen live weeks only; a regrade is the next version</td></tr>
+        <tr><td>Resolve</td><td><code>resolutions.jsonl</code></td><td>each forecast item once: evidence knowable after the freeze, or the operator's answer; never evidence from before the freeze</td></tr>
+        <tr><td>Review</td><td><code>reviews/&lt;day&gt;/packet.{json,md}</code>; <code>reviews.jsonl</code></td><td>the six roadmap sections, replays, integrity, the § 14 stop flags; the last line is the STOP: Operator Review #2 decides</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">MATCH</span><span><b>intact</b>Every file of a frozen run hashes to its manifest, and each week's forecast line matches its frozen forecast.</span></li>
+    <li><span class="chip warn">MISSING</span><span><b>log gap</b>The week froze but its log lines were not appended. Its own copies stay in the run dir.</span></li>
+    <li><span class="chip bad">MISMATCH</span><span><b>edited</b>A frozen file or a forecast line changed. The review packet shows it.</span></li>
+  </ul>
+</section>
+
 <section class="sec" aria-labelledby="s-eval">
   <div class="sec-head">
     <span class="kicker">Dated, synthetic, replayable</span>
@@ -574,7 +599,10 @@
     <li><span><b>A Critic only makes things worse.</b> Each end of a challenged input moves only against the candidate; an unknown stays unknown; a block holds, never passes.</span></li>
     <li><span><b>The week never overspends.</b> Tests fit the profile's weekly hours and validation tranche; a diligence tranche is capped at the tranche and spends nothing.</span></li>
     <li><span><b>A forecast cannot be fixed later.</b> An edited, dropped or reordered log line breaks the chain; evidence from before the freeze resolves nothing.</span></li>
-    <li><span><b>A week runs once.</b> A frozen run dir is refused, and a frozen dir refuses every write; a replay writes under <code>replays/</code>, never <code>cycles/</code>, and no state log.</span></li>
+    <li><span><b>A week runs once.</b> A frozen run dir is refused, and a frozen dir refuses every write; a replay writes under <code>replays/</code>, never <code>cycles/</code>, and no live state log.</span></li>
+    <li><span><b>A holdout label needs a counted read.</b> Without one a holdout case is not run; with one the read is logged before any label, outcome or score shows.</span></li>
+    <li><span><b>Grades and resolutions are append-only.</b> Only a frozen live week takes them; a regrade is a new version and a resolved item is never resolved again.</span></li>
+    <li><span><b>The review decides nothing.</b> The packet ends with the STOP line; no O5–O8 action exists.</span></li>
     <li><span><b>Same inputs, same cycle.</b> The same packet, profile, generation and stage records give the same bytes in every file but <code>ops.json</code>.</span></li>
     <li><span><b>Nothing after the decision reaches a week.</b> A record read or published later changes no byte of the run, the stage goals included.</span></li>
     <li><span><b>The models see the packet only.</b> A stage goal holds ids and the packet's sha256; a tool refuses a draft citing a record outside the packet.</span></li>
@@ -612,7 +640,7 @@
 <span class="ln cmd"><span class="p">$ </span>cargo test --test soe_cli</span>
 <span class="ln o"># 9 tests: eval, init, refusals, a byte-identical portfolio rerun, check JSON, the tornado, the week fixture</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu soe</span>
-<span class="ln o"># 131 unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init, the O3 stages, the six roadmap cases and the cycle on its 11 synthetic cycle cases</span></pre>
+<span class="ln o"># unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init, the O3 stages, the six roadmap cases, the cycle on its 11 synthetic cycle cases, replay, grades, resolution and the review packet</span></pre>
   </div>
 </section>
 
@@ -646,6 +674,8 @@
         <tr><td><code>src/ports/soe.rs</code></td><td><code>StageRunner</code>, <code>CycleStore</code>, <code>RunDir</code>, <code>StateLog</code></td></tr>
         <tr><td><code>src/application/soe/cycle.rs</code> · <code>submit.rs</code> · <code>freeze.rs</code></td><td><code>run_cycle</code>, carry-forward, stage goals, episodes · <code>submit_proposal</code>, <code>submit_challenge</code>, phases · <code>freeze</code>, <code>verify</code>, <code>decision_sha256</code></td></tr>
         <tr><td><code>src/application/soe/job.rs</code></td><td><code>SoeCycleJob</code>: the <code>soe_cycle</code> job (week of the slot, frozen week a no-op)</td></tr>
+        <tr><td><code>src/domain/soe/replay.rs</code></td><td><code>ReplaySet</code>, <code>score_case</code>, <code>summarize</code>, <code>rank_stability</code></td></tr>
+        <tr><td><code>src/application/soe/replay.rs</code> · <code>grade.rs</code> · <code>review.rs</code></td><td><code>run_replay</code>, <code>RecordedStages</code>, the holdout read · <code>grade_cycle</code>, <code>resolve_cycle</code> · <code>build_review</code>, <code>STOP_LINE</code>; <code>freeze::verify_state</code></td></tr>
         <tr><td><code>src/application/soe/tests.rs</code></td><td>the cycle on in-memory fakes and the synthetic cycle cases</td></tr>
         <tr><td><code>src/adapters/outbound/soe/store.rs</code></td><td><code>FsCycleStore</code>: run dirs, write-once files, appends, freeze, state logs</td></tr>
         <tr><td><code>src/adapters/outbound/soe/runner.rs</code> · <code>cache.rs</code></td><td><code>SubprocessStageRunner</code>, <code>skill_sha256</code> · <code>CachedStageRunner</code>, <code>stage_key</code></td></tr>
