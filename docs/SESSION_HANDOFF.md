@@ -6,7 +6,40 @@
 
 ---
 
-## Tengu Studio lane (`feature/studio`, Thu 2026-10-08) — tracker `TENGU_STUDIO_PLAN.md` § 8
+## 2026-10-08/09: strategy ranking, SOE O0–O4, Studio — on `main` @ `f7ac9a5636e2493e3839e896cba9951a2d41aefb`
+
+All squash-merged; branches `feature/strategy-ranking` and `feature/studio` deleted. Checked against the code 2026-10-09.
+
+| PR | Squash on `main` | What |
+|---|---|---|
+| #39 | `10bdbb53a27390f6a67fd73826740befe05ababe` | xlab-w2 `keep_runs = 0`: unbound, it shares `xlab`'s state dir with the W1-cited run dirs and would have pruned them. #40 then set `keep_runs = 200` — `[strategy_ranking]` names the registry, so retention keeps every cited run (`sandboxes/xlab-w2/config.toml` `[backtest]`, `src/config/backtest.rs` module table) |
+| #40 | `117b2595b0864066502d156aca42c7180494d67a` | strategy ranking SR-1..SR-8: lineage kind `ranking`, unsealed contracts `rank.xlab-w2.daily.v1` / `rank.xlab-w2.weekend.v1`, ranker, coordinator, `tengu ranking run \| show`, tool `strategy_ranking`, xlab-w2 feeds — § Strategy ranking below |
+| #41 | `bc9bc12a038654ac4941c714abcfa777c99af631` | SOE O0–O2: `domain/soe/`, `domain/source/`, `sources.db`, SEC EDGAR + EU TED, `tengu soe` / `tengu sources`, tool `source_evidence`, `sandboxes/soe` — § SOE below |
+| #42 | `e84e886c6d3d4dc985e408991fe66d1773140c01` | docs sweep A: README, architecture, context, research, memory / skills docs and 22 tutorial pages match the code |
+| #43 | `7cae230f61eddcc014b94521564b15a7b3ac817f` | SOE O3 / O4: weekly cycle, replay + grading, Review #2 packet, tools `soe_view` / `soe_propose` / `soe_challenge`, feed `kind = "job"` (`soe_cycle`), generation SOE-G0 |
+| #44 | `f7ac9a5636e2493e3839e896cba9951a2d41aefb` | Tengu Studio + control-loop-lab ST-00..ST-40: workflow graph, trace store, `tengu studio` / `tengu trace`, `web/studio/`, Play / Stop — § Studio below |
+
+### Operator decisions open
+
+| Gate | The operator | Blocks | Doc |
+|---|---|---|---|
+| G-WKND | stops weekend #2 Mon 2026-10-12; snapshot `lineage/evidence/w1-2026-10-12.toml`, grade, regrade | the main-checkout pull (rule below) | `docs/forward-evidence-runbook-2026-10-08.md` |
+| G-SR1 | seals both ranking contracts as drafted (`tengu lineage seal ranking:<id>`) or changes them first | every ranking — refused while unsealed (`tengu lineage verify` warns `ranking_unsealed`) | `docs/strategy-ranking-automation-2026-10-08.md` § Operator decisions |
+| G-O0 | signs the private SOE profile (`tengu soe init` writes the UNSIGNED template `<TENGU_HOME>/state/soe/operator.toml`: four money values `REQUIRED`, add `[[capabilities]]`, sign); approves each source row's terms + hash and enables it; approves committing sanitized planning docs | a source `enabled = true`; the first live cycle | `docs/soe-2026-10-08.md` § 1, § 15.1 |
+| SOE-G0 lock | after G-O0 + G-WKND: appends SOE-G0's `[[frozen]]` row to `lineage/locks.toml` | nothing in code (a CANDIDATE runs) | same, § 15.1 #8 |
+| Operator Review #2 (SOE G-R2; not `TENGU_ROADMAP.md`'s trading Review #2 after P13 — not reached) | 4 frozen live weekly cycles, each graded; a replay of ≥ 8 older dated cases with a counted holdout read; `tengu soe review` packet | STOP: nothing from O5–O8 | same, §§ 15.2–15.4 |
+| Live engine-matrix legs | sets `xlab_rank` (`strategy_ranking`), `sources` (`source_evidence`), `soe` (`soe_view` · `soe_propose` · `soe_challenge`): only the offline local legs ran; openrouter + claude_code live legs not run, local on the operator's PC; also `tengu run --sandbox xlab-w2` live | each tool's definition of done (CLAUDE.md "How to add a new tool" step 4) | `tests/engine_matrix.rs` module table |
+| Operator Review #3 | decides on building the Studio editor (ST-40 = design only) | any edit / save code or route | `docs/studio-editor-design-2026-10-08.md` |
+
+### Weekend no-pull rule (main checkout)
+
+| When | Do |
+|---|---|
+| Until the weekend #2 stop (Mon 2026-10-12) | the main checkout stays at `10bdbb53a27390f6a67fd73826740befe05ababe`: the frozen `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` runs from it, and its W1 load refuses origin/main's `lineage/rankings/` (verified 2026-10-08, runbook row "Before the stop"). Work in worktrees only |
+| After the stop, before `git pull` | `git checkout -- docs/forward-evidence-runbook-2026-10-08.md` (the local edit = upstream's blob `aa7ccff6f4cd980d64d2f6e6a40a47dde5676c0b`, nothing lost) · `rm TENGU_STUDIO_PLAN.md docs/strategy-ranking-automation-2026-10-08.md` (untracked older drafts; tracked upstream since #44 / #40) · `rm handoff_for_check.md` if present (not on disk, not in git on 2026-10-09) · then `git pull` |
+| Stays untracked | the private research docs of cleanup row C1 |
+
+### Studio (#44) — tracker `TENGU_STUDIO_PLAN.md` § 8
 
 | Item | State |
 |---|---|
@@ -23,21 +56,36 @@
 | Gate 4 | waived (operator instruction 2026-10-08) — not reviewed by the operator |
 | ST-40 + docs | editor = design only `docs/studio-editor-design-2026-10-08.md` (palette from Rust, connections = the graph's edges → one TOML key each, `Config::load` validation, Save-as-new + TOML diff, W1 / hardened view-only, maps via `ExecutionMap::apply`; no code, no route); operator doc `docs/studio-2026-10-08.md` (quick start, routes, security, Play / Stop, troubleshooting); CLAUDE.md + AGENTS.md "Beyond chat" row + gotcha; code map `[studio]` row + recipe |
 | Review ST-20..ST-40 | adversarial pass (`7a69f79e51c46b54cfdaa0123da5b18c00610d7e`): the CSRF proofs guard every request but GET / HEAD on any path (was: `/api/` only — the guard leaned on the router not normalising paths); `scenario` / `loop` names 1–128 bytes (400; a 1 MiB name was kept in the served view and trace); the control verdict carries its `tone`, `studio.js` compares no status / tone (test); the Studio server logs to `tengu.log` + stderr like `tengu run`; acceptance doc no longer cites the folded WIP commit as its base. Live (`docs/studio-acceptance-2026-10-08.md` § Review): guards incl. traversal + bogus `Last-Event-ID`, a live drain of an in-flight event (`finished 1`), secrets sweep 0 matches, `kill -9` → no orphan, lease taken over after its TTL |
-| Next | ST-90 clean room: fresh clone → `cargo build --release --features studio` → lab A0–A15 + Studio flow (plan § 9) → full check matrix; then Operator Review #3 decides on building the editor |
-| Merge origin/main (Fri 2026-10-09) | #39–#43 (xlab-w2 `keep_runs`, strategy ranking, SOE O0–O4, docs sweep) merged into `feature/studio`: a `kind = "job"` feed (`soe_cycle`) starts through the same `start_session` under `tengu run` and Studio's Play; its runs trace like a tool run (`feed.fired` `kind = "job"` → `feed.completed` · `retrying` · `failed`, correlation `feed:<name>:<slot ms>`); the workflow graph draws a job feed owned by the `[soe] architect` (whose store holds its `feed/1` row); an `[soe]` refusal carries `LeaseHeld` like the others; `sources` / `ranking` log to stderr via `stdout_is_data` |
+| Screenshots | `docs/studio-evidence/01-idle.png` (no runtime, health not live) · `02-running.png` (after Play: live run, a scenario event queued) · `03-replay.png` (the stopped run replayed at seq 60 of 117) — `control-loop-lab`, 2026-10-09 08:01–08:05 UTC |
+| Next | ST-90 clean room (open; its docs part landed): fresh clone → `cargo build --release --features studio` → lab A0–A15 + Studio flow (plan § 9) → full check matrix (`cargo test --workspace`, `--features studio`); then Operator Review #3 decides on building the editor |
+| Integration with #39–#43 (Fri 2026-10-09, before the squash) | #39–#43 (xlab-w2 `keep_runs`, strategy ranking, SOE O0–O4, docs sweep) merged into `feature/studio`: a `kind = "job"` feed (`soe_cycle`) starts through the same `start_session` under `tengu run` and Studio's Play; its runs trace like a tool run (`feed.fired` `kind = "job"` → `feed.completed` · `retrying` · `failed`, correlation `feed:<name>:<slot ms>`); the workflow graph draws a job feed owned by the `[soe] architect` (whose store holds its `feed/1` row); an `[soe]` refusal carries `LeaseHeld` like the others; `sources` / `ranking` log to stderr via `stdout_is_data` |
 | Gotchas | lab runs export `TENGU_HOME="$HOME/tengu-lab/home"` first (parent `.env` = `~/.tengu`); `--sandbox` is cwd-relative (run from the repo / worktree root); `tengu webhooks` does not record a trace yet; a tick's feed and loop events share the session `tick:<slot ms>` = one correlation; the Studio server needs a `--features studio` build (`tengu studio graph` works in every build); Studio control lives in the Studio process — a killed Studio takes its runtime along, the lease frees after 30 s |
 
-## Strategy ranking built, unsealed (Thu 2026-10-08, branch `feature/strategy-ranking`)
+### Strategy ranking (#40) — built, unsealed (Thu 2026-10-08)
 
 | Item | State |
 |---|---|
 | Doc | `docs/strategy-ranking-automation-2026-10-08.md` (audit A1–A12 as built, deviations, SR-0–SR-8 states, operator decisions) · tutorial `docs/tutorial/strategy-ranking.html` |
 | Built | record kind `ranking` (`lineage/rankings/`, `tengu lineage seal ranking:<id>`, Warn `ranking_unsealed`) · cohort identity in `report.json` (`generation`, `instruments_sha256`, `costs_sha256`) · `[strategy_ranking]` + retention of cited runs in unbound sandboxes · pure ranker `domain/backtest/ranking.rs` · coordinator `application/ranking/` (seal check, DST-correct date + cutoff, lease `ranking:<id>`, manifest resume, freshness, backtests, publish dated + `latest`) · `tengu ranking run \| show` · opt-in tool `strategy_ranking` (every engine; capability `intel.strategy_ranking` CANDIDATE) · xlab-w2: contracts listed, private `xl_ranker`, feeds `history_refresh` / `strategy_ranking_daily` / `strategy_ranking_weekend`, `keep_runs = 200` |
-| Commits | `caacdc0be446ce9d7628beacbc31ef0992855c1f`, `42584f85ca739b7ee6a0df408726e05488d5deec`, `5a4682e8f0c7fce262f94895e2fe9b134f71e4ae`, `7c7a7cdc5df01f1b117abbc8b0c3a30dcff5b78d`, `6573e24f44da1eb35ff2f7930348cbd884fa1239`, `6a99fe212062036833b8a4bb28e3a6457573262d` + the SR-8 docs |
+| Commits | `caacdc0be446ce9d7628beacbc31ef0992855c1f`, `42584f85ca739b7ee6a0df408726e05488d5deec`, `5a4682e8f0c7fce262f94895e2fe9b134f71e4ae`, `7c7a7cdc5df01f1b117abbc8b0c3a30dcff5b78d`, `6573e24f44da1eb35ff2f7930348cbd884fa1239`, `6a99fe212062036833b8a4bb28e3a6457573262d` + the SR-8 docs — pre-squash branch commits (PR #40's history; on no branch since the merge), squash `117b2595b0864066502d156aca42c7180494d67a` |
 | Tests | domain ranker + contract + validate unit tests; `application::ranking::tests` (lease, resume, publish order, stale, DST, `a_forward_grade_changes_only_later_dates`); `tests/strategy_ranking.rs` on the binary; conformance case `strategy_ranking_hl`; engine-matrix set `xlab_rank` (offline local leg) |
-| G-WKND (merge) | after weekend #2's Monday snapshot (Mon 2026-10-12): the frozen weekend binary's W1 load refuses the unknown `lineage/rankings/` dir |
+| G-WKND (merge) | merged to `main` anyway (#40); the frozen weekend binary's W1 load refuses the unknown `lineage/rankings/` dir, so the main checkout is not pulled until weekend #2 stops (§ Weekend no-pull rule) |
 | G-SR1 (operator) | both contracts committed **unsealed**: seal as drafted or change first (strategy set, rating order, cohort fields — `instruments_sha256` + `costs_sha256` split xlab-w2 into several cohorts — cutoffs, the weekend contract's `days`). Until then every ranking is refused; nothing ran on `~/.tengu/state/xlab` |
 | Open | INCOMPLETE is terminal (rerun = delete the date dir) · a run cut by shutdown keeps its lease ≤ 15 min · the W1 `xlab` sandbox shares the state dir and can prune xlab-w2 runs no `latest.json` cites · live matrix legs `*_xlab_rank` and `tengu run --sandbox xlab-w2` not run |
+
+### SOE O0–O4 (#41, #43) — built and tested offline, waits on G-O0
+
+| Item | State |
+|---|---|
+| Docs | `docs/soe-2026-10-08.md` (contract, sources, threat model, cycle; operator path § 15) · `docs/source-evidence-2026-10-08.md` (O2) · tutorials `soe.html`, `source-evidence.html` · `docs/lineage-2026-10-06.md` § 7 (SOE-G0) · `docs/runtime-2026-09-30.md` § SOE sandbox |
+| O0 / O1 | 16 synthetic eval cases (`tests/fixtures/soe/cases/`) · `domain/soe/` (values, records, economics, PRD § 7.2 hard gates, capability fit, ranking, `HOLD` week) · profile loader `config/soe.rs` · `tengu soe init \| check \| portfolio \| sensitivity \| eval` |
+| O2 | `domain/source/` (records, two-clock as-of view, packet `source_asof/1`) · `[sources]` (`config/sources.rs`) · append-only `<TENGU_HOME>/state/<state>/sources.db` (`adapters/outbound/sources/store.rs`) · SEC EDGAR + EU TED (`sources/{sec,ted}.rs`) · `tengu sources list \| fetch \| import \| asof \| purge \| terms \| disable \| enable` · read-only tool `source_evidence` |
+| O3 / O4 | `application/soe/` (cycle, freeze, submit, replay, grade, review, `soe_cycle` job) · `[soe]` closed-world load rules · `FsCycleStore` (`adapters/outbound/soe/store.rs`) · feed `kind = "job"` · stage tools `soe_view` / `soe_propose` / `soe_challenge` (`tools/soe/`) · skills `soe-architect`, `soe-critic` · `tengu soe cycle \| replay \| grade \| resolve \| review \| verify \| show` |
+| Sandbox | `sandboxes/soe`: bound to SOE-G0 (CANDIDATE, hash-only public record, no `[[frozen]]` row yet) · closed world, no write / contact / spend / publish tool · every `[sources.registry.*]` row `enabled = false` · feed `[feeds.soe_week]` (`kind = "job"`) · state `~/.tengu/state/soe/`, workspace `~/soe-ws` (neither exists yet) |
+| Capabilities | `intel.source_evidence`, `intel.soe_view`, `intel.soe_propose`, `intel.soe_challenge` (+ `intel.strategy_ranking`) — all `CANDIDATE` |
+| Tests | bridge conformance `source_evidence:*`, `soe_*`; engine-matrix sets `sources`, `soe` (offline local legs `offline_local_sources`, `offline_local_soe`) |
+| Not yet (G-O0) | a signed profile, an enabled source, a cycle against a live model, the live engine-matrix legs — `docs/soe-2026-10-08.md` § 15 |
+| Private | the planning set `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` stays local (private figures; cleanup row C1) |
 
 ## Operator Review #1 = APPROVE (Thu 2026-10-08)
 
@@ -81,28 +129,30 @@ Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568
 |---|---|
 | Site | `docs/tutorial/index.html` + 25 feature pages, one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
 | Sync rule | every code change updates the pages whose `sources` cover it (`docs/tutorial/sources.toml`) — CLAUDE.md / AGENTS.md "REQUIRED updates"; `cargo test --test tutorial_map`; Claude Code `PostToolUse` hook in `.claude/settings.json` (`.gitignore` now `/.claude/*` + `!/.claude/settings.json`) |
-| Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` |
-| Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (PR #31, each with a test; pages re-checked), 4 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) |
+| Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` — done with #32; 2026-10-09: 31 feature pages (`docs/tutorial/sources.toml`), incl. `strategy-ranking`, `studio`, `soe`, `source-evidence` |
+| Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (PR #31, each with a test; pages re-checked), 3 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) — #38 closed 4 gaps 2026-10-08: 13 open, the decision still open |
 
 ## Local data to clean up later (operator, 2026-10-07)
 
 Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kept on purpose for now. **An agent deletes a group only after the operator says that group is done** — never on its own initiative, never as "cleanup while here". Back up first if the operator asks. When a row is deleted, remove it here in the same commit.
 
-| # | Path | Size (2026-10-07) | What | Delete when | How |
+| # | Path | Size (2026-10-09) | What | Delete when | How |
 |---|---|---|---|---|---|
-| A1 | `~/.tengu/state/evidence/w1-2026-10-06/` | 2.2 GB | W1 weekend evidence vault (read-only); its tree hash is pinned by `lineage/evidence/w1-2026-10-06.toml` (branch `feature/w1-lineage`) | W1 retired after Operator Review #1 | `chmod -R u+w` then `rm -rf`; `tengu evidence verify` then fails for that record — expected |
-| A2 | `~/.tengu/state/xmarket-weekend/` | 1.2 GB | weekend paper run: `ledger.db`, `history/` day files, `run-logs/`, `runtime.db` (the vault's source) | with A1 | `rm -rf` |
-| A3 | `~/.cache/tengu-xm.noindex/weekend/` | 61 MB | frozen weekend binaries `tengu-6fcb455`, `tengu-desk-2026-10-02` (commit = tag `w1-forward-2026-10-02`, on origin) | with A1 | `rm -rf` |
-| B1 | `~/.tengu/state/xlab/` | 499 MB | xlab warehouse `market.db` (+ `-wal` / `-shm`), `backtests/` run dirs, `holdout-reads.jsonl` | xlab research finished | `rm -rf` (backfill can rebuild `market.db`; run dirs and holdout reads cannot) |
+| A1 | `~/.tengu/state/evidence/w1-2026-10-06/` | 2.2 GB | W1 weekend evidence vault (read-only); its tree hash is pinned by `lineage/evidence/w1-2026-10-06.toml` (on `main` since #32). Weekend #2's vault `w1-2026-10-12/` joins it after the Monday snapshot | W1 retired (Review #1 APPROVE + P10 kept W1: not yet) | `chmod -R u+w` then `rm -rf`; `tengu evidence verify` then fails for that record — expected |
+| A2 | `~/.tengu/state/xmarket-weekend/` | 1.2 GB | weekend paper runs: `ledger.db`, `history/` day files, `run-logs/`, `runtime.db` (the vaults' source); weekend #2 writes here 2026-10-09 → 10-12 | with A1, never before weekend #2 is vaulted + graded | `rm -rf` |
+| A3 | `~/.cache/tengu-xm.noindex/weekend/` | 96 MB | frozen weekend binaries `tengu-6fcb455`, `tengu-desk-2026-10-02` (commit = tag `w1-forward-2026-10-02`, on origin), `tengu-acdef66` (weekend #2, `acdef66fc45252cba181a351cbc237ed6886ad57`) | with A1; `tengu-acdef66` not before weekend #2 is graded | `rm -rf` |
+| B1 | `~/.tengu/state/xlab/` | 535 MB | xlab warehouse `market.db` (+ `-wal` / `-shm`), `backtests/` run dirs, `holdout-reads.jsonl`; shared with `xlab-w2` (its `strategy-rankings/` appear once G-SR1 seals a contract — none yet) | xlab research finished | `rm -rf` (backfill can rebuild `market.db`; run dirs and holdout reads cannot) |
 | B2 | `~/.tengu/state/xmarket/` | 646 MB | xmarket paper ledger + recorder history | xmarket work finished | `rm -rf` |
 | B3 | `~/.tengu/state/research/` | 8.3 GB | `market-scan-2026-10-05/`, `qnt/`, `sliding/` research data | research finished | `rm -rf` |
-| B4 | `~/.cache/tengu-xm.noindex/tengu-xlab-f554db0/` | 107 MB | xlab binary build | with B1 | `rm -rf` |
-| C1 | main checkout `docs/crypto-opportunity-research-2026-10-05.md`, `docs/crypto-opportunity-deep-dive-2026-10-06.{md,html}`, `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` | ~150 KB | weekend research docs, untracked (never committed — public repo) | operator decides: move somewhere private, or drop | `rm` the six files |
-| D1 | `~/.tengu/logs/` | 74 MB | `decisions.jsonl`, `egress.jsonl`, `risk.jsonl`, `maps/` (execution maps by sha256) | no longer needed for audit | truncate or `rm` the files (the dir is recreated) |
+| B4 | `~/.cache/tengu-xm.noindex/tengu-xlab-f554db0` | 107 MB | xlab binary (one file) | with B1 | `rm` |
+| C1 | main checkout `docs/crypto-opportunity-research-2026-10-05.md`, `docs/crypto-opportunity-deep-dive-2026-10-06.{md,html}`, `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` | ~160 KB | private, untracked (never committed — public repo): the two crypto research docs + the three SOE planning docs (private figures; committing sanitized versions is a G-O0 item). Not C1: the untracked `TENGU_STUDIO_PLAN.md` + `docs/strategy-ranking-automation-2026-10-08.md` — tracked upstream, deleted before the post-weekend pull (§ Weekend no-pull rule) | operator decides: move somewhere private, or drop | `rm` the six files |
+| D1 | `~/.tengu/logs/` | 75 MB | `decisions.jsonl`, `egress.jsonl`, `risk.jsonl`, `tengu.log`, `maps/` (execution maps by sha256); `trace/<sandbox>/` appears once a post-#44 binary runs `tengu run` / `decide` on `~/.tengu` | no longer needed for audit | truncate or `rm` the files (the dir is recreated) |
 | D2 | `~/lping-workspace/.tengu/`, `~/.tengu/state/solana-writes.db` | 128 KB, 28 KB | lping observation cache, Solana write lease store | lping work finished | `rm -rf` / `rm` |
-| E1 | repo `target/` | 79 GB | build cache | any time (rebuildable); disk was 94 % full | `cargo clean` |
-| E2 | `~/.cache/tengu-xm.noindex/{main,seed}/` | 37 GB, 3.3 GB | build caches (seed = clone source for agent target dirs) | any time | `rm -rf` |
-| E3 | `~/.cache/tengu-xm.noindex/agents/jev-chains/` + worktree `.claude/worktrees/jev-chains` | 8.6 GB | step A/B build dir + worktree (`feature/execution-map`) | after PR #29 merges | `git worktree remove .claude/worktrees/jev-chains`, `rm -rf` the dir |
+| E1 | repo `target/` | 89 GB | build cache | any time (rebuildable); disk was 94 % full | `cargo clean` |
+| E2 | `~/.cache/tengu-xm.noindex/main/` | 47 GB | build cache | any time | `rm -rf` |
+| E4 | `~/.cache/tengu-xm.noindex/seed/` | 6.2 GB | clone source for agent target dirs (`agents/<label>`, deleted after each agent), refreshed 2026-10-09 | any time (refresh before the next parallel build) | `rm -rf` |
+| F1 | `~/tengu-lab/` | 464 KB | control-loop-lab + Studio: workspace `control-loop-lab/{in,out}` (the lab agent's only fs roots, empty); the lab `TENGU_HOME` `home/` (312 KB: `logs/trace/<sandbox>/<run_id>.jsonl`, `logs/decisions.jsonl`, `logs/maps/`, `state/`) and the Studio validation home `home-validation-2026-10-09/` (152 KB: `logs/` + `state/`; its trace `cbd8cd05-30fb-4177-aa99-0b978f0e83e5` backs `docs/studio-evidence/`) | Studio / lab work finished (after Operator Review #3) | `rm -rf ~/tengu-lab` (only ever lab data — `docs/control-loop-lab-2026-10-08.md` reset steps) |
+| F2 | `~/.tengu/state/soe/` (+ workspace `~/soe-ws`) | none yet | SOE state root: signed `operator.toml`, `sources.db`, `cycles/`, `replays/`, `reviews/`, `eval/` — private (never in git); created by `tengu soe init` / the first `tengu sources fetch` | never without the operator: it holds the signed profile and the graded cycles of Operator Review #2 | back up first; `rm -rf` |
 
 ## Third-party science-platform integrations removed (2026-10-07, operator)
 
