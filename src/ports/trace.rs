@@ -5,7 +5,7 @@
 //! | Port | Contract |
 //! |---|---|
 //! | [`TraceSink`] | one recording: stamps `seq` / ids / time, redacts and bounds the payload, writes each event once, in `seq` order; fail-soft (a trace error never stops a run) |
-//! | [`TraceReader`] | one sandbox's recordings: list runs, page events after a `seq`, follow a run live (bounded channel: a slow reader waits, loses nothing, resumes by `seq`) |
+//! | [`TraceReader`] | one sandbox's recordings: list runs, page events after a `seq`, the newest `seq`, follow a run live (bounded channel: a slow reader waits, loses nothing, resumes by `seq`) |
 
 use anyhow::Result;
 use tokio::sync::mpsc::Receiver;
@@ -28,6 +28,10 @@ pub(crate) trait TraceReader: Send + Sync {
     /// Up to `limit` events of `run_id` with `seq > after_seq`, in `seq`
     /// order. A partial last line (a write in progress) is not returned.
     fn events(&self, run_id: &str, after_seq: u64, limit: usize) -> Result<Vec<ExecutionEvent>>;
+    /// The `seq` of the newest complete event of `run_id` (0 before the
+    /// first); `Err` for a run that does not exist. Studio's live stream
+    /// tells the backlog (≤ it) from what is written after.
+    fn last_seq(&self, run_id: &str) -> Result<u64>;
     /// Every event of `run_id` with `seq > after_seq`, then each new one as
     /// it is written, until the receiver is dropped. Needs a tokio runtime.
     fn follow(&self, run_id: &str, after_seq: u64) -> Result<Receiver<ExecutionEvent>>;

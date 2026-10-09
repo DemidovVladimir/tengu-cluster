@@ -5,7 +5,7 @@
 //! |---|---|
 //! | [`JsonlTraceSink::open`] | a fresh `run_id` (UUID v4) = a new file, first line `run.opened` (`{kind, pid}`; node `runtime:<sandbox>` for a `tengu run`, none for a decide — its `trigger.*` root names the trigger); a restart never appends to an old run |
 //! | [`JsonlTraceSink::emit`](TraceSink::emit) | under one lock: next `seq`, stamp (`RunContext::stamp`), payload redacted — `domain::trace::scrub_value`: every string and object key, secrets then URLs — then bounded ([`MAX_PAYLOAD_BYTES`], whole fields dropped), one `write_all` on an append-mode file (`decision_loop::append_line`); a failed write keeps the `seq` (no gap) and only warns |
-//! | [`JsonlTraceReader`] | one sandbox dir; a `run_id` must be a lowercase UUID (no path from a request reaches the disk); unparsable lines and a partial last line are skipped; `follow` tails the file every 250 ms into a bounded channel (256): a slow reader holds the tail, nothing is dropped, a reconnect resumes by `seq` |
+//! | [`JsonlTraceReader`] | one sandbox dir; a `run_id` must be a lowercase UUID (no path from a request reaches the disk); unparsable lines and a partial last line are skipped; `last_seq` = the last complete line's (no full parse); `follow` tails the file every 250 ms into a bounded channel (256): a slow reader holds the tail, nothing is dropped, a reconnect resumes by `seq` |
 //!
 //! Nothing here deletes a run; `tengu prune` removes `<TENGU_HOME>/logs`
 //! wholesale (the lab runs under its own `TENGU_HOME`).
@@ -127,9 +127,11 @@ impl JsonlTraceSink {
     fn write(&self, draft: EventDraft) -> Result<String> {
         let mut last = self.last_seq.lock().unwrap_or_else(|p| p.into_inner());
         let seq = *last + 1;
+        let keep = draft.keep;
         let mut ev = self.ctx.stamp(seq, now_ms(), draft);
         scrub_value(&mut ev.payload, &self.secrets);
-        ev.payload = bound_payload(std::mem::take(&mut ev.payload), self.max_payload_bytes).0;
+        let payload = std::mem::take(&mut ev.payload);
+        ev.payload = bound_payload(payload, self.max_payload_bytes, keep).0;
         let line = format!("{}\n", serde_json::to_string(&ev)?);
         append_line(&self.path, &line)?;
         *last = seq;
@@ -184,8 +186,9 @@ impl JsonlTraceReader {
         })
     }
 
+    /// A faster poll / smaller channel (tests).
     #[cfg(test)]
-    fn tuned(mut self, poll: Duration, capacity: usize) -> Self {
+    pub(crate) fn tuned(mut self, poll: Duration, capacity: usize) -> Self {
         self.poll = poll;
         self.capacity = capacity;
         self
@@ -239,6 +242,19 @@ impl TraceReader for JsonlTraceReader {
             .filter(|e| e.seq > after_seq)
             .take(limit)
             .collect())
+    }
+
+    fn last_seq(&self, run_id: &str) -> Result<u64> {
+        let path = self.file(run_id)?;
+        let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        // The last complete line that parses: `seq` is file order (one lock).
+        let Some(end) = bytes.iter().rposition(|b| *b == b'\n') else {
+            return Ok(0);
+        };
+        Ok(bytes[..end]
+            .rsplit(|b| *b == b'\n')
+            .find_map(|l| serde_json::from_slice::<ExecutionEvent>(l).ok())
+            .map_or(0, |e| e.seq))
     }
 
     fn follow(&self, run_id: &str, after_seq: u64) -> Result<Receiver<ExecutionEvent>> {
@@ -567,6 +583,69 @@ mod tests {
         assert_eq!(first(&decide)["node_id"], Value::Null);
         assert_eq!(first(&decide)["payload"]["kind"], json!("decide"));
         assert_eq!(first(&decide)["runtime_id"], Value::Null);
+    }
+
+    /// `last_seq` is the newest complete event: a partial line being
+    /// written is not counted; an unknown run is an error.
+    #[test]
+    fn last_seq_is_the_newest_complete_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = sink(tmp.path(), SecretRegistry::new());
+        let r = reader(tmp.path());
+        let run = s.run_id().unwrap().to_string();
+        assert_eq!(r.last_seq(&run).unwrap(), 1, "run.opened");
+        for i in 0..3 {
+            s.emit(step(i)).unwrap();
+        }
+        assert_eq!(r.last_seq(&run).unwrap(), 4);
+        append_line(s.path(), "{\"schema_version\":1,\"seq\":5").unwrap();
+        assert_eq!(r.last_seq(&run).unwrap(), 4, "partial line");
+        assert!(r.last_seq("5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e").is_err());
+        assert!(r.last_seq("../x").is_err());
+    }
+
+    /// The review's open issue (ST-12): `jev.completed` lost its legal set
+    /// whole above the payload bound. Pinned fields go last: the legal set
+    /// stays beside a huge answer, and the action names stay even when
+    /// the full set does not fit.
+    #[test]
+    fn bounding_keeps_the_legal_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = sink(tmp.path(), SecretRegistry::new());
+        let jev = |legal: Value, names: Value| {
+            EventDraft::new(Component::Jev, "jev.completed", Status::Ok)
+                .node("jev:demo")
+                .keep(&["legal_actions", "legal"])
+                .payload(json!({
+                    "answers": {"next_action": {"why": "w".repeat(6000)}},
+                    "questions": ["next_action"],
+                    "legal": legal,
+                    "legal_actions": names,
+                }))
+        };
+        let small = json!({"hold": {}, "write_marker": {"scenario": ["act"]}});
+        s.emit(jev(small.clone(), json!(["hold", "write_marker"])))
+            .unwrap();
+        let last = file_lines(s.path()).pop().unwrap();
+        assert_eq!(last["payload"]["legal"], small);
+        assert_eq!(
+            last["payload"]["legal_actions"],
+            json!(["hold", "write_marker"])
+        );
+        assert_eq!(last["payload"]["_dropped"], json!(["answers"]));
+        // A legal set over the bound on its own: the names survive.
+        let big: serde_json::Map<String, Value> = (0..40)
+            .map(|i| (format!("act_{i:02}"), json!({"pool": ["p".repeat(120)]})))
+            .collect();
+        let names: Vec<&String> = big.keys().collect();
+        let names = json!(names);
+        s.emit(jev(Value::Object(big.clone()), names.clone()))
+            .unwrap();
+        let line = std::fs::read_to_string(s.path()).unwrap();
+        let last: Value = serde_json::from_str(line.lines().last().unwrap()).unwrap();
+        assert!(last["payload"].get("legal").is_none());
+        assert_eq!(last["payload"]["legal_actions"], names);
+        assert!(serde_json::to_string(&last["payload"]).unwrap().len() <= MAX_PAYLOAD_BYTES);
     }
 
     /// No request path reaches the disk: run ids and sandbox names are

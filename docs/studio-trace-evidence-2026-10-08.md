@@ -115,3 +115,18 @@ Ticks every 20 s (+ one at start), probe every 30 s. One tick and one probe slot
 ## Cleanup
 
 The runbook's guarded block ran after the extracts (`TENGU_HOME` = the lab home): `out/marker.txt`, the workspace `observations.db*`, `$HOME/tengu-lab/home/{logs,state}` removed. Left: the empty lab dirs. Raw outputs stayed in the session scratchpad, not committed.
+
+## ST-20 — `tengu studio` attached to the lab (2026-10-09)
+
+Read-only server (`--features studio`) on a debug build of the ST-20 tree (parent `1d8223fd4ed2c0384c20db27bee45625fb71c636`), same lab home, 2026-10-09 01:24:35Z → 01:25:58Z. One Studio process for the whole session: before any runtime, `tengu run` #1 (45 s, SIGINT), `tengu run` #2 (25 s, SIGINT). Token: 64 hex, URL fragment only (not recorded here). Runbook rows S1–S4: `docs/control-loop-lab-2026-10-08.md`.
+
+| Check | Result |
+|---|---|
+| Before a runtime | `/api/v1/meta`: `read_only: true`, `control_enabled: false`, `config_hash` `a68882899f1aacfe0dde95eb5c6c1a9490750886c5af79b11255437044b4b40f` · `/api/v1/graph` 16 nodes, 17 edges (= the ST-10 golden) · `/api/v1/health` `live: false`, heartbeat `missing` · `/api/v1/runs` empty · live stream `event: run` `waiting` |
+| Guards (curl) | no token 401 · `Host: evil.example` 421 · `Origin: http://evil.example` 403 · `POST` 405 · `?token=` 200 · page headers: CSP `default-src 'self'` … `frame-ancestors 'none'`, `no-store`, `DENY`, `nosniff`, `no-referrer` · `--bind 0.0.0.0` refused, exit 1 |
+| Attach (run #1) | live stream `attached`: run `77ed9381-60eb-4c8d-8bbd-c6f4d6594ba0`, runtime `Vladimirs-MacBook-Pro-2.local:53048:946975cb-d103-4b62-aed4-23e84fe775c9` · `/api/v1/health` at 45 s = `tengu doctor --live` at the same time: `live: true`, heartbeat ok, `loop demo` done 3, `feed tick` live, `feed probe` down (fatal, optional) — same 4 checks, same verdict |
+| Stop / restart | after SIGINT: health `live: false`, heartbeat `stopped` (SIGINT) · run #2 → `event: run` `restarted`: run `ec4b4026-e2f8-4d32-b8ea-6acae2a9d021`, runtime `Vladimirs-MacBook-Pro-2.local:53617:003eeadf-60fe-4cbf-9785-4516e22dbeba`; `/api/v1/runs` `live_run_id` follows it |
+| Live stream | 67 `trace` events = run #1 seq 1…38 then run #2 seq 1…29, no gap, no repeat; both runs end `runtime.stopped` (`lease_released: true`) |
+| Replay = CLI | `/api/v1/runs/77ed9381-60eb-4c8d-8bbd-c6f4d6594ba0/events?limit=1000` = `tengu trace show` of the run, event for event (38, `more: false`) · `runs/…/stream` with `Last-Event-ID: 77ed9381-60eb-4c8d-8bbd-c6f4d6594ba0:5` starts at `:6` (33 events) |
+| Jev | 5 real calls, `typesafe/jev-1.13-20260917`, 263–595 ms, cost $0.000136038; every `jev.completed` keeps `legal_actions` `hold, read_probe, write_marker` |
+| Nothing dangerous | `~/.tengu/logs/decisions.jsonl` sha256 equal before and after · key value: 0 matches in the outputs and the lab home · no tengu process left · lab cleaned with the runbook block |

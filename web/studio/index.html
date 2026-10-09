@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Tengu Studio</title>
+<link rel="stylesheet" href="/assets/studio.css">
+<script src="/assets/studio.js" defer></script>
+</head>
+<body>
+<!-- Tengu Studio, read-only shell (ST-20). Every value on this page comes
+     from the Rust API (/api/v1/...); this page decides nothing. The graph,
+     inspector and timeline land in ST-21. -->
+<header class="bar">
+  <h1>Tengu Studio</h1>
+  <dl class="facts">
+    <div><dt>sandbox</dt><dd id="sandbox">…</dd></div>
+    <div><dt>config</dt><dd id="config-hash" class="id">…</dd></div>
+    <div><dt>health</dt><dd id="health">…</dd></div>
+    <div><dt>mode</dt><dd id="mode">…</dd></div>
+  </dl>
+</header>
+
+<p id="notice" class="notice" hidden></p>
+
+<main class="grid">
+  <section class="panel">
+    <h2>Health <small>tengu doctor --live</small></h2>
+    <ul id="checks" class="checks"></ul>
+  </section>
+
+  <section class="panel">
+    <h2>Live run <small>the lease holder's recording</small></h2>
+    <p id="live-run" class="muted">connecting…</p>
+    <ol id="live-events" class="events" reversed></ol>
+  </section>
+
+  <section class="panel wide">
+    <h2>Runs <small>logs/trace/&lt;sandbox&gt;/</small></h2>
+    <div class="scroll">
+      <table class="runs">
+        <thead>
+          <tr><th>run_id</th><th>kind</th><th>runtime_id</th><th>started</th><th>events</th><th>last</th><th>config</th></tr>
+        </thead>
+        <tbody id="runs"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel wide">
+    <h2>Workflow graph</h2>
+    <p id="graph" class="muted">…</p>
+  </section>
+</main>
+
+<footer class="evidence">
+  <h2>Evidence</h2>
+  <dl id="evidence"></dl>
+</footer>
+</body>
+</html>

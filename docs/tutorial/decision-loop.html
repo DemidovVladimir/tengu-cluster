@@ -400,7 +400,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
     <li><span><b>Old data is never offered.</b> Slots from earlier steps read only this event's history.</span></li>
     <li><span><b>Tools keep their fences.</b> A loop runs tools as its <code>agent</code>, with that agent's scopes and egress.</span></li>
     <li><span><b>Audit lines never interleave.</b> Each line is one <code>write_all</code> on an append-only file, across loops and processes.</span></li>
-    <li><span><b>Every step is traced.</b> Under <code>tengu run</code> or <code>tengu decide</code> a step writes <code>observation.read</code>, <code>jev.completed</code> with the legal set offered, and its <code>action.*</code> event carrying the outcome as computed; the tool call adds <code>tool.*</code> (<a href="studio.html">Studio graph and trace</a>).</span></li>
+    <li><span><b>Every step is traced.</b> Under <code>tengu run</code> or <code>tengu decide</code> a step writes <code>observation.read</code>, <code>jev.completed</code> with the legal set offered (pinned: the payload bound drops it last), and its <code>action.*</code> event carrying the outcome as computed; the tool call adds <code>tool.*</code> (<a href="studio.html">Studio graph and trace</a>).</span></li>
     <li><span><b>Replay is the same loop.</b> Backtests run it terminal-only on a simulated clock, every answer cached (<a href="backtest.html">Backtests</a>).</span></li>
   </ul>
 </section>
@@ -450,7 +450,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

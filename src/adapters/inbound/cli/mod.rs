@@ -118,16 +118,19 @@ enum Commands {
         #[arg(long)]
         map: Option<PathBuf>,
     },
-    /// Tengu Studio from the terminal (TENGU_STUDIO_PLAN.md): `graph`
-    /// prints the sandbox's workflow graph — validated config + catalog
-    /// tools as nodes and edges, optionally narrowed by an execution map.
-    /// Read-only; JSON on stdout.
+    /// Tengu Studio (TENGU_STUDIO_PLAN.md): with no subcommand, the local
+    /// read-only browser UI (`--features studio`): loopback only, prints
+    /// its URL (with a per-process token) on stdout. `graph` prints the
+    /// sandbox's workflow graph — validated config + catalog tools as
+    /// nodes and edges, optionally narrowed by an execution map — as JSON.
     Studio {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long, global = true)]
         sandbox: Option<String>,
+        #[command(flatten)]
+        serve: studio::ServeArgs,
         #[command(subcommand)]
-        action: studio::StudioAction,
+        action: Option<studio::StudioAction>,
     },
     /// Read the execution trace `tengu run` / `tengu decide` recorded under
     /// <TENGU_HOME>/logs/trace/<sandbox>/: `runs`, `show --run <id>
@@ -667,9 +670,13 @@ pub(crate) async fn run() -> Result<()> {
             )
             .await
         }
-        Commands::Studio { sandbox, action } => {
+        Commands::Studio {
+            sandbox,
+            serve,
+            action,
+        } => {
             let config = load_sandbox_or(sandbox, config)?;
-            studio::run_studio(&config, action, secret_registry)
+            studio::run_studio(config, serve, action, secret_registry).await
         }
         Commands::History { sandbox, action } => {
             let config = load_sandbox_or(sandbox, config)?;
@@ -918,6 +925,15 @@ mod tests {
             ][..],
             &["tengu", "doctor", "--sandbox", "control-loop-lab", "--live"],
             &["tengu", "studio", "graph", "--sandbox", "control-loop-lab"],
+            // The server: its URL alone on stdout.
+            &[
+                "tengu",
+                "studio",
+                "--sandbox",
+                "control-loop-lab",
+                "--port",
+                "0",
+            ],
             &["tengu", "history", "range", "k", "--from", "0", "--to", "1"],
         ] {
             assert!(stdout_is_data(&command(args)), "{args:?}");

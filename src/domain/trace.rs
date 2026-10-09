@@ -16,7 +16,7 @@
 //! | `correlation_id` | the draft's, else `session_id`, else `runtime_id`, else `run_id` ([`RunContext::stamp`]) |
 //! | `parent_event_id` · `call_id` | the causing event · the tool call id (`{loop}:{session}:{t}`, `feed:<n>:<slot>:<i>`) |
 //! | `component` · `kind` · `node_id` · `status` | [`Component`] · dotted `<family>.<what>` (`run.opened`, `jev.completed`, …) · a `domain::workflow` node id · [`Status`] |
-//! | `duration_ms` · `payload` · `artifact` | wall time of the thing reported · a redacted object ≤ [`MAX_PAYLOAD_BYTES`] ([`bound_payload`]) · where the full record lives ([`ArtifactRef`]) |
+//! | `duration_ms` · `payload` · `artifact` | wall time of the thing reported · a redacted object ≤ [`MAX_PAYLOAD_BYTES`] ([`bound_payload`]; the fields a draft pins with [`EventDraft::keep`] go last — `jev.*` pin the legal set) · where the full record lives ([`ArtifactRef`]) |
 //!
 //! Every field is always present (`null` when unknown), so a reader sees one
 //! shape; unknown fields are ignored, so an older reader takes newer lines.
@@ -140,6 +140,15 @@ pub(crate) fn event_id(run_id: &str, seq: u64) -> String {
     format!("{run_id}:{seq}")
 }
 
+/// The `(run_id, seq)` of an [`event_id`] (an SSE `Last-Event-ID`); `None`
+/// when it is not one.
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+pub(crate) fn parse_event_id(id: &str) -> Option<(&str, u64)> {
+    let (run, seq) = id.rsplit_once(':')?;
+    let seq = seq.parse().ok()?;
+    (!run.is_empty()).then_some((run, seq))
+}
+
 /// A recording's identity, as audit lines carry it (`decisions.jsonl`
 /// `runtime_id` / `run_id`, both additive).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -165,6 +174,8 @@ pub(crate) struct EventDraft {
     pub artifact: Option<ArtifactRef>,
     /// The caller's clock (replay); `None` = the sink's wall clock.
     pub ts_ms: Option<i64>,
+    /// Payload fields [`bound_payload`] drops last (never written itself).
+    pub keep: &'static [&'static str],
 }
 
 impl EventDraft {
@@ -182,6 +193,7 @@ impl EventDraft {
             payload: Value::Object(Default::default()),
             artifact: None,
             ts_ms: None,
+            keep: &[],
         }
     }
     pub(crate) fn session(mut self, id: impl Into<String>) -> Self {
@@ -217,6 +229,12 @@ impl EventDraft {
             file: file.into(),
             key,
         });
+        self
+    }
+    /// Pin payload fields: [`bound_payload`] drops them only after every
+    /// other field, the last named first (`jev.*`: the legal set).
+    pub(crate) fn keep(mut self, fields: &'static [&'static str]) -> Self {
+        self.keep = fields;
         self
     }
     /// The caller's clock (a replay's); unused by the live sites.
@@ -312,11 +330,12 @@ fn json_len(v: &Value) -> usize {
 
 /// `v` within `max_bytes` serialized, and its original size when it was
 /// not. Never cuts a string, an id or a number: an object loses whole
-/// top-level fields, largest first (ties by name), and gains `_dropped`
-/// (their names, sorted) + `_bytes` (the original size); any other value
-/// over the bound — or an object whose list of dropped names alone is over
-/// it — becomes `{"_dropped": ["payload"], "_bytes": n}`.
-pub(crate) fn bound_payload(v: Value, max_bytes: usize) -> (Value, Option<usize>) {
+/// top-level fields, largest first (ties by name) — the fields named in
+/// `keep` only after every other one, the last named first — and gains
+/// `_dropped` (their names, sorted) + `_bytes` (the original size); any
+/// other value over the bound — or an object whose list of dropped names
+/// alone is over it — becomes `{"_dropped": ["payload"], "_bytes": n}`.
+pub(crate) fn bound_payload(v: Value, max_bytes: usize, keep: &[&str]) -> (Value, Option<usize>) {
     let size = json_len(&v);
     if size <= max_bytes {
         return (v, None);
@@ -325,9 +344,19 @@ pub(crate) fn bound_payload(v: Value, max_bytes: usize) -> (Value, Option<usize>
     let Value::Object(mut o) = v else {
         return whole();
     };
-    let mut by_size: Vec<(usize, String)> =
-        o.iter().map(|(k, x)| (json_len(x), k.clone())).collect();
-    by_size.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    // Drop order: unpinned by size (largest first, ties by name), then the
+    // pinned in reverse `keep` order.
+    let pin = |k: &str| keep.iter().position(|p| *p == k);
+    let mut by_size: Vec<(Option<std::cmp::Reverse<usize>>, usize, String)> = o
+        .iter()
+        .map(|(k, x)| (pin(k).map(std::cmp::Reverse), json_len(x), k.clone()))
+        .collect();
+    by_size.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    let by_size = by_size.into_iter().map(|(_, n, k)| (n, k));
     let mut dropped: BTreeSet<String> = BTreeSet::new();
     let marked = |o: &serde_json::Map<String, Value>, dropped: &BTreeSet<String>| {
         let mut m = o.clone();
@@ -428,7 +457,7 @@ mod tests {
             "answers": {"next_action": {"value": "x".repeat(3000), "confidence": 0.9}},
             "output": "y".repeat(2000),
         });
-        let (out, was) = bound_payload(v.clone(), 1024);
+        let (out, was) = bound_payload(v.clone(), 1024, &[]);
         assert!(was.unwrap() > 1024);
         assert!(json_len(&out) <= 1024, "{}", json_len(&out));
         assert_eq!(out["call_id"], json!(id));
@@ -437,21 +466,75 @@ mod tests {
         assert_eq!(out["_dropped"], json!(["answers", "output"]));
         assert_eq!(out["_bytes"], json!(was.unwrap()));
         // Only the largest goes when that is enough.
-        let (out, _) = bound_payload(v.clone(), 2500);
+        let (out, _) = bound_payload(v.clone(), 2500, &[]);
         assert_eq!(out["_dropped"], json!(["answers"]));
         assert_eq!(out["output"], v["output"]);
         // Within the bound: untouched, no marker.
-        assert_eq!(bound_payload(v.clone(), 1 << 20), (v, None));
+        assert_eq!(bound_payload(v.clone(), 1 << 20, &[]), (v, None));
         // A non-object over the bound is replaced, never cut.
-        let (s, n) = bound_payload(json!("z".repeat(100)), 10);
+        let (s, n) = bound_payload(json!("z".repeat(100)), 10, &[]);
         assert_eq!(s, json!({"_dropped": ["payload"], "_bytes": n.unwrap()}));
         // So is an object whose dropped names alone would not fit.
         let many: serde_json::Map<String, Value> = (0..200)
             .map(|i| (format!("field_with_a_long_name_{i:03}"), json!(i)))
             .collect();
-        let (s, n) = bound_payload(Value::Object(many), 1024);
+        let (s, n) = bound_payload(Value::Object(many), 1024, &[]);
         assert_eq!(s, json!({"_dropped": ["payload"], "_bytes": n.unwrap()}));
         assert!(json_len(&s) <= 1024);
+    }
+
+    /// Pinned fields go last, the last pinned first: a big legal set
+    /// survives a bigger `answers`; when even it does not fit, the action
+    /// names still do.
+    #[test]
+    fn bound_payload_keeps_pinned_fields() {
+        let legal: serde_json::Map<String, Value> = (0..10)
+            .map(|i| (format!("action_{i:02}"), json!({"slot": ["a", "b", "c"]})))
+            .collect();
+        let names: Vec<String> = legal.keys().cloned().collect();
+        let v = json!({
+            "decision_id": "gen-1",
+            "answers": {"next_action": {"why": "x".repeat(3000)}},
+            "questions": ["next_action"],
+            "legal": legal,
+            "legal_actions": names,
+            "note": "y".repeat(200),
+        });
+        let (legal_len, note_len) = (json_len(&v["legal"]), json_len(&v["note"]));
+        assert!(legal_len > note_len, "{legal_len} {note_len}");
+        let keep = &["legal_actions", "legal"];
+        // Unpinned, `legal` (the largest after `answers`) goes next.
+        let (plain, _) = bound_payload(v.clone(), 700, &[]);
+        assert!(json_len(&plain) <= 700, "{}", json_len(&plain));
+        assert!(plain.get("legal").is_none());
+        assert_eq!(plain["_dropped"], json!(["answers", "legal"]));
+        // Pinned, the smaller `note` goes instead.
+        let (out, was) = bound_payload(v.clone(), 700, keep);
+        assert!(was.is_some() && json_len(&out) <= 700, "{}", json_len(&out));
+        assert_eq!(out["legal"], v["legal"]);
+        assert_eq!(out["legal_actions"], v["legal_actions"]);
+        assert_eq!(out["decision_id"], json!("gen-1"));
+        assert_eq!(out["_dropped"], json!(["answers", "note"]));
+        // Room for the names only: `legal` (pinned last) goes before them.
+        let (out, _) = bound_payload(v.clone(), 300, keep);
+        assert!(json_len(&out) <= 300, "{}", json_len(&out));
+        assert!(out.get("legal").is_none());
+        assert_eq!(out["legal_actions"], v["legal_actions"]);
+        assert_eq!(
+            out["_dropped"],
+            json!(["answers", "decision_id", "legal", "note", "questions"]),
+            "every unpinned field before a pinned one"
+        );
+    }
+
+    /// `parse_event_id` inverts `event_id`; anything else is `None`.
+    #[test]
+    fn event_id_round_trips() {
+        let run = "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e";
+        assert_eq!(parse_event_id(&event_id(run, 42)), Some((run, 42)));
+        for bad in ["", "42", ":42", "x:", "x:-1", "x:1.5", "x:y"] {
+            assert_eq!(parse_event_id(bad), None, "{bad}");
+        }
     }
 
     /// Replay order is the run's `seq`, whatever the clock or arrival order;

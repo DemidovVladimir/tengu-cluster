@@ -84,6 +84,17 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 
 Every event's fields, parents and the Studio visual it drives: `docs/runtime-2026-09-30.md` § Trace. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below). Recorded run: `docs/studio-trace-evidence-2026-10-08.md`.
 
+## Studio server (ST-20, build with `--features studio`)
+
+| # | Command | Expected |
+|---|---|---|
+| S1 | `$T studio --sandbox control-loop-lab` (any time; Ctrl-C stops it) | stdout `Studio: http://127.0.0.1:<port>/#t=<64 hex>`; open it: header sandbox + `config_hash`, health `not live` before A7 |
+| S2 | `curl -s -H "X-Studio-Token: <token>" http://127.0.0.1:<port>/api/v1/graph` | = G1 (16 nodes, 17 edges) · no token ⇒ 401 · `-H 'Host: evil.example'` ⇒ 421 · `-H 'Origin: http://evil.example'` ⇒ 403 · `-X POST` ⇒ 405 |
+| S3 | A7 running, page open | live panel `attached: run <run_id> · runtime <A7 holder>`, events arrive per tick; health `live` (= `doctor --live`); A12 ⇒ `restarted: run <new run_id>` |
+| S4 | `$T studio --sandbox control-loop-lab --bind 0.0.0.0` | refused (`loopback only`), exit 1 |
+
+Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

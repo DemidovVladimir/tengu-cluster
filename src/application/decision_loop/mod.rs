@@ -49,7 +49,7 @@
 //! | Event (node) | Status | When / payload |
 //! |---|---|---|
 //! | `observation.read` (`world:<loop>/<alias>`) | `ok` · `stale` · `missing` · `failed` | each `world` alias as `World::reads` classifies it: `key`, `age_ms` |
-//! | `jev.completed` · `jev.failed` (`jev:<loop>`) | `ok` · `failed` | the decisions call: `decision_id`, `model`, `answers`, `usage`, `latency_ms` (= `duration_ms`), `legal` (action → slot → labels: what was offered), `questions` |
+//! | `jev.completed` · `jev.failed` (`jev:<loop>`) | `ok` · `failed` | the decisions call: `decision_id`, `model`, `answers`, `usage`, `latency_ms` (= `duration_ms`), `legal` (action → slot → labels: what was offered), `legal_actions` (its action names), `questions`; both pinned (`EventDraft::keep`): the payload bound drops every other field first, then `legal`, then `legal_actions` |
 //! | `action.selected` (`action:<loop>/<a>`) | `running` | a tool action past the gate and the caps, before its call; the call's `tool.*` are its children (`trace_exec::TracedExecutor`) |
 //! | `action.completed` · `action.refused` | `ok` / `failed` (the history entry's `ok`) · `refused` (`[risk]` rule) | after the call: `ok`, `output`, `obs`, `call_id` |
 //! | `action.selected` | `ok` (terminal) · `skipped` (dry-run write) | a terminal action; a write under `dry_run` |
@@ -101,6 +101,9 @@ use slots::Candidate;
 use world::{Read, World};
 
 const NEXT_ACTION: &str = "next_action";
+/// `jev.*` payload fields the trace drops last (`EventDraft::keep`): the
+/// action names, then the full legal set — what Studio greys nodes by.
+const LEGAL_FIELDS: &[&str] = &["legal_actions", "legal"];
 
 pub(crate) struct DecisionLoop {
     name: String,
@@ -370,10 +373,12 @@ impl DecisionLoop {
         let started = Instant::now();
         let decided = self.engine.decide(&state, &questions).await;
         let latency_ms = started.elapsed().as_millis() as u64;
-        // What Jev was offered: the legal set (a configured action outside it is drawn grey).
+        // What Jev was offered: the legal set (a configured action outside it is
+        // drawn grey) — pinned ([`LEGAL_FIELDS`]): it survives the payload bound.
         let offered = json!({
             "step": step,
             "legal": legal_json(&legal),
+            "legal_actions": legal.keys().collect::<Vec<_>>(),
             "questions": questions.keys().collect::<Vec<_>>(),
             "latency_ms": latency_ms,
             "act_at": self.cfg.act_at,
@@ -393,6 +398,7 @@ impl DecisionLoop {
                 let d = self
                     .draft("jev.failed", Component::Jev, Status::Failed, session_id)
                     .node(node_id::jev(&self.name))
+                    .keep(LEGAL_FIELDS)
                     .duration(latency_ms)
                     .payload(p);
                 self.emit(d, tr.root.as_deref());
@@ -413,6 +419,7 @@ impl DecisionLoop {
         let mut d = self
             .draft("jev.completed", Component::Jev, Status::Ok, session_id)
             .node(node_id::jev(&self.name))
+            .keep(LEGAL_FIELDS)
             .duration(latency_ms)
             .payload(p);
         if let Some(a) = &self.audit {
@@ -2872,6 +2879,9 @@ description = "Unsure: hand it to the architect"
             let legal = d.payload["legal"].as_object().unwrap();
             let offered: Vec<&String> = criteria.keys().collect();
             assert_eq!(legal.keys().collect::<Vec<_>>(), offered, "step {step}");
+            // The names alone too, pinned so they survive the payload bound.
+            assert_eq!(d.payload["legal_actions"], json!(offered), "step {step}");
+            assert_eq!(d.keep, LEGAL_FIELDS);
             let questions: Vec<String> = seen[step].keys().cloned().collect();
             assert_eq!(d.payload["questions"], json!(questions));
             for (key, q) in seen[step].iter().filter(|(k, _)| k.contains("__")) {

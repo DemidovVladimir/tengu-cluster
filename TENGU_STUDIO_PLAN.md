@@ -282,8 +282,9 @@ Required env (names only): `TENGU_HOME` (the lab home above), `OPENROUTER_API_KE
 ### Studio proof
 
 ```bash
-target/release/tengu studio --sandbox control-loop-lab
-# prints the loopback URL, for example http://127.0.0.1:<port>
+cargo build --release --features studio      # the server is behind the non-default `studio` feature
+target/release/tengu studio --sandbox control-loop-lab [--port <n>] [--bind 127.0.0.1|::1]
+# stdout: Studio: http://127.0.0.1:<port>/#t=<64 hex token>   (open exactly this URL; a non-loopback --bind is refused)
 ```
 
 Expected operator flow:

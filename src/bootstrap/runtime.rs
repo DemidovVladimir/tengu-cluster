@@ -8,6 +8,7 @@
 //! | trace | [`start`] opens this process's recording (`bootstrap::trace::open_sink`, `RunKind::Run`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, `runtime_id` = the lease holder; every loop's `decisions.jsonl` lines carry both ids ([`Runtime::trace`]) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
+//! | live verdict | [`read_live`]: the heartbeat file + the `loop/1` / `feed/1` rows of each agent store that exists → `domain::runtime::live_verdict` — `tengu doctor --live` and Studio's `/api/v1/health` read the same |
 //! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's) |
 //! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router and the feeds |
 //! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → leases released |
@@ -26,9 +27,9 @@ use tracing::{info, warn};
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
 use crate::adapters::outbound::noop::NoopTrace;
-use crate::adapters::outbound::observations::open_observation_store;
+use crate::adapters::outbound::observations::{open_observation_store, SqliteObservationStore};
 use crate::adapters::outbound::rate_limit::jitter01;
-use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+use crate::adapters::outbound::runtime_store::{read_heartbeat, SqliteRuntimeStore};
 use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, Rand01};
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
@@ -38,9 +39,10 @@ use crate::bootstrap::trace::Recording;
 use crate::config::feeds::{FeedConfig, FeedKind};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
-use crate::domain::observation::now_ms;
+use crate::domain::observation::{now_ms, Observation, Observed};
 use crate::domain::runtime::{
-    heartbeat_file, lease_resource, state_lease_resource, RunState, RunnerLease,
+    heartbeat_file, lease_resource, live_verdict, state_lease_resource, FeedHealth, HeartbeatRead,
+    LiveKnobs, LiveReport, LoopHealth, RunState, RunnerLease,
 };
 use crate::domain::secrets::SecretRegistry;
 use crate::domain::trace::{Component, EventDraft, Status};
@@ -76,6 +78,81 @@ pub(crate) fn runtime_state_dir(config: &Config) -> PathBuf {
         xm_state_dir(config).as_deref(),
         &crate::config::paths::resolve_tengu_home(),
     )
+}
+
+/// What `tengu doctor --live` and Studio's `/api/v1/health` judge: the
+/// heartbeat file and the `loop/1` / `feed/1` rows, through
+/// `domain::runtime::live_verdict` (no rule here).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LiveHealth {
+    /// Runner name ([`runner_name`]).
+    pub sandbox: String,
+    /// Where `run-<sandbox>.json` was read.
+    pub state_dir: PathBuf,
+    pub heartbeat: HeartbeatRead,
+    pub report: LiveReport,
+}
+
+/// The live verdict of `config`'s runtime, its heartbeat read from
+/// `state_dir` ([`runtime_state_dir`] for this process's `TENGU_HOME`).
+pub(crate) async fn read_live(config: &Config, state_dir: &Path) -> LiveHealth {
+    let sandbox = runner_name(config);
+    let heartbeat = match read_heartbeat(state_dir, &sandbox) {
+        Ok(Some(hb)) => HeartbeatRead::Found(hb),
+        Ok(None) => HeartbeatRead::Missing,
+        Err(e) => HeartbeatRead::Unreadable(format!("{e:#}")),
+    };
+    let rows = health_rows(config, &heartbeat).await;
+    let knobs = LiveKnobs {
+        heartbeat_stale_secs: config.runtime.heartbeat_stale_secs,
+    };
+    let report = live_verdict(&sandbox, &heartbeat, &rows, now_ms(), knobs);
+    LiveHealth {
+        sandbox,
+        state_dir: state_dir.to_path_buf(),
+        heartbeat,
+        report,
+    }
+}
+
+/// `loop/1` rows of every configured loop and `feed/1` rows of every feed
+/// the heartbeat lists, from each agent workspace whose observation store
+/// exists (never created here). Unreadable stores are skipped.
+async fn health_rows(config: &Config, heartbeat: &HeartbeatRead) -> Vec<Observation> {
+    let mut keys: BTreeSet<String> = config
+        .decision_loops
+        .keys()
+        .map(|n| Observation::key_for(LoopHealth::SCHEMA, n))
+        .collect();
+    if let HeartbeatRead::Found(hb) = heartbeat {
+        keys.extend(
+            hb.loops
+                .keys()
+                .map(|n| Observation::key_for(LoopHealth::SCHEMA, n)),
+        );
+        keys.extend(
+            hb.feeds
+                .keys()
+                .map(|n| Observation::key_for(FeedHealth::SCHEMA, n)),
+        );
+    }
+    let keys: Vec<String> = keys.into_iter().collect();
+    let workspaces: BTreeSet<PathBuf> = config
+        .agents
+        .keys()
+        .map(|a| agent_workspace(config, a))
+        .filter(|ws| ws.join(".tengu").join("observations.db").exists())
+        .collect();
+    let mut rows = Vec::new();
+    for ws in workspaces {
+        let Ok(store) = SqliteObservationStore::open(&ws) else {
+            continue;
+        };
+        if let Ok(found) = store.get_many(&keys).await {
+            rows.extend(found.into_iter().flatten());
+        }
+    }
+    rows
 }
 
 /// What a long-running process of a sandbox (`tengu run`, `tengu webhooks`)

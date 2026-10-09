@@ -9,7 +9,9 @@
 //! recorder when `[recorder]` is on; fail-soft) →
 //! `application::decision_loop::DecisionLoop` (step events: `with_trace`).
 //! [`agent_tool_executor`] also builds each `[feeds]` tool feed's executor
-//! (`bootstrap/runtime.rs`).
+//! (`bootstrap/runtime.rs`). Paths: [`audit_path`] / [`audit_file`]
+//! (`<home>/logs/decisions.jsonl`), [`maps_dir`] (`<home>/logs/maps/`, the
+//! maps `tengu decide --map` kept; Studio's `/api/v1/graph?map=`).
 //!
 //! Replay — the backtest gate arm (`docs/xlab-2026-10-01.md` § 7):
 //!
@@ -49,9 +51,18 @@ const REPLAY_TRIGGER: &str = "backtest";
 
 /// `<TENGU_HOME>/logs/decisions.jsonl` — one line per decision.
 pub(crate) fn audit_path() -> PathBuf {
-    crate::config::paths::resolve_tengu_home()
-        .join("logs")
-        .join("decisions.jsonl")
+    audit_file(&crate::config::paths::resolve_tengu_home())
+}
+
+/// `<home>/logs/decisions.jsonl`.
+pub(crate) fn audit_file(home: &Path) -> PathBuf {
+    home.join("logs").join("decisions.jsonl")
+}
+
+/// `<home>/logs/maps/` — the execution maps `tengu decide --map` ran, as
+/// `<sha256>.json` (canonical JSON), by the identity their audit lines carry.
+pub(crate) fn maps_dir(home: &Path) -> PathBuf {
+    home.join("logs").join("maps")
 }
 
 /// Tool executor of `agent` for a decision loop or a `[feeds]` feed: the

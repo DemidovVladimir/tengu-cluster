@@ -1,20 +1,17 @@
 //! `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live`, the
-//! running `tengu run`: heartbeat file + `loop/1` / `feed/1` rows →
+//! running `tengu run`: heartbeat file + `loop/1` / `feed/1` rows
+//! (`bootstrap::runtime::read_live`, shared with Studio) →
 //! `domain::runtime::live_verdict`, and `--engines`, a tool-using smoke turn
 //! per agent → `domain::engine_smoke`).
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
 use crate::adapters::outbound::engines::{build_engine, build_step_engine, StepOpts};
-use crate::adapters::outbound::observations::SqliteObservationStore;
-use crate::adapters::outbound::runtime_store::read_heartbeat;
 use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
 use crate::application::chat::tool_loop::collect_engine_response;
-use crate::bootstrap::runtime::{agent_workspace, runner_name, runtime_state_dir};
+use crate::bootstrap::runtime::{read_live, runtime_state_dir};
 use crate::bootstrap::tools::{
     build_tool_executor, compute_base_tools, grant_workspace_root, subagent_config,
 };
@@ -24,11 +21,8 @@ use crate::domain::engine_smoke::{
     TOKEN_FILE_PREFIX,
 };
 use crate::domain::message::{Message, Role, ToolCall, ToolDef, ToolRun};
-use crate::domain::observation::{now_ms, Observation, Observed};
-use crate::domain::runtime::{live_verdict, FeedHealth, HeartbeatRead, LiveKnobs, LoopHealth};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::EngineContext;
-use crate::ports::observation::ObservationStore;
 use crate::ports::tool_activity::ToolActivityPort;
 
 fn format_diagnostics_compact(d: &crate::ports::engine::EngineDiagnostics) -> String {
@@ -238,18 +232,13 @@ async fn doctor_egress(tor_check: bool, failures: &mut Vec<String>) {
 /// `--live` block: one line per check of `live_verdict` (heartbeat, loops,
 /// feeds); failing checks fail the doctor.
 async fn doctor_live(config: &Config, failures: &mut Vec<String>) {
-    let (sandbox, dir) = (runner_name(config), runtime_state_dir(config));
-    println!("  Runtime (live): sandbox {sandbox} · {}", dir.display());
-    let heartbeat = match read_heartbeat(&dir, &sandbox) {
-        Ok(Some(hb)) => HeartbeatRead::Found(hb),
-        Ok(None) => HeartbeatRead::Missing,
-        Err(e) => HeartbeatRead::Unreadable(format!("{e:#}")),
-    };
-    let rows = health_rows(config, &heartbeat).await;
-    let knobs = LiveKnobs {
-        heartbeat_stale_secs: config.runtime.heartbeat_stale_secs,
-    };
-    let report = live_verdict(&sandbox, &heartbeat, &rows, now_ms(), knobs);
+    let live = read_live(config, &runtime_state_dir(config)).await;
+    println!(
+        "  Runtime (live): sandbox {} · {}",
+        live.sandbox,
+        live.state_dir.display()
+    );
+    let report = live.report;
     for c in &report.checks {
         println!(
             "    {} {:<24} {}",
@@ -477,46 +466,6 @@ async fn smoke_agent(
     .await
     .with_context(|| format!("no answer within {}s", limits.step_timeout_secs))??;
     Ok((resp.tool_runs, resp.text, token))
-}
-
-/// `loop/1` rows of every configured loop and `feed/1` rows of every feed
-/// the heartbeat lists, from each agent workspace whose observation store
-/// exists (never created here). Unreadable stores are skipped.
-async fn health_rows(config: &Config, heartbeat: &HeartbeatRead) -> Vec<Observation> {
-    let mut keys: BTreeSet<String> = config
-        .decision_loops
-        .keys()
-        .map(|n| Observation::key_for(LoopHealth::SCHEMA, n))
-        .collect();
-    if let HeartbeatRead::Found(hb) = heartbeat {
-        keys.extend(
-            hb.loops
-                .keys()
-                .map(|n| Observation::key_for(LoopHealth::SCHEMA, n)),
-        );
-        keys.extend(
-            hb.feeds
-                .keys()
-                .map(|n| Observation::key_for(FeedHealth::SCHEMA, n)),
-        );
-    }
-    let keys: Vec<String> = keys.into_iter().collect();
-    let workspaces: BTreeSet<PathBuf> = config
-        .agents
-        .keys()
-        .map(|a| agent_workspace(config, a))
-        .filter(|ws| ws.join(".tengu").join("observations.db").exists())
-        .collect();
-    let mut rows = Vec::new();
-    for ws in workspaces {
-        let Ok(store) = SqliteObservationStore::open(&ws) else {
-            continue;
-        };
-        if let Ok(found) = store.get_many(&keys).await {
-            rows.extend(found.into_iter().flatten());
-        }
-    }
-    rows
 }
 
 async fn tor_exit_check(

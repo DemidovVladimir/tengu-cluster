@@ -36,13 +36,14 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · Studio read model</div>
   <h1>Studio graph and trace</h1>
-  <p class="lede">Two read models for Studio. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is one redacted, ordered event file per run: every runtime, feed, loop, Jev, action and tool step.</p>
+  <p class="lede">Two read models for Studio. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is one redacted, ordered event file per run: every runtime, feed, loop, Jev, action and tool step. <code>tengu studio</code> serves both, read-only, to a browser on this machine.</p>
   <ul class="facts">
     <li>schema <b>v1</b> for both</li>
     <li>payload ≤ <b>4096</b> bytes</li>
     <li>graph in <b>8</b> columns</li>
     <li><b>8</b> event families</li>
     <li>follow: <b>250 ms</b> poll · <b>256</b> buffered</li>
+    <li>server: <b>loopback</b> · GET only</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip heart"><span class="k">心</span> heart</span> Architect / map</li>
@@ -275,6 +276,35 @@
   <p class="note">Not traced yet: planner / subagent steps, a typed scope refusal (today a <code>tool.failed</code> with the refusal text), <code>tengu webhooks</code>.</p>
 </section>
 
+<section class="sec" aria-labelledby="s-server">
+  <div class="sec-head">
+    <span class="kicker">Read-only, loopback only</span>
+    <h2 id="s-server">The Studio server</h2>
+    <p><code>tengu studio --sandbox &lt;s&gt;</code> (build with <code>--features studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Route (GET only)</th><th>Serves</th></tr></thead>
+      <tbody>
+        <tr><td><code>/</code> · <code>/assets/&lt;file&gt;</code></td><td>the page, compiled into the binary (<code>include_str!</code>); nothing loads from the network</td></tr>
+        <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only: true</code>, <code>control_enabled: false</code>, evidence paths</td></tr>
+        <tr><td><code>/api/v1/graph[?map=&lt;sha256&gt;]</code></td><td>the graph above; with <code>map</code>, a map <code>tengu decide --map</code> kept, re-hashed and re-applied to this config</td></tr>
+        <tr><td><code>/api/v1/health</code></td><td>the heartbeat and the <code>tengu doctor --live</code> checks (one function, <code>runtime::read_live</code>)</td></tr>
+        <tr><td><code>/api/v1/runs</code></td><td>every recorded run, the heartbeat holder, the live run, whether each run's config hash is the current one</td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/events?after=&amp;limit=</code></td><td>a page of events in <code>seq</code> order (limit 1–1000), <code>more</code>, <code>next_after</code></td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/stream</code></td><td>SSE: the run after <code>Last-Event-ID</code> or <code>?after=</code>, then live</td></tr>
+        <tr><td><code>/api/v1/live/stream</code></td><td>SSE: the run of the runtime holding the lease; <code>event: run</code> on attach and on every restart</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip guard">bind</span><span><b>Loopback only</b><code>127.0.0.1</code> (default) or <code>::1</code>; any other <code>--bind</code> is refused before anything listens. Port 0 = a free one.</span></li>
+    <li><span class="chip guard">key</span><span><b>Token</b>32 random bytes per process. Every <code>/api/</code> call sends it (<code>X-Studio-Token</code>, or <code>?token=</code> for <code>EventSource</code>); compared in constant time, else 401.</span></li>
+    <li><span class="chip guard">host</span><span><b>Host / Origin</b>a <code>Host</code> other than <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> is 421 (DNS rebinding); a foreign <code>Origin</code> or a cross-site fetch is 403; no CORS header.</span></li>
+    <li><span class="chip data">sse</span><span><b>Bounded per client</b>the backlog waits for a slow client; a live event that does not fit its 256-item buffer sends <code>event: lagged</code> (id = the last event handed) and closes. The browser reconnects with that id and reads the rest from the file: no gap, no repeat.</span></li>
+  </ul>
+</section>
+
 <section class="sec" aria-labelledby="s-rules">
   <div class="sec-head">
     <span class="kicker">Enforced in code</span>
@@ -284,11 +314,12 @@
     <li><span><b>The graph never widens.</b> A map goes through <code>ExecutionMap::apply</code>; a mapped graph has no node or edge the base graph lacks, except the map trigger.</span></li>
     <li><span><b>The graph is deterministic.</b> It is normalized: the same config gives the same bytes (golden files for <code>control-loop-lab</code> and <code>lping</code>).</span></li>
     <li><span><b>Redaction before the write.</b> Registered secrets become <code>[REDACTED]</code> and URLs become <code>&lt;url&gt;</code> in every payload string and object key before the line is written.</span></li>
-    <li><span><b>Bounded, never cut.</b> An oversize payload loses whole fields, largest first, and says which (<code>_dropped</code>, <code>_bytes</code>). Ids and strings are never shortened.</span></li>
+    <li><span><b>Bounded, never cut.</b> An oversize payload loses whole fields, largest first, and says which (<code>_dropped</code>, <code>_bytes</code>). Ids and strings are never shortened. <code>jev.*</code> pin the legal set: <code>legal</code> and <code>legal_actions</code> go only after every other field, the names last, so a grey node survives a huge answer.</span></li>
     <li><span><b>One event, one line, in order.</b> <code>seq</code> is taken under the same lock as the write; a failed write reuses its <code>seq</code>, so there is no gap.</span></li>
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
+    <li><span><b>The server cannot change anything.</b> Only GET / HEAD routes exist (anything else is 405); no control route is built yet. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
     <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read. Shared tests live in one place (<code>ObsStatus::usable</code>, <code>reduce::http_ok</code>, <code>DecisionLoopConfig::logs_only</code>), so the trace and the graph never judge differently from the loop.</span></li>
   </ul>
 </section>
@@ -317,7 +348,12 @@
 <span class="ln o">8  action.completed  ok       action:demo/write_marker</span>
 <span class="ln o">11 action.selected   ok       action:demo/hold</span>
 <span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/studio-trace-evidence-2026-10-08.md</span>
-<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span></pre>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
+<span class="ln o"># the browser UI: a build with --features studio</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>
+<span class="ln o">Studio: http://127.0.0.1:&lt;port&gt;/#t=&lt;64 hex token&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab --bind 0.0.0.0</span>
+<span class="ln o">Error: --bind 0.0.0.0: refused — tengu studio binds to loopback only (127.0.0.1 or ::1) …</span></pre>
   </div>
 </section>
 
@@ -340,7 +376,11 @@
         <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code></td></tr>
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
-        <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio graph</code> · <code>tengu trace runs | show</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
+        <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (<code>--features studio</code>): routes, guard, SSE, embedded page; tests on a real listener</td></tr>
+        <tr><td><code>src/application/studio/stream.rs</code></td><td>live delivery: backlog waits, live overflow = <code>lagged</code>, the lease holder's run across restarts</td></tr>
+        <tr><td><code>src/bootstrap/studio.rs</code> · <code>bootstrap/runtime.rs</code></td><td><code>StudioContext</code> (graph, trace reader, kept maps, evidence paths) · <code>read_live</code>, shared with <code>doctor --live</code></td></tr>
+        <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>)</td></tr>
         <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code></td></tr>
       </tbody>
     </table>
@@ -349,7 +389,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

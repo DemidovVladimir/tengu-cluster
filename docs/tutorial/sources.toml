@@ -343,6 +343,8 @@ sources = [
   "src/adapters/outbound/trace_store.rs",
   "src/adapters/inbound/cli/studio.rs",
   "src/adapters/inbound/cli/trace.rs",
+  "src/adapters/inbound/studio/",
+  "web/studio/",
   "sandboxes/control-loop-lab/config.toml",
   "tests/fixtures/studio/",
 ]

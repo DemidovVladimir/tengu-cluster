@@ -200,9 +200,7 @@ pub(super) fn read_input(p: &Path, what: &str) -> Result<String> {
 /// `<TENGU_HOME>/logs/maps/<sha256>.json` — what the Architect asked for,
 /// by the identity every audit line of its run carries.
 fn keep_map(sha: &str, canonical: &str) -> Result<PathBuf> {
-    let dir = crate::config::paths::resolve_tengu_home()
-        .join("logs")
-        .join("maps");
+    let dir = crate::bootstrap::decision::maps_dir(&crate::config::paths::resolve_tengu_home());
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let path = dir.join(format!("{sha}.json"));
     std::fs::write(&path, format!("{canonical}\n"))

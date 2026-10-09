@@ -1,6 +1,7 @@
 //! Inbound (driving) adapters — what turns outside input into use-case calls:
-//! the chat channels (TUI, Telegram, webhooks), the MCP bridge server, and
-//! the `tengu eval` / `tengu skill evolve` commands.
+//! the chat channels (TUI, Telegram, webhooks), the MCP bridge server, the
+//! local Studio server (`studio`, `--features studio`), and the `tengu eval` /
+//! `tengu skill evolve` commands.
 
 pub(crate) mod activity;
 pub(crate) mod channel;
@@ -9,6 +10,8 @@ pub(crate) mod eval;
 pub(crate) mod evolve;
 pub(crate) mod mcp_bridge;
 pub(crate) mod run;
+#[cfg(feature = "studio")]
+pub(crate) mod studio;
 #[cfg(feature = "telegram")]
 pub(crate) mod telegram;
 pub(crate) mod tui;

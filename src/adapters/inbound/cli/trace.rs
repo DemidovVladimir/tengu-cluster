@@ -61,7 +61,7 @@ pub(super) async fn run_trace(sandbox: Option<String>, action: TraceAction) -> R
 
 async fn follow_run(reader: &dyn TraceReader, run: &str, after: u64) -> Result<()> {
     // Fail fast on a run that does not exist (the tail would wait forever).
-    reader.events(run, 0, 1)?;
+    reader.last_seq(run)?;
     let mut rx = reader.follow(run, after)?;
     // One listener for the whole tail: a Ctrl-C while a line is being
     // written is not lost between two `select!`s.

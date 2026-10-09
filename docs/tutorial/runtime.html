@@ -225,7 +225,7 @@
         <li>Each <code>[feeds.&lt;name&gt;]</code> fires on its schedule. <code>kind = "tool"</code> calls its agent's tool, which writes rows; <code>kind = "tick"</code> sends an event to a loop.</li>
         <li>Webhook endpoints with <code>loop = "&lt;name&gt;"</code> feed the same dispatcher. A loop runs one event at a time, in arrival order; at most 4 run across all loops.</li>
         <li>A loop with 64 events already waiting refuses the next: a webhook gets 429, a tick counts it dropped. A burst cannot pile up tasks.</li>
-        <li>Every 5 s: <code>run-&lt;sandbox&gt;.json</code> plus <code>loop/1</code> and <code>feed/1</code> rows. <code>tengu doctor --live</code> fails on a beat older than 30 s or a required feed down or stale.</li>
+        <li>Every 5 s: <code>run-&lt;sandbox&gt;.json</code> plus <code>loop/1</code> and <code>feed/1</code> rows. <code>tengu doctor --live</code> fails on a beat older than 30 s or a required feed down or stale; Studio's <code>/api/v1/health</code> serves the same verdict (<code>read_live</code>).</li>
         <li>The lease is renewed every 10 s. If another holder took it, or renewal keeps failing until it expires, the run stops as failed and exits non-zero.</li>
         <li>SIGINT or SIGTERM: new events refused (503), queued ones dropped, running ones get up to 20 s, then abort. Leases released. A second signal exits 130.</li>
       </ol>
@@ -398,7 +398,7 @@
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, stop report</td></tr>
-        <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, feeds, health, shutdown</td></tr>
+        <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, feeds, health, shutdown; <code>read_live</code> (the <code>--live</code> verdict, shared with Studio)</td></tr>
         <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, lease keeper</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td><code>LoopDispatch</code>: turn, permits, queue bound, drain</td></tr>
         <tr><td><code>src/application/runtime/feeds.rs</code></td><td>the feed runner: fire, fan-out, backoff, health</td></tr>
@@ -417,7 +417,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>
