@@ -96,7 +96,7 @@ Every event's fields, parents and the Studio visual it drives: `docs/runtime-202
 | S6 | Replay, A2 (act) · A4 (`uncertain.map.json`) | act: `action:demo/write_marker` + `tool:lab/write_file` green, edges `jev → write_marker → write_file` lit; map: drawn on the map's graph (`trigger:map/<sha256>`, `act_at 1.0`, dry run on), `gate:demo/act_at` amber (`action.escalated`), the picked action's `chooses` edge amber |
 | S7 | click a node · an event | node: the validated config section (`decision_loops.demo`, defaults filled in), edges, evidence files + store key (`feed/1:tick`, `loop/1:demo`), its events; event: answers + probabilities, args, result, duration, `call_id`, `decision_id`, payload |
 
-Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22.
+Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22. Play / Stop / send-event (ST-30 / ST-31; the lab sets `[studio] control = true`): `docs/studio-2026-10-08.md` § Play / Stop, recorded run `docs/studio-acceptance-2026-10-08.md`.
 
 ## Troubleshooting
 

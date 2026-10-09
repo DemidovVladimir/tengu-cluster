@@ -136,6 +136,7 @@ const CONFIG_SECTIONS = [
   ["cfg:scaffold", "[scaffold]", "ScaffoldConfig — workspace directories + seed files.", ["src/config/mod.rs", "src/adapters/outbound/scaffold.rs"]],
   ["cfg:skill_lifecycle", "[skill_lifecycle]", "SkillLifecycleConfig — eval / evolve settings.", ["src/config/skill_lifecycle.rs", "src/adapters/inbound/evolve.rs", "src/adapters/inbound/eval.rs"]],
   ["cfg:hub", "[hub]", "HubConfig — validated and shown by `tengu status` only.", ["src/config/mod.rs", "src/adapters/inbound/cli/doctor.rs"]],
+  ["cfg:studio", "[studio]", "StudioConfig — control: Play / Stop / send-event in `tengu studio` (default false; `--allow-control` per process; never for a [generation]-bound or hardened sandbox — a load error). deny_unknown_fields.", ["src/config/studio.rs", "src/adapters/inbound/studio/mod.rs"]],
 ];
 const MANUAL_EDGES = [
   // [from, to, kind]  kind: external | spawns
@@ -227,6 +228,14 @@ const RECIPES = [
     ["src/adapters/inbound/cli/run_agent.rs", "Child loads `[agents.<name>]`, builds tools, runs the loop."],
     ["src/application/chat/tool_loop.rs", "Engine rounds + tool execution."],
     ["src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs", "`compress_and_store` ends the step; summary goes back (and to Postgres)."],
+  ]},
+  { title: "Watch / control a sandbox in Studio", steps: [
+    ["src/adapters/inbound/cli/studio.rs", "`cargo build --release --features studio`; export `TENGU_HOME` first; from the repo root `tengu studio --sandbox <s>` prints the URL with its token (`docs/studio-2026-10-08.md`). `tengu studio graph` works in any build."],
+    ["src/application/studio/graph.rs", "The graph = the validated config + each agent's catalog tools (`build_graph`; a map only narrows via `ExecutionMap::apply`)."],
+    ["src/adapters/outbound/trace_store.rs", "Runs = the trace files `tengu run` / `tengu decide` record (`tengu trace show` reads the same lines)."],
+    ["src/application/studio/board.rs", "Tones, lit edges and grey legal sets are folded in Rust; `web/studio/` only draws."],
+    ["cfg:studio", "Play / Stop / send-event: `[studio] control = true` or `--allow-control`; never W1-bound or hardened."],
+    ["src/adapters/inbound/studio/control.rs", "Play = `inbound::run::start_session` (the `tengu run` start, same lease); Stop = the SIGINT drain; guard: token header + `Origin` + `Sec-Fetch-Site`."],
   ]},
   { title: "Add a memory backend", steps: [
     ["src/ports/memory.rs", "Pick the seam: `VectorStore`, `MemoryProvider`, `Embedding` or `RecallStore`."],

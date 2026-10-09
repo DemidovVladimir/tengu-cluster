@@ -424,7 +424,8 @@
 <span class="ln o">11 action.selected   ok       action:demo/hold</span>
 <span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/studio-trace-evidence-2026-10-08.md</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
-<span class="ln o"># the browser UI: a build with --features studio</span>
+<span class="ln o"># the browser UI: a build with --features studio (without it: an error naming the flag)</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release --features studio</span>
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>
 <span class="ln o">Studio: http://127.0.0.1:&lt;port&gt;/#t=&lt;64 hex token&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab --bind 0.0.0.0</span>
@@ -440,6 +441,27 @@
 <span class="ln cmd"><span class="p">$ </span>P /api/v1/control/stop '' | jq -c '.end | {reason, lease_released}'</span>
 <span class="ln o">{"reason":"studio stop","lease_released":true}</span>
 <span class="ln o"># example run of 2026-10-09; the full record: docs/studio-acceptance-2026-10-08.md</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-editor">
+  <div class="sec-head">
+    <span class="kicker">Not built</span>
+    <h2 id="s-editor">The editor, as designed</h2>
+    <p>A visual editor is a design only (<code>docs/studio-editor-design-2026-10-08.md</code>): no route, no save. Building it waits for the operator's review. These rules are fixed now.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>Palette</td><td>served from Rust: node kinds of this graph, each agent's catalog tools with their own schemas, the config structs' fields. No list in the page; no shell or code node.</td></tr>
+        <tr><td>Connections</td><td>the graph's edges, each mapped to the one TOML key it writes: <code>fires</code> → feed <code>target</code> or a webhook <code>loop</code>, <code>reads</code> → <code>world</code>, <code>calls</code> → <code>tool</code>, <code>binds</code> → a slot source, <code>next</code> → <code>sequence</code>, <code>owns</code> → <code>agent</code>.</td></tr>
+        <tr><td>Validate</td><td><code>Config::load</code> on the draft written at its final path; the page only shows the errors.</td></tr>
+        <tr><td>Save</td><td>as a new sandbox only, after a TOML preview and a diff; never in place, never a running sandbox.</td></tr>
+        <tr><td>Frozen and hardened</td><td>a W1-bound or hardened sandbox is view-only; a new design is a new sandbox or generation.</td></tr>
+        <tr><td>Narrowing</td><td>a loop is narrowed only by an execution map, checked by <code>ExecutionMap::apply</code>; the map is never written into TOML.</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -476,7 +498,7 @@
       </tbody>
     </table>
   </div>
-  <p class="note">Related: <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>.</p>
+  <p class="note">Related: <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>. Operator doc (quick start, routes, security, troubleshooting): <code>docs/studio-2026-10-08.md</code>.</p>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
