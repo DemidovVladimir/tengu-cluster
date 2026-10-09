@@ -32,7 +32,9 @@
 //!
 //! Ids keep every name in full — tool names, `{server}__{tool}`, the 64-hex
 //! map hash — never shortened. `narrowed_out` = configured in the sandbox but
-//! dropped by the execution map (drawn grey).
+//! dropped by the execution map (drawn grey). `facets` = the loop / action /
+//! feed / agent / tool a node belongs to ([`Facets`]), set by the builder
+//! from the config — Studio's timeline filters, never parsed from an id.
 
 use std::collections::BTreeMap;
 
@@ -91,6 +93,48 @@ pub(crate) struct Node {
     pub attrs: BTreeMap<String, Value>,
     /// Configured, but dropped by the execution map.
     pub narrowed_out: bool,
+    /// The loop / action / feed / agent / tool the node belongs to (names
+    /// whole) — what Studio's timeline filters match an event of this node
+    /// on (`application/studio/board.rs`). Additive: absent when empty.
+    #[serde(default, skip_serializing_if = "Facets::is_empty")]
+    pub facets: Facets,
+}
+
+/// What a node (or an event, `application/studio/board.rs`) belongs to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Facets {
+    #[serde(rename = "loop", default, skip_serializing_if = "Option::is_none")]
+    pub loop_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feed: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
+impl Facets {
+    pub(crate) fn is_empty(&self) -> bool {
+        self == &Facets::default()
+    }
+
+    /// Each field this one lacks, taken from `parent`.
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
+    pub(crate) fn or(mut self, parent: &Facets) -> Facets {
+        let fill = |mine: &mut Option<String>, theirs: &Option<String>| {
+            if mine.is_none() {
+                mine.clone_from(theirs);
+            }
+        };
+        fill(&mut self.loop_name, &parent.loop_name);
+        fill(&mut self.action, &parent.action);
+        fill(&mut self.feed, &parent.feed);
+        fill(&mut self.agent, &parent.agent);
+        fill(&mut self.tool, &parent.tool);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -233,6 +277,7 @@ mod tests {
             order,
             attrs: BTreeMap::from([("k".to_string(), json!(id))]),
             narrowed_out: false,
+            facets: Facets::default(),
         }
     }
 

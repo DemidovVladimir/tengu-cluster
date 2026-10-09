@@ -9,11 +9,13 @@
 //! | Route (GET only) | Serves |
 //! |---|---|
 //! | `/` · `/assets/<file>` | `web/studio/` (`index.html`, `studio.css`, `studio.js`), embedded (`assets.rs`) |
-//! | `/api/v1/meta` | sandbox, `config_hash`, schema versions, `read_only: true`, `control_enabled: false`, limits, evidence paths |
+//! | `/api/v1/meta` | sandbox, `config_hash`, schema versions, `read_only: true`, `control_enabled: false`, limits, evidence paths, `tones` (status → tone → meaning: `Status::tone`, the page's legend) |
 //! | `/api/v1/graph[?map=<sha256>]` | the `WorkflowGraph`, or narrowed by a map `tengu decide --map` kept (re-applied to this config) |
 //! | `/api/v1/health` | the heartbeat + the `tengu doctor --live` checks (`bootstrap::runtime::read_live`) |
-//! | `/api/v1/runs` | every recorded run (`RunSummary` + `config_current`), the heartbeat holder, `live_run_id` |
-//! | `/api/v1/runs/:run_id/events?after=&limit=` | events with `seq > after`, `seq` order, `limit` 1–1000 (default 500); `more`, `next_after` |
+//! | `/api/v1/runs` | every recorded run (`RunSummary` + `config_current` + `state`: live · closed · open, `RunState`), the heartbeat holder, `live_run_id` |
+//! | `/api/v1/runs/:run_id/events?after=&limit=` | events with `seq > after`, `seq` order, `limit` 1–1000 (default 500); `more`, `next_after`; each event + `view` (tone, facets, highlighted edges — `application::studio::board`), `graph` = the map a `--map` run is drawn on |
+//! | `/api/v1/runs/:run_id/board[?upto=<seq>]` | the run folded over its graph up to `seq`: every node's tone + why, highlighted edges, grey legal sets, header (runtime state, model, loop counters), nodes not in this graph; the run's `state`, `config_current`, trace file |
+//! | `/api/v1/nodes/:node_id[?map=<sha256>]` | the inspector: the graph node, the validated config section behind it (`application::studio::inspect`, never TOML text), its edges, its evidence files + store keys; redacted |
 //! | `/api/v1/runs/:run_id/stream` | SSE: the run after `Last-Event-ID` (a browser reconnect; wins) or `?after=` |
 //! | `/api/v1/live/stream` | SSE: the lease holder's run across restarts (`event: run`) |
 //!
@@ -121,6 +123,8 @@ pub(crate) fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/health", get(api::health))
         .route("/api/v1/runs", get(api::runs))
         .route("/api/v1/runs/:run_id/events", get(api::events))
+        .route("/api/v1/runs/:run_id/board", get(api::board))
+        .route("/api/v1/nodes/:node_id", get(api::node))
         .route("/api/v1/runs/:run_id/stream", get(sse::run_stream))
         .route("/api/v1/live/stream", get(sse::live_stream))
         .fallback(api::not_found)

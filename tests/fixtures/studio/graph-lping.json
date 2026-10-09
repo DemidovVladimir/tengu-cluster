@@ -40,7 +40,10 @@
         "enabled": true,
         "loop": "lp_watch"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch"
+      }
     },
     {
       "id": "loop:hedge_exec",
@@ -65,7 +68,11 @@
         "timeout_secs": 20,
         "world_max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "agent:lp_executor",
@@ -78,7 +85,10 @@
         "model": "anthropic/claude-sonnet-4-6",
         "workspace": "~/lping-workspace"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "loop:hedge_watch",
@@ -98,7 +108,11 @@
         "timeout_secs": 20,
         "world_max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "loop:lp_exec",
@@ -129,7 +143,11 @@
         "timeout_secs": 20,
         "world_max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "loop:lp_watch",
@@ -152,7 +170,11 @@
         "timeout_secs": 20,
         "world_max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "world:hedge_exec/snap",
@@ -164,7 +186,11 @@
         "key": "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
         "max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "world:hedge_watch/snap",
@@ -176,7 +202,11 @@
         "key": "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
         "max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "world:lp_exec/snap",
@@ -188,7 +218,11 @@
         "key": "lp_snapshot/1:F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S:5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
         "max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "world:lp_watch/price",
@@ -200,7 +234,11 @@
         "key": "price_oracle/1:So11111111111111111111111111111111111111112",
         "max_age_secs": 30
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "jev:hedge_exec",
@@ -213,7 +251,11 @@
         "model": "~typesafe/jev-latest",
         "timeout_secs": 20
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "gate:hedge_exec/act_at",
@@ -225,7 +267,11 @@
         "act_at": 0.8,
         "escalate": true
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "jev:hedge_watch",
@@ -238,7 +284,11 @@
         "model": "~typesafe/jev-latest",
         "timeout_secs": 20
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "gate:hedge_watch/act_at",
@@ -250,7 +300,11 @@
         "act_at": 0.8,
         "escalate": true
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "jev:lp_exec",
@@ -263,7 +317,11 @@
         "model": "~typesafe/jev-latest",
         "timeout_secs": 20
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "gate:lp_exec/act_at",
@@ -275,7 +333,11 @@
         "act_at": 0.8,
         "escalate": true
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "jev:lp_watch",
@@ -288,7 +350,11 @@
         "model": "~typesafe/jev-latest",
         "timeout_secs": 20
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "gate:lp_watch/act_at",
@@ -300,7 +366,11 @@
         "act_at": 0.8,
         "escalate": true
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "escalation:hedge_exec",
@@ -309,7 +379,11 @@
       "layer": 5,
       "order": 0,
       "attrs": {},
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "action:hedge_exec/snapshot",
@@ -329,7 +403,13 @@
         "step": 1,
         "tool": "lp_snapshot"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "action": "snapshot",
+        "agent": "lp_executor",
+        "tool": "lp_snapshot"
+      }
     },
     {
       "id": "action:hedge_exec/decide_hedge",
@@ -390,7 +470,13 @@
         "step": 2,
         "tool": "hedge_decide"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "action": "decide_hedge",
+        "agent": "lp_executor",
+        "tool": "hedge_decide"
+      }
     },
     {
       "id": "action:hedge_exec/order",
@@ -447,7 +533,13 @@
         "step": 3,
         "tool": "jup_perps_order"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "action": "order",
+        "agent": "lp_executor",
+        "tool": "jup_perps_order"
+      }
     },
     {
       "id": "action:hedge_exec/hold",
@@ -460,7 +552,12 @@
         "effect": "terminal",
         "read_only": false
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_exec",
+        "action": "hold",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "escalation:hedge_watch",
@@ -469,7 +566,11 @@
       "layer": 5,
       "order": 5,
       "attrs": {},
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "action:hedge_watch/decide_hedge",
@@ -523,7 +624,13 @@
         },
         "tool": "hedge_decide"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "action": "decide_hedge",
+        "agent": "lp_executor",
+        "tool": "hedge_decide"
+      }
     },
     {
       "id": "action:hedge_watch/decide_lp",
@@ -557,7 +664,13 @@
         },
         "tool": "lp_decide"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "action": "decide_lp",
+        "agent": "lp_executor",
+        "tool": "lp_decide"
+      }
     },
     {
       "id": "action:hedge_watch/hold",
@@ -570,7 +683,12 @@
         "effect": "terminal",
         "read_only": false
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "action": "hold",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "action:hedge_watch/snapshot",
@@ -588,7 +706,13 @@
         "read_only": true,
         "tool": "lp_snapshot"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "hedge_watch",
+        "action": "snapshot",
+        "agent": "lp_executor",
+        "tool": "lp_snapshot"
+      }
     },
     {
       "id": "escalation:lp_exec",
@@ -597,7 +721,11 @@
       "layer": 5,
       "order": 10,
       "attrs": {},
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "action:lp_exec/snapshot",
@@ -617,7 +745,13 @@
         "step": 1,
         "tool": "lp_snapshot"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "snapshot",
+        "agent": "lp_executor",
+        "tool": "lp_snapshot"
+      }
     },
     {
       "id": "action:lp_exec/plan_swap",
@@ -684,7 +818,13 @@
         "step": 2,
         "tool": "lp_swap_plan"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "plan_swap",
+        "agent": "lp_executor",
+        "tool": "lp_swap_plan"
+      }
     },
     {
       "id": "action:lp_exec/swap",
@@ -728,7 +868,13 @@
         "step": 3,
         "tool": "jupiter_swap"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "swap",
+        "agent": "lp_executor",
+        "tool": "jupiter_swap"
+      }
     },
     {
       "id": "action:lp_exec/refresh",
@@ -756,7 +902,13 @@
         "step": 4,
         "tool": "lp_snapshot"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "refresh",
+        "agent": "lp_executor",
+        "tool": "lp_snapshot"
+      }
     },
     {
       "id": "action:lp_exec/open",
@@ -804,7 +956,13 @@
         "step": 5,
         "tool": "dlmm_open_position"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "open",
+        "agent": "lp_executor",
+        "tool": "dlmm_open_position"
+      }
     },
     {
       "id": "action:lp_exec/hold",
@@ -817,7 +975,12 @@
         "effect": "terminal",
         "read_only": false
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "hold",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "escalation:lp_watch",
@@ -826,7 +989,11 @@
       "layer": 5,
       "order": 17,
       "attrs": {},
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "action:lp_watch/fetch_pools",
@@ -853,7 +1020,13 @@
         },
         "tool": "dlmm_pools"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "action": "fetch_pools",
+        "agent": "lp_executor",
+        "tool": "dlmm_pools"
+      }
     },
     {
       "id": "action:lp_watch/hold",
@@ -866,7 +1039,12 @@
         "effect": "terminal",
         "read_only": false
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "action": "hold",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "action:lp_watch/open_position",
@@ -913,7 +1091,13 @@
         },
         "tool": "dlmm_open_position"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "action": "open_position",
+        "agent": "lp_executor",
+        "tool": "dlmm_open_position"
+      }
     },
     {
       "id": "action:lp_watch/refresh_price",
@@ -930,7 +1114,13 @@
         "read_only": true,
         "tool": "sol_price"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "action": "refresh_price",
+        "agent": "lp_executor",
+        "tool": "sol_price"
+      }
     },
     {
       "id": "scope:lp_executor/lp_snapshot",
@@ -950,7 +1140,11 @@
           "lite-api.jup.ag"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "lp_snapshot"
+      }
     },
     {
       "id": "scope:lp_executor/hedge_decide",
@@ -963,7 +1157,11 @@
           "~/lping-workspace"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "hedge_decide"
+      }
     },
     {
       "id": "scope:lp_executor/jup_perps_order",
@@ -983,7 +1181,11 @@
           "lite-api.jup.ag"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "jup_perps_order"
+      }
     },
     {
       "id": "scope:lp_executor/lp_decide",
@@ -996,7 +1198,11 @@
           "~/lping-workspace"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "lp_decide"
+      }
     },
     {
       "id": "gate:lp_exec/plan_swap/caps",
@@ -1010,7 +1216,12 @@
           "target_usdc": 250.0
         }
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "plan_swap",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "scope:lp_executor/jupiter_swap",
@@ -1030,7 +1241,11 @@
           "lite-api.jup.ag"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "jupiter_swap"
+      }
     },
     {
       "id": "gate:lp_exec/open/caps",
@@ -1044,7 +1259,12 @@
           "amount_y": 250.0
         }
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_exec",
+        "action": "open",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "scope:lp_executor/dlmm_open_position",
@@ -1064,7 +1284,11 @@
           "lite-api.jup.ag"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "dlmm_open_position"
+      }
     },
     {
       "id": "scope:lp_executor/dlmm_pools",
@@ -1080,7 +1304,11 @@
           "dlmm.datapi.meteora.ag"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "dlmm_pools"
+      }
     },
     {
       "id": "gate:lp_watch/open_position/caps",
@@ -1093,7 +1321,12 @@
           "size_sol": 2.0
         }
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "lp_watch",
+        "action": "open_position",
+        "agent": "lp_executor"
+      }
     },
     {
       "id": "scope:lp_executor/sol_price",
@@ -1114,7 +1347,11 @@
           "api.mainnet-beta.solana.com"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "sol_price"
+      }
     },
     {
       "id": "tool:lp_executor/lp_snapshot",
@@ -1127,7 +1364,11 @@
         "in_catalog": true,
         "tool": "lp_snapshot"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "lp_snapshot"
+      }
     },
     {
       "id": "tool:lp_executor/hedge_decide",
@@ -1140,7 +1381,11 @@
         "in_catalog": true,
         "tool": "hedge_decide"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "hedge_decide"
+      }
     },
     {
       "id": "tool:lp_executor/jup_perps_order",
@@ -1153,7 +1398,11 @@
         "in_catalog": true,
         "tool": "jup_perps_order"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "jup_perps_order"
+      }
     },
     {
       "id": "tool:lp_executor/lp_decide",
@@ -1166,7 +1415,11 @@
         "in_catalog": true,
         "tool": "lp_decide"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "lp_decide"
+      }
     },
     {
       "id": "tool:lp_executor/lp_swap_plan",
@@ -1179,7 +1432,11 @@
         "in_catalog": true,
         "tool": "lp_swap_plan"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "lp_swap_plan"
+      }
     },
     {
       "id": "tool:lp_executor/jupiter_swap",
@@ -1192,7 +1449,11 @@
         "in_catalog": true,
         "tool": "jupiter_swap"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "jupiter_swap"
+      }
     },
     {
       "id": "tool:lp_executor/dlmm_open_position",
@@ -1205,7 +1466,11 @@
         "in_catalog": true,
         "tool": "dlmm_open_position"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "dlmm_open_position"
+      }
     },
     {
       "id": "tool:lp_executor/dlmm_pools",
@@ -1218,7 +1483,11 @@
         "in_catalog": true,
         "tool": "dlmm_pools"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "dlmm_pools"
+      }
     },
     {
       "id": "tool:lp_executor/sol_price",
@@ -1231,7 +1500,11 @@
         "in_catalog": true,
         "tool": "sol_price"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lp_executor",
+        "tool": "sol_price"
+      }
     }
   ],
   "edges": [

@@ -50,19 +50,24 @@ fn redacted_graph(
 }
 
 #[cfg(feature = "studio")]
-pub(crate) use context::{MapGraphError, StudioContext};
+pub(crate) use context::{MapGraphError, NodeError, StudioContext};
 
 #[cfg(feature = "studio")]
 mod context {
+    use std::borrow::Cow;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
 
     use anyhow::Result;
     use serde::Serialize;
+    use serde_json::{json, Value};
 
-    use super::redacted_graph;
+    use super::{graph_inputs, redacted_graph};
     use crate::adapters::outbound::runtime_store::read_heartbeat;
-    use crate::adapters::outbound::trace_store::{trace_root, JsonlTraceReader};
+    use crate::adapters::outbound::trace_store::{run_file, trace_root, JsonlTraceReader};
+    use crate::application::studio::board::run_map;
+    use crate::application::studio::graph::AgentTools;
+    use crate::application::studio::inspect::{config_slice, node_evidence, EvidenceRef};
     use crate::application::studio::stream::HolderFn;
     use crate::bootstrap::decision::{audit_file, maps_dir};
     use crate::bootstrap::runtime::{read_live, runner_name, LiveHealth};
@@ -71,7 +76,8 @@ mod context {
     use crate::config::Config;
     use crate::domain::runtime::heartbeat_file;
     use crate::domain::secrets::SecretRegistry;
-    use crate::domain::workflow::WorkflowGraph;
+    use crate::domain::trace::{scrub_value, ExecutionEvent};
+    use crate::domain::workflow::{NodeKind, WorkflowGraph};
     use crate::ports::trace::TraceReader;
 
     /// What `tengu studio` serves (module table).
@@ -82,6 +88,9 @@ mod context {
         pub secrets: Arc<SecretRegistry>,
         /// The base graph (no map), attrs redacted.
         pub graph: WorkflowGraph,
+        /// Each agent's catalog tools (the graph's input; the inspector's
+        /// tool definitions).
+        pub tools: AgentTools,
         pub reader: Arc<dyn TraceReader>,
         /// `TENGU_HOME`: `logs/trace`, `logs/maps`, `logs/decisions.jsonl`.
         pub home: PathBuf,
@@ -100,6 +109,36 @@ mod context {
         Unreadable(String),
         /// `ExecutionMap::apply` refused it against this config.
         Refused(Vec<String>),
+    }
+
+    impl std::fmt::Display for MapGraphError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                MapGraphError::BadId => write!(f, "not a sha256"),
+                MapGraphError::Missing => write!(f, "not kept under logs/maps/"),
+                MapGraphError::Unreadable(why) => write!(f, "unreadable: {why}"),
+                MapGraphError::Refused(why) => {
+                    write!(f, "refused by this config: {}", why.join("; "))
+                }
+            }
+        }
+    }
+
+    /// Why a node has no detail.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum NodeError {
+        /// The graph (with the map, if one was named) has no such node.
+        Missing,
+        Map(MapGraphError),
+    }
+
+    /// The graph a recorded run is drawn on: the kept execution map's for a
+    /// `tengu decide --map` run (re-applied to this config), else the base
+    /// graph; `note` says why a map run fell back to the base graph.
+    pub(crate) struct RunGraph<'a> {
+        pub graph: Cow<'a, WorkflowGraph>,
+        pub map: Option<String>,
+        pub note: Option<String>,
     }
 
     /// Files a Studio user may open to check what the page shows (`~` for
@@ -132,21 +171,22 @@ mod context {
             let reader = Arc::new(JsonlTraceReader::new(&trace_root(home), &sandbox)?);
             let graph = redacted_graph(&config, None, &secrets)
                 .map_err(|e| anyhow::anyhow!("workflow graph: {}", e.join("; ")))?;
+            let tools = graph_inputs(&config);
             Ok(Self {
                 sandbox,
                 config,
                 secrets,
                 graph,
+                tools,
                 reader,
                 home: home.to_path_buf(),
                 state_dir: state_dir.to_path_buf(),
             })
         }
 
-        /// The graph narrowed by the kept map `sha256` — re-read, re-hashed
-        /// and re-applied to this config (a map kept for an older config
-        /// may be refused now).
-        pub(crate) fn map_graph(&self, sha256: &str) -> Result<WorkflowGraph, MapGraphError> {
+        /// The map `tengu decide --map` kept as `<sha256>.json`, re-read and
+        /// re-hashed.
+        fn kept_map(&self, sha256: &str) -> Result<ExecutionMap, MapGraphError> {
             let hex = sha256.len() == 64
                 && sha256
                     .bytes()
@@ -169,7 +209,131 @@ mod context {
                     map.sha256()
                 )));
             }
+            Ok(map)
+        }
+
+        /// The graph narrowed by the kept map `sha256` — re-read, re-hashed
+        /// and re-applied to this config (a map kept for an older config
+        /// may be refused now).
+        pub(crate) fn map_graph(&self, sha256: &str) -> Result<WorkflowGraph, MapGraphError> {
+            let map = self.kept_map(sha256)?;
             redacted_graph(&self.config, Some(&map), &self.secrets).map_err(MapGraphError::Refused)
+        }
+
+        /// The graph `events` (one run) are drawn on (`RunGraph`).
+        pub(crate) fn run_graph(&self, events: &[ExecutionEvent]) -> RunGraph<'_> {
+            let Some(sha) = run_map(events) else {
+                return RunGraph {
+                    graph: Cow::Borrowed(&self.graph),
+                    map: None,
+                    note: None,
+                };
+            };
+            match self.map_graph(&sha) {
+                Ok(g) => RunGraph {
+                    graph: Cow::Owned(g),
+                    map: Some(sha),
+                    note: None,
+                },
+                Err(e) => RunGraph {
+                    graph: Cow::Borrowed(&self.graph),
+                    note: Some(format!(
+                        "execution map {sha}: {e} — drawn on the base graph"
+                    )),
+                    map: Some(sha),
+                },
+            }
+        }
+
+        /// The inspector's view of one node (`GET /api/v1/nodes/<id>`): the
+        /// graph node, the validated config behind it
+        /// (`application::studio::inspect`), its edges, the files its facts
+        /// live in — redacted like the graph (secrets, then URLs).
+        pub(crate) fn node_detail(
+            &self,
+            node_id: &str,
+            map: Option<&str>,
+        ) -> Result<Value, NodeError> {
+            let kept = map
+                .map(|sha| self.kept_map(sha))
+                .transpose()
+                .map_err(NodeError::Map)?;
+            let narrowed;
+            let graph = match &kept {
+                Some(m) => {
+                    narrowed = redacted_graph(&self.config, Some(m), &self.secrets)
+                        .map_err(|e| NodeError::Map(MapGraphError::Refused(e)))?;
+                    &narrowed
+                }
+                None => &self.graph,
+            };
+            let node = graph.node(node_id).ok_or(NodeError::Missing)?;
+            let slice = config_slice(&self.config, &self.tools, node, kept.as_ref());
+            let edges_in: Vec<Value> = graph
+                .edges
+                .iter()
+                .filter(|e| e.to == node_id)
+                .map(|e| json!({"from": e.from, "kind": e.kind}))
+                .collect();
+            let edges_out: Vec<Value> = graph
+                .edges
+                .iter()
+                .filter(|e| e.from == node_id)
+                .map(|e| json!({"to": e.to, "kind": e.kind}))
+                .collect();
+            let mut v = json!({
+                "node": node,
+                "map": map,
+                "source": if kept.is_some() {
+                    "validated config (Config::load), narrowed by ExecutionMap::apply"
+                } else {
+                    "validated config (Config::load)"
+                },
+                "config": slice,
+                "edges": {"in": edges_in, "out": edges_out},
+                "evidence": self.node_files(node.kind, node_id, map, node_evidence(&self.config, node)),
+            });
+            scrub_value(&mut v, &self.secrets);
+            Ok(v)
+        }
+
+        /// The files a node of `kind` is evidenced in (`~/…`).
+        fn node_files(
+            &self,
+            kind: NodeKind,
+            node_id: &str,
+            map: Option<&str>,
+            mut rows: Vec<EvidenceRef>,
+        ) -> Vec<EvidenceRef> {
+            let ev = self.evidence();
+            let file = |label: &'static str, path: &str| EvidenceRef {
+                label,
+                path: path.to_string(),
+                key: None,
+            };
+            let mut out = Vec::new();
+            if matches!(kind, NodeKind::Runtime | NodeKind::Feed | NodeKind::Loop) {
+                out.push(file("heartbeat (tengu doctor --live)", &ev.heartbeat));
+            }
+            if matches!(
+                kind,
+                NodeKind::Loop
+                    | NodeKind::Jev
+                    | NodeKind::Gate
+                    | NodeKind::Action
+                    | NodeKind::Escalation
+                    | NodeKind::Tool
+            ) {
+                out.push(file("decision audit (decisions.jsonl)", &ev.decisions));
+            }
+            out.append(&mut rows);
+            let sha = node_id.strip_prefix("trigger:map/").or(map);
+            if let Some(sha) = sha {
+                let path = contract_tilde(&maps_dir(&self.home).join(format!("{sha}.json")));
+                out.push(file("kept execution map", &path));
+            }
+            out.push(file("trace recordings", &ev.trace_dir));
+            out
         }
 
         /// The live verdict `tengu doctor --live` prints.
@@ -186,6 +350,11 @@ mod context {
                     .flatten()
                     .map(|hb| hb.holder)
             })
+        }
+
+        /// One run's trace file (`~/…`).
+        pub(crate) fn run_file(&self, run_id: &str) -> String {
+            contract_tilde(&run_file(&trace_root(&self.home), &self.sandbox, run_id))
         }
 
         pub(crate) fn evidence(&self) -> Evidence {
@@ -243,5 +412,51 @@ mod tests {
         assert_eq!(args["method"], json!("GET"));
         assert_eq!(g.sandbox, "default");
         assert_eq!(g.config_hash, None);
+    }
+
+    /// The inspector's detail is scrubbed as the graph is: a registered
+    /// secret and an unregistered key in a URL never leave.
+    #[cfg(feature = "studio")]
+    #[test]
+    fn node_detail_is_redacted() {
+        let mut cfg: Config = toml::from_str(
+            r#"
+            [agents.a]
+            engine = "openrouter"
+            model = "m"
+            tools = ["http_request"]
+            [decision_loops.l]
+            goal = "g"
+            agent = "a"
+            [decision_loops.l.actions.hold]
+            description = "stop"
+            [decision_loops.l.actions.fetch]
+            description = "fetch"
+            tool = "http_request"
+            read_only = true
+            args = { method = "GET", url = "https://rpc.example/?api-key=unregistered-k1", headers = { auth = "Bearer sk-studio-secret-123" } }
+            "#,
+        )
+        .unwrap();
+        cfg.fold_default_scopes();
+        let mut secrets = SecretRegistry::new();
+        secrets.register("sk-studio-secret-123".into());
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx =
+            StudioContext::at(cfg, std::sync::Arc::new(secrets), tmp.path(), tmp.path()).unwrap();
+        let d = ctx.node_detail("action:l/fetch", None).unwrap();
+        let text = d.to_string();
+        for leaked in ["sk-studio-secret-123", "unregistered-k1", "rpc.example"] {
+            assert!(!text.contains(leaked), "{leaked}: {text}");
+        }
+        assert_eq!(d["config"]["value"]["args"]["url"], json!("<url>"));
+        assert_eq!(
+            d["config"]["value"]["args"]["headers"]["auth"],
+            json!("Bearer [REDACTED]")
+        );
+        assert_eq!(
+            ctx.node_detail("action:l/nope", None),
+            Err(NodeError::Missing)
+        );
     }
 }

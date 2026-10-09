@@ -21,6 +21,10 @@
 //! Every field is always present (`null` when unknown), so a reader sees one
 //! shape; unknown fields are ignored, so an older reader takes newer lines.
 //! The first event of every run is [`RUN_OPENED`] (payload `{kind, pid}`).
+//!
+//! Studio reads two rules from here, never from the page: a status's colour
+//! ([`Status::tone`] → [`Tone`]) and a run's state ([`RunState`]: live ·
+//! closed by [`closes_run`] · open).
 
 use std::collections::BTreeSet;
 
@@ -111,6 +115,135 @@ pub(crate) enum Status {
     Stale,
     Missing,
     Skipped,
+}
+
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+impl Status {
+    /// Every status, in declaration order (the `/api/v1/meta` legend).
+    pub(crate) const ALL: [Status; 10] = [
+        Status::Pending,
+        Status::Running,
+        Status::Ok,
+        Status::Failed,
+        Status::Refused,
+        Status::Escalated,
+        Status::Dropped,
+        Status::Stale,
+        Status::Missing,
+        Status::Skipped,
+    ];
+
+    /// How Studio colours a node or an edge whose latest event has this
+    /// status ([`Tone`]; `TENGU_STUDIO_PLAN.md` § 4). The one mapping:
+    /// the board and the page's legend both read it.
+    pub(crate) fn tone(self) -> Tone {
+        match self {
+            Status::Ok => Tone::Green,
+            Status::Failed | Status::Refused => Tone::Red,
+            Status::Pending
+            | Status::Running
+            | Status::Escalated
+            | Status::Dropped
+            | Status::Stale
+            | Status::Missing => Tone::Amber,
+            Status::Skipped => Tone::Plain,
+        }
+    }
+
+    /// One line for the legend: what an event with this status says.
+    pub(crate) fn meaning(self) -> &'static str {
+        match self {
+            Status::Pending => "waiting: queued, starting, stopping or retrying later",
+            Status::Running => "in progress: started, not finished",
+            Status::Ok => "done: executed or terminally completed",
+            Status::Failed => "failed or unavailable: an error",
+            Status::Refused => "refused by a deterministic gate (risk, legality, caps, queue)",
+            Status::Escalated => "below confidence: under act_at, the event stops",
+            Status::Dropped => "dropped: a slot or an event not run (late, busy, full queue, stop); the next slot tries again",
+            Status::Stale => "stale: an observation older than its limit",
+            Status::Missing => "missing: no observation row",
+            Status::Skipped => "logged, not run: a dry-run step, or a run the stop came before",
+        }
+    }
+}
+
+/// A Studio colour (`TENGU_STUDIO_PLAN.md` § 4 "Visual semantics"): decided
+/// in Rust ([`Status::tone`], the board's legal set), served as a name; the
+/// page maps the name to a CSS token and decides nothing.
+///
+/// | Tone | Plan § 4 | From |
+/// |---|---|---|
+/// | `green` | executed successfully or terminally completed | `ok` |
+/// | `amber` | waiting, stale, retrying or below confidence | `pending` · `running` · `stale` · `missing` · `escalated` · `dropped` |
+/// | `red` | failed, refused by a deterministic gate, unavailable | `failed` · `refused` |
+/// | `plain` | (decision 2026-10-09) logged, not run — neither executed (green) nor illegal (grey) | `skipped` |
+/// | `grey` | configured but not legal for this step | the step's `jev.*` legal set, a map's `narrowed_out` — never a status |
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Tone {
+    Green,
+    Amber,
+    Red,
+    Plain,
+    Grey,
+}
+
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+impl Tone {
+    pub(crate) const ALL: [Tone; 5] =
+        [Tone::Green, Tone::Amber, Tone::Red, Tone::Plain, Tone::Grey];
+
+    /// The legend line (plan § 4 wording).
+    pub(crate) fn meaning(self) -> &'static str {
+        match self {
+            Tone::Green => "executed successfully or terminally completed",
+            Tone::Amber => "waiting, stale, retrying, dropped or below confidence",
+            Tone::Red => "failed, refused by a deterministic gate, or unavailable",
+            Tone::Plain => "logged, not run (dry run, or the stop came first)",
+            Tone::Grey => {
+                "configured but not legal for this step (or dropped by the execution map)"
+            }
+        }
+    }
+}
+
+/// `kind` + `status` that end a recording: `tengu run` writes
+/// `runtime.stopped` last; `tengu decide` ends with `trigger.completed` /
+/// `trigger.failed`, or a failed root `trigger.decide` / `trigger.map` (the
+/// loop could not be built).
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+pub(crate) fn closes_run(kind: &str, status: Status) -> bool {
+    kind == "runtime.stopped"
+        || (kind.starts_with("trigger.") && matches!(status, Status::Ok | Status::Failed))
+}
+
+/// A recording now (`/api/v1/runs`, the Studio header).
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RunState {
+    /// The run of the runtime that holds the lease now, not closed.
+    Live,
+    /// Its last event closes it ([`closes_run`]).
+    Closed,
+    /// No closing event and not the lease holder's: a `tengu decide` still
+    /// going, or a process that died before its last line.
+    Open,
+}
+
+#[cfg_attr(not(feature = "studio"), allow(dead_code))]
+impl RunState {
+    /// `live_run_id` = the heartbeat holder's run (`application::studio::stream::pick_live`).
+    pub(crate) fn of(run: &RunSummary, live_run_id: Option<&str>) -> Self {
+        if closes_run(&run.last_kind, run.last_status) {
+            RunState::Closed
+        } else if live_run_id == Some(run.run_id.as_str()) {
+            RunState::Live
+        } else {
+            RunState::Open
+        }
+    }
 }
 
 /// What a recording is (`run.opened` payload `kind`).
@@ -525,6 +658,66 @@ mod tests {
             json!(["answers", "decision_id", "legal", "note", "questions"]),
             "every unpinned field before a pinned one"
         );
+    }
+
+    /// Plan § 4: green = ok; red = failed / refused; amber = waiting,
+    /// stale, retrying, below confidence (+ dropped); skipped = plain; grey
+    /// never comes from a status. Names match the JSON.
+    #[test]
+    fn every_status_has_one_tone() {
+        use Tone::*;
+        let want = [
+            (Status::Pending, Amber),
+            (Status::Running, Amber),
+            (Status::Ok, Green),
+            (Status::Failed, Red),
+            (Status::Refused, Red),
+            (Status::Escalated, Amber),
+            (Status::Dropped, Amber),
+            (Status::Stale, Amber),
+            (Status::Missing, Amber),
+            (Status::Skipped, Plain),
+        ];
+        assert_eq!(Status::ALL.len(), want.len());
+        for (s, (w, tone)) in Status::ALL.iter().zip(want) {
+            assert_eq!((*s, s.tone()), (w, tone));
+            assert!(!s.meaning().is_empty());
+        }
+        assert!(Status::ALL.iter().all(|s| s.tone() != Grey));
+        assert_eq!(
+            json!(Tone::ALL),
+            json!(["green", "amber", "red", "plain", "grey"])
+        );
+        assert_eq!(json!(Status::Skipped.tone()), json!("plain"));
+    }
+
+    /// Closed by its last event; else live when it is the lease holder's
+    /// run, open otherwise (a decide still going, or a dead process).
+    #[test]
+    fn run_state_by_closing_event() {
+        let c = ctx();
+        let run = |kind: &str, status: Status| {
+            let ev = c.stamp(1, 0, EventDraft::new(Component::Runtime, kind, status));
+            RunSummary::of(&[ev]).unwrap()
+        };
+        let id = c.run_id.as_str();
+        for (kind, status) in [
+            ("runtime.stopped", Status::Ok),
+            ("runtime.stopped", Status::Failed),
+            ("trigger.completed", Status::Ok),
+            ("trigger.failed", Status::Failed),
+            ("trigger.decide", Status::Failed),
+        ] {
+            assert_eq!(RunState::of(&run(kind, status), Some(id)), RunState::Closed);
+        }
+        for (kind, status) in [
+            ("runtime.running", Status::Running),
+            ("trigger.decide", Status::Running),
+            ("runtime.stopping", Status::Pending),
+        ] {
+            assert_eq!(RunState::of(&run(kind, status), Some(id)), RunState::Live);
+            assert_eq!(RunState::of(&run(kind, status), None), RunState::Open);
+        }
     }
 
     /// `parse_event_id` inverts `event_id`; anything else is `None`.

@@ -213,16 +213,18 @@
   <div class="sec-head">
     <span class="kicker">Ten statuses</span>
     <h2 id="s-status">What an event can say</h2>
-    <p>The colours Studio will draw come from these, never from a guess in the page. Each status is written where the rule already ran, from the value it computed.</p>
+    <p>Each status is written where the rule already ran, from the value it computed. Its colour is decided once, in Rust (<code>Status::tone</code>): green, amber, red, or plain. The page is sent the name and only picks the CSS token.</p>
   </div>
   <ul class="states">
-    <li><span class="chip ok">ok</span><span><b>ok</b>Done as asked.</span></li>
-    <li><span class="chip bad">fail</span><span><b>failed</b>An error: a tool call, a decisions call, a feed run.</span></li>
-    <li><span class="chip guard">no</span><span><b>refused</b>A deterministic gate said no: risk, scope, a full queue.</span></li>
-    <li><span class="chip heart">ask</span><span><b>escalated</b>Below <code>act_at</code>.</span></li>
-    <li><span class="chip warn">wait</span><span><b>pending</b> · <b>running</b>Queued, or in progress.</span></li>
-    <li><span class="chip warn">old</span><span><b>stale</b> · <b>missing</b>An observation too old, or absent.</span></li>
-    <li><span class="chip data">skip</span><span><b>dropped</b> · <b>skipped</b>Not run: shed under load, or an optional step passed over.</span></li>
+    <li><span class="chip ok">green</span><span><b>ok</b>Done as asked: executed, or terminally completed.</span></li>
+    <li><span class="chip bad">red</span><span><b>failed</b>An error: a tool call, a decisions call, a feed run.</span></li>
+    <li><span class="chip bad">red</span><span><b>refused</b>A deterministic gate said no: risk, legality, caps, a full queue.</span></li>
+    <li><span class="chip warn">amber</span><span><b>escalated</b>Below <code>act_at</code>: the event stops.</span></li>
+    <li><span class="chip warn">amber</span><span><b>pending</b> · <b>running</b>Queued, retrying later, or in progress.</span></li>
+    <li><span class="chip warn">amber</span><span><b>stale</b> · <b>missing</b>An observation too old, or absent.</span></li>
+    <li><span class="chip warn">amber</span><span><b>dropped</b>A slot or an event not run: late, busy, a full queue, the stop. The next slot tries again.</span></li>
+    <li><span class="chip data">plain</span><span><b>skipped</b>Logged, not run: a dry-run step, or a run the stop came before. Drawn with a dashed outline.</span></li>
+    <li><span class="chip guard">grey</span><span><b>not legal</b>Never a status: an action outside the step's legal set, or one a map dropped. Grey wins over the node's latest colour.</span></li>
   </ul>
 </section>
 
@@ -290,8 +292,10 @@
         <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only: true</code>, <code>control_enabled: false</code>, evidence paths</td></tr>
         <tr><td><code>/api/v1/graph[?map=&lt;sha256&gt;]</code></td><td>the graph above; with <code>map</code>, a map <code>tengu decide --map</code> kept, re-hashed and re-applied to this config</td></tr>
         <tr><td><code>/api/v1/health</code></td><td>the heartbeat and the <code>tengu doctor --live</code> checks (one function, <code>runtime::read_live</code>)</td></tr>
-        <tr><td><code>/api/v1/runs</code></td><td>every recorded run, the heartbeat holder, the live run, whether each run's config hash is the current one</td></tr>
-        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/events?after=&amp;limit=</code></td><td>a page of events in <code>seq</code> order (limit 1–1000), <code>more</code>, <code>next_after</code></td></tr>
+        <tr><td><code>/api/v1/runs</code></td><td>every recorded run, the heartbeat holder, the live run, each run's state (live, closed, open) and whether its config hash is the current one</td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/events?after=&amp;limit=</code></td><td>a page of events in <code>seq</code> order (limit 1–1000), <code>more</code>, <code>next_after</code>; each event with its <code>view</code>: tone, what it belongs to, the edges it lights</td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/board?upto=&lt;seq&gt;</code></td><td>the run folded over its graph up to <code>seq</code>: every node's colour and why, lit edges, grey legal sets, runtime state, model, loop counters</td></tr>
+        <tr><td><code>/api/v1/nodes/&lt;node_id&gt;</code></td><td>the validated config behind a node (never the TOML text), its edges and the files that hold its facts</td></tr>
         <tr><td><code>/api/v1/runs/&lt;run_id&gt;/stream</code></td><td>SSE: the run after <code>Last-Event-ID</code> or <code>?after=</code>, then live</td></tr>
         <tr><td><code>/api/v1/live/stream</code></td><td>SSE: the run of the runtime holding the lease; <code>event: run</code> on attach and on every restart</td></tr>
       </tbody>
@@ -302,6 +306,32 @@
     <li><span class="chip guard">key</span><span><b>Token</b>32 random bytes per process. Every <code>/api/</code> call sends it (<code>X-Studio-Token</code>, or <code>?token=</code> for <code>EventSource</code>); compared in constant time, else 401.</span></li>
     <li><span class="chip guard">host</span><span><b>Host / Origin</b>a <code>Host</code> other than <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> is 421 (DNS rebinding); a foreign <code>Origin</code> or a cross-site fetch is 403; no CORS header.</span></li>
     <li><span class="chip data">sse</span><span><b>Bounded per client</b>the backlog waits for a slow client; a live event that does not fit its 256-item buffer sends <code>event: lagged</code> (id = the last event handed) and closes. The browser reconnects with that id and reads the rest from the file: no gap, no repeat.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-page">
+  <div class="sec-head">
+    <span class="kicker">The page</span>
+    <h2 id="s-page">Graph, inspector, timeline, replay</h2>
+    <p>Open the URL <code>tengu studio</code> prints. The page reads the token from the address, keeps it for the tab and drops it from the address bar. Every colour and highlight below is computed in Rust (<code>application/studio/board.rs</code>) from persisted events.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Region</th><th>Shows</th><th>From</th></tr></thead>
+      <tbody>
+        <tr><td>Header</td><td>sandbox, config hash, runtime state, run id, runtime id, model, Live / Replay, health; a <code>config changed</code> badge for a run of another config</td><td><code>meta</code>, the board's header, <code>health</code></td></tr>
+        <tr><td>Graph</td><td>nodes in the Rust columns and order; each node's colour = its latest event's tone; grey = not in the step's legal set; a lit edge only from an <code>action.*</code> or <code>tool.*</code> event; a thick outline = the latest event</td><td><code>graph</code> + <code>board</code></td></tr>
+        <tr><td>Inspector</td><td>a node: the validated config section, its edges, evidence files and its events. An event: answers with probabilities, args, the redacted result, duration, call id, decision id, the full payload</td><td><code>nodes/&lt;id&gt;</code>, the event list</td></tr>
+        <tr><td>Timeline</td><td>every event in <code>seq</code> order; filters: session, loop, agent, model, tool, status, call id</td><td><code>events</code> (each event's <code>view</code> carries loop, agent, tool, model)</td></tr>
+        <tr><td>Runs + replay</td><td>every run with its state and config badge; pick one, then step or drag through its <code>seq</code></td><td><code>runs</code>, <code>board?upto=</code></td></tr>
+        <tr><td>Evidence</td><td>the trace file, heartbeat, decision audit, kept maps, the selected event's record and observation key</td><td><code>meta</code>, <code>board</code>, the event</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip data">live</span><span><b>Live</b>follows the run of the runtime that holds the lease. The stream only says "a line landed"; the page then reads the same <code>events</code> pages a replay reads, so live and replay are one list.</span></li>
+    <li><span class="chip data">replay</span><span><b>Replay</b>any recorded run. The slider asks Rust for the board at that <code>seq</code>. Reload keeps the mode, run, position and selection: they ride in the URL fragment.</span></li>
+    <li><span class="chip guard">map</span><span><b>A map run</b>a <code>tengu decide --map</code> run is drawn on its kept map's graph: dropped actions grey, the map trigger lit.</span></li>
   </ul>
 </section>
 
@@ -319,7 +349,7 @@
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
-    <li><span><b>The server cannot change anything.</b> Only GET / HEAD routes exist (anything else is 405); no control route is built yet. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
+    <li><span><b>The server cannot change anything.</b> Only GET / HEAD routes exist (anything else is 405); no control route is built yet. The page decides nothing: tones, lit edges, grey nodes, run states and the health verdict all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
     <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read. Shared tests live in one place (<code>ObsStatus::usable</code>, <code>reduce::http_ok</code>, <code>DecisionLoopConfig::logs_only</code>), so the trace and the graph never judge differently from the loop.</span></li>
   </ul>
 </section>
@@ -379,6 +409,8 @@
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
         <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (<code>--features studio</code>): routes, guard, SSE, embedded page; tests on a real listener</td></tr>
         <tr><td><code>src/application/studio/stream.rs</code></td><td>live delivery: backlog waits, live overflow = <code>lagged</code>, the lease holder's run across restarts</td></tr>
+        <tr><td><code>src/application/studio/board.rs</code></td><td>the board: a run folded over its graph — tones, lit edges, grey legal set, header facts, each event's view</td></tr>
+        <tr><td><code>src/application/studio/inspect.rs</code></td><td>the validated config section behind a node; the store rows it names</td></tr>
         <tr><td><code>src/bootstrap/studio.rs</code> · <code>bootstrap/runtime.rs</code></td><td><code>StudioContext</code> (graph, trace reader, kept maps, evidence paths) · <code>read_live</code>, shared with <code>doctor --live</code></td></tr>
         <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>)</td></tr>
         <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code></td></tr>

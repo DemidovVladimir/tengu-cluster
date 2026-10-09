@@ -84,16 +84,19 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 
 Every event's fields, parents and the Studio visual it drives: `docs/runtime-2026-09-30.md` § Trace. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below). Recorded run: `docs/studio-trace-evidence-2026-10-08.md`.
 
-## Studio server (ST-20, build with `--features studio`)
+## Studio server + page (ST-20 / ST-21 / ST-22, build with `--features studio`)
 
 | # | Command | Expected |
 |---|---|---|
 | S1 | `$T studio --sandbox control-loop-lab` (any time; Ctrl-C stops it) | stdout `Studio: http://127.0.0.1:<port>/#t=<64 hex>`; open it: header sandbox + `config_hash`, health `not live` before A7 |
 | S2 | `curl -s -H "X-Studio-Token: <token>" http://127.0.0.1:<port>/api/v1/graph` | = G1 (16 nodes, 17 edges) · no token ⇒ 401 · `-H 'Host: evil.example'` ⇒ 421 · `-H 'Origin: http://evil.example'` ⇒ 403 · `-X POST` ⇒ 405 |
-| S3 | A7 running, page open | live panel `attached: run <run_id> · runtime <A7 holder>`, events arrive per tick; health `live` (= `doctor --live`); A12 ⇒ `restarted: run <new run_id>` |
+| S3 | A7 running, page open (Live) | header: run = A7's `run_id`, runtime id = the A7 holder, runtime `running` (amber), model = the Jev build; graph per tick: `feed:tick`, `loop:demo`, `world:demo/tick`, `jev:demo`, `action:demo/hold` green, `feed:probe` + `tool:lab/read_file` red, edges `jev:demo → action:demo/hold` (green) and `feed:probe → tool:lab/read_file` (red) lit; `loop demo` counters = health `done N` (= `doctor --live`); timeline grows; A12 ⇒ the header's run switches to the new `run_id` |
 | S4 | `$T studio --sandbox control-loop-lab --bind 0.0.0.0` | refused (`loopback only`), exit 1 |
+| S5 | Replay, a closed A7 run (Runs table) | slider = `seq` 1…n; the board at each `seq` (`/api/v1/runs/<run_id>/board?upto=<seq>`); reload = the same run, position and selection (URL fragment); the `/events` pages = `tengu trace show` of the run |
+| S6 | Replay, A2 (act) · A4 (`uncertain.map.json`) | act: `action:demo/write_marker` + `tool:lab/write_file` green, edges `jev → write_marker → write_file` lit; map: drawn on the map's graph (`trigger:map/<sha256>`, `act_at 1.0`, dry run on), `gate:demo/act_at` amber (`action.escalated`), the picked action's `chooses` edge amber |
+| S7 | click a node · an event | node: the validated config section (`decision_loops.demo`, defaults filled in), edges, evidence files + store key (`feed/1:tick`, `loop/1:demo`), its events; event: answers + probabilities, args, result, duration, `call_id`, `decision_id`, payload |
 
-Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20.
+Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22.
 
 ## Troubleshooting
 

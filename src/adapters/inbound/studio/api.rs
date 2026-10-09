@@ -1,6 +1,8 @@
 //! Studio JSON routes (`studio/mod.rs` route table). Every value comes from
 //! Rust that already decided it — the validated graph, the trace store, the
-//! `tengu doctor --live` verdict; nothing here re-derives a rule. Errors are
+//! `tengu doctor --live` verdict, the board fold (`application::studio::board`:
+//! colours, edges, grey), the inspector slice (`application::studio::inspect`);
+//! nothing here re-derives a rule. Errors are
 //! `{"error": …}` with a status: 400 bad input, 404 unknown, 422 a kept map
 //! this config refuses, 500 a store that cannot be read.
 
@@ -9,16 +11,19 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::AppState;
 use crate::adapters::outbound::trace_store::check_run_id;
+use crate::application::studio::board::{fold_run, EventView};
 use crate::application::studio::stream::pick_live;
-use crate::bootstrap::studio::MapGraphError;
+use crate::bootstrap::studio::{MapGraphError, NodeError};
 use crate::domain::observation::now_ms;
 use crate::domain::runtime::HeartbeatRead;
-use crate::domain::trace::{scrub_value, TRACE_SCHEMA_VERSION};
+use crate::domain::trace::{
+    scrub_value, ExecutionEvent, RunKind, RunState, RunSummary, Status, Tone, TRACE_SCHEMA_VERSION,
+};
 use crate::domain::workflow::WORKFLOW_SCHEMA_VERSION;
 
 /// Version of this API's JSON shapes (`/api/v1/…`).
@@ -69,8 +74,23 @@ pub(super) async fn meta(State(st): St) -> Response {
             "client_buffer": st.limits.client_buffer,
         },
         "evidence": st.ctx.evidence(),
+        "tones": tones(),
     }))
     .into_response()
+}
+
+/// The colour legend as Rust decides it (`Status::tone`, `Tone`): the page
+/// looks a status up here and draws that tone's token.
+fn tones() -> Value {
+    let statuses: Vec<Value> = Status::ALL
+        .iter()
+        .map(|s| json!({"status": s, "tone": s.tone(), "meaning": s.meaning()}))
+        .collect();
+    let tones: Vec<Value> = Tone::ALL
+        .iter()
+        .map(|t| json!({"tone": t, "meaning": t.meaning()}))
+        .collect();
+    json!({"statuses": statuses, "tones": tones})
 }
 
 #[derive(Deserialize)]
@@ -105,6 +125,15 @@ pub(super) async fn graph(State(st): St, Query(q): Query<GraphQuery>) -> Respons
     }
 }
 
+/// A `doctor --live` verdict as a tone: ok = green, else red.
+fn verdict_tone(ok: bool) -> Tone {
+    if ok {
+        Tone::Green
+    } else {
+        Tone::Red
+    }
+}
+
 pub(super) async fn health(State(st): St) -> Response {
     let live = st.ctx.health().await;
     let (read, value, err) = match &live.heartbeat {
@@ -116,7 +145,7 @@ pub(super) async fn health(State(st): St) -> Response {
         .report
         .checks
         .iter()
-        .map(|c| json!({"subject": c.subject, "ok": c.ok, "detail": c.detail}))
+        .map(|c| json!({"subject": c.subject, "ok": c.ok, "tone": verdict_tone(c.ok), "detail": c.detail}))
         .collect();
     let mut v = json!({
         "sandbox": live.sandbox,
@@ -128,6 +157,7 @@ pub(super) async fn health(State(st): St) -> Response {
             "error": err,
         },
         "live": live.report.ok(),
+        "tone": verdict_tone(live.report.ok()),
         "checks": checks,
     });
     scrub_value(&mut v, &st.ctx.secrets);
@@ -160,6 +190,7 @@ pub(super) async fn runs(State(st): St) -> Response {
                     "config_current".into(),
                     json!(current.is_some() && r.config_hash == current),
                 );
+                o.insert("state".into(), json!(RunState::of(r, live.as_deref())));
             }
             v
         })
@@ -174,12 +205,47 @@ pub(super) async fn runs(State(st): St) -> Response {
     .into_response()
 }
 
+/// Every event of `run_id` (`seq` order), read off the async workers.
+async fn read_run(st: &Arc<AppState>, run_id: &str) -> Result<Vec<ExecutionEvent>, Response> {
+    if let Err(e) = check_run_id(run_id) {
+        return Err(error(StatusCode::BAD_REQUEST, format!("{e:#}")));
+    }
+    let (st2, id) = (Arc::clone(st), run_id.to_string());
+    match tokio::task::spawn_blocking(move || st2.ctx.reader.events(&id, 0, usize::MAX)).await {
+        Ok(Ok(evs)) => Ok(evs),
+        Ok(Err(e)) => Err(read_error(&e)),
+        Err(e) => Err(error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// An `/events` page.
+#[derive(Serialize)]
+struct Page<'a> {
+    run_id: &'a str,
+    after: u64,
+    next_after: u64,
+    more: bool,
+    graph: Value,
+    events: Vec<WithView<'a>>,
+}
+
+/// One event as written, plus its board view.
+#[derive(Serialize)]
+struct WithView<'a> {
+    #[serde(flatten)]
+    event: &'a ExecutionEvent,
+    view: EventView,
+}
+
 #[derive(Deserialize)]
 pub(super) struct EventsQuery {
     after: Option<u64>,
     limit: Option<usize>,
 }
 
+/// A page of a run's events, each with its `view` (`board::EventView`:
+/// tone, facets, highlighted edges — folded from `seq` 1 over the graph the
+/// run is drawn on, so any page carries the views a full read would).
 pub(super) async fn events(
     State(st): St,
     Path(run_id): Path<String>,
@@ -196,23 +262,107 @@ pub(super) async fn events(
         );
     }
     let after = q.after.unwrap_or(0);
-    let (st2, id) = (Arc::clone(&st), run_id.clone());
-    let read =
-        tokio::task::spawn_blocking(move || st2.ctx.reader.events(&id, after, limit + 1)).await;
-    let mut evs = match read {
-        Ok(Ok(evs)) => evs,
-        Ok(Err(e)) => return read_error(&e),
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    let evs = match read_run(&st, &run_id).await {
+        Ok(evs) => evs,
+        Err(r) => return r,
     };
-    let more = evs.len() > limit;
-    evs.truncate(limit);
-    let next_after = evs.last().map_or(after, |e| e.seq);
+    let rg = st.ctx.run_graph(&evs);
+    let end = evs.iter().filter(|e| e.seq <= after).count() + limit;
+    let cut = &evs[..end.min(evs.len())];
+    let (views, _) = fold_run(&rg.graph, cut, None);
+    let events: Vec<WithView> = cut
+        .iter()
+        .zip(views)
+        .filter(|(e, _)| e.seq > after)
+        .map(|(event, view)| WithView { event, view })
+        .collect();
+    let more = evs.len() > end;
+    let next_after = events.last().map_or(after, |e| e.event.seq);
+    // A struct, not `json!`: each event keeps the field order of its trace
+    // line (`tengu trace show`), `view` last.
+    Json(Page {
+        run_id: &run_id,
+        after,
+        next_after,
+        more,
+        graph: json!({"map": rg.map, "note": rg.note}),
+        events,
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub(super) struct BoardQuery {
+    upto: Option<u64>,
+}
+
+/// `/api/v1/runs/:run_id/board?upto=<seq>`: the run folded over its graph
+/// up to `seq` (all when absent) — node colours, highlighted edges, grey
+/// legal sets, header facts (`application::studio::board`) — plus the run's
+/// state and trace file.
+pub(super) async fn board(
+    State(st): St,
+    Path(run_id): Path<String>,
+    Query(q): Query<BoardQuery>,
+) -> Response {
+    let evs = match read_run(&st, &run_id).await {
+        Ok(evs) => evs,
+        Err(r) => return r,
+    };
+    let Some(summary) = RunSummary::of(&evs) else {
+        return error(StatusCode::NOT_FOUND, "no events in this run");
+    };
+    let holder = (st.ctx.holder_fn())();
+    let holders = summary.kind.as_deref() == Some(RunKind::Run.as_str())
+        && summary.runtime_id.is_some()
+        && summary.runtime_id == holder;
+    let state = RunState::of(&summary, holders.then_some(summary.run_id.as_str()));
+    let rg = st.ctx.run_graph(&evs);
+    let (_, board) = fold_run(&rg.graph, &evs, q.upto);
+    let current = st.ctx.graph.config_hash.clone();
     Json(json!({
         "run_id": run_id,
-        "after": after,
-        "next_after": next_after,
-        "more": more,
-        "events": evs,
+        "last_seq": summary.last_seq,
+        "run": {
+            "summary": summary,
+            "state": state,
+            "config_current": current.is_some() && summary.config_hash == current,
+            "trace_file": st.ctx.run_file(&run_id),
+        },
+        "graph": {"map": rg.map, "note": rg.note},
+        "board": board,
     }))
     .into_response()
+}
+
+#[derive(Deserialize)]
+pub(super) struct NodeQuery {
+    map: Option<String>,
+}
+
+/// `/api/v1/nodes/:node_id[?map=<sha256>]`: the inspector's node — the
+/// graph node, the validated config section behind it, its edges and
+/// evidence files (`StudioContext::node_detail`); never the TOML text.
+pub(super) async fn node(
+    State(st): St,
+    Path(node_id): Path<String>,
+    Query(q): Query<NodeQuery>,
+) -> Response {
+    let st2 = Arc::clone(&st);
+    let found =
+        tokio::task::spawn_blocking(move || st2.ctx.node_detail(&node_id, q.map.as_deref())).await;
+    match found {
+        Ok(Ok(v)) => Json(v).into_response(),
+        Ok(Err(NodeError::Missing)) => error(StatusCode::NOT_FOUND, "no such node in this graph"),
+        Ok(Err(NodeError::Map(MapGraphError::BadId))) => {
+            error(StatusCode::BAD_REQUEST, "map: a sha256 (64 lowercase hex)")
+        }
+        Ok(Err(NodeError::Map(MapGraphError::Missing))) => {
+            error(StatusCode::NOT_FOUND, "no kept map with that sha256")
+        }
+        Ok(Err(NodeError::Map(e))) => {
+            error(StatusCode::UNPROCESSABLE_ENTITY, format!("kept map: {e}"))
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }

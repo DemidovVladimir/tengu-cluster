@@ -350,6 +350,8 @@ async fn token_guards_every_api_route() {
         "/api/v1/health".into(),
         "/api/v1/runs".into(),
         format!("/api/v1/runs/{id}/events"),
+        format!("/api/v1/runs/{id}/board"),
+        "/api/v1/nodes/loop:demo".into(),
         format!("/api/v1/runs/{id}/stream"),
         "/api/v1/live/stream".into(),
     ];
@@ -420,6 +422,20 @@ async fn get_routes_only_without_control() {
     assert_eq!(meta["sandbox"], json!(SANDBOX));
     assert_eq!(meta["config_hash"], json!(s.config_hash));
     assert_eq!(meta["schema"], json!({"workflow": 1, "trace": 1}));
+    // The colour legend comes from Rust (`Status::tone`), not the page.
+    let tone_of = |status: &str| {
+        meta["tones"]["statuses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["status"] == json!(status))
+            .map(|r| r["tone"].clone())
+    };
+    assert_eq!(tone_of("ok"), Some(json!("green")));
+    assert_eq!(tone_of("refused"), Some(json!("red")));
+    assert_eq!(tone_of("escalated"), Some(json!("amber")));
+    assert_eq!(tone_of("skipped"), Some(json!("plain")));
+    assert_eq!(meta["tones"]["tones"].as_array().unwrap().len(), 5);
     let trace_dir = meta["evidence"]["trace_dir"].as_str().unwrap();
     assert!(
         trace_dir.ends_with("logs/trace/control-loop-lab"),
@@ -774,4 +790,624 @@ async fn streams_are_capped_and_end_at_shutdown() {
     assert_eq!(two.status(), StatusCode::SERVICE_UNAVAILABLE);
     s.stop.send(true).unwrap();
     assert!(one.next().await.is_none(), "the stream ends at shutdown");
+}
+
+// --- ST-21 / ST-22: board, inspector, replay ---------------------------------
+
+const MODEL: &str = "typesafe/jev-1.13-20260917";
+
+/// A recording with its own `config_hash` (a run of an older config).
+fn sink_with_hash(s: &Studio, hash: &str, runtime_id: Option<&str>) -> JsonlTraceSink {
+    JsonlTraceSink::open(
+        &trace_root(s.home.path()),
+        SANDBOX,
+        Some(hash),
+        runtime_id,
+        if runtime_id.is_some() {
+            RunKind::Run
+        } else {
+            RunKind::Decide
+        },
+        Arc::new(SecretRegistry::new()),
+    )
+    .unwrap()
+}
+
+/// One tick of the lab's `act` path, as `tengu run` records it: the feed
+/// fires, the loop runs, Jev picks write_marker, the tool writes.
+fn tick(s: &JsonlTraceSink, n: u64) {
+    let sess = format!("tick:{n}");
+    let d = |kind: &str, status: Status, node: &str| {
+        EventDraft::new(Component::Loop, kind, status)
+            .session(sess.clone())
+            .node(node)
+    };
+    let fired = s
+        .emit(d("feed.fired", Status::Running, "feed:tick"))
+        .unwrap();
+    let queued = s
+        .emit(
+            d("loop.queued", Status::Pending, "loop:demo")
+                .parent(fired)
+                .payload(json!({"stats": {"queued": 1, "completed": n - 1}})),
+        )
+        .unwrap();
+    let started = s
+        .emit(d("loop.started", Status::Running, "loop:demo").parent(queued))
+        .unwrap();
+    let jev = s
+        .emit(
+            d("jev.completed", Status::Ok, "jev:demo")
+                .parent(started.clone())
+                .payload(json!({
+                    "model": MODEL,
+                    "decision_id": format!("gen-dec-{n}"),
+                    "legal_actions": ["hold", "read_probe", "write_marker"],
+                    "answers": {"next_action": {"choice": "write_marker", "confidence": 0.93}},
+                })),
+        )
+        .unwrap();
+    let call = format!("demo:{sess}:1");
+    let sel = s
+        .emit(
+            d(
+                "action.selected",
+                Status::Running,
+                "action:demo/write_marker",
+            )
+            .parent(jev)
+            .call(call.clone()),
+        )
+        .unwrap();
+    let ts = s
+        .emit(
+            d("tool.started", Status::Running, "tool:lab/write_file")
+                .parent(sel.clone())
+                .call(call.clone()),
+        )
+        .unwrap();
+    s.emit(
+        d("tool.completed", Status::Ok, "tool:lab/write_file")
+            .parent(ts)
+            .call(call.clone())
+            .duration(1),
+    );
+    s.emit(
+        d("action.completed", Status::Ok, "action:demo/write_marker")
+            .parent(sel)
+            .call(call),
+    );
+    s.emit(
+        d("loop.completed", Status::Ok, "loop:demo")
+            .parent(started)
+            .payload(json!({"stats": {"queued": 0, "completed": n}})),
+    );
+}
+
+/// `runtime.stopping` → `runtime.stopped`: the run is closed.
+fn stop(s: &JsonlTraceSink) {
+    let node = format!("runtime:{SANDBOX}");
+    let stopping = s
+        .emit(
+            EventDraft::new(Component::Runtime, "runtime.stopping", Status::Pending)
+                .node(node.clone()),
+        )
+        .unwrap();
+    s.emit(
+        EventDraft::new(Component::Runtime, "runtime.stopped", Status::Ok)
+            .node(node)
+            .parent(stopping),
+    );
+}
+
+/// Every event of a run through `/events` pages of `limit`.
+async fn replay(s: &Studio, run_id: &str, limit: usize) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut after = 0;
+    loop {
+        let (code, page) = s
+            .json(&format!(
+                "/api/v1/runs/{run_id}/events?after={after}&limit={limit}"
+            ))
+            .await;
+        assert_eq!(code, StatusCode::OK, "{page}");
+        out.extend(page["events"].as_array().unwrap().iter().cloned());
+        after = page["next_after"].as_u64().unwrap();
+        if page["more"] == json!(false) {
+            return out;
+        }
+    }
+}
+
+/// An event as written (its `view` removed).
+fn bare(ev: &Value) -> Value {
+    let mut ev = ev.clone();
+    ev.as_object_mut().unwrap().remove("view");
+    ev
+}
+
+/// The inspector reads the validated config, never the TOML text: a
+/// default the TOML never wrote is there, a comment is not; a map's node
+/// shows the narrowed loop; ids may come percent-encoded; unknown = 404.
+#[tokio::test]
+async fn node_detail_is_from_validated_config() {
+    let s = Studio::start().await;
+    let enc = |id: &str| id.replace(':', "%3A").replace('/', "%2F");
+    let (code, d) = s.json(&format!("/api/v1/nodes/{}", enc("loop:demo"))).await;
+    assert_eq!(code, StatusCode::OK, "{d}");
+    assert_eq!(d["config"]["section"], json!("decision_loops.demo"));
+    assert_eq!(
+        d["config"]["value"]["timeout_secs"],
+        json!(20),
+        "a default, not in the TOML"
+    );
+    assert_eq!(d["config"]["value"]["act_at"], json!(0.8));
+    assert_eq!(
+        d["config"]["value"]["actions"],
+        json!(["hold", "read_probe", "write_marker"])
+    );
+    assert_eq!(d["source"], json!("validated config (Config::load)"));
+    let golden: Value = serde_json::from_str(
+        &std::fs::read_to_string(repo().join("tests/fixtures/studio/graph-control-loop-lab.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let node = golden["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == json!("loop:demo"))
+        .unwrap();
+    assert_eq!(&d["node"], node, "the graph's own node");
+    let labels: Vec<&str> = d["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["label"].as_str().unwrap())
+        .collect();
+    assert!(
+        labels.contains(&"heartbeat (tengu doctor --live)"),
+        "{labels:?}"
+    );
+    assert!(
+        labels.contains(&"decision audit (decisions.jsonl)"),
+        "{labels:?}"
+    );
+    let row = d["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["key"] == json!("loop/1:demo"))
+        .unwrap();
+    assert_eq!(
+        row["path"],
+        json!("~/tengu-lab/control-loop-lab/.tengu/observations.db")
+    );
+    assert!(d["edges"]["in"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["from"] == json!("feed:tick")));
+
+    // Every node of the graph answers; none carries the TOML's comments.
+    let toml =
+        std::fs::read_to_string(repo().join("sandboxes/control-loop-lab/config.toml")).unwrap();
+    assert!(toml.contains("Short beats so a demo shows health"));
+    for n in golden["nodes"].as_array().unwrap() {
+        let id = n["id"].as_str().unwrap();
+        let r = s
+            .get(&format!("/api/v1/nodes/{}", enc(id)))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK, "{id}");
+        let text = r.text().await.unwrap();
+        for comment in [
+            "Short beats so a demo shows health",
+            "QUICKSTART",
+            "the safe reference run",
+        ] {
+            assert!(!text.contains(comment), "{id}: {comment}");
+        }
+    }
+    let (_, wm) = s.json("/api/v1/nodes/action:demo%2Fwrite_marker").await;
+    assert_eq!(
+        wm["config"]["section"],
+        json!("decision_loops.demo.actions.write_marker")
+    );
+    assert_eq!(
+        wm["config"]["value"]["args"]["path"],
+        json!("out/marker.txt")
+    );
+    // `top` is the schema default the TOML never wrote.
+    assert_eq!(
+        wm["config"]["value"]["slots"]["scenario"],
+        json!({"event": "/scenario", "top": 5})
+    );
+    let (_, tool) = s
+        .json(&format!("/api/v1/nodes/{}", enc("tool:lab/write_file")))
+        .await;
+    assert_eq!(tool["config"]["section"], json!("catalog.write_file"));
+    assert!(!tool["config"]["value"]["description"]
+        .as_str()
+        .unwrap()
+        .is_empty());
+    let (_, scope) = s
+        .json(&format!("/api/v1/nodes/{}", enc("scope:lab/write_file")))
+        .await;
+    assert_eq!(
+        scope["config"]["value"]["fs_roots"],
+        json!(["~/tengu-lab/control-loop-lab/out"])
+    );
+    let (code, none) = s
+        .json(&format!("/api/v1/nodes/{}", enc("trigger:decide")))
+        .await;
+    assert_eq!(
+        (code, none["config"].clone()),
+        (StatusCode::OK, Value::Null)
+    );
+
+    // A kept map: the narrowed loop, its source named.
+    let maps = s.home.path().join("logs").join("maps");
+    std::fs::create_dir_all(&maps).unwrap();
+    let text = std::fs::read_to_string(
+        repo().join("sandboxes/control-loop-lab/scenarios/uncertain.map.json"),
+    )
+    .unwrap();
+    let map = ExecutionMap::parse(&text).unwrap();
+    std::fs::write(maps.join(format!("{}.json", map.sha256())), map.canonical()).unwrap();
+    let (code, m) = s
+        .json(&format!(
+            "/api/v1/nodes/{}?map={}",
+            enc("loop:demo"),
+            map.sha256()
+        ))
+        .await;
+    assert_eq!(code, StatusCode::OK, "{m}");
+    assert_eq!(m["config"]["value"]["act_at"], json!(1.0));
+    assert!(m["source"]
+        .as_str()
+        .unwrap()
+        .contains("ExecutionMap::apply"));
+    let (code, t) = s
+        .json(&format!(
+            "/api/v1/nodes/{}?map={}",
+            enc(&format!("trigger:map/{}", map.sha256())),
+            map.sha256()
+        ))
+        .await;
+    assert_eq!(code, StatusCode::OK, "{t}");
+
+    for (path, want) in [
+        (
+            format!("/api/v1/nodes/{}", enc("loop:nope")),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            format!("/api/v1/nodes/{}?map=xyz", enc("loop:demo")),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            format!("/api/v1/nodes/{}?map={}", enc("loop:demo"), "0".repeat(64)),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        assert_eq!(s.json(&path).await.0, want, "{path}");
+    }
+    let bare = s
+        .http
+        .get(s.url("/api/v1/nodes/loop:demo"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bare.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Live and replay are one sequence: what the live stream handed while
+/// the run was written equals the `/events` pages read after it — the same
+/// ids, the same order, the same events; the board folds to the same state
+/// at the end whichever way it is asked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_equals_live_sequence() {
+    let s = Studio::with(|st| st.limits.holder_poll = Duration::from_millis(50)).await;
+    let h = "host:20:3f0e0d0c-0b0a-4908-8706-050403020100";
+    let run = s.sink(Some(h));
+    let id = run.run_id().unwrap().to_string();
+    s.beat(h);
+    let mut live = s.sse("/api/v1/live/stream", &[]).await;
+    loop {
+        let f = live.frame().await;
+        if f.event == "run" && f.data["reason"] == json!("attached") {
+            assert_eq!(f.data["run_id"], json!(id));
+            break;
+        }
+    }
+    let mut got = Vec::new();
+    for n in 1..=3 {
+        tick(&run, n);
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    stop(&run);
+    let last = 1 + 3 * 9 + 2;
+    while got.len() < last {
+        let f = live.frame().await;
+        assert_eq!(f.event, "trace", "{f:?}");
+        assert_eq!(f.id.as_deref(), f.data["event_id"].as_str());
+        got.push(f.data);
+    }
+    let pages = replay(&s, &id, 7).await;
+    assert_eq!(pages.len(), last);
+    let ids = |v: &[Value]| {
+        v.iter()
+            .map(|e| e["event_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&got), ids(&pages));
+    for (l, r) in got.iter().zip(&pages) {
+        assert_eq!(l, &bare(r));
+    }
+    assert_eq!(
+        pages
+            .iter()
+            .map(|e| e["seq"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        (1..=last as u64).collect::<Vec<_>>()
+    );
+    // The views: a tool call knows its loop, action, feed and model.
+    let tool = pages
+        .iter()
+        .find(|e| e["kind"] == json!("tool.completed"))
+        .unwrap();
+    let v = &tool["view"];
+    assert_eq!(
+        (
+            v["loop"].clone(),
+            v["action"].clone(),
+            v["feed"].clone(),
+            v["model"].clone(),
+            v["tone"].clone()
+        ),
+        (
+            json!("demo"),
+            json!("write_marker"),
+            json!("tick"),
+            json!(MODEL),
+            json!("green")
+        )
+    );
+    assert_eq!(
+        v["edges"],
+        json!([{"from": "action:demo/write_marker", "to": "tool:lab/write_file", "kind": "calls"}])
+    );
+
+    let (_, all) = s.json(&format!("/api/v1/runs/{id}/board")).await;
+    let (_, at_end) = s
+        .json(&format!("/api/v1/runs/{id}/board?upto={last}"))
+        .await;
+    assert_eq!(all, at_end);
+    let b = &all["board"];
+    assert_eq!(b["upto"], json!(last));
+    assert_eq!(b["header"]["runtime"]["state"], json!("stopped"));
+    assert_eq!(b["header"]["closed"], json!(true));
+    assert_eq!(b["header"]["model"]["value"], json!(MODEL));
+    assert_eq!(b["header"]["loops"]["demo"]["value"]["completed"], json!(3));
+    assert_eq!(all["run"]["state"], json!("closed"));
+    let tone = |id: &str| {
+        b["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["node_id"] == json!(id))
+            .unwrap()["tone"]
+            .clone()
+    };
+    assert_eq!(tone("tool:lab/write_file"), json!("green"));
+    assert_eq!(tone("action:demo/hold"), Value::Null, "legal, never run");
+    assert_eq!(tone(&format!("runtime:{SANDBOX}")), json!("green"));
+    // Mid-run: the board at the first tool call has write_marker running.
+    let sel = pages
+        .iter()
+        .find(|e| e["kind"] == json!("action.selected"))
+        .unwrap()["seq"]
+        .as_u64()
+        .unwrap();
+    let (_, mid) = s.json(&format!("/api/v1/runs/{id}/board?upto={sel}")).await;
+    let mid_tone = mid["board"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["node_id"] == json!("action:demo/write_marker"))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (mid_tone["tone"].clone(), mid_tone["latest"].clone()),
+        (json!("amber"), json!(true))
+    );
+    assert_eq!(mid["board"]["edges"][0]["kind"], json!("chooses"));
+}
+
+/// A reload reads the same thing: runs, graph, events (any page size, views
+/// included), the board at a `seq` and a fresh stream are byte-identical
+/// on every read.
+#[tokio::test]
+async fn reload_returns_identical_order() {
+    let s = Studio::start().await;
+    let run = s.sink(Some("host:21:4f0e0d0c-0b0a-4908-8706-050403020100"));
+    tick(&run, 1);
+    tick(&run, 2);
+    let id = run.run_id().unwrap().to_string();
+    emit(&s.sink(None), 3, 0);
+    let text = |path: String| {
+        let req = s.get(&path);
+        async move { req.send().await.unwrap().text().await.unwrap() }
+    };
+    for path in [
+        "/api/v1/runs".to_string(),
+        "/api/v1/graph".into(),
+        format!("/api/v1/runs/{id}/events?limit=1000"),
+        format!("/api/v1/runs/{id}/board"),
+        format!("/api/v1/runs/{id}/board?upto=6"),
+        format!("/api/v1/nodes/{}", "jev:demo"),
+    ] {
+        assert_eq!(text(path.clone()).await, text(path.clone()).await, "{path}");
+    }
+    // Each event keeps its trace line's field order (`tengu trace show`).
+    let raw = text(format!("/api/v1/runs/{id}/events?limit=2")).await;
+    assert!(
+        raw.contains(r#""events":[{"schema_version":1,"event_id":""#),
+        "{raw}"
+    );
+    let whole = replay(&s, &id, 1000).await;
+    for limit in [1, 3, 7] {
+        assert_eq!(replay(&s, &id, limit).await, whole, "limit {limit}");
+    }
+    // The board lists every graph node in graph order, every time.
+    let (_, b) = s.json(&format!("/api/v1/runs/{id}/board?upto=6")).await;
+    let (_, g) = s.json("/api/v1/graph").await;
+    let order = |v: &Value, k: &str| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n[k].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        order(&b["board"]["nodes"], "node_id"),
+        order(&g["nodes"], "id")
+    );
+    assert_eq!(b["board"]["upto"], json!(6));
+    // Two fresh streams of the run: the same ids in the same order.
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let mut st = s.sse(&format!("/api/v1/runs/{id}/stream"), &[]).await;
+        let mut ids = Vec::new();
+        while ids.len() < whole.len() {
+            ids.push(st.frame().await.id.unwrap());
+        }
+        seen.push(ids);
+    }
+    assert_eq!(seen[0], seen[1]);
+    assert_eq!(
+        seen[0],
+        whole
+            .iter()
+            .map(|e| e["event_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A restart is a new run: each run's events, board and state are its own
+/// (ids, runtime, config); the old run is closed and flagged when its
+/// config differs; the live stream follows only the new holder's run.
+#[tokio::test]
+async fn runs_are_not_mixed_across_restarts() {
+    let s = Studio::with(|st| st.limits.holder_poll = Duration::from_millis(50)).await;
+    let (h1, h2) = (
+        "host:30:5f0e0d0c-0b0a-4908-8706-050403020100",
+        "host:31:6f0e0d0c-0b0a-4908-8706-050403020100",
+    );
+    let older = "e".repeat(64);
+    let old = sink_with_hash(&s, &older, Some(h1));
+    tick(&old, 1);
+    stop(&old);
+    let new = s.sink(Some(h2));
+    tick(&new, 1);
+    s.beat(h2);
+    let decide = s.sink(None);
+    let root = decide
+        .emit(
+            EventDraft::new(Component::Loop, "trigger.decide", Status::Running)
+                .node("trigger:decide"),
+        )
+        .unwrap();
+    decide.emit(
+        EventDraft::new(Component::Loop, "trigger.completed", Status::Ok)
+            .node("trigger:decide")
+            .parent(root),
+    );
+    let (old_id, new_id, decide_id) = (
+        old.run_id().unwrap().to_string(),
+        new.run_id().unwrap().to_string(),
+        decide.run_id().unwrap().to_string(),
+    );
+
+    let (_, runs) = s.json("/api/v1/runs").await;
+    let row = |id: &str| {
+        runs["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["run_id"] == json!(id))
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        (
+            row(&old_id)["state"].clone(),
+            row(&old_id)["config_current"].clone()
+        ),
+        (json!("closed"), json!(false))
+    );
+    assert_eq!(
+        (
+            row(&new_id)["state"].clone(),
+            row(&new_id)["config_current"].clone()
+        ),
+        (json!("live"), json!(true))
+    );
+    assert_eq!(row(&decide_id)["state"], json!("closed"));
+    assert_eq!(runs["live_run_id"], json!(new_id));
+
+    for (id, runtime, hash, state) in [
+        (&old_id, json!(h1), json!(older), "closed"),
+        (&new_id, json!(h2), json!(s.config_hash), "live"),
+        (&decide_id, Value::Null, json!(s.config_hash), "closed"),
+    ] {
+        let evs = replay(&s, id, 1000).await;
+        assert!(!evs.is_empty());
+        for e in &evs {
+            assert_eq!(e["run_id"], json!(id));
+            assert_eq!(e["runtime_id"], runtime);
+            assert_eq!(e["config_hash"], hash);
+            assert!(e["event_id"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{id}:")));
+        }
+        let (_, b) = s.json(&format!("/api/v1/runs/{id}/board")).await;
+        assert_eq!(b["run"]["state"], json!(state), "{id}");
+        assert_eq!(b["board"]["header"]["run_id"], json!(id));
+        for n in b["board"]["nodes"].as_array().unwrap() {
+            if let Some(eid) = n["mark"]["event_id"].as_str() {
+                assert!(eid.starts_with(&format!("{id}:")), "{eid} in {id}");
+            }
+        }
+        for e in b["board"]["edges"].as_array().unwrap() {
+            assert!(e["event_id"]
+                .as_str()
+                .unwrap()
+                .starts_with(&format!("{id}:")));
+        }
+    }
+    let (_, ob) = s.json(&format!("/api/v1/runs/{old_id}/board")).await;
+    assert_eq!(ob["run"]["config_current"], json!(false));
+    assert_eq!(ob["board"]["header"]["runtime"]["state"], json!("stopped"));
+    let (_, nb) = s.json(&format!("/api/v1/runs/{new_id}/board")).await;
+    assert_eq!(nb["board"]["header"]["closed"], json!(false));
+    assert_eq!(nb["board"]["header"]["runtime_id"], json!(h2));
+
+    // The live stream: the new holder's run, from seq 1, nothing of the old.
+    let mut live = s.sse("/api/v1/live/stream", &[]).await;
+    let first = loop {
+        let f = live.frame().await;
+        if f.event == "run" && f.data["run_id"] != Value::Null {
+            break f;
+        }
+    };
+    assert_eq!(first.data["run_id"], json!(new_id));
+    for want in 1..=10 {
+        let f = live.frame().await;
+        assert_eq!((f.seq(), f.data["run_id"].clone()), (want, json!(new_id)));
+    }
 }

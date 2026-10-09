@@ -130,3 +130,26 @@ Read-only server (`--features studio`) on a debug build of the ST-20 tree (paren
 | Replay = CLI | `/api/v1/runs/77ed9381-60eb-4c8d-8bbd-c6f4d6594ba0/events?limit=1000` = `tengu trace show` of the run, event for event (38, `more: false`) · `runs/…/stream` with `Last-Event-ID: 77ed9381-60eb-4c8d-8bbd-c6f4d6594ba0:5` starts at `:6` (33 events) |
 | Jev | 5 real calls, `typesafe/jev-1.13-20260917`, 263–595 ms, cost $0.000136038; every `jev.completed` keeps `legal_actions` `hold, read_probe, write_marker` |
 | Nothing dangerous | `~/.tengu/logs/decisions.jsonl` sha256 equal before and after · key value: 0 matches in the outputs and the lab home · no tengu process left · lab cleaned with the runbook block |
+
+## ST-21 / ST-22 — the page over real runs (2026-10-09)
+
+Debug build of the ST-21 / ST-22 tree with `--features studio` (parent `77bf750a4a53e3113a9bb53cf37aae46c6a93af6`), lab home, 2026-10-09 02:07:45Z → 02:17:23Z. One Studio process; the page rendered by headless Chrome (`--headless=new`, a temp profile, no extension, no sync, no proxy, loopback only; screenshots + `--dump-dom` kept in the session scratchpad, not committed). The Claude-in-Chrome extension was not connected, so no interactive session. Runbook rows S3, S5–S7: `docs/control-loop-lab-2026-10-08.md`.
+
+| Run | `run_id` | Kind · events | Board (Rust) = what the page drew |
+|---|---|---|---|
+| decide act (A2) | `0dec1264-6d71-40d6-bf20-d7593b819d6e` | decide · 12 | Jev `write_marker` 0.86 then `hold` 1.0; `action:demo/write_marker`, `tool:lab/write_file`, `action:demo/hold`, `jev:demo` green, `world:demo/tick` amber (missing: no runtime); edges `jev:demo → action:demo/write_marker`, `action:demo/write_marker → tool:lab/write_file`, `jev:demo → action:demo/hold` lit green |
+| decide `uncertain.map.json` (A4) | `996e416c-f7e1-408f-8d1a-c2e197b54b62` | decide · 6 | drawn on the kept map's graph (17 nodes, `trigger:map/1a97d5793e4abfd1a53fb717c34b1a9fbfa1dc49b7ef6dd4ec165813cac5a1ef` green, `act_at 1`, `write_marker` effect `logged`); `gate:demo/act_at` amber (`action.escalated`, `hold` 0.92 < 1.0), edge `jev:demo → action:demo/hold` amber; the inspector shows the narrowed loop (`act_at` 1, `dry_run` true, "narrowed by ExecutionMap::apply") — on a re-check of this run restored from its `/events` dump; the first capture showed the base section (the node was read before the map graph loaded: fixed, the page re-reads the selected node when the drawn graph changes) |
+| `tengu run` #1 | `95ff067e-f446-410e-ab2c-7cd42af74cf9` | run · 73 (holder `Vladimirs-MacBook-Pro-2.local:80016:12536bb9-ab9e-45c4-aafb-0f71a39681fa`) | live at 99 s: state `live`, runtime `running`; `feed:tick`, `loop:demo`, `world:demo/tick`, `jev:demo`, `action:demo/hold` green, `feed:probe` + `tool:lab/read_file` red, edges `feed:probe → tool:lab/read_file` red, `jev:demo → action:demo/hold` green; grey: none (legal set `hold, read_probe, write_marker`) |
+| `tengu run` #2 (restart) | `a0fd15c8-1779-4398-a691-ef4b4196d8eb` | run · 25 (holder `Vladimirs-MacBook-Pro-2.local:81184:757e93dd-b59f-4461-8370-a9c94ff0f449`) | its own board: `runtime_id` = its holder, loop counters from 0 (`completed` 2), `runtime.stopped` |
+
+| Check | Result |
+|---|---|
+| Page = audit = health (run #1, at 99 s) | board `loop demo` `accepted 6 · completed 6 · failed 0 · queued 0` = heartbeat `loops.demo` (`accepted 6`, `completed 6`) = `/api/v1/health` and `tengu doctor --live` (`done 6`, `=> live`, exit 0) = 6 `decisions.jsonl` lines with this `run_id` = 6 `jev.completed` + 6 `loop.completed` in the timeline; `feed tick` `items 6` |
+| Replay = live = CLI | `/events` in pages of 7 = one page of 1000 (73 events, same order, views included); without `view` = `tengu trace show` of the run, event for event (`jq -S`: the build that ran sorted the keys; after this run each page event keeps the trace line's field order, `{"schema_version":1,"event_id":…` — `reload_returns_identical_order`) |
+| Reload | `/board` of run #1 read three times (before and after six page loads): byte-identical |
+| Replay position | `board?upto=7` (the first `tool.started`): `tool:lab/read_file`, `feed:probe`, `feed:tick`, `loop:demo`, runtime amber, edge `feed:probe → tool:lab/read_file` amber + latest, counters `queued 1`; model `—` (no Jev call yet) |
+| Runs not mixed | `/runs`: 4 runs, each `closed` with its own `runtime_id` (decides: none); each board's marks name only its own `event_id`s |
+| Inspector | `/api/v1/nodes/loop:demo`: section `decision_loops.demo`, `timeout_secs` 20 (a default), evidence heartbeat + decision audit + `loop/1:demo` row; `feed:tick`: `feed/1:tick` in `~/tengu-lab/control-loop-lab/.tengu/observations.db` |
+| Jev | 11 real calls, `typesafe/jev-1.13-20260917`, 265–756 ms, cost $0.000293286 |
+| Phone | the layout reflows to one column at 500 px (headless Chrome's smallest window); every grid is `minmax(0, 1fr)`, ids wrap, never cut |
+| Nothing dangerous | `~/.tengu/logs/decisions.jsonl` sha256 equal before and after · key value: 0 matches in the outputs and the lab home · no tengu or Chrome process left · lab cleaned with the runbook block |

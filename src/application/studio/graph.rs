@@ -20,7 +20,11 @@
 //! `dry_run`: never run — `DecisionLoopConfig::logs_only`, the rule the loop
 //! applies), else `runs`. `in_catalog`
 //! of a tool: it is one of the agent's catalog tools (`agent_base_tools`) —
-//! an `[[mcp_servers]]` or shell-skill tool shows `false`.
+//! an `[[mcp_servers]]` or shell-skill tool shows `false`. `facets` of a
+//! node: the loop / action / feed / agent / tool it belongs to, from the
+//! config (a tick feed: its target loop + that loop's agent; a tool or
+//! scope: agent + tool only — a tool event gets its loop or feed from its
+//! parent event, `application/studio/board.rs`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,7 +37,8 @@ use crate::config::Config;
 use crate::domain::message::ToolDef;
 use crate::domain::scope::ToolScope;
 use crate::domain::workflow::{
-    layer, node_id, Edge, EdgeKind, MapRef, Node, NodeKind, WorkflowGraph, WORKFLOW_SCHEMA_VERSION,
+    layer, node_id, Edge, EdgeKind, Facets, MapRef, Node, NodeKind, WorkflowGraph,
+    WORKFLOW_SCHEMA_VERSION,
 };
 
 /// Each agent's catalog tools (`bootstrap::studio::graph_inputs`).
@@ -125,7 +130,7 @@ pub(crate) fn build_graph(
             "none"
         };
         let id = node_id::trigger_webhook(ep);
-        b.node(
+        let n = b.node(
             &id,
             NodeKind::Trigger,
             &format!("/webhooks/{ep}"),
@@ -136,19 +141,21 @@ pub(crate) fn build_graph(
                 ("enabled", json!(cfg.webhooks.enabled)),
             ]),
         );
+        belongs(n, facets(Some(l), None, None, None, None));
         b.edge(&id, &node_id::loop_(l), EdgeKind::Fires);
     }
 
     let map_ref = mapped.as_ref().map(|(m, _)| {
         let sha = m.sha256();
         let id = node_id::trigger_map(&sha);
-        b.node(
+        let n = b.node(
             &id,
             NodeKind::Trigger,
             &format!("map {sha}"),
             layer::TRIGGER,
             attrs([("sha256", json!(sha)), ("loop", json!(m.loop_name))]),
         );
+        belongs(n, facets(Some(&m.loop_name), None, None, None, None));
         b.edge(&id, &node_id::loop_(&m.loop_name), EdgeKind::Fires);
         MapRef {
             sha256: sha,
@@ -171,6 +178,33 @@ fn attrs<const N: usize>(kv: [(&str, Value); N]) -> BTreeMap<String, Value> {
 /// A serializable config value as JSON (`Null` when it cannot be).
 fn to_json<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+/// A node's [`Facets`]: what it belongs to (names whole).
+fn facets(
+    loop_name: Option<&str>,
+    action: Option<&str>,
+    feed: Option<&str>,
+    agent: Option<&str>,
+    tool: Option<&str>,
+) -> Facets {
+    let own = |v: Option<&str>| v.map(str::to_string);
+    Facets {
+        loop_name: own(loop_name),
+        action: own(action),
+        feed: own(feed),
+        agent: own(agent),
+        tool: own(tool),
+    }
+}
+
+/// Set `n`'s facets unless an earlier insertion did (first insertion wins,
+/// like its attrs).
+fn belongs(n: &mut Node, f: Facets) -> &mut Node {
+    if n.facets.is_empty() {
+        n.facets = f;
+    }
+    n
 }
 
 struct Builder<'a> {
@@ -213,6 +247,7 @@ impl<'a> Builder<'a> {
                 order: *order,
                 attrs,
                 narrowed_out: false,
+                facets: Facets::default(),
             };
             *order = order.saturating_add(1);
             n
@@ -230,7 +265,7 @@ impl<'a> Builder<'a> {
     fn add_agent(&mut self, agent: &str) -> String {
         let id = node_id::agent(agent);
         let a = self.cfg.agents.get(agent);
-        self.node(
+        let n = self.node(
             &id,
             NodeKind::Agent,
             agent,
@@ -246,6 +281,7 @@ impl<'a> Builder<'a> {
                 ),
             ]),
         );
+        belongs(n, facets(None, None, None, Some(agent), None));
         id
     }
 
@@ -256,7 +292,7 @@ impl<'a> Builder<'a> {
             .tools
             .get(agent)
             .is_some_and(|ts| ts.iter().any(|t| t.name == tool));
-        self.node(
+        let n = self.node(
             &id,
             NodeKind::Tool,
             tool,
@@ -267,6 +303,7 @@ impl<'a> Builder<'a> {
                 ("in_catalog", json!(in_catalog)),
             ]),
         );
+        belongs(n, facets(None, None, None, Some(agent), Some(tool)));
         let scope = self
             .cfg
             .agents
@@ -275,7 +312,8 @@ impl<'a> Builder<'a> {
             .map(scope_attrs);
         if let Some(scope) = scope {
             let sid = node_id::scope(agent, tool);
-            self.node(&sid, NodeKind::Scope, "scope", layer::GUARD, scope);
+            let n = self.node(&sid, NodeKind::Scope, "scope", layer::GUARD, scope);
+            belongs(n, facets(None, None, None, Some(agent), Some(tool)));
             self.edge(&sid, &id, EdgeKind::Guards);
         }
         id
@@ -323,14 +361,18 @@ impl<'a> Builder<'a> {
                 la.insert("map_changes".into(), Value::Object(changes));
             }
         }
-        self.node(&lid, NodeKind::Loop, name, layer::LOOP, la);
+        let n = self.node(&lid, NodeKind::Loop, name, layer::LOOP, la);
+        belongs(
+            n,
+            facets(Some(name), None, None, Some(dl.agent.as_str()), None),
+        );
         let agent = self.add_agent(&dl.agent);
         self.edge(&agent, &lid, EdgeKind::Owns);
         self.edge(&node_id::trigger_decide(), &lid, EdgeKind::Fires);
 
         for (alias, key) in &dl.world {
             let wid = node_id::world(name, alias);
-            self.node(
+            let n = self.node(
                 &wid,
                 NodeKind::World,
                 alias,
@@ -340,11 +382,15 @@ impl<'a> Builder<'a> {
                     ("max_age_secs", json!(dl.world_max_age_secs)),
                 ]),
             );
+            belongs(
+                n,
+                facets(Some(name), None, None, Some(dl.agent.as_str()), None),
+            );
             self.edge(&lid, &wid, EdgeKind::Reads);
         }
 
         let jev = node_id::jev(name);
-        self.node(
+        let n = self.node(
             &jev,
             NodeKind::Jev,
             &dl.model,
@@ -355,9 +401,13 @@ impl<'a> Builder<'a> {
                 ("history", json!(dl.history)),
             ]),
         );
+        belongs(
+            n,
+            facets(Some(name), None, None, Some(dl.agent.as_str()), None),
+        );
         self.edge(&lid, &jev, EdgeKind::Asks);
         let gate = node_id::gate_act_at(name);
-        self.node(
+        let n = self.node(
             &gate,
             NodeKind::Gate,
             &format!("act_at {}", dl.act_at),
@@ -367,15 +417,23 @@ impl<'a> Builder<'a> {
                 ("escalate", json!(dl.escalate)),
             ]),
         );
+        belongs(
+            n,
+            facets(Some(name), None, None, Some(dl.agent.as_str()), None),
+        );
         self.edge(&gate, &jev, EdgeKind::Guards);
         if dl.escalate {
             let esc = node_id::escalation(name);
-            self.node(
+            let n = self.node(
                 &esc,
                 NodeKind::Escalation,
                 "escalation",
                 layer::ACTION,
                 BTreeMap::new(),
+            );
+            belongs(
+                n,
+                facets(Some(name), None, None, Some(dl.agent.as_str()), None),
             );
             self.edge(&gate, &esc, EdgeKind::Escalates);
         }
@@ -410,21 +468,30 @@ impl<'a> Builder<'a> {
                     aa.insert("caps_base".into(), to_json(&b.caps));
                 }
             }
-            self.node(&aid, NodeKind::Action, an, layer::ACTION, aa)
-                .narrowed_out = kept.is_none();
+            let n = self.node(&aid, NodeKind::Action, an, layer::ACTION, aa);
+            n.narrowed_out = kept.is_none();
+            let tool = a.tool.as_deref();
+            belongs(
+                n,
+                facets(Some(name), Some(an), None, Some(dl.agent.as_str()), tool),
+            );
             if kept.is_some() {
                 self.edge(&jev, &aid, EdgeKind::Chooses);
             }
             if !a.caps.is_empty() {
                 let cid = node_id::gate_caps(name, an);
-                self.node(
+                let n = self.node(
                     &cid,
                     NodeKind::Gate,
                     "caps",
                     layer::GUARD,
                     attrs([("caps", to_json(&a.caps))]),
-                )
-                .narrowed_out = kept.is_none();
+                );
+                n.narrowed_out = kept.is_none();
+                belongs(
+                    n,
+                    facets(Some(name), Some(an), None, Some(dl.agent.as_str()), None),
+                );
                 self.edge(&cid, &aid, EdgeKind::Guards);
             }
             for alias in a.requires.keys() {
@@ -476,7 +543,26 @@ impl<'a> Builder<'a> {
             Value::Object(o) => o.into_iter().collect(),
             _ => BTreeMap::new(),
         };
-        self.node(&fid, NodeKind::Feed, name, layer::TRIGGER, fa);
+        // A tick feed belongs to its target loop (and that loop's agent,
+        // whose store holds its health row); a tool feed to its agent + tool.
+        let f = match feed.kind() {
+            Ok(FeedKind::Tick) => {
+                let target = feed.target.as_deref();
+                let agent = target
+                    .and_then(|t| self.cfg.decision_loops.get(t))
+                    .map(|dl| dl.agent.as_str());
+                facets(target, None, Some(name), agent, None)
+            }
+            _ => facets(
+                None,
+                None,
+                Some(name),
+                feed.agent.as_deref(),
+                feed.tool.as_deref(),
+            ),
+        };
+        let n = self.node(&fid, NodeKind::Feed, name, layer::TRIGGER, fa);
+        belongs(n, f);
         self.edge(runtime, &fid, EdgeKind::Owns);
         match feed.kind() {
             Ok(FeedKind::Tick) => {

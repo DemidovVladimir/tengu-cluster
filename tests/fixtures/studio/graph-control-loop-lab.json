@@ -47,7 +47,12 @@
         "run_on_start": true,
         "tool": "read_file"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "feed": "probe",
+        "agent": "lab",
+        "tool": "read_file"
+      }
     },
     {
       "id": "feed:tick",
@@ -68,7 +73,12 @@
         "stale_after_secs": 60,
         "target": "demo"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "feed": "tick",
+        "agent": "lab"
+      }
     },
     {
       "id": "loop:demo",
@@ -88,7 +98,11 @@
         "timeout_secs": 20,
         "world_max_age_secs": 60
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "agent": "lab"
+      }
     },
     {
       "id": "agent:lab",
@@ -101,7 +115,10 @@
         "model": "anthropic/claude-haiku-4-5",
         "workspace": "~/tengu-lab/control-loop-lab"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lab"
+      }
     },
     {
       "id": "world:demo/tick",
@@ -113,7 +130,11 @@
         "key": "feed/1:tick",
         "max_age_secs": 60
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "agent": "lab"
+      }
     },
     {
       "id": "jev:demo",
@@ -126,7 +147,11 @@
         "model": "~typesafe/jev-latest",
         "timeout_secs": 20
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "agent": "lab"
+      }
     },
     {
       "id": "gate:demo/act_at",
@@ -138,7 +163,11 @@
         "act_at": 0.8,
         "escalate": false
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "agent": "lab"
+      }
     },
     {
       "id": "action:demo/hold",
@@ -151,7 +180,12 @@
         "effect": "terminal",
         "read_only": false
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "action": "hold",
+        "agent": "lab"
+      }
     },
     {
       "id": "action:demo/read_probe",
@@ -173,7 +207,13 @@
         },
         "tool": "read_file"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "action": "read_probe",
+        "agent": "lab",
+        "tool": "read_file"
+      }
     },
     {
       "id": "action:demo/write_marker",
@@ -197,7 +237,13 @@
         },
         "tool": "write_file"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "loop": "demo",
+        "action": "write_marker",
+        "agent": "lab",
+        "tool": "write_file"
+      }
     },
     {
       "id": "scope:lab/read_file",
@@ -210,7 +256,11 @@
           "~/tengu-lab/control-loop-lab"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lab",
+        "tool": "read_file"
+      }
     },
     {
       "id": "scope:lab/write_file",
@@ -223,7 +273,11 @@
           "~/tengu-lab/control-loop-lab/out"
         ]
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lab",
+        "tool": "write_file"
+      }
     },
     {
       "id": "tool:lab/read_file",
@@ -236,7 +290,11 @@
         "in_catalog": true,
         "tool": "read_file"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lab",
+        "tool": "read_file"
+      }
     },
     {
       "id": "tool:lab/write_file",
@@ -249,7 +307,11 @@
         "in_catalog": true,
         "tool": "write_file"
       },
-      "narrowed_out": false
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lab",
+        "tool": "write_file"
+      }
     }
   ],
   "edges": [
