@@ -346,6 +346,7 @@ impl EgressPolicy {
     /// through the proxy via `HTTPS_PROXY` when `route_llm_api` is set.
     /// Empty otherwise (the CLI then connects directly, like OpenRouter does
     /// when `route_llm_api = false`).
+    #[cfg_attr(not(feature = "claude_code"), allow(dead_code))]
     pub(crate) fn claude_cli_env(&self) -> Vec<(&'static str, String)> {
         if !self.route_llm_api() {
             return Vec::new();
