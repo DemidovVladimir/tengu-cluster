@@ -721,8 +721,9 @@ These are not preferences. They're load-bearing.
   `TENGU_STUDIO_PLAN.md` § 8)** — the server needs `cargo build --features
   studio` (not default; without it `tengu studio` fails naming the flag;
   `tengu studio graph` and `tengu trace` work in every build). Loopback only;
-  the token is printed once, in the URL fragment; a POST needs the
-  `X-Studio-Token` header + its own `Origin` + `Sec-Fetch-Site: same-origin`.
+  the token is printed once, in the URL fragment; any request but GET / HEAD,
+  on any path, needs the `X-Studio-Token` header + its own `Origin` +
+  `Sec-Fetch-Site: same-origin`; the server logs to `tengu.log` like `tengu run`.
   Play = `inbound::run::start_session` inside the Studio process (the `tengu
   run` lease: a CLI run and Studio refuse each other), Stop = the SIGINT
   drain; control only with `[studio] control = true` (only `control-loop-lab`)

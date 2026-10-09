@@ -1,8 +1,11 @@
 # Studio Play / Stop — live acceptance (ST-30 / ST-31, run 2026-10-09)
 
 Real Jev, release build `cargo build --release --features studio` of the ST-30 / ST-31 tree
-(`feature/studio` at `9a71ed6b0f563904b889dac7ca7c5e0b65406a0e` + this change, built after the
-last code edit; working-tree diff sha256 `642c23400a617c3848a86dfb0670208d26421af7e1ffbf6d736cfd7eff69de79`).
+(the working tree committed as `b1d51fc05801a1bb29e654b21d94e3d55a45c26b`, built after the last
+code edit; working-tree diff sha256 `642c23400a617c3848a86dfb0670208d26421af7e1ffbf6d736cfd7eff69de79`
+against `9a71ed6b0f563904b889dac7ca7c5e0b65406a0e`, a WIP commit then folded into `b1d51fc05801a1bb29e654b21d94e3d55a45c26b` — not in
+the branch history; review correction 2026-10-09). Review re-run of the guards, a live drain and a
+`kill -9`: § Review below.
 Lab home `TENGU_HOME=$HOME/tengu-lab/home`, sandbox `control-loop-lab` (`[studio] control = true`).
 Sanitized: the token is never shown (64 hex, length checked); the key never printed. Plan:
 `TENGU_STUDIO_PLAN.md` § 6, § 8 ST-30 / ST-31. Window 2026-10-09T06:58:03Z → 06:58:29Z.
@@ -91,5 +94,20 @@ Script: session scratchpad `lane-S/st30-lab.sh` (watchdog 300 s, runbook cleanup
 | Item | Note |
 |---|---|
 | Doc date | file named `…-2026-10-08` as the plan's tracker asks; the run is 2026-10-09 |
-| Stop drain | the Stop of step 11 met no event in flight (finished 0); a drain of a running event is proved in `adapters::inbound::studio::control::tests::stop_drains_and_releases_lease` |
+| Stop drain | the Stop of step 11 met no event in flight (finished 0); a live drain of a running event: § Review, step R3 (finished 1) |
 | `tool-error` final step | Jev's `hold` came at confidence 0.66 → `escalated` (an earlier try the same day: 0.64) — Jev's own variance, recorded as is |
+
+## Review (2026-10-09, adversarial pass on ST-20..ST-40)
+
+Release `--features studio` at `7a69f79e51c46b54cfdaa0123da5b18c00610d7e` (the review fixes), real Jev (`typesafe/jev-1.13-20260917`), same lab home, window 2026-10-09T07:32:53Z → 07:33:32Z. Script: session scratchpad `lane-S/review-lab.sh` (watchdog 270 s, runbook cleanup at the end).
+
+| # | Step | Result |
+|---|---|---|
+| R1 | `--bind 0.0.0.0` | exit 1, `refused — tengu studio binds to loopback only` |
+| R2 | GET guards | no / wrong token 401 · `Host: evil.example` (with or without the port) 421 · foreign `Origin` 403 · `Sec-Fetch-Site: cross-site` 403 · `//api/v1/meta`, `/./api/…`, `/%61pi/…`, `/assets/../api/…` without a token 404 (never the API) · `/assets/../../Cargo.toml`, `/assets/..%2F..%2FCargo.toml`, `/assets/index.html` 404 · run id `..%2F..%2Fstate…` / uppercase UUID / `board` traversal 400, unknown UUID 404 · node `..%2F..%2F..%2Fetc%2Fpasswd` 404 · `?map=..%2F..` 400 (graph and node) · run stream with `Last-Event-ID: ../../etc/passwd:5` 400 · live stream with `Last-Event-ID: ../../x:99999999999999999999` 200 (ignored: not an event id) |
+| R2 | change-request guards | `POST /` without proofs 403 (new) · `POST //api/v1/control/play` 403 · `POST /%61pi/…/play` with the token only 403 · no / wrong / query token 403 · cross-origin 403 · rebinding `Host` 421 · body > 1 MiB 413 · a 200-byte scenario name 400 (new) · an event body 400 · preflight 403. Control after all of it: `idle`, `last: null`, no `runtime.db` — nothing reached the control |
+| R3 | Play → event `act` → Stop at the event's `loop.started` | Play 200 (verdict `tone: green`), holder `Vladimirs-MacBook-Pro-2.local:51395:afbad1b0-d79c-400c-86a4-55c4857222e6`, run `1d046fd0-d1f8-40df-8cb8-6c45f4d4638d`; session `studio-act-10899711-d7d1-4fbc-b873-bfb4483deee3`; Stop **200**: drain `finished 1`, `lease_released: true`. Run order: 17 `loop.started` → 19 `runtime.stopping` → 20 `jev.completed` → 22–23 `tool.started` / `tool.completed` ok (write_marker) → 28 `loop.completed` ok → 29 `runtime.stopped` ok. A live drain of an in-flight event |
+| R4 | CLI `tengu run` holds the lease | Studio `attached` (holder `Vladimirs-MacBook-Pro-2.local:51545:8a7a7de4-212a-4b64-9e2e-42cb7cbe53a3`), every action `ok: false`; Play / Stop / event **409** each, the holder named in full; CLI SIGINT exit 0 |
+| R5 | secrets sweep | every GET Studio serves — meta, graph, health, runs, control, `events` + `board` of all 3 runs, the 16 node details: key value 0 matches (output dir + lab home, `tengu.log` included); token 0 matches outside the one stdout line (deleted) |
+| R6 | `kill -9` of a Studio running its runtime | Play (holder `Vladimirs-MacBook-Pro-2.local:51395:e203616b-4f8d-4970-9917-db6f5f790621`), `kill -9` → exit 137; `pgrep` finds no tengu process (no orphan: the runtime died with it); heartbeat stays `running` with that holder; CLI `tengu run` exit 1 `held by … for 27 s more`; 29 s after the kill a CLI run took the lease (holder `Vladimirs-MacBook-Pro-2.local:52090:336cb4d4-aa63-4f0a-bd46-ef38d96af29b`), SIGINT exit 0. The killed recordings stay `open` (Studio run `52ba5978-0a42-4820-8cd5-f947b6574aa2` ends `studio.control`, runtime run `dcc7a8d5-891f-4a4a-b61f-c28af5edcd32` ends `loop.completed`): no closing line is invented |
+| R7 | after | `tengu.log` has the Studio + runtime lines (server logs like `tengu run`); `pgrep -fl 'tengu (run\|studio)'` nothing; `~/.tengu/logs/decisions.jsonl` sha256 unchanged (`7deaacb257f43d3dc3e622f6d08adddad72e24f7cc812f7722a98ec25e0039d5`); lab paths cleaned |
