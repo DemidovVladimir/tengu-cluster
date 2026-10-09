@@ -831,6 +831,27 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # audit = true                         # JSONL at <TENGU_HOME>/logs/egress.jsonl
 # audit_log = "~/.tengu/logs/egress.jsonl"   # another audit path (~ expanded)
 
+# --- Sealed keys (no provider key on this machine) ---
+# Provider keys are secrets of the tengu-seal Cloudflare Worker (set them in
+# Cloudflare: dashboard or `npx wrangler secret put`); tengu calls
+# <proxy>/<route> and the Worker puts the key at that route's one header / path /
+# query spot and forwards. The session covers only the routes [keys.env] uses
+# that the key's CLIENTS entry allows (empty routes = none).
+# docs/sealed-keys-2026-10-09.md · docs/cloudflare-secrets-setup.html · tengu keys --help
+
+# [keys]
+# proxy = "https://tengu-seal.<subdomain>.workers.dev"   # Worker origin (allow_hosts must admit it)
+# client = "tengu-attended"                              # ssh-agent key comment or full SHA256: fingerprint
+# agent_socket = "~/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"  # default $SSH_AUTH_SOCK
+# strip = ["TELEGRAM_BOT_TOKEN", "ALCHEMY_API_KEY", "HELIUS_API_KEY", "PRIVY_APP_SECRET"]  # removed at load (and in children): local copies of Worker keys; not a [keys.env] name
+# [keys.env]                                             # VAR = "<route>[/path][?query]" or "@session"; the session asks for these routes
+# OPENROUTER_BASE_URL = "openrouter"                     # → <proxy>/openrouter
+# OPENROUTER_API_KEY = "@session"                        # → the session token (RAM only); @session: only this var, only next to a route OPENROUTER_BASE_URL
+# TELEGRAM_API_URL = "telegram"                          # bot uses a placeholder; no TELEGRAM_BOT_TOKEN; no session ⇒ tengu telegram refuses to start
+# SOLANA_RPC_URL = "solana-rpc/?api-key=TENGU_SECRET"    # Worker swaps TENGU_SECRET for HELIUS_API_KEY
+# EVM_RPC_URL = "evm-rpc/TENGU_SECRET"                   # Worker swaps TENGU_SECRET for ALCHEMY_API_KEY
+# PRIVY_API_URL = "privy"                                # Privy tools via the Worker (adds Basic PRIVY_BASIC_AUTH); needs PRIVY_APP_SECRET in strip
+
 # --- Skill Lifecycle ---
 # Enables `tengu eval <skill>`, `tengu skill metrics <skill>`, and
 # `tengu skill evolve <skill>`. All three drive the metrics: frontmatter

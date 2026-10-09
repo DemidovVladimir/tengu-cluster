@@ -492,7 +492,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     "workspace": ["hands", "Files and a shell in the agent workspace. write_file refuses .tengu/, .claude/, .git/, skills/ and CLAUDE.md / AGENTS.md."],
     "memory": ["brain", "Vector memory (needs [memory]); shared_cache is a SQLite store in the workspace; agentic_memory is Open Brain on Postgres."],
     "http": ["hands", "Any HTTP API through the egress client. Follows up to 10 redirects itself, re-checking scope and egress on every hop."],
-    "crypto (Privy)": ["guard", "Privy agentic wallets plus two pure helpers. A [risk] sandbox turns the signing tools off."],
+    "crypto (Privy)": ["guard", "Privy agentic wallets plus two pure helpers. A [risk] sandbox turns the signing tools off. With [keys.env] PRIVY_API_URL = \"privy\" the app secret stays in the Cloudflare Worker (see sealed keys)."],
     "skills": ["brain", "Read skill files and resources; manage_skill writes them; skill_distill and apply_improver_proposal evolve them."],
     "solana": ["hands", "Typed, cached LP reads and pure decisions; five write tools that simulate unless signing is set up."],
     "hyperliquid": ["data", "Typed market contexts and order books from Hyperliquid."],

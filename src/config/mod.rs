@@ -8,6 +8,7 @@ pub(crate) mod egress;
 pub(crate) mod execution_map;
 pub(crate) mod feeds;
 pub(crate) mod hardening;
+pub(crate) mod keys;
 pub(crate) mod lineage;
 pub(crate) mod paths;
 pub(crate) mod rate_limits;
@@ -188,6 +189,12 @@ pub struct Config {
     /// process-wide by `egress::install`; see `adapters/egress.rs`.
     #[serde(default)]
     pub egress: EgressConfig,
+
+    /// `[keys]` — sealed-secret proxy: provider keys live only inside blobs
+    /// the `tengu-seal` Cloudflare Worker opens (`config/keys.rs`). Absent =
+    /// keys come from the env / vault as before.
+    #[serde(default)]
+    pub keys: keys::KeysConfig,
 
     /// Inbound MCP client connections — external MCP servers this install
     /// connects to. At boot the MCP plugin connects to each entry, calls
@@ -1406,6 +1413,9 @@ impl Config {
         for issue in self.egress.validation_errors() {
             errors.push(issue);
         }
+        for issue in self.keys.validation_errors(&self.egress.allow_hosts) {
+            errors.push(issue);
+        }
         for issue in solana::validation_errors(self) {
             errors.push(issue);
         }
@@ -1746,6 +1756,7 @@ impl Default for Config {
             claude_code: None,
             default_scopes: HashMap::new(),
             egress: EgressConfig::default(),
+            keys: keys::KeysConfig::default(),
             mcp_servers: Vec::new(),
             solana: solana::SolanaConfig::default(),
             xmarket: None,

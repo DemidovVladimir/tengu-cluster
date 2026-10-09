@@ -492,11 +492,12 @@ Set only in `control-loop-lab`. Server: the default build (feature `studio`), lo
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Eleven today: `control-loop-lab`, `jev-exec`, `lping`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes.
+`sandboxes/<name>/config.toml`, run from the repo root. Twelve today: `control-loop-lab`, `jev-exec`, `lping`, `sealed-check`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes.
 
 | Sandbox | What its config shows |
 |---|---|
 | `control-loop-lab` | the safe control-loop reference run: one Jev loop, two feeds, `[studio] control = true`; nothing touches money, keys, the shell or the network (`docs/control-loop-lab-2026-10-08.md`) |
+| `sealed-check` | proves the seal proxy: Jev, loop `check`, `tengu run`, Studio reach OpenRouter only through the `tengu-seal` Worker (`[keys]`); one pure-compute tool, own root `~/tengu-sealed-check` (`docs/sealed-check-2026-10-09.md`) |
 | `soe` | the SOE weekly cycle: `[sources]` (rows off), `[soe]` with `soe_architect` / `soe_critic` (`claude_code`, built-ins off), the read-only `soe_reader`, `[feeds.soe_week]` (`kind = "job"`), bound to `SOE-G0` (`docs/soe-2026-10-08.md`) |
 | `xlab-w2` | `[strategy_ranking]` (contracts `rank.xlab-w2.daily.v1`, `rank.xlab-w2.weekend.v1`, unsealed until G-SR1), `strategy_ranking` on the private `xl_ranker` + its feeds `strategy_ranking_daily` / `_weekend`, unbound (no `[generation]`), `[backtest] keep_runs = 200` (cited runs never pruned) |
 
@@ -538,6 +539,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | `TENGU_RISK_RESUME_SECRET_FILE` | `cli/risk.rs` | unset = no guard | `tengu risk resume` also asks for this file's content; refused when the file is missing, not 0600, over 4 KiB, empty, or inside an agent's `fs_roots` / `workspace` |
 | `CHAIN_ID` · `EVM_RPC_URL` | `tools/crypto/helpers.rs` | `1` · `https://ethereum-rpc.publicnode.com` | Privy tools: chain id when a call omits it · JSON-RPC for receipts |
 | `PRIVY_APP_ID` · `PRIVY_APP_SECRET` · `PRIVY_WALLET_ID` | `tools/crypto/helpers.rs` | — | Privy agentic wallet (through `env_reads`) |
+| `PRIVY_API_URL` | `tools/crypto/helpers.rs` | `https://api.privy.io` | Privy base URL; `[keys.env] PRIVY_API_URL = "privy"` = the seal proxy (session, no `PRIVY_APP_SECRET`; `strip` it — required). Scope-checked only when set |
 | `TENGU_BRIDGE_*` (`AGENT`, `TOOLS`, `WORKSPACE`, `GRANT_WORKSPACE`, `SCOPES`, `MCP_SERVERS`, `SUMMARY_FILE`, `TRANSCRIPT_FILE`, `MAX_RESULT_CHARS`) | `inbound/mcp_bridge.rs` (names: `outbound/bridge_env.rs`) | set by the Claude Code engine | engine → bridge contract — `docs/mcp-bridge.md` |
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE` · `_OVERLAP` | forwarded by `engines/claude_code.rs` | unset | read by nothing — the bridge takes `[memory]` from its config |
 | `TENGU_TUI_METRICS` · `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | metrics line · planner recall hits as System bubbles |

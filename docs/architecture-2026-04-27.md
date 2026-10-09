@@ -133,7 +133,7 @@ No user message starts these. Same tools, scopes and egress as a chat turn; no p
 | Clock work is a tool feed | exits, the weekend fade, the daily risk roll: `kind = "tool"` — no LLM, no Jev (`kind = "tick"` always reaches a Jev loop) |
 | `kind = "job"` | a named application job from a closed list (`config/feeds.rs` `JOBS`: `soe_cycle`), never a command from config; `RuntimeJob::run(slot ms, "feed:<name>:<slot ms>")` (`ports/runtime.rs`), built by `bootstrap/runtime.rs::job_for` → `bootstrap/soe.rs` (§2.17); same backoff and health as a tool feed |
 | Trace | `bootstrap/runtime.rs::start` opens this process's recording (`<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, `runtime_id` = the lease holder): `runtime.*`, `feed.*`, `loop.*`, every loop step and tool call (§2.18) |
-| Today | `xmarket` + `xmarket-weekend` run tool feeds only (no `[decision_loops]` there yet — tracker `jev-xmarket-loops-toml`); `xlab-w2` runs tool feeds (`history_refresh`, `strategy_ranking_daily`, `strategy_ranking_weekend` — §1b C); `soe` runs one job feed (`soe_week` → `soe_cycle`); loops live in `lping` (`lp_watch`, `hedge_watch`, exec chains `hedge_exec`, `lp_exec`), `jev-exec`, `xlab` / `xlab-w2` (`xl_gate`, replayed by `tengu backtest --gate`), `control-loop-lab` (`demo`, fed by the tick feed `tick`; tool feed `probe`) |
+| Today | `xmarket` + `xmarket-weekend` run tool feeds only (no `[decision_loops]` there yet — tracker `jev-xmarket-loops-toml`); `xlab-w2` runs tool feeds (`history_refresh`, `strategy_ranking_daily`, `strategy_ranking_weekend` — §1b C); `soe` runs one job feed (`soe_week` → `soe_cycle`); loops live in `lping` (`lp_watch`, `hedge_watch`, exec chains `hedge_exec`, `lp_exec`), `jev-exec`, `xlab` / `xlab-w2` (`xl_gate`, replayed by `tengu backtest --gate`), `control-loop-lab` (`demo`, fed by the tick feed `tick`; tool feed `probe`), `sealed-check` (`check`, fed by the tick feed `tick`; Jev via the seal proxy) |
 | Operator doc | `docs/runtime-2026-09-30.md` (§ Feeds, § Health, § Weekend run) |
 
 ### B. `tengu backtest` — market.db → resolve / prepare → candidates → [Jev gate] → evaluate → run dir
@@ -221,6 +221,7 @@ Edit a block + restart chat → the planner registry file is regenerated on the 
 | `xlab-w2` | W2 research: an unbound copy of `xlab` sharing its state dir (`xlab`) + SEC events, `[strategy_ranking]` + ranking feeds | `open`, `allow_hosts` HL + GeckoTerminal + SEC |
 | `soe` | source layer (O2): `[sources]` rows (SEC EDGAR, EU TED, shipped disabled), one read-only agent; weekly cycle (O3): `[soe]`, two stage agents, the `soe_week` job; bound to SOE-G0 | `open`, `allow_hosts` SEC + TED |
 | `control-loop-lab` | the safe reference run of the control loop: loop `demo` (Jev), feeds `tick` + `probe`, `lab` with `read_file` / `write_file` / `list_directory` in its workspace; `[studio] control = true` (§2.18) | `open` (Jev only) |
+| `sealed-check` | seal-proxy proof: loop `check` (Jev via the `tengu-seal` Worker, `[keys]`), feed `tick`, one tool `hex_to_uint256`; Studio with `--allow-control` | `open`, `allow_hosts` 127.0.0.1 + `*.workers.dev` |
 | `tor-check` · `storage-test` | Tor egress check · `persistent_store` test | `tor` |
 | `unlimited` | one OpenRouter agent over Telegram (`[telegram]`) | `open` |
 

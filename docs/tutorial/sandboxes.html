@@ -66,7 +66,7 @@
   <h1>Sandbox config</h1>
   <p class="lede">One TOML file is the whole team: agents, tools, scopes, network, memory, loops. <code>--sandbox &lt;name&gt;</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code>, and every child process loads that same file again.</p>
   <ul class="facts">
-    <li><b>11</b> sandboxes in the repo</li>
+    <li><b>12</b> sandboxes in the repo</li>
     <li>unknown key = <b>load error</b></li>
     <li>home <b>~/.tengu</b> (<code>TENGU_HOME</code>)</li>
     <li>network <b>tor</b> unless <code>[egress]</code> says open</li>
@@ -214,7 +214,7 @@
         <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, Telegram approvals, a <code>tools</code> name no catalog row or MCP server knows) are only logged.</li>
         <li><code>[default_scopes]</code> is copied into each agent that has no scope for that tool; <code>~</code> is expanded. Every agent gets the same <code>SandboxSections</code>.</li>
         <li><code>--sandbox lping</code> loads <code>sandboxes/lping/config.toml</code> from the current directory, through the same steps. It replaces the base config whole.</li>
-        <li><code>TENGU_CONFIG</code> is re-pinned to the sandbox file's absolute path, and that file's <code>[egress]</code> policy is installed.</li>
+        <li><code>TENGU_CONFIG</code> is re-pinned to the sandbox file's absolute path, and that file's <code>[egress]</code> policy is installed. With <code>[keys]</code>, a seal-proxy session is signed (or the parent's reused) and <code>[keys.env]</code> exported as Worker route URLs (<a href="sealed-keys.html">sealed keys</a>).</li>
         <li>A <code>run-agent</code> child gets the sandbox name over IPC and loads the same file; <code>tengu mcp-bridge</code> loads <code>TENGU_CONFIG</code>. Same agents, scopes and sections everywhere.</li>
       </ol>
     </div>
@@ -232,7 +232,7 @@
       <label for="r-sbx"><code>--sandbox</code>
         <select id="r-sbx">
           <option value="">(not given)</option>
-          <option>control-loop-lab</option><option>jev-exec</option><option selected>lping</option><option>soe</option><option>storage-test</option><option>tor-check</option>
+          <option>control-loop-lab</option><option>jev-exec</option><option selected>lping</option><option>sealed-check</option><option>soe</option><option>storage-test</option><option>tor-check</option>
           <option>unlimited</option><option>xlab</option><option>xlab-w2</option><option>xmarket</option><option>xmarket-weekend</option>
         </select>
       </label>
@@ -323,7 +323,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 <section class="sec" aria-labelledby="s-shelf">
   <div class="sec-head">
     <span class="kicker">The real sandboxes</span>
-    <h2 id="s-shelf">Eleven teams, eleven files</h2>
+    <h2 id="s-shelf">Twelve teams, twelve files</h2>
     <p>Read from <code>sandboxes/*/config.toml</code>. Filter by what each one turns on.</p>
   </div>
   <div class="shelf-filter" role="group" aria-label="Filter sandboxes">
@@ -352,6 +352,12 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
       <div class="tags"><span class="chip data">open</span><span class="chip jev">4 loops</span><span class="chip heart">planner</span><span class="chip data">webhooks</span></div>
       <p>Crypto research and Solana LP reads. No signer: write tools only simulate.</p>
       <div class="agents">lping · crypto_researcher · lp_executor</div>
+    </div>
+    <div class="sbx" data-tags="open loops feeds">
+      <h3>sealed-check</h3>
+      <div class="tags"><span class="chip data">open · 2 hosts</span><span class="chip guard">[keys]</span><span class="chip jev">1 loop</span><span class="chip hands">1 feed</span></div>
+      <p>Proves the <a href="sealed-keys.html">seal proxy</a>: Jev, loop <code>check</code>, <code>tengu run</code> and Studio (<code>--allow-control</code>) reach OpenRouter only through the Worker. One pure-compute tool, deny-all scope; own root <code>~/tengu-sealed-check</code>.</p>
+      <div class="agents">checker</div>
     </div>
     <div class="sbx" data-tags="open hard feeds">
       <h3>soe</h3>
@@ -498,7 +504,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 /* page-only: the resolver, the agent-block anatomy, the sandbox filter */
 (function () {
   "use strict";
-  var NET = { "control-loop-lab": "open", "jev-exec": "open", "lping": "open", "soe": "open, allow_hosts: 3", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
+  var NET = { "control-loop-lab": "open", "jev-exec": "open", "lping": "open", "sealed-check": "open, allow_hosts: 2", "soe": "open, allow_hosts: 3", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
     "unlimited": "open", "xlab": "open, allow_hosts: 2", "xlab-w2": "open, allow_hosts: 4", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
   var sbx = document.getElementById("r-sbx"), cf = document.getElementById("r-c"), env = document.getElementById("r-env");
   var ex = document.getElementById("r-exists"), ok = document.getElementById("r-valid");

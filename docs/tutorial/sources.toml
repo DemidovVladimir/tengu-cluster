@@ -239,6 +239,18 @@ sources = [
   "src/bootstrap/decision.rs",
 ]
 
+[pages.sealed-keys]
+sources = [
+  "src/config/keys.rs",
+  "src/adapters/outbound/keys/mod.rs",
+  "src/adapters/outbound/keys/agent.rs",
+  "src/adapters/inbound/cli/keys.rs",
+  "src/bootstrap/sandbox.rs",
+  "src/adapters/inbound/telegram.rs",
+  "src/adapters/outbound/solana/rpc.rs",
+  "src/adapters/outbound/tools/crypto/helpers.rs",
+]
+
 [pages.evidence]
 sources = [
   "src/domain/evidence.rs",

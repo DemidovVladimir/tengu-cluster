@@ -360,7 +360,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Open each door</h2>
-    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code> and <code>studio</code>. The secret below is an example.</p>
+    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code> and <code>studio</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>

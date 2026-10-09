@@ -35,6 +35,9 @@ pub(crate) fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Resul
             cfg
         }
     };
+    // `[keys]`: sign a seal-proxy session (or reuse the parent's) and point
+    // the provider clients at the Worker. No-op without `[keys] proxy`.
+    crate::adapters::outbound::keys::install(&cfg.keys);
     // The effective policy is known only now (sandbox wins over the base
     // config). Children inherit it via `TENGU_EGRESS` and stay quiet — the
     // parent already printed the warning.
