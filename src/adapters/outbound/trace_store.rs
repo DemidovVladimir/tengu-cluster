@@ -110,7 +110,12 @@ impl JsonlTraceSink {
         // `trigger:map/<sha256>`) is named by its `trigger.*` root event.
         let node = match kind {
             RunKind::Run => Some(crate::domain::workflow::node_id::runtime(sandbox)),
-            RunKind::Decide | RunKind::Studio => None,
+            RunKind::Decide
+            | RunKind::Studio
+            | RunKind::Webhooks
+            | RunKind::Chat
+            | RunKind::Telegram
+            | RunKind::Eval => None,
         };
         let mut opened = EventDraft::new(Component::Runtime, RUN_OPENED, Status::Ok)
             .payload(json!({"kind": kind.as_str(), "pid": std::process::id()}));

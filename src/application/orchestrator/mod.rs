@@ -5,7 +5,8 @@
 //! - `executor`     — DAG executor: parallel, ready-set scheduling
 //! - `retry`        — per-step retry policy
 //! - `replan`       — outer loop: re-invoke the planner on exhaustion
-//! - `events`       — OrchestratorEvent enum + broadcast channel
+//! - `events`       — OrchestratorEvent enum + the event bus (broadcast + optional trace bridge)
+//! - `trace`        — the bridge: each OrchestratorEvent as an execution-trace event (Studio)
 //! - `shared_files` — `TENGU_PLANNER_REGISTRY.md` (from `[agents.*]` blocks with a `description`) + per-session plan state for subagents
 //! - `wiring`       — channel-side glue
 
@@ -15,6 +16,7 @@ pub mod planner;
 pub mod replan;
 pub mod retry;
 pub mod shared_files;
+pub(crate) mod trace;
 // Phase 7.1 (partial) — `pub mod roster` removed; the only runtime caller
 // (crate::bootstrap::orchestrator::build_orchestrator) now uses an inlined helper.
 pub mod wiring;

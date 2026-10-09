@@ -10,9 +10,9 @@
 //! | `seq` | 1, 2, … per run, in file order (the sink stamps it under one lock) |
 //! | `ts_ms` | the sink's wall clock, or the draft's own (a replay's clock) |
 //! | `sandbox` · `config_hash` | runner name · `Config::source_sha256` |
-//! | `runtime_id` | the `tengu run` lease holder `<host>:<pid>:<uuid>`; `None` for `tengu decide` |
-//! | `run_id` | a fresh UUID v4 per recording (one `tengu run` process, one `tengu decide`) — names the file |
-//! | `session_id` | the event's session: `<feed>:<slot ms>` · `decide-<loop>-<uuid>` · `webhook-<endpoint>-<uuid>` |
+//! | `runtime_id` | the lease holder `<host>:<pid>:<uuid>` (`tengu run`, `tengu webhooks`); `None` for `tengu decide` / chat / telegram / eval |
+//! | `run_id` | a fresh UUID v4 per recording (one `tengu run` / `tengu webhooks` / chat / telegram / eval process, one `tengu decide`) — names the file |
+//! | `session_id` | the event's session: `<feed>:<slot ms>` · `decide-<loop>-<uuid>` · `webhook-<endpoint>-<uuid>` · a chat / telegram / eval orchestrator's (`bootstrap::orchestrator::resolve_session_id`) |
 //! | `correlation_id` | the draft's, else `session_id`, else `runtime_id`, else `run_id` ([`RunContext::stamp`]) |
 //! | `parent_event_id` · `call_id` | the causing event · the tool call id (`{loop}:{session}:{t}`, `feed:<n>:<slot>:<i>`) |
 //! | `component` · `kind` · `node_id` · `status` | [`Component`] · dotted `<family>.<what>` (`run.opened`, `jev.completed`, …) · a `domain::workflow` node id · [`Status`] |
@@ -41,6 +41,9 @@ pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 4096;
 /// `kind` of the first event of every run.
 pub(crate) const RUN_OPENED: &str = "run.opened";
+/// `kind` of the last event of a `tengu webhooks` / chat / telegram / eval
+/// recording (payload: the stop `reason`).
+pub(crate) const RUN_CLOSED: &str = "run.closed";
 
 /// One event (module table).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,12 +215,38 @@ impl Tone {
 /// `runtime.stopped` last; `tengu decide` ends with `trigger.completed` /
 /// `trigger.failed`, or a failed root `trigger.decide` / `trigger.map` (the
 /// loop could not be built); a `tengu studio` with control ends with
-/// `studio.stopped`.
+/// `studio.stopped`; `tengu webhooks`, chat, telegram and eval with
+/// [`RUN_CLOSED`]. A webhook request's `trigger.webhook` never closes a run
+/// (one recording holds every request).
 #[cfg_attr(not(feature = "studio"), allow(dead_code))]
 pub(crate) fn closes_run(kind: &str, status: Status) -> bool {
-    kind == "runtime.stopped"
-        || kind == "studio.stopped"
-        || (kind.starts_with("trigger.") && matches!(status, Status::Ok | Status::Failed))
+    match kind {
+        "runtime.stopped" | "studio.stopped" | RUN_CLOSED => true,
+        "trigger.decide" | "trigger.map" | "trigger.completed" | "trigger.failed" => {
+            matches!(status, Status::Ok | Status::Failed)
+        }
+        _ => false,
+    }
+}
+
+/// The status of a webhook request from the HTTP code it answered
+/// (`webhook.responded`): 2xx `ok`; 5xx but 503 `failed` (the listener
+/// could not serve it); any other code `refused` — a deterministic gate
+/// (auth 401, queue full 429, shutting down 503, unknown endpoint 404).
+#[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+pub(crate) fn http_status(code: u16) -> Status {
+    match code {
+        200..=299 => Status::Ok,
+        503 => Status::Refused,
+        500..=599 => Status::Failed,
+        _ => Status::Refused,
+    }
+}
+
+/// The first line of `s` — what an event carries of a free text (a tool's
+/// result, an error), never the rest.
+pub(crate) fn line1(s: &str) -> &str {
+    s.lines().next().unwrap_or_default()
 }
 
 /// A recording now (`/api/v1/runs`, the Studio header).
@@ -260,6 +289,16 @@ pub(crate) enum RunKind {
     /// `studio.control` (Play / Stop / send-event: requested, then ok /
     /// refused / failed), `studio.stopped`.
     Studio,
+    /// One `tengu webhooks` process (outside `tengu run`): a
+    /// `trigger.webhook` root per request, its loop / orchestration events
+    /// under it, [`RUN_CLOSED`] at the stop.
+    Webhooks,
+    /// One `tengu chat` (TUI) process with `[orchestrator]`: its plans.
+    Chat,
+    /// One `tengu telegram` process with `[orchestrator]`: every sender's plans.
+    Telegram,
+    /// One `tengu eval` run with `[orchestrator]`: every row's plans.
+    Eval,
 }
 
 impl RunKind {
@@ -268,6 +307,10 @@ impl RunKind {
             RunKind::Run => "run",
             RunKind::Decide => "decide",
             RunKind::Studio => "studio",
+            RunKind::Webhooks => "webhooks",
+            RunKind::Chat => "chat",
+            RunKind::Telegram => "telegram",
+            RunKind::Eval => "eval",
         }
     }
 }
@@ -295,23 +338,36 @@ pub(crate) struct RunIds {
 }
 
 /// What the caller knows of an event; the sink stamps the rest
-/// ([`RunContext::stamp`]).
-#[derive(Debug, Clone, PartialEq)]
+/// ([`RunContext::stamp`]). Serializable: a `run-agent` child hands its
+/// tool events to the parent over IPC (`AgentIpcOutput.trace`), which
+/// writes them into its own recording (`keep` does not cross).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct EventDraft {
     pub component: Component,
     pub kind: String,
     pub status: Status,
+    #[serde(default)]
     pub session_id: Option<String>,
+    #[serde(default)]
     pub correlation_id: Option<String>,
+    #[serde(default)]
     pub parent_event_id: Option<String>,
+    #[serde(default)]
     pub call_id: Option<String>,
+    #[serde(default)]
     pub node_id: Option<String>,
+    #[serde(default)]
     pub duration_ms: Option<u64>,
+    #[serde(default)]
     pub payload: Value,
+    #[serde(default)]
     pub artifact: Option<ArtifactRef>,
-    /// The caller's clock (replay); `None` = the sink's wall clock.
+    /// The caller's clock (replay, a child's events); `None` = the sink's
+    /// wall clock.
+    #[serde(default)]
     pub ts_ms: Option<i64>,
     /// Payload fields [`bound_payload`] drops last (never written itself).
+    #[serde(skip)]
     pub keep: &'static [&'static str],
 }
 
@@ -374,8 +430,7 @@ impl EventDraft {
         self.keep = fields;
         self
     }
-    /// The caller's clock (a replay's); unused by the live sites.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The caller's clock (a replay's, a `run-agent` child's).
     pub(crate) fn at(mut self, ts_ms: i64) -> Self {
         self.ts_ms = Some(ts_ms);
         self
@@ -715,15 +770,69 @@ mod tests {
         ] {
             assert_eq!(RunState::of(&run(kind, status), Some(id)), RunState::Closed);
         }
+        assert_eq!(
+            RunState::of(&run(RUN_CLOSED, Status::Ok), Some(id)),
+            RunState::Closed
+        );
         for (kind, status) in [
             ("runtime.running", Status::Running),
             ("trigger.decide", Status::Running),
             ("runtime.stopping", Status::Pending),
             ("studio.control", Status::Failed),
+            // One webhooks recording holds every request: a request's root
+            // or answer never closes it.
+            ("trigger.webhook", Status::Ok),
+            ("trigger.webhook", Status::Failed),
+            ("webhook.responded", Status::Ok),
+            ("plan.completed", Status::Ok),
         ] {
             assert_eq!(RunState::of(&run(kind, status), Some(id)), RunState::Live);
             assert_eq!(RunState::of(&run(kind, status), None), RunState::Open);
         }
+    }
+
+    /// A webhook answer's code → status: 2xx ok, a gate refused (auth,
+    /// queue, shutdown, unknown endpoint), a server error failed.
+    #[test]
+    fn http_status_of_a_webhook_answer() {
+        for (code, want) in [
+            (200, Status::Ok),
+            (202, Status::Ok),
+            (401, Status::Refused),
+            (404, Status::Refused),
+            (429, Status::Refused),
+            (503, Status::Refused),
+            (500, Status::Failed),
+            (502, Status::Failed),
+        ] {
+            assert_eq!(http_status(code), want, "{code}");
+        }
+        assert_eq!(line1("first\nsecond"), "first");
+        assert_eq!(line1(""), "");
+    }
+
+    /// A draft crosses the `run-agent` IPC as JSON: every field but `keep`
+    /// round-trips; a minimal (older or newer) object parses.
+    #[test]
+    fn draft_round_trips_as_json() {
+        let d = EventDraft::new(Component::Tool, "tool.completed", Status::Ok)
+            .session("webhook-solana_events-0f0e0d0c-0b0a-4908-8706-050403020100")
+            .parent("ipc:1")
+            .call("call_0f0e0d0c")
+            .node("tool:crypto_researcher/sol_price")
+            .duration(12)
+            .payload(json!({"line1": "ok"}))
+            .at(1_759_912_345_678)
+            .keep(&["line1"]);
+        let back: EventDraft = serde_json::from_str(&serde_json::to_string(&d).unwrap()).unwrap();
+        assert_eq!(back.keep, &[] as &[&str]);
+        assert_eq!(back, EventDraft { keep: &[], ..d });
+        let min: EventDraft = serde_json::from_value(json!({
+            "component": "tool", "kind": "tool.started", "status": "running", "future": 1
+        }))
+        .unwrap();
+        assert_eq!(min.session_id, None);
+        assert_eq!(min.payload, Value::Null);
     }
 
     /// `parse_event_id` inverts `event_id`; anything else is `None`.

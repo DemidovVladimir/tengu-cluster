@@ -627,7 +627,7 @@
     const rt = h && h.runtime;
     const runtime = $("f-runtime");
     if (rt) runtime.replaceChildren(chip(rt.state, rt.tone));
-    else runtime.textContent = h && h.kind === "decide" ? "none (tengu decide)" : "—";
+    else runtime.textContent = h && h.kind && h.kind !== "run" ? `none (tengu ${h.kind})` : "—";
     $("f-model").textContent = h && h.model ? h.model.value : "—";
     const rb = $("run-badge");
     rb.hidden = !S.run;

@@ -56,14 +56,19 @@ impl DagExecutor {
                 let events = events.clone();
                 let step_clone = step.clone();
                 in_flight.insert(step.id.clone());
-                let _ = events.send(OrchestratorEvent::StepStarted {
+                // A recording bus: the step's work (its `run-agent` child's
+                // tool events) runs caused by its `step.started`.
+                let cause = events.send_with_cause(OrchestratorEvent::StepStarted {
                     step_id: step.id.clone(),
                     agent: step.agent.clone(),
                 });
                 futures.push(tokio::spawn(async move {
-                    let outcome =
-                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events)
-                            .await;
+                    let work =
+                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events);
+                    let outcome = match cause {
+                        Some(c) => crate::application::trace_exec::caused_by(c, work).await,
+                        None => work.await,
+                    };
                     (step_clone.id, outcome)
                 }));
             }

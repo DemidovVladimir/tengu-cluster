@@ -203,7 +203,7 @@ Since 2026-10-09, runtime execution is observable too:
 
 | Surface | What |
 |---|---|
-| Execution trace | every `tengu run` / `tengu decide` process writes one JSONL recording `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` (`domain/trace.rs`): `event_id` = `<run_id>:<seq>`, session / correlation / parent ids, workflow `node_id`, status, payload redacted + bounded; `tengu trace runs` / `show [--follow]`. `tengu webhooks` does not record yet |
+| Execution trace | every `tengu run` / `tengu decide` / `tengu webhooks` process (and, with `[orchestrator]`, each `tengu chat` / `tengu telegram` process and `tengu eval` row) writes one JSONL recording `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` (`domain/trace.rs`): `event_id` = `<run_id>:<seq>`, session / correlation / parent ids, workflow `node_id`, status, payload redacted + bounded; `tengu trace runs` / `show [--follow]`. A webhook request is a `trigger.webhook` root over its loop or plan events; planner / subagent steps are `plan.*` / `step.*` with each step's `run-agent` tool calls under it |
 | Tengu Studio | `tengu studio --sandbox <s>` (default build): a loopback browser page over the validated workflow graph, live + replayed runs, the `tengu doctor --live` health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound or hardened); the browser draws, Rust decides — `docs/studio-2026-10-08.md` |
 
 ### Hermes

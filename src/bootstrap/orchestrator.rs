@@ -347,11 +347,16 @@ fn open_brain_embedding_model(configured: &str) -> (&'static str, Option<String>
     (pinned, warning)
 }
 
+/// `trace` = the recording this orchestrator's plans and steps go to
+/// (`application::orchestrator::trace`: `plan.*`, `step.*`,
+/// `metrics.recorded`, and each step's `run-agent` `tool.*` events); `None`
+/// records nothing.
 pub(crate) fn build_orchestrator(
     config: &Config,
     chat_factory: Arc<dyn ChatServiceFactory>,
     memory: Arc<MemoryManager>,
     session_id: String,
+    trace: Option<crate::application::orchestrator::trace::OrchestratorTrace>,
 ) -> Option<Orchestrator> {
     let cfg = config.orchestrator.as_ref()?;
 
@@ -374,22 +379,32 @@ pub(crate) fn build_orchestrator(
     // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
     // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
     // (TUI, Telegram adapter) see one unified event stream.
-    let bus = crate::application::orchestrator::events::new_bus();
+    let step_sink = trace.as_ref().map(|t| Arc::clone(&t.sink));
+    let bus = match trace {
+        Some(t) => crate::application::orchestrator::events::new_bus().traced(
+            crate::application::orchestrator::trace::TraceBridge::new(t, session_id.clone()),
+        ),
+        None => crate::application::orchestrator::events::new_bus(),
+    };
 
     // Metrics — install the process-global metrics sink and bridge it
     // onto the orchestrator event bus so a single subscriber can render
     // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
     // subsequent `build_orchestrator` calls reuse the already-installed
-    // sink. Bridge task lives as long as the metrics sink exists.
+    // sink. The forwarder ends with the orchestrator (a weak bus handle:
+    // a webhook turn's orchestrator used to keep it running forever).
     let metrics_tx = crate::application::metrics::install_global_sink();
     {
         let mut metrics_rx = metrics_tx.subscribe();
-        let bus_tx = bus.clone();
+        let weak_bus = bus.downgrade();
         tokio::spawn(async move {
             use tokio::sync::broadcast::error::RecvError;
             loop {
                 match metrics_rx.recv().await {
                     Ok(record) => {
+                        let Some(bus_tx) = weak_bus.upgrade() else {
+                            break;
+                        };
                         // `bus.send` returns Err only when zero
                         // subscribers — fine, drop and keep listening.
                         let _ = bus_tx.send(
@@ -422,7 +437,8 @@ pub(crate) fn build_orchestrator(
             config.sandbox_name.clone(),
             session_id.clone(),
             config.agents.clone(),
-        ),
+        )
+        .with_trace(step_sink),
     );
     let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
         cfg.agent.clone(),

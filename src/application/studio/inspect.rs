@@ -106,6 +106,24 @@ pub(crate) fn config_slice(
             let name = f.feed.as_deref()?;
             slice(format!("feeds.{name}"), to_json(cfg.feeds.get(name)?))
         }
+        NodeKind::Planner => {
+            let o = cfg.orchestrator.as_ref()?;
+            let routable: Vec<String> =
+                crate::application::orchestrator::shared_files::routable_agents(&cfg.agents)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+            slice(
+                "orchestrator".into(),
+                json!({
+                    "agent": o.agent,
+                    "engine": o.engine,
+                    "max_attempts_per_step": o.max_attempts_per_step,
+                    "max_replans": o.max_replans,
+                    "routable_agents": routable,
+                }),
+            )
+        }
         NodeKind::Agent => {
             let name = f.agent.as_deref()?;
             let a = cfg.agents.get(name)?;

@@ -1,0 +1,78 @@
+# Test-only fixture (never a sandbox): the live check of `tengu webhooks`
+# recording requests (docs/runtime-2026-09-30.md § Trace). No model is ever
+# reached: the loop's Jev call and the `local` agents point at loopback ports.
+#   export TENGU_HOME="$HOME/tengu-lab/home"            # never ~/.tengu
+#   export OPENROUTER_API_KEY=not-a-key OPENROUTER_BASE_URL=http://127.0.0.1:9
+#   export TENGU_TRACE_FIXTURE_SECRET=fixture-secret
+#   mkdir -p "$HOME/tengu-lab/webhook-trace/in"
+#   tengu -c tests/fixtures/webhooks/trace.toml webhooks
+# POST a body signed with that secret (X-Tengu-Signature: sha256=<hex hmac>) to
+# http://127.0.0.1:7391/webhooks/probe (loop) or /webhooks/ask (planner), then
+# `tengu trace runs --sandbox default`.
+#   probe: the Jev call fails on the closed port 9 — trigger.webhook → loop.queued →
+#          loop.started → jev.failed → loop.failed, webhook.responded 202.
+#   ask:   the planner and `reader` are `local` agents at 127.0.0.1:7392: nothing
+#          listening ⇒ plan.completed failed under the root; a stub answering
+#          canned OpenAI-style JSON there (outside the repo) ⇒ plan.created →
+#          step.started → the run-agent child's tool.* → step.completed → plan.completed.
+# Guard: inbound::webhooks::tests::trace_fixture_config_is_served.
+
+[egress]
+network = "open"
+
+[memory]
+enabled = false
+
+[agents.lab]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4-5"
+workspace = "~/tengu-lab/webhook-trace"
+tools = ["read_file"]
+
+[agents.planner]
+engine = "local"
+model = "stub"
+local = { base_url = "http://127.0.0.1:7392" }
+limits = { context_window = 32768 }
+
+[agents.reader]
+engine = "local"
+model = "stub"
+description = "Reads a file in its workspace and says what it holds."
+workspace = "~/tengu-lab/webhook-trace"
+tools = ["read_file"]
+local = { base_url = "http://127.0.0.1:7392" }
+limits = { context_window = 32768, max_tool_rounds = 4, step_timeout_secs = 60 }
+
+[agents.reader.scopes]
+read_file = { fs_roots = ["~/tengu-lab/webhook-trace"] }
+
+[orchestrator]
+agent = "planner"
+max_attempts_per_step = 1
+max_replans = 0
+
+[decision_loops.probe]
+model = "~typesafe/jev-latest"
+goal = "Test fixture: pick hold."
+agent = "lab"
+dry_run = true
+act_at = 0.8
+escalate = false
+
+[decision_loops.probe.actions.hold]
+description = "Nothing to do"
+
+[webhooks]
+enabled = true
+bind = "127.0.0.1"
+port = 7391
+
+[webhooks.endpoints.probe]
+loop = "probe"
+secret_env = "TENGU_TRACE_FIXTURE_SECRET"
+
+[webhooks.endpoints.ask]
+agent = "planner"
+secret_env = "TENGU_TRACE_FIXTURE_SECRET"
+goal_template = "Test fixture: read in/probe.txt."

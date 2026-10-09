@@ -8,7 +8,7 @@
 //! |---|---|
 //! | node colour | the latest event naming the node (`node_id`) → `Status::tone`; no event yet = no tone |
 //! | grey | a map's `narrowed_out` node; or an action node of a loop absent from that loop's latest `jev.*` `payload.legal_actions` (the step's legal set; a set the payload bound dropped greys nothing). Grey wins over the node's latest tone |
-//! | highlighted edge | only `action.*` / `tool.*` events, only edges the graph has: `jev:<l>` → the action (`chooses`; `action.escalated` names the picked action in `payload.action`), `gate:<l>/act_at` → `escalation:<l>` (`escalates`, on `action.escalated`), the caller → the tool (`calls`: the nearest action or feed up the parent chain); colour = that event's tone |
+//! | highlighted edge | only `action.*` / `tool.*` / `step.*` events, only edges the graph has: `jev:<l>` → the action (`chooses`; `action.escalated` names the picked action in `payload.action`), `gate:<l>/act_at` → `escalation:<l>` (`escalates`, on `action.escalated`), the caller → the tool (`calls`: the nearest action, feed or agent up the parent chain — a plan step's `run-agent` tool calls hang under its `step.started`), `planner` → the step's agent (`delegates`, on `step.*`); colour = that event's tone |
 //! | facets | the node's (`Node::facets`), each missing field from the parent event's (`parent_event_id`); `model` = a `jev.*` `payload.model`, else the parent's — so a tool call carries its loop, action, feed and the model that chose it |
 //! | header | first event: run ids, `config_hash`; `run.opened` `payload.kind`; runtime = the latest `runtime.*` (state = the kind after `runtime.`); model = the latest `jev.completed` `payload.model`; counters = each loop's latest `loop.*` `payload.stats`; map = a `trigger.map` root's sha256; `closed` = the last event folded closes the run (`domain::trace::closes_run`) |
 //! | not in this graph | a `node_id` the graph lacks (the run's config differs, a map trigger on the base graph) is listed, never drawn |
@@ -243,7 +243,9 @@ impl<'g> Fold<'g> {
         }
         .or(parent.model.clone());
         let caller = match own {
-            Some(n) if matches!(n.kind, NodeKind::Action | NodeKind::Feed) => Some(n.id.clone()),
+            Some(n) if matches!(n.kind, NodeKind::Action | NodeKind::Feed | NodeKind::Agent) => {
+                Some(n.id.clone())
+            }
             _ => parent.caller.clone(),
         };
         let tone = ev.status.tone();
@@ -335,6 +337,10 @@ impl<'g> Fold<'g> {
         } else if ev.kind.starts_with("tool.") {
             if let (Some(tool), Some(from)) = (own.filter(|n| n.kind == NodeKind::Tool), caller) {
                 out.extend(self.edge(from, &tool.id, EdgeKind::Calls));
+            }
+        } else if ev.kind.starts_with("step.") {
+            if let Some(agent) = own.filter(|n| n.kind == NodeKind::Agent) {
+                out.extend(self.edge(&node_id::planner(), &agent.id, EdgeKind::Delegates));
             }
         }
         out
@@ -864,5 +870,117 @@ mod tests {
         let order: Vec<&str> = a.1.nodes.iter().map(|n| n.node_id.as_str()).collect();
         let graph_order: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(order, graph_order, "graph order");
+    }
+
+    /// lping's orchestration on its golden graph: a webhook root, a plan
+    /// that delegates one step whose `run-agent` tool call hangs under it.
+    /// The planner, the agent and the tool take their latest event's tone;
+    /// `planner → agent` (`delegates`) and `agent → tool` (`calls`) light;
+    /// the run stays open (`webhook.responded` / `plan.completed` close
+    /// nothing).
+    #[test]
+    fn orchestration_lights_planner_agent_and_tool() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/studio/graph-lping.json");
+        let g: WorkflowGraph =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut r = Run::new();
+        let root = r.ev(
+            "trigger.webhook",
+            Status::Running,
+            Some("trigger:webhook/solana_events"),
+            None,
+            json!({"kind": "agent"}),
+        );
+        r.ev(
+            "webhook.responded",
+            Status::Ok,
+            Some("trigger:webhook/solana_events"),
+            Some(root),
+            json!({"status_code": 202}),
+        );
+        let plan = r.ev(
+            "plan.created",
+            Status::Ok,
+            Some("planner"),
+            Some(root),
+            json!({}),
+        );
+        let step = r.ev(
+            "step.started",
+            Status::Running,
+            Some("agent:crypto_researcher"),
+            Some(plan),
+            json!({}),
+        );
+        let ts = r.ev(
+            "tool.started",
+            Status::Running,
+            Some("tool:crypto_researcher/sol_price"),
+            Some(step),
+            json!({}),
+        );
+        r.ev(
+            "tool.failed",
+            Status::Failed,
+            Some("tool:crypto_researcher/sol_price"),
+            Some(ts),
+            json!({}),
+        );
+        r.ev(
+            "step.completed",
+            Status::Ok,
+            Some("agent:crypto_researcher"),
+            Some(step),
+            json!({}),
+        );
+        r.ev(
+            "plan.completed",
+            Status::Ok,
+            Some("planner"),
+            Some(plan),
+            json!({}),
+        );
+        let (views, b) = fold_run(&g, &r.evs, None);
+        assert!(b.not_in_graph.is_empty(), "{:?}", b.not_in_graph);
+        for (id, tone) in [
+            ("trigger:webhook/solana_events", Tone::Green),
+            ("planner", Tone::Green),
+            ("agent:crypto_researcher", Tone::Green),
+            ("tool:crypto_researcher/sol_price", Tone::Red),
+        ] {
+            assert_eq!(draw(&b, id).tone, Some(tone), "{id}");
+        }
+        let lit: Vec<(&str, &str, EdgeKind, Tone)> = b
+            .edges
+            .iter()
+            .map(|e| {
+                (
+                    e.edge.from.as_str(),
+                    e.edge.to.as_str(),
+                    e.edge.kind,
+                    e.mark.tone,
+                )
+            })
+            .collect();
+        assert_eq!(
+            lit,
+            [
+                (
+                    "agent:crypto_researcher",
+                    "tool:crypto_researcher/sol_price",
+                    EdgeKind::Calls,
+                    Tone::Red
+                ),
+                (
+                    "planner",
+                    "agent:crypto_researcher",
+                    EdgeKind::Delegates,
+                    Tone::Green
+                ),
+            ]
+        );
+        assert_eq!(views[5].facets.agent.as_deref(), Some("crypto_researcher"));
+        assert!(!b.header.closed);
     }
 }

@@ -211,7 +211,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li><code>tengu eval &lt;skill&gt;</code> reads <code>evals/prompts.yaml</code> (a list of rows, or the <code>fixtures</code> file the skill tools write; or <code>.md</code>) and <code>evals/config.toml</code>. Each row runs the config's default agent; <code>{TMP_WORKSPACE}</code> there becomes a fresh temp folder per row.</li>
+        <li><code>tengu eval &lt;skill&gt;</code> reads <code>evals/prompts.yaml</code> (a list of rows, or the <code>fixtures</code> file the skill tools write; or <code>.md</code>) and <code>evals/config.toml</code>. Each row runs the config's default agent; <code>{TMP_WORKSPACE}</code> there becomes a fresh temp folder per row. With <code>[orchestrator]</code> a row runs through the planner and is recorded as its own trace run (<code>plan.*</code>, <code>step.*</code>).</li>
         <li>A row's stubs answer its tool calls in order; other tools run for real. The judge sees the expected behaviour, every tool call and the final text, and answers pass or fail.</li>
         <li>When <code>SKILL.md</code> declares <code>metrics</code>, every row is also scored by each one: six kinds, from a shell check to an LLM rubric.</li>
         <li>Each run appends one <code>history.jsonl</code> line per metric. <code>metrics.json</code> keeps the mean of the last 10 runs; below <code>min_pass_rate</code> a metric is gated.</li>
@@ -451,7 +451,7 @@ tengu skill remove my-notes --tier project
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

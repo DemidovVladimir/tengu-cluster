@@ -175,14 +175,14 @@
   <div class="cols" data-inview>
     <div><b>0 runtime</b><small><code>runtime:&lt;s&gt;</code>: the <code>[runtime]</code> knobs; owns the feeds</small></div>
     <div><b>1 trigger · feed</b><small><code>trigger:decide</code>, <code>trigger:webhook/&lt;e&gt;</code>, <code>trigger:map/&lt;sha&gt;</code>, <code>feed:&lt;f&gt;</code></small></div>
-    <div><b>2 loop · agent</b><small><code>loop:&lt;l&gt;</code> with its knobs; <code>agent:&lt;a&gt;</code> owns it</small></div>
+    <div><b>2 loop · agent · planner</b><small><code>loop:&lt;l&gt;</code> with its knobs; <code>agent:&lt;a&gt;</code> owns it; with <code>[orchestrator]</code>: <code>planner</code> and each routable <code>agent:&lt;a&gt;</code> (one with a <code>description</code>)</small></div>
     <div><b>3 world</b><small><code>world:&lt;l&gt;/&lt;alias&gt;</code>: an observation the loop reads, never fetches</small></div>
     <div><b>4 jev · gate</b><small><code>jev:&lt;l&gt;</code> and <code>gate:&lt;l&gt;/act_at</code></small></div>
     <div><b>5 action</b><small><code>action:&lt;l&gt;/&lt;a&gt;</code> with <code>effect</code> terminal, logged or runs; <code>escalation:&lt;l&gt;</code></small></div>
     <div><b>6 guards</b><small><code>gate:&lt;l&gt;/&lt;a&gt;/caps</code>, <code>scope:&lt;agent&gt;/&lt;tool&gt;</code> (roots shown as <code>~/…</code>)</small></div>
     <div><b>7 tool</b><small><code>tool:&lt;agent&gt;/&lt;tool&gt;</code>; <code>in_catalog</code> says whether the agent's catalog has it</small></div>
   </div>
-  <p class="note">Edges: <code>fires</code>, <code>reads</code>, <code>asks</code>, <code>chooses</code>, <code>calls</code>, <code>binds</code>, <code>next</code>, <code>guards</code>, <code>escalates</code>, <code>owns</code>. A webhook endpoint that runs an agent (not a loop) is not drawn.</p>
+  <p class="note">Edges: <code>fires</code>, <code>reads</code>, <code>asks</code>, <code>chooses</code>, <code>calls</code>, <code>binds</code>, <code>next</code>, <code>guards</code>, <code>escalates</code>, <code>owns</code>, <code>delegates</code>. With <code>[orchestrator]</code>: a planner webhook endpoint <code>fires</code> the <code>planner</code>; the planner <code>delegates</code> to each routable agent, which <code>calls</code> each catalog tool it gets; a loop's <code>escalation:&lt;l&gt;</code> <code>escalates</code> to it.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-env">
@@ -196,9 +196,9 @@
       <thead><tr><th>Field</th><th>Value</th></tr></thead>
       <tbody>
         <tr><td><code>event_id</code> · <code>seq</code></td><td><code>&lt;run_id&gt;:&lt;seq&gt;</code>; seq 1, 2, … in file order, the same live and in replay</td></tr>
-        <tr><td><code>runtime_id</code></td><td>the <code>tengu run</code> lease holder <code>&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt;</code>; <code>null</code> for <code>tengu decide</code></td></tr>
+        <tr><td><code>runtime_id</code></td><td>the lease holder <code>&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt;</code> of <code>tengu run</code> or <code>tengu webhooks</code>; <code>null</code> for <code>tengu decide</code>, chat, telegram, eval</td></tr>
         <tr><td><code>run_id</code></td><td>a UUID v4 per recording; names the file</td></tr>
-        <tr><td><code>session_id</code> · <code>call_id</code></td><td>the event's session (<code>tick:&lt;slot ms&gt;</code>, <code>decide-&lt;loop&gt;-&lt;uuid&gt;</code>) · the tool call id</td></tr>
+        <tr><td><code>session_id</code> · <code>call_id</code></td><td>the event's session (<code>tick:&lt;slot ms&gt;</code>, <code>decide-&lt;loop&gt;-&lt;uuid&gt;</code>, <code>webhook-&lt;endpoint&gt;-&lt;uuid&gt;</code>, a chat or telegram session) · the tool call id</td></tr>
         <tr><td><code>correlation_id</code></td><td>the caller's, else the session, else the runtime, else the run</td></tr>
         <tr><td><code>component</code> · <code>kind</code> · <code>status</code></td><td>runtime, feed, loop, observation, jev, action, tool, gate, orchestrator, studio · a dotted name such as <code>run.opened</code> · see below</td></tr>
         <tr><td><code>node_id</code> · <code>parent_event_id</code></td><td>a graph node id · the event that caused it</td></tr>
@@ -231,8 +231,8 @@
 <section class="sec" aria-labelledby="s-fam">
   <div class="sec-head">
     <span class="kicker">What a run records</span>
-    <h2 id="s-fam">Nine event families</h2>
-    <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool. A tool feed's calls hang on its <code>feed.fired</code>.</p>
+    <h2 id="s-fam">Eleven event families</h2>
+    <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool, or webhook → plan → step → the subagent's tool. A tool feed's calls hang on its <code>feed.fired</code>.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -242,10 +242,12 @@
         <tr><td><code>feed</code></td><td><code>feed.fired</code> → <code>completed</code> · <code>retrying</code> (class, delay) · <code>failed</code> · <code>tick_sent</code> · <code>dropped</code> · <code>skipped</code></td><td>outcome ← <code>feed.fired</code></td></tr>
         <tr><td><code>loop</code></td><td><code>loop.queued</code> → <code>started</code> → <code>completed</code> · <code>failed</code>; <code>dropped</code>, <code>refused</code>; each with the loop's counters</td><td><code>queued</code> ← the tick's <code>feed.fired</code></td></tr>
         <tr><td><code>trigger</code></td><td><code>trigger.decide</code> · <code>trigger.map</code> → <code>trigger.completed</code> · <code>trigger.failed</code></td><td>the root of a <code>tengu decide</code> run</td></tr>
+        <tr><td><code>webhook</code></td><td><code>trigger.webhook</code> (running: endpoint, loop or agent, body size — never the body or a header) → <code>webhook.responded</code> (the HTTP code: 2xx ok, 401 / 429 / 503 refused, 500 failed)</td><td>the root of one request; its loop or plan events hang under it</td></tr>
+        <tr><td><code>orchestrator</code></td><td><code>plan.created</code> (steps, agents) → <code>step.started</code> → <code>step.completed</code> · <code>step.retrying</code> · <code>step.failed</code>; <code>plan.replanned</code>; <code>plan.completed</code> (ok, failed, or dropped when cancelled); <code>metrics.recorded</code> (tokens, no node)</td><td><code>step.*</code> ← <code>step.started</code> ← <code>plan.created</code> ← the webhook root or nothing</td></tr>
         <tr><td><code>observation</code></td><td><code>observation.read</code> per <code>world</code> alias per step: ok, stale, missing or failed, with its age</td><td><code>loop.started</code> or the trigger</td></tr>
         <tr><td><code>jev</code></td><td><code>jev.completed</code> (answers, model, usage, the <b>legal set</b> offered) · <code>jev.failed</code></td><td><code>loop.started</code> or the trigger</td></tr>
         <tr><td><code>action</code></td><td><code>action.selected</code> → <code>completed</code> · <code>refused</code>; <code>escalated</code>, <code>rejected</code>; payload <code>outcome</code> = the loop's own result</td><td><code>selected</code> ← its <code>jev.completed</code></td></tr>
-        <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code> (an error, an error row, or an HTTP status that is not 2xx — the loop's own test), with <code>duration_ms</code> and the call id</td><td><code>action.selected</code> or <code>feed.fired</code></td></tr>
+        <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code> (an error, an error row, or an HTTP status that is not 2xx — the loop's own test), with <code>duration_ms</code> and the call id</td><td><code>action.selected</code>, <code>feed.fired</code>, or a plan step's <code>step.started</code> (the <code>run-agent</code> child hands its calls back over IPC)</td></tr>
         <tr><td><code>studio</code></td><td>Studio's own run (control on): <code>studio.started</code>; <code>studio.control</code> pending → ok · refused · failed per Play, Stop or event; <code>studio.runtime</code> when the runtime it started ends; <code>studio.stopped</code></td><td>verdict ← its request; <code>studio.runtime</code> ← the Play verdict</td></tr>
       </tbody>
     </table>
@@ -271,12 +273,13 @@
         <tr><td>Red: failed</td><td><code>tool.failed</code> · <code>action.completed</code> · <code>feed.failed</code> · <code>jev.failed</code> · <code>loop.failed</code></td><td><code>status</code> failed, <code>payload.error</code></td></tr>
         <tr><td>Red: refused</td><td><code>action.refused</code> · <code>action.rejected</code> · <code>loop.refused</code></td><td><code>status</code> refused, the rule or reason</td></tr>
         <tr><td>Green</td><td><code>tool.completed</code> · <code>action.completed</code> · <code>feed.completed</code> · <code>loop.completed</code> · terminal <code>action.selected</code></td><td><code>status</code> ok</td></tr>
+        <tr><td>Orchestration</td><td><code>plan.*</code> · <code>step.*</code> · the child's <code>tool.*</code></td><td><code>planner</code>, <code>agent:&lt;a&gt;</code>, <code>tool:&lt;a&gt;/&lt;t&gt;</code> in their latest tone; lit <code>planner → agent</code> (<code>delegates</code>) and <code>agent → tool</code> (<code>calls</code>)</td></tr>
         <tr><td>Counters move</td><td><code>loop.*</code></td><td><code>payload.stats</code>: queued, in flight, completed</td></tr>
         <tr><td>Header</td><td>every event · <code>runtime.*</code> · <code>jev.completed</code></td><td>run, runtime, config hash · state + heartbeat <code>artifact</code> · <code>payload.model</code></td></tr>
       </tbody>
     </table>
   </div>
-  <p class="note">Not traced yet: planner / subagent steps, a typed scope refusal (today a <code>tool.failed</code> with the refusal text), <code>tengu webhooks</code>.</p>
+  <p class="note">Not traced yet: a typed scope refusal (today a <code>tool.failed</code> with the refusal text); a <code>claude_code</code> step's tool calls (they run in its MCP bridge process). Who records: <code>tengu run</code>, <code>tengu decide</code>, <code>tengu webhooks</code>, and, with <code>[orchestrator]</code>, <code>tengu chat</code>, <code>tengu telegram</code> and each <code>tengu eval</code> row.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-server">
@@ -481,9 +484,11 @@
         <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> and <code>TraceReader</code></td></tr>
         <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow</td></tr>
         <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + run ids) for each loop</td></tr>
-        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code></td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>DraftBuffer</code> / <code>replay_child</code>: a <code>run-agent</code> child's tool events, written by the parent</td></tr>
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request; <code>tengu webhooks</code>' own recording (<code>run.closed</code>)</td></tr>
+        <tr><td><code>src/application/orchestrator/trace.rs</code> · <code>events.rs</code></td><td>the bridge: each <code>OrchestratorEvent</code> written as <code>plan.*</code> / <code>step.*</code> / <code>metrics.recorded</code> when the bus sends it; a step's cause for its <code>run-agent</code> child</td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
         <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (feature <code>studio</code>, default): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
         <tr><td><code>src/application/studio/stream.rs</code></td><td>live delivery: backlog waits, live overflow = <code>lagged</code>, the lease holder's run across restarts</td></tr>
@@ -494,7 +499,7 @@
         <tr><td><code>src/adapters/inbound/studio/control.rs</code> · <code>inbound/run.rs</code></td><td>Play / Stop / event on the runtime (<code>start_session</code>, the stopper, the loop dispatch), <code>studio.*</code> events, Studio's shutdown drain</td></tr>
         <tr><td><code>src/bootstrap/studio.rs</code> · <code>bootstrap/runtime.rs</code></td><td><code>StudioContext</code> (graph, trace reader, kept maps, evidence paths) · <code>read_live</code>, shared with <code>doctor --live</code></td></tr>
         <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>); the control buttons draw <code>/api/v1/control</code></td></tr>
-        <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code></td></tr>
+        <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code> (with its planner)</td></tr>
       </tbody>
     </table>
   </div>

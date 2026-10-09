@@ -2055,11 +2055,23 @@ async fn run_row_via_orchestrator(
     // MemoryManager so the orchestrator doesn't choke on missing deps.
     let memory_manager = Arc::new(crate::application::memory::manager::MemoryManager::new());
 
+    // One recording per orchestrated row (`RunKind::Eval`): its plans,
+    // steps and their `run-agent` tool calls; `run.closed` at the end.
+    let trace = crate::bootstrap::trace::open_orchestration(
+        &cfg_arc,
+        crate::domain::trace::RunKind::Eval,
+        &Arc::new(crate::adapters::outbound::secrets::process_secret_registry(
+            None,
+        )),
+    );
     let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
         &cfg_arc,
         Arc::clone(&factory),
         Arc::clone(&memory_manager),
         crate::bootstrap::orchestrator::resolve_session_id(),
+        trace
+            .as_ref()
+            .and_then(|s| crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)),
     )
     .ok_or_else(|| {
         anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")
@@ -2110,6 +2122,7 @@ async fn run_row_via_orchestrator(
                     step_id,
                     attempt,
                     error,
+                    ..
                 } => (
                     "orchestrator:step_failed".to_string(),
                     format!(
@@ -2133,6 +2146,7 @@ async fn run_row_via_orchestrator(
                 OrchestratorEvent::PlanCompleted {
                     final_response,
                     cancelled,
+                    ..
                 } => (
                     "orchestrator:plan_completed".to_string(),
                     format!("cancelled={} final_len={}", cancelled, final_response.len()),
@@ -2196,6 +2210,14 @@ async fn run_row_via_orchestrator(
         Ok(text) => (false, text),
         Err(_) => (true, String::new()),
     };
+    if let Some(t) = &trace {
+        let reason = if timed_out {
+            "row timed out"
+        } else {
+            "row done"
+        };
+        crate::bootstrap::trace::close(&**t, reason, timed_out);
+    }
 
     // Let the event drain finish — PlanCompleted should already have
     // fired. Give it a brief grace window to flush before we snapshot.

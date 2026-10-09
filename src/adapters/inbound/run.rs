@@ -60,12 +60,21 @@ pub(crate) async fn start_session(
 ) -> Result<RunSession> {
     #[cfg(feature = "webhooks")]
     let webhook_memory = Arc::new(crate::application::memory::manager::MemoryManager::new());
+    // The escalator records into the runtime's run, opened by `start`.
     #[cfg(feature = "webhooks")]
-    let escalator = super::webhooks::orchestrator_escalator(config, &webhook_memory);
+    let escalation_trace = super::webhooks::TraceSlot::default();
+    #[cfg(feature = "webhooks")]
+    let escalator = super::webhooks::orchestrator_escalator(
+        config,
+        &webhook_memory,
+        Arc::clone(&escalation_trace),
+    );
     #[cfg(not(feature = "webhooks"))]
     let escalator = None;
 
     let mut rt = runtime::start(config, Arc::clone(&secrets), escalator).await?;
+    #[cfg(feature = "webhooks")]
+    let _ = escalation_trace.set(rt.trace());
     #[cfg(feature = "webhooks")]
     let mounted = mount_webhooks(config, &mut rt, secrets, webhook_memory).await;
     #[cfg(not(feature = "webhooks"))]
@@ -167,7 +176,15 @@ async fn mount_webhooks(
         info!("webhooks off ([webhooks] enabled = false)");
         return Ok(());
     }
-    let state = webhooks::app_state(config.clone(), memory_manager, rt.loops(), secrets)?;
+    // Each request's `trigger.webhook` root and its work go into the
+    // runtime's run.
+    let state = webhooks::app_state(
+        config.clone(),
+        memory_manager,
+        rt.loops(),
+        secrets,
+        rt.trace(),
+    )?;
     let addr = webhooks::bind_addr(config)?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await

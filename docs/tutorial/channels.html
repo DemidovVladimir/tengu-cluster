@@ -349,6 +349,8 @@
     <li><span><b>Webhooks authenticate first.</b> HMAC-SHA256 or an exact <code>Authorization</code> header, compared in constant time, before any work starts.</span></li>
     <li><span><b>Bad endpoint config fails at start.</b> Both or neither secret, an empty inline secret, or a loop with no <code>[decision_loops]</code> block stops the listener.</span></li>
     <li><span><b>One owner.</b> <code>tengu webhooks</code> takes the same leases as <code>tengu run</code>; a second process exits 1.</span></li>
+    <li><span><b>Every request is recorded.</b> A configured endpoint's request is one <code>trigger.webhook</code> root in the execution trace, its loop or plan events under it, then <code>webhook.responded</code> with the code. Never the body or a header; an unknown endpoint is only logged.</span></li>
+    <li><span><b>Plans are recorded.</b> With <code>[orchestrator]</code>, <code>tengu chat</code> and <code>tengu telegram</code> each write one run of <code>plan.*</code> / <code>step.*</code> events (<a href="studio.html">Studio</a>).</span></li>
     <li><span><b>Loops stay ordered.</b> One event at a time per loop, at most 64 waiting by default; the rest get <code>429</code>.</span></li>
     <li><span><b>Redaction on every surface.</b> Tool output passes <code>SanitizedToolExecutor</code>; Telegram replies and the TUI's planner answers are redacted again.</span></li>
   </ul>
@@ -358,7 +360,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Open each door</h2>
-    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code> and <code>telegram</code>. The secret below is an example.</p>
+    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code> and <code>studio</code>. The secret below is an example.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
@@ -367,7 +369,11 @@
 <span class="ln cmd"><span class="p">$ </span>TENGU_LPING_WEBHOOK_SECRET=example-secret target/release/tengu webhooks --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>BODY='{"pool":"example"}'; SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac example-secret | sed 's/^.* //')</span>
 <span class="ln cmd"><span class="p">$ </span>curl -s -X POST localhost:7081/webhooks/solana_events -H "X-Tengu-Signature: sha256=$SIG" -d "$BODY"</span>
-<span class="ln">{"agent":"lping","endpoint":"solana_events","session_id":"webhook-solana_events-<span class="hl">&lt;uuid&gt;</span>","status":"accepted"}</span></pre>
+<span class="ln">{"agent":"lping","endpoint":"solana_events","session_id":"webhook-solana_events-<span class="hl">&lt;uuid&gt;</span>","status":"accepted"}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace runs --sandbox lping</span>
+<span class="ln">{"run_id":"&lt;run id&gt;","sandbox":"lping",<span class="hl">"kind":"webhooks"</span>,…}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox lping --run &lt;run id&gt;</span>
+<span class="ln">… <span class="hl">trigger.webhook</span> → webhook.responded (202) → plan.created → step.started → tool.* → step.completed → plan.completed</span></pre>
   </div>
 </section>
 
@@ -387,9 +393,9 @@
         <tr><td><code>src/adapters/inbound/channel.rs</code></td><td><code>@role:</code> parsing, chunking, team activity</td></tr>
         <tr><td><code>src/adapters/inbound/activity.rs</code></td><td>activity line text per tool</td></tr>
         <tr><td><code>src/ports/tool_activity.rs</code></td><td>the activity port every surface implements</td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns; each request's <code>trigger.webhook</code> root and answer; <code>tengu webhooks</code>' recording</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td>the loop queue: one at a time, cap, drain</td></tr>
-        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>resolve_session_id</code>, <code>build_orchestrator</code></td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>resolve_session_id</code>, <code>build_orchestrator</code> (+ the recording a surface hands it)</td></tr>
       </tbody>
     </table>
   </div>

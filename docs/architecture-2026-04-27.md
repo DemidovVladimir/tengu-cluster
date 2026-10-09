@@ -246,7 +246,8 @@ One list for every reader: `application/skills/registry.rs::skill_directories` �
 | `executor.rs` | `DagExecutor` — parallel `ready_steps` with cancel; aborts in-flight steps on cancel / exhaustion; a never-ready step ⇒ replan; parallel leaves joined |
 | `retry.rs` | `RetryPolicy` |
 | `replan.rs` | `drive()` loop — replan-on-exhausted |
-| `events.rs` | `OrchestratorEvent` enum + bus (PlanCreated, StepStarted, RagQueried legacy event name, **MetricsRecorded**, etc.) |
+| `events.rs` | `OrchestratorEvent` enum + `EventBus` (PlanCreated, StepStarted, RagQueried legacy event name, **MetricsRecorded**, etc.; `StepFailed.retry_in_ms`, `PlanCompleted.failed`); a traced bus records each event before it broadcasts |
+| `trace.rs` | `OrchestratorTrace` + `TraceBridge`: each event → `plan.*` / `step.*` / `metrics.recorded` in the surface's execution trace (chat, telegram, eval, webhook agent endpoints, escalations); a step's cause handed to its `run-agent` child |
 | `wiring.rs` | `ChatOrchestratorPortImpl` (planner-side LLM turn glue). Traits `Planner`, `OrchestratorChatPort`, `WorkerHandle`, `ChatServiceFactory`, `TurnTelemetry` live in `ports/orchestration.rs` |
 | `shared_files.rs` | `routable_agents` + `render_registry` → `TENGU_PLANNER_REGISTRY.md` (`ensure_planner_registry`, tool list from the `ToolDirectory` port), per-session `set_active_plan` / `active_plan` (IPC `plan_state`), `TENGU_PLAN.md` debug artifact, `scan_skill_summaries` |
 
@@ -476,7 +477,7 @@ The trace is what Studio reads; the page draws what Rust computed (graph, colour
 | `ports/trace.rs` | `TraceSink` (one recording, fail-soft) · `TraceReader` (runs, events after a `seq`, follow live) |
 | `adapters/outbound/trace_store.rs` | `JsonlTraceSink` / `JsonlTraceReader`: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, first line `run.opened`, one `write_all` per event; follow = a 250 ms tail into a bounded channel (256) |
 | `application/trace_exec.rs` | `Cause` / `caused_by` (an event's parent) · `TracedExecutor` (`tool.started` → `tool.completed` / `tool.failed`, node `tool:<agent>/<tool>`) |
-| `bootstrap/trace.rs` | `open_sink` (a new recording per process; an unwritable dir ⇒ `NoopTrace` + a warn), `reader`, `run_path`. Records: `tengu run` (`runtime.*`, `feed.*`, `loop.*`, steps, tools), `tengu decide` (`trigger.*`, steps, tools); `tengu webhooks` not yet |
+| `bootstrap/trace.rs` | `open_sink` (a new recording per process; an unwritable dir ⇒ `NoopTrace` + a warn), `reader`, `run_path`. Records: `tengu run` (`runtime.*`, `feed.*`, `loop.*`, steps, tools, webhook requests, plans), `tengu decide` (`trigger.*`, steps, tools), `tengu webhooks` (`trigger.webhook` per request, its loop / plan events, `run.closed`); `open_orchestration` — chat / telegram / eval with `[orchestrator]` (`plan.*`, `step.*`, a step's `run-agent` `tool.*`) |
 | `cli/trace.rs` | `tengu trace runs \| show --run <id> [--after <seq>] [--follow]` — JSON lines; no config, read-only |
 | `domain/workflow.rs` | `WorkflowGraph`: nodes `runtime` · `trigger` · `feed` · `agent` · `loop` · `world` · `jev` · `gate` · `action` · `escalation` · `scope` · `tool` (layer + order computed in Rust); edges `fires` · `reads` · `asks` · `chooses` · `calls` · `binds` · `next` · `guards` · `escalates` · `owns`; `narrowed_out` = dropped by an execution map — pure |
 | `application/studio/` | `graph.rs::build_graph` (config + catalog tools + an optional map) · `stream` (`follow_run` / `follow_live`: bounded per client, resume by `seq`; served as SSE by `inbound/studio/sse.rs`) · `board` (`fold_run`: a run over its graph at a `seq`) · `inspect` (the config section + evidence behind a node) · `control` (Play / Stop / send-event rules) |

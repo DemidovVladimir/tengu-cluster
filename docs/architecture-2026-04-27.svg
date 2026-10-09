@@ -304,7 +304,7 @@
     <text x="10" y="268" class="small">OrchestratorEvent + EventBus:</text>
     <text x="10" y="280" class="small">PlanCreated, StepStarted, RagQueried,</text>
     <text x="10" y="292" class="small">MetricsRecorded</text>
-    <text x="10" y="312" class="file">shared_files.rs · wiring.rs</text>
+    <text x="10" y="312" class="file">shared_files.rs · wiring.rs · trace.rs</text>
   </g>
 
   <!-- ===================== SECTION 3 — stores ===================== -->
