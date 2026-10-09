@@ -204,7 +204,7 @@ No `agents/` directory, no separate spec type. A subagent is an `[agents.<name>]
 | Fields | `engine` (`openrouter` \| `local` \| `claude_code`), `model`, `description`, `example_queries`, `tools` (allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias), `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap per step), `limits.step_timeout_secs` (default 600), `identity`, `claude_code` |
 | Sandbox sections | `AgentConfig::sandbox` (`config/sections.rs`) — `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`, `[backtest]`, `[generation]` (resolved `GenerationScope`), `[sources]`, `[strategy_ranking]` reach tools on every surface |
 | Child lookup | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` loads the parent config first, then `config.agents.get(name)` (`compose.base_agent` when composed) |
-| Examples | `sandboxes/lping` (`lping` planner · `crypto_researcher` routable · `lp_executor` private), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private), `sandboxes/xlab-w2` (+ `xl_ranker` private, the ranking feeds' agent), `sandboxes/soe` (`soe_reader` default, `source_evidence` only) |
+| Examples | `sandboxes/lping` (`lping` planner · `crypto_researcher` routable · `lp_executor` private), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private), `sandboxes/xlab-w2` (+ `xl_ranker` private, the ranking feeds' agent), `sandboxes/soe` (`soe_reader` default, `source_evidence` only · `soe_architect` · `soe_critic` stage agents) |
 
 Edit a block + restart chat → the planner registry file is regenerated on the next planner turn. No rebuild required.
 
@@ -216,7 +216,7 @@ Edit a block + restart chat → the planner registry file is regenerated on the 
 | `xmarket-weekend` | rule W on paper, tool feeds only (no LLM, no Jev); bound to generation W1 | `open`, `allow_hosts` HL |
 | `xlab` | history-first research: `market.db`, `tengu backtest`, Architect; bound to generation W1 (frozen) | `open`, `allow_hosts` HL + GeckoTerminal |
 | `xlab-w2` | W2 research: an unbound copy of `xlab` sharing its state dir (`xlab`) + SEC events, `[strategy_ranking]` + ranking feeds | `open`, `allow_hosts` HL + GeckoTerminal + SEC |
-| `soe` | source layer (O2): `[sources]` rows (SEC EDGAR, EU TED, shipped disabled), one read-only agent; unbound | `open`, `allow_hosts` SEC + TED |
+| `soe` | source layer (O2): `[sources]` rows (SEC EDGAR, EU TED, shipped disabled), one read-only agent; weekly cycle (O3): `[soe]`, two stage agents, the `soe_week` job; bound to SOE-G0 | `open`, `allow_hosts` SEC + TED |
 | `tor-check` · `storage-test` | Tor egress check · `persistent_store` test | `tor` |
 | `unlimited` | one OpenRouter agent over Telegram (`[telegram]`) | `open` |
 
@@ -433,7 +433,7 @@ Facts from approved sources with full provenance, read as-of t. Docs: `docs/sour
 | `cli/sources.rs` | `tengu sources list \| fetch \| import \| asof \| purge \| terms \| disable \| enable` — only `fetch` uses the network |
 | `tools/sources/` | `source_evidence` — read-only; agents never fetch |
 
-Sandbox `sandboxes/soe`: `soe_reader` (default, `source_evidence` only, Claude Code `builtin_tools_profile = "none"`), no feeds, loops or `[[mcp_servers]]`.
+Sandbox `sandboxes/soe`: `soe_reader` (default, `source_evidence` only, Claude Code `builtin_tools_profile = "none"`), the O3 stage agents `soe_architect` · `soe_critic` (`docs/soe-2026-10-08.md` § 13) and one `kind = "job"` feed `soe_week`; no loops or `[[mcp_servers]]`; bound to SOE-G0.
 
 ### 2.17 Software Opportunity Engine — SOE O0–O2 (2026-10-08)
 

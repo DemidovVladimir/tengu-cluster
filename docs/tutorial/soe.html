@@ -483,7 +483,7 @@
       <tbody>
         <tr><td><code>sandboxes/soe</code></td><td><code>[soe]</code>, <code>soe_architect</code> (Opus) and <code>soe_critic</code> (Sonnet) on <code>claude_code</code> with built-ins off, <code>[feeds.soe_week]</code> Mon 07:00 Paris, deny-all scopes for every side-effect tool; no <code>source_evidence</code> on a stage agent — the stages read their run's packet only</td></tr>
         <tr><td>Skills</td><td><code>soe-architect</code>: two mechanisms and <code>HOLD</code>, ranges with evidence ids or <code>UNKNOWN</code>, never a computed field. <code>soe-critic</code>: the seven challenge kinds and their effects</td></tr>
-        <tr><td>SOE-G0</td><td><code>lineage/generations/SOE-G0.toml</code> (<code>CANDIDATE</code>): the three tool capabilities, the two models, hash pins of <code>[soe]</code>, the job, the agents, the scopes, the schemas and the skills. Ids and sha256 only — no profile value. The sandbox is bound to it; its lock row waits for the operator's signed profile</td></tr>
+        <tr><td>SOE-G0</td><td><code>lineage/generations/SOE-G0.toml</code> (<code>CANDIDATE</code>): the three stage-tool capabilities and <code>intel.source_evidence</code>, the two models, hash pins of <code>[soe]</code>, the job, the agents, the scopes, the schemas and the skills. Ids and sha256 only — no profile value. The sandbox is bound to it; its lock row waits for the operator's signed profile</td></tr>
         <tr><td>Guards</td><td>no tool reachable from the sandbox can contact, spend, publish or deploy; the opportunity domain never imports the trading domain, the backtest engine or the risk config (layering lint); W1 and its sandboxes load unchanged next to SOE-G0</td></tr>
       </tbody>
     </table>

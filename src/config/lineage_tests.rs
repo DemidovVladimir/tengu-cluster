@@ -441,14 +441,15 @@ fn the_scope_lists_the_runs_the_registry_cites() {
 /// SOE-G0 (critic C13; roadmap § 13 generation isolation) on the repo's own
 /// registry: the SOE generation, its capability records and its family
 /// leave W1 alone — W1's manifest still hashes to its lock row, no Error
-/// finding (no `binding_conflict`), W1 cannot reach a `soe_*` tool, SOE-G0
-/// reaches only those and binds only the `soe` sandbox, unlocked (its lock
-/// row waits for the operator's signed profile) — and W1's two sandboxes
-/// still load bound to W1, every FROZEN pin recomputing. (W1's rule-W
-/// golden: `config::xmarket::tests::weekend_sandbox_replays_the_golden`.)
+/// finding (no `binding_conflict`), W1 cannot reach a `soe_*` tool or
+/// `source_evidence`, SOE-G0 reaches only those and binds only the `soe`
+/// sandbox, unlocked (its lock row waits for the operator's signed profile)
+/// — and W1's two sandboxes still load bound to W1, every FROZEN pin
+/// recomputing. (W1's rule-W golden:
+/// `config::xmarket::tests::weekend_sandbox_replays_the_golden`.)
 #[test]
 fn soe_generation_leaves_w1_manifest_and_golden() {
-    use crate::domain::tools::{SOE_CHALLENGE, SOE_PROPOSE, SOE_VIEW};
+    use crate::domain::tools::{SOE_CHALLENGE, SOE_PROPOSE, SOE_VIEW, SOURCE_EVIDENCE};
     let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
     let reg = load_registry(&repo.join("lineage")).unwrap_or_else(|e| panic!("{e:#?}"));
     let w1_lock = reg
@@ -473,7 +474,7 @@ fn soe_generation_leaves_w1_manifest_and_golden() {
     assert!(reg.families.contains_key("soe"));
     let soe = GenerationScope::of(&reg, "SOE-G0").unwrap();
     let w1 = GenerationScope::of(&reg, "W1").unwrap();
-    for t in [SOE_VIEW, SOE_PROPOSE, SOE_CHALLENGE] {
+    for t in [SOE_VIEW, SOE_PROPOSE, SOE_CHALLENGE, SOURCE_EVIDENCE] {
         assert!(soe.tool_refusal(t).is_none(), "SOE-G0 reaches {t}");
         assert!(w1.tool_refusal(t).is_some(), "W1 reaches {t}");
     }

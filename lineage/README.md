@@ -2,15 +2,15 @@
 
 One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage-2026-10-06.md`.
 
-| Dir / file | Record | Key fields | Files (2026-10-08) |
+| Dir / file | Record | Key fields | Files (2026-10-09) |
 |---|---|---|---:|
-| `families/<id>.toml` | hypothesis family | `hypothesis`, `role`, `status`, `origin*`, `preceded_by`, `controls`, `[prior_search]` | 14 |
+| `families/<id>.toml` | hypothesis family | `hypothesis`, `role`, `status`, `origin*`, `preceded_by`, `controls`, `[prior_search]` | 15 |
 | `variants/<id>.toml` | one variant of a family | `family`, `parent` (`ROOT`), `[[changed]]`, `preregistered`, `[spec]` | 49 |
 | `experiments/<id>.toml` | hypothesis → config → evidence → result → verdict | `kind`, `[[windows]]`, `[[results]]` (`extract`), `[verdict]`, `validity` | 37 |
 | `episodes/<id>.toml` | Experience episode | `[context]`, `[[information]]`, `[[alternatives]]`, `[decision]`, `[quality]` | 3 |
 | `incidents/<id>.toml` | operational / data incident | `class`, `strategy_impact`, `[[data_impact]]` | 8 |
-| `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` | 19 (17 in W1; `intel.strategy_ranking`, `intel.source_evidence`: CANDIDATE, no generation) |
-| `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` | 1 (W1, FROZEN) |
+| `capabilities/<id>.toml` | decision-relevant capability | `class`, `version`, `permission`, `lifecycle`, `contract`, `bindings` | 22 (17 in W1; SOE-G0: `intel.soe_{view,propose,challenge}`, `intel.source_evidence`; `intel.strategy_ranking`: CANDIDATE, no generation) |
+| `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` | 2 (W1, FROZEN; SOE-G0, CANDIDATE) |
 | `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 | 1 |
 | `rankings/<id>.toml` | strategy-ranking contract (`domain/lineage/ranking.rs`) | `sandbox`, `strategies`, `tz`, `cutoff`, `days`, `from`, `cohort`, `on_missing`, `[freshness]`, `[eligibility]`, `[rating]` | 2 (unsealed) |
 | `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only | — |
@@ -49,4 +49,4 @@ Exit 1 on any Error finding. Views: `show`, `trace`, `family`, `attempts`, `capa
 
 ## SOE-G0 (CANDIDATE)
 
-The Software Opportunity Engine's generation: `generations/SOE-G0.toml`, `capabilities/intel.soe_{view,propose,challenge}.toml`, `families/soe.toml` — ids, pins and sha256 only; every private value stays under `<TENGU_HOME>/state/soe/`. `sandboxes/soe` is bound to it. No `[[frozen]]` row yet: the operator locks it after signing the profile and approving the sources (`docs/soe-2026-10-08.md` § 15.1 #8); until then a pinned edit updates its `[[pins]]` sha256. Rules: `docs/lineage-2026-10-06.md` § 7.
+The Software Opportunity Engine's generation: `generations/SOE-G0.toml`, `capabilities/intel.soe_{view,propose,challenge}.toml`, `families/soe.toml` — ids, pins and sha256 only; it also lists the O2 capability `intel.source_evidence`; every private value stays under `<TENGU_HOME>/state/soe/`. `sandboxes/soe` is bound to it. No `[[frozen]]` row yet: the operator locks it after signing the profile and approving the sources (`docs/soe-2026-10-08.md` § 15.1 #8); until then a pinned edit updates its `[[pins]]` sha256. Rules: `docs/lineage-2026-10-06.md` § 7.

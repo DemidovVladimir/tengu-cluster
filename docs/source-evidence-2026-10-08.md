@@ -120,7 +120,7 @@ Hosts, audit (`sec_edgar` / `ted_search`) and attribution: [`egress-2026-09-16.m
 | Text | line 1 + features + ≤ 8 error lines, then the packet's fenced text; ≤ 6 000 bytes (fewer records, the rest `omitted`) — never the `data` JSON |
 | Refusals | no `[sources]` (`sources_state_missing`), an unknown key / source, a bad time or limit — before any read; no `sources.db` yet ⇒ an empty packet, nothing created |
 | Gate | opt-in (`WORKSPACE_TOOLS`); scope `fs_roots` = the workspace (observation store); no host, no env |
-| Parity | bridge conformance `source_evidence:asof` + `:no_sources`; engine-matrix set `sources` (offline local leg; live legs per engine); capability `lineage/capabilities/intel.source_evidence.toml` (CANDIDATE, READ_ONLY, no generation) |
+| Parity | bridge conformance `source_evidence:asof` + `:no_sources`; engine-matrix set `sources` (offline local leg; live legs per engine); capability `lineage/capabilities/intel.source_evidence.toml` (CANDIDATE, READ_ONLY; listed by SOE-G0, the `soe` sandbox's generation) |
 
 ## 9. Rights, retention, PII
 

@@ -20,6 +20,10 @@ version = 1
 id = "intel.soe_challenge"
 version = 1
 
+[[capabilities]]
+id = "intel.source_evidence"
+version = 1
+
 [decision_policy]
 primary = "DETERMINISTIC"
 summary = "domain::soe::allocate::decide_week: the O1 gates and three-scenario economics, the Critic's challenges merged toward the conservative side, then the one portfolio builder under the signed profile's weekly owner hours and validation tranche, ranked by the profile's rank order (private; its sha256 is each cycle's inputs.json policy_sha256). HOLD is a valid week; no LAUNCH action exists."
@@ -78,6 +82,11 @@ sha256 = "ecda977f1935b554bc3fca9019e4574d98e72348f81dae6e232cec400200af7b"
 target = "tool_schema:soe_challenge"
 role = "SCHEMA"
 sha256 = "e729bac4c971af42af2642e91b486aa5f1c725e18dfa23ffe8ac554ddf61bcb5"
+
+[[pins]]
+target = "tool_schema:source_evidence"
+role = "SCHEMA"
+sha256 = "994bb32eaaafe8ac9b1e1402e3ebbe39fca6efb2bd7e6a81d3de20c546c28fef"
 
 [[pins]]
 target = "skill:soe-architect"
