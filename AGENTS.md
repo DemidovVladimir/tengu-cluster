@@ -47,10 +47,13 @@ messages into a TUI / Telegram chat. The harness:
 | Beyond chat | What | Doc |
 |---|---|---|
 | `tengu run --sandbox <s>` | long-running: `[feeds.*]`, `[decision_loops.*]` (Jev picks the action, tools execute), lease, heartbeat, `doctor --live` | `docs/runtime-2026-09-30.md` |
-| `tengu studio --sandbox <s>` | local browser UI (`--features studio`): the validated graph, live + replayed runs (`tengu trace`), health; Play / Stop only where `[studio] control` allows it (never W1-bound / hardened) | `docs/studio-2026-10-08.md` |
+| `tengu studio --sandbox <s>` · `sandboxes/control-loop-lab` | local browser UI (`--features studio`, loopback only): the validated graph, live + replayed runs, health; Play / Stop only where `[studio] control` allows it (the lab; never `[generation]`-bound / hardened). The lab = a safe Jev loop to watch | `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` |
+| `tengu trace runs\|show --sandbox <s>` | the execution trace `tengu run` / `tengu decide` / Studio record: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, read-only, every build | `docs/runtime-2026-09-30.md` § Trace |
 | `sandboxes/xmarket` | paper trading desk: every order tool runs the `[risk]` gate inside it ($100 budget) | `docs/xmarket-tracker-2026-09-29.md` § 0 |
 | `sandboxes/xlab` | research on backfilled history: `tengu history`, `tengu backtest`, Jev replayed | `docs/xlab-2026-10-01.md` |
-| `lineage/` · `tengu lineage` · `tengu evidence` | research lineage: experiments, variants, Experience, capabilities, generations (W1 frozen; a sandbox binds one with `[generation]`), evidence vault + forward grading | `docs/lineage-2026-10-06.md` |
+| `sandboxes/xlab-w2` · `tengu ranking run\|show` | W2 research (unbound) + scheduled strategy ranking: sealed `lineage/rankings/` contracts, deterministic ranker, no LLM — both contracts unsealed (G-SR1) | `docs/strategy-ranking-automation-2026-10-08.md` |
+| `sandboxes/soe` · `tengu soe` · `tengu sources` | Software Opportunity Engine: a weekly evidence-backed ranking of software opportunities (`HOLD` is a valid week), offline until G-O0; source layer: SEC EDGAR + EU TED records in `sources.db`, as-of view, operator-only fetch | `docs/soe-2026-10-08.md` · `docs/source-evidence-2026-10-08.md` |
+| `lineage/` · `tengu lineage` · `tengu evidence` | research lineage: experiments, variants, Experience, capabilities, generations (W1 frozen; a sandbox binds one with `[generation]`), ranking contracts, evidence vault + forward grading | `docs/lineage-2026-10-06.md` |
 
 All network traffic is **Tor by default** (`[egress] network = "tor"`, the
 Arti + lyrebird-rs proxy from `make tor`); a sandbox opts out with
@@ -66,13 +69,13 @@ tools/memory/grounding on the planner-side LLM call).
 
 | Layer | Path | Holds | May import |
 |---|---|---|---|
-| domain | `src/domain/` | plain data + pure policy (messages, plan, `ToolScope`, secrets redaction, metrics records, observations, decisions, risk / paper / backtest math, calendars) | nothing else |
-| ports | `src/ports/` | traits: `Engine`, `Tool`, `MemoryService`, `RecallStore`, `Planner`, `WorkerHandle`, `Clock`, `ObservationStore`, `PaperLedger`, `MarketDataStore`, … | domain, config |
+| domain | `src/domain/` | plain data + pure policy (messages, plan, `ToolScope`, secrets redaction, metrics records, observations, decisions, risk / paper / backtest math + strategy ranker, calendars, lineage, SOE `soe/`, source records + as-of view `source/`, trace envelope, workflow graph) | nothing else |
+| ports | `src/ports/` | traits: `Engine`, `Tool`, `MemoryService`, `RecallStore`, `Planner`, `WorkerHandle`, `Clock`, `ObservationStore`, `PaperLedger`, `MarketDataStore`, `SourceStore`, `CycleStore`, `TraceSink`, … | domain, config |
 | config | `src/config/` | TOML schema, validation, paths | domain |
-| application | `src/application/` | use cases: chat turn + tool loop, orchestrator, memory manager, skills, tool dispatch, decision loops, runtime (`tengu run`), paper gate + fill, backtests | domain, ports, config |
-| outbound adapters | `src/adapters/outbound/` | engines, **tools**, memory stores, MCP client, egress, secrets, subprocess runner, SQLite stores (observations, ledger, `market.db`), backfill, Hyperliquid / Solana clients | all but inbound/bootstrap |
-| bootstrap | `src/bootstrap/` | composition root: tool executor, memory, orchestrator, sandbox, decision loops, runtime | all but inbound |
-| inbound adapters | `src/adapters/inbound/` | CLI (`cli/`), TUI, Telegram, webhooks, `tengu run`, MCP bridge, eval/evolve | everything |
+| application | `src/application/` | use cases: chat turn + tool loop, orchestrator, memory manager, skills, tool dispatch, decision loops, runtime (`tengu run`), paper gate + fill, backtests, strategy ranking, SOE weekly cycle, source evidence, Studio read models | domain, ports, config |
+| outbound adapters | `src/adapters/outbound/` | engines, **tools**, memory stores, MCP client, egress, secrets, subprocess runner, SQLite stores (observations, ledger, `market.db`, `sources.db`), backfill, SEC / TED fetchers, SOE cycle store, trace store, Hyperliquid / Solana clients | all but inbound/bootstrap |
+| bootstrap | `src/bootstrap/` | composition root: tool executor, memory, orchestrator, sandbox, decision loops, runtime, SOE job, Studio, trace | all but inbound |
+| inbound adapters | `src/adapters/inbound/` | CLI (`cli/`), TUI, Telegram, webhooks, `tengu run`, Studio server, MCP bridge, eval/evolve | everything |
 
 Enforced by `tests/layering_lint.rs`. **Where does X live / how do I add Y** → `docs/code-map.md` (+ `docs/code-map.html`, interactive knowledge graph).
 
@@ -168,14 +171,42 @@ config, channels) — it is the index into everything below.
     `domain/{marketdata*,backtest/,canonical.rs}`, `ports/market_data.rs`,
     `adapters/outbound/{market_data.rs,backfill/,decision_cache.rs,tools/xlab/}`,
     `application/backtest/`, `config/backtest.rs` or `sandboxes/xlab`.
-13. **`TENGU_HANDOFF.md` + `TENGU_ROADMAP.md`** — operator intent (W1 → W2 → evolution,
+12. **`TENGU_HANDOFF.md` + `TENGU_ROADMAP.md`** — operator intent (W1 → W2 → evolution,
     gated phases, STOP at operator reviews) — and **`docs/lineage-2026-10-06.md`**:
     the `lineage/` registry (one TOML file per record), `tengu evidence` (vault,
-    grade, regrade, coverage), generation binding. State: P0–P5 done, W1 frozen,
-    STOP at Operator Review #1 (`docs/w1-review-2026-10-06.md`). Read BEFORE
+    grade, regrade, coverage), generation binding. State: P0–P11 done, Operator
+    Review #1 = APPROVE (`docs/w1-review-2026-10-06.md` § Verdict), W1 kept;
+    P12 / P13 not started. Read BEFORE
     touching `lineage/`, `domain/{lineage/,evidence*.rs,xm/grade.rs,xm/regrade.rs}`,
     `{config,ports,application,adapters/outbound}/{lineage,evidence}*`, a
     sandbox's `[generation]` or any W1-pinned section.
+13. **`docs/strategy-ranking-automation-2026-10-08.md`** — scheduled strategy
+    ranking (SR-0–SR-8, as built): ranking contracts as lineage records
+    `lineage/rankings/` sealed by the operator, the pure ranker, the coordinator /
+    publisher, cohorts, retention of cited runs, the `xlab-w2` feeds. Read BEFORE
+    touching `domain/{backtest/ranking.rs,lineage/ranking.rs}`, `application/ranking/`,
+    `config/strategy_ranking.rs`, `adapters/outbound/tools/xlab/rank.rs`,
+    `adapters/inbound/cli/ranking.rs`, `lineage/rankings/` or `sandboxes/xlab-w2`.
+14. **`docs/soe-2026-10-08.md`** + **`docs/source-evidence-2026-10-08.md`** — the
+    Software Opportunity Engine (O0–O4: contract, profile field names, gates,
+    economics, weekly cycle, replay + grading, the Review #2 packet, stage tools,
+    SOE-G0; § 15 = the operator's path) and its source layer (O2: `[sources]`,
+    `source_record/1`, `sources.db`, the two-clock as-of view, SEC EDGAR + EU TED).
+    Read BEFORE touching `domain/{soe,source}/`, `config/{soe,sources}.rs`,
+    `ports/{soe,source_store}.rs`, `application/{soe/,sources.rs}`,
+    `adapters/outbound/{soe,sources}/`, `adapters/outbound/tools/{soe,sources}/`,
+    `bootstrap/soe.rs`, `adapters/inbound/cli/{soe.rs,soe/,sources.rs}`, feed kind
+    `job` (`config/feeds.rs`), `skills/soe-{architect,critic}/` or `sandboxes/soe`.
+15. **`docs/studio-2026-10-08.md`** + **`TENGU_STUDIO_PLAN.md`** (delivery contract,
+    tracker § 8) — Tengu Studio: workflow graph, execution trace (envelope +
+    coverage: `docs/runtime-2026-09-30.md` § Trace), routes, security model,
+    Play / Stop; lab runbook `docs/control-loop-lab-2026-10-08.md`; editor = design
+    only (`docs/studio-editor-design-2026-10-08.md`). Read BEFORE touching
+    `adapters/inbound/studio/`, `application/{studio/,trace_exec.rs}`,
+    `domain/{trace,workflow}.rs`, `ports/trace.rs`, `adapters/outbound/trace_store.rs`,
+    `bootstrap/{studio,trace}.rs`, `config/studio.rs`,
+    `adapters/inbound/cli/{studio,trace}.rs`, `adapters/inbound/run.rs::start_session`,
+    `web/studio/` or `sandboxes/control-loop-lab`.
 
 ---
 
@@ -204,7 +235,7 @@ flow, audit these for staleness **before declaring done**:
 | `src/application/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `TENGU_PLAN.md` shape, or who writes/reads them |
 | `docs/comparison-2026-04-26.md` + `.svg` | If your change affects how Tengu compares to Hermes or PI on memory/skills/tools/routing or the trading runtime axes (typed decisions, runtime, money safety, research on history, engine parity) |
 | `docs/skill-research-2026-04-28.md` | If the skill-lifecycle plan, gap inventory, or learning-platform A1/A2/A3 decisions change. |
-| `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `application/chat/flow.rs`, `application/chat/tool_loop.rs::collect_engine_response`, `application/chat/service.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or `rag/cleanup.rs`). The .html keeps inline JS arrays — keep them in sync with the .md. |
+| `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `application/chat/flow.rs`, `application/chat/tool_loop.rs::collect_engine_response`, `application/chat/service.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or the Open Brain / planner-file layer — `orchestrator/shared_files.rs`, `outbound/tools/agentic_memory/`). The .html keeps inline JS arrays — keep them in sync with the .md. |
 | `AGENTS.md` (this file) **and** `CLAUDE.md` (its twin) | If you added/removed a top-level subsystem, changed the doctrine, or added a new "required reading" doc. Update both — they must not drift. |
 | `docs/code-map.md` + `docs/code-map.html` (inline `GRAPH` data) | If you added/moved/removed a file, port, layer, tool, engine, config section, or changed an extension recipe. Keep the two in sync. |
 | `docs/tutorial/<slug>.html` + `docs/tutorial/sources.toml` | **Every code change** (rule above): pages whose `sources` cover the changed paths; `sources.toml` when files move; `cargo test --test tutorial_map`. |
@@ -220,7 +251,10 @@ flow, audit these for staleness **before declaring done**:
 | `skills/orchestrator/SKILL.md` | If you changed what the planner can output OR added a new prompt block (e.g. cross-session recall) |
 | `skills/orchestrator/plan_schema.json` | If you changed the plan JSON shape (e.g. added `Step.compose` for C→B fallback) |
 | `src/domain/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
-| `docs/studio-2026-10-08.md` + `TENGU_STUDIO_PLAN.md` § 8 | If you changed `tengu studio` (routes, guard, control, `[studio]`, the page in `web/studio/`) or the trace envelope: keep the operator doc true and tick the § 8 row (status, evidence, commit). |
+| `docs/studio-2026-10-08.md` + `TENGU_STUDIO_PLAN.md` § 8 | If you changed `tengu studio` (routes, guard, control, `[studio]`, the page in `web/studio/`), `control-loop-lab` or the trace envelope / coverage (`docs/runtime-2026-09-30.md` § Trace): keep the operator doc true and tick the § 8 row (status, evidence, commit). |
+| `docs/studio-evidence/` | Screenshots of the Studio page on the lab (idle · running · replay, lab `TENGU_HOME`): retake when `web/studio/` or a served view changes what the page shows. |
+| `docs/strategy-ranking-automation-2026-10-08.md` | If you changed the ranker, the coordinator / publisher, the ranking contract shape, `[strategy_ranking]`, cited-run retention, `tengu ranking`, the `strategy_ranking` tool or the `xlab-w2` ranking feeds: keep its as-built tables and SR states current. Never edit a sealed contract (`seal_mismatch`). |
+| `docs/soe-2026-10-08.md` + `docs/source-evidence-2026-10-08.md` | If you changed SOE records, economics, gates, ranking, `[soe]` load rules, the cycle / `soe_cycle` job, replay / grading / review, the stage tools or SOE-G0 (a pinned change updates its pin until the lock row — `tengu lineage generation SOE-G0`); or `[sources]`, `source_record/1`, `sources.db`, the as-of view, a fetcher, `tengu sources` or `source_evidence`. Profile field names only, never a value. |
 
 **Rule of thumb:** if a future agent opening this project would learn the
 "wrong" thing from a doc, the doc is stale. Fix it in the same commit that
@@ -310,7 +344,7 @@ These are not preferences. They're load-bearing.
 3. **Composition over wholesale.** Per-agent scopes override
    `default_scopes` wholesale (NOT field-merged). Per-step `Step.compose`
    overrides the base spec's skills/tools wholesale — in a hardened sandbox
-   (`[risk]` / Solana signer) it may only narrow them
+   (`[risk]` / `[soe]` / Solana signer) it may only narrow them
    (`bootstrap::tools::compose_agent`; a widening compose fails the step).
    This keeps the contract simple even if it costs some convenience.
 
@@ -343,8 +377,11 @@ These are not preferences. They're load-bearing.
   append-only. Evidence: `tengu evidence snapshot` copies into a read-only vault
   `<TENGU_HOME>/state/evidence/<id>/` (a non-empty `-wal` is refused —
   checkpoint first); read old ledgers / day files there, never through the
-  store adapters (they migrate or purge on open). Phase 6+ of
-  `TENGU_ROADMAP.md` waits for the operator's APPROVE.
+  store adapters (they migrate or purge on open). `sandboxes/soe` binds
+  `SOE-G0` (`CANDIDATE`: the load checks its tool closed world; pins only
+  `tengu lineage verify --pins` — a pinned change updates its pin until the
+  operator appends its `[[frozen]]` row after G-O0 + G-WKND, never an agent).
+  Operator Review #1 = APPROVE (2026-10-08) → P6–P11 done, W1 kept.
 - **History first (operator rule 2026-10-01)** — answer trading / strategy
   questions by backfilling public history and backtesting it (`tengu history
   backfill`, `tengu backtest`, sandbox `xlab`, `docs/xlab-2026-10-01.md`) — never
@@ -379,8 +416,9 @@ These are not preferences. They're load-bearing.
   verify Warn `ranking_unsealed`. The publisher (`application/ranking/`, behind
   `tengu ranking run|show` and the opt-in tool `strategy_ranking`) reloads the
   registry on every run and refuses `contract_unsealed` / `contract_changed` —
-  never seal a contract or run a ranking on `~/.tengu/state/xlab` yourself (SR-1:
-  the operator's call). `[strategy_ranking] registry, contracts`
+  never seal a contract or run a ranking on `~/.tengu/state/xlab` yourself (G-SR1:
+  the operator's call; `rank.xlab-w2.daily.v1` and `rank.xlab-w2.weekend.v1` are
+  both committed unsealed). `[strategy_ranking] registry, contracts`
   (`config/strategy_ranking.rs`) lists a sandbox's contracts; `sandboxes/xlab-w2`
   (unbound) runs the daily + weekend contracts by the feeds `history_refresh` →
   `strategy_ranking_daily` / `strategy_ranking_weekend` on the private
@@ -390,12 +428,46 @@ These are not preferences. They're load-bearing.
   arms only (`NOT_GATED`), never a split. Retention (`keep_runs`) keeps every run
   the `[strategy_ranking]` registry cites (bound or not) and every run a
   `latest.json` names. `lineage/rankings/` fails a pre-2026-10-08 binary's W1
-  load (unknown registry dir): keep it out of a checkout a frozen weekend binary
-  reads.
+  load (unknown registry dir) — the weekend no-pull rule below.
+- **Software Opportunity Engine (2026-10-09, `docs/soe-2026-10-08.md`)** —
+  offline until G-O0. The operator profile is private and signed:
+  `<TENGU_HOME>/state/soe/operator.toml` (`sandboxes/soe`'s `[sources]` state
+  root; `config/soe.rs::load_profile`), no built-in value, no serde default; refused when
+  missing, `signed_by = "UNSIGNED"`, `synthetic`, inside a git work tree
+  (`profile_in_repo`) or readable by group / other (`profile_mode`). `tengu soe
+  init` writes the UNSIGNED template with the four money values `REQUIRED` —
+  never put a profile value in the repo, a doc, a test or a fixture (fixtures:
+  `synthetic = true` round values); the planning set
+  `docs/software-opportunity-*-2026-10-04.md` stays local (private figures).
+  `[soe]` = hardened + closed world: tools only from `domain::tools::SOE_ALLOWED`,
+  deny-all scopes for side-effect tools, `kind = "job"` feeds only, no loops /
+  `[risk]` / `[xmarket]` / `[telegram]` / `[webhooks]`. Stages are `run-agent`
+  steps (Architect `soe_propose`, Critic `soe_challenge`, both `soe_view`); a
+  frozen cycle dir is read-only. Nothing for contact, spend or publish exists
+  (O5–O8 wait for SOE Operator Review #2, G-R2).
+- **Source layer (2026-10-08, `docs/source-evidence-2026-10-08.md`)** — every
+  `[sources.registry.*]` row ships `enabled = false`; enabling needs the
+  operator's reviewed terms (`license`, `terms_url`, `terms_sha256`,
+  `terms_reviewed_at`) + both retention periods, else the load fails
+  (`config/sources.rs`); each row's hosts sit inside `[egress] allow_hosts`. Only
+  the operator fetches (`tengu sources fetch|import|terms|purge`; kill switch
+  `disable|enable` — the newest `switches` row wins over the TOML); agents read
+  the as-of packet through the read-only `source_evidence` (no fetch argument).
+  Store `<TENGU_HOME>/state/<sources.state>/sources.db` (0600, append-only: a
+  correction or withdrawal is a new record), outside every fs root and
+  workspace. SEC needs `$SEC_USER_AGENT` (name + email). Never enable a row or
+  fetch yourself (G-O0).
+- **Feed kind `job` (2026-10-09, `config/feeds.rs`)** — `kind = "tool" | "tick" |
+  "job"`; a job names one of the closed list `JOBS` (only `soe_cycle`, needs
+  `[soe]`), never a command from config; `bootstrap/runtime.rs::job_for` runs it
+  under `tengu run` or Studio's Play. `soe_cycle` decides the slot's ISO week at
+  the slot time; a frozen week is a no-op. `tengu run` and `tengu soe cycle` both
+  take `runtime:<s>` + `state:<[sources] state>` (one owner per SOE state root):
+  a held lease refuses the second process.
 - **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
   in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
-  the Solana, Hyperliquid and xmarket families — read the list there, don't
-  copy it); anything else fails config validation, and listing one in
+  the Solana, Hyperliquid, xmarket, xlab, source and SOE families — read the
+  list there, don't copy it); anything else fails config validation, and listing one in
   `tools` opts it in too. `manage_skill` is the canonical unified skill
   write API (see `outbound/tools/manage_skill/`); `agentic_memory` is the
   Postgres-backed Open Brain memory tool (`postgres_memory` feature).
@@ -437,14 +509,18 @@ These are not preferences. They're load-bearing.
   (`[rsik]`) fails the load — a new section must be a `Config` field first
   (`config::risk::tests` loads every `sandboxes/*/config.toml`).
   Docker mounts `./config.toml` (or `sandboxes/<name>/config.toml` via
-  `make up SANDBOX=<name>`) as `TENGU_CONFIG`; `make` derives `NETWORK` from
+  `make up SANDBOX=<name>`, at its own path `/opt/tengu/sandboxes/<name>/config.toml`
+  so `../../lineage` resolves) as `TENGU_CONFIG`; `make` derives `NETWORK` from
   that file's `[egress] network`.
 - **The accepted plan reaches subagents via IPC, not the file** —
-  `AgentIpcInput.plan_state` carries the rendered plan per session
-  (`shared_files::set_active_plan`, keyed by the shared `session_id`);
-  `run_agent_subprocess` prefers it and only falls back to reading root
-  `TENGU_PLAN.md` for old parents. `TENGU_PLAN.md` is a debug artifact —
-  concurrent webhook / Telegram sessions no longer race on it.
+  `replan.rs::drive` registers every accepted plan / replan per session
+  (`shared_files::set_active_plan`, keyed by the shared `session_id`) and
+  `AgentIpcInput.plan_state` carries it; `run_agent_subprocess`
+  (`cli/run_agent.rs` plan block) prefers it and only falls back to reading root
+  `TENGU_PLAN.md` for old parents that send none. `TENGU_PLAN.md` is a human
+  mirror of the last plan of any session — concurrent webhook / Telegram
+  sessions no longer race on it. It and `TENGU_PLANNER_REGISTRY.md` are runtime
+  artifacts — gitignored, never hand-edited.
 - **`run-agent` children export `TENGU_SESSION_ID` and `TENGU_AGENT_NAME`** —
   `agentic_memory` `capture` stamps both when the LLM omits `session_id` /
   `agent`, so subagent captures are session-scoped.
@@ -474,10 +550,6 @@ These are not preferences. They're load-bearing.
   Editing the sandbox config and restarting `tengu chat` is sufficient to
   pick up the change. The planner LLM is asked to use its own judgement reading
   each description — there is no similarity score gate anymore.
-- **`TENGU_PLAN.md` carries the accepted plan to subagents** — `replan.rs::drive`
-  overwrites root `TENGU_PLAN.md` on every accepted plan/replan;
-  `run_agent_subprocess` reads it into the subagent system prompt at startup.
-  Both files are runtime artifacts — gitignored, never hand-edited.
 - **Sandbox config crosses the IPC boundary (Phase 7.2)** —
   `Config.sandbox_name` (`#[serde(skip)]`) is set by `load_sandbox_or` and
   threaded through `SubprocessRunner` → `AgentIpcInput.sandbox_config` so the
@@ -671,9 +743,11 @@ These are not preferences. They're load-bearing.
   base tool; `[[mcp_servers]]` tools too); in-process chat call ids are
   `chat:<turn nonce>:<round>:<i>:<provider id>`. Still open: the live `local`
   legs (the operator's PC), `agentic_memory` live (Postgres), Privy signing /
-  Solana `send` legs (never run).
+  Solana `send` legs (never run), the live legs of the sets `xlab_rank`
+  (`strategy_ranking`), `sources` (`source_evidence`) and `soe` (`soe_view`,
+  `soe_propose`, `soe_challenge`) — not run yet.
 - **Hardened sandboxes (2026-09-30, `config/hardening.rs`)** — a `[solana]`
-  signer or a `[risk]` section: every `claude_code` agent must set
+  signer, a `[risk]` or an `[soe]` section: every `claude_code` agent must set
   `[agents.<a>.claude_code] builtin_tools_profile = "none"` (no block =
   `editor_shell` = load error; the value is read trimmed, an unknown one is a
   load error), and `fold_default_scopes` sets `no_shell_fallback` on every
@@ -715,12 +789,14 @@ These are not preferences. They're load-bearing.
   ledger's account owner), `[xmarket]` state dir (`<TENGU_HOME>/state/<state>`,
   install-wide stores), `[risk]` / `[paper]` (every field required,
   `config/risk.rs`), `[xmarket.calendars.*]`, `[rate_limits.<name>]`,
-  `[recorder]`. A new section a tool reads goes there — never a new
+  `[recorder]`, `[backtest]`, the `[generation]` scope, `[sources]` (+ its state
+  dir), `[soe]`, `[strategy_ranking]`. A new section a tool reads goes there — never a new
   `#[serde(skip)]` field on `AgentConfig`. Every surface (in-process,
   `run-agent`, loops, `tengu run`, bridge) sees the same values.
 - **`tengu run --sandbox <s>` (2026-09-30, `docs/runtime-2026-09-30.md`)** —
   one runner per sandbox and one owner per `[xmarket]` ledger (leases
-  `runtime:<s>` + `state:<dir>` in `<state dir>/runtime.db`, TTL 30 s;
+  `runtime:<s>` + `state:<dir>` — with `[soe]` also `state:<[sources] state>` —
+  in `<state dir>/runtime.db`, TTL 30 s, all or none;
   `tengu webhooks` takes the same — a second process exits 1; each ledger
   account records the sandbox that first wrote it, another sandbox's tools are
   refused `account_owner_mismatch`); every `[decision_loops.*]` built once
@@ -750,15 +826,38 @@ These are not preferences. They're load-bearing.
   drain; control only with `[studio] control = true` (only `control-loop-lab`)
   or `--allow-control`, never `[generation]`-bound or hardened (a load error).
   The page draws what Rust serves; its assets are `include_str!` — rebuild
-  after a `web/studio/` edit. **Lab `TENGU_HOME` isolation:** `export
-  TENGU_HOME="$HOME/tengu-lab/home"` before any lab `tengu` — dotenvy loads the
-  nearest `.env` up from the cwd and never overrides an exported var, so a
-  `tengu` started in a worktree under `.claude/worktrees/` otherwise inherits
-  the main checkout's `.env` (`TENGU_HOME=~/.tengu`, the weekend run's live
-  state). `--sandbox <name>` is cwd-relative (`sandboxes/<name>/config.toml`,
-  `bootstrap/sandbox.rs`): run from the repo / worktree root. The visual editor
-  is a design only (`docs/studio-editor-design-2026-10-08.md`; no save until
-  Operator Review #3).
+  after a `web/studio/` edit. Lab runs: `export TENGU_HOME="$HOME/tengu-lab/home"`
+  first (worktree gotcha below). The visual editor (ST-40) is a design only
+  (`docs/studio-editor-design-2026-10-08.md`; no save until Operator Review #3);
+  ST-90 clean room open.
+- **Execution trace (2026-10-09, `domain/trace.rs`, `docs/runtime-2026-09-30.md`
+  § Trace)** — `tengu run`, `tengu decide` and Studio (`kind = "studio"`) each
+  write one JSONL file per recording: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`
+  (`adapters/outbound/trace_store.rs`: first line `run.opened`, `seq` per run,
+  payload redacted then bounded; a restart = a new run, never an append).
+  `decisions.jsonl` lines carry the recording's `runtime_id` / `run_id`. `tengu
+  trace runs` · `show --run <id> [--after <seq>] [--follow]` read it in every
+  build, no config. `tengu webhooks`
+  records no trace yet; only `tengu prune` deletes runs (all of
+  `<TENGU_HOME>/logs`).
+- **Worktrees inherit the main checkout's `.env` (2026-10-09)** — `main` calls
+  `dotenvy::dotenv()` (`adapters/inbound/cli/mod.rs`): the nearest `.env` up from
+  the cwd, never overriding an exported var. A `tengu` started under
+  `.claude/worktrees/<lane>/` therefore gets the main checkout's `TENGU_HOME`
+  (`~/.tengu`, the weekend run's live state) — `export TENGU_HOME=<own dir>`
+  first (lab: `$HOME/tengu-lab/home`). `--sandbox <name>` is cwd-relative
+  (`sandboxes/<name>/config.toml`, `bootstrap/sandbox.rs`): run from the repo /
+  worktree root.
+- **Weekend no-pull rule (until Mon 2026-10-12, G-WKND)** — weekend #2 runs
+  the frozen binary `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` (sha256
+  `fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445`) on the
+  main checkout's `lineage/`; origin/main's `lineage/rankings/` fails its W1 load
+  (`not a registry entry`). Never `git pull` / switch branches in the main
+  checkout until the run is stopped, vaulted and graded
+  (`docs/forward-evidence-runbook-2026-10-08.md`) — work in a worktree. After the
+  stop: delete the untracked local copies of
+  `docs/strategy-ranking-automation-2026-10-08.md` and `TENGU_STUDIO_PLAN.md`
+  (tracked upstream), then pull.
 - **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
   (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
   via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
@@ -784,7 +883,7 @@ These are not preferences. They're load-bearing.
   Jev retries once on 429 / 5xx and has a 30 s circuit breaker. Audit in
   `<TENGU_HOME>/logs/decisions.jsonl` — one `write_all` per line, a line for a
   failed Jev call (`outcome = "error"`), `ts_ms` / `latency_ms` / `sandbox` /
-  `act_at` (incl. `args`, `ok`, `output`);
+  `act_at` (incl. `args`, `ok`, `output`), `runtime_id` / `run_id` when recorded;
   `tengu chat` on a config with `[decision_loops]` tails it and shows each
   decision of those loops as a System bubble. Plan:
   `docs/decision-loop-plan-2026-09-24.md`.
@@ -830,16 +929,19 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later. State 2026-10-08: `TENGU_ROADMAP.md` P0–P5 done (evidence vault +
-forward grading, the lineage registry, W1 frozen + generation binding);
-Operator Review #1 = APPROVE (`docs/w1-review-2026-10-06.md` § Verdict); Phases 6–11
-done 2026-10-08 (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1
-kept — next: forward evidence every weekend (Review #2 not reached). Before that, 2026-10-02: xmarket W1 +
-its gate done, `xlab` built. Next, in order: the operator decisions
-(`docs/xmarket-tracker-2026-09-29.md` § 0 + W1 notes) → W2
-(`docs/xmarket-build-plan-2026-09-30.md`: status, waves, W2 kickoff prompt at its
-end), judged on history first (`docs/xlab-2026-10-01.md` § 12 Next). The weekend
-run is optional; the live `local` engine legs run on the operator's PC.
+See `docs/SESSION_HANDOFF.md` for the running list. **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later.
+
+State 2026-10-09 (origin/main = #39–#44: xlab-w2 retention, strategy ranking, SOE O0–O4, Tengu Studio):
+
+| Open | Whose | Next |
+|---|---|---|
+| G-WKND | operator | weekend #2 (2026-10-09 → 10-12): stop Mon 2026-10-12, vault, grade; then pull the main checkout (no-pull gotcha) |
+| G-SR1 | operator | seal `rank.xlab-w2.daily.v1` and `rank.xlab-w2.weekend.v1` (`tengu lineage seal ranking:<id>`) or change them first; every ranking is refused until then |
+| G-O0 → SOE Review #2 | operator | sign the SOE profile, approve each source row's terms + enable it, append SOE-G0's `[[frozen]]` row → 4 frozen weekly cycles → G-R2 (`docs/soe-2026-10-08.md` § 15) |
+| Studio | agent → operator | ST-90 clean room (`TENGU_STUDIO_PLAN.md` § 8) → Operator Review #3 decides on the editor (ST-40 = design only) |
+| Engine parity | — | live legs `xlab_rank` · `sources` · `soe` not run; live `local` legs (the operator's PC); `agentic_memory` live; Privy / Solana `send` |
+| Trading | — | `TENGU_ROADMAP.md` P0–P11 done (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1 kept; forward rule W evidence every weekend (M3 tally 1 / 12); P12 / P13 + trading Operator Review #2 not reached; W2 research in `xlab-w2`, history first (`docs/xlab-2026-10-01.md` § 12) |
+
 As of 2026-05-14, the
 agentic-memory migration (Open Brain Postgres + pgvector behind
 `postgres_memory`) has landed all six phases: the `agentic_memory` plugin, the
@@ -878,7 +980,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-10-09 (Tengu Studio: `tengu studio` — graph, trace, live + replay, Play / Stop for the lab; operator doc `docs/studio-2026-10-08.md`, editor design only — "Beyond chat" row, REQUIRED updates row, gotcha; before that 2026-10-08 Operator Review #1 = APPROVE → Phase 6; before that 2026-10-07 visual tutorial `docs/tutorial/` — one animated page per feature, built from the code — and the rule that every code change updates its pages: REQUIRED updates + `tests/tutorial_map.rs` + `.claude/settings.json` hook; before that 2026-10-06 TENGU_ROADMAP P0–P5: `tengu evidence` vault + grade + regrade, the `lineage/` registry + `tengu lineage`, W1 frozen and `[generation]`-bound — gotcha above, required reading 13; before that 2026-10-02 docs refresh: "What this project is" names `tengu run`, the xmarket paper desk and xlab; the layer table lists the new ports / stores; "stuck" starts at `docs/index.html` + the HTML explorers; open items = operator decisions → W2; before that 2026-10-01 xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-09 (docs sweep B against origin/main #39–#44: "Beyond chat" rows `tengu trace`, `xlab-w2` + `tengu ranking`, `soe` + `tengu soe` / `tengu sources`; layout table; required reading renumbered 12–15 (ranking, SOE + source evidence, Studio); REQUIRED updates rows (ranking, SOE / source docs, `docs/studio-evidence/`); gotchas SOE profile, source layer, feed kind `job`, execution trace, worktree `.env`, weekend no-pull, `[soe]` hardened, sections; the stale `TENGU_PLAN.md` gotcha folded into the IPC one; open items = gate table; before that 2026-10-09 Tengu Studio: `tengu studio` — graph, trace, live + replay, Play / Stop for the lab; operator doc `docs/studio-2026-10-08.md`, editor design only — "Beyond chat" row, REQUIRED updates row, gotcha; before that 2026-10-08 Operator Review #1 = APPROVE → Phase 6; before that 2026-10-07 visual tutorial `docs/tutorial/` — one animated page per feature, built from the code — and the rule that every code change updates its pages: REQUIRED updates + `tests/tutorial_map.rs` + `.claude/settings.json` hook; before that 2026-10-06 TENGU_ROADMAP P0–P5: `tengu evidence` vault + grade + regrade, the `lineage/` registry + `tengu lineage`, W1 frozen and `[generation]`-bound — gotcha above, required reading 12; before that 2026-10-02 docs refresh: "What this project is" names `tengu run`, the xmarket paper desk and xlab; the layer table lists the new ports / stores; "stuck" starts at `docs/index.html` + the HTML explorers; open items = operator decisions → W2; before that 2026-10-01 xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames
