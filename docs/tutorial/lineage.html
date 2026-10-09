@@ -236,13 +236,13 @@
     <p>Counts are the repo's <code>lineage/</code> today. The file stem is the id; ids are unique across all kinds, so <code>show</code> and <code>trace</code> take a bare id.</p>
   </div>
   <div class="grid">
-    <div class="card data kind"><span class="n">families/ · 14</span><h3>Family</h3><p>One idea: <code>hypothesis</code>, <code>role</code> (primary, negative control, placebo), <code>status</code>, <code>[prior_search]</code>. Links <code>preceded_by</code> and <code>controls</code>.</p></div>
+    <div class="card data kind"><span class="n">families/ · 15</span><h3>Family</h3><p>One idea: <code>hypothesis</code>, <code>role</code> (primary, negative control, placebo), <code>status</code>, <code>[prior_search]</code>. Links <code>preceded_by</code> and <code>controls</code>.</p></div>
     <div class="card data kind"><span class="n">variants/ · 49</span><h3>Variant</h3><p><code>family</code>, <code>parent</code> (or <code>ROOT</code>), <code>[[changed]]</code> dims, <code>preregistered</code>, exactly one <code>[spec]</code> shape.</p></div>
     <div class="card data kind"><span class="n">experiments/ · 37</span><h3>Experiment</h3><p><code>kind</code>, <code>[[windows]]</code>, <code>[[results]]</code> with <code>evidence</code> and <code>extract</code>, <code>[verdict]</code>, <code>validity</code>. Links family, variant, generation, capabilities, incidents.</p></div>
     <div class="card data kind"><span class="n">episodes/ · 3</span><h3>Episode</h3><p>Context, information with <code>available_at</code>, alternatives (one chosen), decision, action, outcome, <code>[quality]</code>, a lesson.</p></div>
     <div class="card data kind"><span class="n">incidents/ · 8</span><h3>Incident</h3><p><code>class</code>, start and end, <code>strategy_impact</code>, <code>[[data_impact]]</code>: each gap <code>MISSING</code>, <code>BACKFILLED</code> or <code>LIVE_RECORDED</code>.</p></div>
-    <div class="card hands kind"><span class="n">capabilities/ · 19</span><h3>Capability</h3><p>Class, <code>version</code>, permission, lifecycle, a <code>contract</code> pin target, <code>bindings</code>: <code>tool:&lt;name&gt;</code> or <code>strategy_kind:&lt;kind&gt;</code>. W1 lists 17; <code>intel.strategy_ranking</code> and <code>intel.source_evidence</code> are <code>CANDIDATE</code>s outside it.</p></div>
-    <div class="card guard kind"><span class="n">generations/ · 1</span><h3>Generation</h3><p>W1: <code>status</code>, <code>sandboxes</code>, <code>[[capabilities]] id, version</code>, decision and research policy, models, <code>[[pins]]</code>.</p></div>
+    <div class="card hands kind"><span class="n">capabilities/ · 22</span><h3>Capability</h3><p>Class, <code>version</code>, permission, lifecycle, a <code>contract</code> pin target, <code>bindings</code>: <code>tool:&lt;name&gt;</code> or <code>strategy_kind:&lt;kind&gt;</code>. W1 lists 17; SOE-G0 lists the three <code>intel.soe_*</code> and <code>intel.source_evidence</code>; <code>intel.strategy_ranking</code> is a <code>CANDIDATE</code> no generation lists.</p></div>
+    <div class="card guard kind"><span class="n">generations/ · 2</span><h3>Generation</h3><p>W1 (frozen) and SOE-G0 (candidate, unlocked): <code>status</code>, <code>sandboxes</code>, <code>[[capabilities]] id, version</code>, decision and research policy, models, <code>[[pins]]</code>.</p></div>
     <div class="card data kind"><span class="n">evidence/ · 1</span><h3>Evidence</h3><p>A read-only vault snapshot: items with sha256. See <a href="evidence.html">Forward evidence</a>.</p></div>
     <div class="card guard kind"><span class="n">rankings/ · 2</span><h3>Ranking contract</h3><p>A strategy ranking's policy: <code>strategies</code>, <code>cohort</code>, <code>[eligibility]</code>, <code>[rating] order</code>, cutoff, tz. Both are drafts: unsealed is a Warn. See <a href="strategy-ranking.html">Strategy ranking</a>.</p></div>
   </div>
@@ -502,7 +502,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
         <tr><td><code>src/application/lineage/verify.rs</code></td><td>the <code>--pins</code> and <code>--evidence</code> passes, pin status</td></tr>
         <tr><td><code>src/application/lineage/attempts.rs</code></td><td>the run-dir and holdout-read scan</td></tr>
         <tr><td><code>src/adapters/outbound/lineage/</code></td><td>repo and catalog probe, locator resolver, run dirs, <code>ledger:</code> results</td></tr>
-        <tr><td><code>src/config/lineage.rs</code></td><td>the registry loader, <code>[generation]</code>, the load rules</td></tr>
+        <tr><td><code>src/config/lineage.rs</code></td><td>the registry loader, <code>[generation]</code>, the load rules; its tests prove a new generation leaves W1 alone (the W2 simulation, and SOE-G0 on the repo's own registry: W1's lock, no shared binding, W1's sandboxes still loading)</td></tr>
         <tr><td><code>src/config/sections.rs</code></td><td><code>SandboxSections::generation</code>: the scope tools see; <code>ranking</code>: the <code>[strategy_ranking]</code> section</td></tr>
         <tr><td><code>src/adapters/inbound/cli/lineage.rs</code></td><td><code>tengu lineage</code> and its subcommands</td></tr>
         <tr><td class="wrap"><code>lineage/</code> · <code>lineage/locks.toml</code></td><td>the records, the W1 manifest and its lock, the seals</td></tr>
@@ -512,7 +512,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

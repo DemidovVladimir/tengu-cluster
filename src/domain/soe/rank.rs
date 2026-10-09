@@ -4,9 +4,9 @@
 //! them, why one ranks above another, what moved between two rankings and
 //! how sensitive a verdict is to one input — plus the pieces of a
 //! `WeeklyPortfolio`. Pure and deterministic. The allocation (who gets a
-//! test within the weekly hours and the tranche) is O3 `allocate`, the one
-//! portfolio builder; here only weeks with nothing allocated are assembled:
-//! the `HOLD` week (nothing passes) and, until O3, the unallocated week.
+//! test within the weekly hours and the tranche) is `allocate.rs` (O3), the
+//! one portfolio builder (`tengu soe portfolio` and the weekly cycle use
+//! it); here only the `HOLD` week (nothing passes) is assembled.
 //!
 //! | `RankKey` | Value ([`KeyValue`]) | Ranks first |
 //! |---|---|---|
@@ -41,7 +41,6 @@
 //! | [`week_next_information`] | the fields behind the held candidates' `HOLD` failures, by how many candidates each blocks, then by name |
 //! | [`portfolio_inputs_sha256`] | canonical sha256 of every candidate's (id, version, `inputs_sha256`), by id |
 //! | [`hold_week`] | the `HOLD` week: nothing ranked, every failed gate, the next information, a rationale; refused when a candidate passes (that week is the allocation's) |
-//! | [`unallocated_week`] | `tengu soe portfolio` until O3: the `HOLD` week, or the `PASS` candidates ranked, each `HOLD`, nothing allocated, rationale [`NOT_ALLOCATED`] |
 
 // `rank_moves` (week-over-week moves) and `KeyValue::is_known` wait for O3.
 #![allow(dead_code)]
@@ -901,8 +900,9 @@ pub struct WeekHead {
     pub profile_sha256: String,
 }
 
-/// Every assessment made at the week's decision time, in its currency.
-fn same_decision(head: &WeekHead, all: &[Assessment]) -> Vec<ValueError> {
+/// Every assessment made at the week's decision time, in its currency
+/// (one error per one that is not).
+pub fn same_decision(head: &WeekHead, all: &[Assessment]) -> Vec<ValueError> {
     all.iter()
         .filter(|a| a.verdict.as_of != head.as_of || a.scenarios.currency != head.currency)
         .map(|a| {
@@ -972,35 +972,6 @@ pub fn hold_week(head: WeekHead, all: &[Assessment]) -> Result<WeeklyPortfolio, 
     }
     let rationale = hold_rationale(all);
     week_record(head, all, Vec::new(), rationale)
-}
-
-/// `hold_rationale` of an [`unallocated_week`] that ranks a candidate.
-pub const NOT_ALLOCATED: &str = "not allocated: every ranked candidate holds until the O3 allocation gives tests within weekly_owner_hours and max_validation_tranche";
-
-/// Module table: the week `tengu soe portfolio` prints before O3 —
-/// [`hold_week`] when nothing passes; else every `PASS` candidate ranked by
-/// `order` with the action `HOLD` (nothing allocated), the held / rejected
-/// rows, the next information and [`NOT_ALLOCATED`]. O3 `allocate` replaces
-/// it; `Err` as [`hold_week`] (another decision time or currency, a broken
-/// record).
-pub fn unallocated_week(
-    head: WeekHead,
-    all: &[Assessment],
-    order: &[RankKey],
-) -> Result<WeeklyPortfolio, Vec<ValueError>> {
-    if !all.iter().any(Assessment::passes) {
-        return hold_week(head, all);
-    }
-    let errors = same_decision(&head, all);
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-    let ranked = rank(all, order)
-        .into_iter()
-        .enumerate()
-        .map(|(i, a)| ranked_row(i as u32 + 1, a, order, PortfolioAction::Hold))
-        .collect();
-    week_record(head, all, ranked, Some(NOT_ALLOCATED.into()))
 }
 
 #[cfg(test)]
@@ -1529,46 +1500,6 @@ mod tests {
         let mut other = head();
         other.as_of = "2026-10-06T12:00:00Z".parse().unwrap();
         assert!(hold_week(other, &all).is_err());
-    }
-
-    #[test]
-    fn unallocated_week_ranks_passing_candidates_as_hold() {
-        let order = synthetic().rank_order;
-        let mut h = complete(recurring()); // price UNKNOWN
-        h.id = "h".into();
-        let mut r = revenue_share("\"16000.00\"", "7500", "160"); // hidden labour
-        r.id = "r".into();
-        let (a, b) = (automation("a", "\"600.00\""), automation("b", "\"500.00\""));
-        let all: Vec<Assessment> = [&r, &b, &h, &a].map(assessed).to_vec();
-        let w = unallocated_week(head(), &all, &order).unwrap_or_else(|e| panic!("{e:?}"));
-        let ranked: Vec<(u32, &str, &str)> = w
-            .ranked
-            .iter()
-            .map(|r| (r.rank, r.id.as_str(), r.action.kind()))
-            .collect();
-        assert_eq!(ranked, [(1, "a", "HOLD"), (2, "b", "HOLD")]);
-        assert_eq!(w.ranked[0].keys.len(), order.len());
-        assert_eq!(
-            (w.held[0].id.as_str(), w.rejected[0].id.as_str()),
-            ("h", "r")
-        );
-        assert_eq!(w.hold_rationale.as_deref(), Some(NOT_ALLOCATED));
-        assert_eq!(
-            (w.allocation.owner_hours, w.allocation.cash),
-            (0, Minor::ZERO)
-        );
-        assert!(!w.is_hold());
-        assert_eq!(w.inputs_sha256, portfolio_inputs_sha256(&all));
-        // Nothing passes: it is the HOLD week.
-        let gated = [all[0].clone(), all[2].clone()];
-        assert_eq!(
-            unallocated_week(head(), &gated, &order).unwrap(),
-            hold_week(head(), &gated).unwrap()
-        );
-        // Another decision time is refused.
-        let mut other = head();
-        other.as_of = "2026-10-06T12:00:00Z".parse().unwrap();
-        assert!(unallocated_week(other, &all, &order).is_err());
     }
 
     #[test]

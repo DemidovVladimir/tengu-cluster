@@ -1,0 +1,248 @@
+# Synthetic cycle case: invented example values and test sources
+# (`domain::source::testkit`, example.org urls) — no real firm, person or
+# figure. Expectations hold for the profile `synthetic-operator`
+# (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.cycle_case/1"
+id = "platform_rule_change"
+version = 1
+synthetic = true
+profile = "synthetic-operator"
+note = "PRD § 12 #1: one API sunset notice, two mechanisms. The automation needs support for every client edge case: its support is unbounded (REJECT, no price fixes it), and the Critic's HIDDEN_LABOR challenge also widens its hours (base 40, high 60). The one-off migration passes and gets the week's cheap test. An outlet's report published the day after the decision is stored but never seen: one confirmation."
+week = "2026-W41"
+decided_at = "2026-10-05T12:00:00Z"
+
+[[records]]
+src = "TED"
+native = "ted-2026-000501"
+published = "2026-09-29T09:00:00Z"
+
+[[records]]
+src = "DAILY"
+native = "d-501"
+published = "2026-10-06T08:00:00Z"
+report_of = "ted-2026-000501"
+
+[expected]
+hold = false
+allocation = { owner_hours = 5, cash = "0.00" }
+ranked = [{ id = "api-sunset-migration", action = { kind = "CHEAP_TEST", max_cash = "0.00", max_hours = 5 } }]
+held = []
+rejected = [{ id = "api-sunset-automation", action = "REJECT", gates = ["UNBOUNDED_SUPPORT"] }]
+confirmations = { ted-2026-000501 = 1 }
+
+[[proposals]]
+novelty = "MEDIUM"
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "api-sunset-automation"
+version = 1
+as_of = "2026-10-04"
+customer = "small accounting firms (synthetic example)"
+pain = "a changed filing format, re-keyed by hand"
+mechanism = "AUTOMATE"
+alternatives = ["PRODUCTIZE", "HOLD"]
+requires_skills = ["automation"]
+signals = ["@ted-2026-000501"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "30.00", base = "40.00", high = "60.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 13 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 1, base = 2, high = 3 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "RECURRING"
+leads_per_month = { value = { low = 7, base = 10, high = 14 }, evidence = ["url:https://example.org/ted_search/ted-2026-000501"], as_of = "2026-10-01" }
+conversion = { value = { low = 1500, base = 2000, high = 2500 }, evidence = [], as_of = "2026-10-01" }
+churn_per_month = { value = { low = 300, base = 500, high = 900 }, evidence = [], as_of = "2026-10-01" }
+price_per_month = { value = { low = "450.00", base = "600.00", high = "750.00" }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "700.00", base = "900.00", high = "1400.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "200.00", base = "300.00", high = "450.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the filing portal", share = 7500 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "900.00", base = "1300.00", high = "2100.00" }
+owner_hours = { low = 25, base = 40, high = 70 }
+reputation = "a missed delivery for one pilot client"
+dependency = "the filing portal's format"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "UNBOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "firms pay to stop re-keying filings"
+metric = "paid pilots"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-11-13"
+expires_at = "2026-11-27"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "750.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[proposals.bases]]
+field = "economics.revenue.leads_per_month"
+basis = { kind = "FACT", evidence = ["@ted-2026-000501"] }
+
+[[proposals.bases]]
+field = "economics.owner_hours_per_month"
+basis = { kind = "INFERENCE", why = "the hours of one comparable automation, edge cases aside" }
+
+[[proposals.forecast]]
+observable = { kind = "ASSUMPTION_WITHIN", field = "economics.owner_hours_per_month", low = "7", high = "13" }
+probability = 5500
+resolve_by = "2026-11-30"
+
+
+[[proposals]]
+novelty = "MEDIUM"
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "api-sunset-migration"
+version = 1
+as_of = "2026-10-04"
+customer = "shops on the retiring API (synthetic example)"
+pain = "their integration stops on the sunset date"
+mechanism = "RESCUE_MIGRATE"
+alternatives = ["AUTOMATE", "HOLD"]
+requires_skills = ["migration"]
+signals = ["@ted-2026-000501"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "ONE_OFF"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 200, base = 300, high = 500 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 0, base = 0, high = 0 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 0, base = 0, high = 1 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "ONE_OFF"
+contract_value = { value = { low = "7500.00", base = "10500.00", high = "11000.00" }, evidence = ["url:https://example.org/ted_search/ted-2026-000501"], as_of = "2026-10-01" }
+win_probability = { value = { low = 4000, base = 6500, high = 7500 }, evidence = [], as_of = "2026-10-01" }
+delivery_weeks = { value = { low = 2, base = 3, high = 4 }, evidence = [], as_of = "2026-10-01" }
+owner_hours_total = { value = { low = 30, base = 40, high = 55 }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "200.00", base = "300.00", high = "500.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "0.00", base = "200.00", high = "300.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the replacement API", share = 9000 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "300.00", base = "800.00", high = "2400.00" }
+owner_hours = { low = 30, base = 40, high = 70 }
+reputation = "a botched migration at one shop"
+dependency = "the replacement API"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "shops pay for a fixed-price migration"
+metric = "paid migrations"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-11-06"
+expires_at = "2026-11-20"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "400.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[proposals.bases]]
+field = "economics.revenue.contract_value"
+basis = { kind = "FACT", evidence = ["@ted-2026-000501"] }
+
+[[proposals.forecast]]
+observable = { kind = "OPERATOR_RESOLVES", question = "does a firm commission the migration before the sunset" }
+probability = 4000
+resolve_by = "2026-11-16"
+
+[[challenges]]
+target = "api-sunset-automation"
+kind = "HIDDEN_LABOR"
+claim = "every client's edge cases land on the operator: the sunset notice lists twelve endpoint variants"
+evidence = ["@ted-2026-000501"]
+effect = { kind = "WIDEN", field = "economics.owner_hours_per_month", base = "40", high = "60" }
+
+[[challenges]]
+target = "api-sunset-migration"
+kind = "BASE_RATE"
+claim = "migrations like this one rarely finish inside four weeks"
+evidence = []
+effect = { kind = "NONE" }

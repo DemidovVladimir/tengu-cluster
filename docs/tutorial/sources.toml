@@ -415,10 +415,20 @@ sources = [
 [pages.soe]
 sources = [
   "src/domain/soe/",
+  "src/ports/soe.rs",
+  "src/application/soe/",
+  "src/adapters/outbound/soe/",
+  "src/adapters/outbound/tools/soe/",
+  "src/bootstrap/soe.rs",
   "src/config/soe.rs",
   "src/adapters/inbound/cli/soe.rs",
+  "src/adapters/inbound/cli/soe/",
   "tests/soe_cli.rs",
   "tests/fixtures/soe/",
+  "sandboxes/soe/config.toml",
+  "skills/soe-architect/",
+  "skills/soe-critic/",
+  "lineage/generations/SOE-G0.toml",
   "docs/soe-2026-10-08.md",
 ]
 

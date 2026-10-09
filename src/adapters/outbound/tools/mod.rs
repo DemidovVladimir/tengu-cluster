@@ -33,6 +33,7 @@ pub(crate) mod schema_lint;
 pub(crate) mod skill;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod skill_resource;
+pub(crate) mod soe;
 pub(crate) mod solana;
 pub(crate) mod sources;
 pub(crate) mod view_skill;
@@ -338,6 +339,27 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: || sources::defs_named(names::SOURCE_EVIDENCE),
             plugin: |_| Box::new(sources::SourcesPlugin),
+        },
+        // SOE family (O3): one opt-in row per tool, all sharing the `soe`
+        // plugin (interfaces in `soe/defs.rs`); one read, two stage writes
+        // into the open run dir of the private SOE state.
+        ToolEntry {
+            opt_in: Some(names::SOE_VIEW),
+            needs_memory: false,
+            defs: || soe::defs_named(names::SOE_VIEW),
+            plugin: |_| Box::new(soe::SoePlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::SOE_PROPOSE),
+            needs_memory: false,
+            defs: || soe::defs_named(names::SOE_PROPOSE),
+            plugin: |_| Box::new(soe::SoePlugin),
+        },
+        ToolEntry {
+            opt_in: Some(names::SOE_CHALLENGE),
+            needs_memory: false,
+            defs: || soe::defs_named(names::SOE_CHALLENGE),
+            plugin: |_| Box::new(soe::SoePlugin),
         },
     ]);
     rows

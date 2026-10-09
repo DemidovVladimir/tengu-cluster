@@ -31,6 +31,11 @@
 //! | `ACQUISITION` | `asset_monthly_revenue`, `churn_per_month`, `collection_loss` |
 //! | `REVENUE_SHARE` | `partner_monthly_revenue`, `share` (bps), `collection_loss` |
 //!
+//! Every input has a dotted field (`economics.revenue.price_per_month`,
+//! `economics.initial.setup`, …): `EconomicInputs::inputs` / `input` /
+//! `input_mut` name the closed set an O3 proposal basis, forecast or
+//! challenge may refer to.
+//!
 //! | Rule (`validate`) | Code |
 //! |---|---|
 //! | `HIGH_TICKET_DELIVERY` with `RECURRING` revenue | `fake_recurring` (PRD § 12: no fake recurring revenue) |
@@ -174,14 +179,74 @@ impl RevenueModel {
             ],
         }
     }
+
+    /// [`RevenueModel::inputs`], mutable (same order).
+    fn inputs_mut(&mut self) -> Vec<(&'static str, InputMut<'_>)> {
+        use InputMut::{Amount as A, Count as C, Share as S};
+        match self {
+            RevenueModel::Recurring {
+                leads_per_month,
+                conversion,
+                churn_per_month,
+                price_per_month,
+                collection_loss,
+            } => vec![
+                ("leads_per_month", C(leads_per_month)),
+                ("conversion", S(conversion)),
+                ("churn_per_month", S(churn_per_month)),
+                ("price_per_month", A(price_per_month)),
+                ("collection_loss", S(collection_loss)),
+            ],
+            RevenueModel::OneOff {
+                contract_value,
+                win_probability,
+                delivery_weeks,
+                owner_hours_total,
+                collection_loss,
+            } => vec![
+                ("contract_value", A(contract_value)),
+                ("win_probability", S(win_probability)),
+                ("delivery_weeks", C(delivery_weeks)),
+                ("owner_hours_total", C(owner_hours_total)),
+                ("collection_loss", S(collection_loss)),
+            ],
+            RevenueModel::Acquisition {
+                asset_monthly_revenue,
+                churn_per_month,
+                collection_loss,
+            } => vec![
+                ("asset_monthly_revenue", A(asset_monthly_revenue)),
+                ("churn_per_month", S(churn_per_month)),
+                ("collection_loss", S(collection_loss)),
+            ],
+            RevenueModel::RevenueShare {
+                partner_monthly_revenue,
+                share,
+                collection_loss,
+            } => vec![
+                ("partner_monthly_revenue", A(partner_monthly_revenue)),
+                ("share", S(share)),
+                ("collection_loss", S(collection_loss)),
+            ],
+        }
+    }
 }
 
 /// One economic input of any value type.
 #[derive(Debug, Clone, Copy)]
-enum Input<'a> {
+pub enum Input<'a> {
     Count(&'a Assumption<u32>),
     Share(&'a Assumption<Bps>),
     Amount(&'a Assumption<Minor>),
+}
+
+/// One economic input, mutable (O3: a Critic's conservative merge, a
+/// reprice search).
+#[derive(Debug)]
+pub enum InputMut<'a> {
+    Count(&'a mut Assumption<u32>),
+    Share(&'a mut Assumption<Bps>),
+    Amount(&'a mut Assumption<Minor>),
 }
 
 /// What the gates read of one economic input: no value, only its state.
@@ -206,6 +271,55 @@ impl Input<'_> {
             known,
             evidenced,
             as_of,
+        }
+    }
+
+    /// Its evidence locators.
+    pub fn evidence(&self) -> &[Locator] {
+        match self {
+            Input::Count(a) => &a.evidence,
+            Input::Share(a) => &a.evidence,
+            Input::Amount(a) => &a.evidence,
+        }
+    }
+
+    pub fn is_known(&self) -> bool {
+        match self {
+            Input::Count(a) => a.value.is_known(),
+            Input::Share(a) => a.value.is_known(),
+            Input::Amount(a) => a.value.is_known(),
+        }
+    }
+
+    /// Unknown: why (`None` when no reason was given); known: `None`.
+    pub fn unknown_reason(&self) -> Option<&str> {
+        fn reason<T>(e: &Est<T>) -> Option<&str> {
+            match e {
+                Est::Unknown { reason } => reason.as_deref(),
+                Est::Range { .. } => None,
+            }
+        }
+        match self {
+            Input::Count(a) => reason(&a.value),
+            Input::Share(a) => reason(&a.value),
+            Input::Amount(a) => reason(&a.value),
+        }
+    }
+
+    /// The estimate as text: `low..base..high` (a share in bps), or
+    /// `UNKNOWN[: reason]`.
+    pub fn value_text(&self) -> String {
+        fn text<T: std::fmt::Display>(e: &Est<T>) -> String {
+            match e {
+                Est::Range { low, base, high } => format!("{low}..{base}..{high}"),
+                Est::Unknown { reason: None } => "UNKNOWN".into(),
+                Est::Unknown { reason: Some(r) } => format!("UNKNOWN: {r}"),
+            }
+        }
+        match self {
+            Input::Count(a) => text(&a.value),
+            Input::Share(a) => text(&a.value),
+            Input::Amount(a) => text(&a.value),
         }
     }
 
@@ -267,7 +381,9 @@ pub struct EconomicInputs {
 }
 
 impl EconomicInputs {
-    fn inputs(&self) -> Vec<(String, Input<'_>)> {
+    /// Every input with its dotted field, revenue inputs first, then in
+    /// field order (the closed set an O3 proposal or challenge may name).
+    pub fn inputs(&self) -> Vec<(String, Input<'_>)> {
         let mut out: Vec<(String, Input<'_>)> = self
             .revenue
             .inputs()
@@ -314,6 +430,39 @@ impl EconomicInputs {
     /// Every input's state, revenue inputs first, then in field order.
     pub fn input_states(&self) -> Vec<InputState> {
         self.inputs().into_iter().map(|(f, i)| i.state(f)).collect()
+    }
+
+    /// The input named `field` (`economics.revenue.price_per_month`).
+    pub fn input(&self, field: &str) -> Option<Input<'_>> {
+        self.inputs()
+            .into_iter()
+            .find(|(f, _)| f == field)
+            .map(|(_, i)| i)
+    }
+
+    /// The input named `field`, mutable.
+    pub fn input_mut(&mut self, field: &str) -> Option<InputMut<'_>> {
+        let rest = field.strip_prefix("economics.")?;
+        if let Some(name) = rest.strip_prefix("revenue.") {
+            return self
+                .revenue
+                .inputs_mut()
+                .into_iter()
+                .find(|(f, _)| *f == name)
+                .map(|(_, i)| i);
+        }
+        let i = &mut self.initial;
+        Some(match rest {
+            "variable_cost" => InputMut::Share(&mut self.variable_cost),
+            "fixed_costs_per_month" => InputMut::Amount(&mut self.fixed_costs_per_month),
+            "owner_hours_per_month" => InputMut::Count(&mut self.owner_hours_per_month),
+            "ramp_months" => InputMut::Count(&mut self.ramp_months),
+            "initial.acquisition" => InputMut::Amount(&mut i.acquisition),
+            "initial.setup" => InputMut::Amount(&mut i.setup),
+            "initial.validation" => InputMut::Amount(&mut i.validation),
+            "initial.working_capital" => InputMut::Amount(&mut i.working_capital),
+            _ => return None,
+        })
     }
 }
 
@@ -649,6 +798,51 @@ reversibility = "HIGH"
         assert!(e[0].message.contains("is a float"), "{e:?}");
         let wrong = RECURRING.replace("kind = \"RECURRING\"", "kind = \"SUBSCRIPTION\"");
         assert!(from_toml::<Opportunity>(&wrong).is_err());
+    }
+
+    #[test]
+    fn every_input_is_reachable_by_its_field() {
+        let mut o = recurring();
+        let fields: Vec<String> = o.economics.inputs().into_iter().map(|(f, _)| f).collect();
+        assert_eq!(fields.len(), 13);
+        for f in &fields {
+            let text = o.economics.input(f).unwrap().value_text();
+            assert!(o.economics.input_mut(f).is_some(), "{f}");
+            assert!(!text.is_empty(), "{f}");
+        }
+        let price = o
+            .economics
+            .input("economics.revenue.price_per_month")
+            .unwrap();
+        assert!(!price.is_known());
+        assert_eq!(price.unknown_reason(), Some("no public price list"));
+        assert_eq!(price.value_text(), "UNKNOWN: no public price list");
+        let leads = o
+            .economics
+            .input("economics.revenue.leads_per_month")
+            .unwrap();
+        assert_eq!(leads.value_text(), "4..7..11");
+        assert_eq!(leads.evidence().len(), 1);
+        // Another model's input, a typo and a bare name are not inputs.
+        for bad in [
+            "economics.revenue.contract_value",
+            "economics.revenue.price",
+            "price_per_month",
+            "economics.initial",
+        ] {
+            assert!(o.economics.input(bad).is_none(), "{bad}");
+            assert!(o.economics.input_mut(bad).is_none(), "{bad}");
+        }
+        if let Some(InputMut::Count(h)) = o.economics.input_mut("economics.owner_hours_per_month") {
+            h.value = Est::point(40);
+        }
+        assert_eq!(
+            o.economics
+                .input("economics.owner_hours_per_month")
+                .unwrap()
+                .value_text(),
+            "40..40..40"
+        );
     }
 
     #[test]

@@ -222,7 +222,7 @@
         <li><code>tengu run --sandbox xmarket</code> takes lease <code>runtime:xmarket</code>, then <code>state:xmarket</code> for its ledger, in <code>&lt;state dir&gt;/runtime.db</code>. Both or none; TTL 30 s.</li>
         <li>A second <code>tengu run</code> or <code>tengu webhooks</code> of that sandbox, or of one naming the same <code>[xmarket] state</code>, is refused at start. It names the holder and the seconds left.</li>
         <li>Every <code>[decision_loops.*]</code> is built once behind one <code>LoopDispatch</code>, so each loop's history and state live in this one process.</li>
-        <li>Each <code>[feeds.&lt;name&gt;]</code> fires on its schedule. <code>kind = "tool"</code> calls its agent's tool, which writes rows; <code>kind = "tick"</code> sends an event to a loop.</li>
+        <li>Each <code>[feeds.&lt;name&gt;]</code> fires on its schedule. <code>kind = "tool"</code> calls its agent's tool, which writes rows; <code>kind = "tick"</code> sends an event to a loop; <code>kind = "job"</code> runs a named application job.</li>
         <li>Webhook endpoints with <code>loop = "&lt;name&gt;"</code> feed the same dispatcher. A loop runs one event at a time, in arrival order; at most 4 run across all loops.</li>
         <li>A loop with 64 events already waiting refuses the next: a webhook gets 429, a tick counts it dropped. A burst cannot pile up tasks.</li>
         <li>Every 5 s: <code>run-&lt;sandbox&gt;.json</code> plus <code>loop/1</code> and <code>feed/1</code> rows. <code>tengu doctor --live</code> fails on a beat older than 30 s or a required feed down or stale.</li>
@@ -281,7 +281,11 @@
     <li><span class="chip warn">quiet</span><span><b>stalled</b>Was live, no item within <code>stale_after_secs</code>.</span></li>
     <li><span class="chip bad">down</span><span><b>down</b>A failure the feed does not retry until the next slot.</span></li>
   </ul>
-  <p class="note">Kinds <code>poll</code>, <code>stream</code>, <code>ws</code> and <code>rows</code> are refused at config load: not built yet. Only <code>tool</code> and <code>tick</code> run.</p>
+  <div class="grid">
+    <div class="card brain feed"><h3><b class="mono">soe_week</b> <span class="chip ok">required</span></h3>
+      <dl><dt>kind</dt><dd>job <code>soe_cycle</code>, in an <code>[soe]</code> sandbox (example block in <code>config.example.toml</code>): the week's SOE cycle, Architect and Critic as <code>run-agent</code> children</dd><dt>when</dt><dd><code>at = ["Mon 07:00"]</code> Europe/Paris</dd><dt>stale</dt><dd>idle between ticks: 8 days</dd></dl></div>
+  </div>
+  <p class="note"><code>job</code> names come from a closed list in <code>config/feeds.rs</code> (only <code>soe_cycle</code>), never a command from config. A job run settles like one call: <code>Done</code> = an item, <code>Failed</code> = a failed call of its class, so the at-tick slot retries for 15 min. Kinds <code>poll</code>, <code>stream</code>, <code>ws</code> and <code>rows</code> are refused at config load: not built yet. <code>tool</code>, <code>tick</code> and <code>job</code> run.</p>
   <p class="note"><b>Elsewhere.</b> <code>sandboxes/xlab-w2</code> runs three at-tick tool feeds in New York time: <code>history_refresh</code> (daily 05:00, Mon 12:05), then the daily and weekend <a href="strategy-ranking.html">strategy rankings</a> (daily 06:00, Mon 13:00). A ranking that comes back INCOMPLETE, or a contract not sealed yet, fails the call.</p>
 </section>
 
@@ -356,7 +360,7 @@
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>One runner per sandbox, one owner per ledger.</b> Both leases are taken in one go or not at all; a held one refuses the start.</span></li>
+    <li><span><b>One runner per sandbox, one owner per ledger.</b> Both leases are taken in one go or not at all; a held one refuses the start. An <code>[soe]</code> sandbox also leases its <code>[sources]</code> state dir, where <code>runtime.db</code> then lives.</span></li>
     <li><span><b>A crash frees itself.</b> A dead runner's lease expires after 30 s; a new one takes over then.</span></li>
     <li><span><b>Losing the lease stops the run.</b> Another holder, or failed renewals past expiry, end it as failed.</span></li>
     <li><span><b>A loop never runs two events at once</b>, and no more than <code>max_decisions_in_flight</code> run across loops.</span></li>
@@ -410,14 +414,14 @@
         <tr><td><code>src/config/runtime.rs</code> · <code>feeds.rs</code> · <code>rate_limits.rs</code></td><td><code>[runtime]</code>, <code>[feeds.*]</code>, <code>[rate_limits.*]</code></td></tr>
         <tr><td><code>src/adapters/outbound/runtime_store.rs</code></td><td><code>runtime.db</code> leases, atomic heartbeat file</td></tr>
         <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes, system clock</td></tr>
-        <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store and clock ports (<code>SimClock</code> for replay)</td></tr>
+        <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store, <code>RuntimeJob</code> (a job feed's run) and clock ports (<code>SimClock</code> for replay)</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

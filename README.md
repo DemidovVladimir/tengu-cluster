@@ -6,7 +6,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 |---|---|---|
 | Orchestrated chat: planner → `tengu run-agent` subagents | `tengu chat` / `telegram` / `webhooks` | § Orchestration |
 | Three engines, every tool under each (schema lint, bridge conformance, live engine matrix; the live `local` legs still to run on the operator's PC) | `[agents.<a>] engine` | § Engines, `docs/engine-backends.md` |
-| 47 catalog tools (48 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
+| 50 catalog tools (51 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
 | Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loop-plan-2026-09-24.md` |
 | Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime-2026-09-30.md` |
 | Paper desk: `[risk]` gate inside every order tool, paper ledger, kill switch, exit rules, weekend fade | sandboxes `xmarket`, `xmarket-weekend` | § Paper desk (xmarket) |
@@ -253,7 +253,7 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 |---|---|---|
 | `jev-exec` | `open` | Experiment: a Claude Code architect (built-ins off, only `run_command` → `tengu`) drives Jev through `tengu decide --loop executor` |
 | `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch`, `hedge_exec`, `lp_exec` over 11 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
-| `soe` | `open`, `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]` | Source layer (SOE O2): `[sources]` registry `sec_edgar`, `ted_search` (both ship `enabled = false` until the operator's reviewed terms); one read-only agent `soe_reader` (`claude_code`, tool `source_evidence` only); unbound — `docs/source-evidence-2026-10-08.md` |
+| `soe` | `open`, `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]` | Software Opportunity Engine — source layer (O2) + weekly cycle (O3): `[sources]` registry `sec_edgar`, `ted_search` (both ship `enabled = false` until the operator's reviewed terms); read-only `soe_reader` (`source_evidence` only); `[soe]` stage agents `soe_architect` · `soe_critic` (`claude_code`, built-ins off) and the `soe_week` job; closed world, bound to SOE-G0 — `docs/source-evidence-2026-10-08.md`, `docs/soe-2026-10-08.md` |
 | `storage-test` | tor | `persistent_store` file storage + vector indexing; agent `storage` (`claude_code`, skill `telegram-rag-ingest`) |
 | `tor-check` | tor | Minimal probe of the egress path over Tor (Arti + lyrebird-rs) |
 | `unlimited` | `open` | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |

@@ -55,6 +55,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 | `[feeds.<n>]` | `FeedConfig` (`feeds.rs`) | no feeds | **error** |
 | `[sources]` | `SourcesConfig` (`sources.rs`) | no source registry (`tengu sources` and `source_evidence` refuse: `sources_state_missing`) | **error** (every registry row too) |
 | `[skill_lifecycle]` | `SkillLifecycleConfig` (`skill_lifecycle.rs`) | `tengu skill evolve` refuses | ignored |
+| `[soe]` | `SoeConfig` (`soe.rs`) | not an SOE sandbox (`tengu soe cycle` / `replay` refuse: `soe_config_missing`) | **error** |
 
 ## Agents — `[agents.<id>]`
 
@@ -415,7 +416,7 @@ The kill switch is not TOML: `tengu sources disable` appends a row to `sources.d
 
 | Key | Kind | Default | Meaning |
 |---|---|---|---|
-| `kind` | — | required | `tool` (call a tool) \| `tick` (send a loop event); `poll`, `stream`, `ws`, `rows` refused (not built) |
+| `kind` | — | required | `tool` (call a tool) \| `tick` (send a loop event) \| `job` (run a named application job); `poll`, `stream`, `ws`, `rows` refused (not built) |
 | `every_secs` | both | — | 1 s – 7 d on the UTC grid |
 | `windows` | both | `[]` | `{ days, from, to, every_secs }` local in `tz`, replaces `every_secs` inside; ≤ 32 |
 | `at` | both | `[]` | `"Sun 18:00"`, `"daily 09:00"` in `tz`; ≤ 64 |
@@ -427,8 +428,28 @@ The kill switch is not TOML: `tengu sources disable` appends a row to `sources.d
 | `args` · `each` | tool | `{}` | `each = { coin = [...] }` fans out (≤ 500 calls a run; a key not also in `args`) |
 | `concurrency` | tool | 1 | 1–32 |
 | `target` · `event` | tick | required · `{}` | a `[decision_loops.<target>]`; the scheduler adds `ts_ms` |
+| `job` | job | required | one name of the closed list `config/feeds.rs` `JOBS` — today `soe_cycle` (needs `[soe]`); never a command from config. No `agent`, `tool`, `args`, `each`, `concurrency`, `target`, `event` |
 
 At least one of `every_secs`, `windows`, `at`; names `[a-z0-9_-]+`. Call ids `feed:<name>:<slot ms>:<i>`.
+
+## SOE — `[soe]` (Software Opportunity Engine cycle)
+
+The weekly cycle's stage agents and limits; its state root is the `[sources]` state dir (`<TENGU_HOME>/state/<state>/`). Every key but `token_prices` is required (`deny_unknown_fields`, no built-in default). Example: `sandboxes/soe/config.toml`, the commented block in `config.example.toml`. Doc: `docs/soe-2026-10-08.md` § 11 (operator steps § 15).
+
+| Field | Rules |
+|---|---|
+| `architect` · `critic` | two different `[agents.*]` with a `description`; the Architect never lists `soe_challenge`, the Critic never `soe_propose` |
+| `max_proposals` · `forecast_max_weeks` | 1–50 proposals per cycle · 1–52 weeks to a forecast's resolution |
+| `token_prices` | optional `{ currency, prompt_per_million, completion_per_million }` (decimal text); absent ⇒ a cycle's cost is `UNKNOWN` |
+
+| Load rule with `[soe]` (`config/soe.rs::validation_errors`; the load fails) | |
+|---|---|
+| `[sources]` present; the state root outside every git work tree; an `operator.toml` there with no group / other permission bit | |
+| every agent lists `tools`, all inside `domain::tools::SOE_ALLOWED` (`soe_view`, `soe_propose`, `soe_challenge`, `source_evidence`, `read_file`, `list_directory`, `view_skill`, `skill_resource`); `workspace_tools` too | |
+| a deny-all `[default_scopes.<t>]` (no keys) for `http_request`, `write_file`, `run_command`, `sign_and_send_transaction`, `sign_message`; an agent's own scope for one stays deny-all | |
+| no `[decision_loops]`, `[[mcp_servers]]`, `[risk]`, `[paper]`, `[xmarket]`, `[backtest]`, `[solana]` signer, `[telegram]`, `[webhooks]`; feeds of `kind = "job"` only | |
+| `[egress] allow_hosts` inside the hosts of the `[sources.registry.*]` rows (non-empty under `network = "open"`) | |
+| hardened (§ Hardened sandboxes): every `claude_code` agent `builtin_tools_profile = "none"`, no shell fallback | |
 
 ## Skill lifecycle — `[skill_lifecycle]`
 

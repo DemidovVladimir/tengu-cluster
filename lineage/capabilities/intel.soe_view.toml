@@ -1,0 +1,9 @@
+id = "intel.soe_view"
+title = "SOE cycle view (one run as the stages read it, O3)"
+class = "INTELLIGENCE"
+version = 1
+permission = "READ_ONLY"
+lifecycle = "CANDIDATE"
+contract = "tool_schema:soe_view"
+bindings = ["tool:soe_view"]
+notes = "Read-only rows soe_view/1 over the private SOE state root (<TENGU_HOME>/state/<sources.state>/, never in the repo): a run's head, its evidence packet at the decision (paged, source text fenced), the week's candidates with their inputs, bases and computed gate verdict, the run's proposals and challenges, and history = the OpportunityEpisodes decided before the run (no look-ahead). Writes nothing. Offline-tested only: unit tests inside run_cycle, bridge conformance, the offline local leg; no live engine leg run yet."

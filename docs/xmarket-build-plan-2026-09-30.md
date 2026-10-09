@@ -13,7 +13,7 @@ How the next sessions build everything in the PRD. **What** to build: [`xmarket-
 | Weekend run | #1 done 2026-10-05; #2 2026-10-09 → 10-12 on the frozen `tengu-acdef66` (runbook above); the frozen-binary rules hold (tracker § 0 step 2a) |
 | Next | forward rule W evidence each weekend (M3 needs 12, 1 so far); the operator decisions (tracker W1 notes: 3 open, 2 moot since 2026-10-07) → W2 (§ Waves; inputs: VPS + SSH alias, dedicated OpenRouter key; prompt in § Kickoff) |
 | Machine load | operator 2026-10-01 (supersedes "one agent at a time"): workflows / parallel agents allowed, ≤ 3 at once, each build in its own `CARGO_TARGET_DIR` under `~/.cache/tengu-xm.noindex/`; never a local model on this Mac |
-| Engine matrix | 17 tool sets (W1: 13, + `xlab`, `xlab_holdout`, `xlab_rank`, `sources`; `tests/engine_matrix.rs` `Set::ALL`); `xlab_rank` / `sources` live legs not run yet; W1-gate live run 39 / 39 on `11900f78894867e3427ca828d10ec80b4d3d4e4b`; xlab sets: haiku-4.5 + Claude CLI green, gemini-2.5-flash-lite misquotes numbers (xlab § 14); `local` legs on the operator's PC |
+| Engine matrix | 18 tool sets (W1: 13, + `xlab`, `xlab_holdout`, `xlab_rank`, `sources`, `soe`; `tests/engine_matrix.rs` `Set::ALL`); `xlab_rank` / `sources` / `soe` live legs not run yet; W1-gate live run 39 / 39 on `11900f78894867e3427ca828d10ec80b4d3d4e4b`; xlab sets: haiku-4.5 + Claude CLI green, gemini-2.5-flash-lite misquotes numbers (xlab § 14); `local` legs on the operator's PC |
 
 ## Mandate (operator, 2026-09-30)
 

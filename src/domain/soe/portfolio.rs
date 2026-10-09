@@ -3,8 +3,8 @@
 //! candidates, each with an action; an empty ranked list is a valid `HOLD`
 //! week. The public brief is the only shape that may leave the private state:
 //! allow-listed keys, `url:` facts only. Types only: the rows, the `HOLD` week
-//! and the next information come from `rank.rs`; the allocated week is O3
-//! `allocate`, the brief's sanitizer O7.
+//! and the next information come from `rank.rs`; the allocated week is
+//! `allocate.rs` (O3), the brief's sanitizer O7.
 //!
 //! | `WeeklyPortfolio` | Value |
 //! |---|---|

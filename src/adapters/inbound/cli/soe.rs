@@ -1,22 +1,27 @@
-//! `tengu soe …` — the Software Opportunity Engine, offline
-//! (`docs/soe-2026-10-08.md`): no sandbox config, secrets, egress, LLM or
-//! source fetch. It reads the private operator profile, opportunity files, a
-//! cited-records file and eval cases; only `init` writes (one new file).
-//! stdout carries the report; logs go to stderr; ids and hashes print in full.
+//! `tengu soe …` — the Software Opportunity Engine
+//! (`docs/soe-2026-10-08.md`). The O1 commands below run offline: no sandbox
+//! config, secrets, egress, LLM or source fetch — they read the private
+//! operator profile, opportunity files, a cited-records file and eval cases;
+//! only `init` writes (one new file). The weekly cycle and its O4 measures
+//! (`cycle`, `replay`, `grade`, `resolve`, `review`, `verify`, `show`) live in
+//! `soe/weekly.rs` and write the private SOE state only. stdout carries the
+//! report; logs go to stderr; ids and hashes print in full.
 //!
 //! | Command | Prints | Exit 1 when |
 //! |---|---|---|
 //! | `init` | writes the UNSIGNED profile template — generic values, the four money values `REQUIRED` (the operator's, never in public source), no capability — at `--profile`, mode 0600 (new dirs 0700), whole or not at all (a synced temp file hard-linked into place); its path + sha256 | the file exists (never overwritten); the path sits inside a git work tree (`profile_in_repo`) |
 //! | `check <opportunity.toml> [--cited F] [--as-of T]` | the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information, the hashes | the profile or the opportunity is refused; the gates refuse (`future_leakage`, an unknown time) |
-//! | `portfolio <dir> --as-of T [--week YYYY-Www] [--cited F]` | the week (`rank::unallocated_week`): ranked — each `HOLD`, nothing allocated before O3 — with why each ranks above the next, held, rejected, the next information; json = its canonical JSON | as `check`, for any `<id>.toml` in `<dir>` |
+//! | `portfolio <dir> --as-of T [--week YYYY-Www] [--cited F]` | the week as `allocate::allocate` builds it (C4: the one portfolio builder; every candidate new — no test under way offline): ranked with their actions (`CHEAP_TEST` within the weekly hours and tranche, else `HOLD`) and why each ranks above the next, held (`DILIGENCE`, `CHEAP_TEST`, `HOLD`), rejected (`REPRICE`, `REJECT`), a note per candidate, the next information; json = its canonical JSON | as `check`, for any `<id>.toml` in `<dir>` |
 //! | `sensitivity <opportunity.toml> [--scale-bps 2000] [--cited F] [--as-of T]` | the tornado: each input at ± the scale — fields scaled, the base time-adjusted contribution, the verdict, gates added / removed | as `check` |
 //! | `eval <cases dir>` | expected vs answered per case (`eval::run_case`): ok / FAIL with every diff | a case fails (a diff, or the case is refused — another profile id) |
+//! | `cycle` · `replay` · `grade` · `resolve` · `review` · `verify` · `show` | the weekly cycle (O3) and its O4 measures — `soe/weekly.rs` module table | a refusal, a failed run or a state that is not intact |
 //!
 //! | Flag (every command) | Value |
 //! |---|---|
 //! | `--profile <path>` | the operator profile; default `<TENGU_HOME>/state/soe/operator.toml` |
 //! | `--allow-synthetic` | accept a `synthetic = true` test profile (`tests/fixtures/soe/profile.synthetic.toml`) |
 //! | `--format text\|json` | text (default) or JSON |
+//! | `--sandbox <name>` | the weekly commands: the SOE sandbox (`[sources]` = the state root, `[soe]` = stage agents and limits); `tengu -c <file> soe …` names a config file instead |
 //!
 //! Every command but `init` loads the profile with
 //! `config::soe::load_profile`: a missing, invalid, in-repo, loose-mode or
@@ -44,17 +49,19 @@ use crate::config::soe::{
 use crate::domain::canonical::{canonical_json, sha256_hex};
 use crate::domain::lineage::pins::toml_digest;
 use crate::domain::lineage::value::Time;
+use crate::domain::soe::allocate::{allocate, Candidate, Track};
 use crate::domain::soe::eval::{run_case, Answer, CaseClass, EvalCase};
 use crate::domain::soe::gates::{next_information, CitedRecord};
 use crate::domain::soe::opportunity::Opportunity;
 use crate::domain::soe::portfolio::IsoWeek;
 use crate::domain::soe::profile::{OperatorProfile, RankKey, UNSIGNED};
 use crate::domain::soe::rank::{
-    assess, current_versions, explain_order, rank, sensitivity, tornado, unallocated_week,
-    Assessment, WeekHead,
+    assess, current_versions, explain_order, rank, sensitivity, tornado, Assessment, WeekHead,
 };
 use crate::domain::soe::record::from_toml;
 use crate::domain::soe::value::Minor;
+
+mod weekly;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(super) enum Format {
@@ -73,6 +80,10 @@ pub(crate) struct SoeArgs {
     /// `text` (default) or `json`.
     #[arg(long, global = true, value_enum, default_value_t = Format::Text)]
     format: Format,
+    /// The SOE sandbox for the weekly commands (sandboxes/<name>/config.toml):
+    /// its [sources] state dir is the SOE state root, [soe] the stage agents.
+    #[arg(long, global = true)]
+    sandbox: Option<String>,
     #[command(subcommand)]
     action: SoeAction,
 }
@@ -120,10 +131,84 @@ pub(super) enum SoeAction {
         /// A dir of `soe.eval_case/1` files.
         cases: PathBuf,
     },
+    /// One live weekly cycle (O3) → cycles/<week>/, frozen, then the state
+    /// logs. Needs --sandbox (or `tengu -c <file>`) with [sources] + [soe].
+    Cycle {
+        /// `YYYY-Www` (default: the ISO week of --at, UTC).
+        #[arg(long)]
+        week: Option<String>,
+        /// The decision time (default now): RFC 3339, a UTC day or epoch ms.
+        #[arg(long)]
+        at: Option<String>,
+        /// Stage runs from the stage cache only: a miss fails the stage.
+        #[arg(long)]
+        offline: bool,
+        /// No model stage: the week decides what is carried.
+        #[arg(long, conflicts_with = "offline")]
+        no_llm: bool,
+    },
+    /// Replay a soe.replay_set/1 under replays/ (never cycles/); holdout
+    /// cases only with --holdout, a counted read.
+    Replay {
+        /// The set file (private; a synthetic one needs --allow-synthetic).
+        #[arg(long)]
+        set: PathBuf,
+        /// The run id (default r-<UTC time>): replays/<run id>/.
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Run the HOLDOUT cases too and record the read first.
+        #[arg(long)]
+        holdout: bool,
+        #[arg(long)]
+        offline: bool,
+        #[arg(long, conflicts_with = "offline")]
+        no_llm: bool,
+        /// The rank-stability tornado scale.
+        #[arg(long, default_value_t = 2000, value_parser = clap::value_parser!(i32).range(1..=10_000))]
+        scale_bps: i32,
+    },
+    /// Append the operator's grade (a soe.cycle_grade/1 TOML file) of a
+    /// frozen live cycle; a regrade is the next version.
+    Grade {
+        /// The cycle id (`2026-W41`).
+        cycle: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
+    /// Resolve a frozen cycle's forecast items: evidence after the freeze
+    /// (with a config: the source store) and the operator's answers (--file).
+    Resolve {
+        cycle: String,
+        /// `cycle_id` + `[[resolutions]]` (item, hit, observed_at, evidence, resolved_by).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Build the Operator Review #2 packet (reviews/<day>/); its last line is
+    /// the STOP. Exit 1 when the state is not intact.
+    Review {
+        /// First week, `YYYY-Www` (default: the first cycle).
+        #[arg(long)]
+        from: Option<String>,
+        /// Last week, `YYYY-Www` (default: the last cycle).
+        #[arg(long)]
+        to: Option<String>,
+    },
+    /// Re-hash every frozen run dir, check the forecast chain and each
+    /// cycle's log line. Exit 1 unless intact.
+    Verify,
+    /// One run: a cycle id or `cycles/…`, `replays/…`, `reviews/…`.
+    Show { run: String },
 }
 
-/// `tengu soe` (module table).
-pub(super) fn run_soe(args: SoeArgs) -> Result<()> {
+/// `tengu soe` (module table); `config_file` = `tengu -c <file>`.
+pub(super) async fn run_soe(args: SoeArgs, config_file: Option<PathBuf>) -> Result<()> {
+    let common = weekly::Common {
+        sandbox: args.sandbox.clone(),
+        config_file,
+        profile: args.profile.clone(),
+        allow_synthetic: args.allow_synthetic,
+        format: args.format,
+    };
     let path = args.profile.unwrap_or_else(default_profile_path);
     let format = args.format;
     let profile = || load_profile(&path, args.allow_synthetic).map_err(|e| anyhow!(e));
@@ -168,6 +253,47 @@ pub(super) fn run_soe(args: SoeArgs) -> Result<()> {
             sensitivity_report(&p, &opp, &views, at, scale_bps, format)
         }
         SoeAction::Eval { cases } => eval(&profile()?, &cases, format),
+        SoeAction::Cycle {
+            week,
+            at,
+            offline,
+            no_llm,
+        } => {
+            weekly::cycle(
+                &common,
+                week.as_deref(),
+                at.as_deref(),
+                weekly::StageMode::of(offline, no_llm),
+            )
+            .await
+        }
+        SoeAction::Replay {
+            set,
+            run_id,
+            holdout,
+            offline,
+            no_llm,
+            scale_bps,
+        } => {
+            weekly::replay(
+                &common,
+                &weekly::ReplayArgs {
+                    set: &set,
+                    run_id: run_id.as_deref(),
+                    holdout,
+                    mode: weekly::StageMode::of(offline, no_llm),
+                    scale_bps,
+                },
+            )
+            .await
+        }
+        SoeAction::Grade { cycle, file } => weekly::grade(&common, &cycle, &file),
+        SoeAction::Resolve { cycle, file } => {
+            weekly::resolve(&common, &cycle, file.as_deref()).await
+        }
+        SoeAction::Review { from, to } => weekly::review(&common, from.as_deref(), to.as_deref()),
+        SoeAction::Verify => weekly::verify(&common),
+        SoeAction::Show { run } => weekly::show(&common, &run),
     }
 }
 
@@ -628,7 +754,17 @@ fn portfolio(
         currency: p.record.currency,
         profile_sha256: p.sha256.clone(),
     };
-    let w = unallocated_week(head, &all, order).map_err(|errs| {
+    // Offline: no test is under way, every candidate is new.
+    let cands: Vec<Candidate> = current
+        .iter()
+        .zip(&all)
+        .map(|(o, a)| Candidate {
+            opportunity: o,
+            assessment: a.clone(),
+            track: Track::New,
+        })
+        .collect();
+    let allocated = allocate(head, &cands, &p.record, views).map_err(|errs| {
         anyhow!(
             "the week is invalid:\n{}",
             errs.iter()
@@ -637,6 +773,7 @@ fn portfolio(
                 .join("\n")
         )
     })?;
+    let w = allocated.portfolio;
     let canonical = canonical_json(&serde_json::to_value(&w)?);
     if format == Format::Json {
         println!("{canonical}");
@@ -653,8 +790,12 @@ fn portfolio(
     println!("{}", profile_line(p));
     println!("inputs_sha256 {}", w.inputs_sha256);
     println!(
-        "ranked ({}): nothing is allocated before O3 — a ranked candidate holds",
-        w.ranked.len()
+        "ranked ({}) · allocated {} owner h, {} cash of {} h, {} (weekly hours, validation tranche)",
+        w.ranked.len(),
+        w.allocation.owner_hours,
+        w.allocation.cash,
+        p.record.weekly_owner_hours,
+        p.record.max_validation_tranche
     );
     if !w.ranked.is_empty() {
         let mut header = vec!["rank", "id", "version", "action"];
@@ -700,6 +841,9 @@ fn portfolio(
                 text_table(&["id", "version", "action", "gates"], &rows)
             );
         }
+    }
+    for n in &allocated.notes {
+        println!("  {} {}: {}", n.id, n.action, n.why);
     }
     println!("next information: {}", list_or(&w.next_information, "none"));
     if let Some(r) = &w.hold_rationale {

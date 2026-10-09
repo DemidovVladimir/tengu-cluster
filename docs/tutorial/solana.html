@@ -425,7 +425,7 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>
@@ -451,7 +451,7 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
     gate(true, "The signing agent is private", !$("g-desc").checked,
       "agents.lp_executor may sign (" + tool + ") but has a `description` — a signing agent must not be planner-routable");
     gate(true, "Hardened sandbox: no foreign processes", !$("g-mcp").checked,
-      "[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer or [risk]): foreign processes with this filesystem",
+      "[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): foreign processes with this filesystem",
       signer ? null : "no signer: not hardened");
     var cs = send ? null : "simulate: skipped";
     gate(false, "This agent's scope for " + tool + " lists the wallet", $("g-grant").checked,

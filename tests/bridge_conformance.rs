@@ -49,7 +49,10 @@
 //! the first step: `source_evidence` reads a `sources.db` filled by `tengu
 //! sources import` of the captured TED pair `ted/search_change_notice.json`
 //! (`<TENGU_HOME>/state/conf/sources.db`), as of before and after the change
-//! notice.
+//! notice. The SOE cases (`soe(..)`) seed the fixture state root
+//! `tests/fixtures/soe/state/` under `<TENGU_HOME>/state/conf/`
+//! (`[sources] state = "conf"`) with `TENGU_AGENT_NAME = conf` on both
+//! sides, as a `run-agent` stage sets it: the stamped records compare alike.
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -749,6 +752,50 @@ fn backtest_rows() -> Case {
             json!({"run_id": "20200101T000000Z-nope", "view": "notes"}),
         )
         .err("no run `<TIME>-nope` in the state dir's backtests/ (the newest: <TIME>-conf_rows)")
+}
+
+/// The SOE fixture runs (`tests/fixtures/soe/state/`): a live week open in
+/// `PROPOSE` and a replay open in `CHALLENGE`.
+const SOE_RUN: &str = "cycles/2026-W42";
+const SOE_REPLAY: &str = "replays/fixture.w42";
+
+/// An SOE case: `[sources] state = "conf"` and the fixture state root
+/// (written by `tools::soe::tests::fixture_state_is_current`) under the
+/// side's `<TENGU_HOME>/state/conf/`; `TENGU_AGENT_NAME` = the agent, as a
+/// `run-agent` stage sets it (its bridge inherits it).
+fn soe(c: Case) -> Case {
+    let root = Path::new(FIXTURES).join("soe/state");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    files.sort();
+    let mut c = c
+        .toml("[sources]\nstate = \"conf\"\n")
+        .env("TENGU_AGENT_NAME", AGENT);
+    for f in files {
+        let rel = f
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        c = c.home_file(
+            &format!("state/conf/{rel}"),
+            &fixture(&format!("soe/state/{rel}")),
+        );
+    }
+    c
+}
+
+/// A fixture draft (`tests/fixtures/soe/drafts/`).
+fn soe_draft(name: &str) -> Value {
+    serde_json::from_str(&fixture(&format!("soe/drafts/{name}"))).unwrap()
+}
+
+/// `soe_challenge`'s flat fixture arguments on `run`, aimed at `target`.
+fn soe_challenge_args(run: &str, target: &str) -> Value {
+    let mut a = soe_draft("challenge.json");
+    a["run"] = run.into();
+    a["target"] = target.into();
+    a
 }
 
 /// `[sources]` with one enabled `ted_search` row (synthetic reviewed terms;
@@ -1496,6 +1543,40 @@ fn cases() -> Vec<Case> {
         case("source_evidence", json!({}))
             .named("no_sources")
             .err("sources_state_missing: no [sources] section"),
+        // ── SOE (O3): the fixture state root under <TENGU_HOME>/state/conf
+        soe(case("soe_view", json!({"run": SOE_RUN})))
+            .ok("soe_view cycles/2026-W42 head OPEN PROPOSE decided_at=<TIME> shown=1 of 1 from 0 | ok")
+            .then("soe_view", json!({"run": SOE_RUN, "view": "candidates"}))
+            .ok(" · news-automation v1 · AUTOMATE · revenue RECURRING · carried from 2026-W41 · ")
+            .then("soe_view", json!({"run": SOE_RUN, "view": "history"}))
+            .ok("## 2026-W41.e01 · news-automation v1 · decided <TIME> · verdict HOLD")
+            .then("soe_view", json!({"run": SOE_RUN, "view": "packet", "limit": 1}))
+            .ok("more: 3 of 4 left")
+            .then("soe_view", json!({"run": "cycles/2026-W01"}))
+            .err("run_not_found: cycles/2026-W01"),
+        soe(case(
+            "soe_propose",
+            json!({"run": SOE_RUN, "proposal": soe_draft("proposal.json")}),
+        ))
+        .ok("soe_propose 2026-W42.p01 news-automation v1 AUTOMATE run=cycles/2026-W42 | written")
+        .then(
+            "soe_propose",
+            json!({"run": SOE_RUN, "proposal": soe_draft("proposal.json")}),
+        )
+        .err("- duplicate: opportunity `news-automation` is already proposal `2026-W42.p01`"),
+        soe(case("soe_challenge", soe_challenge_args(SOE_REPLAY, "news-automation")))
+            .ok(
+                "soe_challenge 2026-W42.c01 target=news-automation kind=HIDDEN_LABOR effect=WIDEN \
+                 economics.owner_hours_per_month run=replays/fixture.w42 | written",
+            )
+            .then("soe_challenge", soe_challenge_args(SOE_REPLAY, "nobody"))
+            .err("- unknown_target:")
+            .then("soe_challenge", soe_challenge_args(SOE_RUN, "news-automation"))
+            .err("- stage_closed: cycles/2026-W42 is in phase Propose"),
+        // No `[sources]`: no state root, refused alike.
+        case("soe_view", json!({"run": SOE_RUN}))
+            .named("no_sources")
+            .err("soe_state_missing: no [sources] section"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))

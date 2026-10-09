@@ -402,7 +402,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>
@@ -466,7 +466,7 @@
   var DIRS = [[".tengu", "`.tengu/` holds tengu's own state"], [".claude", "`.claude/` configures Claude Code (hooks, commands, skills)"], [".git", "`.git/` holds git hooks"]];
   var FILES = [["CLAUDE.md", "a CLI agent loads `CLAUDE.md` as instructions"], ["CLAUDE.local.md", "a CLI agent loads `CLAUDE.local.md` as instructions"], ["AGENTS.md", "agents load `AGENTS.md` as instructions"], [".mcp.json", "a CLI agent starts the servers in `.mcp.json`"]];
   var PROMPT = ["MEMORY.md", "USER.md", "IDENTITY.md", "PROFILE.md", "CONTEXT.md"];
-  var HARD_WHY = "a hardened sandbox ([risk] or a Solana signer) keeps the workspace prompt files (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — tengu loads them into the system prompt";
+  var HARD_WHY = "a hardened sandbox ([risk], [soe] or a Solana signer) keeps the workspace prompt files (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — tengu loads them into the system prompt";
   function named(name, list) { var lo = name.toLowerCase(); for (var i = 0; i < list.length; i++) if (list[i][0].toLowerCase() === lo) return list[i][1]; return null; }
   function protectedWrite(rel, hardened) {
     var comps = split(rel);
@@ -678,7 +678,7 @@
 
   /* ---------- hardening load check ---------- */
   var H = { risk: document.getElementById("h-risk"), sign: document.getElementById("h-sign"), prof: document.getElementById("h-prof"), root: document.getElementById("h-root"), mcp: document.getElementById("h-mcp"), sh: document.getElementById("h-sh") };
-  var WHY = "hardened sandbox: Solana signer or [risk]";
+  var WHY = "hardened sandbox: Solana signer, [risk] or [soe]";
   function hardCheck() {
     var out = document.getElementById("h-out"), head = document.getElementById("h-head");
     var hardened = H.risk.checked || H.sign.checked, errs = [];
@@ -691,10 +691,10 @@
     var prof = H.prof.value;
     if (prof !== "none") {
       var got = prof ? 'builtin_tools_profile = "' + prof + '"' : 'no [agents.exec.claude_code] block (= "editor_shell")';
-      errs.push('agents.exec: engine = "claude_code" in a hardened sandbox (Solana signer or [risk]) needs [agents.exec.claude_code] builtin_tools_profile = "none" — got ' + got + "; built-in tools run outside tengu scopes");
+      errs.push('agents.exec: engine = "claude_code" in a hardened sandbox (Solana signer, [risk] or [soe]) needs [agents.exec.claude_code] builtin_tools_profile = "none" — got ' + got + "; built-in tools run outside tengu scopes");
     }
-    if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer or [risk]): foreign processes with this filesystem");
-    if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer or [risk]) runs no shell");
+    if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): foreign processes with this filesystem");
+    if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer, [risk] or [soe]) runs no shell");
     var prot = [];
     if (H.sign.checked) prot.push({ what: "solana.signer_key_file", path: HOME + "/.tengu/keys/lping-signer.json", dir: false });
     prot.push({ what: "<TENGU_HOME>/state", path: HOME + "/.tengu/state", dir: true });

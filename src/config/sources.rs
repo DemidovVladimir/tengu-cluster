@@ -861,18 +861,27 @@ mod tests {
         assert!(plain.agents["main"].sandbox.sources.is_none());
     }
 
-    /// `sandboxes/soe` (O2): an unbound, closed world — one read-only agent,
-    /// no shell, no write / contact / spend / publish tool, every registry
-    /// row off, every host inside the egress ceiling.
+    /// `sandboxes/soe`: a closed world — the O2 read-only agent and the O3
+    /// stage agents (tools inside `SOE_ALLOWED`, none with a side effect),
+    /// the one `job` feed, no shell, no write / contact / spend / publish
+    /// tool, every registry row off, every host inside the egress ceiling;
+    /// bound to SOE-G0 since O3 (`docs/soe-2026-10-08.md` § 13).
     #[test]
     fn soe_sandbox_is_a_closed_world() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/soe/config.toml");
         let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
-        assert!(
-            cfg.generation.is_none(),
-            "unbound until the held lineage step"
+        assert_eq!(
+            cfg.generation.as_ref().map(|g| g.id.as_str()),
+            Some("SOE-G0")
         );
-        assert!(cfg.risk.is_none() && cfg.xmarket.is_none() && cfg.feeds.is_empty());
+        assert!(cfg.risk.is_none() && cfg.xmarket.is_none());
+        assert_eq!(
+            cfg.feeds
+                .iter()
+                .map(|(id, f)| (id.as_str(), f.kind.as_str()))
+                .collect::<Vec<_>>(),
+            [("soe_week", "job")]
+        );
         assert!(cfg.decision_loops.is_empty() && cfg.mcp_servers.is_empty());
         assert!(cfg.webhooks.endpoints.is_empty());
         assert_eq!(cfg.egress.network, "open");
@@ -897,18 +906,20 @@ mod tests {
                 "{id}: the operator hashes the terms page"
             );
         }
-        const READ_ONLY: [&str; 1] = [crate::domain::tools::SOURCE_EVIDENCE];
+        use crate::domain::tools::{
+            SIDE_EFFECT_TOOLS, SOE_ALLOWED, SOURCE_EVIDENCE, WORKSPACE_TOOLS,
+        };
+        assert_eq!(cfg.agents["soe_reader"].tools, [SOURCE_EVIDENCE]);
         // A catalog tool (opt-in), so the agent holds it.
-        assert!(READ_ONLY
-            .iter()
-            .all(|t| crate::domain::tools::WORKSPACE_TOOLS.contains(t)));
+        assert!(WORKSPACE_TOOLS.contains(&SOURCE_EVIDENCE));
         for (id, a) in &cfg.agents {
             assert!(
                 !a.tools.is_empty(),
                 "{id}: an empty list is every base tool"
             );
             assert!(
-                a.tools.iter().all(|t| READ_ONLY.contains(&t.as_str())),
+                a.tools.iter().all(|t| SOE_ALLOWED.contains(&t.as_str())
+                    && !SIDE_EFFECT_TOOLS.contains(&t.as_str())),
                 "{id}: {:?}",
                 a.tools
             );
