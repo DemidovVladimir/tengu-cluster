@@ -38,8 +38,8 @@ use crate::domain::tz::Zone;
 use crate::ports::runtime::RuntimeJob;
 use crate::ports::soe::{CycleStore, StageRunner};
 
-/// The id of an unbound sandbox's pin.
-pub(crate) const UNBOUND: &str = "UNBOUND";
+/// The id of an unbound sandbox's pin (the `soe_*` tools stamp the same).
+pub(crate) use crate::application::soe::submit::UNBOUND;
 
 /// The weekly cycle job of `config` for a feed in `zone` (module table).
 pub(crate) fn soe_cycle_job(config: &Config, zone: Zone) -> Result<Arc<dyn RuntimeJob>> {
@@ -204,5 +204,93 @@ mod tests {
         let mut no_soe = cfg.clone();
         no_soe.soe = None;
         assert!(soe_cycle_job(&no_soe, Zone::Paris).is_err());
+    }
+
+    /// § 13 no unapproved side effect (roadmap O4 safety): no catalog tool
+    /// reachable from the shipped `soe` sandbox can contact, spend, publish
+    /// or deploy. Every agent's effective tool set (its list within the
+    /// generation, `agent_base_tools`) sits in the closed world; no tool of
+    /// the closed world is a side-effect, signing, exec or Solana write tool;
+    /// every side-effect tool's scope is deny-all on every agent; Claude Code
+    /// built-ins are off and no shell runs; a plan step's `compose` cannot
+    /// widen a stage agent; no loop, server or non-job feed exists; the
+    /// network reaches the registry's hosts only.
+    #[test]
+    fn soe_sandbox_has_no_side_effect_surface() {
+        use crate::bootstrap::tools::{agent_base_tools, compose_agent};
+        use crate::domain::plan::AgentCompose;
+        use crate::domain::tools::{
+            PRIVY_SIGNING_TOOLS, SIDE_EFFECT_TOOLS, SOE_ALLOWED, SOLANA_WRITE_TOOLS, XM_EXEC_TOOLS,
+        };
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/soe/config.toml");
+        let cfg = Config::load(&file).unwrap_or_else(|e| panic!("{e:#}"));
+        let reaching: Vec<&str> = SIDE_EFFECT_TOOLS
+            .iter()
+            .chain(PRIVY_SIGNING_TOOLS)
+            .chain(SOLANA_WRITE_TOOLS)
+            .chain(XM_EXEC_TOOLS)
+            .chain(&["manage_skill", "apply_improver_proposal", "skill_distill"])
+            .copied()
+            .collect();
+        for t in SOE_ALLOWED {
+            assert!(
+                !reaching.contains(t),
+                "`{t}` reaches out yet is in SOE_ALLOWED"
+            );
+        }
+        assert!(!cfg.agents.is_empty());
+        for (name, agent) in &cfg.agents {
+            let tools = agent_base_tools(agent, true, cfg.memory.enabled);
+            let soe = cfg.soe.as_ref().unwrap();
+            if [&soe.architect, &soe.critic].contains(&name) {
+                assert!(tools.len() >= 2, "{name}: {tools:?}");
+            }
+            for t in &tools {
+                assert!(
+                    SOE_ALLOWED.contains(&t.name.as_str()),
+                    "{name} reaches `{}` outside the closed world",
+                    t.name
+                );
+            }
+            for t in SIDE_EFFECT_TOOLS {
+                assert!(
+                    agent.scopes.get(*t).is_some_and(|s| s.is_deny_all()),
+                    "{name}: the scope of `{t}` is not deny-all"
+                );
+            }
+            assert!(agent.no_shell_fallback, "{name} may run a shell");
+            if agent.engine == "claude_code" {
+                let profile = agent
+                    .claude_code
+                    .as_ref()
+                    .map(|c| c.builtin_tools_profile.trim());
+                assert_eq!(profile, Some("none"), "{name}: Claude Code built-ins on");
+            }
+            for widen in [vec!["http_request"], vec!["write_file"], Vec::new()] {
+                let compose = AgentCompose {
+                    base_agent: name.clone(),
+                    skills: agent.skill_packages.clone(),
+                    tools: widen.iter().map(|t| t.to_string()).collect(),
+                };
+                assert!(
+                    compose_agent(name, agent, &compose, true, cfg.memory.enabled).is_err(),
+                    "{name}: a compose with {widen:?} widened it"
+                );
+            }
+        }
+        assert!(cfg.mcp_servers.is_empty() && cfg.decision_loops.is_empty());
+        assert!(cfg.feeds.values().all(|f| f.kind == "job"));
+        assert!(
+            cfg.risk.is_none() && cfg.xmarket.is_none() && cfg.solana.signer_key_file.is_none()
+        );
+        let hosts: std::collections::BTreeSet<&str> = cfg
+            .sources
+            .iter()
+            .flat_map(|s| s.registry.values())
+            .flat_map(|e| e.hosts.iter().map(String::as_str))
+            .collect();
+        let allowed: std::collections::BTreeSet<&str> =
+            cfg.egress.allow_hosts.iter().map(String::as_str).collect();
+        assert_eq!(allowed, hosts);
     }
 }

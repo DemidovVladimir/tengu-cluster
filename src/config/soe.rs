@@ -815,21 +815,15 @@ mod tests {
         errors.iter().any(|e| e.contains(want))
     }
 
-    /// The `soe` sandbox with the cycle added (`[soe]`, two stage agents,
-    /// deny-all side-effect scopes, the weekly job) loads like any sandbox:
-    /// every load rule passes and the section reaches every agent.
+    /// The shipped `soe` sandbox (`[soe]`, the two stage agents, deny-all
+    /// side-effect scopes, the weekly job, bound to `SOE-G0`) loads like any
+    /// sandbox, from its repo path: every load rule passes — the `[soe]`
+    /// rules, the generation binding — and the section and the generation
+    /// reach every agent; the stage agents hold only their stage's tools.
     #[test]
     fn soe_sandbox_loads() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let base = std::fs::read_to_string(repo.join("sandboxes/soe/config.toml")).unwrap();
-        let overlay = SOE
-            .split("[soe]")
-            .nth(1)
-            .map(|rest| format!("[soe]{rest}"))
-            .unwrap();
-        let tmp = tempfile::TempDir::new().unwrap();
-        let file = tmp.path().join("config.toml");
-        std::fs::write(&file, format!("{base}\n{overlay}")).unwrap();
+        let file = repo.join("sandboxes/soe/config.toml");
         let cfg = Config::load(&file).unwrap_or_else(|e| panic!("{e:#}"));
         let s = cfg.soe.as_ref().unwrap();
         assert_eq!(
@@ -839,13 +833,20 @@ mod tests {
         assert!(cfg
             .agents
             .values()
-            .all(|a| a.sandbox.soe.as_deref() == Some(s)));
+            .all(|a| a.sandbox.soe.as_deref() == Some(s)
+                && a.sandbox.generation.as_ref().map(|g| g.id.as_str()) == Some("SOE-G0")));
+        assert_eq!(
+            cfg.agents["soe_architect"].tools,
+            ["soe_view", "soe_propose", "skill_resource"]
+        );
+        assert_eq!(
+            cfg.agents["soe_critic"].tools,
+            ["soe_view", "soe_challenge"]
+        );
+        assert_eq!(cfg.feeds["soe_week"].job.as_deref(), Some("soe_cycle"));
         if let Some(h) = home() {
             assert_eq!(rules_at(&cfg, h.path()), Vec::<String>::new());
         }
-        // The shipped sandbox (no [soe] yet) has no SOE rule to pass.
-        let shipped: Config = toml::from_str(&base).unwrap();
-        assert!(shipped.soe.is_none() && validation_errors(&shipped).is_empty());
     }
 
     /// An empty `tools` list is every base tool: refused for every agent of

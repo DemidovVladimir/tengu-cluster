@@ -219,6 +219,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // Resolved agent name (the base for composed agents) — exposed like
     // TENGU_SESSION_ID so plugins can attribute writes without ToolCtx plumbing.
     std::env::set_var("TENGU_AGENT_NAME", &spec_load_name);
+    // The step's skill identity, computed here (this process's cwd, as the
+    // SOE stage cache key's): a Claude Code CLI runs in the workspace, so its
+    // bridge could not find a cwd-tier skill itself — the `soe_*` tools stamp
+    // this value (`tools/soe/mod.rs`).
+    std::env::set_var(
+        crate::adapters::outbound::soe::runner::SKILL_SHA256_ENV,
+        crate::adapters::outbound::soe::runner::skill_sha256(&spec, &workspace),
+    );
 
     // IPC `model` overrides the agent block's `model` when non-empty (the
     // orchestrator can swap models per-step in the future).

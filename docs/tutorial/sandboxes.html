@@ -349,9 +349,9 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     </div>
     <div class="sbx" data-tags="open">
       <h3>soe</h3>
-      <div class="tags"><span class="chip data">open · 3 hosts</span><span class="chip guard">closed world</span></div>
-      <p>Software Opportunity Engine sources: the <code>[sources]</code> registry (SEC EDGAR, EU TED), both rows off; the operator fetches with <code>tengu sources</code>; one read-only agent (<a href="source-evidence.html">Source evidence</a>).</p>
-      <div class="agents">soe_reader</div>
+      <div class="tags"><span class="chip data">open · 3 hosts</span><span class="chip guard">closed world</span><span class="chip guard">SOE-G0</span><span class="chip jev">job feed</span></div>
+      <p>Software Opportunity Engine: the <code>[sources]</code> registry (SEC EDGAR, EU TED), both rows off, fetched by the operator (<a href="source-evidence.html">Source evidence</a>); <code>[soe]</code> and the weekly <code>soe_cycle</code> job, whose Architect and Critic write only into the open run (<a href="soe.html">SOE</a>). Bound to SOE-G0.</p>
+      <div class="agents">soe_reader · soe_architect · soe_critic</div>
     </div>
     <div class="sbx" data-tags="tor">
       <h3>storage-test</h3>

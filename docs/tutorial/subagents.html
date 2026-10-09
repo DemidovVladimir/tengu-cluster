@@ -448,7 +448,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output; exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
         <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, <code>&lt;step-input&gt;</code>, leaves, aborts</td></tr>
         <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans, plan per session</td></tr>
@@ -463,7 +463,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

@@ -10,7 +10,7 @@
 //! | Wall clock | the agent's `limits.step_timeout_secs` (it must cover the Architect's turn) |
 //! | Reply ([`reply_of`]) | `Ok` ⇒ `ok`, `summary` = the child's summary (its output when that is empty); `Failed` ⇒ not ok, `error`, `summary` = the partial output; the metrics kept either way and re-emitted on the global sink (as `run_step`) |
 //! | `Err` | no child, a non-zero exit, a timeout, an unparsable reply — the cycle records a failed stage and goes on |
-//! | Skill identity ([`skill_sha256`]) | canonical sha256 of `{ "skills": { <name>: <sha256 of its SKILL.md> \| "MISSING" } }` over the agent's `skill_packages`, each found by `application::skills::registry::skill_directories` (first hit wins) — a part of the stage cache key (`cache.rs`) |
+//! | Skill identity ([`skill_sha256`]) | canonical sha256 of `{ "skills": { <name>: <sha256 of its SKILL.md> \| "MISSING" } }` over the agent's `skill_packages`, each found by `application::skills::registry::skill_directories` (first hit wins) — a part of the stage cache key (`cache.rs`); a `run-agent` step exports its own as [`SKILL_SHA256_ENV`] for the `soe_*` tools' stamp |
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -145,11 +145,23 @@ impl StageRunner for SubprocessStageRunner {
     }
 }
 
+/// Where a `run-agent` step exports its [`skill_sha256`] (`cli/run_agent.rs`)
+/// for the tools of its process tree — its bridge included, whose cwd is
+/// the agent's workspace, not the step's.
+pub(crate) const SKILL_SHA256_ENV: &str = "TENGU_AGENT_SKILL_SHA256";
+
 /// Module table: Skill identity, over `workspace`'s skill directories.
 pub(crate) fn skill_sha256(agent: &AgentConfig, workspace: &Path) -> String {
+    skill_sha256_of(&agent.skill_packages, workspace)
+}
+
+/// [`skill_sha256`] of a list of skill packages — what the `soe_*` tools
+/// stamp as `Provenance.skill_sha256` (`tools/soe/mod.rs`): the cache key's
+/// own identity.
+pub(crate) fn skill_sha256_of(skill_packages: &[String], workspace: &Path) -> String {
     let dirs = skill_directories(workspace);
     let mut skills = BTreeMap::new();
-    for name in &agent.skill_packages {
+    for name in skill_packages {
         let found = dirs
             .iter()
             .map(|d| d.join(name).join("SKILL.md"))

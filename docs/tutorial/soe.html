@@ -450,6 +450,40 @@
   </ul>
 </section>
 
+<section class="sec" aria-labelledby="s-stage">
+  <div class="sec-head">
+    <span class="kicker">O3, the stages' hands</span>
+    <h2 id="s-stage">Stage tools, the sandbox and SOE-G0</h2>
+    <p>The Architect and the Critic are agents of <code>sandboxes/soe</code>. Each runs as a <code>run-agent</code> step of the weekly job and touches the run only through its tools. Every check and every id is <code>application::soe::submit</code>'s. A tool never writes a file itself.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tool</th><th>Who holds it</th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td><code>soe_view</code></td><td>both</td><td>read-only <code>soe_view/1</code>: the run's head, its packet (paged, source text fenced), the week's candidates with inputs, bases and the verdict computed now, proposals, challenges, and <code>history</code>: earlier weeks' episodes decided before this run</td></tr>
+        <tr><td><code>soe_propose</code></td><td>the Architect</td><td>one mechanism as data into the open run (phase <code>PROPOSE</code>) → <code>&lt;cycle&gt;.pNN</code>, then a read-only preview of the gates and rank keys</td></tr>
+        <tr><td><code>soe_challenge</code></td><td>the Critic</td><td>flat arguments → one challenge into the open run (phase <code>CHALLENGE</code>) → <code>&lt;cycle&gt;.cNN</code>; the week merges it toward the conservative side only</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">written</span><span><b>stamped</b>agent, model, engine, skill sha256 (the stage cache key's own), generation, call id, time.</span></li>
+    <li><span class="chip warn">refused</span><span><b>nothing written</b>every problem listed at once: <code>stage_closed</code>, <code>computed_field</code>, <code>unsupported_evidence</code>, <code>duplicate</code>, <code>unknown_target</code>, …</span></li>
+    <li><span class="chip bad">stage agent</span><span><b>wrong caller</b>no <code>TENGU_AGENT_NAME</code> ⇒ <code>stage_agent_unknown</code>; with <code>[soe]</code> the Architect never challenges and the Critic never proposes ⇒ <code>stage_agent_mismatch</code>.</span></li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Piece</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td><code>sandboxes/soe</code></td><td><code>[soe]</code>, <code>soe_architect</code> (Opus) and <code>soe_critic</code> (Sonnet) on <code>claude_code</code> with built-ins off, <code>[feeds.soe_week]</code> Mon 07:00 Paris, deny-all scopes for every side-effect tool; no <code>source_evidence</code> on a stage agent — the stages read their run's packet only</td></tr>
+        <tr><td>Skills</td><td><code>soe-architect</code>: two mechanisms and <code>HOLD</code>, ranges with evidence ids or <code>UNKNOWN</code>, never a computed field. <code>soe-critic</code>: the seven challenge kinds and their effects</td></tr>
+        <tr><td>SOE-G0</td><td><code>lineage/generations/SOE-G0.toml</code> (<code>CANDIDATE</code>): the three tool capabilities, the two models, hash pins of <code>[soe]</code>, the job, the agents, the scopes, the schemas and the skills. Ids and sha256 only — no profile value. The sandbox is bound to it; its lock row waits for the operator's signed profile</td></tr>
+        <tr><td>Guards</td><td>no tool reachable from the sandbox can contact, spend, publish or deploy; the opportunity domain never imports the trading domain, the backtest engine or the risk config (layering lint); W1 and its sandboxes load unchanged next to SOE-G0</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <section class="sec" aria-labelledby="s-o4">
   <div class="sec-head">
     <span class="kicker">O4, shadow weeks</span>
@@ -679,11 +713,14 @@
         <tr><td><code>src/application/soe/tests.rs</code></td><td>the cycle on in-memory fakes and the synthetic cycle cases</td></tr>
         <tr><td><code>src/adapters/outbound/soe/store.rs</code></td><td><code>FsCycleStore</code>: run dirs, write-once files, appends, freeze, state logs</td></tr>
         <tr><td><code>src/adapters/outbound/soe/runner.rs</code> · <code>cache.rs</code></td><td><code>SubprocessStageRunner</code>, <code>skill_sha256</code> · <code>CachedStageRunner</code>, <code>stage_key</code></td></tr>
-        <tr><td><code>src/bootstrap/soe.rs</code></td><td><code>soe_cycle_job</code>, <code>stage_runner</code>, <code>generation_pin</code></td></tr>
+        <tr><td><code>src/bootstrap/soe.rs</code></td><td><code>soe_cycle_job</code>, <code>stage_runner</code>, <code>generation_pin</code>; the side-effect-surface test of the shipped sandbox</td></tr>
+        <tr><td><code>src/adapters/outbound/tools/soe/</code></td><td><code>SoePlugin</code>, <code>Stamp</code>; <code>soe_view</code> (<code>view.rs</code>: <code>packet_page</code>, <code>prior_episodes</code>), <code>soe_propose</code> (<code>propose.rs</code>: <code>assess_in_run</code>), <code>soe_challenge</code> (<code>challenge.rs</code>); <code>tests.rs</code> runs them inside a real cycle and keeps the fixture state root current</td></tr>
+        <tr><td><code>sandboxes/soe/config.toml</code> · <code>skills/soe-architect/</code> · <code>skills/soe-critic/</code></td><td>the sandbox (<code>[soe]</code>, the stage agents, the job feed, bound to SOE-G0) · the two stage protocols (+ the Architect's example draft)</td></tr>
+        <tr><td><code>lineage/generations/SOE-G0.toml</code> · <code>lineage/capabilities/intel.soe_*.toml</code> · <code>lineage/families/soe.toml</code></td><td>the hash-only public records: the generation, the three tool capabilities, the family</td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code>; <code>SoeConfig</code> and the <code>[soe]</code> load rules</td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
-        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases, the example week (<code>week/</code>) and the 11 cycle cases (<code>cycles/</code>)</td></tr>
+        <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases, the example week (<code>week/</code>), the 11 cycle cases (<code>cycles/</code>), a state root with open runs (<code>state/</code>) and the tools' drafts (<code>drafts/</code>) — what the bridge conformance cases and the engine matrix seed</td></tr>
         <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set, the command</td></tr>
       </tbody>
     </table>

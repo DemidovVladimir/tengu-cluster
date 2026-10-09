@@ -178,6 +178,24 @@ env_reads = ["HL_API_URL", "GECKO_API_URL"]
 [default_scopes.backtest]
 fs_roots = ["/nonexistent/tengu-engine-matrix"]
 
+# The soe set: `[sources] state` is the SOE state root
+# <TENGU_HOME>/state/engine-matrix-soe/ (seeded per leg from
+# tests/fixtures/soe/state/: a week open in PROPOSE, a replay open in
+# CHALLENGE). The three tools read and write only there — the state dir sits
+# outside every fs root; no network, no env. No [soe] section: it would close
+# this sandbox's world (config/soe.rs).
+[sources]
+state = "engine-matrix-soe"
+
+[default_scopes.soe_view]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.soe_propose]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.soe_challenge]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
 # The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
 # require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
 # workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
@@ -212,7 +230,7 @@ env_reads = ["HL_API_URL"]
 engine = "openrouter"
 model = "google/gemini-2.5-flash-lite"
 description = "Engine-matrix fixture: OpenRouter google/gemini-2.5-flash-lite."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "soe_view", "soe_propose", "soe_challenge"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.gemini.limits]
@@ -222,7 +240,7 @@ max_tool_rounds = 10
 engine = "openrouter"
 model = "anthropic/claude-haiku-4.5"
 description = "Engine-matrix fixture: OpenRouter anthropic/claude-haiku-4.5."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "soe_view", "soe_propose", "soe_challenge"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.haiku.limits]

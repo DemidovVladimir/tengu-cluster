@@ -48,6 +48,14 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 pub(crate) const MARKET_HISTORY: &str = "market_history";
 pub(crate) const BACKTEST: &str = "backtest";
 
+// SOE family (O3, `adapters/outbound/tools/soe/`) — the weekly cycle's
+// stage tools over the private SOE state root (`<sources state dir>/cycles/`,
+// `replays/`): one read, two writes into the open run dir (never a file, a
+// contact, a spend or a publish); one `soe` plugin serves all of them.
+pub(crate) const SOE_VIEW: &str = "soe_view";
+pub(crate) const SOE_PROPOSE: &str = "soe_propose";
+pub(crate) const SOE_CHALLENGE: &str = "soe_challenge";
+
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
 /// transaction). Only a private agent may hold one — no `description`, not
@@ -135,6 +143,9 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
     BACKTEST,
+    SOE_VIEW,
+    SOE_PROPOSE,
+    SOE_CHALLENGE,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
@@ -161,12 +172,12 @@ pub(crate) const SOLANA_WRITE_TOOLS: &[&str] = &[
 /// `config/soe.rs`): every tool one of its agents may list — reads, the two
 /// stage writes into the open run dir (`soe_propose`, `soe_challenge`), skill
 /// docs. No write, contact, spend, publish or shell tool. `source_evidence`
-/// (O2) and the `soe_*` rows (O3) join the catalog with their tools; until
-/// then such a name is no catalog tool and the load warns it is dropped.
+/// (O2) joins the catalog with its tool; until then the name is no catalog
+/// tool and the load warns it is dropped.
 pub(crate) const SOE_ALLOWED: &[&str] = &[
-    "soe_view",
-    "soe_propose",
-    "soe_challenge",
+    SOE_VIEW,
+    SOE_PROPOSE,
+    SOE_CHALLENGE,
     "source_evidence",
     "read_file",
     "list_directory",

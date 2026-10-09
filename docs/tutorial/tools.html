@@ -244,6 +244,7 @@
     <div class="bar"><span class="lbl">skills</span><span class="track"><span class="fill" style="--w:31.3%"></span></span><span class="val">5</span></div>
     <div class="bar"><span class="lbl">workspace</span><span class="track"><span class="fill" style="--w:25%"></span></span><span class="val">4</span></div>
     <div class="bar"><span class="lbl">hyperliquid</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
+    <div class="bar"><span class="lbl">soe</span><span class="track"><span class="fill" style="--w:18.8%"></span></span><span class="val">3</span></div>
     <div class="bar"><span class="lbl">xlab</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
     <div class="bar"><span class="lbl">http</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
   </div>
@@ -413,9 +414,10 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     ["solana_close_token_accounts", "solana", 1, 0], ["jupiter_swap", "solana", 1, 0], ["dlmm_close_position", "solana", 1, 0], ["dlmm_open_position", "solana", 1, 0], ["jup_perps_order", "solana", 1, 0],
     ["hl_ctx", "hyperliquid", 1, 0], ["hl_book", "hyperliquid", 1, 0],
     ["risk_status", "xm paper", 1, 0], ["paper_order", "xm paper", 1, 0], ["paper_close", "xm paper", 1, 0], ["xm_exits", "xm paper", 1, 0], ["xm_weekend_fade", "xm paper", 1, 0], ["paper_positions", "xm paper", 1, 0],
-    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0]
+    ["market_history", "xlab", 1, 0], ["backtest", "xlab", 1, 0],
+    ["soe_view", "soe", 1, 0], ["soe_propose", "soe", 1, 0], ["soe_challenge", "soe", 1, 0]
   ];
-  var FAMS = ["workspace", "memory", "http", "crypto (Privy)", "skills", "solana", "hyperliquid", "xm paper", "xlab"];
+  var FAMS = ["workspace", "memory", "http", "crypto (Privy)", "skills", "solana", "hyperliquid", "xm paper", "xlab", "soe"];
   var OPT = C.filter(function (r) { return r[2]; }).map(function (r) { return r[0]; });
   var ALL = C.map(function (r) { return r[0]; });
   var SOL = ["http_request", "read_file", "list_directory", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_snapshot", "lp_swap_plan", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order"];
@@ -426,6 +428,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     { id: "storage-test · storage", tools: ["persistent_store", "read_file", "http_request", "write_file"], wt: [], mem: true, hint: "persistent_store needs the memory backend." },
     { id: "xmarket · xm_architect", tools: ["read_file", "list_directory", "hl_ctx", "hl_book", "risk_status", "paper_positions"], wt: [], mem: false, hint: "Read-only research agent of a [risk] sandbox." },
     { id: "xlab · xl_architect", tools: ["market_history", "backtest", "read_file", "list_directory"], wt: [], mem: false, hint: "History tools only." },
+    { id: "soe · soe_architect", tools: ["soe_view", "soe_propose", "skill_resource"], wt: [], mem: false, hint: "Closed world ([soe]): its stage's tools only; the Critic holds soe_challenge instead of soe_propose." },
     { id: "your own (example)", tools: ["htp_request", "read_file"], wt: ["shared_cache", "backtests"], mem: false, hint: "Two typos: see what each one does." }
   ];
   var sel = document.getElementById("pk-preset"), tIn = document.getElementById("pk-tools"), wIn = document.getElementById("pk-wt");
@@ -492,9 +495,10 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     "solana": ["hands", "Typed, cached LP reads and pure decisions; five write tools that simulate unless signing is set up."],
     "hyperliquid": ["data", "Typed market contexts and order books from Hyperliquid."],
     "xm paper": ["guard", "Paper ledger reads and exec tools; the [risk] gate runs inside each exec tool."],
-    "xlab": ["data", "Read-only market history and backtests on the sandbox's market.db."]
+    "xlab": ["data", "Read-only market history and backtests on the sandbox's market.db."],
+    "soe": ["guard", "The weekly cycle's stage tools: read a run, propose or challenge as data into its open run dir. Never a contact, spend or publish."]
   };
-  var LINKS = { "solana": "solana.html", "xm paper": "paper-desk.html", "xlab": "backtest.html", "memory": "memory.html", "skills": "skills.html", "http": "egress.html", "crypto (Privy)": "secrets.html", "workspace": "scopes.html", "hyperliquid": "observations.html" };
+  var LINKS = { "solana": "solana.html", "xm paper": "paper-desk.html", "xlab": "backtest.html", "memory": "memory.html", "skills": "skills.html", "http": "egress.html", "crypto (Privy)": "secrets.html", "workspace": "scopes.html", "hyperliquid": "observations.html", "soe": "soe.html" };
   document.getElementById("famcards").innerHTML = FAMS.map(function (f) {
     var rows = C.filter(function (r) { return r[1] === f; });
     return '<div class="card ' + NOTES[f][0] + '"><h3>' + esc(f) + ' <span class="chip data">' + rows.length + "</span></h3>" +

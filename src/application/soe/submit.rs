@@ -55,6 +55,10 @@ pub(crate) const PACKET: &str = "packet.json";
 pub(crate) const CARRIED: &str = "carried.json";
 /// `head.json`'s schema.
 pub(crate) const HEAD_SCHEMA: &str = "soe.run_head/1";
+/// The generation id of an unbound sandbox: a cycle's pin
+/// (`bootstrap::soe::generation_pin`) and the tools' stamp
+/// (`tools/soe/mod.rs`) agree on it.
+pub(crate) const UNBOUND: &str = "UNBOUND";
 
 const WEEK_MS: i64 = 7 * 86_400_000;
 

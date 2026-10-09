@@ -12,6 +12,8 @@ Skills are portable workflow documents that compose Tengu's platform primitives 
 | `skill-creator` | documentation (+ `metrics`, `evals/`) | Create or modify a skill: anatomy, frontmatter, tiers, workflow | no sandbox lists it |
 | `telegram-rag-ingest` | documentation | Resources shared in Telegram (attachments, URLs, text) → searchable vector memory; answer from it later (`http_request` → `write_file` → `persistent_store`) | `storage-test` → `storage` |
 | `xlab-research` | documentation | xlab Architect protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → ONE holdout read → critique; copy-paste call shapes for `market_history` / `backtest` | `xlab` → `xl_architect` |
+| `soe-architect` | documentation (+ `resources/proposal.example.json`) | SOE Architect stage: read the run's packet, at least two mechanisms + `HOLD`, ranges with evidence ids or `UNKNOWN`, never a computed field; `soe_propose` call shapes and the draft format | `soe` → `soe_architect` |
+| `soe-critic` | documentation | SOE Critic stage: the seven challenge kinds and their conservative-only effects; `soe_challenge` flat call shape | `soe` → `soe_critic` |
 | `orchestrator` | documentation (+ `plan_schema.json`) | The planner's system prompt: a direct answer or plan JSON | every `[orchestrator]` sandbox (`lping`, `xmarket`) — read by the planner from the cwd, not through `skill_packages` |
 | `skill-eval` | documentation | Points to `tengu eval` / `tengu skill metrics` / `tengu skill evolve` | none |
 | `german-teacher` · `spanish-teacher` | documentation, learner-facing (`resources/`, `evals/prompts.yaml`) | Teacher-seeded skills (`tengu skill seed`), `editable_by_learner: true`; read their materials with `skill_resource` | none |
