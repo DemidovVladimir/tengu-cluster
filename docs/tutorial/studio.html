@@ -283,7 +283,7 @@
   <div class="sec-head">
     <span class="kicker">Loopback only</span>
     <h2 id="s-server">The Studio server</h2>
-    <p><code>tengu studio --sandbox &lt;s&gt;</code> (build with <code>--features studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code>.</p>
+    <p><code>tengu studio --sandbox &lt;s&gt;</code> (in the default build: feature <code>studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code>.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -424,8 +424,8 @@
 <span class="ln o">11 action.selected   ok       action:demo/hold</span>
 <span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/studio-trace-evidence-2026-10-08.md</span>
 <span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
-<span class="ln o"># the browser UI: a build with --features studio (without it: an error naming the flag)</span>
-<span class="ln cmd"><span class="p">$ </span>cargo build --release --features studio</span>
+<span class="ln o"># the browser UI: the default build carries it (feature studio; a --no-default-features build without it: an error naming the flag)</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release</span>
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>
 <span class="ln o">Studio: http://127.0.0.1:&lt;port&gt;/#t=&lt;64 hex token&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab --bind 0.0.0.0</span>
@@ -485,7 +485,7 @@
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
-        <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (<code>--features studio</code>): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
+        <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (feature <code>studio</code>, default): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
         <tr><td><code>src/application/studio/stream.rs</code></td><td>live delivery: backlog waits, live overflow = <code>lagged</code>, the lease holder's run across restarts</td></tr>
         <tr><td><code>src/application/studio/board.rs</code></td><td>the board: a run folded over its graph — tones, lit edges, grey legal set, header facts, each event's view</td></tr>
         <tr><td><code>src/application/studio/inspect.rs</code></td><td>the validated config section behind a node; the store rows it names</td></tr>

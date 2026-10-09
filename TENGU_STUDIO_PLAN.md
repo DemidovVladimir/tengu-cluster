@@ -1,7 +1,7 @@
 # Tengu Control Loop Lab + Studio — implementation plan
 
 **Date:** 2026-10-08  
-**Status:** merged to main 2026-10-09 as #44 (squash `f7ac9a5636e2493e3839e896cba9951a2d41aefb`) — ST-00 … ST-03, ST-10, ST-11, ST-12 landed 2026-10-08, ST-20, ST-21, ST-22, ST-30, ST-31, ST-40 (design only) + the operator docs 2026-10-09 (§ 8); live browser validation 2026-10-09 (`docs/studio-2026-10-08.md` § Live validation); Gates 1, 2, 3 and 4 waived; ST-90 clean room passed 2026-10-09 (`docs/studio-clean-room-2026-10-09.md`); Operator Review #3 (editor) open; the operator's 2026-10-08 instruction waives the numbered gates (recorded per gate in § 8). The § 8 Commit column names `feature/studio` branch commits — squashed into #44, not in main's history  
+**Status:** merged to main 2026-10-09 as #44 (squash `f7ac9a5636e2493e3839e896cba9951a2d41aefb`) — ST-00 … ST-03, ST-10, ST-11, ST-12 landed 2026-10-08, ST-20, ST-21, ST-22, ST-30, ST-31, ST-40 (design only) + the operator docs 2026-10-09 (§ 8); live browser validation 2026-10-09 (`docs/studio-2026-10-08.md` § Live validation); Gates 1, 2, 3 and 4 waived; ST-90 clean room passed 2026-10-09 (`docs/studio-clean-room-2026-10-09.md`); Studio in the default build since 2026-10-09 (`studio` is a default feature, the Docker image carries it; the ST-20 row records the opt-in state of #44); Operator Review #3 (editor) open; the operator's 2026-10-08 instruction waives the numbered gates (recorded per gate in § 8). The § 8 Commit column names `feature/studio` branch commits — squashed into #44, not in main's history  
 **Audience:** the coding agent that will implement the work and the operator who will review it
 
 > This file is the delivery contract and progress tracker. The coding agent must update the status/evidence columns as work lands. Code existing in the working tree is not proof; only a commit plus the named verification is ✅.
@@ -254,13 +254,13 @@ Gaps the later steps close: no `runtime_id` / `run_id` / `config_hash` on audit 
 
 ## 9. Target runbook
 
-The coding agent must make these commands true or update this section with the final equivalent. State 2026-10-09: every command below ran as written (ST-03, ST-11, ST-20 … ST-31 evidence docs; the Studio quick start again on 2026-10-09, `docs/studio-2026-10-08.md` last line). Run from the repo / worktree root (`--sandbox` is cwd-relative); `target/release/tengu` = `$CARGO_TARGET_DIR/release/tengu` when that is set. Operator doc: `docs/studio-2026-10-08.md`.
+The coding agent must make these commands true or update this section with the final equivalent. State 2026-10-09: every command below ran as written (ST-03, ST-11, ST-20 … ST-31 evidence docs; the Studio quick start again on 2026-10-09, `docs/studio-2026-10-08.md` last line); since `studio` became a default feature (2026-10-09) both build lines are the plain default build. Run from the repo / worktree root (`--sandbox` is cwd-relative); `target/release/tengu` = `$CARGO_TARGET_DIR/release/tengu` when that is set. Operator doc: `docs/studio-2026-10-08.md`.
 
 ### CLI-only proof
 
 ```bash
 export TENGU_HOME="$HOME/tengu-lab/home"     # FIRST — never ~/.tengu (the weekend run owns it)
-cargo build --release                        # or --features studio: one binary serves both proofs
+cargo build --release                        # default features (incl. `studio`): one binary serves both proofs
 mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
 
 # One controlled event through the real Jev loop.
@@ -282,7 +282,7 @@ Required env (names only): `TENGU_HOME` (the lab home above), `OPENROUTER_API_KE
 ### Studio proof
 
 ```bash
-cargo build --release --features studio      # the server is behind the non-default `studio` feature
+cargo build --release                        # the server is in the default build (feature `studio`, default since 2026-10-09)
 target/release/tengu studio --sandbox control-loop-lab [--port <n>] [--bind 127.0.0.1|::1] [--allow-control]
 # stdout: Studio: http://127.0.0.1:<port>/#t=<64 hex token>   (open exactly this URL; a non-loopback --bind is refused)
 ```

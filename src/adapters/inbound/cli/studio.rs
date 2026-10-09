@@ -2,7 +2,7 @@
 //!
 //! | Command | Does |
 //! |---|---|
-//! | `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control]` | the local browser UI (`adapters/inbound/studio`, `--features studio`): loopback only (`127.0.0.1` default, `::1`; anything else refused), port 0 (default) = any free one; prints `Studio: http://127.0.0.1:<port>/#t=<token>` on stdout; SIGINT / SIGTERM drain a runtime it started, then stop it. Play / Stop / send-event when the sandbox sets `[studio] control = true` or with `--allow-control` — never for a `[generation]`-bound or hardened sandbox (`config/studio.rs`). Without the feature: an error naming the build flag |
+//! | `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control]` | the local browser UI (`adapters/inbound/studio`, feature `studio`, on by default): loopback only (`127.0.0.1` default, `::1`; anything else refused), port 0 (default) = any free one; prints `Studio: http://127.0.0.1:<port>/#t=<token>` on stdout; SIGINT / SIGTERM drain a runtime it started, then stop it. Play / Stop / send-event when the sandbox sets `[studio] control = true` or with `--allow-control` — never for a `[generation]`-bound or hardened sandbox (`config/studio.rs`). A build without it (`--no-default-features`): an error naming the build flag |
 //! | `tengu studio graph --sandbox <s> [--map <file\|->]` | the sandbox's `WorkflowGraph` (`domain/workflow.rs`) as JSON on stdout: validated config + catalog tools, narrowed by an execution map when given (a refused map lists every reason), attrs redacted |
 
 use std::path::PathBuf;
@@ -139,7 +139,8 @@ mod tests {
         assert!(err.to_string().contains("server's flags"), "{err:#}");
     }
 
-    /// The default build names the flag that adds the server.
+    /// A build without `studio` (`--no-default-features`) names the flag
+    /// that adds the server.
     #[cfg(not(feature = "studio"))]
     #[tokio::test]
     async fn studio_server_needs_the_feature() {

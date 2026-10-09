@@ -4,7 +4,7 @@
 //! (defaults filled in, `[default_scopes]` folded, an execution map applied
 //! by `ExecutionMap::apply`) — never from the TOML text, so a comment or a
 //! key the schema dropped cannot reach the page. The caller redacts the
-//! result (`bootstrap::studio`, as the graph's attrs) (`--features studio`).
+//! result (`bootstrap::studio`, as the graph's attrs) (feature `studio`).
 //!
 //! | Node kind | `section` · value |
 //! |---|---|

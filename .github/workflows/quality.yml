@@ -34,6 +34,9 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
-      # Tengu Studio server + API (`--features studio`, not a default feature).
-      - name: Studio tests (feature studio)
-        run: cargo test --features studio --bin tengu studio
+      # `studio` is a default feature (2026-10-09): `cargo test --workspace`
+      # above runs the Studio server tests. This step keeps the build without
+      # it compiling — the `tengu studio --sandbox` stub that names the flag
+      # and its test (`cli::studio::tests`).
+      - name: Studio tests (without the studio feature)
+        run: cargo test --no-default-features --features openrouter,telegram --bin tengu studio

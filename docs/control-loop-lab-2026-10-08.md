@@ -31,7 +31,7 @@
 cd <repo or worktree root>               # --sandbox is cwd-relative
 export TENGU_HOME="$HOME/tengu-lab/home"   # never ~/.tengu
 mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
-cargo build --release --features studio    # A0–A15 / G1–G8 need only the default build; S1–S7 need `studio`; `cargo build` (debug, ST-03) behaves the same
+cargo build --release                      # default features include `studio` (S1–S7); `cargo build` (debug, ST-03) behaves the same
 T=target/release/tengu                     # $CARGO_TARGET_DIR/release/tengu when that is set
 S=sandboxes/control-loop-lab; W="$HOME/tengu-lab/control-loop-lab"
 J() { sed -n '/^{/,$p'; }                  # only for a binary before ST-11 (logs on stdout): $T decide … | J | jq …
@@ -85,7 +85,7 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 
 Every event's fields, parents and the Studio visual it drives: `docs/runtime-2026-09-30.md` § Trace. Trace files: `$TENGU_HOME/logs/trace/control-loop-lab/<run_id>.jsonl` (removed by the cleanup below). Recorded run: `docs/studio-trace-evidence-2026-10-08.md`.
 
-## Studio server + page (ST-20 / ST-21 / ST-22, build with `--features studio`)
+## Studio server + page (ST-20 / ST-21 / ST-22, the default build)
 
 | # | Command | Expected |
 |---|---|---|

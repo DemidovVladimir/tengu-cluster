@@ -40,7 +40,7 @@
 |---|---|---|---|
 | **Language** | Rust | Python | TypeScript + Claude Agent SDK |
 | **Origin** | Vibe-coded v2 redesign | Nous Research, mature | Anthropic, this product |
-| **Surfaces** | TUI (cursive), Telegram, webhooks listener; long-running `tengu run` (feeds + decision loops); Tengu Studio (`tengu studio`, a loopback browser page, `--features studio`); CLIs `tengu decide`, `tengu backtest`, `tengu history`, `tengu ranking`, `tengu lineage`, `tengu evidence`, `tengu sources`, `tengu soe`, `tengu trace` | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
+| **Surfaces** | TUI (cursive), Telegram, webhooks listener; long-running `tengu run` (feeds + decision loops); Tengu Studio (`tengu studio`, a loopback browser page, default build); CLIs `tengu decide`, `tengu backtest`, `tengu history`, `tengu ranking`, `tengu lineage`, `tengu evidence`, `tengu sources`, `tengu soe`, `tengu trace` | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
 | **Models** | OpenRouter (any) + `local` (any OpenAI-compatible server: Ollama, llama.cpp, vLLM, Unsloth) + Claude Code engine; Jev (`~typesafe/jev-latest`) as the decision model of `[decision_loops]` | 200+ providers, multi-backend terminal | Sonnet / Opus / Haiku |
 | **Persistence** | Open Brain Postgres + Karpathy LLM Wiki Markdown + file registry; SQLite stores for typed observations, the paper ledger, the market-data warehouse and the source store (`sources.db`); frozen SOE run dirs; JSONL execution traces; `lineage/` TOML registry + read-only evidence vaults | SQLite + FTS5 + Honcho dialectic model | CLAUDE.md + plain-text memory files |
 | **Network** | Tor by default (`[egress] network = "tor"`: Arti + lyrebird-rs proxy, host allow/deny ceiling, JSONL audit — code-enforced, fail-closed; `"open"` per sandbox) | not a first-class feature | platform-managed |
@@ -204,7 +204,7 @@ Since 2026-10-09, runtime execution is observable too:
 | Surface | What |
 |---|---|
 | Execution trace | every `tengu run` / `tengu decide` process writes one JSONL recording `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl` (`domain/trace.rs`): `event_id` = `<run_id>:<seq>`, session / correlation / parent ids, workflow `node_id`, status, payload redacted + bounded; `tengu trace runs` / `show [--follow]`. `tengu webhooks` does not record yet |
-| Tengu Studio | `tengu studio --sandbox <s>` (`--features studio`): a loopback browser page over the validated workflow graph, live + replayed runs, the `tengu doctor --live` health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound or hardened); the browser draws, Rust decides — `docs/studio-2026-10-08.md` |
+| Tengu Studio | `tengu studio --sandbox <s>` (default build): a loopback browser page over the validated workflow graph, live + replayed runs, the `tengu doctor --live` health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound or hardened); the browser draws, Rust decides — `docs/studio-2026-10-08.md` |
 
 ### Hermes
 
