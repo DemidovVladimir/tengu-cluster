@@ -29,6 +29,23 @@
 //! - `verify_hmac(...)` — constant-time HMAC-SHA256 verify via the
 //!   `hmac` crate's `Mac::verify_slice`.
 //!
+//! ## Trace (`domain/trace.rs`, Studio)
+//!
+//! `tengu webhooks` records one run per process (`RunKind::Webhooks`,
+//! `runtime_id` = the lease holder; ends with `run.closed`); under `tengu
+//! run` / Studio Play the routes write into the runtime's run. Per request
+//! to a configured endpoint (an unknown one is logged, never recorded — its
+//! name is the sender's):
+//!
+//! | Event | Node | Status | Payload |
+//! |---|---|---|---|
+//! | `trigger.webhook` (root; component `loop` or `orchestrator`) | `trigger:webhook/<endpoint>` | running | `endpoint`, `kind` (`loop` · `agent`), the loop or agent, `body_bytes` |
+//! | its work: `loop.queued` … (loop endpoint) · `plan.*` / `step.*` (agent endpoint, `orchestrator/trace.rs`) | | | parent = the root, session = the request's |
+//! | `webhook.responded` (child of the root) | same | `domain::trace::http_status`: 2xx ok · 401 / 429 / 503 refused · 500 failed | `endpoint`, `kind`, `status_code`, `error` (line 1); `duration_ms` |
+//!
+//! Never recorded: the body (its size only), a header, a secret. A loop
+//! escalation's orchestrator turn records under the loop event's cause.
+//!
 //! ## Doctrine
 //!
 //! - Behaviour changes via TOML, not code: every endpoint binding is in
@@ -45,20 +62,30 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::application::chat::tool_loop::collect_engine_response;
 use crate::application::memory::manager::MemoryManager;
+use crate::application::orchestrator::trace::OrchestratorTrace;
 use crate::application::runtime::loops::{LoopDispatch, LoopHandler, Refused};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
+use crate::application::trace_exec::{self, Cause};
 use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::message::{Message, Role};
 use crate::domain::secrets::SecretRegistry;
+use crate::domain::trace::{
+    http_status, line1, Component, EventDraft, RunKind, Status, RUN_CLOSED,
+};
+use crate::domain::workflow::node_id;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::engine::{Engine, EngineContext};
 use crate::ports::orchestration::ChatServiceFactory;
 use crate::ports::tool_activity::ToolActivityPort;
+use crate::ports::trace::TraceSink;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use axum::{
@@ -71,6 +98,7 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use serde_json::json;
+use serde_json::Value;
 use sha2::Sha256;
 use tracing::{error, info, warn};
 
@@ -110,13 +138,47 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
     );
     let stopper = supervisor.stopper();
     let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
-    let served = serve_webhooks(config, secret_registry, addr, signals, stopper.clone()).await;
+    // This process's recording (module docs § Trace), after the leases.
+    let trace = crate::bootstrap::trace::open_sink(
+        &config,
+        Some(owner.holder()),
+        RunKind::Webhooks,
+        &secret_registry,
+    );
+    let holder = owner.holder().to_string();
+    let (served, drained) = serve_webhooks(
+        config,
+        secret_registry,
+        addr,
+        signals,
+        stopper.clone(),
+        (Arc::clone(&trace), holder),
+    )
+    .await;
     supervisor
         .shutdown(tokio::time::Instant::now() + grace)
         .await;
     let released = owner.release().await;
     let stop = stopper.cause();
     info!(lease_released = released, stop = ?stop, "tengu webhooks stopped");
+    let failed = served.is_err() || stop.as_ref().is_some_and(|s| s.failed);
+    trace.emit(
+        EventDraft::new(
+            Component::Runtime,
+            RUN_CLOSED,
+            if failed { Status::Failed } else { Status::Ok },
+        )
+        .payload(json!({
+            "reason": stop.as_ref().map(|s| s.reason.clone()),
+            "failed": failed,
+            "lease_released": released,
+            "drained": drained.map(|d| json!({
+                "finished": d.finished,
+                "dropped": d.dropped,
+                "aborted": d.aborted,
+            })),
+        })),
+    );
     served?;
     match stop {
         Some(s) if s.failed => anyhow::bail!("tengu webhooks stopped: {}", s.reason),
@@ -126,14 +188,33 @@ pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) 
 
 /// The listener under the leases: every endpoint loop built once, served
 /// until the stop signal (a signal, a lost lease), then the loop events
-/// drained.
+/// drained (`None`: it never served). `rec` = the recording + the lease
+/// holder its audit lines name.
 async fn serve_webhooks(
+    config: Config,
+    secret_registry: Arc<SecretRegistry>,
+    addr: SocketAddr,
+    signals: super::run::Signals,
+    stopper: crate::application::runtime::Stopper,
+    rec: (Arc<dyn TraceSink>, String),
+) -> (
+    Result<()>,
+    Option<crate::application::runtime::loops::DrainReport>,
+) {
+    match listen(config, secret_registry, addr, signals, stopper, rec).await {
+        Ok((served, drained)) => (served, Some(drained)),
+        Err(e) => (Err(e), None),
+    }
+}
+
+async fn listen(
     config: Config,
     secret_registry: Arc<SecretRegistry>,
     addr: SocketAddr,
     mut signals: super::run::Signals,
     stopper: crate::application::runtime::Stopper,
-) -> Result<()> {
+    (trace, holder): (Arc<dyn TraceSink>, String),
+) -> Result<(Result<()>, crate::application::runtime::loops::DrainReport)> {
     use crate::application::runtime::stopped;
 
     let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
@@ -144,7 +225,10 @@ async fn serve_webhooks(
     // One `DecisionLoop` per loop referenced by an endpoint — built once so
     // its action history survives across events. Escalation reuses the
     // one-shot orchestrator path when `[orchestrator]` is configured.
-    let escalator = orchestrator_escalator(&config, &memory_manager);
+    let slot = TraceSlot::default();
+    let _ = slot.set(Arc::clone(&trace));
+    let escalator = orchestrator_escalator(&config, &memory_manager, Arc::clone(&slot));
+    let rec = crate::bootstrap::trace::Recording::of(Arc::clone(&trace), Some(&holder));
     let mut handlers: BTreeMap<String, Arc<dyn LoopHandler>> = BTreeMap::new();
     for ep in config.webhooks.endpoints.values() {
         let Some(name) = &ep.decision_loop else {
@@ -153,24 +237,33 @@ async fn serve_webhooks(
         if handlers.contains_key(name) {
             continue;
         }
-        // No trace recording on this surface yet: audit lines carry no
-        // runtime / run id (`bootstrap/trace.rs`).
+        // Step / tool events into this process's recording; audit lines
+        // carry its runtime + run id.
         let dl = crate::bootstrap::decision::build_decision_loop(
             &config,
             name,
             escalator.clone(),
             Arc::clone(&secret_registry),
-            Default::default(),
+            rec.clone(),
         )?;
         handlers.insert(name.clone(), dl);
     }
-    let loops = Arc::new(LoopDispatch::new(
-        handlers,
-        config.runtime.max_decisions_in_flight,
-        config.runtime.max_queued_per_loop,
-    ));
+    let loops = Arc::new(
+        LoopDispatch::new(
+            handlers,
+            config.runtime.max_decisions_in_flight,
+            config.runtime.max_queued_per_loop,
+        )
+        .with_trace(Arc::clone(&trace)),
+    );
 
-    let state = app_state(config, memory_manager, Arc::clone(&loops), secret_registry)?;
+    let state = app_state(
+        config,
+        memory_manager,
+        Arc::clone(&loops),
+        secret_registry,
+        trace,
+    )?;
     let endpoints_summary: Vec<&str> = state
         .config
         .webhooks
@@ -217,7 +310,7 @@ async fn serve_webhooks(
         "webhook loop events drained"
     );
     signal_task.abort();
-    served
+    Ok((served, drained))
 }
 
 /// Refuse a config the listener cannot serve: disabled, no endpoints,
@@ -254,27 +347,36 @@ pub(crate) fn bind_addr(config: &Config) -> Result<SocketAddr> {
         .with_context(|| format!("invalid bind address {bind}:{port}"))
 }
 
+/// The recording an escalator writes into, set once it is open (`tengu
+/// run` opens its recording after building the escalator).
+pub(crate) type TraceSlot = Arc<OnceLock<Arc<dyn TraceSink>>>;
+
 /// The escalator loops use when `[orchestrator]` is configured: a
-/// low-confidence step becomes a one-shot orchestrator turn.
+/// low-confidence step becomes a one-shot orchestrator turn, recorded into
+/// `trace` (once set) under the loop event's cause.
 pub(crate) fn orchestrator_escalator(
     config: &Config,
     memory_manager: &Arc<MemoryManager>,
+    trace: TraceSlot,
 ) -> Option<Arc<dyn Escalator>> {
     config.orchestrator.as_ref().map(|_| {
         Arc::new(OrchestratorEscalator {
             config: config.clone(),
             memory_manager: Arc::clone(memory_manager),
+            trace,
         }) as Arc<dyn Escalator>
     })
 }
 
 /// Validated shared state for [`router`]. `loops` must hold every loop an
-/// endpoint names (`tengu run` passes its dispatch with every loop).
+/// endpoint names (`tengu run` passes its dispatch with every loop);
+/// `trace` = the process's recording (module docs § Trace).
 pub(crate) fn app_state(
     config: Config,
     memory_manager: Arc<MemoryManager>,
     loops: Arc<LoopDispatch>,
     secret_registry: Arc<SecretRegistry>,
+    trace: Arc<dyn TraceSink>,
 ) -> Result<Arc<WebhookAppState>> {
     check_config(&config)?;
     for (name, ep) in &config.webhooks.endpoints {
@@ -289,6 +391,7 @@ pub(crate) fn app_state(
         memory_manager,
         loops,
         _secret_registry: secret_registry,
+        trace,
     }))
 }
 
@@ -313,10 +416,93 @@ pub(crate) struct WebhookAppState {
     /// responses are 202s with no agent text). Kept for the inevitable
     /// future "sync mode" that mirrors telegram's `secret_registry.redact`.
     _secret_registry: Arc<SecretRegistry>,
+    /// Where each request's `trigger.webhook` and its work go (module docs
+    /// § Trace; `NoopTrace` = nowhere).
+    trace: Arc<dyn TraceSink>,
+}
+
+/// One request's root + answer (module docs § Trace).
+struct RequestTrace<'a> {
+    sink: &'a dyn TraceSink,
+    endpoint: &'a str,
+    kind: &'static str,
+    component: Component,
+    session: &'a str,
+    root: Option<String>,
+    t0: Instant,
+}
+
+impl<'a> RequestTrace<'a> {
+    /// Write the root `trigger.webhook` (running).
+    fn begin(
+        sink: &'a dyn TraceSink,
+        endpoint: &'a str,
+        ep: &WebhookEndpointConfig,
+        session: &'a str,
+        body_bytes: usize,
+    ) -> Self {
+        let (kind, component, target) = match &ep.decision_loop {
+            Some(l) => ("loop", Component::Loop, ("loop", l.as_str())),
+            None => (
+                "agent",
+                Component::Orchestrator,
+                ("agent", ep.agent.as_str()),
+            ),
+        };
+        let mut r = Self {
+            sink,
+            endpoint,
+            kind,
+            component,
+            session,
+            root: None,
+            t0: Instant::now(),
+        };
+        let mut payload = json!({"endpoint": endpoint, "kind": kind, "body_bytes": body_bytes});
+        if let Value::Object(o) = &mut payload {
+            o.insert(target.0.into(), json!(target.1));
+        }
+        r.root = sink.emit(r.draft("trigger.webhook", Status::Running).payload(payload));
+        r
+    }
+
+    fn draft(&self, kind: &str, status: Status) -> EventDraft {
+        EventDraft::new(self.component, kind, status)
+            .session(self.session)
+            .node(node_id::trigger_webhook(self.endpoint))
+    }
+
+    /// What the request's work runs caused by.
+    fn cause(&self) -> Cause {
+        Cause::new(self.root.clone(), self.session)
+    }
+
+    /// Write `webhook.responded` for the answer the sender gets.
+    fn responded(&self, code: StatusCode, answer: &Value) {
+        let mut payload = json!({
+            "endpoint": self.endpoint,
+            "kind": self.kind,
+            "status_code": code.as_u16(),
+        });
+        if let (Some(e), Value::Object(o)) =
+            (answer.get("error").and_then(Value::as_str), &mut payload)
+        {
+            o.insert("error".into(), json!(line1(e)));
+        }
+        let mut d = self
+            .draft("webhook.responded", http_status(code.as_u16()))
+            .duration(self.t0.elapsed().as_millis() as u64)
+            .payload(payload);
+        if let Some(root) = &self.root {
+            d = d.parent(root.clone());
+        }
+        self.sink.emit(d);
+    }
 }
 
 /// `POST /webhooks/{name}`. Validates HMAC, mints per-request session_id,
-/// fires-and-forgets the orchestrator turn, returns 202 immediately.
+/// fires-and-forgets the orchestrator turn, returns 202 immediately. A
+/// configured endpoint's request is recorded (module docs § Trace).
 async fn dispatch_webhook(
     Path(name): Path<String>,
     State(state): State<Arc<WebhookAppState>>,
@@ -324,7 +510,8 @@ async fn dispatch_webhook(
     body: Bytes,
 ) -> impl IntoResponse {
     // 1. Look up endpoint binding. 404 if unknown — surface clearly so
-    //    senders see a typo'd URL rather than a vague auth failure.
+    //    senders see a typo'd URL rather than a vague auth failure. Not
+    //    recorded: the name is the sender's, not a configured node.
     let Some(endpoint) = state.config.webhooks.endpoints.get(&name) else {
         warn!(name = %name, "unknown webhook endpoint");
         return (
@@ -334,6 +521,26 @@ async fn dispatch_webhook(
             .into_response();
     };
 
+    // Mint the per-request session_id — uuid keeps it unique even when the
+    // same endpoint fires twice in the same second; the trace root and every
+    // event of the request's work carry it.
+    let session_id = format!("webhook-{}-{}", name, uuid::Uuid::new_v4());
+    let rt = RequestTrace::begin(&*state.trace, &name, endpoint, &session_id, body.len());
+    let (code, answer) = handle_webhook(&state, &name, endpoint, &headers, &body, &rt).await;
+    rt.responded(code, &answer);
+    (code, Json(answer)).into_response()
+}
+
+/// Steps 2–6 of a configured endpoint's request; the answer.
+async fn handle_webhook(
+    state: &Arc<WebhookAppState>,
+    name: &str,
+    endpoint: &WebhookEndpointConfig,
+    headers: &HeaderMap,
+    body: &Bytes,
+    rt: &RequestTrace<'_>,
+) -> (StatusCode, Value) {
+    let session_id = rt.session;
     // 2. Resolve the shared secret. `secret_env` (preferred) reads at
     //    request time so a key rotation doesn't require restart.
     let auth = match resolve_endpoint_auth(endpoint) {
@@ -342,63 +549,55 @@ async fn dispatch_webhook(
             error!(name = %name, error = %e, "secret resolve failed");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("server misconfiguration: {}", e)})),
-            )
-                .into_response();
+                json!({"error": format!("server misconfiguration: {}", e)}),
+            );
         }
     };
 
     // 3. Verify HMAC (or the static `Authorization` header). 401 on
     //    missing-header / bad-format / mismatch.
     let verified = match &auth {
-        EndpointAuth::Hmac(secret) => verify_signature(&headers, &body, secret.as_bytes()),
-        EndpointAuth::Header(expected) => verify_auth_header(&headers, expected),
+        EndpointAuth::Hmac(secret) => verify_signature(headers, body, secret.as_bytes()),
+        EndpointAuth::Header(expected) => verify_auth_header(headers, expected),
     };
     if let Err(e) = verified {
         warn!(name = %name, error = %e, "webhook auth failed");
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response();
+        return (StatusCode::UNAUTHORIZED, json!({"error": e.to_string()}));
     }
-
-    // 4. Mint per-request session_id — uuid keeps it unique even when
-    //    the same endpoint fires twice in the same second.
-    let session_id = format!("webhook-{}-{}", name, uuid::Uuid::new_v4());
 
     // 5a. Decision-loop endpoint: the body is the event (Helius sends a
     //     JSON array of transactions). Non-JSON bodies become a string.
     //     Queued on the loop (one event at a time per loop); failures are
-    //     logged by the dispatch and land in the decision audit.
+    //     logged by the dispatch and land in the decision audit. Its
+    //     `loop.queued` hangs under the request's root.
     if let Some(loop_name) = &endpoint.decision_loop {
-        let event: serde_json::Value = serde_json::from_slice(&body)
-            .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&body).into()));
-        match state.loops.submit(loop_name, event, session_id.clone()) {
+        let event: Value = serde_json::from_slice(body)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(body).into()));
+        let submitted = trace_exec::caused_by_sync(rt.cause(), || {
+            state.loops.submit(loop_name, event, session_id.to_string())
+        });
+        match submitted {
             Ok(()) => {}
             Err(refused @ Refused::ShuttingDown) => {
                 warn!(name = %name, decision_loop = %loop_name, session_id = %session_id, "loop event refused: shutting down");
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
-                    Json(json!({"error": refused.to_string()})),
-                )
-                    .into_response();
+                    json!({"error": refused.to_string()}),
+                );
             }
             // The dispatch warned (loop, session id, counts).
             Err(refused @ Refused::QueueFull { .. }) => {
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
-                    Json(json!({"error": refused.to_string()})),
-                )
-                    .into_response();
+                    json!({"error": refused.to_string()}),
+                );
             }
             Err(Refused::UnknownLoop) => {
                 error!(name = %name, decision_loop = %loop_name, "decision loop not built");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": format!("decision loop '{}' not available", loop_name)})),
-                )
-                    .into_response();
+                    json!({"error": format!("decision loop '{}' not available", loop_name)}),
+                );
             }
         }
         info!(
@@ -410,36 +609,38 @@ async fn dispatch_webhook(
         );
         return (
             StatusCode::ACCEPTED,
-            Json(json!({
+            json!({
                 "status": "accepted",
                 "session_id": session_id,
                 "endpoint": name,
                 "loop": loop_name,
-            })),
-        )
-            .into_response();
+            }),
+        );
     }
 
     // 5. Synthesize the user message: goal_template + body. Body bytes
     //    aren't required to be UTF-8 (binary webhooks exist) — fall
     //    through to lossy stringification rather than rejecting.
-    let body_str = String::from_utf8_lossy(&body);
+    let body_str = String::from_utf8_lossy(body);
     let user_message = format!(
         "{}\n\nPayload (raw body, may be JSON):\n{}",
         endpoint.goal_template, body_str
     );
 
     // 6. Spawn the orchestrator turn. Fire-and-forget — caller gets
-    //    202 immediately; agent runs in the background.
+    //    202 immediately; agent runs in the background, its plans and steps
+    //    recorded under the request's root.
     let agent_name = endpoint.agent.clone();
-    let session_id_for_handle = session_id.clone();
-    let state_for_handle = Arc::clone(&state);
+    let session_id_for_handle = session_id.to_string();
+    let state_for_handle = Arc::clone(state);
+    let trace = OrchestratorTrace::of(&state.trace, rt.root.clone());
     tokio::spawn(async move {
         run_one_shot(
             &state_for_handle.config,
             &state_for_handle.memory_manager,
             &session_id_for_handle,
             user_message,
+            trace,
         )
         .await;
     });
@@ -454,25 +655,26 @@ async fn dispatch_webhook(
 
     (
         StatusCode::ACCEPTED,
-        Json(json!({
+        json!({
             "status": "accepted",
             "session_id": session_id,
             "endpoint": name,
             "agent": agent_name,
-        })),
+        }),
     )
-        .into_response()
 }
 
 /// Run one orchestrator turn for the synthesized webhook user message.
 /// Final agent text is written to the tracing log; durable side-effects
 /// (`agentic_memory` step summaries, metrics records) flow through the standard
 /// pipeline. Errors are logged and discarded — the listener stays up.
+/// `trace` = where its plans and steps are recorded (`None`: nowhere).
 async fn run_one_shot(
     config: &Config,
     memory_manager: &Arc<MemoryManager>,
     session_id: &str,
     user_message: String,
+    trace: Option<OrchestratorTrace>,
 ) {
     // Per-request orchestrator construction. Uses `WebhookChatServiceFactory`
     // — a per-turn rebuild-from-config pattern modelled on `EvalChatServiceFactory`
@@ -490,6 +692,7 @@ async fn run_one_shot(
         factory,
         Arc::clone(memory_manager),
         session_id.to_string(),
+        trace,
     ) else {
         warn!(
             session_id = %session_id,
@@ -782,6 +985,7 @@ fn decode_nibble(b: u8) -> Result<u8, String> {
 struct OrchestratorEscalator {
     config: Config,
     memory_manager: Arc<MemoryManager>,
+    trace: TraceSlot,
 }
 
 #[async_trait]
@@ -789,8 +993,15 @@ impl Escalator for OrchestratorEscalator {
     async fn escalate(&self, session_id: String, message: String) {
         let config = self.config.clone();
         let memory_manager = Arc::clone(&self.memory_manager);
+        // Recorded under what the loop event runs caused by (its
+        // `loop.started`, a decide run's root), read before the spawn.
+        let parent = trace_exec::cause().and_then(|c| c.parent);
+        let trace = self
+            .trace
+            .get()
+            .and_then(|sink| OrchestratorTrace::of(sink, parent));
         tokio::spawn(async move {
-            run_one_shot(&config, &memory_manager, &session_id, message).await;
+            run_one_shot(&config, &memory_manager, &session_id, message, trace).await;
         });
     }
 }
@@ -1152,6 +1363,7 @@ mod tests {
             Arc::new(MemoryManager::new()),
             Arc::clone(&loops),
             Arc::new(SecretRegistry::new()),
+            Arc::new(crate::adapters::outbound::noop::NoopTrace),
         )
         .unwrap();
         assert_eq!(
@@ -1205,6 +1417,7 @@ mod tests {
             Arc::new(MemoryManager::new()),
             Arc::clone(&loops),
             Arc::new(SecretRegistry::new()),
+            Arc::new(crate::adapters::outbound::noop::NoopTrace),
         )
         .unwrap();
         assert_eq!(
@@ -1227,6 +1440,150 @@ mod tests {
         );
     }
 
+    /// Each request to a configured endpoint: a `trigger.webhook` root, its
+    /// loop events under it (one session), a `webhook.responded` with the
+    /// code; a refused one too (401, refused); an unknown endpoint nothing.
+    /// The body never reaches the trace (its size does).
+    #[tokio::test]
+    async fn webhook_requests_record_a_root_their_work_and_the_answer() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let sink = Arc::new(MemTrace::default());
+        let slow = crate::application::runtime::loops::tests::SlowLoop::new(1);
+        let loops = Arc::new(
+            LoopDispatch::new(
+                BTreeMap::from([(
+                    "watch".to_string(),
+                    Arc::clone(&slow) as Arc<dyn LoopHandler>,
+                )]),
+                4,
+                64,
+            )
+            .with_trace(sink.clone()),
+        );
+        let state = app_state(
+            loop_config(),
+            Arc::new(MemoryManager::new()),
+            Arc::clone(&loops),
+            Arc::new(SecretRegistry::new()),
+            sink.clone(),
+        )
+        .unwrap();
+        let body: &'static [u8] = b"{\"marker\":\"body-text-never-recorded\"}";
+        assert_eq!(post_signed(&state, body).await, StatusCode::ACCEPTED);
+        for _ in 0..200 {
+            if loops.stats()["watch"].completed == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let mut bad = HeaderMap::new();
+        bad.insert(SIG_HEADER, sign(body, b"wrong").parse().unwrap());
+        let refused = dispatch_webhook(
+            Path("h".to_string()),
+            State(Arc::clone(&state)),
+            bad,
+            Bytes::from_static(body),
+        )
+        .await
+        .into_response()
+        .status();
+        assert_eq!(refused, StatusCode::UNAUTHORIZED);
+        let unknown = dispatch_webhook(
+            Path("nope".to_string()),
+            State(Arc::clone(&state)),
+            HeaderMap::new(),
+            Bytes::from_static(body),
+        )
+        .await
+        .into_response()
+        .status();
+        assert_eq!(unknown, StatusCode::NOT_FOUND);
+
+        let d = sink.all();
+        let session = d[0].session_id.clone().unwrap();
+        assert!(session.starts_with("webhook-h-"), "{session}");
+        let first: Vec<(&str, Option<&str>)> = d
+            .iter()
+            .filter(|e| e.session_id.as_deref() == Some(session.as_str()))
+            .map(|e| (e.kind.as_str(), e.parent_event_id.as_deref()))
+            .collect();
+        let root = MemTrace::id(0);
+        assert_eq!(first[0], ("trigger.webhook", None), "{first:?}");
+        assert!(
+            first.contains(&("loop.queued", Some(root.as_str()))),
+            "{first:?}"
+        );
+        assert!(
+            first.contains(&("webhook.responded", Some(root.as_str()))),
+            "{first:?}"
+        );
+        for k in ["loop.started", "loop.completed"] {
+            assert!(first.iter().any(|(kind, _)| *kind == k), "{k}: {first:?}");
+        }
+        assert_eq!(d[0].node_id.as_deref(), Some("trigger:webhook/h"));
+        assert_eq!(d[0].status, Status::Running);
+        assert_eq!(d[0].component, Component::Loop);
+        assert_eq!(d[0].payload["kind"], json!("loop"));
+        assert_eq!(d[0].payload["loop"], json!("watch"));
+        assert_eq!(d[0].payload["body_bytes"], json!(body.len()));
+        let answer = d
+            .iter()
+            .find(|e| e.kind == "webhook.responded" && e.session_id.as_deref() == Some(&session))
+            .unwrap();
+        assert_eq!(
+            (answer.status, &answer.payload["status_code"]),
+            (Status::Ok, &json!(202))
+        );
+        assert!(answer.duration_ms.is_some());
+
+        // The refused request: its own session, root + 401 refused.
+        let other: Vec<&EventDraft> = d
+            .iter()
+            .filter(|e| e.session_id.as_deref() != Some(session.as_str()))
+            .collect();
+        assert_eq!(
+            other
+                .iter()
+                .map(|e| (e.kind.as_str(), e.status))
+                .collect::<Vec<_>>(),
+            [
+                ("trigger.webhook", Status::Running),
+                ("webhook.responded", Status::Refused)
+            ]
+        );
+        assert_eq!(other[1].payload["status_code"], json!(401));
+        assert_eq!(other[1].payload["error"], json!("HMAC mismatch"));
+        assert!(
+            d.iter()
+                .all(|e| e.node_id.as_deref() != Some("trigger:webhook/nope")),
+            "an unknown endpoint is not recorded"
+        );
+        let text =
+            serde_json::to_string(&d.iter().map(|e| &e.payload).collect::<Vec<_>>()).unwrap();
+        assert!(!text.contains("body-text-never-recorded"), "{text}");
+        assert!(!text.contains("sha256="), "no header: {text}");
+    }
+
+    /// The live-check fixture (`tests/fixtures/webhooks/trace.toml`) loads
+    /// and passes the listener's checks: a loop endpoint, a planner one; its
+    /// models are loopback only.
+    #[test]
+    fn trace_fixture_config_is_served() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/webhooks/trace.toml");
+        let config = Config::load(&path).unwrap();
+        check_config(&config).unwrap();
+        let ep = &config.webhooks.endpoints["probe"];
+        assert_eq!(ep.decision_loop.as_deref(), Some("probe"));
+        assert_eq!(bind_addr(&config).unwrap().to_string(), "127.0.0.1:7391");
+        assert_eq!(config.webhooks.endpoints["ask"].agent, "planner");
+        assert!(config.orchestrator.is_some());
+        for a in ["planner", "reader"] {
+            let base = &config.agents[a].local.as_ref().unwrap().base_url;
+            assert!(base.starts_with("http://127.0.0.1:"), "{a}: {base}");
+        }
+    }
+
     #[test]
     fn app_state_refuses_an_endpoint_whose_loop_is_not_running() {
         let (loops, _) = slow_dispatch(&["other"]);
@@ -1235,6 +1592,7 @@ mod tests {
             Arc::new(MemoryManager::new()),
             loops,
             Arc::new(SecretRegistry::new()),
+            Arc::new(crate::adapters::outbound::noop::NoopTrace),
         )
         .err()
         .unwrap();

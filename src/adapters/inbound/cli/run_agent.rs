@@ -3,6 +3,8 @@
 //! `compress_and_store`, writes `AgentIpcOutput` to stdout. Spawned by
 //! `SubprocessRunner`.
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 
 use crate::bootstrap::sandbox::load_sandbox_or;
@@ -354,11 +356,34 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         activity,
         memory_manager.clone(),
     );
-    let executor = executor.map(|e| {
-        crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-            std::sync::Arc::new(e),
-            std::sync::Arc::clone(&secret_registry),
-        )
+    // The parent records this step (`AgentIpcInput.trace`): every tool call
+    // here becomes `tool.*` drafts it writes into its run, under the step's
+    // `step.started` (`trace_exec::DraftBuffer`; outside the redaction, as a
+    // loop's `TracedExecutor`). A Claude Code step's calls run in its bridge
+    // process and are not recorded.
+    let step_trace = input.trace.as_ref().map(|t| {
+        Arc::new(crate::application::trace_exec::DraftBuffer::new(
+            t.parent_event_id.clone(),
+            input.session_id.clone(),
+            Arc::clone(&secret_registry),
+        ))
+    });
+    let executor: Option<Arc<dyn crate::ports::engine::ToolExecutor>> = executor.map(|e| {
+        let sanitized: Arc<dyn crate::ports::engine::ToolExecutor> = Arc::new(
+            crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
+                Arc::new(e),
+                Arc::clone(&secret_registry),
+            ),
+        );
+        match &step_trace {
+            Some(buf) => Arc::new(crate::application::trace_exec::TracedExecutor::new(
+                sanitized,
+                buf.clone(),
+                &input.agent_name,
+                None,
+            )),
+            None => sanitized,
+        }
     });
     // Diagnostic: log the actual tool NAMES the subprocess can call, so we
     // can verify (in the parent log) whether expected tools like
@@ -524,7 +549,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
                 }
                 ("stored".to_string(), None, true)
             } else if let Some(ref exec) = executor {
-                use crate::ports::engine::ToolExecutor;
                 match exec.execute_typed(call, &messages).await {
                     Ok(out) => (out.text, out.observation, true),
                     Err(e) => {
@@ -667,6 +691,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             summary,
             metrics: subagent_metrics,
             tools: tool_runs,
+            trace: step_trace.as_ref().map(|b| b.take()).unwrap_or_default(),
         }
     } else {
         // Genuinely empty run — no text, no protocol call, no useful output.
@@ -679,6 +704,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             output,
             metrics: subagent_metrics,
             tools: tool_runs,
+            trace: step_trace.as_ref().map(|b| b.take()).unwrap_or_default(),
         }
     };
     let json = serde_json::to_string(&out).context("serialise IPC output")?;

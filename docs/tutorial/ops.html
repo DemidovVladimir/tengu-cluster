@@ -300,7 +300,7 @@
   <div class="targets">
     <div class="dk"><b>chat · telegram · webhooks</b>the TUI · the bot · the webhook listener (<code>--features webhooks</code>) — <a href="channels.html">channels</a></div>
     <div class="dk"><b>run · decide</b><code>tengu run</code>: loops, feeds, lease, heartbeat — <a href="runtime.html">runtime</a> · one loop event, <code>--map</code> — <a href="decision-loop.html">decision loop</a></div>
-    <div class="dk"><b>studio · trace</b><code>graph</code> (JSON); no subcommand = the loopback browser UI (<code>--features studio</code>), Play / Stop with control on · <code>runs</code> <code>show</code> — <a href="studio.html">Studio</a></div>
+    <div class="dk"><b>studio · trace</b><code>graph</code> (JSON); no subcommand = the loopback browser UI (default build), Play / Stop with control on · <code>runs</code> <code>show</code> — <a href="studio.html">Studio</a></div>
     <div class="tor"><b>status · doctor · prune</b>this page: snapshot · <code>--tor</code> <code>--live</code> <code>--engines</code> · clean state</div>
     <div class="tor"><b>secret</b><code>init</code> <code>set</code> <code>remove</code> <code>list</code> <code>change-password</code> <code>path</code> — <a href="secrets.html">secrets</a></div>
     <div><b>history</b><code>range</code> <code>asof</code> · <code>backfill</code> <code>events</code> <code>import-hl-archive</code> <code>import-json</code> <code>coverage</code> — <a href="history.html">history</a></div>
@@ -340,6 +340,8 @@ tengu secret change-password
 tengu secret path</pre></div>
     <div class="tabpanel" id="tab-img" hidden><pre><span class="c"># Dockerfile (tengu)</span>
 builder  rust:1.91-bookworm, FEATURES=<span class="s">"openrouter,telegram"</span> (TENGU_FEATURES overrides)
+         + the default features (openrouter, telegram, studio)   <span class="c"># no --no-default-features</span>
+         copies src/, web/ (the Studio page, compiled in), skills/, sandboxes/
 runtime  debian:bookworm-slim + ca-certificates, libssl3   <span class="c"># no Claude CLI inside</span>
          /opt/tengu/{skills,sandboxes,lineage}, WORKDIR /opt/tengu
          TENGU_CONFIG=/opt/tengu/config.toml  TENGU_HOME=/opt/tengu/data
@@ -438,7 +440,7 @@ ufw: allow 22/tcp and 7080/tcp
         <tr><td><code>src/domain/runtime.rs</code></td><td><code>live_verdict</code>: heartbeat, loops, feeds</td></tr>
         <tr><td><code>src/config/runtime.rs</code></td><td><code>heartbeat_stale_secs</code> and the other <code>[runtime]</code> knobs</td></tr>
         <tr><td><code>src/adapters/outbound/prune.rs</code></td><td>prune plan: targets, <code>--hard</code>, the state-dir guard</td></tr>
-        <tr><td><code>Dockerfile</code></td><td>the tengu image (<code>skills/</code>, <code>sandboxes/</code>, <code>lineage/</code>), its HEALTHCHECK and CMD</td></tr>
+        <tr><td><code>Dockerfile</code></td><td>the tengu image (<code>skills/</code>, <code>sandboxes/</code>, <code>lineage/</code>), its HEALTHCHECK and CMD; the build copies <code>web/</code> for the default feature <code>studio</code></td></tr>
         <tr><td><code>docker-compose.yml</code></td><td>tengu + optional Postgres / pgvector; the config mount at <code>TENGU_CONTAINER_CONFIG</code></td></tr>
         <tr><td><code>docker-compose.tor.yml</code></td><td>the Tor topology override</td></tr>
         <tr><td><code>Makefile</code></td><td>targets, <code>SANDBOX</code>, <code>TENGU_CONTAINER_CONFIG</code>, <code>NETWORK</code> from the <code>[egress]</code> table</td></tr>

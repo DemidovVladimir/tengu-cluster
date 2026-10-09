@@ -64,6 +64,7 @@ impl SubprocessStageRunner {
             compose: None,
             sandbox_config: self.runner.sandbox_name.clone(),
             plan_state: None,
+            trace: None,
         }
     }
 }
@@ -266,6 +267,7 @@ mod tests {
             output: "2 proposals written".into(),
             metrics: vec![metric("soe_architect"), metric("soe_architect")],
             tools: Vec::new(),
+            trace: Vec::new(),
         };
         let runner = SubprocessStageRunner::new(Some("soe".into()), agents())
             .with_exe(fake_child(tmp.path(), &failed));
@@ -301,6 +303,7 @@ mod tests {
             summary: String::new(),
             metrics: vec![metric("soe_architect")],
             tools: Vec::new(),
+            trace: Vec::new(),
         };
         let r = reply_of(ok, 7);
         assert!(r.ok && r.error.is_none());

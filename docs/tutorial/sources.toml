@@ -44,6 +44,7 @@ sources = [
   "src/application/orchestrator/shared_files.rs",
   "src/application/orchestrator/replan.rs",
   "src/application/orchestrator/events.rs",
+  "src/application/orchestrator/trace.rs",
   "src/application/orchestrator/wiring.rs",
   "src/application/orchestrator/mod.rs",
   "src/bootstrap/orchestrator.rs",
@@ -354,6 +355,8 @@ sources = [
   "src/ports/trace.rs",
   "src/application/studio/",
   "src/application/trace_exec.rs",
+  "src/application/orchestrator/trace.rs",
+  "src/adapters/inbound/webhooks.rs",
   "src/bootstrap/studio.rs",
   "src/config/studio.rs",
   "src/bootstrap/trace.rs",
@@ -364,6 +367,7 @@ sources = [
   "web/studio/",
   "sandboxes/control-loop-lab/config.toml",
   "tests/fixtures/studio/",
+  "tests/fixtures/webhooks/",
 ]
 
 # ── Trading desk ──────────────────────────────────────────────────────────

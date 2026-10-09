@@ -514,7 +514,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # at = ["Sun 18:00", "Mon 09:00"]           # wall-clock times, DST-safe
 # event = { phase = "review" }              # the loop gets { phase, ts_ms }
 
-# --- Tengu Studio (tengu studio --sandbox <name>, build --features studio; docs/studio-2026-10-08.md) ---
+# --- Tengu Studio (tengu studio --sandbox <name>, default build; docs/studio-2026-10-08.md) ---
 # control = true: the local Studio page may Play (start this sandbox's runtime in
 # the Studio process — the `tengu run` composition, lease and stores), Stop it (the
 # graceful drain) and send a scenario event (sandboxes/<name>/scenarios/*.json) to

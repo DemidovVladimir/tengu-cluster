@@ -241,7 +241,7 @@
         <li>Loop: model turn, tool calls through the redacting executor, capped results; older rounds shrink to 200 chars. At most the agent's <code>max_tool_rounds</code> (default 70).</li>
         <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary (on <code>claude_code</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and stops.</li>
         <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code> is the last model text, else the summary. A temp workspace is deleted after printing.</li>
-        <li>The parent parses it. Ok: metrics re-emitted, output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
+        <li>The parent parses it. Ok: metrics re-emitted, the step's <code>tool.*</code> trace events written into its own run (when it records), output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
       </ol>
     </div>
   </figure>
@@ -346,14 +346,16 @@
   <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,         <span class="c"># shared with the planner</span>
   <span class="k">"step_id"</span>: <span class="s">"s2"</span>,
   <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,          <span class="c"># the child loads sandboxes/lping/config.toml</span>
-  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n…"</span>   <span class="c"># this session's plan</span>
+  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n…"</span>,  <span class="c"># this session's plan</span>
+  <span class="k">"trace"</span>: { <span class="k">"run_id"</span>: <span class="s">"&lt;run id&gt;"</span>, <span class="k">"parent_event_id"</span>: <span class="s">"&lt;run id&gt;:&lt;seq&gt;"</span> }   <span class="c"># only when the parent records: its step.started</span>
 }</pre></div>
     <div class="tabpanel" id="tab-ok" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"ok"</span>,
   <span class="k">"output"</span>: <span class="s">"&lt;last model text, else the summary&gt;"</span>,
   <span class="k">"summary"</span>: <span class="s">"&lt;compress_and_store text, else the last model text&gt;"</span>,
   <span class="k">"metrics"</span>: [ { <span class="k">"kind"</span>: <span class="s">"subagent"</span>, <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>, <span class="k">"step_id"</span>: <span class="s">"s2"</span>, <span class="c">… one per engine turn</span> } ],
   <span class="k">"tools"</span>: [ { <span class="k">"name"</span>: <span class="s">"sol_price"</span>, <span class="k">"ok"</span>: <span class="n">true</span> },
-             { <span class="k">"name"</span>: <span class="s">"compress_and_store"</span>, <span class="k">"ok"</span>: <span class="n">true</span> } ] }</pre></div>
+             { <span class="k">"name"</span>: <span class="s">"compress_and_store"</span>, <span class="k">"ok"</span>: <span class="n">true</span> } ],
+  <span class="k">"trace"</span>: [ { <span class="k">"kind"</span>: <span class="s">"tool.started"</span>, <span class="k">"node_id"</span>: <span class="s">"tool:crypto_researcher/sol_price"</span>, <span class="c">… redacted, ≤ 512 events; only when asked</span> } ] }</pre></div>
     <div class="tabpanel" id="tab-fail" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"failed"</span>,
   <span class="k">"error"</span>: <span class="s">"subagent 'crypto_researcher' produced no output and did not call compress_and_store"</span>,
   <span class="k">"output"</span>: <span class="s">""</span> }
@@ -416,6 +418,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span><b>Hardened compose only narrows.</b> In a <code>[risk]</code> or signer sandbox an extra tool or skill fails the step before the engine is built.</span></li>
     <li><span><b>Redacted results.</b> Every tool result and tool error passes the secret redactor before the model sees it.</span></li>
     <li><span><b>Same network rules.</b> The child installs the parent's resolved egress policy; an invalid one aborts it.</span></li>
+    <li><span><b>One trace writer.</b> A child never opens the run file: it hands its tool events back over IPC and the parent writes them under the step (an old parent or child sends no <code>trace</code> field and nothing changes).</span></li>
     <li><span><b>One log.</b> The parent reads the child's stderr into its own log (target <code>tengu::run_agent</code>); a failed exit carries its last 40 lines.</span></li>
     <li><span><b>No orphans.</b> A replan, a cancel or a panic aborts every step still in flight; its child is killed.</span></li>
   </ul>

@@ -46,6 +46,22 @@
       }
     },
     {
+      "id": "trigger:webhook/solana_events",
+      "kind": "trigger",
+      "label": "/webhooks/solana_events",
+      "layer": 1,
+      "order": 2,
+      "attrs": {
+        "agent": "lping",
+        "auth": "hmac",
+        "enabled": true
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lping"
+      }
+    },
+    {
       "id": "loop:hedge_exec",
       "kind": "loop",
       "label": "hedge_exec",
@@ -174,6 +190,40 @@
       "facets": {
         "loop": "lp_watch",
         "agent": "lp_executor"
+      }
+    },
+    {
+      "id": "planner",
+      "kind": "planner",
+      "label": "planner (lping)",
+      "layer": 2,
+      "order": 5,
+      "attrs": {
+        "agent": "lping",
+        "engine": "openrouter",
+        "max_attempts_per_step": 3,
+        "max_replans": 2,
+        "model": "anthropic/claude-sonnet-4-6"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "lping"
+      }
+    },
+    {
+      "id": "agent:crypto_researcher",
+      "kind": "agent",
+      "label": "crypto_researcher",
+      "layer": 2,
+      "order": 6,
+      "attrs": {
+        "engine": "openrouter",
+        "model": "anthropic/claude-sonnet-4-6",
+        "workspace": "~/lping-workspace"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher"
       }
     },
     {
@@ -1354,6 +1404,366 @@
       }
     },
     {
+      "id": "scope:crypto_researcher/http_request",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 11,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "*"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "http_request"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/sol_price",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 12,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "lite-api.jup.ag",
+          "hermes.pyth.network",
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "sol_price"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/dlmm_pools",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 13,
+      "attrs": {
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "dlmm.datapi.meteora.ag"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_pools"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/dlmm_pool",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 14,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_pool"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/dlmm_positions",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 15,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_positions"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/jup_perps",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 16,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "jup_perps"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/solana_wallet",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 17,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "solana_wallet"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/solana_tx",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 18,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "solana_tx"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/lp_snapshot",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 19,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "lp_snapshot"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/hedge_decide",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 20,
+      "attrs": {
+        "fs_roots": [
+          "~/lping-workspace"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "hedge_decide"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/lp_decide",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 21,
+      "attrs": {
+        "fs_roots": [
+          "~/lping-workspace"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "lp_decide"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/solana_close_token_accounts",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 22,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "solana_close_token_accounts"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/jupiter_swap",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 23,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "jupiter_swap"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/dlmm_close_position",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 24,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_close_position"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/dlmm_open_position",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 25,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_open_position"
+      }
+    },
+    {
+      "id": "scope:crypto_researcher/jup_perps_order",
+      "kind": "scope",
+      "label": "scope",
+      "layer": 6,
+      "order": 26,
+      "attrs": {
+        "env_reads": [
+          "SOLANA_RPC_URL"
+        ],
+        "fs_roots": [
+          "~/lping-workspace"
+        ],
+        "net_hosts": [
+          "api.mainnet-beta.solana.com",
+          "lite-api.jup.ag"
+        ]
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "jup_perps_order"
+      }
+    },
+    {
       "id": "tool:lp_executor/lp_snapshot",
       "kind": "tool",
       "label": "lp_snapshot",
@@ -1505,6 +1915,329 @@
         "agent": "lp_executor",
         "tool": "sol_price"
       }
+    },
+    {
+      "id": "tool:crypto_researcher/read_file",
+      "kind": "tool",
+      "label": "read_file",
+      "layer": 7,
+      "order": 9,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "read_file"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "read_file"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/list_directory",
+      "kind": "tool",
+      "label": "list_directory",
+      "layer": 7,
+      "order": 10,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "list_directory"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "list_directory"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/http_request",
+      "kind": "tool",
+      "label": "http_request",
+      "layer": 7,
+      "order": 11,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "http_request"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "http_request"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/sol_price",
+      "kind": "tool",
+      "label": "sol_price",
+      "layer": 7,
+      "order": 12,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "sol_price"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "sol_price"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/dlmm_pools",
+      "kind": "tool",
+      "label": "dlmm_pools",
+      "layer": 7,
+      "order": 13,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "dlmm_pools"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_pools"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/dlmm_pool",
+      "kind": "tool",
+      "label": "dlmm_pool",
+      "layer": 7,
+      "order": 14,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "dlmm_pool"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_pool"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/dlmm_positions",
+      "kind": "tool",
+      "label": "dlmm_positions",
+      "layer": 7,
+      "order": 15,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "dlmm_positions"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_positions"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/jup_perps",
+      "kind": "tool",
+      "label": "jup_perps",
+      "layer": 7,
+      "order": 16,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "jup_perps"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "jup_perps"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/solana_wallet",
+      "kind": "tool",
+      "label": "solana_wallet",
+      "layer": 7,
+      "order": 17,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "solana_wallet"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "solana_wallet"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/solana_tx",
+      "kind": "tool",
+      "label": "solana_tx",
+      "layer": 7,
+      "order": 18,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "solana_tx"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "solana_tx"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/lp_snapshot",
+      "kind": "tool",
+      "label": "lp_snapshot",
+      "layer": 7,
+      "order": 19,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "lp_snapshot"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "lp_snapshot"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/lp_swap_plan",
+      "kind": "tool",
+      "label": "lp_swap_plan",
+      "layer": 7,
+      "order": 20,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "lp_swap_plan"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "lp_swap_plan"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/hedge_decide",
+      "kind": "tool",
+      "label": "hedge_decide",
+      "layer": 7,
+      "order": 21,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "hedge_decide"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "hedge_decide"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/lp_decide",
+      "kind": "tool",
+      "label": "lp_decide",
+      "layer": 7,
+      "order": 22,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "lp_decide"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "lp_decide"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/solana_close_token_accounts",
+      "kind": "tool",
+      "label": "solana_close_token_accounts",
+      "layer": 7,
+      "order": 23,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "solana_close_token_accounts"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "solana_close_token_accounts"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/jupiter_swap",
+      "kind": "tool",
+      "label": "jupiter_swap",
+      "layer": 7,
+      "order": 24,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "jupiter_swap"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "jupiter_swap"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/dlmm_close_position",
+      "kind": "tool",
+      "label": "dlmm_close_position",
+      "layer": 7,
+      "order": 25,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "dlmm_close_position"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_close_position"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/dlmm_open_position",
+      "kind": "tool",
+      "label": "dlmm_open_position",
+      "layer": 7,
+      "order": 26,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "dlmm_open_position"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "dlmm_open_position"
+      }
+    },
+    {
+      "id": "tool:crypto_researcher/jup_perps_order",
+      "kind": "tool",
+      "label": "jup_perps_order",
+      "layer": 7,
+      "order": 27,
+      "attrs": {
+        "agent": "crypto_researcher",
+        "in_catalog": true,
+        "tool": "jup_perps_order"
+      },
+      "narrowed_out": false,
+      "facets": {
+        "agent": "crypto_researcher",
+        "tool": "jup_perps_order"
+      }
     }
   ],
   "edges": [
@@ -1634,6 +2367,101 @@
       "kind": "calls"
     },
     {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/dlmm_close_position",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/dlmm_open_position",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/dlmm_pool",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/dlmm_pools",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/dlmm_positions",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/hedge_decide",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/http_request",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/jup_perps",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/jup_perps_order",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/jupiter_swap",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/list_directory",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/lp_decide",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/lp_snapshot",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/lp_swap_plan",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/read_file",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/sol_price",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/solana_close_token_accounts",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/solana_tx",
+      "kind": "calls"
+    },
+    {
+      "from": "agent:crypto_researcher",
+      "to": "tool:crypto_researcher/solana_wallet",
+      "kind": "calls"
+    },
+    {
       "from": "agent:lp_executor",
       "to": "loop:hedge_exec",
       "kind": "owns"
@@ -1652,6 +2480,26 @@
       "from": "agent:lp_executor",
       "to": "loop:lp_watch",
       "kind": "owns"
+    },
+    {
+      "from": "escalation:hedge_exec",
+      "to": "planner",
+      "kind": "escalates"
+    },
+    {
+      "from": "escalation:hedge_watch",
+      "to": "planner",
+      "kind": "escalates"
+    },
+    {
+      "from": "escalation:lp_exec",
+      "to": "planner",
+      "kind": "escalates"
+    },
+    {
+      "from": "escalation:lp_watch",
+      "to": "planner",
+      "kind": "escalates"
     },
     {
       "from": "gate:hedge_exec/act_at",
@@ -1839,6 +2687,91 @@
       "kind": "reads"
     },
     {
+      "from": "planner",
+      "to": "agent:crypto_researcher",
+      "kind": "delegates"
+    },
+    {
+      "from": "scope:crypto_researcher/dlmm_close_position",
+      "to": "tool:crypto_researcher/dlmm_close_position",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/dlmm_open_position",
+      "to": "tool:crypto_researcher/dlmm_open_position",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/dlmm_pool",
+      "to": "tool:crypto_researcher/dlmm_pool",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/dlmm_pools",
+      "to": "tool:crypto_researcher/dlmm_pools",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/dlmm_positions",
+      "to": "tool:crypto_researcher/dlmm_positions",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/hedge_decide",
+      "to": "tool:crypto_researcher/hedge_decide",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/http_request",
+      "to": "tool:crypto_researcher/http_request",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/jup_perps",
+      "to": "tool:crypto_researcher/jup_perps",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/jup_perps_order",
+      "to": "tool:crypto_researcher/jup_perps_order",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/jupiter_swap",
+      "to": "tool:crypto_researcher/jupiter_swap",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/lp_decide",
+      "to": "tool:crypto_researcher/lp_decide",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/lp_snapshot",
+      "to": "tool:crypto_researcher/lp_snapshot",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/sol_price",
+      "to": "tool:crypto_researcher/sol_price",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/solana_close_token_accounts",
+      "to": "tool:crypto_researcher/solana_close_token_accounts",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/solana_tx",
+      "to": "tool:crypto_researcher/solana_tx",
+      "kind": "guards"
+    },
+    {
+      "from": "scope:crypto_researcher/solana_wallet",
+      "to": "tool:crypto_researcher/solana_wallet",
+      "kind": "guards"
+    },
+    {
       "from": "scope:lp_executor/dlmm_open_position",
       "to": "tool:lp_executor/dlmm_open_position",
       "kind": "guards"
@@ -1901,6 +2834,11 @@
     {
       "from": "trigger:webhook/helius",
       "to": "loop:lp_watch",
+      "kind": "fires"
+    },
+    {
+      "from": "trigger:webhook/solana_events",
+      "to": "planner",
       "kind": "fires"
     },
     {

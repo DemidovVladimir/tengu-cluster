@@ -1,8 +1,9 @@
 //! `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control]`
 //! — the local Tengu Studio server (`TENGU_STUDIO_PLAN.md` § 4–6, ST-20 /
-//! ST-30 / ST-31; `--features studio`). Serves the page in `web/studio/`
-//! and a JSON / SSE API over what Rust already computed — the validated
-//! graph, the trace, the `tengu doctor --live` verdict, the control rules.
+//! ST-30 / ST-31; feature `studio`, on by default). Serves the page in
+//! `web/studio/` and a JSON / SSE API over what Rust already computed — the
+//! validated graph, the trace, the `tengu doctor --live` verdict, the
+//! control rules.
 //! The browser draws; it decides nothing. Composition:
 //! `bootstrap::studio::StudioContext`; delivery rules:
 //! `application::studio::stream`; control: `control.rs` (rules

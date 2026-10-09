@@ -5,14 +5,20 @@
 //! | Helper | Builds |
 //! |---|---|
 //! | [`open_sink`] | a new recording of the runner name (`--sandbox`, else `default`) under `<TENGU_HOME>/logs/trace/`, `config_hash` = `Config::source_sha256`, redacting with the process `SecretRegistry`; fail-soft: an unwritable dir = `NoopTrace` + a warn, the run goes on |
+//! | [`open_orchestration`] · [`close`] | a chat / telegram / eval recording, opened only with `[orchestrator]` (their plans are all they record) · its last event, `run.closed` |
 //! | [`run_ids`] · [`Recording`] | `runtime_id` + `run_id` for `AuditLog` (`decisions.jsonl`) · the sink + ids handed to each decision loop (`bootstrap::decision`) |
 //! | [`reader`] · [`run_path`] | a sandbox's `JsonlTraceReader` · one run's file |
 //!
 //! Who records: `tengu run` (`RunKind::Run`, `runtime_id` = the lease holder,
-//! `bootstrap/runtime.rs::start`: `runtime.*`, `feed.*`, `loop.*` and every
-//! loop's step / tool events), `tengu decide` (`RunKind::Decide`, no
-//! `runtime_id`: `trigger.*` + the loop's step / tool events). `tengu
-//! webhooks` does not record yet ([`Recording::default`]).
+//! `bootstrap/runtime.rs::start`: `runtime.*`, `feed.*`, `loop.*`, every
+//! loop's step / tool events, each webhook request's `trigger.webhook` and
+//! its work, escalation turns), `tengu decide` (`RunKind::Decide`, no
+//! `runtime_id`: `trigger.*` + the loop's step / tool events), `tengu
+//! webhooks` (`RunKind::Webhooks`, `runtime_id` = the lease holder: the same
+//! per-request events, `run.closed`), `tengu chat` / `tengu telegram` (one
+//! per process) and `tengu eval` (one per orchestrated row) with
+//! `[orchestrator]` (`plan.*`, `step.*`, `metrics.recorded`, each step's
+//! `run-agent` `tool.*`; `application/orchestrator/trace.rs`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,8 +32,9 @@ use crate::adapters::outbound::trace_store::{
 };
 use crate::config::Config;
 use crate::domain::secrets::SecretRegistry;
-use crate::domain::trace::{RunIds, RunKind};
+use crate::domain::trace::{Component, EventDraft, RunIds, RunKind, Status, RUN_CLOSED};
 use crate::ports::trace::TraceSink;
+use serde_json::json;
 
 fn root() -> PathBuf {
     trace_root(&crate::config::paths::resolve_tengu_home())
@@ -65,6 +72,26 @@ pub(crate) fn open_sink(
     }
 }
 
+/// A surface's recording of its orchestration (module table); `None`
+/// without `[orchestrator]`.
+pub(crate) fn open_orchestration(
+    config: &Config,
+    kind: RunKind,
+    secrets: &Arc<SecretRegistry>,
+) -> Option<Arc<dyn TraceSink>> {
+    config.orchestrator.as_ref()?;
+    Some(open_sink(config, None, kind, secrets))
+}
+
+/// The last event of a chat / telegram / eval / webhooks recording.
+pub(crate) fn close(sink: &dyn TraceSink, reason: &str, failed: bool) {
+    let status = if failed { Status::Failed } else { Status::Ok };
+    sink.emit(
+        EventDraft::new(Component::Runtime, RUN_CLOSED, status)
+            .payload(json!({"reason": reason, "failed": failed})),
+    );
+}
+
 /// The ids every audit line of this recording carries.
 pub(crate) fn run_ids(trace: &dyn TraceSink, runtime_id: Option<&str>) -> RunIds {
     RunIds {
@@ -76,7 +103,7 @@ pub(crate) fn run_ids(trace: &dyn TraceSink, runtime_id: Option<&str>) -> RunIds
 /// One process's recording as the composition hands it to what it builds
 /// (decision loops, feeds): the sink their events go to + the ids their
 /// audit lines carry. [`Default`] = records nothing (`NoopTrace`, no ids):
-/// `tengu webhooks`, tests.
+/// tests.
 #[derive(Clone)]
 pub(crate) struct Recording {
     pub sink: Arc<dyn TraceSink>,

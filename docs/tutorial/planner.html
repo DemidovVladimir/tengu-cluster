@@ -383,18 +383,41 @@ Example queries:
   <div class="sec-head">
     <span class="kicker">Event bus</span>
     <h2 id="s-events">What the TUI shows during a turn</h2>
-    <p>One broadcast channel (capacity 256) per orchestrator. The TUI prints the first seven as <code>orch:</code> system bubbles.</p>
+    <p>One broadcast channel (capacity 256) per orchestrator. The TUI prints the first seven as <code>orch:</code> system bubbles. On a surface that records, each event is first written to the execution trace, in send order (<a href="studio.html">Studio</a>).</p>
   </div>
   <ul class="states">
     <li><span class="chip hands">plan</span><span><b>PlanCreated</b>orch: plan created (1 step). Also after every replan.</span></li>
     <li><span class="chip hands">start</span><span><b>StepStarted</b>orch: ▶ s1 [crypto_researcher]</span></li>
     <li><span class="chip ok">ok</span><span><b>StepSucceeded</b>orch: ✓ s1</span></li>
-    <li><span class="chip warn">fail</span><span><b>StepFailed</b>orch: ✗ s1 (attempt 1): the error. One per failed attempt.</span></li>
+    <li><span class="chip warn">fail</span><span><b>StepFailed</b>orch: ✗ s1 (attempt 1): the error. One per failed attempt; <code>retry_in_ms</code> = the wait before the next one, none on the last.</span></li>
     <li><span class="chip bad">out</span><span><b>StepExhausted</b>orch: ⊘ s1 exhausted: the last error.</span></li>
     <li><span class="chip heart">again</span><span><b>ReplanTriggered</b>orch: ↻ replan — the error.</span></li>
-    <li><span class="chip data">end</span><span><b>PlanCompleted</b>orch: plan completed. Every path ends with one.</span></li>
+    <li><span class="chip data">end</span><span><b>PlanCompleted</b>orch: plan completed. Every path ends with one; <code>failed</code> when the answer is a system error (planner or replan call failed, replans ran out).</span></li>
     <li><span class="chip data">opt-in</span><span><b>RagQueried · MetricsRecorded</b>Shown with <code>TENGU_TUI_RAG_DEBUG=1</code> / <code>TENGU_TUI_METRICS=1</code>.</span></li>
   </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-trace">
+  <div class="sec-head">
+    <span class="kicker">Execution trace</span>
+    <h2 id="s-trace">The same turn, recorded</h2>
+    <p>A surface that records hands the orchestrator its recording: <code>tengu chat</code> and <code>tengu telegram</code> (one run per process), each <code>tengu eval</code> row, and every webhook or escalation turn under <code>tengu webhooks</code> / <code>tengu run</code>. Only with <code>[orchestrator]</code>. Sizes are written, never the goal, the message or the answer.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Event</th><th>Written as</th><th>Node</th></tr></thead>
+      <tbody>
+        <tr><td><code>PlanCreated</code></td><td><code>plan.created</code> ok: steps, agents, ids, <code>depends_on</code>, <code>replan</code></td><td><code>planner</code></td></tr>
+        <tr><td><code>StepStarted</code></td><td><code>step.started</code> running</td><td><code>agent:&lt;a&gt;</code></td></tr>
+        <tr><td><code>StepFailed</code></td><td><code>step.retrying</code> pending (another attempt) · <code>step.failed</code> failed (the last); line 1 of the error</td><td><code>agent:&lt;a&gt;</code></td></tr>
+        <tr><td><code>StepSucceeded</code></td><td><code>step.completed</code> ok, <code>output_chars</code>, duration</td><td><code>agent:&lt;a&gt;</code></td></tr>
+        <tr><td><code>ReplanTriggered</code></td><td><code>plan.replanned</code> pending, line 1 of the reason</td><td><code>planner</code></td></tr>
+        <tr><td><code>PlanCompleted</code></td><td><code>plan.completed</code>: ok · failed · dropped (cancelled); <code>direct</code> when the planner answered itself</td><td><code>planner</code></td></tr>
+        <tr><td><code>MetricsRecorded</code> (this session)</td><td><code>metrics.recorded</code>: tokens, chars, latency; a subagent record under its step, even one that reaches the bus after <code>plan.completed</code></td><td>none</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">A webhook turn hangs under its <code>trigger.webhook</code>; a step's <code>run-agent</code> tool calls hang under its <code>step.started</code> (<a href="subagents.html">Subagents</a>). <code>StepExhausted</code>, <code>RagQueried</code> and <code>StepProgress</code> are not written.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -440,9 +463,10 @@ Example queries:
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>RagPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
         <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, plan state, <code>TENGU_PLAN.md</code></td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop; per-session plan guard</td></tr>
-        <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus</td></tr>
+        <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus (records before it broadcasts)</td></tr>
+        <tr><td><code>src/application/orchestrator/trace.rs</code></td><td>the bridge: each event as a trace event; a step's cause</td></tr>
         <tr><td><code>src/application/orchestrator/wiring.rs</code></td><td>the planner's chat port</td></tr>
-        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>wiring; the stripped planner turn</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>wiring; the stripped planner turn; the recording a surface hands it</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>Planner</code>, <code>PlannerVerdict</code></td></tr>
         <tr><td><code>src/domain/plan.rs</code></td><td><code>Plan</code>, <code>Step</code>, <code>AgentCompose</code></td></tr>
         <tr><td><code>skills/orchestrator/SKILL.md</code></td><td>the planner's system prompt</td></tr>

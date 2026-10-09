@@ -532,6 +532,9 @@ struct TelegramSession {
     orchestrator_factory: Option<Arc<dyn crate::ports::orchestration::ChatServiceFactory>>,
     orchestrators: HashMap<String, Arc<crate::application::orchestrator::Orchestrator>>,
     orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots,
+    /// This process's recording of every sender's plans (`RunKind::Telegram`,
+    /// `run_telegram`); `None` without `[orchestrator]`.
+    trace: Option<Arc<dyn crate::ports::trace::TraceSink>>,
     _memory_manager: Arc<crate::application::memory::manager::MemoryManager>,
 
     // Per-user mutable state
@@ -824,6 +827,7 @@ impl TelegramSession {
             orchestrator_factory,
             orchestrators: HashMap::new(),
             orchestrator_snapshots,
+            trace: None,
             _memory_manager: memory_manager,
             user_states: HashMap::new(),
             user_state_last_active: HashMap::new(),
@@ -1448,6 +1452,9 @@ impl TelegramSession {
             factory,
             Arc::clone(&self._memory_manager),
             session_id.clone(),
+            self.trace.as_ref().and_then(|s| {
+                crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
+            }),
         )?);
         info!(sender, session_id = %session_id, "Telegram orchestrator built for sender");
         log_orchestrator_events(&orch);
@@ -2201,8 +2208,21 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
         .build()
         .expect("Failed to create Telegram runtime");
 
-    let (session, inbound_rx) = TelegramSession::build(config, secret_registry, &rt)?;
-    session.run(rt, inbound_rx)
+    let (mut session, inbound_rx) = TelegramSession::build(config, secret_registry, &rt)?;
+    // With `[orchestrator]`, one recording of every sender's plans — opened
+    // once the session is built, so a refused start (no allow-list) leaves
+    // no run without its `run.closed`.
+    let trace = crate::bootstrap::trace::open_orchestration(
+        &session.config,
+        crate::domain::trace::RunKind::Telegram,
+        &session.secret_registry,
+    );
+    session.trace.clone_from(&trace);
+    let out = session.run(rt, inbound_rx);
+    if let Some(t) = &trace {
+        crate::bootstrap::trace::close(&**t, "telegram stopped", out.is_err());
+    }
+    out
 }
 
 #[cfg(test)]

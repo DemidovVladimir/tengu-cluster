@@ -304,7 +304,7 @@
     <text x="10" y="268" class="small">OrchestratorEvent + EventBus:</text>
     <text x="10" y="280" class="small">PlanCreated, StepStarted, RagQueried,</text>
     <text x="10" y="292" class="small">MetricsRecorded</text>
-    <text x="10" y="312" class="file">shared_files.rs · wiring.rs</text>
+    <text x="10" y="312" class="file">shared_files.rs · wiring.rs · trace.rs</text>
   </g>
 
   <!-- ===================== SECTION 3 — stores ===================== -->
@@ -1045,7 +1045,7 @@
   <g transform="translate(604, 3576)">
     <rect width="282" height="256" rx="6" class="panel" />
     <rect x="0" y="0" width="282" height="22" rx="6" class="pill-std" />
-    <text x="10" y="15" class="pt">Studio server (--features studio)</text>
+    <text x="10" y="15" class="pt">Studio server (default build)</text>
     <text x="10" y="40" class="file">adapters/inbound/studio/</text>
     <text x="10" y="52" class="small">GET /api/v1/ meta, graph, health, runs,</text>
     <text x="10" y="64" class="small">runs/:id/{events,board,stream}, nodes/:id,</text>
@@ -1089,6 +1089,6 @@
     <text x="10" y="54" class="small">tui/mod.rs - build_orchestrator - RagPlanner::plan - SubprocessRunner::run_step - run_agent_subprocess - http_request - compress_and_store. That is the chat turn.</text>
     <text x="10" y="68" class="small">Other flows: tengu backtest --sandbox xlab --strategy weekend_fade (no LLM) → cli/backtest.rs → application/backtest/ → domain/backtest/engine.rs → the run dir; tengu ranking run → application/ranking/;</text>
     <text x="10" y="82" class="small">tengu run --sandbox xmarket (runbook at the top of its config) → inbound/run.rs → bootstrap/runtime.rs → application/runtime/feeds.rs → tools/xm/exec_common.rs · tengu lineage verify --pins.</text>
-    <text x="10" y="96" class="small">Trace + Studio (isolated TENGU_HOME): tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json → tengu trace runs → tengu studio (--features studio).</text>
+    <text x="10" y="96" class="small">Trace + Studio (isolated TENGU_HOME): tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json → tengu trace runs → tengu studio (default build).</text>
   </g>
 </svg>

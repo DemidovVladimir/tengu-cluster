@@ -4,7 +4,7 @@
 //! (defaults filled in, `[default_scopes]` folded, an execution map applied
 //! by `ExecutionMap::apply`) — never from the TOML text, so a comment or a
 //! key the schema dropped cannot reach the page. The caller redacts the
-//! result (`bootstrap::studio`, as the graph's attrs) (`--features studio`).
+//! result (`bootstrap::studio`, as the graph's attrs) (feature `studio`).
 //!
 //! | Node kind | `section` · value |
 //! |---|---|
@@ -105,6 +105,24 @@ pub(crate) fn config_slice(
         NodeKind::Feed => {
             let name = f.feed.as_deref()?;
             slice(format!("feeds.{name}"), to_json(cfg.feeds.get(name)?))
+        }
+        NodeKind::Planner => {
+            let o = cfg.orchestrator.as_ref()?;
+            let routable: Vec<String> =
+                crate::application::orchestrator::shared_files::routable_agents(&cfg.agents)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect();
+            slice(
+                "orchestrator".into(),
+                json!({
+                    "agent": o.agent,
+                    "engine": o.engine,
+                    "max_attempts_per_step": o.max_attempts_per_step,
+                    "max_replans": o.max_replans,
+                    "routable_agents": routable,
+                }),
+            )
         }
         NodeKind::Agent => {
             let name = f.agent.as_deref()?;

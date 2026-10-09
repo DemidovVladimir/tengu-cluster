@@ -121,7 +121,7 @@ every_secs = 30
 run_on_start = true
 required = false
 
-# --- Studio (tengu studio --features studio) -------------------------------------
+# --- Studio (tengu studio, default build) ----------------------------------------
 # Play / Stop / send a scenario event from the Studio page: Play starts this
 # sandbox's runtime in the Studio process (the `tengu run` composition and lease);
 # Stop drains it. Scenario list = scenarios/*.json (not the *.map.json maps).

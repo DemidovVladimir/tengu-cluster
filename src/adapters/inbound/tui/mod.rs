@@ -253,6 +253,13 @@ pub fn run_tui(
             guard.insert(planner.agent_id.clone(), planner);
         }
     }
+    // With `[orchestrator]`, this process records its plans and steps
+    // (`RunKind::Chat`; Studio, `tengu trace show`).
+    let trace = crate::bootstrap::trace::open_orchestration(
+        &config,
+        crate::domain::trace::RunKind::Chat,
+        &secret_registry,
+    );
     let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
         let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
             &orchestrator_snapshots,
@@ -264,6 +271,9 @@ pub fn run_tui(
             factory,
             Arc::clone(&_memory_manager),
             crate::bootstrap::orchestrator::resolve_session_id(),
+            trace.as_ref().and_then(|s| {
+                crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
+            }),
         )
         .map(Arc::new)
     };
@@ -320,6 +330,7 @@ pub fn run_tui(
                                     step_id,
                                     attempt,
                                     error,
+                                    ..
                                 } => Some(format!(
                                     "orch: ✗ {} (attempt {}): {}",
                                     step_id.0, attempt, error
@@ -1022,6 +1033,9 @@ pub fn run_tui(
         .map_err(|e| anyhow::Error::msg(e.to_string()))?;
     disable_terminal_mouse_capture()?;
     runner.run();
+    if let Some(t) = &trace {
+        crate::bootstrap::trace::close(&**t, "chat exited", false);
+    }
 
     Ok(())
 }

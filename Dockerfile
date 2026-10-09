@@ -10,12 +10,16 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 
 # Pre-build dependencies (cached unless Cargo.toml changes)
+# The Cargo.toml default features (openrouter, telegram, studio) are always on:
+# no --no-default-features here, so FEATURES only adds to them.
 # Optional extras: postgres_memory, claude_code, webhooks (no qdrant feature exists)
 ARG FEATURES="openrouter,telegram"
 RUN cargo build --release --features "${FEATURES}" 2>/dev/null || true
 
-# Copy real source + skills + sandboxes
+# Copy real source + skills + sandboxes; web/ = the Studio page, compiled into
+# the binary (include_str! in src/adapters/inbound/studio/assets.rs)
 COPY src src
+COPY web web
 COPY skills skills
 COPY sandboxes sandboxes
 

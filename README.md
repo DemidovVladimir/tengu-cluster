@@ -9,7 +9,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | 50 catalog tools (51 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
 | Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loop-plan-2026-09-24.md` |
 | Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime-2026-09-30.md` |
-| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); edit / save is design-only until Operator Review #3 | `tengu studio` (`--features studio`), `tengu studio graph`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md`, `docs/control-loop-lab-2026-10-08.md` |
+| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); edit / save is design-only until Operator Review #3 | `tengu studio` (default build), `tengu studio graph`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md`, `docs/control-loop-lab-2026-10-08.md` |
 | Execution trace: one JSONL file per recording (`tengu run`, `tengu decide`; not `tengu webhooks` yet), correlated events, redacted + bounded payloads | `tengu trace runs` · `show` | `docs/runtime-2026-09-30.md` § Trace |
 | Paper desk: `[risk]` gate inside every order tool, paper ledger, kill switch, exit rules, weekend fade | sandboxes `xmarket`, `xmarket-weekend` | § Paper desk (xmarket) |
 | History-first research: `market.db` warehouse (+ SEC EDGAR filing events), strategy specs, deterministic backtests, Jev replayed on history | `tengu history`, `tengu backtest`, sandboxes `xlab` (W1), `xlab-w2` | § History-first research (xlab) |
@@ -34,7 +34,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 git clone https://github.com/DemidovVladimir/tengu-cluster.git
 git clone https://github.com/DemidovVladimir/lyrebird-rs.git         # sibling checkout, built into the Tor proxy image
 cd tengu-cluster
-cargo build                                            # default features: openrouter + telegram
+cargo build                                            # default features: openrouter + telegram + studio
 cargo run -- secret init                               # encrypted vault ~/.tengu/secrets.vault
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
@@ -81,7 +81,7 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | `webhooks` | `--sandbox` | `[webhooks.endpoints.<n>]` → `POST /webhooks/<n>` (HMAC `X-Tengu-Signature: sha256=<hex>` or a static `auth_header_env` header); 202 + a one-shot orchestrator turn, or `loop = "<name>"` → that decision loop. Takes the leases `tengu run` takes | `webhooks` | `OPENROUTER_API_KEY` (planner / Jev), each endpoint's `secret_env` / `auth_header_env` |
 | `run` | `--sandbox` | The sandbox's long-running process: every `[decision_loops.*]` built once, every `[feeds.*]`, the webhook routes (`webhooks` build + `[webhooks] enabled`); lease `runtime:<s>` (+ `state:<dir>` with `[xmarket]`), heartbeat `<state dir>/run-<s>.json`; SIGINT / SIGTERM drain ≤ `[runtime] shutdown_grace_secs` | default | `OPENROUTER_API_KEY` for Jev loops / LLM agents only |
 | `decide` | `--sandbox`, `--loop <name>`, `--event <file \| ->`, `--map <file \| ->` (an execution map: order, event, tighter caps — only narrows the loop; names its loop) | One event through `[decision_loops.<name>]` (Jev picks, tools run); prints the step outcomes; no escalation | default | `OPENROUTER_API_KEY` |
-| `studio` | `--sandbox`, `[--port <n>]` (0 = any free), `[--bind <loopback ip>]`, `[--allow-control]` | Local Studio server: loopback only, prints its URL (+ per-process token in the fragment) on stdout; graph, runs, live SSE, health; Play / Stop / send-event with control on (`[studio] control = true` or `--allow-control`, never W1-bound / hardened) | `studio` | `OPENROUTER_API_KEY` (Jev, on Play) |
+| `studio` | `--sandbox`, `[--port <n>]` (0 = any free), `[--bind <loopback ip>]`, `[--allow-control]` | Local Studio server: loopback only, prints its URL (+ per-process token in the fragment) on stdout; graph, runs, live SSE, health; Play / Stop / send-event with control on (`[studio] control = true` or `--allow-control`, never W1-bound / hardened) | `studio` (default) | `OPENROUTER_API_KEY` (Jev, on Play) |
 | `studio graph` | `--sandbox`, `[--map <file \| ->]` | The sandbox's workflow graph (validated config + catalog tools; a map only narrows it) as redacted JSON | default | — |
 | `trace` | `--sandbox`; `runs` · `show --run <id> [--after <seq>] [--follow]` | The execution trace `tengu run` / `tengu decide` recorded under `<TENGU_HOME>/logs/trace/<sandbox>/`, JSON lines; no config, read-only | default | — |
 | `history range` | `<key> --from --to` | Recorded observation rows (`[recorder]`) of one key, JSON lines | default | — |
@@ -242,7 +242,7 @@ Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, 
 | `claude_code` | off | Claude Code CLI backend |
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
 | `webhooks` | off | `tengu webhooks` listener, webhook routes under `tengu run` |
-| `studio` | off | the `tengu studio` server (loopback, `web/studio/` embedded); `tengu studio graph` works in every build |
+| `studio` | on | the `tengu studio` server (loopback, `web/studio/` embedded); a `--no-default-features` build without it refuses `tengu studio --sandbox`, naming the flag; `tengu studio graph` works in every build |
 
 ```bash
 cargo build --features claude_code,postgres_memory,webhooks
@@ -307,7 +307,7 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 | `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) | Not runnable in the image: it has no Claude Code CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
 | Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
-| Features | `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build` |
+| Features | the Cargo default features (`openrouter`, `telegram`, `studio`) are always built in (the build stage copies `web/` for the Studio page); `TENGU_FEATURES` adds more: `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
 | Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build or the Tor proxy is unreachable — a config with `engine = "claude_code"` agents needs `claude_code` in `TENGU_FEATURES` or the container reports unhealthy |
 
 VPS one-liner: `curl -fsSL https://raw.githubusercontent.com/DemidovVladimir/tengu-cluster/main/deploy/install.sh | bash` (`TENGU_NETWORK=open` to skip Tor, `TENGU_PROFILE=postgres-memory` for memory; clones lyrebird-rs next to the checkout). Cloud-init: `deploy/cloud-init.yml`.
@@ -425,7 +425,7 @@ src/adapters/outbound/      engines/ (openrouter, local, claude_code), tools/ (c
                             http_class.rs, clock.rs, egress.rs, secrets.rs, shell.rs, bridge_env.rs, subprocess_runner.rs, noop.rs,
                             prune.rs, scaffold.rs
 src/adapters/inbound/       cli/ (mod + run_agent, doctor, decide, history, backtest, ranking, risk, evidence, lineage, soe (+ soe/weekly),
-                            sources, studio, trace, skill, tool), run.rs (`tengu run`), studio/ (Studio server, `--features studio`),
+                            sources, studio, trace, skill, tool), run.rs (`tengu run`), studio/ (Studio server, default feature `studio`),
                             tui/, telegram.rs, webhooks.rs, mcp_bridge.rs, eval.rs, evolve.rs, channel.rs, activity.rs
 web/studio/                 the Studio page (index.html, studio.css, studio.js), embedded with include_str!; draws only
 ```

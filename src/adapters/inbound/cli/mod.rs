@@ -122,11 +122,12 @@ enum Commands {
         map: Option<PathBuf>,
     },
     /// Tengu Studio (TENGU_STUDIO_PLAN.md): with no subcommand, the local
-    /// browser UI (`--features studio`): loopback only, prints its URL (with
-    /// a per-process token) on stdout; Play / Stop / send-event only with
-    /// `[studio] control = true` or `--allow-control`. `graph` prints the
-    /// sandbox's workflow graph — validated config + catalog tools as
-    /// nodes and edges, optionally narrowed by an execution map — as JSON.
+    /// browser UI (feature `studio`, on by default): loopback only, prints
+    /// its URL (with a per-process token) on stdout; Play / Stop / send-event
+    /// only with `[studio] control = true` or `--allow-control`. `graph`
+    /// prints the sandbox's workflow graph — validated config + catalog
+    /// tools as nodes and edges, optionally narrowed by an execution map —
+    /// as JSON.
     Studio {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long, global = true)]
