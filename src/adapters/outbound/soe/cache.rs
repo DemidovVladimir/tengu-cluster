@@ -12,7 +12,7 @@
 //! | Miss, offline (`inner = None`) | `Err` naming the key in full and the file (`stage_cache_miss`) |
 //! | Inner `Err` | returned; nothing recorded (the next run asks again) |
 //! | Unknown agent | `Err` (`stage_cache_agent`): no identity, no key |
-//! | File | line 1 the header `{schema = "soe.stage_cache/1", key, request, reply}`, then one `{draft, provenance}` per record; dir 0700, file 0600, one `write_all`, never rewritten |
+//! | File | line 1 the header `{schema = "soe.stage_cache/1", key, request, reply}`, then one `{draft, provenance}` per record; dir 0700, file 0600, never rewritten; whole or absent — written to a dot temp file, synced, hard-linked in (an existing file stays), the temp removed |
 
 use std::collections::BTreeMap;
 use std::fs::{DirBuilder, OpenOptions};
@@ -238,7 +238,18 @@ impl CachedStageRunner {
         }
         b.create(&self.dir)
             .with_context(|| format!("create {}", self.dir.display()))?;
+        // Whole or absent: written aside, synced, then linked in — a stop
+        // mid-write never leaves a torn recording under the key (which every
+        // later run would fail on), and a concurrent identical miss keeps the
+        // first file.
         let path = self.path(key);
+        let tmp = self.dir.join(format!(
+            ".{key}.{}.{}.tmp",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
         let mut o = OpenOptions::new();
         o.write(true).create_new(true);
         #[cfg(unix)]
@@ -246,15 +257,22 @@ impl CachedStageRunner {
             use std::os::unix::fs::OpenOptionsExt;
             o.mode(0o600);
         }
-        let mut f = match o.open(&path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => return Ok(()),
-            Err(e) => return Err(e).with_context(|| format!("create {}", path.display())),
-        };
-        f.write_all(text.as_bytes())
-            .with_context(|| format!("write {}", path.display()))?;
-        f.sync_all()
-            .with_context(|| format!("sync {}", path.display()))
+        let mut f = o
+            .open(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        let written = f
+            .write_all(text.as_bytes())
+            .and_then(|()| f.sync_all())
+            .with_context(|| format!("write {}", tmp.display()));
+        drop(f);
+        let linked = written.and_then(|()| {
+            std::fs::hard_link(&tmp, &path).or_else(|e| match e.kind() {
+                ErrorKind::AlreadyExists => Ok(()),
+                _ => Err(e).with_context(|| format!("link {}", path.display())),
+            })
+        });
+        let _ = std::fs::remove_file(&tmp);
+        linked
     }
 }
 
@@ -427,6 +445,14 @@ mod tests {
             .map(|e| e.unwrap().path())
             .collect();
         assert_eq!(recorded.len(), 2, "one file per stage: {recorded:?}");
+        // Linked in whole: no temp file is left beside the recordings.
+        assert!(
+            recorded.iter().all(|p| {
+                let name = p.file_name().unwrap().to_string_lossy();
+                name.len() == 64 + ".jsonl".len() && name.ends_with(".jsonl")
+            }),
+            "{recorded:?}"
+        );
         let architect = recorded
             .iter()
             .map(|p| std::fs::read_to_string(p).unwrap())

@@ -8,7 +8,7 @@
 //! | `cycles/<id>/` · `replays/<id>/` | `claim` = `create_dir` (atomic: of two concurrent claims one fails); the space dir and the root are created on first use; the id must be a lineage id (`valid_id`) on every call |
 //! | run files | `write` = `create_new` + one `write_all` + `sync_all`: an existing name, an unclaimed or a frozen dir is refused; `read` takes any one path segment (a planted file shows up in `freeze::verify` as `EXTRA`) |
 //! | `proposals.jsonl` · `challenges.jsonl` | `O_APPEND`, one canonical JSON line per `write_all`; read back with `domain::soe::record::from_json`, a bad line named with its file and number |
-//! | freeze | `MANIFEST.json` as a new file, then `chmod a-w` on every file and the dir (dir last); a dir holding `MANIFEST.json` is `FROZEN` |
+//! | freeze | `MANIFEST.json` whole or absent: written to `.MANIFEST.json.tmp`, synced, hard-linked in (never over an existing one), the temp removed — then `chmod a-w` on every file and the dir (dir last); a dir holding `MANIFEST.json` is `FROZEN`, so a stop mid-freeze leaves it `OPEN`, never frozen with a torn manifest |
 //! | `<log>.jsonl` (`StateLog`) | `O_APPEND`, one line per `write_all`; its number = the newlines up to this handle's offset after the write — a concurrent append never takes it (the holdout ledger's rule, `tools/xlab/holdout.rs`) |
 //! | `files` · `cycles` | regular files but `MANIFEST.json`, sorted bytewise · dirs under `cycles/` named by an id, sorted |
 
@@ -27,6 +27,9 @@ use crate::domain::soe::record::{from_json, SoeRecord};
 use crate::ports::soe::{
     valid_file_name, CycleStore, RunDir, RunStatus, StateLog, CHALLENGES, MANIFEST, PROPOSALS,
 };
+
+/// Where `freeze` writes the manifest before linking it in (module table).
+const MANIFEST_TMP: &str = ".MANIFEST.json.tmp";
 
 /// The SOE state root (module table).
 #[derive(Debug, Clone)]
@@ -268,19 +271,30 @@ impl CycleStore for FsCycleStore {
     fn freeze(&self, dir: &RunDir, manifest: &[u8]) -> Result<()> {
         let path = self.open_dir(dir)?;
         let manifest_path = path.join(MANIFEST);
-        let mut f = match file_options()
+        // Whole or absent (module table): a dir holding `MANIFEST.json` is
+        // FROZEN, so the file appears in one step — written aside, synced,
+        // then linked in (never over an existing one). A stop before the
+        // link leaves the run OPEN (`cycle_unfinished`), never FROZEN with a
+        // torn manifest.
+        let tmp = path.join(MANIFEST_TMP);
+        let mut f = file_options()
             .write(true)
-            .create_new(true)
-            .open(&manifest_path)
-        {
-            Ok(f) => f,
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => bail!("{dir} is frozen"),
-            Err(e) => return Err(e).with_context(|| format!("create {}", manifest_path.display())),
-        };
+            .create(true)
+            .truncate(true)
+            .open(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
         f.write_all(manifest)
-            .with_context(|| format!("write {}", manifest_path.display()))?;
+            .with_context(|| format!("write {}", tmp.display()))?;
         f.sync_all()
-            .with_context(|| format!("sync {}", manifest_path.display()))?;
+            .with_context(|| format!("sync {}", tmp.display()))?;
+        drop(f);
+        let linked = std::fs::hard_link(&tmp, &manifest_path);
+        std::fs::remove_file(&tmp).with_context(|| format!("remove {}", tmp.display()))?;
+        match linked {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => bail!("{dir} is frozen"),
+            Err(e) => return Err(e).with_context(|| format!("link {}", manifest_path.display())),
+        }
         for entry in std::fs::read_dir(&path).with_context(|| format!("read {}", path.display()))? {
             let entry = entry?;
             if entry.file_type()?.is_file() {
@@ -457,11 +471,25 @@ pub(crate) mod tests {
         assert!(s.freeze(&d, b"[]\n").is_err());
         assert_eq!(s.read(&d, MANIFEST).unwrap().unwrap(), b"[]\n".to_vec());
         assert_eq!(s.files(&d).unwrap(), ["memo.md"]);
+        assert!(!s.root().join("cycles/2026-W41").join(MANIFEST_TMP).exists());
         #[cfg(unix)]
         {
             assert_eq!(mode(&s.root().join("cycles/2026-W41")) & 0o222, 0);
             assert_eq!(mode(&s.root().join("cycles/2026-W41/memo.md")) & 0o222, 0);
         }
+
+        // A freeze stopped before its link (a torn manifest aside): the run
+        // stays OPEN, never FROZEN with half a manifest; the next freeze
+        // writes it whole.
+        let w42 = RunDir::Cycle("2026-W42".into());
+        s.claim(&w42).unwrap();
+        let dir42 = s.root().join("cycles/2026-W42");
+        std::fs::write(dir42.join(MANIFEST_TMP), b"[{\"path\":").unwrap();
+        assert_eq!(s.status(&w42).unwrap(), RunStatus::Open);
+        s.freeze(&w42, b"[]\n").unwrap();
+        assert_eq!(s.status(&w42).unwrap(), RunStatus::Frozen);
+        assert_eq!(s.read(&w42, MANIFEST).unwrap().unwrap(), b"[]\n".to_vec());
+        assert!(!dir42.join(MANIFEST_TMP).exists());
     }
 
     /// The cycle runs on the filesystem as on the in-memory fake: the same

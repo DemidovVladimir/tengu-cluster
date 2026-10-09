@@ -443,7 +443,7 @@
         <tr><td>Closed world</td><td>every agent lists its tools, only from <code>soe_view</code>, <code>soe_propose</code>, <code>soe_challenge</code>, <code>source_evidence</code>, <code>read_file</code>, <code>list_directory</code>, <code>view_skill</code>, <code>skill_resource</code></td></tr>
         <tr><td>No side effect</td><td>deny-all scopes for <code>http_request</code>, <code>write_file</code>, <code>run_command</code> and the two signing tools; no loops, MCP servers, trading or inbound sections; feeds of kind <code>job</code> only</td></tr>
         <tr><td>Network</td><td><code>[egress] allow_hosts</code> equals the registry rows' hosts</td></tr>
-        <tr><td><code>FsCycleStore</code></td><td>run dirs claimed once, files written once, appends one line per write, freeze = manifest then read-only</td></tr>
+        <tr><td><code>FsCycleStore</code></td><td>run dirs claimed once, files written once, appends one line per write, freeze = the manifest linked in whole, then read-only</td></tr>
         <tr><td>Stage runners</td><td>one <code>tengu run-agent</code> child per stage, behind a cache keyed by the sha256 of agent, model, skill, stage and goal (which names the profile and generation sha256): a rerun asks no model; offline, a miss names the full key</td></tr>
         <tr><td><code>soe_cycle</code> job</td><td>the slot's ISO week, decided at the slot; a frozen week is a no-op; no signed profile ⇒ the run fails before anything is created, and the at-tick slot retries for 15 min</td></tr>
         <tr><td>Lease</td><td><code>tengu run</code> of an <code>[soe]</code> sandbox owns its state root: <code>state:&lt;sources.state&gt;</code>, <code>runtime.db</code> inside it</td></tr>
