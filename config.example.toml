@@ -634,6 +634,32 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # query = "publication-date >= {from} AND publication-date <= {to}"   # ted_search only: {from} / {to} required
 # # listing_max_age_days = 2                # registry_marketplace only (required there)
 
+# --- Software Opportunity Engine cycle (O3; needs [sources]; sandboxes/soe) ---
+# The weekly cycle (docs/soe-2026-10-08.md § 10): the Architect proposes
+# mechanisms as data, the Critic challenges them, the pure domain decides; the
+# run dir <TENGU_HOME>/state/<sources.state>/cycles/<ISO week>/ is frozen.
+# [soe] hardens and closes the sandbox: every agent lists its tools, only from
+# soe_view · soe_propose · soe_challenge · source_evidence · read_file ·
+# list_directory · view_skill · skill_resource; a deny-all [default_scopes.<t>]
+# (no keys) for http_request, write_file, run_command, sign_and_send_transaction,
+# sign_message; no [[mcp_servers]], [decision_loops], [risk], [paper],
+# [xmarket], [backtest], signer, [telegram] or [webhooks]; feeds of kind = "job"
+# only; [egress] allow_hosts = the hosts of the registry rows. Every key is
+# required (no built-in default). Rules: src/config/soe.rs.
+# [soe]
+# architect = "soe_architect"               # an [agents.*] with a description; never lists soe_challenge
+# critic = "soe_critic"                     # another one (never the Architect); never lists soe_propose
+# max_proposals = 12                        # 1–50 per cycle
+# forecast_max_weeks = 12                   # 1–52: a forecast resolves within this many weeks
+# token_prices = { currency = "USD", prompt_per_million = "15.00", completion_per_million = "75.00" }   # optional; absent = cost UNKNOWN
+#
+# [feeds.soe_week]                          # kind = "job": a named application job (closed list, src/config/feeds.rs)
+# kind = "job"
+# job = "soe_cycle"                         # the slot's ISO week in tz, decided at the slot; a frozen week is a no-op
+# tz = "Europe/Paris"
+# at = ["Mon 07:00"]
+# required = true                           # `tengu doctor --live` fails when down or stale (8 days)
+
 # --- Orchestration ---
 # The planner agent emits plan JSON; each step runs one `[agents.<name>]`
 # block as a `tengu run-agent` subprocess. An agent is routable (listed in

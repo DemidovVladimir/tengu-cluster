@@ -3,11 +3,11 @@
 //!
 //! | Step | What |
 //! |---|---|
-//! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else `<TENGU_HOME>/state`; `runtime.db` lives there |
-//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
+//! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else the `[sources]` one (the SOE state root, critic C9), else `<TENGU_HOME>/state`; `runtime.db` lives there |
+//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; then — with `[soe]` — `state:<[sources] state dir name>`: one owner per SOE state root (its cycles and logs); taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
-//! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's) |
+//! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; a job feed runs the named job ([`job_for`]: `soe_cycle` = `bootstrap::soe::soe_cycle_job`); `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's; job `soe_cycle`: the `[soe] architect`'s) |
 //! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router and the feeds |
 //! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → leases released |
 
@@ -30,17 +30,18 @@ use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, R
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
 use crate::application::runtime::{keep_lease, LeaseTiming, Stop, StopRx, Stopper, Supervisor};
-use crate::config::feeds::{FeedConfig, FeedKind};
+use crate::config::feeds::{FeedConfig, FeedKind, JOBS, JOB_SOE_CYCLE};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
 use crate::domain::runtime::{lease_resource, state_lease_resource, RunState, RunnerLease};
 use crate::domain::secrets::SecretRegistry;
+use crate::domain::tz::Zone;
 use crate::ports::clock::Clock;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
-use crate::ports::runtime::RuntimeStore;
+use crate::ports::runtime::{RuntimeJob, RuntimeStore};
 
 /// Runner name: the `--sandbox` name, else `default`.
 pub(crate) fn runner_name(config: &Config) -> String {
@@ -59,11 +60,22 @@ fn xm_state_dir(config: &Config) -> Option<PathBuf> {
         .find_map(|a| a.sandbox.xm_state_dir.clone())
 }
 
+/// The `[sources]` state dir — the SOE state root (critic C8) — when the
+/// sandbox has `[sources]`.
+fn sources_state_dir(config: &Config) -> Option<PathBuf> {
+    config
+        .sources
+        .as_ref()
+        .map(|s| s.state_dir(&crate::config::paths::resolve_tengu_home()))
+}
+
 /// Where `runtime.db` lives: the `[xmarket]` state dir every agent sees
-/// (`AgentConfig::sandbox`), else `<TENGU_HOME>/state`.
+/// (`AgentConfig::sandbox`), else the `[sources]` one, else
+/// `<TENGU_HOME>/state`.
 pub(crate) fn runtime_state_dir(config: &Config) -> PathBuf {
     crate::config::runtime::state_dir(
         xm_state_dir(config).as_deref(),
+        sources_state_dir(config).as_deref(),
         &crate::config::paths::resolve_tengu_home(),
     )
 }
@@ -81,6 +93,9 @@ pub(crate) struct LeasePlan {
     /// state` never run at once. `<TENGU_HOME>/state` (no `[xmarket]`) is
     /// install-wide: no state lease there.
     pub ledger: bool,
+    /// With `[soe]`: the SOE state root (the `[sources]` state dir) — also
+    /// `state:<dir name>`, so one process owns its cycles and logs.
+    pub soe_state: Option<PathBuf>,
 }
 
 /// Which lease a refusal is about.
@@ -88,6 +103,16 @@ pub(crate) struct LeasePlan {
 enum LeaseKind {
     Runner,
     State,
+    SoeState,
+}
+
+/// `state:<dir name>` of `dir`.
+fn dir_lease(dir: &Path) -> String {
+    let name = dir.file_name().map_or_else(
+        || dir.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    state_lease_resource(&name)
 }
 
 impl LeasePlan {
@@ -97,18 +122,21 @@ impl LeasePlan {
             sandbox: runner_name(config),
             ledger: xm.is_some(),
             state_dir: runtime_state_dir(config),
+            soe_state: config.soe.as_ref().and_then(|_| sources_state_dir(config)),
         }
     }
 
-    /// The leases in the order they are taken.
+    /// The leases in the order they are taken (a dir leased once).
     fn resources(&self) -> Vec<(String, LeaseKind)> {
         let mut out = vec![(lease_resource(&self.sandbox), LeaseKind::Runner)];
         if self.ledger {
-            let name = self.state_dir.file_name().map_or_else(
-                || self.state_dir.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
-            out.push((state_lease_resource(&name), LeaseKind::State));
+            out.push((dir_lease(&self.state_dir), LeaseKind::State));
+        }
+        if let Some(dir) = &self.soe_state {
+            let r = dir_lease(dir);
+            if out.iter().all(|(x, _)| *x != r) {
+                out.push((r, LeaseKind::SoeState));
+            }
         }
         out
     }
@@ -135,6 +163,17 @@ impl LeasePlan {
                  Stop that process first (SIGTERM drains it), or give this sandbox its own \
                  [xmarket] state; if it crashed, retry once the lease expires.",
                 self.state_dir.display()
+            ),
+            LeaseKind::SoeState => anyhow!(
+                "SOE state root {} already has an owner: lease `{resource}` in {db} is held by \
+                 `{holder}` for {secs} s more — a `tengu run` or `tengu webhooks` of a sandbox \
+                 with [soe] naming the same [sources] state owns its cycles and logs. Stop that \
+                 process first (SIGTERM drains it), or give this sandbox its own [sources] \
+                 state; if it crashed, retry once the lease expires.",
+                self.soe_state
+                    .as_deref()
+                    .unwrap_or(&self.state_dir)
+                    .display()
             ),
         }
     }
@@ -193,6 +232,7 @@ impl OwnerLeases {
             let name = match kind {
                 LeaseKind::Runner => "lease",
                 LeaseKind::State => "state lease",
+                LeaseKind::SoeState => "soe state lease",
             };
             supervisor.spawn(name, move |stop| {
                 keep_lease(store, lease, timing, stopper, stop)
@@ -420,6 +460,14 @@ fn feed_spec(
             };
             (job, dl.agent.clone())
         }
+        FeedKind::Job => {
+            let (job, agent) = job_for(
+                config,
+                feed.job.as_deref().unwrap_or_default(),
+                schedule.zone,
+            )?;
+            (FeedJob::Job { job }, agent)
+        }
     };
     let spec = FeedSpec {
         name: name.to_string(),
@@ -429,6 +477,23 @@ fn feed_spec(
         job,
     };
     Ok((spec, agent))
+}
+
+/// The named job of a `kind = "job"` feed (`config/feeds.rs` `JOBS`, a
+/// closed list) + the agent whose store takes its `feed/1` row.
+fn job_for(config: &Config, job: &str, zone: Zone) -> Result<(Arc<dyn RuntimeJob>, String)> {
+    match job {
+        JOB_SOE_CYCLE => {
+            let soe = config
+                .soe
+                .as_ref()
+                .ok_or_else(|| anyhow!("job: `{JOB_SOE_CYCLE}` needs a [soe] section"))?;
+            let job = crate::bootstrap::soe::soe_cycle_job(config, zone)
+                .with_context(|| format!("job `{JOB_SOE_CYCLE}`"))?;
+            Ok((job, soe.architect.clone()))
+        }
+        other => anyhow::bail!("job: `{other}` is not a known job ({})", JOBS.join(", ")),
+    }
 }
 
 /// `[agents.<agent>]`'s observation store (fail-soft: no `feed/1` rows).
@@ -678,6 +743,7 @@ mod tests {
             sandbox: sandbox.into(),
             state_dir: dir.to_path_buf(),
             ledger,
+            soe_state: None,
         }
     }
 
@@ -840,6 +906,85 @@ mod tests {
                 ("state:xm-plan".to_string(), LeaseKind::State)
             ]
         );
+    }
+
+    /// With `[soe]` the `[sources]` state dir — the SOE state root — holds
+    /// `runtime.db`, and one process owns it: `state:<dir name>` beside
+    /// `runtime:<sandbox>`. A second sandbox naming the same `[sources]
+    /// state` is refused, names the holder in full and keeps nothing; once
+    /// the first stops it runs.
+    #[tokio::test]
+    async fn soe_state_dir_holds_runtime_db_and_lease() {
+        let mut config: Config = toml::from_str(
+            r#"
+            [agents.soe_architect]
+            engine = "openrouter"
+            model = "m"
+            description = "d"
+            tools = ["soe_propose"]
+
+            [sources]
+            state = "soe-plan"
+
+            [soe]
+            architect = "soe_architect"
+            critic = "soe_architect"
+            max_proposals = 1
+            forecast_max_weeks = 1
+            "#,
+        )
+        .unwrap();
+        config.fold_default_scopes();
+        config.sandbox_name = Some("soe".into());
+        let p = LeasePlan::of(&config);
+        assert!(p.state_dir.ends_with("state/soe-plan"), "{p:?}");
+        assert_eq!(
+            (p.ledger, p.soe_state.as_ref()),
+            (false, Some(&p.state_dir))
+        );
+        assert_eq!(
+            p.resources(),
+            [
+                ("runtime:soe".to_string(), LeaseKind::Runner),
+                ("state:soe-plan".to_string(), LeaseKind::SoeState)
+            ]
+        );
+        // `[sources]` without `[soe]`: runtime.db there, no state lease.
+        let mut plain = config.clone();
+        plain.soe = None;
+        let q = LeasePlan::of(&plain);
+        assert_eq!((&q.state_dir, q.soe_state.as_ref()), (&p.state_dir, None));
+        assert_eq!(q.resources().len(), 1);
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("soe-plan");
+        let on = |sandbox: &str| LeasePlan {
+            sandbox: sandbox.into(),
+            state_dir: root.clone(),
+            ledger: false,
+            soe_state: Some(root.clone()),
+        };
+        let first = begin_as(on("soe"), slow_timing()).await.unwrap();
+        assert!(root.join("runtime.db").is_file());
+        assert_eq!(first.owner.resources(), ["runtime:soe", "state:soe-plan"]);
+        let err = format!(
+            "{:#}",
+            begin_as(on("soe-copy"), slow_timing()).await.err().unwrap()
+        );
+        assert!(err.starts_with("SOE state root "), "{err}");
+        assert!(err.contains("`state:soe-plan`"), "{err}");
+        assert!(err.contains(&format!("`{}`", first.holder())), "{err}");
+        let store = SqliteRuntimeStore::open(&root).unwrap();
+        let r = lease_resource("soe-copy");
+        let probe = store
+            .acquire_lease(&r, "probe", 60_000, now_ms())
+            .await
+            .unwrap();
+        assert!(probe.granted, "the refused process freed its runner lease");
+        store.release_lease(&r, "probe").await.unwrap();
+        assert!(first.shutdown().await.lease_released);
+        let second = begin_as(on("soe-copy"), slow_timing()).await.unwrap();
+        second.shutdown().await;
     }
 
     #[tokio::test]

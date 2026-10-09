@@ -10,6 +10,7 @@
 //! | `cycle.rs` | [`cycle::run_cycle`] (`CycleEnv`, `CycleParams`, `Target` cycle · replay, `CycleOutcome`): the step table, carry-forward of the previous frozen cycle, the stage goals, `decided.json` / `inputs.json` / `stages.json`, candidate events and `OpportunityEpisode`s (C20) |
 //! | `submit.rs` | the stage window: `head.json` (`RunHead`, `GenerationPin`), `packet.json`, `carried.json` (`Carried`), phase markers (`Phase`); the tools' writes [`submit::submit_proposal`] / [`submit::submit_challenge`]; the week's `candidates` |
 //! | `freeze.rs` | `freeze` (`MANIFEST.json` + read-only), `verify` (re-hash), `decision_sha256` (every file but `ops.json`) |
+//! | `job.rs` | [`job::SoeCycleJob`]: the `soe_cycle` job of a `kind = "job"` feed (`ports::runtime::RuntimeJob`) — the slot's week, decided at the slot, a frozen week a no-op |
 //! | `tests.rs` | in-memory fakes of the ports, the synthetic cycle cases `tests/fixtures/soe/cycles/`, the acceptance tests |
 //!
 //! | Refusal code | When |
@@ -26,6 +27,7 @@
 
 pub(crate) mod cycle;
 pub(crate) mod freeze;
+pub(crate) mod job;
 pub(crate) mod submit;
 #[cfg(test)]
 pub(crate) mod tests;

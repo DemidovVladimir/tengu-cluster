@@ -25,6 +25,7 @@ pub(crate) mod runtime_store;
 pub(crate) mod scaffold;
 pub(crate) mod secrets;
 pub(crate) mod shell;
+pub(crate) mod soe;
 pub(crate) mod solana;
 pub(crate) mod sources;
 pub(crate) mod subprocess_runner;

@@ -1,7 +1,8 @@
 //! SOE files (`docs/soe-2026-10-08.md` § 2): the private operator profile and
 //! the record dirs (opportunities, eval cases). Pure file IO like
 //! `config/lineage.rs`, whose dir walk it reuses; the records and their rules
-//! are `domain/soe/`. No `[soe]` config section yet — O3 adds it here.
+//! are `domain/soe/`. Also the `[soe]` section (O3, [`SoeConfig`]) and its
+//! closed-world load rules (below).
 //!
 //! | Loader | Rule (each refusal starts with its code) |
 //! |---|---|
@@ -11,20 +12,61 @@
 //! | [`load_record_dir`] | `<id>.toml` per record (file stem = `id`); `*.md` and dotfiles skipped; another entry refused; sorted by id; every error names its file |
 //! | [`load_cited`] | a `--cited` file: `[[cited]]` `gates::CitedRecord` views (what each cited source record shows; the O2 as-of view builds them later) — record ids unique, unknown keys refused, problems listed |
 //! | digest | `lineage::pins::toml_digest` of the file text (the profile's is `profile_sha256`) |
+//!
+//! `[soe]` — the weekly cycle of a Software Opportunity Engine sandbox
+//! (`application/soe/`, run by the `soe_cycle` job of a `kind = "job"` feed,
+//! `config/feeds.rs`). Every key required (no built-in default);
+//! `deny_unknown_fields`. Its state root is the `[sources]` state dir
+//! (critic C8/C9): `<TENGU_HOME>/state/<sources.state>/` holds `sources.db`,
+//! `operator.toml`, `cycles/`, `replays/`, `stage-cache/` and the state logs.
+//!
+//! ```toml
+//! [soe]
+//! architect = "soe_architect"
+//! critic = "soe_critic"
+//! max_proposals = 12
+//! forecast_max_weeks = 12
+//! # token_prices = { currency = "USD", prompt_per_million = "15.00", completion_per_million = "75.00" }
+//! ```
+//!
+//! | Key | Rule |
+//! |---|---|
+//! | `architect` · `critic` | two different `[agents.<name>]` with a `description` (a stage is a `run-agent` step); the Architect lists no `soe_challenge`, the Critic no `soe_propose` |
+//! | `max_proposals` | 1–[`MAX_PROPOSALS`] per cycle |
+//! | `forecast_max_weeks` | 1–[`MAX_FORECAST_WEEKS`]: a forecast resolves within this many weeks of the decision |
+//! | `token_prices` | optional `domain::soe::ops::TokenPrices`, ≥ 0; absent ⇒ the cycle's cost is `UNKNOWN` |
+//!
+//! | `[soe]` load rule ([`validation_errors`]; a violation fails `Config::load`) | Why |
+//! |---|---|
+//! | `[sources]` present | the state root is its state dir |
+//! | every agent's `tools` non-empty (empty = every base tool) and, like `workspace_tools`, inside `domain::tools::SOE_ALLOWED` | closed world: no write, contact, spend, publish or shell tool |
+//! | `[default_scopes.<t>]` deny-all (no keys) for each `domain::tools::SIDE_EFFECT_TOOLS`; an agent's own scope for one stays deny-all | defence in depth behind the tool lists |
+//! | no `[decision_loops]`; every `[feeds.*]` `kind = "job"` | the cycle is the only scheduled work |
+//! | no `[risk]`, `[paper]`, `[xmarket]`, `[backtest]`, `[solana] signer_key_file`, `[telegram]` (enabled or users), `[webhooks]` (enabled or endpoints) | no trading, signing or inbound surface |
+//! | `[egress] allow_hosts` ⊆ the hosts of the `[sources.registry.*]` rows (every listed row: `[sources]` checks the other way, so they are equal); non-empty under `network = "open"` | the sandbox reaches its listed sources only |
+//! | the state root outside every git work tree; an existing `operator.toml` there with no group / other permission bit | private data never sits in a repo or opens to other users |
+//! | hardened (`config/hardening.rs`): `claude_code` agents `builtin_tools_profile = "none"`, no shell fallback, no `[[mcp_servers]]`, `<TENGU_HOME>/state` outside every fs root and workspace | nothing runs outside tengu scopes |
+//!
+//! The rules read file metadata only: a load creates and changes nothing.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+use super::egress::NETWORK_OPEN;
 use super::lineage::{parse, toml_files};
 use super::paths;
+use super::{AgentConfig, Config};
 use crate::domain::lineage::pins::toml_digest;
 use crate::domain::soe::gates::{cited_problems, CitedRecord};
 use crate::domain::soe::opportunity::Opportunity;
+use crate::domain::soe::ops::TokenPrices;
 use crate::domain::soe::profile::OperatorProfile;
 use crate::domain::soe::record::{from_toml, validate, Problems, SoeRecord};
-use crate::domain::soe::value::{codes, ValueError};
+use crate::domain::soe::value::{codes, Minor, ValueError};
+use crate::domain::tools::{SIDE_EFFECT_TOOLS, SOE_ALLOWED};
 
 /// The SOE state dir name under `<TENGU_HOME>/state/`.
 pub const SOE_STATE: &str = "soe";
@@ -141,6 +183,24 @@ pub fn load_profile(path: &Path, allow_synthetic: bool) -> Result<Loaded<Operato
     Ok(loaded)
 }
 
+/// [`load_profile`] plus the file's text (a cycle keeps it): the text read
+/// must hash to the digest loaded (`profile_changed` when the file was
+/// replaced in between).
+pub fn load_profile_with_text(
+    path: &Path,
+    allow_synthetic: bool,
+) -> Result<(Loaded<OperatorProfile>, String), String> {
+    let loaded = load_profile(path, allow_synthetic)?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if toml_digest(&text).ok().as_deref() != Some(loaded.sha256.as_str()) {
+        return Err(format!(
+            "profile_changed: {}: the file changed while it was read — run again",
+            path.display()
+        ));
+    }
+    Ok((loaded, text))
+}
+
 /// Module table: one opportunity file.
 pub fn load_opportunity(path: &Path) -> Result<Loaded<Opportunity>, String> {
     read_record(path)
@@ -199,6 +259,258 @@ pub fn load_record_dir<R: SoeRecord + DeserializeOwned>(
     }
     out.sort_by(|a, b| a.record.id().cmp(b.record.id()));
     Ok(out)
+}
+
+/// Most proposals one cycle takes (`[soe] max_proposals`).
+pub const MAX_PROPOSALS: usize = 50;
+/// Longest forecast horizon in weeks (`[soe] forecast_max_weeks`).
+pub const MAX_FORECAST_WEEKS: u32 = 52;
+
+/// `[soe]` (module table: the section).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoeConfig {
+    /// The `[agents.<name>]` that runs the Architect stage (`soe_propose`).
+    pub architect: String,
+    /// The `[agents.<name>]` that runs the Critic stage (`soe_challenge`).
+    pub critic: String,
+    /// Proposals one cycle takes (`too_many_proposals` beyond).
+    pub max_proposals: usize,
+    /// A forecast resolves within this many weeks (`horizon_too_long`).
+    pub forecast_max_weeks: u32,
+    /// Per-million token prices; `None` ⇒ the cycle's cost is `UNKNOWN`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_prices: Option<TokenPrices>,
+}
+
+impl SoeConfig {
+    /// `<state root>/operator.toml` — the profile a cycle decides on.
+    pub fn profile_path(state_root: &Path) -> PathBuf {
+        state_root.join(PROFILE_FILE)
+    }
+}
+
+/// Every `[soe]` load rule (module table), with the state root under
+/// `<TENGU_HOME>`.
+pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
+    rules_at(cfg, &paths::resolve_tengu_home())
+}
+
+fn rules_at(cfg: &Config, tengu_home: &Path) -> Vec<String> {
+    let Some(soe) = &cfg.soe else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    stage_errors(cfg, soe, &mut out);
+    closed_world_errors(cfg, &mut out);
+    egress_errors(cfg, &mut out);
+    match &cfg.sources {
+        None => out.push(
+            "soe: needs [sources] — the SOE state root is the [sources] state dir \
+             (<TENGU_HOME>/state/<sources.state>/)"
+                .into(),
+        ),
+        Some(s) => state_root_errors(&s.state_dir(tengu_home), &mut out),
+    }
+    out
+}
+
+fn lists(agent: &AgentConfig, tool: &str) -> bool {
+    agent
+        .tools
+        .iter()
+        .chain(&agent.workspace_tools)
+        .any(|t| t == tool)
+}
+
+/// `architect` · `critic` · the limits (module table: the section).
+fn stage_errors(cfg: &Config, soe: &SoeConfig, out: &mut Vec<String>) {
+    for (key, name, foreign) in [
+        ("architect", soe.architect.trim(), "soe_challenge"),
+        ("critic", soe.critic.trim(), "soe_propose"),
+    ] {
+        if name.is_empty() {
+            out.push(format!("soe.{key}: empty — name an [agents.<name>] block"));
+            continue;
+        }
+        match cfg.agents.get(name) {
+            None => out.push(format!("soe.{key}: no [agents.{name}] block")),
+            Some(a)
+                if !a
+                    .description
+                    .as_deref()
+                    .is_some_and(|d| !d.trim().is_empty()) =>
+            {
+                out.push(format!(
+                    "soe.{key}: [agents.{name}] has no description — a stage runs as a \
+                     `run-agent` step, which refuses an agent without one"
+                ))
+            }
+            Some(a) if lists(a, foreign) => out.push(format!(
+                "soe.{key}: [agents.{name}] lists `{foreign}` — the Architect never \
+                 challenges and the Critic never proposes"
+            )),
+            Some(_) => {}
+        }
+    }
+    if !soe.architect.trim().is_empty() && soe.architect.trim() == soe.critic.trim() {
+        out.push(format!(
+            "soe.critic: `{}` is also soe.architect — the Critic must not judge its own proposals",
+            soe.critic.trim()
+        ));
+    }
+    if !(1..=MAX_PROPOSALS).contains(&soe.max_proposals) {
+        out.push(format!(
+            "soe.max_proposals {} must be 1–{MAX_PROPOSALS}",
+            soe.max_proposals
+        ));
+    }
+    if !(1..=MAX_FORECAST_WEEKS).contains(&soe.forecast_max_weeks) {
+        out.push(format!(
+            "soe.forecast_max_weeks {} must be 1–{MAX_FORECAST_WEEKS}",
+            soe.forecast_max_weeks
+        ));
+    }
+    if let Some(p) = &soe.token_prices {
+        if p.prompt_per_million < Minor::ZERO || p.completion_per_million < Minor::ZERO {
+            out.push("soe.token_prices: a price per million tokens is never negative".into());
+        }
+    }
+}
+
+/// Tools, scopes, loops, feeds, sections (module table).
+fn closed_world_errors(cfg: &Config, out: &mut Vec<String>) {
+    let allowed = SOE_ALLOWED.join(", ");
+    let mut agents: Vec<_> = cfg.agents.iter().collect();
+    agents.sort_by(|a, b| a.0.cmp(b.0));
+    for (id, a) in agents {
+        if a.tools.is_empty() {
+            out.push(format!(
+                "agents.{id}.tools: empty = every base tool — an SOE agent lists its tools \
+                 (from {allowed})"
+            ));
+        }
+        for (key, names) in [("tools", &a.tools), ("workspace_tools", &a.workspace_tools)] {
+            // Always on and never listed; harmless when it is.
+            for t in names
+                .iter()
+                .filter(|t| *t != "compress_and_store" && !SOE_ALLOWED.contains(&t.as_str()))
+            {
+                out.push(format!(
+                    "agents.{id}.{key}: `{t}` is outside the SOE closed world ({allowed})"
+                ));
+            }
+        }
+        // An agent's own scope replaces the default wholesale.
+        for t in SIDE_EFFECT_TOOLS {
+            if a.scopes.get(*t).is_some_and(|s| !s.is_deny_all()) {
+                out.push(format!(
+                    "agents.{id}.scopes.{t}: must stay deny-all (no keys) in an SOE sandbox"
+                ));
+            }
+        }
+    }
+    for t in SIDE_EFFECT_TOOLS {
+        match cfg.default_scopes.get(*t) {
+            None => out.push(format!(
+                "default_scopes.{t}: an SOE sandbox needs a deny-all [default_scopes.{t}] \
+                 (no keys) — defence in depth behind the tool lists"
+            )),
+            Some(s) if !s.is_deny_all() => out.push(format!(
+                "default_scopes.{t}: must be deny-all (no keys) in an SOE sandbox"
+            )),
+            Some(_) => {}
+        }
+    }
+    if !cfg.decision_loops.is_empty() {
+        out.push(
+            "decision_loops: an SOE sandbox runs no decision loop (its cycle is the \
+             `soe_cycle` job)"
+                .into(),
+        );
+    }
+    for (name, f) in &cfg.feeds {
+        if f.kind != "job" {
+            out.push(format!(
+                "feeds.{name}: kind = \"{}\" — an SOE sandbox runs `kind = \"job\"` feeds only",
+                f.kind
+            ));
+        }
+    }
+    for (section, set) in [
+        ("risk", cfg.risk.is_some()),
+        ("paper", cfg.paper.is_some()),
+        ("xmarket", cfg.xmarket.is_some()),
+        ("backtest", cfg.backtest.is_some()),
+        (
+            "solana] signer_key_file",
+            cfg.solana.signer_key_file.is_some(),
+        ),
+        (
+            "telegram",
+            cfg.telegram.enabled || !cfg.telegram.allowed_users.is_empty(),
+        ),
+        (
+            "webhooks",
+            cfg.webhooks.enabled || !cfg.webhooks.endpoints.is_empty(),
+        ),
+    ] {
+        if set {
+            out.push(format!(
+                "[{section}]: not allowed beside [soe] — an SOE sandbox has no trading, \
+                 signing or inbound surface"
+            ));
+        }
+    }
+}
+
+/// `[egress] allow_hosts` against the registry (module table).
+fn egress_errors(cfg: &Config, out: &mut Vec<String>) {
+    let listed: BTreeSet<&str> = cfg
+        .sources
+        .iter()
+        .flat_map(|s| s.registry.values())
+        .flat_map(|e| e.hosts.iter().map(String::as_str))
+        .collect();
+    for h in &cfg.egress.allow_hosts {
+        if !listed.contains(h.as_str()) {
+            out.push(format!(
+                "egress.allow_hosts: `{h}` is no host of a [sources.registry.*] row — an SOE \
+                 sandbox reaches its listed sources only"
+            ));
+        }
+    }
+    if cfg.egress.network.trim() == NETWORK_OPEN && cfg.egress.allow_hosts.is_empty() {
+        out.push(
+            "egress.allow_hosts: empty under network = \"open\" = every host — set it to the \
+             hosts of the [sources.registry.*] rows"
+                .into(),
+        );
+    }
+}
+
+/// The private state root (module table).
+fn state_root_errors(root: &Path, out: &mut Vec<String>) {
+    if let Some(tree) = git_work_tree(root) {
+        out.push(format!(
+            "soe: the state root {} is inside the git work tree {} — the operator profile, \
+             cycles and logs are private; keep [sources] state under a <TENGU_HOME> outside \
+             any repo",
+            root.display(),
+            tree.display()
+        ));
+    }
+    let profile = SoeConfig::profile_path(root);
+    if profile.is_file() {
+        match loose_mode(&profile) {
+            Ok(Some(mode)) => out.push(format!(
+                "soe: profile_mode: {}: mode {mode:o} lets others read it — chmod 600",
+                profile.display()
+            )),
+            Ok(None) => {}
+            Err(e) => out.push(format!("soe: {e}")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -407,5 +719,414 @@ mod tests {
             .map(|r| format!("{}: {:#?}\n{:#?}", r.id, r.diffs, r.answer))
             .collect();
         assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+
+    // --- `[soe]` section ----------------------------------------------------
+
+    /// An SOE sandbox that passes every `[soe]` rule (open network, the two
+    /// registry rows, two stage agents, deny-all side-effect scopes, the
+    /// weekly job).
+    const SOE: &str = r#"
+        [egress]
+        network = "open"
+        allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]
+
+        [rate_limits.sec]
+        per_minute = 300
+        [rate_limits.ted]
+        per_minute = 60
+
+        [sources]
+        state = "soe-test"
+
+        [sources.registry.sec_edgar]
+        kind = "sec_edgar"
+        class = "company_primary"
+        trust = "primary"
+        revision = "immutable"
+        enabled = false
+        hosts = ["www.sec.gov", "data.sec.gov"]
+        auth = "user_agent_env:SEC_USER_AGENT"
+        rate_limit = "sec"
+        store_raw = true
+        jurisdiction = "US"
+        language = "en"
+
+        [sources.registry.ted_search]
+        kind = "ted_search"
+        class = "law_regulator"
+        trust = "primary"
+        revision = "immutable"
+        enabled = false
+        hosts = ["api.ted.europa.eu"]
+        auth = "none"
+        rate_limit = "ted"
+        store_raw = true
+        jurisdiction = "EU"
+        language = "en"
+        query = "publication-date >= {from} AND publication-date <= {to}"
+
+        [soe]
+        architect = "soe_architect"
+        critic = "soe_critic"
+        max_proposals = 12
+        forecast_max_weeks = 12
+
+        [agents.soe_architect]
+        engine = "claude_code"
+        model = "claude-opus-5-5"
+        description = "Proposes mechanisms as data"
+        tools = ["soe_view", "soe_propose", "source_evidence"]
+        [agents.soe_architect.claude_code]
+        builtin_tools_profile = "none"
+
+        [agents.soe_critic]
+        engine = "claude_code"
+        model = "claude-sonnet-5-5"
+        description = "Challenges the week's proposals"
+        tools = ["soe_view", "soe_challenge", "source_evidence"]
+        [agents.soe_critic.claude_code]
+        builtin_tools_profile = "none"
+
+        [default_scopes.http_request]
+        [default_scopes.write_file]
+        [default_scopes.run_command]
+        [default_scopes.sign_and_send_transaction]
+        [default_scopes.sign_message]
+
+        [feeds.soe_week]
+        kind = "job"
+        job = "soe_cycle"
+        tz = "Europe/Paris"
+        at = ["Mon 07:00"]
+    "#;
+
+    fn soe(text: &str) -> Config {
+        toml::from_str(text).unwrap_or_else(|e| panic!("{e}\n{text}"))
+    }
+
+    /// A home outside any git work tree (`None` when the temp dir is in one).
+    fn home() -> Option<tempfile::TempDir> {
+        let tmp = tempfile::TempDir::new().unwrap();
+        git_work_tree(tmp.path()).is_none().then_some(tmp)
+    }
+
+    fn has(errors: &[String], want: &str) -> bool {
+        errors.iter().any(|e| e.contains(want))
+    }
+
+    /// The `soe` sandbox with the cycle added (`[soe]`, two stage agents,
+    /// deny-all side-effect scopes, the weekly job) loads like any sandbox:
+    /// every load rule passes and the section reaches every agent.
+    #[test]
+    fn soe_sandbox_loads() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let base = std::fs::read_to_string(repo.join("sandboxes/soe/config.toml")).unwrap();
+        let overlay = SOE
+            .split("[soe]")
+            .nth(1)
+            .map(|rest| format!("[soe]{rest}"))
+            .unwrap();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("config.toml");
+        std::fs::write(&file, format!("{base}\n{overlay}")).unwrap();
+        let cfg = Config::load(&file).unwrap_or_else(|e| panic!("{e:#}"));
+        let s = cfg.soe.as_ref().unwrap();
+        assert_eq!(
+            (s.architect.as_str(), s.critic.as_str()),
+            ("soe_architect", "soe_critic")
+        );
+        assert!(cfg
+            .agents
+            .values()
+            .all(|a| a.sandbox.soe.as_deref() == Some(s)));
+        if let Some(h) = home() {
+            assert_eq!(rules_at(&cfg, h.path()), Vec::<String>::new());
+        }
+        // The shipped sandbox (no [soe] yet) has no SOE rule to pass.
+        let shipped: Config = toml::from_str(&base).unwrap();
+        assert!(shipped.soe.is_none() && validation_errors(&shipped).is_empty());
+    }
+
+    /// An empty `tools` list is every base tool: refused for every agent of
+    /// an SOE sandbox. The stage agents' own rules too.
+    #[test]
+    fn empty_tools_refused() {
+        let Some(h) = home() else { return };
+        assert_eq!(rules_at(&soe(SOE), h.path()), Vec::<String>::new());
+        let mut cfg = soe(SOE);
+        cfg.agents.get_mut("soe_critic").unwrap().tools.clear();
+        assert_eq!(
+            rules_at(&cfg, h.path()),
+            [
+                "agents.soe_critic.tools: empty = every base tool — an SOE agent lists its tools \
+              (from soe_view, soe_propose, soe_challenge, source_evidence, read_file, \
+              list_directory, view_skill, skill_resource)"
+            ]
+        );
+        // Stage agents: named, with a description, distinct, each in its role.
+        let mut cfg = soe(SOE);
+        cfg.soe.as_mut().unwrap().critic = "soe_architect".into();
+        cfg.agents.get_mut("soe_architect").unwrap().description = None;
+        cfg.soe.as_mut().unwrap().max_proposals = 0;
+        let errs = rules_at(&cfg, h.path());
+        for want in [
+            "soe.architect: [agents.soe_architect] has no description",
+            "soe.critic: `soe_architect` is also soe.architect",
+            "soe.max_proposals 0 must be 1–50",
+        ] {
+            assert!(has(&errs, want), "{want}: {errs:#?}");
+        }
+    }
+
+    /// Closed world: a tool outside `SOE_ALLOWED` (a write, contact, spend,
+    /// publish or shell tool) is refused in `tools` and `workspace_tools`;
+    /// the Architect never challenges, the Critic never proposes.
+    #[test]
+    fn side_effect_tool_refused() {
+        let Some(h) = home() else { return };
+        let mut cfg = soe(SOE);
+        let a = cfg.agents.get_mut("soe_architect").unwrap();
+        a.tools.push("http_request".into());
+        a.tools.push("soe_challenge".into());
+        a.workspace_tools.push("persistent_store".into());
+        cfg.agents
+            .get_mut("soe_critic")
+            .unwrap()
+            .tools
+            .push("run_command".into());
+        let errs = rules_at(&cfg, h.path());
+        for want in [
+            "agents.soe_architect.tools: `http_request` is outside the SOE closed world",
+            "agents.soe_architect.workspace_tools: `persistent_store` is outside the SOE closed world",
+            "agents.soe_critic.tools: `run_command` is outside the SOE closed world",
+            "soe.architect: [agents.soe_architect] lists `soe_challenge`",
+        ] {
+            assert!(has(&errs, want), "{want}: {errs:#?}");
+        }
+        assert_eq!(errs.len(), 4, "{errs:#?}");
+        // `compress_and_store` is always on: listing it is harmless.
+        let mut cfg = soe(SOE);
+        cfg.agents
+            .get_mut("soe_critic")
+            .unwrap()
+            .tools
+            .push("compress_and_store".into());
+        assert!(rules_at(&cfg, h.path()).is_empty());
+    }
+
+    /// Every side-effect tool needs a deny-all default scope; an agent's own
+    /// scope for one (it replaces the default wholesale) stays deny-all.
+    #[test]
+    fn http_request_scope_must_be_deny_all() {
+        let Some(h) = home() else { return };
+        let granted = SOE.replace(
+            "[default_scopes.http_request]\n",
+            "[default_scopes.http_request]\n        net_hosts = [\"www.sec.gov\"]\n",
+        );
+        assert_eq!(
+            rules_at(&soe(&granted), h.path()),
+            ["default_scopes.http_request: must be deny-all (no keys) in an SOE sandbox"]
+        );
+        let missing = SOE.replace("        [default_scopes.sign_message]\n", "");
+        assert!(has(
+            &rules_at(&soe(&missing), h.path()),
+            "default_scopes.sign_message: an SOE sandbox needs a deny-all [default_scopes.sign_message]"
+        ));
+        let own = format!(
+            "{SOE}\n[agents.soe_critic.scopes.http_request]\nnet_hosts = [\"api.ted.europa.eu\"]\n"
+        );
+        assert_eq!(
+            rules_at(&soe(&own), h.path()),
+            ["agents.soe_critic.scopes.http_request: must stay deny-all (no keys) in an SOE sandbox"]
+        );
+    }
+
+    /// `[soe]` hardens the sandbox: no `[[mcp_servers]]` (foreign processes).
+    #[test]
+    fn mcp_servers_refused() {
+        let text = format!(
+            "{SOE}\n[[mcp_servers]]\nname = \"x\"\ntransport = \"stdio\"\ncommand = [\"x\"]\n"
+        );
+        let errs = soe(&text).validation_errors();
+        assert!(
+            has(
+                &errs,
+                "[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe])"
+            ),
+            "{errs:#?}"
+        );
+    }
+
+    /// No trading, signing or inbound surface beside `[soe]`; no decision
+    /// loop; feeds of `kind = "job"` only.
+    #[test]
+    fn trading_sections_refused() {
+        let Some(h) = home() else { return };
+        let mut cfg = soe(SOE);
+        cfg.xmarket = Some(toml::from_str("state = \"xm\"").unwrap());
+        cfg.solana.signer_key_file = Some(h.path().join("key.json").display().to_string());
+        cfg.telegram.enabled = true;
+        cfg.webhooks.enabled = true;
+        let mut tick = soe(
+            "[feeds.t]\nkind = \"tick\"\ntarget = \"l\"\nevery_secs = 60\n[decision_loops.l]\ngoal = \"g\"\nagent = \"soe_architect\"\n[decision_loops.l.actions.hold]\ndescription = \"x\"\n",
+        );
+        cfg.feeds.append(&mut tick.feeds);
+        cfg.decision_loops = std::mem::take(&mut tick.decision_loops);
+        let errs = rules_at(&cfg, h.path());
+        for want in [
+            "[xmarket]: not allowed beside [soe]",
+            "[solana] signer_key_file]: not allowed beside [soe]",
+            "[telegram]: not allowed beside [soe]",
+            "[webhooks]: not allowed beside [soe]",
+            "decision_loops: an SOE sandbox runs no decision loop",
+            "feeds.t: kind = \"tick\" — an SOE sandbox runs `kind = \"job\"` feeds only",
+        ] {
+            assert!(has(&errs, want), "{want}: {errs:#?}");
+        }
+        // And `[soe]` needs `[sources]`: its state root.
+        let mut cfg = soe(SOE);
+        cfg.sources = None;
+        assert!(has(&rules_at(&cfg, h.path()), "soe: needs [sources]"));
+    }
+
+    /// The SOE state root (`operator.toml`, cycles, logs) never sits in a
+    /// git work tree.
+    #[test]
+    fn profile_in_repo_refused() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let errs = rules_at(&soe(SOE), &repo.join("home"));
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(
+            errs[0].starts_with("soe: the state root ")
+                && errs[0].contains(&format!("inside the git work tree {}", repo.display())),
+            "{errs:#?}"
+        );
+    }
+
+    /// An `operator.toml` in the state root with a group / other bit fails
+    /// the load (stricter than a warning, critic C10); 0600 passes.
+    #[cfg(unix)]
+    #[test]
+    fn profile_mode_not_0600_refused() {
+        let Some(h) = home() else { return };
+        let profile = h.path().join("state/soe-test").join(PROFILE_FILE);
+        write(&profile, &real(), 0o644);
+        let errs = rules_at(&soe(SOE), h.path());
+        assert_eq!(errs.len(), 1, "{errs:#?}");
+        assert!(
+            errs[0].starts_with("soe: profile_mode: ") && errs[0].contains("mode 644"),
+            "{errs:#?}"
+        );
+        write(&profile, &real(), 0o600);
+        assert!(rules_at(&soe(SOE), h.path()).is_empty());
+    }
+
+    /// The state root sits under `<TENGU_HOME>/state`, which a hardened
+    /// sandbox keeps out of every fs root and workspace.
+    #[test]
+    fn state_dir_in_fs_root_refused() {
+        let home = crate::config::paths::resolve_tengu_home();
+        let text = format!(
+            "{SOE}\n[default_scopes.source_evidence]\nfs_roots = [\"{}\"]\n",
+            home.display()
+        );
+        let errs = soe(&text).validation_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("default_scopes.source_evidence.fs_roots")
+                    && e.contains("hardened sandbox: Solana signer, [risk] or [soe]")),
+            "{errs:#?}"
+        );
+    }
+
+    /// `[egress] allow_hosts` equals the registry's hosts: one outside it is
+    /// refused here, a row host missing from it by `[sources]`; an open
+    /// network with no list (= every host) too.
+    #[test]
+    fn egress_host_outside_sources_refused() {
+        let Some(h) = home() else { return };
+        let wider = SOE.replace(
+            "\"api.ted.europa.eu\"]\n\n        [rate_limits.sec]",
+            "\"api.ted.europa.eu\", \"evil.example.com\"]\n\n        [rate_limits.sec]",
+        );
+        assert_eq!(
+            rules_at(&soe(&wider), h.path()),
+            ["egress.allow_hosts: `evil.example.com` is no host of a [sources.registry.*] row — \
+              an SOE sandbox reaches its listed sources only"]
+        );
+        let narrower = SOE.replace(
+            "allow_hosts = [\"www.sec.gov\", \"data.sec.gov\", \"api.ted.europa.eu\"]",
+            "allow_hosts = [\"www.sec.gov\", \"data.sec.gov\"]",
+        );
+        let errs = soe(&narrower).validation_errors();
+        assert!(
+            errs.iter()
+                .any(|e| e.starts_with("sources.registry.ted_search.")
+                    && e.contains("api.ted.europa.eu")),
+            "{errs:#?}"
+        );
+        let mut open = soe(SOE);
+        open.egress.allow_hosts.clear();
+        assert!(has(
+            &rules_at(&open, h.path()),
+            "egress.allow_hosts: empty under network = \"open\" = every host"
+        ));
+    }
+
+    /// `[soe]` hardens the sandbox: a `claude_code` agent runs with the
+    /// built-in tools off.
+    #[test]
+    fn claude_code_needs_profile_none() {
+        let text = SOE.replacen(
+            "        [agents.soe_architect.claude_code]\n        builtin_tools_profile = \"none\"\n",
+            "",
+            1,
+        );
+        let errs = soe(&text).validation_errors();
+        assert!(
+            has(
+                &errs,
+                "agents.soe_architect: engine = \"claude_code\" in a hardened sandbox (Solana signer, \
+                 [risk] or [soe]) needs [agents.soe_architect.claude_code] builtin_tools_profile = \"none\""
+            ),
+            "{errs:#?}"
+        );
+    }
+
+    /// The commented `[soe]` block of `config.example.toml`, uncommented
+    /// over the SOE sandbox above (without its own `[soe]` and feed), is
+    /// valid.
+    #[test]
+    fn example_block_uncommented_is_valid() {
+        let Some(h) = home() else { return };
+        let text = include_str!("../../config.example.toml");
+        let block: Vec<&str> = text
+            .lines()
+            .skip_while(|l| *l != "# [soe]")
+            .take_while(|l| l.starts_with('#'))
+            .map(|l| l.strip_prefix("# ").unwrap_or(l.trim_start_matches('#')))
+            .collect();
+        assert!(block.len() > 8, "{block:?}");
+        let before = SOE.split("[soe]").next().unwrap();
+        let agents = SOE
+            .split("[agents.soe_architect]")
+            .nth(1)
+            .and_then(|r| r.split("[feeds.soe_week]").next())
+            .unwrap();
+        let cfg = soe(&format!(
+            "{before}\n[agents.soe_architect]{agents}\n{}",
+            block.join("\n")
+        ));
+        assert_eq!(rules_at(&cfg, h.path()), Vec::<String>::new());
+        assert_eq!(
+            crate::config::feeds::validation_errors(&cfg),
+            Vec::<String>::new()
+        );
+        let s = cfg.soe.as_ref().unwrap();
+        assert!(s.token_prices.is_some());
+        assert_eq!(cfg.feeds["soe_week"].job.as_deref(), Some("soe_cycle"));
     }
 }

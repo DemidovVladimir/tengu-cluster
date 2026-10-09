@@ -705,6 +705,7 @@ max_data_age_ms = {{ book = 5000, ctx = 20000, reference = 60000, quote = 20000 
             sandbox: "xmarket".into(),
             state_dir: t.state_dir.clone(),
             ledger: true,
+            soe_state: None,
         };
         let held = OwnerLeases::take(&plan, 60_000).await.unwrap();
         run(&t, halt_now(), &mut console(true, &[]), None, NOW)
