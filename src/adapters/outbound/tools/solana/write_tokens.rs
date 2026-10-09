@@ -246,9 +246,7 @@ mod tests {
     use crate::domain::observation::{ObsSource, ObsStatus, Observation};
     use crate::domain::scope::ToolScope;
     use crate::domain::solana_write::{WriteMode, WriteResult, WriteStatus};
-    use crate::ports::observation::ObservationStore;
     use crate::ports::solana_signer::SolanaSigner;
-    use crate::ports::solana_writes::SolanaWriteStore;
 
     fn keypair() -> LocalKeypair {
         LocalKeypair::from_seed(&[1; 32])
