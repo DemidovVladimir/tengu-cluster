@@ -1,7 +1,7 @@
 # Harness-Owned Orchestration + Memory — Architecture
 
-> **Historical snapshot (PR #6–#8, 2026-04) — banner refreshed 2026-10-02.** Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer); every file: `docs/code-map.md`; config: `docs/configuration.md`.
-> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). The flow below no longer runs as written. Corrected in place on 2026-10-02: the file tables in § 3, the `build_orchestrator` signature in § 5. Still as of PR #8: the `tengu.toml` examples (§ 7, § 12), the line numbers in § 11, the sequence diagrams (§ 4, § 10).
+> **Historical snapshot (PR #6–#8, 2026-04) — banner refreshed 2026-10-08.** Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer); every file: `docs/code-map.md`; config: `docs/configuration.md`.
+> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). The flow below no longer runs as written. Corrected in place on 2026-10-02 and 2026-10-08: the file tables in § 3, the `build_orchestrator` signature in § 5, the eval dispatch in § 14.1. Still as of PR #8: the `tengu.toml` examples (§ 7, § 12), the line numbers in § 11, the sequence diagrams and cancel semantics (§ 4, § 10).
 
 | Then (this doc) | Now | Where |
 |---|---|---|
@@ -12,7 +12,9 @@
 | `workspace_tools = ["memory_search"]` | fails validation — `memory_search` is a base tool; subagents use `tools` + `description` | `src/domain/tools.rs::WORKSPACE_TOOLS` |
 | Qdrant vector backend | removed 2026-05-14; `DiskVectorStore` is the only `VectorStore` | `src/adapters/outbound/memory/disk_vector.rs` |
 | flat `src/adapters/` | hexagonal layout since 2026-09-23 | `docs/code-map.md`, `tests/layering_lint.rs` |
-| the chat turn only | + `tengu run` (feeds, loops, lease), decision loops (Jev) + replay, typed observations, xmarket risk / paper, xlab backtests (2026-09-24 → 2026-10-01) | `docs/architecture-2026-04-27.md` §1b, §2.7–2.13 |
+| `/stop` checked between dispatches; an in-flight worker finishes its LLM call | cancel, or an exhausted step, aborts every step still in flight (`abort_in_flight`; the `run-agent` child is `kill_on_drop`); a step that never becomes ready is a replan | `src/application/orchestrator/executor.rs` |
+| the single leaf's output is the reply | one leaf ⇒ its output; parallel leaves with no join step ⇒ joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`) | `src/application/orchestrator/executor.rs`, `src/domain/plan.rs` |
+| the chat turn only | + `tengu run` (feeds, loops, lease), decision loops (Jev) + replay, typed observations, xmarket risk / paper, xlab backtests (2026-09-24 → 2026-10-01); lineage + evidence, strategy ranking, source evidence, SOE (2026-10-06 → 2026-10-08) | `docs/architecture-2026-04-27.md` §1b, §2.7–2.17 |
 
 This document describes the architecture that landed across PRs #6, #7, #8. It replaces the heart/brain/sensors doctrine and all prior skill-based orchestration.
 
@@ -92,10 +94,10 @@ Each step dispatch:
 | `mod.rs` | `Orchestrator` struct. Public API: `new`, `handle`, `subscribe`, `cancel`. |
 | `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/mod.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
-| `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `single_leaf`. `validate` (cycles, single-leaf, known agents) is dead code since Phase 7.1. |
+| `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `leaves` (the executor joins parallel leaves). `single_leaf` is test-only; `validate` (cycles, single-leaf, known agents) is dead code since Phase 7.1 (`#[allow(dead_code)]`). |
 | `planner.rs` | `RagPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
-| `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Exponential backoff, emits `StepFailed` / `StepExhausted`. |
-| `executor.rs` | `DagExecutor`. Parallel ready-set scheduling via `tokio::spawn`. Observes cancel flag. (`WorkerHandle` trait: `src/ports/orchestration.rs`.) |
+| `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Waits 1 s, 3 s, then 9 s between attempts; emits `StepFailed` per attempt, `StepExhausted` at the end. |
+| `executor.rs` | `DagExecutor`. Parallel ready-set scheduling via `tokio::spawn`. Cancel or an exhausted step aborts every in-flight step (`abort_in_flight`). (`WorkerHandle` trait: `src/ports/orchestration.rs`.) |
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
 | `wiring.rs` | `ChatOrchestratorPortImpl` (planner LLM port). The `ChatServiceFactory` trait lives in `src/ports/orchestration.rs`. `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`src/adapters/outbound/subprocess_runner.rs`) is the only `WorkerHandle`. |
 | `roster.rs` | Removed (Phase 7.1) — roster is rendered to `TENGU_PLANNER_REGISTRY.md` by `shared_files.rs`. |
@@ -106,8 +108,8 @@ Each step dispatch:
 | File | What it does |
 |---|---|
 | `mod.rs` | Module root. |
-| `provider.rs` | Moved: the `MemoryProvider` trait (Hermes-shaped: `system_prompt_block`, `prefetch(agent, query)`, `sync_turn(agent, user, asst)`, `on_pre_compress`, `shutdown`) lives in `src/ports/memory.rs`. |
-| `builtin.rs` | Moved to `src/adapters/outbound/memory/builtin.rs`: `BuiltinMemoryProvider` — always-registered. Loads AGENTS.md + MEMORY.md + identity files + daily logs into system prompt; vector-searches on prefetch. |
+| `provider.rs` | Moved: the `MemoryProvider` trait (Hermes-shaped: `is_available`, `initialize`, `system_prompt_block`, `prefetch(agent, query)`, `sync_turn(agent, user, asst)`, `shutdown`) lives in `src/ports/memory.rs`. |
+| `builtin.rs` | Moved to `src/adapters/outbound/memory/builtin.rs`: `BuiltinMemoryProvider` — always-registered; vector-searches on prefetch (top 5 for the agent). Its AGENTS.md + MEMORY.md + identity files + daily-log loader runs only from `initialize`, which only tests call. |
 | `manager.rs` | `MemoryManager` — holds one builtin + at most one external. Exposes `prefetch_all`, `sync_all`, `ingest_one`, `ingest_batch`, `search`, `set_vector_backend`, `clear_all`, `stats`. |
 | `injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock`. Since Phase 7.1 only the planner-side `ChatOrchestratorPortImpl` calls it. |
 | `writer.rs` | `sync_turn` — spawns a detached task for post-turn writes. Never blocks the user reply. Same Phase 7.1 note. |
@@ -581,9 +583,9 @@ All pass under `cargo test --bin tengu <filter>` with narrow filters (per projec
 `tengu eval <skill>` has two dispatch paths in `src/adapters/inbound/eval.rs::run_row`:
 
 - **Direct** (default): row prompt → default agent's `collect_engine_response`. Used by config files without an `[orchestrator]` block — `skills/<name>/evals/config.toml`.
-- **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle`. The orchestrator agent plans, the DAG executor spawns worker steps, each worker step calls `collect_engine_response` inside an `EvalChatServiceFactory` closure that threads the row's stubs + observer + token accumulator. Used by `skills/orchestration-e2e/evals/config.toml`.
+- **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle` (`run_row_via_orchestrator`). `build_orchestrator` wires `SubprocessRunner`, so each worker step runs as a real `tengu run-agent` child; `EvalChatServiceFactory` serves the planner turn only, so the row's stubs and observer tap reach the planner, not the steps (steps' metrics cross the IPC boundary). Used by `skills/orchestration-e2e/evals/config.toml`.
 
-Both paths produce the same `RowResult` shape for the judge — observations accumulate across worker steps, tokens sum, final text is the plan's leaf output.
+Both paths produce the same `RowResult` shape for the judge; the final text is the plan's leaf output (parallel leaves joined).
 
 Runbook for smoke testing orchestration: see `docs/orchestration-test-scenarios.md`.
 

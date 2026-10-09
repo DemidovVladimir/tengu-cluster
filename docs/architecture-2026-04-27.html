@@ -38,6 +38,10 @@
     --xm: #FB7185;
     --xl: #93C5FD;
     --par: #D6D3D1;
+    --lin: #A3E635;
+    --rnk: #F472B6;
+    --src: #5EEAD4;
+    --soe: #FDBA74;
     --ok: #16A34A;
     --warn: #CA8A04;
     --info: #0891B2;
@@ -185,6 +189,10 @@
   .sys-card.xmarket { border-top-color: var(--xm); }
   .sys-card.xlab { border-top-color: var(--xl); }
   .sys-card.parity { border-top-color: var(--par); }
+  .sys-card.lineage { border-top-color: var(--lin); }
+  .sys-card.ranking { border-top-color: var(--rnk); }
+  .sys-card.sources { border-top-color: var(--src); }
+  .sys-card.soe { border-top-color: var(--soe); }
   .sys-card .title {
     font-size: 14px; font-weight: 700; margin-bottom: 4px;
   }
@@ -295,7 +303,7 @@
 
 <div class="header">
   <h1>Tengu-Cluster · Architecture Explorer</h1>
-  <div class="sub">2026-04-27 · synced 2026-10-02 · walk the chat turn and the two other flows, expand subsystem cards, search the file map · companion to architecture-2026-04-27.{md,svg}</div>
+  <div class="sub">2026-04-27 · synced 2026-10-08 · walk the chat turn and the three other flows, expand subsystem cards, search the file map · companion to architecture-2026-04-27.{md,svg}</div>
 </div>
 
 <div class="tabs">
@@ -324,7 +332,7 @@
 
 <!-- ============ OTHER FLOWS ============ -->
 <div class="panel" id="panel-flows">
-  <h2>Flows with no user message — <code>tengu run</code> and <code>tengu backtest</code></h2>
+  <h2>Flows with no user message — <code>tengu run</code>, <code>tengu backtest</code> and <code>tengu ranking run</code></h2>
   <p>Same tools, scopes and egress as a chat turn; no planner. Pick a flow, then walk its steps (arrow keys work here too).</p>
   <div class="flow-switch" id="flow-switch"></div>
   <div class="flow-title" id="flow-title"></div>
@@ -425,10 +433,10 @@
       </tr>
       <tr>
         <td>&lt;state dir&gt;/runtime.db · run-&lt;s&gt;.json</td>
-        <td>leases <code>runtime:&lt;s&gt;</code>, <code>state:&lt;dir&gt;</code> · heartbeat</td>
-        <td><code>tengu run</code>, <code>tengu webhooks</code> (leases only)</td>
+        <td>leases <code>runtime:&lt;s&gt;</code>, <code>state:&lt;dir&gt;</code>, <code>ranking:&lt;contract id&gt;</code> · heartbeat</td>
+        <td><code>tengu run</code>, <code>tengu webhooks</code> (leases only), the ranking coordinator</td>
         <td>the next runner · <code>tengu doctor --sandbox &lt;s&gt; --live</code></td>
-        <td>lease 30 s</td>
+        <td>lease 30 s (ranking 15 min)</td>
       </tr>
       <tr>
         <td>&lt;TENGU_HOME&gt;/logs/{egress,decisions,risk}.jsonl</td>
@@ -447,17 +455,17 @@
       <tr><td class="grp" colspan="5">xlab — history first (2026-10-01)</td></tr>
       <tr>
         <td>&lt;state dir&gt;/market.db</td>
-        <td><code>bars</code>, <code>funding</code>, <code>ctx</code> by full instrument id</td>
-        <td><code>tengu history backfill</code> / <code>import-hl-archive</code> / <code>import-json</code>; <code>market_history</code> <code>fetch</code></td>
-        <td><code>tengu backtest</code>, <code>backtest</code>, <code>market_history</code></td>
+        <td><code>bars</code>, <code>funding</code>, <code>ctx</code>, <code>events</code> (SEC filings), <code>event_coverage</code> by full instrument id</td>
+        <td><code>tengu history backfill</code> / <code>events</code> / <code>import-hl-archive</code> / <code>import-json</code>; <code>market_history</code> <code>fetch</code></td>
+        <td><code>tengu backtest</code>, <code>backtest</code>, <code>market_history</code>, labels, ranking freshness, <code>tengu evidence coverage</code> / <code>regrade</code> (read-only)</td>
         <td>none</td>
       </tr>
       <tr>
         <td>&lt;state dir&gt;/backtests/&lt;run id&gt;/</td>
-        <td><code>report.json</code> (<code>backtest/1:&lt;run id&gt;</code>), <code>report.md</code>, <code>trades-&lt;arm&gt;.jsonl</code>, <code>candidates.jsonl</code>, <code>skips.json</code>, <code>decisions.jsonl</code></td>
+        <td><code>report.json</code> (<code>backtest/1:&lt;run id&gt;</code>, <code>data_through_ms</code>, cohort identity), <code>report.md</code>, <code>trades-&lt;arm&gt;.jsonl</code>, <code>candidates.jsonl</code>, <code>skips.json</code>, <code>decisions.jsonl</code></td>
         <td><code>application/backtest/run_dir.rs::write_run_dir</code></td>
-        <td>humans; <code>backtest</code> <code>run_id</code> + <code>view</code> reads</td>
-        <td><code>[backtest] keep_runs</code> (100)</td>
+        <td>humans; <code>backtest</code> <code>run_id</code> + <code>view</code> reads; rankings; <code>tengu evidence evaluate</code></td>
+        <td><code>[backtest] keep_runs</code> (100; cited and latest-ranked runs kept)</td>
       </tr>
       <tr>
         <td>&lt;state dir&gt;/backtests/decision-cache.db</td>
@@ -468,16 +476,52 @@
       </tr>
       <tr>
         <td>&lt;state dir&gt;/backtests/holdout-reads.jsonl</td>
-        <td>every holdout the Architect read (time, run id, <code>spec_sha256</code>, split, call id)</td>
-        <td><code>tools/xlab/holdout.rs</code></td>
-        <td>the <code>xlab-research</code> protocol, operators</td>
+        <td>every holdout read — the Architect's and <code>tengu backtest --split</code>'s (<code>via = "cli"</code>)</td>
+        <td><code>tools/xlab/holdout.rs</code> (also called by <code>cli/backtest.rs</code>)</td>
+        <td>the <code>xlab-research</code> protocol, <code>tengu lineage attempts</code>, operators</td>
         <td>append-only</td>
+      </tr>
+      <tr><td class="grp" colspan="5">Research lineage, rankings, sources (2026-10-06 → 2026-10-08)</td></tr>
+      <tr>
+        <td>&lt;state dir&gt;/strategy-rankings/&lt;contract&gt;/</td>
+        <td><code>&lt;date&gt;/manifest.json</code>, <code>ranking.json</code>, <code>ranking.md</code> · <code>latest.md</code>, <code>latest.json</code></td>
+        <td><code>application/ranking/store.rs</code> (temp file + rename)</td>
+        <td><code>tengu ranking show</code>, <code>strategy_ranking</code> <code>latest</code>, run-dir retention</td>
+        <td>none (a published date is never rewritten)</td>
+      </tr>
+      <tr>
+        <td>lineage/ (repo)</td>
+        <td>the registry: one TOML per record (families … rankings), <code>locks.toml</code> append-only</td>
+        <td>humans; <code>tengu lineage seal</code> appends <code>[[sealed]]</code></td>
+        <td><code>tengu lineage</code>, <code>Config::load</code> (<code>[generation]</code>, <code>[strategy_ranking]</code>)</td>
+        <td>git</td>
+      </tr>
+      <tr>
+        <td>&lt;TENGU_HOME&gt;/state/evidence/&lt;vault&gt;/</td>
+        <td>read-only copies of evidence + <code>MANIFEST.json</code> (sha256 per file)</td>
+        <td><code>tengu evidence snapshot</code> (once, then <code>chmod a-w</code>)</td>
+        <td><code>tengu evidence verify</code> / <code>grade</code> / <code>evaluate</code>, <code>tengu lineage verify --evidence</code></td>
+        <td>none</td>
+      </tr>
+      <tr>
+        <td>&lt;TENGU_HOME&gt;/state/&lt;sources.state&gt;/sources.db</td>
+        <td>raw snapshots (sha256), source records, coverage, cursors, purge tombstones, runtime kill switches — append-only</td>
+        <td><code>tengu sources fetch</code> / <code>import</code> / <code>terms</code> / <code>disable</code> / <code>enable</code> / <code>purge</code></td>
+        <td><code>tengu sources asof</code>, <code>source_evidence</code></td>
+        <td>per row: <code>raw_retention_days</code>, <code>record_retention_days</code> (0 = forever)</td>
+      </tr>
+      <tr>
+        <td>&lt;TENGU_HOME&gt;/state/soe/operator.toml</td>
+        <td>the signed private operator profile (0600, never in a git tree)</td>
+        <td><code>tengu soe init</code> (template), the operator</td>
+        <td>every other <code>tengu soe</code> command</td>
+        <td>none</td>
       </tr>
     </tbody>
   </table>
   </div>
   <p style="margin-top: 18px;">
-    <code>&lt;state dir&gt;</code> = <code>&lt;TENGU_HOME&gt;/state/&lt;[xmarket] state&gt;</code> (else <code>&lt;TENGU_HOME&gt;/state</code>): outside every fs root and workspace, never deleted by <code>tengu prune</code>.
+    <code>&lt;state dir&gt;</code> = <code>&lt;TENGU_HOME&gt;/state/&lt;[xmarket] state&gt;</code> (else <code>&lt;TENGU_HOME&gt;/state</code>): outside every fs root and workspace; <code>tengu prune</code> never deletes <code>&lt;TENGU_HOME&gt;/state</code> beyond <code>state/flows</code>.
     Without <code>postgres_memory</code> the planner still routes from <code>TENGU_PLANNER_REGISTRY.md</code>; it just has no durable memory.
   </p>
 </div>
@@ -555,14 +599,14 @@
     <div class="mech-card">
       <div class="label">Phase 7.7</div>
       <h3>K. WORKSPACE_TOOLS — single constant</h3>
-      <p>Opt-in tools — <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, <code>manage_skill</code>, the Solana, Hyperliquid, xmarket and xlab families — are one <code>pub(crate) const WORKSPACE_TOOLS</code> in <code>domain/tools.rs</code> (beside <code>XM_TOOLS</code>, <code>XM_EXEC_TOOLS</code>, <code>SOLANA_WRITE_TOOLS</code>). Config validation checks against it; <code>bootstrap::tools::subagent_config</code> merges the names in <code>tools</code> that match it into <code>workspace_tools</code>; the bridge filters against it.</p>
+      <p>Opt-in tools — <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, <code>manage_skill</code>, the Solana, Hyperliquid, xmarket, xlab (incl. <code>strategy_ranking</code>) and sources families — are one <code>pub(crate) const WORKSPACE_TOOLS</code> in <code>domain/tools.rs</code> (beside <code>XM_TOOLS</code>, <code>XM_EXEC_TOOLS</code>, <code>SOLANA_WRITE_TOOLS</code>). Config validation checks against it; <code>bootstrap::tools::subagent_config</code> merges the names in <code>tools</code> that match it into <code>workspace_tools</code>; the bridge filters against it.</p>
       <div class="ref">domain::tools::WORKSPACE_TOOLS</div>
     </div>
 
     <div class="mech-card">
       <div class="label">2026-09-16</div>
       <h3>L. Every LLM network path goes through egress.rs</h3>
-      <p><code>[egress] network = "tor"</code> is the default: proxy <code>socks5h://127.0.0.1:9050</code> (<code>TENGU_TOR_PROXY</code> overrides — the <code>deploy/tor/</code> Arti + lyrebird-rs container), <code>route_llm_api</code> on; <code>network = "open"</code> is plain internet (xmarket / xlab add an <code>allow_hosts</code> ceiling). The <em>resolved</em> config is handed to <code>run-agent</code> / <code>mcp-bridge</code> children as <code>TENGU_EGRESS</code>. <code>http_request</code>, crypto, Hyperliquid, GeckoTerminal and Solana RPC use the proxied tool client; OpenRouter, embeddings and Jev the LLM client; the Claude Code CLI gets <code>HTTPS_PROXY</code> (HTTP CONNECT on the SOCKS port); Telegram a proxied reqwest 0.11 client. Feed and loop calls carry their own agent / session / call id on the JSONL audit (<code>AttributedExecutor</code>).</p>
+      <p><code>[egress] network = "tor"</code> is the default: proxy <code>socks5h://127.0.0.1:9050</code> (<code>TENGU_TOR_PROXY</code> overrides — the <code>deploy/tor/</code> Arti + lyrebird-rs container), <code>route_llm_api</code> on; <code>network = "open"</code> is plain internet (xmarket / xlab add an <code>allow_hosts</code> ceiling). The <em>resolved</em> config is handed to <code>run-agent</code> / <code>mcp-bridge</code> children as <code>TENGU_EGRESS</code>. <code>http_request</code>, crypto, Hyperliquid, GeckoTerminal, SEC EDGAR, EU TED and Solana RPC use the proxied tool client; OpenRouter, embeddings and Jev the LLM client; the Claude Code CLI gets <code>HTTPS_PROXY</code> (HTTP CONNECT on the SOCKS port); Telegram a proxied reqwest 0.11 client. Feed and loop calls carry their own agent / session / call id on the JSONL audit (<code>AttributedExecutor</code>).</p>
       <div class="ref">egress::install · resolved · tool_client · llm_api_client · check_url · shell_command · guard_shell · claude_cli_env · AttributedExecutor · docs/egress-2026-09-16.md</div>
     </div>
 
@@ -585,6 +629,20 @@
       <h3>O. One owner per state dir</h3>
       <p><code>tengu run</code> and <code>tengu webhooks</code> take the same leases (<code>runtime:&lt;sandbox&gt;</code>, <code>state:&lt;dir&gt;</code>) in <code>&lt;state dir&gt;/runtime.db</code>; a second process exits 1. Behind them, each ledger account records the sandbox that first wrote it — another sandbox's tools are refused <code>account_owner_mismatch</code>.</p>
       <div class="ref">bootstrap/runtime.rs::LeasePlan · OwnerLeases · outbound/paper_store.rs</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">2026-10-06 · 2026-10-08</div>
+      <h3>P. Sealed before seen, frozen once judged</h3>
+      <p>A preregistered variant, experiment or ranking contract is sealed (<code>tengu lineage seal</code>: its digest appended to <code>lineage/locks.toml</code>) before any outcome; <code>seal_mismatch</code> fires if it changes after, and the ranking publisher refuses an unsealed or changed contract. A FROZEN generation (W1) is checked at every <code>Config::load</code> of a bound sandbox: a tool or kind outside it, or an edited pinned section (<code>pin_drift</code>), fails the load — W2 work goes in new, unbound sandboxes (<code>xlab-w2</code>). Evidence is copied once into a read-only vault pinned by sha256; readers open SQLite <code>immutable=1</code>.</p>
+      <div class="ref">domain/lineage/validate.rs · config/lineage.rs · application/ranking/mod.rs · adapters/outbound/evidence/</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">2026-10-08</div>
+      <h3>Q. Agents never fetch sources</h3>
+      <p><code>source_evidence</code> only reads <code>sources.db</code>; fetching is the operator's (<code>tengu sources fetch</code>), gated per row — <code>enabled</code>, reviewed <code>terms_sha256</code>, the runtime kill switch — before any request. Source text reaches a model fenced as untrusted data.</p>
+      <div class="ref">adapters/outbound/sources/mod.rs::fetch_gate · domain/source/packet.rs::fence_untrusted · tools/sources/</div>
     </div>
   </div>
 </div>
@@ -647,18 +705,18 @@ const STEPS = [
     num: 4, title: "DagExecutor", lane: "exec",
     what: "Standard topological DAG with retry. Plan::ready_steps returns every step whose deps are satisfied; each is tokio::spawn'd on the SubprocessRunner. On step exhaustion, calls RagPlanner::replan with failure context + cross-plan recall.",
     files: [
-      { path: "src/application/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel" },
+      { path: "src/application/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel; abort_in_flight on cancel / exhaustion" },
       { path: "src/application/orchestrator/replan.rs::drive", desc: "the outer loop — replan-on-exhausted; stores the rendered plan per session (plan_state)" },
-      { path: "src/application/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts with backoff" },
-      { path: "src/domain/plan.rs::Plan::ready_steps", desc: "topology check" },
+      { path: "src/application/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts: at once, then 1 s, 3 s (9 s for any later one)" },
+      { path: "src/domain/plan.rs::Plan::ready_steps · leaves", desc: "topology check · the steps that make the reply" },
     ],
-    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn) on an agent name with no [agents.*] block — composed agents use Step.compose to declare a transient roster, NOT a renamed agent name."
+    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn; the retry policy still runs its attempts, then the replan) on an agent name with no routable [agents.*] block — composed agents use Step.compose to declare a transient roster, NOT a renamed agent name. Cancel or an exhausted step aborts every step still in flight (its run-agent child is kill_on_drop); a step that never becomes ready (unknown dependency, cycle) is a replan; parallel leaves with no join step are joined in plan order, one ### <id> (<agent>) section each."
   },
   {
     num: 5, title: "SubprocessRunner — spawn tengu run-agent", lane: "sub",
-    what: "Fails fast when step.agent has no [agents.*] block; builds AgentIpcInput JSON (max_turns = the agent's limits.max_tool_rounds; model/tools/skills travel empty), spawns child with TENGU_AGENT_IPC=1 + TENGU_EGRESS (parent's resolved [egress]), pipes JSON over stdin, reads result over stdout under limits.step_timeout_secs (run_with_timeout). Kill on drop.",
+    what: "Fails fast (no spawn; the retry policy still runs its attempts) when step.agent names no routable [agents.*] block (one with a description); builds AgentIpcInput JSON (max_turns = the agent's limits.max_tool_rounds; model/tools/skills travel empty), spawns child with TENGU_AGENT_IPC=1 + TENGU_EGRESS (parent's resolved [egress]), pipes JSON over stdin, reads result over stdout under limits.step_timeout_secs (run_with_timeout). Kill on drop. The child's stderr log goes through the parent's log (forward_child_log, target tengu::run_agent); a failed step's error carries its last 40 lines.",
     files: [
-      { path: "src/adapters/outbound/subprocess_runner.rs::SubprocessRunner::run_step", desc: "parent side; re-emits the child's metrics on the global sink" },
+      { path: "src/adapters/outbound/subprocess_runner.rs::SubprocessRunner::run_step", desc: "parent side; re-emits the child's metrics on the global sink (metrics::forward — no second log line)" },
       { path: "src/adapters/outbound/subprocess_runner.rs::AgentIpcInput", desc: "the wire format — session_id, step_id, sandbox_config, plan_state, optional compose" },
       { path: "src/adapters/outbound/subprocess_runner.rs::AgentIpcOutput", desc: "Ok { output, summary } / Failed { error, output }, both + metrics + tools (tool activity)" },
       { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "child entry point" },
@@ -715,7 +773,7 @@ const FLOWS = [
           { path: "src/bootstrap/decision.rs::build_decision_loop", desc: "JevClient + the loop agent's executor + observation store" },
           { path: "src/config/runtime.rs", desc: "[runtime]: grace, in-flight, queue, heartbeat" },
         ],
-        deep: "Today xmarket and xmarket-weekend hold no [decision_loops] (tool feeds only; tracker item jev-xmarket-loops-toml); loops live in lping (lp_watch, hedge_watch), jev-exec (executor) and xlab (xl_gate, replayed by tengu backtest --gate)."
+        deep: "Today xmarket and xmarket-weekend hold no [decision_loops] (tool feeds only; tracker item jev-xmarket-loops-toml); xlab-w2 runs tool feeds (history_refresh, strategy_ranking_daily, strategy_ranking_weekend); loops live in lping (lp_watch, hedge_watch, exec chains hedge_exec and lp_exec with a sequence and bound slots), jev-exec (executor) and xlab / xlab-w2 (xl_gate, replayed by tengu backtest --gate). tengu decide --map runs an Architect's execution map that only narrows a loop."
       },
       {
         num: 3, title: "Feed fires", lane: "exec",
@@ -800,14 +858,14 @@ const FLOWS = [
     steps: [
       {
         num: 0, title: "Fill market.db", lane: "mem",
-        what: "tengu history backfill (Hyperliquid candleSnapshot + fundingHistory; --source gecko for GeckoTerminal pool OHLCV), import-hl-archive (S3 asset_ctxs *.csv.lz4 → ctx), import-json → <state dir>/market.db (WAL; bars, funding, ctx by full instrument id). Resumes: only what is not stored; a bar not yet closed is never stored.",
+        what: "tengu history backfill (Hyperliquid candleSnapshot + fundingHistory; --source gecko for GeckoTerminal pool OHLCV), tengu history events (SEC EDGAR filings of hyperliquid:xyz:<TICKER> names, published = the index page's acceptance time; needs $SEC_USER_AGENT), import-hl-archive (S3 asset_ctxs *.csv.lz4 → ctx), import-json → <state dir>/market.db (WAL; bars, funding, ctx, events, event_coverage by full instrument id). Resumes: only what is not stored; a bar not yet closed is never stored.",
         files: [
-          { path: "src/adapters/inbound/cli/history.rs", desc: "backfill / import-hl-archive / import-json / coverage (+ range / asof for the recorder)" },
-          { path: "src/adapters/outbound/backfill/", desc: "mod (Retry, missing_ranges, report), hl, gecko, hl_archive, json" },
+          { path: "src/adapters/inbound/cli/history.rs", desc: "backfill / events / import-hl-archive / import-json / coverage (+ range / asof for the recorder)" },
+          { path: "src/adapters/outbound/backfill/", desc: "mod (Retry, missing_ranges, report), hl, gecko, hl_archive, json, sec (+ domain/sec.rs decoders)" },
           { path: "src/adapters/outbound/market_data.rs", desc: "SqliteMarketData — WITHOUT ROWID tables, upserts, coverage" },
           { path: "src/domain/marketdata_decode.rs", desc: "HL / Gecko / archive / JSON decoders; a bad row names its row and time" },
         ],
-        deep: "Budgets: [rate_limits.hyperliquid] (xlab 600 / min, burst 200 — the IP's 1200 is shared with the xmarket runs) and [rate_limits.geckoterminal] (25 / min); egress through the tool client under allow_hosts. HL keeps the newest 5 000 bars per interval (1h ≈ 208 days)."
+        deep: "Budgets: [rate_limits.hyperliquid] (xlab 600 / min, burst 200 — the IP's 1200 is shared with the xmarket runs), [rate_limits.geckoterminal] (25 / min) and [rate_limits.sec] (xlab-w2 300 / min, burst 5); egress through the tool client under allow_hosts. HL keeps the newest 5 000 bars per interval (1h ≈ 208 days). A ticker without a SEC CIK is recorded as not covered (its silence is no evidence of no news)."
       },
       {
         num: 1, title: "resolve", lane: "plan",
@@ -822,11 +880,12 @@ const FLOWS = [
       },
       {
         num: 2, title: "prepare → candidates", lane: "exec",
-        what: "from = the earliest stored bar of the instruments, to = now by default; series over the data window: bars at the interval, funding when the cost books it (always for funding_carry), ctx when half_spread = ctx; [backtest.splits] applied (a bar straddling a split dropped); engine::candidates decides each instant as-of t and stops past [backtest] max_candidates (50 000).",
+        what: "A kind outside the bound [generation] is refused first (capability_unavailable). from = the earliest stored bar of the instruments, to = now by default; series over the data window: bars at the interval, funding when the cost books it (always for funding_carry), ctx when half_spread = ctx; cut at --data-through (else the newest row read is the run's data_through_ms); [backtest.splits] applied (a bar straddling a split dropped); a spec with labels loads events + event coverage; engine::candidates decides each instant as-of t and stops past [backtest] max_candidates (50 000).",
         files: [
-          { path: "src/application/backtest/mod.rs::prepare", desc: "series, splits, RunParams, RiskCaps, the run id proposed" },
+          { path: "src/application/backtest/mod.rs::prepare", desc: "series, data_through_ms, splits, InfoData, RunParams, RiskCaps, the run id proposed" },
           { path: "src/domain/backtest/engine.rs::candidates", desc: "checks, then kinds.rs; the max_candidates guard" },
           { path: "src/domain/backtest/kinds.rs", desc: "the six kinds' decisions as-of t, skips, data notes" },
+          { path: "src/domain/backtest/labels.rs", desc: "weekend_window info labels NEWS / UNCERTAIN / NOISE (Phase 7); skip classes before top_n" },
           { path: "src/domain/backtest/features.rs", desc: "features as-of t for the Jev gate" },
         ],
         deep: "Price at an instant = the close of the bar ending exactly there; missing ⇒ skipped (missing_price), never interpolated. Each trade records decided_at_ms and data_asof_ms; data_asof_ms ≤ decided_at_ms is asserted."
@@ -855,7 +914,7 @@ const FLOWS = [
       },
       {
         num: 5, title: "Run dir", lane: "mem",
-        what: "write_run_dir claims <state dir>/backtests/<YYYYMMDDTHHMMSSZ>-<strategy>[-N]/ (create_dir) and writes report.json (backtest/1:<run id>), report.md, trades-<arm>.jsonl, candidates.jsonl, skips.json and the gate's decisions.jsonl; then prunes run dirs beyond [backtest] keep_runs (100), never the decision cache.",
+        what: "write_run_dir claims <state dir>/backtests/<YYYYMMDDTHHMMSSZ>-<strategy>[-N]/ (create_dir) and writes report.json (backtest/1:<run id>, data_through_ms, the cohort identity: generation, instruments_sha256, costs_sha256), report.md, trades-<arm>.jsonl, candidates.jsonl, skips.json and the gate's decisions.jsonl; then prunes run dirs beyond [backtest] keep_runs (100) — never the decision cache, a run the lineage registry cites or one a published ranking's latest.json names.",
         files: [
           { path: "src/application/backtest/run_dir.rs", desc: "write_run_dir, prune_runs" },
           { path: "src/domain/backtest/report.rs", desc: "BacktestReport: report.json + the backtest/1 row, report.md, compact text" },
@@ -865,11 +924,73 @@ const FLOWS = [
       },
     ],
   },
+  {
+    key: "ranking",
+    label: "tengu ranking run",
+    title: "tengu ranking run --sandbox <s> — sealed contract → date → lease → backtests → rank → publish (docs/strategy-ranking-automation-2026-10-08.md)",
+    steps: [
+      {
+        num: 1, title: "Contract sealed", lane: "orch",
+        what: "The contract must be listed in [strategy_ranking] contracts; the lineage registry is reloaded from disk and the contract's newest [[sealed]] row ranking:<id> must hash the file now — else contract_unsealed / contract_changed. Nothing is written before this passes.",
+        files: [
+          { path: "src/application/ranking/mod.rs::run_ranking", desc: "the coordinator: contract, date, lease, manifest, freshness, backtest, rank, publish" },
+          { path: "src/domain/lineage/ranking.rs", desc: "RankingContract — strategies, cohort, eligibility, rating; lineage/rankings/<id>.toml" },
+          { path: "src/config/strategy_ranking.rs", desc: "[strategy_ranking] registry, contracts → SandboxSections::ranking" },
+        ],
+        deep: "Seal a contract with tengu lineage seal ranking:<id> before any ranked outcome is seen; an unsealed contract is only a Warn (ranking_unsealed) in the registry, but the publisher refuses it."
+      },
+      {
+        num: 2, title: "Date + cutoff", lane: "plan",
+        what: "The given date, else the newest local date in the contract's tz whose cutoff has passed; a weekday of days (none = every day) — else not_a_ranking_day; cutoff = Zone::at(date, cutoff), DST-correct, ≤ now — else cutoff_not_reached; after from — else before_from.",
+        files: [
+          { path: "src/application/ranking/mod.rs::ranking_date", desc: "date, cutoff and the refusals" },
+          { path: "src/domain/tz.rs", desc: "America/New_York · Europe/Paris · UTC civil time with DST" },
+        ],
+        deep: "A COMPLETE / INCOMPLETE manifest of that date returns the published ranking as it is (published = false): checked before and after the lease; only the operator reruns a published date, by deleting its <date>/ dir."
+      },
+      {
+        num: 3, title: "Lease + manifest", lane: "exec",
+        what: "Lease ranking:<contract id> in the state dir's runtime.db (TTL 15 min, renewed before each strategy and before each manifest write; another holder ⇒ ranking_busy; a lost renewal ⇒ ranking_lease_lost). A RUNNING / FAILED manifest of the same contract sha256 is resumed: a DONE strategy whose report.json still hashes is reused.",
+        files: [
+          { path: "src/application/ranking/store.rs", desc: "<state dir>/strategy-rankings/<contract>/<date>/manifest.json; temp file + rename" },
+          { path: "src/adapters/outbound/runtime_store.rs", desc: "SqliteRuntimeStore — the same lease table tengu run uses" },
+        ],
+        deep: "Lease holder: cli:<pid> from tengu ranking run, the call id (feed:…, mcp:…, chat:…) from the strategy_ranking tool."
+      },
+      {
+        num: 4, title: "Freshness → backtest", lane: "tool",
+        what: "Per strategy, one at a time: every instrument's newest stored bar must close ≥ cutoff − max_lag_bars × interval, else STALE (no run); then prepare (from = the contract's from, to = data through = the cutoff, no split — never a holdout read), evaluate (the rules arms), write_run_dir.",
+        files: [
+          { path: "src/application/backtest/mod.rs", desc: "prepare / evaluate — the same use case as tengu backtest" },
+          { path: "src/application/backtest/run_dir.rs", desc: "write_run_dir; retention also keeps this date's DONE runs" },
+        ],
+        deep: "No LLM, no network: market.db is read only (a missing one is an error, never created). Fill it first with tengu history backfill — xlab-w2 does that in its history_refresh feed."
+      },
+      {
+        num: 5, title: "Select → rank", lane: "sub",
+        what: "Each report.json is read back (its sha256, RunFacts, the standing from the reloaded registry as of the cutoff); select drops or rejects runs (not_in_contract, failed:<stage>, stale, missing, holdout_present, arm_missing, cohort_unknown / cohort_mismatch, superseded_run, excluded_status, insufficient_trades / periods, funding_incomplete); rank orders each cohort weakest → strongest by the rating tuple, then the tie break.",
+        files: [
+          { path: "src/domain/backtest/ranking.rs", desc: "RunFacts::from_report, StrategyStanding::of, select, rank, content_sha256, render_markdown / render_compact" },
+        ],
+        deep: "content_sha256 = canonical sha256 of the ranking without run ids, report hashes and the generation time: a rerun on the same data ranks to the same hash. on_missing = INCOMPLETE makes a failed or stale strategy mark the whole ranking INCOMPLETE."
+      },
+      {
+        num: 6, title: "Publish", lane: "mem",
+        what: "<date>/ranking.json + ranking.md; COMPLETE and no newer date in latest ⇒ latest.md, then latest.json (the commit point); then the manifest's final status. A failure after the lease marks the manifest FAILED (resumable).",
+        files: [
+          { path: "src/adapters/inbound/cli/ranking.rs", desc: "tengu ranking run | show — exit 1 on INCOMPLETE, a failure or a refusal" },
+          { path: "src/adapters/outbound/tools/xlab/rank.rs", desc: "strategy_ranking — run | latest; xlab-w2's [feeds.strategy_ranking_daily] / _weekend under tengu run (agent xl_ranker)" },
+        ],
+        deep: "INCOMPLETE is an error from the tool too, so the feed shows down and tengu doctor --live names it; latest keeps the previous COMPLETE ranking. Run-dir retention never prunes a run latest.json cites."
+      },
+    ],
+  },
 ];
 
 const SUBSYSTEM_GROUPS = [
   { title: "Chat turn", keys: ["memory", "rag", "agents", "skills", "orchestrator", "metrics", "egress"] },
   { title: "Beyond the chat turn (2026-09-24 → 2026-10-01)", keys: ["runtime", "decision", "observations", "tools", "xmarket", "xlab", "parity"] },
+  { title: "Research lineage, rankings, sources (2026-10-06 → 2026-10-08)", keys: ["lineage", "ranking", "sources", "soe"] },
 ];
 
 const SUBSYSTEMS = [
@@ -885,7 +1006,7 @@ const SUBSYSTEMS = [
       ["application/memory/fencing.rs", "<memory-context> block helpers"],
       ["adapters/outbound/memory/disk_vector.rs", "DiskVectorStore — the only VectorStore impl (bincode)"],
       ["adapters/outbound/memory/embedder.rs", "OpenRouter text-embedding-3-small client, impl Embedding"],
-      ["adapters/outbound/memory/builtin.rs", "BuiltinMemoryProvider (MEMORY.md, identity, daily logs)"],
+      ["adapters/outbound/memory/builtin.rs", "BuiltinMemoryProvider — vector prefetch + sync_turn (its MEMORY.md / identity / daily-log loader runs only in tests)"],
       ["bootstrap/memory.rs", "builds the MemoryManager for a workspace"],
     ],
     deep: "memory/ is the in-process disk vector store used by memory_ingest/memory_search and the BuiltinMemoryProvider. Durable, cross-session memory is adapters/outbound/tools/agentic_memory/ (Postgres + pgvector, postgres_memory feature).",
@@ -906,8 +1027,8 @@ const SUBSYSTEMS = [
     subtitle: "no agents/ directory, no separate spec — the same AgentConfig, routable when description is set, private when not (and not default). Edit a block, restart chat, registry regenerated.",
     files: [
       ["config/mod.rs::AgentConfig", "one struct (deny_unknown_fields) for in-process agents, subagents and loop / feed agents — engine, model, description, example_queries, tools, skill_packages (skills alias), workspace, scopes, limits.max_tool_rounds / step_timeout_secs, identity, claude_code"],
-      ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest] on every surface"],
-      ["sandboxes/<name>/config.toml", "one config per sandbox: lping, jev-exec, xmarket, xmarket-weekend, xlab, tor-check, storage-test, unlimited"],
+      ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest], [generation], [sources], [strategy_ranking] on every surface"],
+      ["sandboxes/<name>/config.toml", "one config per sandbox: lping, jev-exec, xmarket, xmarket-weekend, xlab, xlab-w2, soe, tor-check, storage-test, unlimited"],
       ["application/orchestrator/shared_files.rs::routable_agents", "blocks with a description → TENGU_PLANNER_REGISTRY.md"],
       ["bootstrap/tools.rs::subagent_config", "merges workspace-tool names listed in tools into workspace_tools"],
       ["adapters/inbound/cli/run_agent.rs::run_agent_subprocess", "loads the parent config first, then config.agents.get(name)"],
@@ -916,18 +1037,21 @@ const SUBSYSTEMS = [
   },
   {
     key: "skills", title: "skills/ — prompt fragments",
-    subtitle: "three-tier scanner with shadowing.",
+    subtitle: "one list of skill directories, highest priority first — a name found earlier shadows later ones.",
     files: [
-      ["~/.tengu/skills/", "TIER 1 — managed (lowest priority)"],
-      [".tengu/skills/", "TIER 2 — workspace dotdir"],
-      ["skills/", "TIER 3 — workspace root (highest priority)"],
+      ["~/.tengu/skills/", "1 — managed (highest priority)"],
+      ["<workspace>/.tengu/skills/", "2 — workspace dotdir"],
+      ["<workspace>/skills/", "3 — project"],
+      ["skills/ (cwd)", "4 — the repo's skills/ where tengu runs, when it is another dir"],
       ["skills/orchestrator/SKILL.md", "SPECIAL — used as planner system prompt"],
       ["skills/orchestrator/plan_schema.json", "the plan JSON shape the prompt asks for"],
       ["skills/xlab-research/SKILL.md", "the xlab Architect's protocol: split first, tune in-sample, one holdout read"],
-      ["application/orchestrator/shared_files.rs::scan_skill_summaries", "the scanner"],
+      ["skills/execution-map/SKILL.md", "teaches the execution-map JSON (tengu decide --map)"],
+      ["application/skills/registry.rs::skill_directories", "the list every reader shares"],
+      ["application/orchestrator/shared_files.rs::scan_skill_summaries", "the planner registry's scan (first found wins)"],
       ["adapters/inbound/cli/run_agent.rs::load_skill_body_three_tier", "called by run_agent_subprocess"],
     ],
-    deep: "Each SKILL.md has YAML frontmatter (name, description). The scanner walks all three tiers, dedupes by name, later tiers shadow earlier. The body of each SKILL.md becomes part of the subagent's system prompt (assembled in run_agent_subprocess after the base template). Shell skills become tools; a hardened sandbox loads none.",
+    deep: "Each SKILL.md has YAML frontmatter (name, description). skill_directories is the one order for the planner registry, the run-agent loader, view_skill, skill_resource and apply_improver_proposal (the registry used to scan project first, so it could describe another skill than agents loaded). The body of each SKILL.md becomes part of the subagent's system prompt (assembled in run_agent_subprocess after the base template). Shell skills become tools; a hardened sandbox loads none.",
   },
   {
     key: "orchestrator", title: "application/orchestrator/ — planner + executor",
@@ -935,8 +1059,8 @@ const SUBSYSTEMS = [
     files: [
       ["mod.rs", "Orchestrator — top-level handle (handle, subscribe, cancel)"],
       ["planner.rs", "RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
-      ["domain/plan.rs", "Plan, Step, AgentCompose (C→B B-half), StepId"],
-      ["executor.rs", "DagExecutor — parallel ready_steps with cancel"],
+      ["domain/plan.rs", "Plan, Step, AgentCompose (C→B B-half), StepId, ready_steps, leaves"],
+      ["executor.rs", "DagExecutor — parallel ready_steps with cancel; aborts in-flight steps on cancel / exhaustion; parallel leaves joined"],
       ["retry.rs", "RetryPolicy"],
       ["replan.rs", "drive() loop — replan-on-exhausted"],
       ["events.rs", "OrchestratorEvent enum + bus (incl. MetricsRecorded)"],
@@ -975,7 +1099,7 @@ const SUBSYSTEMS = [
       ["AttributedExecutor / CallScope", "a tengu run feed's or loop's calls carry their own agent / session / call id on the audit"],
       ["warn_if_proxy_unreachable", "one startup warning from the parent CLI; tengu doctor prints the resolved network"],
     ],
-    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab (the last three under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
+    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab, xlab-w2, soe (the last five under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
   },
   {
     key: "runtime", title: "tengu run — runtime supervisor (2026-09-30)",
@@ -998,13 +1122,14 @@ const SUBSYSTEMS = [
     key: "decision", title: "decision loops (Jev) + replay (2026-09-24 / 2026-10-01)",
     subtitle: "outside the chat turn: a System One model (Jev) picks actions + argument slots; tools execute; the same loop replays on history.",
     files: [
-      ["config/decision_loop.rs", "[decision_loops.<name>] — actions, slots (static / from history / observation), caps, dry_run, world, requires, act_at"],
+      ["config/decision_loop.rs", "[decision_loops.<name>] — actions, slots (static / from history / observation / event: a list Jev picks from, or one bound value with no question), caps, sequence (\"a\", \"b?\": one step at a time), dry_run, world, requires, act_at"],
+      ["config/execution_map.rs", "an Architect's execution map (JSON): order, event, tighter caps — only narrows the TOML loop; skill execution-map"],
       ["application/decision_loop/{mod,slots,reduce,world}.rs", "per event: world → Jev → act_at gate → execute_typed → history; with_clock; decide_terminal → Verdict (replay)"],
       ["domain/decision.rs · ports/decision.rs", "Question / Answer / Decision, HistoryEntry, StepOutcome (incl. Refused), Verdict · DecisionEngine, Escalator"],
-      ["bootstrap/decision.rs", "build_decision_loop, agent_tool_executor (SanitizedToolExecutor); replay: build_replay_loop, cached_decision_engine, build_gate"],
+      ["bootstrap/decision.rs", "build_decision_loop, build_mapped_loop (audit trigger = map:<sha256>), agent_tool_executor (SanitizedToolExecutor); replay: build_replay_loop, cached_decision_engine, build_gate"],
       ["adapters/outbound/decisions.rs", "JevClient — OpenRouter /api/alpha/decisions (llm_api_client), one retry, 30 s circuit breaker"],
       ["adapters/outbound/decision_cache.rs", "CachedDecisionEngine — replay-deterministic, <state dir>/backtests/decision-cache.db"],
-      ["adapters/inbound/cli/decide.rs", "tengu decide --sandbox <s> --loop <n> [--event f.json]"],
+      ["adapters/inbound/cli/decide.rs", "tengu decide --sandbox <s> --loop <n> [--event f.json] · --map <file|->"],
     ],
     deep: "Jev returns typed choices, never text or tool-call JSON — it cannot be an engine. dry_run defaults to true; low confidence escalates to the orchestrator (Escalator). Audit: <TENGU_HOME>/logs/decisions.jsonl; a replay's lines go to the run's decisions.jsonl. Docs: docs/decision-loop-plan-2026-09-24.md, docs/xlab-2026-10-01.md § 7.",
   },
@@ -1024,18 +1149,19 @@ const SUBSYSTEMS = [
   },
   {
     key: "tools", title: "tool families (opt-in, WORKSPACE_TOOLS)",
-    subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research — each a plugin, one catalog row per tool.",
+    subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research + ranking, sources — each a plugin, one catalog row per tool.",
     files: [
       ["adapters/outbound/tools/solana/", "11 observe/plan tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
       ["adapters/outbound/solana/", "SolanaRpc, cache-through account reads, JSON fetch, read planning, send pipeline, signer, writes store"],
       ["adapters/outbound/tools/hyperliquid/", "hl_ctx (dex sweep or ≤ 64 coins → mkt_ctx/1 + mkt_instrument/1), hl_book (hl_book/1)"],
       ["adapters/outbound/hyperliquid/info.rs", "HlInfo — POST /info over the scoped egress client, [rate_limits.hyperliquid] weights"],
       ["adapters/outbound/tools/xm/", "risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade"],
-      ["adapters/outbound/tools/xlab/", "market_history, backtest (read-only)"],
-      ["domain/tools.rs", "WORKSPACE_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS"],
+      ["adapters/outbound/tools/xlab/", "market_history, backtest (read-only), strategy_ranking (run | latest)"],
+      ["adapters/outbound/tools/sources/", "source_evidence — source_asof/1, read-only (agents never fetch)"],
+      ["domain/tools.rs", "WORKSPACE_TOOLS, DEFAULT_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS"],
       ["adapters/outbound/rate_limit.rs · http_class.rs · domain/backoff.rs", "named budgets per process · HTTP → ErrorClass + URL scrubber · backoff, token bucket, breaker"],
     ],
-    deep: "The hidden tengu tool list prints every catalog name: 44 in a build without postgres_memory (agentic_memory joins with it). Every tool works under openrouter, local and claude_code — see engine parity.",
+    deep: "The hidden tengu tool list prints every catalog name: 47 in a build without postgres_memory (14 default + 33 opt-in; agentic_memory joins with it). In a [generation]-bound sandbox the executor and the bridge drop a tool the generation refuses (bootstrap::tools::within_generation). Every tool works under openrouter, local and claude_code — see engine parity.",
   },
   {
     key: "xmarket", title: "xmarket — risk gate, paper ledger, fill engine, kill switch, exits, weekend fade",
@@ -1060,16 +1186,17 @@ const SUBSYSTEMS = [
     subtitle: "history first: backfill public history, replay rules and Jev on it; the Architect proposes specs, never code.",
     files: [
       ["domain/marketdata.rs · marketdata_decode.rs · marketdata_stats.rs", "Interval, Bar, series observable at close, StockSplit · decoders · mkt_history/1"],
-      ["ports/market_data.rs · adapters/outbound/market_data.rs", "MarketDataStore · <state dir>/market.db (bars, funding, ctx)"],
-      ["adapters/outbound/backfill/", "HL candles + funding, GeckoTerminal OHLCV, HL S3 asset_ctxs, JSON; resume"],
-      ["domain/backtest/", "spec, kinds, engine, fills, costs, features, stats, gate, report (checks, testkit: tests only) — pure"],
-      ["application/backtest/{mod,gate,run_dir}.rs", "resolve → prepare → [run_gate] → evaluate → write_run_dir"],
-      ["domain/canonical.rs", "canonical JSON + sha256 (spec_sha256, decision-cache key)"],
-      ["adapters/outbound/tools/xlab/", "market_history, backtest — holdout ledger (holdout.rs), stored-run rows by run id (rows.rs)"],
-      ["adapters/inbound/cli/{history,backtest}.rs", "tengu history backfill / import-hl-archive / import-json / coverage · tengu backtest"],
+      ["domain/sec.rs", "SEC EDGAR decoders: ticker map, submissions, the index page's Accepted (New York → UTC = published_ms)"],
+      ["ports/market_data.rs · adapters/outbound/market_data.rs", "MarketDataStore · <state dir>/market.db (bars, funding, ctx, events, event_coverage)"],
+      ["adapters/outbound/backfill/", "HL candles + funding, GeckoTerminal OHLCV, HL S3 asset_ctxs, JSON, SEC filings (sec.rs); resume"],
+      ["domain/backtest/", "spec, kinds, labels, engine, fills, costs, features, stats, gate, report, evaluation, ranking (checks, testkit: tests only) — pure"],
+      ["application/backtest/{mod,gate,run_dir}.rs", "resolve → prepare → [run_gate] → evaluate → write_run_dir; cohort identity, cited runs kept"],
+      ["domain/canonical.rs", "canonical JSON + sha256 (spec_sha256, decision-cache key, ranking content_sha256)"],
+      ["adapters/outbound/tools/xlab/", "market_history, backtest — holdout ledger (holdout.rs), stored-run rows by run id (rows.rs); strategy_ranking (rank.rs)"],
+      ["adapters/inbound/cli/{history,backtest}.rs", "tengu history backfill / events / import-hl-archive / import-json / coverage · tengu backtest (--data-through)"],
       ["config/backtest.rs", "[backtest] — costs, universes, strategies, splits, gate, max_candidates, keep_runs"],
     ],
-    deep: "Sandbox xlab: xl_architect (default, routable; market_history, backtest, skill xlab-research) and xl_jev (private, owns [decision_loops.xl_gate]). Results so far: only the weekend-fade family survives costs out of sample (docs/xlab-2026-10-01.md § 14).",
+    deep: "Sandbox xlab (bound to W1): xl_architect (default, routable; market_history, backtest, skill xlab-research) and xl_jev (private, owns [decision_loops.xl_gate]). xlab-w2 (unbound, the same xlab state dir): the same agents + xl_ranker (private; ranking feeds), SEC events, [strategy_ranking]. Phases 7–11 (news labels, HIP-3 oracle, cost model v2, stops): no W2 change beats rule W (docs/p10-w2-candidate-2026-10-08.md).",
   },
   {
     key: "parity", title: "engine parity (E0) + hardening (2026-09-30 / 2026-10-01)",
@@ -1086,13 +1213,67 @@ const SUBSYSTEMS = [
     ],
     deep: "Hardened sandboxes ([risk] or a Solana signer, config/hardening.rs): claude_code only with builtin_tools_profile = \"none\", no [[mcp_servers]], no shell scope, no shell skills; a plan step's compose may only narrow. Docs: docs/engine-backends.md § Engine matrix, docs/mcp-bridge.md.",
   },
+  {
+    key: "lineage", title: "research lineage + evidence (2026-10-06; Phase 6 2026-10-08)",
+    subtitle: "what an experiment's figures rest on, and which capabilities a sandbox may reach: the lineage/ registry, frozen generations, a read-only evidence vault, forward grading.",
+    files: [
+      ["lineage/ (repo)", "one TOML per record: families, variants, experiments, episodes, incidents, capabilities, generations, evidence, rankings; locks.toml append-only ([[frozen]], [[sealed]])"],
+      ["domain/lineage/", "record types, Registry::validate (codes invalid_id … ranking_unsealed), trace / family_report / acceptance (21 Rule-W answers), pins — pure"],
+      ["config/lineage.rs", "load_registry; [generation] id, registry — Config::load refuses a tool / feed / loop action / strategy kind outside the generation and recomputes FROZEN config: / spec: pins (pin_drift)"],
+      ["ports/lineage.rs · adapters/outbound/lineage/", "ContractProbe (RepoProbe), EvidenceResolver (FsResolver), ResultSource (ReportJson, LedgerGrade), AttemptSource (RunDirs) — read-only"],
+      ["application/lineage/{verify,attempts}.rs · cli/lineage.rs", "tengu lineage verify | show | trace | family | attempts | report | capabilities | generation | seal (only seal writes)"],
+      ["domain/evidence.rs · evidence_coverage.rs", "EvidenceClass, Provenance, EvidenceRecord (vault pinned by sha256), tree_hash · LIVE_RECORDED / BACKFILLED / MISSING"],
+      ["domain/xm/grade.rs · regrade.rs", "a paper ledger → trades, totals, 12 reconciliation checks · rule W re-graded from recorded mkt_ctx/1 + hl_book/1 rows"],
+      ["domain/backtest/evaluation.rs", "rules · Jev · HOLD on the same candidates; Jev PROVEN / UNPROVEN / REJECTED, calibration, capped books"],
+      ["ports/evidence.rs · adapters/outbound/evidence/", "Vault (the only write path), LedgerSource, RecordedHistory, BackfillSource, RunDirSource — SQLite immutable=1"],
+      ["application/evidence.rs · cli/evidence.rs", "tengu evidence snapshot | verify | coverage | grade | evaluate | regrade — no config, no LLM, no network"],
+    ],
+    deep: "W1 is FROZEN (lineage/generations/W1.toml), bound by sandboxes/xlab and xmarket-weekend; editing a pinned section fails their load. The bridge and in-process executors drop a tool the generation refuses (within_generation). W1's Jev is UNPROVEN (docs/p6-decision-evaluation-2026-10-08.md). Docs: docs/lineage-2026-10-06.md, docs/tutorial/lineage.html, docs/tutorial/evidence.html.",
+  },
+  {
+    key: "ranking", title: "strategy ranking (2026-10-08)",
+    subtitle: "a sealed contract's runs → one ranking per date, weakest to strongest per cohort; no LLM, no network.",
+    files: [
+      ["domain/lineage/ranking.rs", "RankingContract — lineage/rankings/<id>.toml: strategies, cohort, eligibility, rating; sealed with tengu lineage seal ranking:<id>"],
+      ["domain/backtest/ranking.rs", "RunFacts::from_report → StrategyStanding::of → select → rank; content_sha256, ranking.md — pure"],
+      ["config/strategy_ranking.rs", "[strategy_ranking] registry, contracts → SandboxSections::ranking"],
+      ["application/ranking/{mod,store}.rs", "run_ranking: contract, date + DST cutoff, lease ranking:<id>, manifest resume, freshness, backtest, rank, publish"],
+      ["adapters/inbound/cli/ranking.rs", "tengu ranking run | show"],
+      ["adapters/outbound/tools/xlab/rank.rs", "strategy_ranking — run | latest; xlab-w2 feeds under tengu run"],
+    ],
+    deep: "Files: <state dir>/strategy-rankings/<contract>/<date>/{manifest.json, ranking.json, ranking.md} + latest.md, latest.json (the commit point). A published date is never rewritten; INCOMPLETE keeps the previous latest. Doc: docs/strategy-ranking-automation-2026-10-08.md.",
+  },
+  {
+    key: "sources", title: "source evidence — O2 (2026-10-08)",
+    subtitle: "facts from approved sources (SEC EDGAR, EU TED) with full provenance, read as-of t without lookahead; agents never fetch.",
+    files: [
+      ["domain/source/", "SourceRecord (source_record/1), Fact (SecFiling, TedNotice, Unparsed, Withdrawn), rules, two-clock as-of view (captured · knowable), packet source_asof/1 (free text fenced), SEC / TED builders — pure"],
+      ["config/sources.rs", "[sources] state + registry rows (sec_edgar, ted_search), shipped enabled = false"],
+      ["ports/source_store.rs · adapters/outbound/sources/store.rs", "SourceStore · SqliteSourceStore — <TENGU_HOME>/state/<sources.state>/sources.db, append-only"],
+      ["adapters/outbound/sources/{mod,sec,ted}.rs", "fetch_gate (enabled, reviewed terms, no runtime off switch); SEC via the backfill client; TED POST /v3/notices/search"],
+      ["application/sources.rs", "evidence_as_of, purge_request"],
+      ["adapters/inbound/cli/sources.rs", "tengu sources list | fetch | import | asof | purge | terms | disable | enable (only fetch uses the network)"],
+      ["adapters/outbound/tools/sources/", "source_evidence — the as-of evidence packet, read-only"],
+    ],
+    deep: "Sandbox soe: soe_reader (default, source_evidence only, builtin_tools_profile = \"none\"), every registry row disabled until the operator reviews its terms, no feeds, loops or [[mcp_servers]]. Docs: docs/source-evidence-2026-10-08.md, docs/tutorial/source-evidence.html.",
+  },
+  {
+    key: "soe", title: "Software Opportunity Engine — O0–O2 (2026-10-08)",
+    subtitle: "offline: no sandbox config, secrets, egress, LLM or fetch; the operator's parameters live only in a signed private profile.",
+    files: [
+      ["domain/soe/", "integer minor-unit money + unknown-safe Est, records soe.<record>/1, economics (downside / base / upside), PRD § 7.2 hard gates (PASS / HOLD / REJECT), capability fit, ranking + the HOLD week, eval cases — pure"],
+      ["config/soe.rs", "<TENGU_HOME>/state/soe/operator.toml (0600, refused in a git tree or unsigned), opportunity + record-dir + --cited loaders"],
+      ["adapters/inbound/cli/soe.rs", "tengu soe init | check | portfolio | sensitivity | eval (only init writes)"],
+    ],
+    deep: "Imports go soe → source, never back: provenance is domain/source/. Docs: docs/soe-2026-10-08.md, docs/tutorial/soe.html.",
+  },
 ];
 
 const FILE_MAP = [
   // ── layers + entry ──
   ["src/main.rs", "main", "mod decls + main → adapters::inbound::cli::run"],
-  ["src/domain/", "domain", "plain data + pure policy: message, session, plan, scope, secrets, tools, metrics, memory, observation, decision, runtime, schedule, market, book, marketdata*, backtest/, xm/, hl/, lp/, solana*, tz, calendar, backoff, canonical, engine_smoke, token, usage"],
-  ["src/ports/", "ports", "traits: engine (Engine, ToolExecutor), tool, memory, orchestration, observation, decision, clock, history, book, paper, runtime, market_data, solana_signer, solana_writes, shell, skill_source, tool_activity"],
+  ["src/domain/", "domain", "plain data + pure policy: message, session, plan, scope, secrets, tools, metrics, memory, observation, decision, runtime, schedule, market, book, marketdata*, sec, backtest/, xm/, hl/, lp/, lineage/, evidence*, source/, soe/, solana*, tz, calendar, backoff, canonical, engine_smoke, token, usage"],
+  ["src/ports/", "ports", "traits: engine (Engine, ToolExecutor), tool, memory, orchestration, observation, decision, clock, history, book, paper, runtime, market_data, evidence, lineage, source_store, solana_signer, solana_writes, shell, skill_source, tool_activity"],
   ["tests/layering_lint.rs", "tests", "enforces domain ← ports ← application ← adapters, bootstrap rules"],
   ["tests/code_map.rs", "tests", "docs/code-map.md lists every source file; code-map.html graph current"],
   ["tests/scope_lint.rs", "tests", "every Tool::execute starts with a scope check"],
@@ -1101,22 +1282,27 @@ const FILE_MAP = [
   ["tests/bridge_conformance.rs", "parity", "every catalog tool: same text + store rows in-process and through a real tengu mcp-bridge"],
   ["tests/engine_matrix.rs", "parity", "live engine × model × tool-set legs (ignored by default); offline local path; every catalog tool in a set"],
   // ── CLI ──
-  ["src/adapters/inbound/cli/mod.rs", "cli", "clap Cli/Commands + dispatch (chat / status / doctor / telegram / webhooks / run / decide / history / backtest / risk / eval / secret / prune / mcp-bridge / agentic-memory-server / skill; hidden run-agent / tool)"],
+  ["src/adapters/inbound/cli/mod.rs", "cli", "clap Cli/Commands + dispatch (chat / status / doctor / telegram / webhooks / run / decide / history / backtest / ranking / evidence / lineage / soe / sources / risk / eval / secret / prune / mcp-bridge / agentic-memory-server / skill; hidden run-agent / tool)"],
   ["src/adapters/inbound/cli/run_agent.rs", "cli", "tengu run-agent child: AgentIpcInput in, LLM-with-tools loop until compress_and_store, AgentIpcOutput out; try_persist_agentic_step_summary"],
   ["src/adapters/inbound/cli/skill.rs", "cli", "tengu skill … commands"],
   ["src/adapters/inbound/cli/doctor.rs", "cli", "tengu status / doctor (--tor exit check, --live runner health, --engines smoke turn per agent)"],
-  ["src/adapters/inbound/cli/decide.rs", "decision", "tengu decide --sandbox <s> --loop <n> [--event f.json] — one event through a loop"],
-  ["src/adapters/inbound/cli/history.rs", "xlab", "tengu history range / asof (recorder) + backfill / import-hl-archive / import-json / coverage (market.db)"],
-  ["src/adapters/inbound/cli/backtest.rs", "xlab", "tengu backtest — rules arms, --split, --fetch, --gate [<loop>] --max-decisions --concurrency --offline"],
+  ["src/adapters/inbound/cli/decide.rs", "decision", "tengu decide --sandbox <s> --loop <n> [--event f.json] — one event through a loop; --map <file|-> — an execution map"],
+  ["src/adapters/inbound/cli/history.rs", "xlab", "tengu history range / asof (recorder) + backfill / events (SEC EDGAR) / import-hl-archive / import-json / coverage (market.db)"],
+  ["src/adapters/inbound/cli/backtest.rs", "xlab", "tengu backtest — rules arms, --split (a counted holdout read), --data-through, --fetch, --gate [<loop>] --max-decisions --concurrency --offline"],
+  ["src/adapters/inbound/cli/ranking.rs", "ranking", "tengu ranking run | show — one ranking date of a sealed contract; a published ranking.md"],
+  ["src/adapters/inbound/cli/lineage.rs", "lineage", "tengu lineage verify [--pins] [--evidence] | show | trace | family | attempts | report | capabilities | generation | seal"],
+  ["src/adapters/inbound/cli/evidence.rs", "lineage", "tengu evidence snapshot | verify | coverage | grade | evaluate | regrade — no config, no LLM, no network"],
+  ["src/adapters/inbound/cli/sources.rs", "sources", "tengu sources list | fetch | import | asof | purge | terms | disable | enable"],
+  ["src/adapters/inbound/cli/soe.rs", "soe", "tengu soe init | check | portfolio | sensitivity | eval — offline, on the signed private profile"],
   ["src/adapters/inbound/cli/risk.rs", "xmarket", "tengu risk status / halt / resume — ledger risk state; halt and resume only at a terminal"],
   ["src/adapters/inbound/cli/tool.rs", "parity", "hidden tengu tool list / call / turn — catalog names, calls through a run-agent executor, one engine turn as any agent"],
   ["src/adapters/inbound/run.rs", "runtime", "tengu run [--sandbox <s>] — loops, feeds, webhook routes, lease, graceful shutdown"],
   // ── bootstrap ──
   ["src/bootstrap/orchestrator.rs", "bootstrap", "ChatTurnInputs, RuntimeChatServiceFactory (run_turn_inner: the planner-side strip), snapshots_inputs_fn, resolve_session_id, build_orchestrator, build_cli_chat_factory"],
-  ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor (catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, agent_base_tools, compose_agent, workspace_or_temp, resolve_tool_scopes, grant_workspace_root, permissive_scope, with_mcp_bridge_tools"],
+  ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor (catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, agent_base_tools, compose_agent, workspace_or_temp, resolve_tool_scopes, grant_workspace_root, permissive_scope, with_mcp_bridge_tools, within_generation"],
   ["src/bootstrap/memory.rs", "bootstrap", "build_memory_manager(_async), resolve_memory_store_path"],
   ["src/bootstrap/sandbox.rs", "bootstrap", "load_sandbox_or — sandboxes/<name>/config.toml + egress install"],
-  ["src/bootstrap/decision.rs", "decision", "build_decision_loop, agent_tool_executor; replay: build_replay_loop, cached_decision_engine, build_gate"],
+  ["src/bootstrap/decision.rs", "decision", "build_decision_loop, build_mapped_loop, agent_tool_executor; replay: build_replay_loop, cached_decision_engine, build_gate"],
   ["src/bootstrap/runtime.rs", "runtime", "tengu run composition — LeasePlan / OwnerLeases, loops built once, start_feeds, Runtime::spawn / shutdown"],
   // ── chat + orchestrator ──
   ["src/application/chat/service.rs", "chat", "ChatRuntimeService::process_user_text, handle_chat_command, slash-command routing"],
@@ -1124,8 +1310,8 @@ const FILE_MAP = [
   ["src/adapters/outbound/subprocess_runner.rs", "orchestrator", "SubprocessRunner::new(sandbox, session_id, agents) — fail-fast on unknown [agents.*], per-step max_tool_rounds / step_timeout_secs, run_with_timeout, TENGU_EGRESS to the child; AgentIpcInput, AgentIpcOutput"],
   ["src/application/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle (handle, subscribe, cancel)"],
   ["src/application/orchestrator/planner.rs", "orchestrator", "RagPlanner::new(.., agents, tool directory, recall, embedder, bus, session_id), parse_verdict (free fn), persist_user_message, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
-  ["src/domain/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7), ready_steps"],
-  ["src/application/orchestrator/executor.rs", "orchestrator", "DagExecutor (WorkerHandle trait → ports/orchestration.rs)"],
+  ["src/domain/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7), ready_steps, leaves"],
+  ["src/application/orchestrator/executor.rs", "orchestrator", "DagExecutor — abort_in_flight on cancel / exhaustion, never-ready step ⇒ replan, parallel leaves joined (WorkerHandle trait → ports/orchestration.rs)"],
   ["src/application/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
   ["src/application/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop with replan-on-exhausted"],
   ["src/application/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
@@ -1139,7 +1325,7 @@ const FILE_MAP = [
   ["src/application/memory/mod.rs", "memory", "module preamble: memory/ (disk vector store) vs adapters/outbound/tools/agentic_memory (Postgres)"],
   ["src/application/memory/manager.rs", "memory", "MemoryManager — provider holder, prefetch_all, sync_all"],
   ["src/ports/memory.rs", "memory", "traits — VectorStore, MemoryProvider, Embedding, MemoryService, RecallStore"],
-  ["src/adapters/outbound/memory/builtin.rs", "memory", "BuiltinMemoryProvider — MEMORY.md, identity, daily logs"],
+  ["src/adapters/outbound/memory/builtin.rs", "memory", "BuiltinMemoryProvider — vector prefetch + sync_turn; its MEMORY.md / identity / daily-log loader runs only in tests"],
   ["src/application/memory/injector.rs", "memory", "for_turn — pre-turn fenced context injection (planner-side only post-7.1)"],
   ["src/application/memory/writer.rs", "memory", "sync_turn — post-turn spawned non-blocking writes"],
   ["src/application/memory/fencing.rs", "memory", "<memory-context> block helpers"],
@@ -1151,7 +1337,8 @@ const FILE_MAP = [
   ["src/config/mod.rs", "config", "Config (deny_unknown_fields at top level), AgentConfig, LimitsConfig (max_tool_rounds, step_timeout_secs), MemoryConfig, OrchestratorConfig, McpServerConfig, fold_default_scopes, sandbox_name"],
   ["src/config/sections.rs", "config", "SandboxSections — sandbox-level sections tools read via AgentConfig::sandbox; owner() = the sandbox of the config file"],
   ["src/config/egress.rs", "egress", "[egress] schema + resolved()"],
-  ["src/config/decision_loop.rs", "decision", "[decision_loops.<name>] — goal, agent, actions, slots, caps, reducers, dry_run, world, requires, act_at"],
+  ["src/config/decision_loop.rs", "decision", "[decision_loops.<name>] — goal, agent, actions, slots (lists or bound values), caps, reducers, sequence, dry_run, world, requires, act_at"],
+  ["src/config/execution_map.rs", "decision", "an Architect's execution map (JSON) — only narrows a loop: actions, sequence, event, goal, caps, max_steps, act_at, dry_run on"],
   ["src/config/runtime.rs", "runtime", "[runtime] — shutdown_grace_secs, max_decisions_in_flight, max_queued_per_loop, heartbeat_secs, heartbeat_stale_secs"],
   ["src/config/feeds.rs", "runtime", "[feeds.<name>] — tool / tick feeds: schedule, fan-out each, health; validated against agents' tools and loops"],
   ["src/config/rate_limits.rs", "tools", "[rate_limits.<name>] — per_minute, burst, exec_reserve"],
@@ -1161,11 +1348,18 @@ const FILE_MAP = [
   ["src/config/hardening.rs", "parity", "hardened sandboxes ([solana] signer or [risk]): claude_code only with profile none, no [[mcp_servers]], no shell scope, stores outside every fs root; compose only narrows"],
   ["src/config/solana.rs", "tools", "[solana] signer_key_file + signing-sandbox rules"],
   ["src/config/backtest.rs", "xlab", "[backtest] — notional, bootstrap, seed, costs, universes, strategies, splits, gate, max_candidates, keep_runs; load rules"],
-  ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest]"],
+  ["src/config/lineage.rs", "lineage", "load_registry (lineage/ dirs, one TOML per record) + [generation] binding rules (tools, kinds, FROZEN pins) → GenerationScope"],
+  ["src/config/strategy_ranking.rs", "ranking", "[strategy_ranking] registry, contracts — load rules → RankingSection (cited runs)"],
+  ["src/config/sources.rs", "sources", "[sources] state + [sources.registry.<id>] rows: kind, class, trust, revision, hosts, terms, retention; shipped enabled = false"],
+  ["src/config/soe.rs", "soe", "the signed private operator profile, opportunity / record-dir / --cited loaders (no [soe] section yet)"],
+  ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest] / [generation] / [strategy_ranking] / [sources]"],
   ["sandboxes/xmarket/config.toml", "xmarket", "paper desk stage M0 — runbook at the top; xm_architect (default, routable, Opus), xm_executor (private, Sonnet), no planner; feeds hl_ctx, hl_book, xm_exits, risk_day"],
-  ["sandboxes/xmarket-weekend/config.toml", "xmarket", "rule W on paper — runbook + timeline at the top; xm_weekend (private); five required tool feeds; recorder"],
-  ["sandboxes/xlab/config.toml", "xlab", "history-first research — [backtest] library, xl_architect (routable), xl_jev + [decision_loops.xl_gate], $100 [risk]"],
+  ["sandboxes/xmarket-weekend/config.toml", "xmarket", "rule W on paper — runbook + timeline at the top; xm_weekend (private); five required tool feeds; recorder; [generation] W1"],
+  ["sandboxes/xlab/config.toml", "xlab", "history-first research — [backtest] library, xl_architect (routable), xl_jev + [decision_loops.xl_gate], $100 [risk]; [generation] W1 (frozen)"],
+  ["sandboxes/xlab-w2/config.toml", "xlab", "W2 research — unbound copy of xlab on the xlab state dir; + SEC hosts, [rate_limits.sec], xl_ranker, [strategy_ranking], feeds history_refresh / strategy_ranking_daily / strategy_ranking_weekend"],
+  ["sandboxes/soe/config.toml", "sources", "source layer O2 — [sources] rows (sec_edgar, ted_search, disabled), soe_reader (default, source_evidence only); unbound, closed world"],
   ["skills/xlab-research/SKILL.md", "xlab", "the Architect's protocol: split first, tune in-sample, one counted holdout read, robustness, critic"],
+  ["skills/execution-map/SKILL.md", "decision", "teaches an Architect the execution-map JSON for tengu decide --map"],
   // ── channels ──
   ["src/adapters/inbound/channel.rs", "channel", "TUI/Telegram helpers: @agent routing, chunking, activity context, skill list"],
   ["src/adapters/inbound/tui/mod.rs", "tui", "cursive TUI loop, event subscription, input dispatch; decision-loop feed bubbles"],
@@ -1254,12 +1448,14 @@ const FILE_MAP = [
   ["src/domain/marketdata.rs", "xlab", "Interval, Bar, FundingPoint, CtxPoint, series observable at close, StockSplit + adjust_for_split, parse_time"],
   ["src/domain/marketdata_decode.rs", "xlab", "HL candleSnapshot / fundingHistory, GeckoTerminal OHLCV, HL archive CSV, JSON decoders"],
   ["src/domain/marketdata_stats.rs", "xlab", "market_history statistics + the mkt_history/1 row"],
-  ["src/ports/market_data.rs", "xlab", "MarketDataStore — bars, funding, ctx per full instrument id; coverage"],
-  ["src/adapters/outbound/market_data.rs", "xlab", "SqliteMarketData — <state dir>/market.db; refused without [xmarket]"],
-  ["src/adapters/outbound/backfill/", "xlab", "mod (Retry, missing_ranges, report), hl (candles + funding via HlInfo), gecko (pool OHLCV), hl_archive (asset_ctxs), json (dataset import)"],
+  ["src/domain/sec.rs", "xlab", "SEC EDGAR decoders: ticker map, submissions + older pages, index Accepted → published_ms, forms kept, MarketEvent"],
+  ["src/ports/market_data.rs", "xlab", "MarketDataStore — bars, funding, ctx, events + event coverage per full instrument id; coverage"],
+  ["src/adapters/outbound/market_data.rs", "xlab", "SqliteMarketData — <state dir>/market.db (bars, funding, ctx, events, event_coverage); refused without [xmarket]"],
+  ["src/adapters/outbound/backfill/", "xlab", "mod (Retry, missing_ranges, report), hl (candles + funding via HlInfo), gecko (pool OHLCV), hl_archive (asset_ctxs), json (dataset import), sec (SEC filings → events, $SEC_USER_AGENT)"],
   ["src/domain/canonical.rs", "xlab", "canonical JSON (keys sorted at every depth) + sha256 hex"],
   ["src/domain/backtest/spec.rs", "xlab", "strategy specs: six kinds, deny_unknown_fields, bounds, SplitSpec"],
   ["src/domain/backtest/kinds.rs", "xlab", "decisions of the six kinds as-of t, skips, data notes"],
+  ["src/domain/backtest/labels.rs", "xlab", "point-in-time info labels of weekend_window candidates: NEWS / UNCERTAIN / NOISE (Phase 7)"],
   ["src/domain/backtest/engine.rs", "xlab", "candidates + simulate per arm (research / [risk]-capped), MarketData, Trade, ArmResult, SkipReason"],
   ["src/domain/backtest/fills.rs", "xlab", "simple-return gross, cost per side, funding over a hold, TP / SL / hold exits, pair spread"],
   ["src/domain/backtest/costs.rs", "xlab", "CostSpec — taker fee, half-spread (fixed / abdi_ranaldo / ctx), slippage, funding"],
@@ -1268,13 +1464,40 @@ const FILE_MAP = [
   ["src/domain/backtest/gate.rs", "xlab", "the gate arm's pure half: gate_event, GateClass, p_take, GateSummary"],
   ["src/domain/backtest/report.rs", "xlab", "BacktestReport — report.json + backtest/1:<run id>, report.md, compact text"],
   ["src/domain/backtest/checks.rs", "xlab", "tests only: time integrity on 15m / 1h / 4h / 1d / split worlds + the rule W golden"],
-  ["src/application/backtest/mod.rs", "xlab", "resolve → prepare → evaluate (IO injected: BacktestEnv)"],
+  ["src/application/backtest/mod.rs", "xlab", "resolve → prepare → evaluate (IO injected: BacktestEnv); cohort identity (RunIdentity), cited_runs, capability_refusal"],
   ["src/application/backtest/gate.rs", "xlab", "run_gate, gate_arms, evaluate_gated, GateAudit"],
-  ["src/application/backtest/run_dir.rs", "xlab", "write_run_dir (run id claimed with create_dir) + prune_runs (keep_runs)"],
+  ["src/application/backtest/run_dir.rs", "xlab", "write_run_dir (run id claimed with create_dir) + prune_runs (keep_runs; cited runs kept)"],
   ["src/adapters/outbound/tools/xlab/history.rs", "xlab", "market_history — optional fetch, splits applied, mkt_history/1"],
   ["src/adapters/outbound/tools/xlab/run.rs", "xlab", "backtest — library name or inline spec, rules arms, backtest/1:<run id>, never the run dir's path"],
   ["src/adapters/outbound/tools/xlab/holdout.rs", "xlab", "holdout discipline: split hidden by default, holdout: true = a counted read (holdout-reads.jsonl)"],
   ["src/adapters/outbound/tools/xlab/rows.rs", "xlab", "backtest run_id + view — a stored run's periods / instruments / trades / notes by run id"],
+  ["src/adapters/outbound/tools/xlab/rank.rs", "ranking", "strategy_ranking — run (the coordinator on a blocking thread) | latest; lease holder = the call id"],
+  // ── lineage + evidence ──
+  ["lineage/", "lineage", "the registry: one TOML per record (families, variants, experiments, episodes, incidents, capabilities, generations, evidence, rankings); locks.toml append-only"],
+  ["src/domain/lineage/", "lineage", "record types, Registry::validate, trace / family_report / acceptance, pins, ranking contract — pure"],
+  ["src/ports/lineage.rs", "lineage", "ContractProbe, EvidenceResolver, ResultSource, AttemptSource"],
+  ["src/application/lineage/", "lineage", "verify (+ --pins, --evidence), pin_status, attempts::scan"],
+  ["src/adapters/outbound/lineage/", "lineage", "probe.rs (RepoProbe), resolver.rs (FsResolver), runs.rs (RunDirs, ReportJson), ledger.rs (LedgerGrade) — read-only"],
+  ["src/domain/evidence.rs", "lineage", "EvidenceClass, Provenance, EvidenceRecord / EvidenceItem, tree_hash — pure"],
+  ["src/domain/evidence_coverage.rs", "lineage", "cadence slots, gaps, LIVE_RECORDED / BACKFILLED / MISSING timeline — pure"],
+  ["src/domain/xm/grade.rs", "lineage", "forward grade: a paper ledger's rows → trades, totals, verdicts, 12 reconciliation checks"],
+  ["src/domain/xm/regrade.rs", "lineage", "book replay: rule W or a variant re-graded from recorded mkt_ctx/1 + hl_book/1 rows"],
+  ["src/domain/backtest/evaluation.rs", "lineage", "Phase 6: rules · Jev · HOLD on the same candidates; JevStatus PROVEN / UNPROVEN / REJECTED; capped books"],
+  ["src/ports/evidence.rs", "lineage", "Vault, LedgerSource, RecordedHistory, BackfillSource, RunDirSource"],
+  ["src/application/evidence.rs", "lineage", "snapshot, verify, coverage, grade, evaluate, regrade"],
+  ["src/adapters/outbound/evidence/", "lineage", "vault.rs, ledger_reader.rs, recorded.rs, run_dir.rs — SQLite immutable=1, the vault the only write"],
+  // ── strategy ranking ──
+  ["src/domain/backtest/ranking.rs", "ranking", "RunFacts, StrategyStanding, select, rank, Ranking (content_sha256, ranking.md, compact text) — pure"],
+  ["src/application/ranking/mod.rs", "ranking", "run_ranking — contract, ranking_date, lease ranking:<id> (TTL 15 min), manifest resume, freshness, backtest, rank, publish"],
+  ["src/application/ranking/store.rs", "ranking", "<state dir>/strategy-rankings/<contract>/: <date>/manifest.json, ranking.json, ranking.md · latest.md, latest.json"],
+  // ── sources (O2) ──
+  ["src/domain/source/", "sources", "SourceRecord, Fact, rules, as-of view (captured · knowable), EvidencePacket source_asof/1, sec_records, ted — pure"],
+  ["src/ports/source_store.rs", "sources", "SourceStore — commit (one transaction), records, cursor, purge, set_switch / switches"],
+  ["src/adapters/outbound/sources/", "sources", "store.rs (SqliteSourceStore, sources.db), sec.rs, ted.rs; fetch_gate, open_source_store / existing_source_store"],
+  ["src/application/sources.rs", "sources", "evidence_as_of, purge_request"],
+  ["src/adapters/outbound/tools/sources/", "sources", "source_evidence — read-only as-of evidence packet (defs.rs = interface)"],
+  // ── SOE ──
+  ["src/domain/soe/", "soe", "values, records, profile, opportunity, risk, experiment, episode, portfolio, economics, gates, matching, rank, eval — pure"],
   // ── skills ──
   ["skills/orchestrator/SKILL.md", "skills", "planner system prompt"],
   ["skills/orchestrator/plan_schema.json", "skills", "the plan JSON shape the planner is asked for"],

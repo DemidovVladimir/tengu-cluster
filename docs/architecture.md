@@ -1,7 +1,7 @@
 # Architecture
 
-> **Historical overview — banner refreshed 2026-10-02.** Read the canonical set instead: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer) — the chat turn, `tengu run` (feeds, loops, lease), decision loops + replay, typed observations, the tool families, xmarket risk / paper and xlab backtests. Every file: `docs/code-map.md` (+ `.html`). Config: `docs/configuration.md`.
-> The doctrine below (harness owns control flow; orchestrator = an agent with one `memory_search` tool) is the PR #6–#8 design, replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). Paths, engines, trait locations, the plugin list and the module map were corrected in place on 2026-10-02; this page does not cover anything added since 2026-09-24.
+> **Historical overview — banner refreshed 2026-10-08.** Read the canonical set instead: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer) — the chat turn, `tengu run` (feeds, loops, lease), decision loops + replay, typed observations, the tool families, xmarket risk / paper, xlab backtests, lineage + evidence, strategy ranking, source evidence and SOE. Every file: `docs/code-map.md` (+ `.html`). Config: `docs/configuration.md`.
+> The doctrine below (harness owns control flow; orchestrator = an agent with one `memory_search` tool) is the PR #6–#8 design, replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). Paths, engines, trait locations, the plugin list and the module map were corrected in place on 2026-10-02 and 2026-10-08; subsystems added since 2026-09-24 are pointers only (§ Added since 2026-09-24).
 
 > Historical: every implementation plan referenced this document; every PR was reviewed against it.
 
@@ -106,7 +106,7 @@ Passed to every `engine.run()` call:
 ### Tool Assembly (`src/bootstrap/tools.rs`, catalog in `src/adapters/outbound/tools/mod.rs`)
 - `compute_base_tools()` — static tool defs for the outer loop; opt-in names (`src/domain/tools.rs::WORKSPACE_TOOLS`) join via `workspace_tools` or `tools`
 - `advertised_defs()` (`adapters/outbound/tools/mod.rs`) — the catalog's tool defs an agent sees (memory gate + its opt-ins)
-- `build_tool_executor()` — constructs a `ToolRegistry`, registers the catalog plugins through `register_catalog` (workspace, memory, cache, `agentic_memory` with feature `postgres_memory`, skill-lifecycle, manage_skill, http, crypto, skill_resource, view_skill, solana, hyperliquid, xm, xlab) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
+- `build_tool_executor()` — constructs a `ToolRegistry`, registers the catalog plugins through `register_catalog` (workspace, memory, cache, `agentic_memory` with feature `postgres_memory`, skill-lifecycle, manage_skill, http, crypto, skill_resource, view_skill, solana, hyperliquid, xm, xlab, sources) plus `SkillPlugin` and `McpPlugin`, filtered by the caller's allow-list, and returns a `PluginToolExecutor`. Callers append `executor.additional_tool_defs(&tools)` to surface dynamically-discovered MCP proxy tools to the LLM.
 
 ### Skill Lifecycle (`src/application/skills/lifecycle/`, `src/adapters/outbound/tools/skill_lifecycle/`)
 A harness-owned subsystem for **distillation**, **metric measurement**, and **bounded evolution** of skills. Three entry points:
@@ -121,7 +121,7 @@ All three honour harness-owned doctrine: cycle counts, regression tolerance, bes
 
 Every tool is a small struct implementing the async `Tool` trait (`src/ports/tool.rs`). Plugins (`ToolPlugin` impls) group related tools and materialize them at registry build time. The `ToolRegistry` collects all tools and dispatches calls through `PluginToolExecutor`, which builds a per-call `ToolCtx` carrying the agent's workspace, scope, shell, HTTP client, memory handle, secret registry, activity port, the conversation, the agent's config and the call id.
 
-- **Catalog plugins** (one `ToolEntry` row per tool in `catalog()`): `workspace`, `memory`, `cache`, `agentic_memory` (feature `postgres_memory`), `skill_lifecycle`, `manage_skill`, `http`, `crypto`, `skill_resource`, `view_skill`, `solana`, `hyperliquid`, `xm`, `xlab`
+- **Catalog plugins** (one `ToolEntry` row per tool in `catalog()`): `workspace`, `memory`, `cache`, `agentic_memory` (feature `postgres_memory`), `skill_lifecycle`, `manage_skill`, `http`, `crypto`, `skill_resource`, `view_skill`, `solana`, `hyperliquid`, `xm`, `xlab`, `sources`
 - **Outside the catalog**: `skill` (`SkillPlugin`, shell skills) and `mcp` (`McpPlugin`, dynamic) — connects to each `[[mcp_servers]]` entry, calls `tools/list`, registers each remote tool as `{server}__{tool}` (a schema outside the engine subset is dropped at discovery)
 
 Adding a new platform tool: write a `Tool` impl under `src/adapters/outbound/tools/<name>/`, expose it through a `ToolPlugin`, and add one `ToolEntry` row to `catalog()` in `adapters/outbound/tools/mod.rs` (+ the name in `WORKSPACE_TOOLS` if opt-in); the in-process executor and the MCP bridge both read it. A tool is done when its schema lint, bridge conformance case and live engine-matrix leg pass (`docs/tools.md`).
@@ -172,7 +172,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 | `adapters/inbound/activity.rs` | Tool-activity UI helpers (no executors) |
 | `adapters/outbound/shell.rs` | `LocalShellExecutor` implementing `ShellExecutionPort` |
 | `application/skills/registry.rs` | Skill parsing, registry, system prompt building (no tool dispatch — that lives in `adapters/outbound/tools/skill/`) |
-| `adapters/outbound/tools/{solana,hyperliquid,xm,xlab}/` | added 2026-09-24 → 10-01 — see `docs/architecture-2026-04-27.md` §2.10 |
+| `adapters/outbound/tools/{solana,hyperliquid,xm,xlab,sources}/` | added 2026-09-24 → 10-08 — see `docs/architecture-2026-04-27.md` §2.10 |
 
 ### Memory
 | Module | Purpose |
@@ -200,6 +200,17 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 | `adapters/outbound/egress.rs` | Network policy: Tor by default, host allowlist, shell sandbox, JSONL audit |
 | `adapters/outbound/scaffold.rs` | Workspace directory scaffolding |
 | `adapters/outbound/prune.rs` | State/cache cleanup (never `<TENGU_HOME>/state` beyond `state/flows`) |
+
+### Added since 2026-09-24 (pointers only)
+| Subsystem | Entry points | Read |
+|-----------|--------------|------|
+| `tengu run` runtime + decision loops (Jev) | `adapters/inbound/run.rs`, `application/{runtime,decision_loop}/` | `docs/architecture-2026-04-27.md` §1b A, §2.7–2.8 |
+| Typed observations + recorder | `domain/observation.rs`, `application/observe.rs` | §2.9 |
+| xmarket risk / paper · xlab backtests | `domain/xm/`, `domain/backtest/`, `application/backtest/` | §2.11–2.12, §1b B |
+| Lineage + evidence | `domain/lineage/`, `domain/evidence*.rs`, `cli/{lineage,evidence}.rs` | §2.14 |
+| Strategy ranking | `application/ranking/`, `domain/backtest/ranking.rs`, `cli/ranking.rs` | §2.15, §1b C |
+| Source evidence (O2) | `domain/source/`, `adapters/outbound/sources/`, `cli/sources.rs` | §2.16 |
+| Software Opportunity Engine | `domain/soe/`, `config/soe.rs`, `cli/soe.rs` | §2.17 |
 
 ## Related
 - `docs/architecture-2026-04-27.md` (+ `.svg`, `.html`) — the current architecture
