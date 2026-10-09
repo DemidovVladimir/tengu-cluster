@@ -9,9 +9,9 @@ window.TUTORIAL = {
     { id: "team", kanji: "組", name: "Build a team", blurb: "Agents, tools, skills and chat surfaces, all composed in TOML." },
     { id: "memory", kanji: "脳", name: "Memory", blurb: "Open Brain for live memory, the LLM Wiki for reviewed knowledge." },
     { id: "safety", kanji: "守", name: "Safety", blurb: "Scopes, Tor egress and secrets: the fences around every tool call." },
-    { id: "runtime", kanji: "動", name: "Runtime", blurb: "Long-running loops, typed observations and the numbers they leave." },
+    { id: "runtime", kanji: "動", name: "Runtime", blurb: "Long-running loops, typed observations, the numbers they leave and the Studio that shows them." },
     { id: "desk", kanji: "市", name: "Trading desk", blurb: "Solana LP tools and the paper desk with its risk gate." },
-    { id: "research", kanji: "史", name: "Research", blurb: "History first: backfill public data, then backtest on it." },
+    { id: "research", kanji: "史", name: "Research", blurb: "History first: backfill, backtest, grade forward runs, rank strategies, cite approved sources." },
     { id: "opportunity", kanji: "機", name: "Opportunities", blurb: "Software opportunities: sourced evidence, exact money, HOLD as a real answer." },
     { id: "operate", kanji: "営", name: "Operate", blurb: "Diagnose, deploy and clean up." }
   ],
@@ -41,7 +41,7 @@ window.TUTORIAL = {
     { slug: "observations", chapter: "runtime", title: "Typed observations", blurb: "Tool results with status, age and features, cached and recorded." },
     { slug: "runtime", chapter: "runtime", title: "tengu run", blurb: "One long-running process per sandbox: feeds, loops, leases, heartbeat." },
     { slug: "metrics", chapter: "runtime", title: "Metrics and audit trails", blurb: "Every model call leaves a record; every risky action leaves a line." },
-    { slug: "studio", chapter: "runtime", title: "Studio graph and trace", blurb: "A sandbox as a graph from its config; every run as an ordered, redacted event file." },
+    { slug: "studio", chapter: "runtime", title: "Studio graph and trace", blurb: "A sandbox as a graph from its config; every run as an ordered, redacted event file; a local browser UI." },
 
     { slug: "solana", chapter: "desk", title: "Solana LP tools", blurb: "Read pools and positions; simulate or send writes behind a lease." },
     { slug: "paper-desk", chapter: "desk", title: "Paper desk and risk gate", blurb: "Every order passes the risk gate inside the tool, then fills on paper." },
@@ -53,7 +53,7 @@ window.TUTORIAL = {
     { slug: "strategy-ranking", chapter: "research", title: "Strategy ranking", blurb: "A sealed contract says how strategies rank, weakest first, on the same data." },
     { slug: "source-evidence", chapter: "research", title: "Source evidence", blurb: "Facts from approved sources with full provenance; an inference is never a fact." },
 
-    { slug: "soe", chapter: "opportunity", title: "Software opportunities", blurb: "tengu soe: gate and rank software opportunities offline on a private, signed profile." },
+    { slug: "soe", chapter: "opportunity", title: "Software opportunities", blurb: "tengu soe: a weekly cycle gates and ranks software opportunities on a private, signed profile; agents only propose and challenge." },
 
     { slug: "ops", chapter: "operate", title: "Diagnose and deploy", blurb: "doctor, prune, Docker and the Tor proxy." }
   ]

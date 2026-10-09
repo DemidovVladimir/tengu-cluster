@@ -396,6 +396,7 @@ active_id=-1567 active_price=148.205 base_fee_pct=0.1 bin_step=10 enabled=true q
     <li><span><b>Degraded, not broken.</b> A store that fails to open or read means live reads, never a failed call.</span></li>
     <li><span><b>Old rows go.</b> Cache rows older than 7 days are deleted when the store opens; day files past <code>retention_days</code> too.</span></li>
     <li><span><b>Readers touch nothing.</b> <code>tengu history</code> opens day files read-only: it creates and deletes no file.</span></li>
+    <li><span><b>World reads are traced.</b> Under <code>tengu run</code> or <code>tengu decide</code>, a loop step writes one <code>observation.read</code> event per <code>world</code> alias: ok, stale, missing or failed, with its key and age (<a href="studio.html">Studio graph and trace</a>).</span></li>
   </ul>
 </section>
 
@@ -443,7 +444,7 @@ active_id=-1567 active_price=148.205 base_fee_pct=0.1 bin_step=10 enabled=true q
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

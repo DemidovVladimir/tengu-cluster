@@ -295,18 +295,19 @@
   <div class="sec-head">
     <span class="kicker">tengu --help</span>
     <h2 id="s-cmds">Every command, one line each</h2>
-    <p>The top-level commands in <code>cli/mod.rs</code>. A command with <code>--sandbox</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code> instead of the base config; <code>evidence</code>, <code>lineage</code> and <code>soe</code> load no config.</p>
+    <p>The top-level commands in <code>cli/mod.rs</code>. A command with <code>--sandbox</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code> instead of the base config; <code>evidence</code>, <code>lineage</code> and <code>trace</code> load no config, <code>soe</code> only for its weekly commands.</p>
   </div>
   <div class="targets">
     <div class="dk"><b>chat · telegram · webhooks</b>the TUI · the bot · the webhook listener (<code>--features webhooks</code>) — <a href="channels.html">channels</a></div>
     <div class="dk"><b>run · decide</b><code>tengu run</code>: loops, feeds, lease, heartbeat — <a href="runtime.html">runtime</a> · one loop event, <code>--map</code> — <a href="decision-loop.html">decision loop</a></div>
+    <div class="dk"><b>studio · trace</b><code>graph</code> (JSON); no subcommand = the loopback browser UI (<code>--features studio</code>), Play / Stop with control on · <code>runs</code> <code>show</code> — <a href="studio.html">Studio</a></div>
     <div class="tor"><b>status · doctor · prune</b>this page: snapshot · <code>--tor</code> <code>--live</code> <code>--engines</code> · clean state</div>
     <div class="tor"><b>secret</b><code>init</code> <code>set</code> <code>remove</code> <code>list</code> <code>change-password</code> <code>path</code> — <a href="secrets.html">secrets</a></div>
     <div><b>history</b><code>range</code> <code>asof</code> · <code>backfill</code> <code>events</code> <code>import-hl-archive</code> <code>import-json</code> <code>coverage</code> — <a href="history.html">history</a></div>
     <div><b>backtest · ranking</b>one strategy on <code>market.db</code> — <a href="backtest.html">backtest</a> · <code>run</code> <code>show</code> — <a href="strategy-ranking.html">ranking</a></div>
     <div><b>evidence</b><code>snapshot</code> <code>verify</code> <code>coverage</code> <code>grade</code> <code>evaluate</code> <code>regrade</code> — <a href="evidence.html">evidence</a></div>
     <div><b>lineage</b><code>verify</code> <code>show</code> <code>trace</code> <code>family</code> <code>attempts</code> <code>report</code> <code>capabilities</code> <code>generation</code> <code>seal</code> — <a href="lineage.html">lineage</a></div>
-    <div><b>soe · sources</b><code>init</code> <code>check</code> <code>portfolio</code> <code>sensitivity</code> <code>eval</code> — <a href="soe.html">SOE</a> · <code>list</code> <code>fetch</code> <code>import</code> <code>asof</code> <code>terms</code> <code>purge</code> <code>disable</code> <code>enable</code> — <a href="source-evidence.html">sources</a></div>
+    <div><b>soe · sources</b><code>init</code> <code>check</code> <code>portfolio</code> <code>sensitivity</code> <code>eval</code> · weekly <code>cycle</code> <code>replay</code> <code>grade</code> <code>resolve</code> <code>review</code> <code>verify</code> <code>show</code> — <a href="soe.html">SOE</a> · <code>list</code> <code>fetch</code> <code>import</code> <code>asof</code> <code>terms</code> <code>purge</code> <code>disable</code> <code>enable</code> — <a href="source-evidence.html">sources</a></div>
     <div class="tor"><b>risk</b><code>status</code> · <code>halt</code> <code>resume</code> (operator at a terminal) — <a href="paper-desk.html">paper desk</a></div>
     <div><b>skill · eval</b><code>list</code> <code>install</code> <code>seed</code> <code>export</code> <code>remove</code> <code>doctor</code> · <code>evolve</code> <code>metrics</code> <code>accept-proposal</code> · skill evals — <a href="skills.html">skills</a>, <a href="skill-lifecycle.html">lifecycle</a></div>
     <div><b>mcp-bridge · agentic-memory-server</b>stdio MCP servers — <a href="mcp-bridge.html">bridge</a> · <a href="memory.html">Open Brain</a></div>
@@ -372,6 +373,7 @@ ufw: allow 22/tcp and 7080/tcp
   <ul class="states">
     <li><span class="chip ok">0</span><span><b>all ok</b>Exit 0; Docker keeps the container healthy.</span></li>
     <li><span class="chip bad">1</span><span><b>backend init error</b>An engine did not build: e.g. <code>OPENROUTER_API_KEY is required</code>, or <code>claude_code</code> without its feature.</span></li>
+    <li><span class="chip bad">1</span><span><b>Claude CLI `claude` not found</b>A <code>claude_code</code> agent whose CLI (<code>[claude_code] cli_path</code>) is not on <code>PATH</code>; the shipped image has none.</span></li>
     <li><span class="chip bad">1</span><span><b>proxy unreachable</b>The <code>[egress]</code> proxy port refused or timed out: is tor running?</span></li>
     <li><span class="chip bad">1</span><span><b>not via Tor</b><code>--tor</code>: the exit is not a Tor exit, or the check failed.</span></li>
     <li><span class="chip bad">1</span><span><b>NOT live</b><code>--live</code>: heartbeat missing, stopped or stale, or a required feed down or stale.</span></li>
@@ -463,9 +465,10 @@ ufw: allow 22/tcp and 7080/tcp
   /* --- make up: sandbox facts read from sandboxes/<name>/config.toml --- */
   var SB = {
     "": { file: "config.toml", open: false, cc: 0, or: 1, tg: false },
-    "jev-exec": { file: "sandboxes/jev-exec/config.toml", open: true, cc: 1, or: 1, tg: false },
+    "control-loop-lab": { file: "sandboxes/control-loop-lab/config.toml", open: true, cc: 0, or: 1, tg: false },
+    "jev-exec":{ file: "sandboxes/jev-exec/config.toml", open: true, cc: 1, or: 1, tg: false },
     "lping": { file: "sandboxes/lping/config.toml", open: true, cc: 0, or: 3, tg: false },
-    "soe": { file: "sandboxes/soe/config.toml", open: true, cc: 1, or: 0, tg: false },
+    "soe": { file: "sandboxes/soe/config.toml", open: true, cc: 3, or: 0, tg: false, gen: true },
     "storage-test": { file: "sandboxes/storage-test/config.toml", open: false, cc: 1, or: 0, tg: true },
     "tor-check": { file: "sandboxes/tor-check/config.toml", open: false, cc: 0, or: 1, tg: false },
     "unlimited": { file: "sandboxes/unlimited/config.toml", open: true, cc: 0, or: 1, tg: true },
@@ -570,10 +573,10 @@ ufw: allow 22/tcp and 7080/tcp
   var WS = { lping: "~/lping-workspace", unlimited: "~/unlimited-workspace", "jev-exec": "~/jev-exec-workspace", xlab: "~/xlab-ws" };
   function prune() {
     var sb = $("p-sb").value, hard = $("p-hard").checked, ws = WS[sb];
-    var rm = ["<code>&lt;TENGU_HOME&gt;/state/flows</code> conversation flows", "<code>&lt;TENGU_HOME&gt;/memory</code> global memory vectors", "<code>&lt;TENGU_HOME&gt;/logs</code> log files"];
+    var rm = ["<code>&lt;TENGU_HOME&gt;/state/flows</code> conversation flows", "<code>&lt;TENGU_HOME&gt;/memory</code> global memory vectors", "<code>&lt;TENGU_HOME&gt;/logs</code> log files, the audit trails (<code>decisions</code>, <code>risk</code>, <code>egress</code>) and the execution traces included"];
     if (ws && !hard) ["memory", ".tengu-tasks", ".tengu-attachments", ".tengu/storage"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
     if (ws && hard) rm.push("every entry inside <code>" + ws + "</code>: <code>.tengu/</code> (cache, observations, workspace skills), output folders, <code>TENGU_PLAN.md</code> …");
-    var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code> beyond <code>flows</code>: xmarket state dirs, <code>solana-writes.db</code>",
+    var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code> beyond <code>flows</code>: the xmarket, xlab and SOE state dirs, <code>solana-writes.db</code>",
       "<code>&lt;TENGU_HOME&gt;/secrets.vault</code>", "<code>&lt;TENGU_HOME&gt;/config.toml</code>", "<code>~/.tengu/skills</code> (managed skills)",
       "the repo: <code>sandboxes/</code>, <code>skills/</code>"];
     if (ws && hard) keep.push("the folder <code>" + ws + "</code> itself (emptied, kept)");

@@ -292,14 +292,15 @@
     <p>Paths assume the default <code>TENGU_HOME</code>, <code>~/.tengu</code>. Every JSONL line is appended whole.</p>
   </div>
   <div class="grid trails">
-    <div class="card data"><h3>~/.tengu/logs/tengu.log</h3><p>All tracing, metrics lines included. TUI: file only. Telegram, webhooks, <code>tengu run</code>: file + stderr.</p><span class="fields">default filter tengu=info</span></div>
+    <div class="card data"><h3>~/.tengu/logs/tengu.log</h3><p>All tracing, metrics lines included. TUI: file only. Telegram, webhooks, <code>tengu run</code> and the Studio server: file + stderr.</p><span class="fields">default filter tengu=info</span></div>
     <div class="card guard"><h3>~/.tengu/logs/egress.jsonl</h3><p>Every <code>http_request</code> hop and network-looking shell command, allowed or denied. <a href="egress.html">Egress</a>.</p><span class="fields">ts pid session agent call_id via proxy verdict</span></div>
-    <div class="card jev"><h3>~/.tengu/logs/decisions.jsonl</h3><p>One line per Jev decisions call, failures included. <a href="decision-loop.html">Decision loop</a>.</p><span class="fields">ts_ms loop sandbox session_id t call_id model act_at latency_ms answers usage result args ok output obs trigger runtime_id run_id</span></div>
-    <div class="card data"><h3>~/.tengu/logs/trace/&lt;sandbox&gt;/&lt;run_id&gt;.jsonl</h3><p>One file per <code>tengu run</code> or <code>tengu decide</code>: ordered, redacted events, first <code>run.opened</code>. <a href="studio.html">Studio graph and trace</a>.</p><span class="fields">event_id seq ts_ms runtime_id run_id session_id correlation_id component kind node_id status payload</span></div>
-    <div class="card guard"><h3>~/.tengu/logs/risk.jsonl</h3><p>Every <code>[risk]</code> verdict, allow or deny, after its ledger commit. <a href="paper-desk.html">Paper desk</a>.</p><span class="fields">ts_ms decision_id account call_id session_id tool client_order_id instrument verdict rule</span></div>
+    <div class="card jev"><h3>~/.tengu/logs/decisions.jsonl</h3><p>One line per Jev decisions call, failures included. <a href="decision-loop.html">Decision loop</a>.</p><span class="fields">ts ts_ms loop sandbox session_id t call_id decision_id model act_at latency_ms answers usage result args ok output obs trigger runtime_id run_id</span></div>
+    <div class="card data"><h3>~/.tengu/logs/trace/&lt;sandbox&gt;/&lt;run_id&gt;.jsonl</h3><p>One file per <code>tengu run</code> or <code>tengu decide</code>: ordered, redacted events, first <code>run.opened</code>. <a href="studio.html">Studio graph and trace</a>.</p><span class="fields">schema_version event_id seq ts_ms sandbox config_hash runtime_id run_id session_id correlation_id parent_event_id call_id component kind node_id status duration_ms payload artifact</span></div>
+    <div class="card guard"><h3>~/.tengu/logs/risk.jsonl</h3><p>Every <code>[risk]</code> verdict, allow or deny, after its ledger commit. <a href="paper-desk.html">Paper desk</a>.</p><span class="fields">ts_ms decision_id account call_id session_id tool client_order_id instrument verdict rule class degraded trips checks headroom intent context fill</span></div>
     <div class="card jev"><h3>~/.tengu/logs/maps/&lt;sha256&gt;.json</h3><p>Each accepted execution map, canonical JSON. Its run's audit lines carry <code>trigger = map:&lt;sha256&gt;</code>.</p><span class="fields">tengu decide --map</span></div>
     <div class="card hands"><h3>&lt;workspace&gt;/skills/.audit.jsonl</h3><p>Skill install, remove and export, with the verdict and sha256.</p><span class="fields">ts op name verdict source sha256</span></div>
-    <div class="card data"><h3>&lt;state dir&gt;/backtests/holdout-reads.jsonl</h3><p>Each counted holdout read of the xlab <code>backtest</code> tool.</p><span class="fields">ts_ms time via run_id spec_sha256 strategy split call_id</span></div>
+    <div class="card data"><h3>&lt;state dir&gt;/backtests/holdout-reads.jsonl</h3><p>Each counted holdout read of the xlab <code>backtest</code> tool, its stored rows, or <code>tengu backtest --split</code>.</p><span class="fields">ts_ms time via run_id spec_sha256 strategy split call_id</span></div>
+    <div class="card brain"><h3>~/.tengu/state/soe/&lt;log&gt;.jsonl</h3><p>The SOE state logs: one line per decided candidate, episode, frozen cycle (hash-chained forecast log), grade, holdout read, resolution, replay and review. <a href="soe.html">SOE</a>.</p><span class="fields">candidates episodes forecast-log grades holdout-reads resolutions replays reviews</span></div>
   </div>
 </section>
 
@@ -315,7 +316,7 @@
     <li><span><b>Old children still parse.</b> A payload without <code>metrics</code> reads as an empty list.</span></li>
     <li><span><b>True totals.</b> The TUI aggregator absorbs every record even with the panel off, so turning it on shows real numbers.</span></li>
     <li><span><b>Slow readers never block.</b> A lagging subscriber skips the records it missed, with a warning.</span></li>
-    <li><span><b>Lines never interleave.</b> Decision and risk lines are one <code>write_all</code> each on an append-only file; egress lines too.</span></li>
+    <li><span><b>Lines never interleave.</b> Decision, risk, trace and SOE state lines are one <code>write_all</code> each on an append-only file; egress lines too.</span></li>
   </ul>
 </section>
 
@@ -362,7 +363,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>
