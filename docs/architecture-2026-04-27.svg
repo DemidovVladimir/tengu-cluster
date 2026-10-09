@@ -1,6 +1,6 @@
-<svg viewBox="0 0 1200 3650" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
-  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run and their files (2026-04-27, synced 2026-10-08)</title>
-  <desc id="desc">Seven stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); and research lineage, rankings and sources (2026-10-06 to 2026-10-08: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine).</desc>
+<svg viewBox="0 0 1200 3976" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio and their files (2026-04-27, synced 2026-10-09)</title>
+  <desc id="desc">Eight stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control).</desc>
   <style>
     .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
     .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
@@ -36,6 +36,8 @@
     .pill-rnk  { fill: #be185d; }
     .pill-src  { fill: #115e59; }
     .pill-soe  { fill: #9a3412; }
+    .pill-trc  { fill: #0e7490; }
+    .pill-std  { fill: #6d28d9; }
     .panel { fill: #ffffff; stroke: #e2e8f0; }
     .arrow { stroke: #475569; stroke-width: 1.6; fill: none; }
     .arrow-fat { stroke: #1e293b; stroke-width: 2.4; fill: none; }
@@ -53,10 +55,10 @@
     </marker>
   </defs>
 
-  <rect x="0" y="0" width="1200" height="3650" fill="#ffffff" />
+  <rect x="0" y="0" width="1200" height="3976" fill="#ffffff" />
 
   <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response, and what runs without one</text>
-  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-08 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer) · section 7: lineage, rankings, sources</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-09 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer) · section 7: lineage, rankings, sources, SOE · section 8: trace + Studio</text>
 
   <g transform="translate(20, 56)">
     <rect width="1160" height="50" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
@@ -563,7 +565,7 @@
   <path d="M 430 2110 L 430 2124 L 937 2124 L 937 2112" class="arrow-dash" marker-end="url(#ah-dash)" />
   <text x="440" y="2140" class="small" font-style="italic">a tool feed may call an exec tool directly (xm_exits, xm_weekend_fade): clock work, no LLM, no Jev</text>
   <text x="20" y="2160" class="small">health: run-&lt;s&gt;.json + loop/1 + feed/1 rows every heartbeat_secs → tengu doctor --sandbox &lt;s&gt; --live (tengu run healthcheck) · SIGINT / SIGTERM drain ≤ shutdown_grace_secs · a second runner exits 1</text>
-  <text x="20" y="2174" class="small">today: xmarket, xmarket-weekend and xlab-w2 (history refresh + strategy rankings) run tool feeds only; Jev loops live in lping (incl. exec chains), jev-exec and xlab / xlab-w2 (xl_gate)</text>
+  <text x="20" y="2174" class="small">today: tool feeds only in xmarket, xmarket-weekend, xlab-w2 (history refresh + rankings); a job feed in soe (soe_cycle); Jev loops in lping (incl. exec chains), jev-exec, xlab / xlab-w2 (xl_gate), control-loop-lab (demo)</text>
 
   <text x="20" y="2206" class="h3">B. tengu backtest --sandbox &lt;s&gt;  -  market.db → resolve / prepare → candidates → [Jev gate] → evaluate → run dir     (docs/xlab-2026-10-01.md)</text>
 
@@ -652,8 +654,8 @@
     <text x="10" y="110" class="small">LoopDispatch: one event at a time per loop,</text>
     <text x="10" y="122" class="small">max_decisions_in_flight, max_queued_per_loop</text>
     <text x="10" y="144" class="file">application/runtime/feeds.rs · health.rs</text>
-    <text x="10" y="156" class="small">run_feed: tool / tick feeds, backoff, at-tick</text>
-    <text x="10" y="168" class="small">retry 15 min · HealthBoard: run-&lt;s&gt;.json,</text>
+    <text x="10" y="156" class="small">run_feed: tool / tick / job feeds, backoff,</text>
+    <text x="10" y="168" class="small">at-tick retry 15 min · HealthBoard: run-&lt;s&gt;.json,</text>
     <text x="10" y="180" class="small">loop/1:&lt;name&gt;, feed/1:&lt;name&gt;</text>
     <text x="10" y="202" class="file">domain/runtime.rs · domain/schedule.rs</text>
     <text x="10" y="214" class="small">leases + live_verdict · next_fire (DST-safe)</text>
@@ -727,14 +729,14 @@
     <text x="10" y="166" class="h3">Hyperliquid (2)</text>
     <text x="10" y="180" class="small">hl_ctx → mkt_ctx/1, hl_book → hl_book/1</text>
     <text x="10" y="192" class="file">outbound/hyperliquid/info.rs (HlInfo)</text>
-    <text x="10" y="210" class="h3">xmarket (6) · xlab (3) · sources (1)</text>
+    <text x="10" y="210" class="h3">xm (6) · xlab (3) · sources (1) · soe (3)</text>
     <text x="10" y="224" class="small">risk_status, paper_positions; exec: paper_order,</text>
     <text x="10" y="236" class="small">paper_close, xm_exits, xm_weekend_fade</text>
     <text x="10" y="248" class="small">market_history, backtest, strategy_ranking</text>
     <text x="10" y="260" class="small">source_evidence (read-only, never fetches)</text>
-    <text x="10" y="276" class="file">domain/tools.rs::WORKSPACE_TOOLS</text>
-    <text x="10" y="288" class="small">rate_limit.rs · http_class.rs · backoff.rs</text>
-    <text x="10" y="304" class="small" font-style="italic">tengu tool list: 47 names (default build)</text>
+    <text x="10" y="272" class="small">soe_view, soe_propose, soe_challenge</text>
+    <text x="10" y="288" class="file">domain/tools.rs · rate_limit · http_class</text>
+    <text x="10" y="304" class="small" font-style="italic">tengu tool list: 50 names (default build)</text>
   </g>
 
   <g transform="translate(20, 2744)">
@@ -826,24 +828,25 @@
     <text x="10" y="120" class="file">xlab-w2</text>
     <text x="108" y="120" class="small">W2 research, SEC, rankings</text>
     <text x="10" y="136" class="file">soe</text>
-    <text x="108" y="136" class="small">source layer O2, read-only</text>
-    <text x="10" y="152" class="file">tor-check</text>
-    <text x="108" y="152" class="small">Tor egress check</text>
-    <text x="10" y="168" class="file">storage-test</text>
-    <text x="108" y="168" class="small">persistent_store test</text>
-    <text x="10" y="184" class="file">unlimited</text>
-    <text x="108" y="184" class="small">one agent over Telegram</text>
-    <text x="10" y="210" class="small">network open: all but tor-check and</text>
-    <text x="10" y="222" class="small">storage-test; allow_hosts ceilings: xmarket*,</text>
-    <text x="10" y="234" class="small">xlab*, soe (HL, Gecko, SEC, TED)</text>
-    <text x="10" y="256" class="small">[risk] sandboxes: hardened (no shell, no</text>
-    <text x="10" y="268" class="small">foreign MCP, claude_code built-ins off)</text>
-    <text x="10" y="290" class="small" font-style="italic">one config per sandbox:</text>
-    <text x="10" y="302" class="small" font-style="italic">sandboxes/&lt;n&gt;/config.toml</text>
+    <text x="108" y="136" class="small">sources O2 + weekly cycle O3</text>
+    <text x="10" y="152" class="file">control-loop-lab</text>
+    <text x="108" y="152" class="small">Studio lab: one Jev loop, Play</text>
+    <text x="10" y="168" class="file">tor-check</text>
+    <text x="108" y="168" class="small">Tor egress check</text>
+    <text x="10" y="184" class="file">storage-test</text>
+    <text x="108" y="184" class="small">persistent_store test</text>
+    <text x="10" y="200" class="file">unlimited</text>
+    <text x="108" y="200" class="small">one agent over Telegram</text>
+    <text x="10" y="222" class="small">network open: all but tor-check and</text>
+    <text x="10" y="234" class="small">storage-test; allow_hosts ceilings: xmarket*,</text>
+    <text x="10" y="246" class="small">xlab*, soe (HL, Gecko, SEC, TED)</text>
+    <text x="10" y="266" class="small">[risk] / [soe] sandboxes: hardened (no shell,</text>
+    <text x="10" y="278" class="small">no foreign MCP, claude_code built-ins off)</text>
+    <text x="10" y="302" class="small" font-style="italic">one config per sandbox: sandboxes/&lt;n&gt;/config.toml</text>
   </g>
 
   <!-- ===================== SECTION 7 — research lineage, rankings, sources ===================== -->
-  <text x="20" y="3088" class="h2">section 7 - research lineage, rankings, sources - 2026-10-06 → 2026-10-08</text>
+  <text x="20" y="3088" class="h2">section 7 - research lineage, rankings, sources, SOE - 2026-10-06 → 2026-10-09</text>
   <line x1="20" y1="3094" x2="1180" y2="3094" stroke="#cbd5e1" />
 
   <text x="20" y="3118" class="h3">C. tengu ranking run --sandbox &lt;s&gt;  -  sealed contract → date → lease → backtests → rank → publish     (docs/strategy-ranking-automation-2026-10-08.md)</text>
@@ -976,27 +979,116 @@
   <g transform="translate(896, 3266)">
     <rect width="284" height="256" rx="6" class="panel" />
     <rect x="0" y="0" width="284" height="22" rx="6" class="pill-soe" />
-    <text x="10" y="15" class="pt">SOE - O0–O2, offline (2026-10-08)</text>
-    <text x="10" y="40" class="file">domain/soe/</text>
-    <text x="10" y="52" class="small">exact money (minor units), unknown-safe Est,</text>
-    <text x="10" y="64" class="small">economics (downside / base / upside), hard</text>
-    <text x="10" y="76" class="small">gates PASS / HOLD / REJECT, capability fit,</text>
-    <text x="10" y="88" class="small">ranking + the HOLD week, eval cases</text>
-    <text x="10" y="108" class="file">config/soe.rs</text>
-    <text x="10" y="120" class="small">signed private profile (0600, never in git)</text>
-    <text x="10" y="140" class="file">cli/soe.rs</text>
-    <text x="10" y="152" class="small">tengu soe init | check | portfolio |</text>
-    <text x="10" y="164" class="small">sensitivity | eval</text>
-    <text x="10" y="184" class="small">no sandbox config, egress, LLM or fetch</text>
-    <text x="10" y="242" class="small" font-style="italic">imports: soe → source, never back</text>
+    <text x="10" y="15" class="pt">SOE - O0–O4 (2026-10-08 / 10-09)</text>
+    <text x="10" y="38" class="file">domain/soe/</text>
+    <text x="10" y="50" class="small">exact money, Est, economics, hard gates</text>
+    <text x="10" y="62" class="small">PASS / HOLD / REJECT, decide_week (pure)</text>
+    <text x="10" y="78" class="file">config/soe.rs</text>
+    <text x="10" y="90" class="small">signed private profile · [soe] closed world</text>
+    <text x="10" y="106" class="file">application/soe/ · bootstrap/soe.rs</text>
+    <text x="10" y="118" class="small">observe → architect → challenge → decide</text>
+    <text x="10" y="130" class="small">→ report → freeze → learn; replay, grade,</text>
+    <text x="10" y="142" class="small">resolve, Review #2 packet</text>
+    <text x="10" y="158" class="file">outbound/soe/ · tools/soe/</text>
+    <text x="10" y="170" class="small">FsCycleStore, stage runner + cache ·</text>
+    <text x="10" y="182" class="small">soe_view, soe_propose, soe_challenge</text>
+    <text x="10" y="198" class="file">cli/soe.rs · feed kind = "job"</text>
+    <text x="10" y="210" class="small">init | check | … | cycle | replay | grade |</text>
+    <text x="10" y="222" class="small">resolve | review | verify | show</text>
+    <text x="10" y="244" class="small" font-style="italic">no contact, spend, publish or deploy</text>
   </g>
 
-  <g transform="translate(20, 3536)">
-    <rect width="1160" height="96" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
+  <!-- ===================== SECTION 8 — execution trace + Tengu Studio ===================== -->
+  <text x="20" y="3556" class="h2">section 8 - execution trace + Tengu Studio - 2026-10-09</text>
+  <line x1="20" y1="3562" x2="1180" y2="3562" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 3576)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-trc" />
+    <text x="10" y="15" class="pt">execution trace</text>
+    <text x="10" y="40" class="file">domain/trace.rs</text>
+    <text x="10" y="52" class="small">one envelope: event_id = &lt;run_id&gt;:&lt;seq&gt;,</text>
+    <text x="10" y="64" class="small">session, correlation, parent, node_id, status;</text>
+    <text x="10" y="76" class="small">payload redacted + bounded (pure)</text>
+    <text x="10" y="96" class="file">ports/trace.rs · outbound/trace_store.rs</text>
+    <text x="10" y="108" class="small">TraceSink / TraceReader · one JSONL per run:</text>
+    <text x="10" y="120" class="small">logs/trace/&lt;sandbox&gt;/&lt;run_id&gt;.jsonl</text>
+    <text x="10" y="140" class="file">application/trace_exec.rs</text>
+    <text x="10" y="152" class="small">TracedExecutor: tool.started → completed /</text>
+    <text x="10" y="164" class="small">failed; Cause = the parent event</text>
+    <text x="10" y="184" class="file">bootstrap/trace.rs · cli/trace.rs</text>
+    <text x="10" y="196" class="small">records: tengu run, tengu decide (not</text>
+    <text x="10" y="208" class="small">webhooks yet) · tengu trace runs | show</text>
+    <text x="10" y="244" class="small" font-style="italic">fail-soft: a trace error never stops a run</text>
+  </g>
+
+  <g transform="translate(312, 3576)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">workflow graph</text>
+    <text x="10" y="40" class="file">domain/workflow.rs</text>
+    <text x="10" y="52" class="small">nodes runtime · trigger · feed · agent · loop ·</text>
+    <text x="10" y="64" class="small">world · jev · gate · action · escalation ·</text>
+    <text x="10" y="76" class="small">scope · tool; edges fires, reads, asks,</text>
+    <text x="10" y="88" class="small">chooses, calls, binds, next, guards, owns</text>
+    <text x="10" y="108" class="file">application/studio/graph.rs</text>
+    <text x="10" y="120" class="small">build_graph: validated config + catalog</text>
+    <text x="10" y="132" class="small">tools (+ a map: only narrows, drawn grey)</text>
+    <text x="10" y="152" class="file">bootstrap/studio.rs</text>
+    <text x="10" y="164" class="small">graph_inputs, workflow_graph (scrubbed)</text>
+    <text x="10" y="184" class="file">cli/studio.rs</text>
+    <text x="10" y="196" class="small">tengu studio graph --sandbox &lt;s&gt; [--map]</text>
+    <text x="10" y="208" class="small">(every build; JSON on stdout)</text>
+    <text x="10" y="244" class="small" font-style="italic">layout computed in Rust; the page draws</text>
+  </g>
+
+  <g transform="translate(604, 3576)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">Studio server (--features studio)</text>
+    <text x="10" y="40" class="file">adapters/inbound/studio/</text>
+    <text x="10" y="52" class="small">GET /api/v1/ meta, graph, health, runs,</text>
+    <text x="10" y="64" class="small">runs/:id/{events,board,stream}, nodes/:id,</text>
+    <text x="10" y="76" class="small">live/stream, control · POST play | stop | event</text>
+    <text x="10" y="88" class="small">guard.rs: loopback, token, Host / Origin, CSRF</text>
+    <text x="10" y="108" class="file">application/studio/</text>
+    <text x="10" y="120" class="small">stream (bounded per client, by seq), board</text>
+    <text x="10" y="132" class="small">(a run at a seq), inspect, control</text>
+    <text x="10" y="152" class="file">web/studio/</text>
+    <text x="10" y="164" class="small">index.html, studio.css, studio.js — embedded</text>
+    <text x="10" y="184" class="file">cli/studio.rs</text>
+    <text x="10" y="196" class="small">tengu studio --sandbox &lt;s&gt; [--port] [--bind]</text>
+    <text x="10" y="208" class="small">[--allow-control]; prints the URL + token</text>
+    <text x="10" y="244" class="small" font-style="italic">the browser draws; Rust decides</text>
+  </g>
+
+  <g transform="translate(896, 3576)">
+    <rect width="284" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="284" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">control: Play / Stop + the lab</text>
+    <text x="10" y="40" class="file">config/studio.rs</text>
+    <text x="10" y="52" class="small">[studio] control (default false) · never a</text>
+    <text x="10" y="64" class="small">[generation]-bound or hardened sandbox</text>
+    <text x="10" y="76" class="small">([risk], [soe], signer), --allow-control too</text>
+    <text x="10" y="96" class="small">Play = tengu run's start_session in Studio's</text>
+    <text x="10" y="108" class="small">process (same leases; held ⇒ 409) · Stop =</text>
+    <text x="10" y="120" class="small">the graceful drain · send-event = a scenario</text>
+    <text x="10" y="140" class="file">sandboxes/control-loop-lab</text>
+    <text x="10" y="152" class="small">[studio] control = true · loop demo (Jev),</text>
+    <text x="10" y="164" class="small">feeds tick + probe, agent lab: read_file,</text>
+    <text x="10" y="176" class="small">write_file, list_directory · scenarios/*.json</text>
+    <text x="10" y="196" class="small">editor (ST-40): design only until</text>
+    <text x="10" y="208" class="small">Operator Review #3</text>
+    <text x="10" y="244" class="small" font-style="italic">runbook: docs/control-loop-lab-2026-10-08.md</text>
+  </g>
+
+  <g transform="translate(20, 3848)">
+    <rect width="1160" height="110" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>
     <text x="10" y="54" class="small">tui/mod.rs - build_orchestrator - RagPlanner::plan - SubprocessRunner::run_step - run_agent_subprocess - http_request - compress_and_store. That is the chat turn.</text>
     <text x="10" y="68" class="small">Other flows: tengu backtest --sandbox xlab --strategy weekend_fade (no LLM) → cli/backtest.rs → application/backtest/ → domain/backtest/engine.rs → the run dir; tengu ranking run → application/ranking/;</text>
     <text x="10" y="82" class="small">tengu run --sandbox xmarket (runbook at the top of its config) → inbound/run.rs → bootstrap/runtime.rs → application/runtime/feeds.rs → tools/xm/exec_common.rs · tengu lineage verify --pins.</text>
+    <text x="10" y="96" class="small">Trace + Studio (isolated TENGU_HOME): tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json → tengu trace runs → tengu studio (--features studio).</text>
   </g>
 </svg>

@@ -1,6 +1,6 @@
 # Typed observations + Solana LP tools (2026-09-24)
 
-Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 11 Solana LP observation/planning tools and 5 live-capable write tools (§ Write tools). Branch `feature/decision-loop`. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
+Typed tool results that one envelope serves to the LLM (text), decision loops (`features`) and a TTL cache. First users: 11 Solana LP observation/planning tools and 5 live-capable write tools (§ Write tools), merged in #18 (`feature/decision-loop`); later the Hyperliquid, xmarket, xlab, source and SOE rows below. Open items: `docs/SESSION_HANDOFF.md`. Loop config: `docs/decision-loop-plan-2026-09-24.md`.
 
 ## Envelope
 
@@ -52,7 +52,8 @@ Append-only time series of observations (xmarket tracker conventions 3 + 5): res
 | action `requires = { alias = secs }` | action offered only while each alias is usable and that fresh |
 | slot `{ observation = alias, items, value, top }` | candidates from a fresh world entry (`FromObservation`) |
 | typed result | history gets `decision_value` (or the reducer over `decision_root`: `/data/...`, `/features/...`), `ok = status != error`, `obs = {key, status, source, age_s, slot}` |
-| executor | loop tools run through `SanitizedToolExecutor` with the process `SecretRegistry` (`bootstrap/decision.rs`) |
+| executor | loop tools run through `SanitizedToolExecutor` with the process `SecretRegistry`, then `trace_exec::TracedExecutor` (`tool.*` trace events: typed `observation` key / status / headline), then `egress::AttributedExecutor` (`bootstrap/decision.rs`) |
+| trace | each `world` alias read per step = one `observation.read` event (ok · stale · missing · failed, `key`, `age_ms`; node `world:<loop>/<alias>`) — `docs/runtime-2026-09-30.md` § Trace |
 
 ## Solana tools (`adapters/outbound/tools/solana/`, opt-in, one `solana` plugin)
 
@@ -232,9 +233,22 @@ Tool `source_evidence` (opt-in, `sources` plugin, `adapters/outbound/tools/sourc
 
 | Tool | Args | Reads | Writes |
 |---|---|---|---|
-| `source_evidence` | `at` (epoch ms, RFC 3339 or `YYYY-MM-DD`; default now, after now refused), `mode` (`captured` default \| `knowable`), `source` (a registry row id), `entity`, `event_key` (verbatim, in full), `from` / `to` (publication window `[from, to)`), `limit` (1–50, default 10) — strict | `sources.db` only when it exists (none ⇒ an empty packet, `absent`, nothing created): records seeded by `source` with `min(published, observed) ≤ at` plus their items and events, every coverage row and tombstone; the registry's policies | the observation row (ttl 0) |
+| `source_evidence` | `at` (epoch ms, RFC 3339 or `YYYY-MM-DD`; default now, after now refused), `mode` (`captured` default \| `knowable`), `source` (a registry row id), `entity`, `event_key` (verbatim, in full), `from` / `to` (publication window `[from, to)`), `limit` (1–50, default 10) — strict | `sources.db` only when it exists (none ⇒ an empty packet, `absent`, nothing created): records seeded by `source` with `min(published, observed) ≤ at` plus their items and events, every coverage row and tombstone; the registry's policies | nothing in the cache (ttl 0); a history row when `[recorder]` takes `source_asof/1` (`hyperliquid::store_live`) |
 
 Text: line 1, features and at most 8 error lines (the rest counted) as `render_text` gives them, without `data` — the data JSON holds titles and buyer names unfenced; then `EvidencePacket::render_text` without its headline: typed tokens (ids, keys, codes, times, amounts) whole, every source free text inside `<source-text record="<id>" field="<f>">…</source-text>` after one system note. Paged to the newest `limit` records, fewer while the text is above 6 000 bytes (¾ of a 16k local window's 8 192-char cap, `engine_matrix::offline_local_sources`); the rest `omitted`. No `[sources]` ⇒ refused `sources_state_missing`. Scope: `fs_roots` = the workspace (observation store); no host, no env.
+
+## SOE view (O3, 2026-10-08)
+
+Tool `soe_view` (opt-in, `soe` plugin, `adapters/outbound/tools/soe/view.rs`; `docs/soe-2026-10-08.md` § 13): one run of the weekly cycle as the stages read it. Read-only over the SOE state root (`<TENGU_HOME>/state/<sources.state>/`); no network, no env.
+
+| Key | TTL | Row | Status |
+|---|---|---|---|
+| `soe_view/1:<run>:<view>` (run = `cycles/<id>` · `replays/<id>`; view = `head` · `packet` · `candidates` · `proposals` · `challenges` · `history`) | 0 — returned only: never cached, never stored or recorded | features `view`, `status` (`OPEN` · `FROZEN`), `phase` (`PROPOSE` · `CHALLENGE` · `CLOSED` · `NONE`), `decided_at_ms`, `offset`, `shown`, `total`; `data` = the row (run, view, counts, the shown items' ids in full — never model or source text) | `ok` |
+
+| Other SOE / ranking tools | Row |
+|---|---|
+| `soe_propose` · `soe_challenge` (writes through `application::soe::submit`) | none: text only (the stamped id + a preview) |
+| `strategy_ranking` (xlab-w2) | none: the ranking is its files (`<state dir>/strategy-rankings/`, `docs/runtime-2026-09-30.md` § State layout) |
 
 ## Risk + paper rows (xmarket, 2026-09-30)
 

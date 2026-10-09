@@ -1,6 +1,6 @@
 # Source evidence — the cross-domain source layer (O2, 2026-10-08)
 
-Facts read from approved public sources become **source records** with full provenance; a pure **as-of view** answers "what did the sources say at t?" without reading anything later. First sources: SEC EDGAR (company filings) and the EU TED Search API (public procurement notices). Consumers: the Software Opportunity Engine (`domain/soe/`, built separately) and later xmarket `info-*` — imports go soe → source, never back. Visual walkthrough: [`tutorial/source-evidence.html`](tutorial/source-evidence.html).
+Facts read from approved public sources become **source records** with full provenance; a pure **as-of view** answers "what did the sources say at t?" without reading anything later. First sources: SEC EDGAR (company filings) and the EU TED Search API (public procurement notices). Consumers: the Software Opportunity Engine (`domain/soe/`: its weekly cycle observes one packet at the decision, [`soe-2026-10-08.md`](soe-2026-10-08.md) § 10) and later xmarket `info-*` — imports go soe → source, never back. On main: #41 (`bc9bc12a038654ac4941c714abcfa777c99af631`). Visual walkthrough: [`tutorial/source-evidence.html`](tutorial/source-evidence.html).
 
 | Rule | Applied as |
 |---|---|
@@ -31,7 +31,7 @@ Facts read from approved public sources become **source records** with full prov
 | `sec_edgar` | `company_primary` · `primary` · `immutable` | `www.sec.gov`, `data.sec.gov` · `$SEC_USER_AGENT` · `[rate_limits.sec]` 300 / min, burst 5 | raw + records forever |
 | `ted_search` | `law_regulator` (`EU`) · `primary` · `immutable` | `api.ted.europa.eu` · anonymous · `[rate_limits.ted]` 60 / min, burst 2 (assumed) | raw 90 days, records forever |
 
-`sandboxes/soe`: `network = "open"`, `allow_hosts` = the three hosts, no `[generation]`, one agent `soe_reader` (`claude_code`, built-ins off, `tools = ["source_evidence"]`); `config::sources::tests::soe_sandbox_is_a_closed_world` pins it.
+`sandboxes/soe`: `network = "open"`, `allow_hosts` = the three hosts, `[generation] id = "SOE-G0"`, `[soe]` + one `kind = "job"` feed (`soe_week`) since O3 ([`soe-2026-10-08.md`](soe-2026-10-08.md) §§ 11, 13). `source_evidence` sits on `soe_reader` alone (default, `claude_code`, built-ins off, `tools = ["source_evidence"]`); the stage agents `soe_architect` / `soe_critic` read the cycle's own packet through `soe_view`, never the store. `config::sources::tests::soe_sandbox_is_a_closed_world` pins it (both rows off, no terms hash, no loop / MCP / webhook, tools inside `SOE_ALLOWED`).
 
 ## 2. Record — `source_record/1` (`src/domain/source/record.rs`)
 
@@ -154,5 +154,5 @@ Hosts, audit (`sec_edgar` / `ted_search`) and attribution: [`egress-2026-09-16.m
 | Registry listing freshness | taken from the source's newest complete fetch (any query) |
 | Text bound | fixed 6 000 bytes (≈ 5 SEC / TED records per call) on every engine |
 | Live engine-matrix legs | `openrouter_*_sources`, `claude_code_sources`, `local_sources` not run yet |
-| O2 exit | 12 source-level cases ship; opportunity-level cases wait for O0 |
-| Scheduled fetch · more sources | none (`[feeds] kind = "poll"` reserved) · Companies House (needs a key), GitHub Events later |
+| O2 exit | 12 source-level cases ship; opportunity-level: the SOE eval set (16) and cycle cases (11) — [`soe-2026-10-08.md`](soe-2026-10-08.md) §§ 7, 10 |
+| Scheduled fetch · more sources | none (`[feeds] kind = "poll"` reserved; the `soe_cycle` job reads the store, never fetches) · Companies House (needs a key), GitHub Events later |

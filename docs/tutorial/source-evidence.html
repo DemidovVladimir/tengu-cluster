@@ -278,7 +278,7 @@
   <div class="sec-head">
     <span class="kicker">The registry</span>
     <h2 id="s-registry"><code>[sources]</code> and the soe sandbox</h2>
-    <p>One row per approved source, as data in the sandbox config. <code>sandboxes/soe</code> ships both rows switched off and holds one read-only agent.</p>
+    <p>One row per approved source, as data in the sandbox config. <code>sandboxes/soe</code> ships both rows switched off. Only its read-only agent <code>soe_reader</code> holds <code>source_evidence</code>; the weekly cycle's <code>soe_architect</code> and <code>soe_critic</code> read the cycle's packet instead (<a href="soe.html">Software opportunities</a>).</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -517,7 +517,7 @@
     <li><span><b>Contact data is never read.</b> TED requests ask for no contact field, and the decoder reads only its allow-list: injected emails and phones never reach a record.</span></li>
     <li><span><b>A kill switch acts at once.</b> <code>tengu sources disable</code> refuses every fetch and import of the source from the next call; the TOML stays the ceiling.</span></li>
     <li><span><b>Agents read, never fetch.</b> <code>source_evidence</code> has no fetch argument (an unknown key is refused) and opens <code>sources.db</code> only when it exists.</span></li>
-    <li><span><b>The same answer on every engine.</b> In-process and through the bridge: the same text and the same store rows (bridge conformance); a 16k local model gets each read whole.</span></li>
+    <li><span><b>The same answer on every engine.</b> In-process and through the bridge: the same text and the same store rows (bridge conformance); a 16k local model gets each read whole (offline leg). The live engine-matrix legs have not run yet.</span></li>
     <li><span><b>The eval set replays.</b> Each of the 12 cases gives its packet byte for byte from the fixture alone, unchanged by anything after t; removing copies beside their origin changes no confidence.</span></li>
   </ul>
 </section>

@@ -42,6 +42,8 @@
     --rnk: #F472B6;
     --src: #5EEAD4;
     --soe: #FDBA74;
+    --trc: #67E8F9;
+    --std: #C4B5FD;
     --ok: #16A34A;
     --warn: #CA8A04;
     --info: #0891B2;
@@ -193,6 +195,8 @@
   .sys-card.ranking { border-top-color: var(--rnk); }
   .sys-card.sources { border-top-color: var(--src); }
   .sys-card.soe { border-top-color: var(--soe); }
+  .sys-card.trace { border-top-color: var(--trc); }
+  .sys-card.studio { border-top-color: var(--std); }
   .sys-card .title {
     font-size: 14px; font-weight: 700; margin-bottom: 4px;
   }
@@ -303,7 +307,7 @@
 
 <div class="header">
   <h1>Tengu-Cluster · Architecture Explorer</h1>
-  <div class="sub">2026-04-27 · synced 2026-10-08 · walk the chat turn and the three other flows, expand subsystem cards, search the file map · companion to architecture-2026-04-27.{md,svg}</div>
+  <div class="sub">2026-04-27 · synced 2026-10-09 · walk the chat turn and the three other flows, expand subsystem cards (incl. SOE O3 / O4, execution trace, Tengu Studio), search the file map · companion to architecture-2026-04-27.{md,svg}</div>
 </div>
 
 <div class="tabs">
@@ -514,8 +518,30 @@
         <td>&lt;TENGU_HOME&gt;/state/soe/operator.toml</td>
         <td>the signed private operator profile (0600, never in a git tree)</td>
         <td><code>tengu soe init</code> (template), the operator</td>
-        <td>every other <code>tengu soe</code> command</td>
+        <td>the O1 <code>tengu soe</code> commands</td>
         <td>none</td>
+      </tr>
+      <tr>
+        <td>&lt;TENGU_HOME&gt;/state/&lt;sources.state&gt;/ (SOE state root)</td>
+        <td><code>operator.toml</code>; run dirs <code>cycles/&lt;week&gt;/</code>, <code>replays/&lt;id&gt;/</code>, <code>reviews/&lt;day&gt;/</code> (frozen: <code>MANIFEST.json</code> + read-only); <code>stage-cache/&lt;key&gt;.jsonl</code>; state logs <code>candidates</code>, <code>episodes</code>, <code>forecast-log</code>, <code>grades</code>, <code>resolutions</code>, <code>replays</code>, <code>reviews</code>, <code>holdout-reads</code> (<code>.jsonl</code>)</td>
+        <td><code>tengu soe cycle</code> / <code>replay</code> / <code>grade</code> / <code>resolve</code> / <code>review</code>, the <code>soe_cycle</code> job; <code>soe_propose</code> / <code>soe_challenge</code> into an open run dir</td>
+        <td><code>soe_view</code>, <code>tengu soe show</code> / <code>verify</code> / <code>review</code></td>
+        <td>none (run dirs frozen, logs append-only)</td>
+      </tr>
+      <tr><td class="grp" colspan="5">Execution trace + Studio (2026-10-09)</td></tr>
+      <tr>
+        <td>&lt;TENGU_HOME&gt;/logs/trace/&lt;sandbox&gt;/&lt;run_id&gt;.jsonl</td>
+        <td>one recording per <code>tengu run</code> / <code>tengu decide</code> process: correlated events, payloads redacted + bounded, first line <code>run.opened</code></td>
+        <td><code>JsonlTraceSink</code> (<code>bootstrap/trace.rs::open_sink</code>)</td>
+        <td><code>tengu trace runs</code> / <code>show</code>, <code>tengu studio</code></td>
+        <td><code>tengu prune</code> deletes <code>logs/</code></td>
+      </tr>
+      <tr>
+        <td>&lt;TENGU_HOME&gt;/logs/maps/&lt;sha256&gt;.json</td>
+        <td>the execution maps <code>tengu decide --map</code> ran (canonical JSON)</td>
+        <td><code>cli/decide.rs</code></td>
+        <td><code>tengu studio</code> (<code>/api/v1/graph?map=&lt;sha256&gt;</code>, re-hashed, re-applied)</td>
+        <td><code>tengu prune</code> deletes <code>logs/</code></td>
       </tr>
     </tbody>
   </table>
@@ -644,6 +670,20 @@
       <p><code>source_evidence</code> only reads <code>sources.db</code>; fetching is the operator's (<code>tengu sources fetch</code>), gated per row — <code>enabled</code>, reviewed <code>terms_sha256</code>, the runtime kill switch — before any request. Source text reaches a model fenced as untrusted data.</p>
       <div class="ref">adapters/outbound/sources/mod.rs::fetch_gate · domain/source/packet.rs::fence_untrusted · tools/sources/</div>
     </div>
+
+    <div class="mech-card">
+      <div class="label">2026-10-09</div>
+      <h3>R. Models write data; the domain decides (SOE)</h3>
+      <p>The SOE stage agents never return a draft as text: <code>soe_propose</code> / <code>soe_challenge</code> write records through <code>application::soe::submit</code> (phase, limits, every check), and <code>domain::soe::allocate::decide_week</code> computes every figure, gate, rank and action. Frozen run dirs make a week reproducible from its inputs.</p>
+      <div class="ref">application/soe/{cycle,submit,freeze}.rs · domain/soe/allocate.rs · freeze::decision_sha256</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">2026-10-09</div>
+      <h3>S. The browser draws; Rust decides (Studio)</h3>
+      <p>Studio's page owns no workflow, risk, scope or colour rule: the graph (layout included), each status's tone, a run's board at a <code>seq</code> and every control verdict come from Rust over the trace each run writes once. Play / Stop never reach a <code>[generation]</code>-bound or hardened sandbox.</p>
+      <div class="ref">domain/workflow.rs · domain/trace.rs::Status::tone · application/studio/{board,control}.rs · config/studio.rs::control_policy</div>
+    </div>
   </div>
 </div>
 
@@ -763,7 +803,7 @@ const FLOWS = [
           { path: "src/adapters/outbound/runtime_store.rs", desc: "SqliteRuntimeStore — acquire / renew / release, TTL takeover" },
           { path: "src/domain/runtime.rs", desc: "lease resources and the live verdict (pure)" },
         ],
-        deep: "Shutdown: stop signal → the webhook server stops accepting (loop endpoints answer 503) → heartbeat stopping, queued loop events dropped, running ones get [runtime] shutdown_grace_secs (20) → heartbeat stopped, leases released. A task that ends before the stop signal fails the run (Docker's restart policy brings it back)."
+        deep: "Shutdown: stop signal → the webhook server stops accepting (loop endpoints answer 503) → heartbeat stopping, queued loop events dropped, running ones get [runtime] shutdown_grace_secs (20) → heartbeat stopped, leases released. A task that ends before the stop signal fails the run (Docker's restart policy brings it back). After the leases, start opens this process's trace recording (bootstrap::trace::open_sink, <TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl, runtime_id = the lease holder): runtime.*, feed.*, loop.*, every step and tool call."
       },
       {
         num: 2, title: "Loops built once", lane: "plan",
@@ -773,7 +813,7 @@ const FLOWS = [
           { path: "src/bootstrap/decision.rs::build_decision_loop", desc: "JevClient + the loop agent's executor + observation store" },
           { path: "src/config/runtime.rs", desc: "[runtime]: grace, in-flight, queue, heartbeat" },
         ],
-        deep: "Today xmarket and xmarket-weekend hold no [decision_loops] (tool feeds only; tracker item jev-xmarket-loops-toml); xlab-w2 runs tool feeds (history_refresh, strategy_ranking_daily, strategy_ranking_weekend); loops live in lping (lp_watch, hedge_watch, exec chains hedge_exec and lp_exec with a sequence and bound slots), jev-exec (executor) and xlab / xlab-w2 (xl_gate, replayed by tengu backtest --gate). tengu decide --map runs an Architect's execution map that only narrows a loop."
+        deep: "Today xmarket and xmarket-weekend hold no [decision_loops] (tool feeds only; tracker item jev-xmarket-loops-toml); xlab-w2 runs tool feeds (history_refresh, strategy_ranking_daily, strategy_ranking_weekend); soe runs one job feed (soe_week → soe_cycle); loops live in lping (lp_watch, hedge_watch, exec chains hedge_exec and lp_exec with a sequence and bound slots), jev-exec (executor), xlab / xlab-w2 (xl_gate, replayed by tengu backtest --gate) and control-loop-lab (demo, fed by the tick feed tick). tengu decide --map runs an Architect's execution map that only narrows a loop."
       },
       {
         num: 3, title: "Feed fires", lane: "exec",
@@ -782,9 +822,9 @@ const FLOWS = [
           { path: "src/bootstrap/runtime.rs::start_feeds", desc: "one task per feed; a feed whose tool its agent cannot run stops tengu run at start" },
           { path: "src/application/runtime/feeds.rs::run_feed", desc: "fire, call or tick, back off, report health" },
           { path: "src/domain/schedule.rs::next_fire", desc: "grid, windows, DST-safe at-ticks, jitter, late grace" },
-          { path: "src/config/feeds.rs", desc: "[feeds.<n>]: kind tool / tick, schedule, fan-out each, health" },
+          { path: "src/config/feeds.rs", desc: "[feeds.<n>]: kind tool / tick / job (a closed JOBS list: soe_cycle), schedule, fan-out each, health" },
         ],
-        deep: "Failures back off by error class (domain/backoff.rs): transient / timeout / rate limit ⇒ the failed calls again after 1–60 s with the same ids; quota or a long rate limit parks; auth / fatal / decode / not_applicable wait for the next slot — except an at-tick slot, whose failed calls retry for 15 min (AT_RETRY_WINDOW_MS). Clock work (exits, the weekend fade, the daily risk roll) is a kind = \"tool\" feed: no LLM, no Jev."
+        deep: "Failures back off by error class (domain/backoff.rs): transient / timeout / rate limit ⇒ the failed calls again after 1–60 s with the same ids; quota or a long rate limit parks; auth / fatal / decode / not_applicable wait for the next slot — except an at-tick slot, whose failed calls retry for 15 min (AT_RETRY_WINDOW_MS). Clock work (exits, the weekend fade, the daily risk roll) is a kind = \"tool\" feed: no LLM, no Jev. A kind = \"job\" feed runs RuntimeJob::run(slot ms, feed:<name>:<slot ms>) (ports/runtime.rs; built by bootstrap/runtime.rs::job_for — soe_cycle → bootstrap/soe.rs) with the same backoff and health."
       },
       {
         num: 4, title: "Tool call", lane: "tool",
@@ -990,7 +1030,8 @@ const FLOWS = [
 const SUBSYSTEM_GROUPS = [
   { title: "Chat turn", keys: ["memory", "rag", "agents", "skills", "orchestrator", "metrics", "egress"] },
   { title: "Beyond the chat turn (2026-09-24 → 2026-10-01)", keys: ["runtime", "decision", "observations", "tools", "xmarket", "xlab", "parity"] },
-  { title: "Research lineage, rankings, sources (2026-10-06 → 2026-10-08)", keys: ["lineage", "ranking", "sources", "soe"] },
+  { title: "Research lineage, rankings, sources, SOE (2026-10-06 → 2026-10-09)", keys: ["lineage", "ranking", "sources", "soe"] },
+  { title: "Execution trace + Tengu Studio (2026-10-09)", keys: ["trace", "studio"] },
 ];
 
 const SUBSYSTEMS = [
@@ -1027,8 +1068,8 @@ const SUBSYSTEMS = [
     subtitle: "no agents/ directory, no separate spec — the same AgentConfig, routable when description is set, private when not (and not default). Edit a block, restart chat, registry regenerated.",
     files: [
       ["config/mod.rs::AgentConfig", "one struct (deny_unknown_fields) for in-process agents, subagents and loop / feed agents — engine, model, description, example_queries, tools, skill_packages (skills alias), workspace, scopes, limits.max_tool_rounds / step_timeout_secs, identity, claude_code"],
-      ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest], [generation], [sources], [strategy_ranking] on every surface"],
-      ["sandboxes/<name>/config.toml", "one config per sandbox: lping, jev-exec, xmarket, xmarket-weekend, xlab, xlab-w2, soe, tor-check, storage-test, unlimited"],
+      ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest], [generation], [sources] (+ its state dir), [soe], [strategy_ranking] on every surface"],
+      ["sandboxes/<name>/config.toml", "one config per sandbox: control-loop-lab, lping, jev-exec, xmarket, xmarket-weekend, xlab, xlab-w2, soe, tor-check, storage-test, unlimited"],
       ["application/orchestrator/shared_files.rs::routable_agents", "blocks with a description → TENGU_PLANNER_REGISTRY.md"],
       ["bootstrap/tools.rs::subagent_config", "merges workspace-tool names listed in tools into workspace_tools"],
       ["adapters/inbound/cli/run_agent.rs::run_agent_subprocess", "loads the parent config first, then config.agents.get(name)"],
@@ -1099,7 +1140,7 @@ const SUBSYSTEMS = [
       ["AttributedExecutor / CallScope", "a tengu run feed's or loop's calls carry their own agent / session / call id on the audit"],
       ["warn_if_proxy_unreachable", "one startup warning from the parent CLI; tengu doctor prints the resolved network"],
     ],
-    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab, xlab-w2, soe (the last five under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
+    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: control-loop-lab (Jev only), lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab, xlab-w2, soe (the last five under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
   },
   {
     key: "runtime", title: "tengu run — runtime supervisor (2026-09-30)",
@@ -1110,9 +1151,9 @@ const SUBSYSTEMS = [
       ["application/runtime/mod.rs", "Supervisor (named tasks on one stop signal; early task death fails the run), keep_lease"],
       ["application/runtime/loops.rs", "LoopDispatch — one event at a time per loop, max_decisions_in_flight, ≤ max_queued_per_loop (Refused::QueueFull)"],
       ["application/runtime/health.rs", "HealthBoard — run-<s>.json, loop/1:<name>, feed/1:<name> (FeedWriter)"],
-      ["application/runtime/feeds.rs", "run_feed — tool / tick feeds, one run in flight, backoff, at-tick retry window"],
+      ["application/runtime/feeds.rs", "run_feed — tool / tick / job feeds, one run in flight, backoff, at-tick retry window, feed.* trace events"],
       ["domain/runtime.rs · domain/schedule.rs", "leases + live_verdict · next_fire (grid, windows, at-ticks, DST)"],
-      ["ports/runtime.rs · adapters/outbound/runtime_store.rs", "RuntimeStore · <state dir>/runtime.db"],
+      ["ports/runtime.rs · adapters/outbound/runtime_store.rs", "RuntimeStore, RuntimeJob · <state dir>/runtime.db"],
       ["ports/clock.rs · adapters/outbound/clock.rs", "Clock + SimClock · SystemClock"],
       ["config/runtime.rs · config/feeds.rs", "[runtime] · [feeds.<n>]"],
     ],
@@ -1149,7 +1190,7 @@ const SUBSYSTEMS = [
   },
   {
     key: "tools", title: "tool families (opt-in, WORKSPACE_TOOLS)",
-    subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research + ranking, sources — each a plugin, one catalog row per tool.",
+    subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research + ranking, sources, SOE stages — each a plugin, one catalog row per tool.",
     files: [
       ["adapters/outbound/tools/solana/", "11 observe/plan tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
       ["adapters/outbound/solana/", "SolanaRpc, cache-through account reads, JSON fetch, read planning, send pipeline, signer, writes store"],
@@ -1158,7 +1199,8 @@ const SUBSYSTEMS = [
       ["adapters/outbound/tools/xm/", "risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade"],
       ["adapters/outbound/tools/xlab/", "market_history, backtest (read-only), strategy_ranking (run | latest)"],
       ["adapters/outbound/tools/sources/", "source_evidence — source_asof/1, read-only (agents never fetch)"],
-      ["domain/tools.rs", "WORKSPACE_TOOLS, DEFAULT_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS"],
+      ["adapters/outbound/tools/soe/", "soe_view (read-only), soe_propose, soe_challenge — the weekly cycle's stage tools, writes through application::soe::submit"],
+      ["domain/tools.rs", "WORKSPACE_TOOLS (37), DEFAULT_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS, SOE_ALLOWED, SIDE_EFFECT_TOOLS"],
       ["adapters/outbound/rate_limit.rs · http_class.rs · domain/backoff.rs", "named budgets per process · HTTP → ErrorClass + URL scrubber · backoff, token bucket, breaker"],
     ],
     deep: "The hidden tengu tool list prints every catalog name: 50 in a build without postgres_memory (14 default + 36 opt-in; agentic_memory joins with it). In a [generation]-bound sandbox the executor and the bridge drop a tool the generation refuses (bootstrap::tools::within_generation). Every tool works under openrouter, local and claude_code — see engine parity.",
@@ -1255,25 +1297,57 @@ const SUBSYSTEMS = [
       ["adapters/inbound/cli/sources.rs", "tengu sources list | fetch | import | asof | purge | terms | disable | enable (only fetch uses the network)"],
       ["adapters/outbound/tools/sources/", "source_evidence — the as-of evidence packet, read-only"],
     ],
-    deep: "Sandbox soe: soe_reader (default, source_evidence only, builtin_tools_profile = \"none\"), every registry row disabled until the operator reviews its terms, no feeds, loops or [[mcp_servers]]. Docs: docs/source-evidence-2026-10-08.md, docs/tutorial/source-evidence.html.",
+    deep: "Sandbox soe: soe_reader (default, source_evidence only, builtin_tools_profile = \"none\"), every registry row disabled until the operator reviews its terms, no loops or [[mcp_servers]]; its [sources] state dir is also the SOE state root (the weekly cycle, see the SOE card). Docs: docs/source-evidence-2026-10-08.md, docs/tutorial/source-evidence.html.",
   },
   {
-    key: "soe", title: "Software Opportunity Engine — O0–O2 (2026-10-08)",
-    subtitle: "offline: no sandbox config, secrets, egress, LLM or fetch; the operator's parameters live only in a signed private profile.",
+    key: "soe", title: "Software Opportunity Engine — O0–O4 (2026-10-08 / 2026-10-09)",
+    subtitle: "O1 offline checks on a signed private profile; the weekly cycle (O3) and its replay, grades and Review #2 packet (O4) write the private SOE state only — no contact, spend, publish or deploy.",
     files: [
-      ["domain/soe/", "integer minor-unit money + unknown-safe Est, records soe.<record>/1, economics (downside / base / upside), PRD § 7.2 hard gates (PASS / HOLD / REJECT), capability fit, ranking + the HOLD week, eval cases — pure"],
-      ["config/soe.rs", "<TENGU_HOME>/state/soe/operator.toml (0600, refused in a git tree or unsigned), opportunity + record-dir + --cited loaders"],
-      ["adapters/inbound/cli/soe.rs", "tengu soe init | check | portfolio | sensitivity | eval (only init writes)"],
+      ["domain/soe/", "integer minor-unit money + unknown-safe Est, records soe.<record>/1, economics (downside / base / upside), PRD § 7.2 hard gates (PASS / HOLD / REJECT), capability fit, rank + allocate::decide_week, proposals, challenges, forecasts, memo, replay, review, eval cases — pure"],
+      ["config/soe.rs", "the signed private profile (0600, refused in a git tree or unsigned), opportunity / record-dir / replay-set / --cited loaders; [soe] architect, critic, max_proposals, forecast_max_weeks + closed-world load rules (hardened)"],
+      ["ports/soe.rs", "StageRunner (one model stage as a sandbox agent) · CycleStore (cycles/ · replays/ · reviews/, claimed once, frozen once; append-only state logs)"],
+      ["application/soe/", "cycle.rs::run_cycle (Observe → Carry → Architect → Challenge → Decide → Report → Freeze → Learn), submit.rs, freeze.rs, job.rs (SoeCycleJob), replay.rs, grade.rs, review.rs"],
+      ["adapters/outbound/soe/", "FsCycleStore · SubprocessStageRunner (one tengu run-agent child per stage) · CachedStageRunner (stage-cache/<key>.jsonl; an offline miss is an error)"],
+      ["bootstrap/soe.rs", "the soe_cycle job of a kind = \"job\" feed: cycle store, source store, cached stage runner, generation pin, profile"],
+      ["adapters/outbound/tools/soe/", "soe_view, soe_propose (only as [soe] architect), soe_challenge (only as [soe] critic)"],
+      ["adapters/inbound/cli/soe.rs · cli/soe/weekly.rs", "tengu soe init | check | portfolio | sensitivity | eval (O1; only init writes) · cycle | replay | grade | resolve | review | verify | show (--sandbox or -c)"],
     ],
-    deep: "Imports go soe → source, never back: provenance is domain/source/. Docs: docs/soe-2026-10-08.md, docs/tutorial/soe.html.",
+    deep: "State root = the [sources] state dir <TENGU_HOME>/state/<sources.state>/ (operator.toml, cycles/, replays/, reviews/, stage-cache/, the state logs). A failed stage is recorded and the week goes on (a HOLD week is valid); every file but ops.json is reproducible (freeze::decision_sha256). A replay's holdout cases run only as a counted read. Sandbox soe (bound to SOE-G0) runs one job feed soe_week (Mon 07:00 Europe/Paris). Gate G-O0 open: no signed profile, no enabled source, no live cycle. Imports go soe → source, never back. Docs: docs/soe-2026-10-08.md, docs/tutorial/soe.html.",
+  },
+  {
+    key: "trace", title: "execution trace (2026-10-09)",
+    subtitle: "every tengu run / tengu decide process writes one correlated JSONL recording; tengu trace and Studio read it back.",
+    files: [
+      ["domain/trace.rs", "event envelope: event_id = <run_id>:<seq>, seq, ts_ms, sandbox, config_hash, runtime_id, session_id, correlation_id, parent_event_id, call_id, component, kind, node_id, status, duration_ms, payload (scrub_value, MAX_PAYLOAD_BYTES), artifact; Status::tone, RunState — pure"],
+      ["ports/trace.rs", "TraceSink (one recording, fail-soft) · TraceReader (runs, events after a seq, follow live)"],
+      ["adapters/outbound/trace_store.rs", "JsonlTraceSink / JsonlTraceReader — <TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl; follow = 250 ms tail, bounded channel (256)"],
+      ["application/trace_exec.rs", "Cause / caused_by (an event's parent) · TracedExecutor: tool.started → tool.completed / tool.failed, node tool:<agent>/<tool>"],
+      ["bootstrap/trace.rs", "open_sink (unwritable dir ⇒ NoopTrace + warn), reader, run_path; records tengu run and tengu decide (not tengu webhooks yet)"],
+      ["adapters/inbound/cli/trace.rs", "tengu trace runs | show --run <id> [--after <seq>] [--follow] — JSON lines, no config, read-only"],
+    ],
+    deep: "The first event of every run is run.opened ({kind, pid}). A restart never appends to an old run: a fresh run_id (UUID v4) = a new file. Payloads are redacted (secrets, then every URL) and bounded before the one write_all; a failed write keeps the seq and only warns. Doc: docs/runtime-2026-09-30.md § Trace.",
+  },
+  {
+    key: "studio", title: "Tengu Studio (2026-10-09)",
+    subtitle: "a loopback browser page over one sandbox: the validated workflow graph, every recorded run (live or replayed), health, and Play / Stop where [studio] control allows it.",
+    files: [
+      ["domain/workflow.rs", "WorkflowGraph: nodes runtime · trigger · feed · agent · loop · world · jev · gate · action · escalation · scope · tool (layer + order in Rust); edges fires · reads · asks · chooses · calls · binds · next · guards · escalates · owns; narrowed_out = dropped by a map — pure"],
+      ["application/studio/", "graph.rs::build_graph · stream (follow_run / follow_live: bounded per client, resume by seq; served as SSE) · board (fold_run at a seq) · inspect (config slice + evidence behind a node) · control (Play / Stop / send-event rules)"],
+      ["bootstrap/studio.rs", "graph_inputs, workflow_graph (attrs scrubbed); StudioContext: config, graph, trace reader, state dir, scenarios <sandbox dir>/scenarios/*.json, kept maps logs/maps/<sha256>.json"],
+      ["config/studio.rs", "[studio] control (default false); control_policy: never [generation]-bound or hardened ([risk], [soe], signer), --allow-control included"],
+      ["adapters/inbound/studio/", "axum server (--features studio): GET /api/v1/ meta, graph, health, runs, runs/:run_id/{events,board,stream}, nodes/:node_id, live/stream, control; POST /api/v1/control/{play,stop,event}; guard.rs: loopback only, per-process token, Host / Origin / CSRF, CSP"],
+      ["web/studio/", "index.html, studio.css, studio.js — embedded with include_str!; draws only"],
+      ["adapters/inbound/cli/studio.rs", "tengu studio --sandbox <s> [--port --bind --allow-control] · tengu studio graph [--map] (every build)"],
+    ],
+    deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The editor (ST-40) is design only until Operator Review #3. Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
   },
 ];
 
 const FILE_MAP = [
   // ── layers + entry ──
   ["src/main.rs", "main", "mod decls + main → adapters::inbound::cli::run"],
-  ["src/domain/", "domain", "plain data + pure policy: message, session, plan, scope, secrets, tools, metrics, memory, observation, decision, runtime, schedule, market, book, marketdata*, sec, backtest/, xm/, hl/, lp/, lineage/, evidence*, source/, soe/, solana*, tz, calendar, backoff, canonical, engine_smoke, token, usage"],
-  ["src/ports/", "ports", "traits: engine (Engine, ToolExecutor), tool, memory, orchestration, observation, decision, clock, history, book, paper, runtime, market_data, evidence, lineage, source_store, solana_signer, solana_writes, shell, skill_source, tool_activity"],
+  ["src/domain/", "domain", "plain data + pure policy: message, session, plan, scope, secrets, tools, metrics, memory, observation, decision, runtime, schedule, market, book, marketdata*, sec, backtest/, xm/, hl/, lp/, lineage/, evidence*, source/, soe/, solana*, tz, calendar, backoff, canonical, engine_smoke, token, usage, workflow (Studio graph), trace (execution-trace envelope)"],
+  ["src/ports/", "ports", "traits: engine (Engine, ToolExecutor), tool, memory, orchestration, observation, decision, clock, history, book, paper, runtime (RuntimeStore, RuntimeJob), market_data, evidence, lineage, source_store, soe (StageRunner, CycleStore), trace (TraceSink, TraceReader), solana_signer, solana_writes, shell, skill_source, tool_activity"],
   ["tests/layering_lint.rs", "tests", "enforces domain ← ports ← application ← adapters, bootstrap rules"],
   ["tests/code_map.rs", "tests", "docs/code-map.md lists every source file; code-map.html graph current"],
   ["tests/scope_lint.rs", "tests", "every Tool::execute starts with a scope check"],
@@ -1282,7 +1356,7 @@ const FILE_MAP = [
   ["tests/bridge_conformance.rs", "parity", "every catalog tool: same text + store rows in-process and through a real tengu mcp-bridge"],
   ["tests/engine_matrix.rs", "parity", "live engine × model × tool-set legs (ignored by default); offline local path; every catalog tool in a set"],
   // ── CLI ──
-  ["src/adapters/inbound/cli/mod.rs", "cli", "clap Cli/Commands + dispatch (chat / status / doctor / telegram / webhooks / run / decide / history / backtest / ranking / evidence / lineage / soe / sources / risk / eval / secret / prune / mcp-bridge / agentic-memory-server / skill; hidden run-agent / tool)"],
+  ["src/adapters/inbound/cli/mod.rs", "cli", "clap Cli/Commands + dispatch (chat / status / doctor / telegram / webhooks / run / decide / history / backtest / ranking / evidence / lineage / soe / sources / studio / trace / risk / eval / secret / prune / mcp-bridge / agentic-memory-server / skill; hidden run-agent / tool)"],
   ["src/adapters/inbound/cli/run_agent.rs", "cli", "tengu run-agent child: AgentIpcInput in, LLM-with-tools loop until compress_and_store, AgentIpcOutput out; try_persist_agentic_step_summary"],
   ["src/adapters/inbound/cli/skill.rs", "cli", "tengu skill … commands"],
   ["src/adapters/inbound/cli/doctor.rs", "cli", "tengu status / doctor (--tor exit check, --live runner health, --engines smoke turn per agent)"],
@@ -1293,7 +1367,10 @@ const FILE_MAP = [
   ["src/adapters/inbound/cli/lineage.rs", "lineage", "tengu lineage verify [--pins] [--evidence] | show | trace | family | attempts | report | capabilities | generation | seal"],
   ["src/adapters/inbound/cli/evidence.rs", "lineage", "tengu evidence snapshot | verify | coverage | grade | evaluate | regrade — no config, no LLM, no network"],
   ["src/adapters/inbound/cli/sources.rs", "sources", "tengu sources list | fetch | import | asof | purge | terms | disable | enable"],
-  ["src/adapters/inbound/cli/soe.rs", "soe", "tengu soe init | check | portfolio | sensitivity | eval — offline, on the signed private profile"],
+  ["src/adapters/inbound/cli/soe.rs", "soe", "tengu soe init | check | portfolio | sensitivity | eval — offline, on the signed private profile (O1)"],
+  ["src/adapters/inbound/cli/soe/weekly.rs", "soe", "tengu soe cycle | replay | grade | resolve | review | verify | show — the weekly cycle (O3) and its O4 measures over the private SOE state; --sandbox or -c"],
+  ["src/adapters/inbound/cli/studio.rs", "studio", "tengu studio --sandbox <s> [--port --bind --allow-control] (the server, --features studio) · tengu studio graph [--map] (every build)"],
+  ["src/adapters/inbound/cli/trace.rs", "trace", "tengu trace runs | show --run <id> [--after <seq>] [--follow] — JSON lines, no config, read-only"],
   ["src/adapters/inbound/cli/risk.rs", "xmarket", "tengu risk status / halt / resume — ledger risk state; halt and resume only at a terminal"],
   ["src/adapters/inbound/cli/tool.rs", "parity", "hidden tengu tool list / call / turn — catalog names, calls through a run-agent executor, one engine turn as any agent"],
   ["src/adapters/inbound/run.rs", "runtime", "tengu run [--sandbox <s>] — loops, feeds, webhook routes, lease, graceful shutdown"],
@@ -1303,7 +1380,10 @@ const FILE_MAP = [
   ["src/bootstrap/memory.rs", "bootstrap", "build_memory_manager(_async), resolve_memory_store_path"],
   ["src/bootstrap/sandbox.rs", "bootstrap", "load_sandbox_or — sandboxes/<name>/config.toml + egress install"],
   ["src/bootstrap/decision.rs", "decision", "build_decision_loop, build_mapped_loop, agent_tool_executor; replay: build_replay_loop, cached_decision_engine, build_gate"],
-  ["src/bootstrap/runtime.rs", "runtime", "tengu run composition — LeasePlan / OwnerLeases, loops built once, start_feeds, Runtime::spawn / shutdown"],
+  ["src/bootstrap/runtime.rs", "runtime", "tengu run composition — LeasePlan / OwnerLeases, loops built once, start_feeds (+ job_for), the trace recording, Runtime::spawn / shutdown"],
+  ["src/bootstrap/soe.rs", "soe", "the soe_cycle job (kind = \"job\" feed): FsCycleStore, source store, CachedStageRunner over SubprocessStageRunner, generation pin, profile"],
+  ["src/bootstrap/trace.rs", "trace", "open_sink (a new recording per process; NoopTrace on an unwritable dir), reader, run_path"],
+  ["src/bootstrap/studio.rs", "studio", "graph_inputs, workflow_graph (scrubbed); StudioContext (--features studio): graph, trace reader, scenarios, kept maps, live verdict"],
   // ── chat + orchestrator ──
   ["src/application/chat/service.rs", "chat", "ChatRuntimeService::process_user_text, handle_chat_command, slash-command routing"],
   ["src/application/chat/tool_loop.rs", "chat", "collect_engine_response / run_single_engine_turn — the inner tool loop; tool_result_content caps results"],
@@ -1340,7 +1420,7 @@ const FILE_MAP = [
   ["src/config/decision_loop.rs", "decision", "[decision_loops.<name>] — goal, agent, actions, slots (lists or bound values), caps, reducers, sequence, dry_run, world, requires, act_at"],
   ["src/config/execution_map.rs", "decision", "an Architect's execution map (JSON) — only narrows a loop: actions, sequence, event, goal, caps, max_steps, act_at, dry_run on"],
   ["src/config/runtime.rs", "runtime", "[runtime] — shutdown_grace_secs, max_decisions_in_flight, max_queued_per_loop, heartbeat_secs, heartbeat_stale_secs"],
-  ["src/config/feeds.rs", "runtime", "[feeds.<name>] — tool / tick feeds: schedule, fan-out each, health; validated against agents' tools and loops"],
+  ["src/config/feeds.rs", "runtime", "[feeds.<name>] — tool / tick / job feeds (JOBS: soe_cycle): schedule, fan-out each, health; validated against agents' tools, loops and jobs"],
   ["src/config/rate_limits.rs", "tools", "[rate_limits.<name>] — per_minute, burst, exec_reserve"],
   ["src/config/recorder.rs", "observations", "[recorder] — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention"],
   ["src/config/risk.rs", "xmarket", "[risk] + [paper] + [risk.exits] — every field required; the paper fill engine's knobs; load rules"],
@@ -1351,8 +1431,10 @@ const FILE_MAP = [
   ["src/config/lineage.rs", "lineage", "load_registry (lineage/ dirs, one TOML per record) + [generation] binding rules (tools, kinds, FROZEN pins) → GenerationScope"],
   ["src/config/strategy_ranking.rs", "ranking", "[strategy_ranking] registry, contracts — load rules → RankingSection (cited runs)"],
   ["src/config/sources.rs", "sources", "[sources] state + [sources.registry.<id>] rows: kind, class, trust, revision, hosts, terms, retention; shipped enabled = false"],
-  ["src/config/soe.rs", "soe", "the signed private operator profile, opportunity / record-dir / --cited loaders (no [soe] section yet)"],
-  ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest] / [generation] / [strategy_ranking] / [sources]"],
+  ["src/config/soe.rs", "soe", "the signed private operator profile, opportunity / record-dir / replay-set / --cited loaders; [soe] (architect, critic, max_proposals, forecast_max_weeks, token_prices) + closed-world load rules"],
+  ["src/config/studio.rs", "studio", "[studio] control (default false); control_policy — never [generation]-bound or hardened"],
+  ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest] / [generation] / [strategy_ranking] / [sources] / [soe] / [studio]"],
+  ["sandboxes/control-loop-lab/config.toml", "studio", "the safe control-loop lab — loop demo (Jev), feeds tick + probe, private agent lab (read_file / write_file / list_directory in its workspace), [studio] control = true; scenarios/*.json + *.map.json"],
   ["sandboxes/xmarket/config.toml", "xmarket", "paper desk stage M0 — runbook at the top; xm_architect (default, routable, Opus), xm_executor (private, Sonnet), no planner; feeds hl_ctx, hl_book, xm_exits, risk_day"],
   ["sandboxes/xmarket-weekend/config.toml", "xmarket", "rule W on paper — runbook + timeline at the top; xm_weekend (private); five required tool feeds; recorder; [generation] W1"],
   ["sandboxes/xlab/config.toml", "xlab", "history-first research — [backtest] library, xl_architect (routable), xl_jev + [decision_loops.xl_gate], $100 [risk]; [generation] W1 (frozen)"],
@@ -1497,7 +1579,20 @@ const FILE_MAP = [
   ["src/application/sources.rs", "sources", "evidence_as_of, purge_request"],
   ["src/adapters/outbound/tools/sources/", "sources", "source_evidence — read-only as-of evidence packet (defs.rs = interface)"],
   // ── SOE ──
-  ["src/domain/soe/", "soe", "values, records, profile, opportunity, risk, experiment, episode, portfolio, economics, gates, matching, rank, eval — pure"],
+  ["src/domain/soe/", "soe", "values, records, profile, opportunity, risk, experiment, episode, portfolio, economics, gates, matching, rank, allocate, proposal, challenge, forecast, memo, observe, ops, replay, review, eval — pure"],
+  ["src/ports/soe.rs", "soe", "StageRunner, CycleStore, RunDir, RunStatus, StateLog"],
+  ["src/application/soe/", "soe", "cycle (run_cycle), submit (the tools' writes), freeze (MANIFEST.json, verify_state), job (SoeCycleJob), replay, grade (grade + resolve), review (the Review #2 packet)"],
+  ["src/adapters/outbound/soe/", "soe", "store.rs (FsCycleStore), runner.rs (SubprocessStageRunner), cache.rs (CachedStageRunner, stage-cache/<key>.jsonl)"],
+  ["src/adapters/outbound/tools/soe/", "soe", "soe_view, soe_propose, soe_challenge (defs.rs = interfaces)"],
+  // ── execution trace + Studio ──
+  ["src/domain/trace.rs", "trace", "the event envelope, scrub_value + bound_payload, Status::tone, RunState — pure"],
+  ["src/ports/trace.rs", "trace", "TraceSink, TraceReader"],
+  ["src/adapters/outbound/trace_store.rs", "trace", "JsonlTraceSink / JsonlTraceReader — <TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl"],
+  ["src/application/trace_exec.rs", "trace", "Cause / caused_by, TracedExecutor (tool.started → tool.completed / tool.failed)"],
+  ["src/domain/workflow.rs", "studio", "WorkflowGraph — nodes, edges, layer + order, narrowed_out, facets — pure"],
+  ["src/application/studio/", "studio", "graph (build_graph), stream, board (fold_run), inspect, control"],
+  ["src/adapters/inbound/studio/", "studio", "the Studio server: mod.rs (routes), api.rs, sse.rs, control.rs, guard.rs (loopback, token, Host / Origin / CSRF, CSP), assets.rs (web/studio/ embedded)"],
+  ["web/studio/", "studio", "index.html, studio.css, studio.js — the page; draws only"],
   // ── skills ──
   ["skills/orchestrator/SKILL.md", "skills", "planner system prompt"],
   ["skills/orchestrator/plan_schema.json", "skills", "the plan JSON shape the planner is asked for"],

@@ -115,7 +115,7 @@ A tool is done only when all three rows pass for it (R1). `x-engine-parity-audit
 The W1 prompt (used 2026-09-30) is in this file at `47fc090de426205df91425df789849466e962399`.
 
 ```text
-Implement xmarket wave W2. Read, in order: CLAUDE.md (required reading #10, #11, #13),
+Implement xmarket wave W2. Read, in order: CLAUDE.md (required reading #10, #11, #12),
 docs/SESSION_HANDOFF.md (top), docs/xmarket-build-plan-2026-09-30.md (Status, § Waves),
 docs/xmarket-tracker-2026-09-29.md § 0 and the W1 notes (the open operator decisions),
 and docs/xlab-2026-10-01.md § 12–14. Confirm the operator decisions first. History

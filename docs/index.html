@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
-<title>Docs Hub · Tengu-Cluster · 2026-10-02</title>
+<title>Docs Hub · Tengu-Cluster · 2026-10-09</title>
 <style>
   :root {
     --bg: #0F0F1A;
@@ -144,14 +144,14 @@
 <div class="top">
   <header class="bar">
     <h1>Tengu-Cluster · Docs hub</h1>
-    <p class="sub">2026-10-02 · every HTML explorer and markdown doc in one place · one search filters both · self-contained, works offline · the change history of <code>feature/xmarket</code> is on the <a href="changes-2026-09-29-to-10-02.html">change timeline</a></p>
+    <p class="sub">2026-10-09 (<code>main</code> @ <span class="hash">f7ac9a5636e2493e3839e896cba9951a2d41aefb</span>) · every HTML explorer and markdown doc in one place · one search filters both · self-contained, works offline · the W1 build history (<code>feature/xmarket</code>) is on the <a href="changes-2026-09-29-to-10-02.html">change timeline</a></p>
     <div class="bar-row">
-      <label class="search"><span class="sr-only">Search the docs</span><input type="search" id="q" placeholder="Search docs and explorers, e.g. risk, bridge, xlab, memory" autocomplete="off" spellcheck="false"></label>
+      <label class="search"><span class="sr-only">Search the docs</span><input type="search" id="q" placeholder="Search docs and explorers, e.g. risk, bridge, xlab, studio, soe" autocomplete="off" spellcheck="false"></label>
       <nav class="jump" aria-label="Sections">
         <a href="#start">Start here</a>
         <a href="#explorers">Explorers</a>
         <a href="#docs">Markdown docs</a>
-        <a href="#outside">Runbooks</a>
+        <a href="#outside">Outside docs/</a>
       </nav>
       <span class="count" id="count" aria-live="polite"></span>
     </div>
@@ -170,45 +170,55 @@
     <div class="step"><span class="n">4</span><a class="t" href="SESSION_HANDOFF.md">docs/SESSION_HANDOFF.md</a><p>Running state: the resume table at the top, open items, active gotchas.</p></div>
   </div>
   <div class="callout">
-    <strong>New to Tengu?</strong> The visual field manual explains every feature on its own animated page, drawn from the code and updated with every code change.
+    <strong>New to Tengu?</strong> The visual field manual explains every feature on its own animated page (31 pages), drawn from the code and updated with every code change.
     <div class="links">
       <a href="tutorial/index.html">docs/tutorial/ — field manual</a>
       <a href="tutorial/big-picture.html">one message, end to end</a>
       <a href="tutorial/decision-loop.html">decision loop (Jev)</a>
+      <a href="tutorial/studio.html">Studio</a>
+      <a href="tutorial/soe.html">SOE</a>
     </div>
   </div>
   <div class="callout">
-    <strong>What changed lately:</strong> 90 commits on <code>feature/xmarket</code> (2026-09-30 → 10-01) — the xmarket build (planning docs, wave W1, the W1 gate), then xlab (history-first backtesting).
+    <strong>What changed lately (2026-10-08/09, PRs #39–#44):</strong> strategy ranking (contracts unsealed), the Software Opportunity Engine O0–O4 + the source-evidence layer (offline until the operator's G-O0), Tengu Studio + the control-loop lab, docs sweep A. Open operator gates: the top of <a href="SESSION_HANDOFF.md">SESSION_HANDOFF</a>.
     <div class="links">
-      <a href="changes-2026-09-29-to-10-02.html">change timeline</a>
-      <a href="xmarket-2026-10-02.html">xmarket explorer</a>
-      <a href="xlab-2026-10-02.html">xlab explorer</a>
-      <a href="xmarket-tracker-2026-09-29.md">xmarket tracker</a>
-      <a href="xlab-2026-10-01.md">xlab doc</a>
+      <a href="strategy-ranking-automation-2026-10-08.md">strategy ranking</a>
+      <a href="soe-2026-10-08.md">SOE</a>
+      <a href="source-evidence-2026-10-08.md">source evidence</a>
+      <a href="studio-2026-10-08.md">Studio</a>
+      <a href="control-loop-lab-2026-10-08.md">control-loop lab</a>
+      <a href="../TENGU_STUDIO_PLAN.md">Studio plan</a>
     </div>
+    <div class="links">Earlier (2026-09-30 → 10-01, 90 commits on <code>feature/xmarket</code>): <a href="changes-2026-09-29-to-10-02.html">change timeline</a> <a href="xmarket-2026-10-02.html">xmarket explorer</a> <a href="xlab-2026-10-02.html">xlab explorer</a></div>
   </div>
 </section>
 
 <!-- ============ EXPLORERS ============ -->
 <section id="explorers" aria-labelledby="h-explorers">
   <h2 id="h-explorers">Interactive explorers (HTML)</h2>
-  <p class="note">Status: <span class="chip new">new</span> written 2026-10-02 · <span class="chip current">current</span> touched by a commit in <code>main..HEAD</code> · <span class="chip">snapshot</span> dated content, unchanged since. "Commits" = commits of <code>main..</code><span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span> that touched the file (<code>git log main..HEAD -- &lt;file&gt;</code>), linked to the change timeline.</p>
+  <p class="note">Status (2026-10-09): <span class="chip new">new</span> added to the hub 2026-10-09 · <span class="chip current">current</span> re-checked against the code in the 2026-10-08/09 docs sweeps · <span class="chip">snapshot</span> dated content, kept as a record. "Commits" = commits of the W1 build range <code>main..</code><span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span> that touched the file (<code>git log main..HEAD -- &lt;file&gt;</code>, counted 2026-10-02), linked to the change timeline.</p>
   <div class="cards" id="cards">
+    <article class="card" data-k="tutorial field manual animated feature pages visual studio soe ranking lineage evidence">
+      <h3><a href="tutorial/index.html">Field manual (visual tutorial)</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/tutorial/ · 31 feature pages · checked against the code page by page</div>
+      <p class="what">One animated page per feature, written from the code: a message end to end, planner, subagents, tool loop, engines, MCP bridge, sandboxes, tools, skills, skill lifecycle, channels, memory, local memory, scopes, egress, secrets, evidence, lineage, strategy ranking, decision loop, observations, runtime, metrics, Studio, Solana, paper desk, history, backtest, SOE, source evidence, ops. Every code change updates the pages its <code>sources</code> cover.</p>
+      <div class="meta">Map: <a href="tutorial/sources.toml">sources.toml</a> (checked by <code>cargo test --test tutorial_map</code>) · rules: <a href="tutorial/AUTHORING.md">AUTHORING.md</a></div>
+    </article>
     <article class="card" data-k="changes timeline commits history git xmarket xlab w1 gate phases">
-      <h3><a href="changes-2026-09-29-to-10-02.html">Change timeline</a> <span class="chip new">new</span></h3>
+      <h3><a href="changes-2026-09-29-to-10-02.html">Change timeline</a> <span class="chip">snapshot</span></h3>
       <div class="file">docs/changes-2026-09-29-to-10-02.html · 2026-10-02</div>
       <p class="what">Every commit of <code>main..HEAD</code> (90, 2026-09-30 → 10-01) in ten phases, from the xmarket planning docs to the xlab review fixes: phase summaries with sources, search and phase filters, commits / lines per phase, day or hour, every path touched, the tracker items closed.</p>
       <div class="meta">Tabs: Overview · Commits · Charts · Files · Tracker items · Method</div>
     </article>
     <article class="card" data-k="xmarket paper desk risk gate ledger weekend fade hyperliquid runtime w1">
-      <h3><a href="xmarket-2026-10-02.html">xmarket explorer</a> <span class="chip new">new</span></h3>
+      <h3><a href="xmarket-2026-10-02.html">xmarket explorer</a> <span class="chip">snapshot</span></h3>
       <div class="file">docs/xmarket-2026-10-02.html · 2026-10-02</div>
       <p class="what">What was built for xmarket, how it works and where it stands: the W1 items, the architecture, the <code>[risk]</code> gate and paper ledger, <code>tengu run</code>, rule W, engine parity and hardening, the evidence, the W1 gate, state and commands, what comes next.</p>
       <div class="meta">Tabs: Overview · W1 items · Architecture · Risk &amp; paper · Runtime · Rule W · Engine parity &amp; hardening · Evidence · W1 gate · State &amp; commands · Next</div>
       <div class="meta">Companions: <a href="xmarket-tracker-2026-09-29.md">tracker</a> · <a href="xmarket-prd-2026-09-29.md">PRD</a> · <a href="xmarket-build-plan-2026-09-30.md">build plan</a> · <a href="xmarket-risk-paper-2026-09-30.md">risk + paper</a> · <a href="runtime-2026-09-30.md">runtime</a></div>
     </article>
     <article class="card" data-k="xlab history backtest market.db backfill jev gate architect strategy">
-      <h3><a href="xlab-2026-10-02.html">xlab explorer</a> <span class="chip new">new</span></h3>
+      <h3><a href="xlab-2026-10-02.html">xlab explorer</a> <span class="chip">snapshot</span></h3>
       <div class="file">docs/xlab-2026-10-02.html · 2026-10-02</div>
       <p class="what">The history-first trading harness built 2026-10-01 for the operator's PRD v0.5: why history first, the architecture, the data, strategy specs, engine rules, results on real history, the live Architect, the adversarial review, commands and next steps.</p>
       <div class="meta">Tabs: Why history first · Architecture · Data · Strategy specs · Engine rules · Results · Architect · Review · Commands &amp; next</div>
@@ -216,8 +226,8 @@
     </article>
     <article class="card" data-k="architecture turn subsystems file map planner runner">
       <h3><a href="architecture-2026-04-27.html">Architecture Explorer</a> <span class="chip current">current</span></h3>
-      <div class="file">docs/architecture-2026-04-27.html · 2026-04-27, synced 2026-10-02</div>
-      <p class="what">Walk a chat turn step by step, plus the two flows with no user message (<code>tengu run</code>, <code>tengu backtest</code>); subsystem cards; which stores each piece writes and reads; key mechanics; a searchable file map.</p>
+      <div class="file">docs/architecture-2026-04-27.html · 2026-04-27, synced 2026-10-08</div>
+      <p class="what">Walk a chat turn step by step, plus the flows with no user message (<code>tengu run</code>, <code>tengu backtest</code>, <code>tengu ranking run</code>); subsystem cards (incl. lineage, rankings, sources, SOE); which stores each piece writes and reads; key mechanics; a searchable file map.</p>
       <div class="meta">Tabs: Walk a Turn · Other Flows · Subsystems · Stores · Key Mechanics · File Map</div>
       <div class="meta">Companions: <a href="architecture-2026-04-27.md">.md</a> · <a href="architecture-2026-04-27.svg">.svg</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/architecture-2026-04-27.html">2</a></div>
     </article>
@@ -229,34 +239,34 @@
     </article>
     <article class="card" data-k="context management layers mechanisms tokens prompt budget">
       <h3><a href="context-management-2026-04-27.html">Context Management Explorer</a> <span class="chip current">current</span></h3>
-      <div class="file">docs/context-management-2026-04-27.html · 2026-04-27</div>
-      <p class="what">The canonical reference for what an LLM sees: 7 layers, ~25 mechanisms — walk a turn, config knobs, symptom → cause, what's missing.</p>
+      <div class="file">docs/context-management-2026-04-27.html · 2026-04-27, checked against the code 2026-10-08</div>
+      <p class="what">The canonical reference for what an LLM sees: 7 layers, 31 mechanisms — walk a turn, config knobs, symptom → cause, what's missing.</p>
       <div class="meta">Tabs: Layers Overview · All Mechanisms · Walk a Turn · Config Knobs · Symptom → Cause · What's Missing</div>
       <div class="meta">Companions: <a href="context-management-2026-04-27.md">.md</a> · <a href="context-management-2026-04-27.svg">.svg</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/context-management-2026-04-27.html">3</a></div>
     </article>
     <article class="card" data-k="context cutting tool loop layer 3 truncation">
       <h3><a href="context-cutting-flow-2026-04-27.html">Context-Cutting Explorer</a> <span class="chip current">current</span></h3>
-      <div class="file">docs/context-cutting-flow-2026-04-27.html · 2026-04-27</div>
+      <div class="file">docs/context-cutting-flow-2026-04-27.html · 2026-04-27, checked against the code 2026-10-08</div>
       <p class="what">Layer 3 only: the inner tool loop — walk the loop, its 5 mechanisms, a live demo, config knobs.</p>
       <div class="meta">Tabs: Overview · Walk the Loop · 5 Mechanisms · Live Demo · Config Knobs · What's Missing</div>
       <div class="meta">Companion: <a href="context-cutting-flow-2026-04-27.svg">.svg</a> · Commits: <a href="changes-2026-09-29-to-10-02.html#files?q=docs/context-cutting-flow-2026-04-27.html">2</a></div>
     </article>
     <article class="card" data-k="orchestrator pipeline planner dag run-agent sequential parallel diamond replan retention">
-      <h3><a href="orchestrator-pipeline.html">Orchestrator Pipeline</a> <span class="chip">snapshot</span></h3>
-      <div class="file">docs/orchestrator-pipeline.html · line numbers as of 2026-09-18</div>
+      <h3><a href="orchestrator-pipeline.html">Orchestrator Pipeline</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/orchestrator-pipeline.html · line numbers as of 2026-10-08 (<code>main</code> at <span class="hash">bc9bc12a038654ac4941c714abcfa777c99af631</span>)</div>
       <p class="what">A message becomes plan JSON (planner, tools stripped), a Rust DAG executor runs each step as a <code>tengu run-agent</code> child: architecture, lifecycle, sequential, parallel, diamond, replan, retention, code refs.</p>
       <div class="meta">Tabs: Overview · Architecture · Lifecycle · Sequential · Parallel · Diamond · Replan · Retention · Code refs</div>
       <div class="meta">Companion: <a href="orchestrator-pipeline.md">orchestrator-pipeline.md</a> · Commits: 0</div>
     </article>
     <article class="card" data-k="skill lifecycle distill eval evolve metrics">
-      <h3><a href="skill-lifecycle.html">Skill Lifecycle</a> <span class="chip">snapshot</span></h3>
-      <div class="file">docs/skill-lifecycle.html</div>
+      <h3><a href="skill-lifecycle.html">Skill Lifecycle</a> <span class="chip current">current</span></h3>
+      <div class="file">docs/skill-lifecycle.html · code refs refreshed in docs sweep A (#42)</div>
       <p class="what">From conversation to evolving skill: <code>skill_distill</code> writes a skill mid-chat, <code>tengu eval</code> scores its fixtures, <code>tengu skill evolve</code> runs bounded rewrite loops behind a user approval gate.</p>
       <div class="meta">Companions: <a href="skill-lifecycle-pipeline-diagrams.md">pipeline diagrams</a> · <a href="skill-lifecycle-validation.md">validation guide</a> · Commits: 0</div>
     </article>
     <article class="card" data-k="memory recall debug planner forgets session">
       <h3><a href="memory-recall-debug-2026-05-11.html">Memory recall debug map</a> <span class="chip">snapshot</span></h3>
-      <div class="file">docs/memory-recall-debug-2026-05-11.html · 2026-05-11</div>
+      <div class="file">docs/memory-recall-debug-2026-05-11.html · 2026-05-11, code refs refreshed in docs sweep A (#42)</div>
       <p class="what">"Why can't the planner remember what I just said?" — three stacked recall failures; toggle knobs to simulate other configs.</p>
       <div class="meta">Commits: 0</div>
     </article>
@@ -291,11 +301,10 @@
         <tr data-k="start here"><td class="doc"><a href="code-map.md">docs/code-map.md</a><span class="also">+ <a href="code-map.html">code-map.html</a></span></td><td class="what">Index into the code: the layers, every source file, how to add a tool, an engine or a config section.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/code-map.md">55</a></td></tr>
         <tr data-k="start here"><td class="doc"><a href="architecture-2026-04-27.md">docs/architecture-2026-04-27.md</a><span class="also">+ <a href="architecture-2026-04-27.svg">.svg</a> · <a href="architecture-2026-04-27.html">.html</a></span></td><td class="what">Architecture walkthrough: a five-sentence TL;DR, seven steps from prompt to reply, every file per subsystem, how to trace one turn.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/architecture-2026-04-27.md">6</a></td></tr>
         <tr data-k="start here"><td class="doc"><a href="SESSION_HANDOFF.md">docs/SESSION_HANDOFF.md</a></td><td class="what">Running state log: the resume table at the top, earlier states below it, open items, active gotchas.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/SESSION_HANDOFF.md">20</a></td></tr>
-        <tr data-k="start here"><td class="doc"><a href="../README.md">README.md</a></td><td class="what">What tengu is and how to run it: prerequisites, quickstart, CLI, history-first research (xlab), the paper desk (xmarket), orchestration, engines, tools, feature flags, sandboxes, Telegram, Docker, configuration, module map.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=README.md">3</a></td></tr>
+        <tr data-k="start here"><td class="doc"><a href="../README.md">README.md</a></td><td class="what">What tengu is and how to run it: the capability table (chat, engines, tools, Jev loops, runtime, Studio, paper desk, xlab, lineage, strategy ranking, source evidence, SOE), prerequisites, quickstart, CLI, history-first research (xlab), the paper desk (xmarket), orchestration, engines, tools, feature flags, skills, sandboxes, Telegram, Docker, configuration, docs, module map.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=README.md">3</a></td></tr>
 
         <tr class="group"><td colspan="3">Runtime + trading <span class="gnote">tengu run, typed observations, decision loops, xmarket, xlab</span></td></tr>
-        <tr data-k="runtime trading"><td class="doc"><a href="runtime-2026-09-30.md">docs/runtime-2026-09-30.md</a></td><td class="what"><code>tengu run</code>: one process per sandbox — feeds, decision loops, webhook routes, single-runner lease, shutdown, health, <code>doctor --live</code>, state layout, the weekend run, the xmarket sandbox.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/runtime-2026-09-30.md">16</a></td></tr>
-        <tr data-k="runtime trading studio"><td class="doc"><a href="studio-2026-10-08.md">docs/studio-2026-10-08.md</a><span class="also">+ <a href="studio-editor-design-2026-10-08.md">editor design</a> · <a href="control-loop-lab-2026-10-08.md">lab runbook</a> · <a href="studio-acceptance-2026-10-08.md">acceptance</a> · <a href="tutorial/studio.html">tutorial</a></span></td><td class="what">Tengu Studio (<code>tengu studio</code>, <code>--features studio</code>): local browser UI over a sandbox — validated graph, live + replayed runs, health; Play / Stop for the lab. Quick start, routes, security model, troubleshooting. The editor is a design only.</td><td class="n">0</td></tr>
+        <tr data-k="runtime trading trace soe sandbox job feed"><td class="doc"><a href="runtime-2026-09-30.md">docs/runtime-2026-09-30.md</a></td><td class="what"><code>tengu run</code>: one process per sandbox — feeds (<code>tool</code> · <code>tick</code> · <code>job</code>), decision loops, webhook routes, single-runner lease, shutdown, health, <code>doctor --live</code>, state layout, the trace recording Studio reads (§ Trace), the weekend run, the xmarket and SOE sandboxes.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/runtime-2026-09-30.md">16</a></td></tr>
         <tr data-k="runtime trading"><td class="doc"><a href="typed-observations-2026-09-24.md">docs/typed-observations-2026-09-24.md</a></td><td class="what">Typed tool results (the <code>Observation</code> envelope), the observation cache and history recorder, decision-loop <code>world</code> / <code>requires</code>; Solana LP read + write tools, market rows, Hyperliquid tools, market history, backtest, risk + paper rows.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/typed-observations-2026-09-24.md">26</a></td></tr>
         <tr data-k="runtime trading"><td class="doc"><a href="decision-loop-plan-2026-09-24.md">docs/decision-loop-plan-2026-09-24.md</a></td><td class="what">Jev decision loops (<code>[decision_loops.*]</code>): status, shape, config, phases, observability, open questions.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/decision-loop-plan-2026-09-24.md">7</a></td></tr>
         <tr data-k="runtime trading"><td class="doc"><a href="lping-2026-09-24.md">docs/lping-2026-09-24.md</a></td><td class="what">The lping sandbox: crypto research + dry-run Solana LP / hedge decision loops over the typed read tools.</td><td class="n">0</td></tr>
@@ -306,23 +315,42 @@
         <tr data-k="runtime trading xmarket"><td class="doc"><a href="xmarket-feasibility-2026-09-30.md">docs/xmarket-feasibility-2026-09-30.md</a></td><td class="what">Feasibility from public data: verdict re-scope (cross-venue convergence fails after costs), what it is worth, the holdout result, limitations.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-feasibility-2026-09-30.md">1</a></td></tr>
         <tr data-k="runtime trading xmarket risk paper"><td class="doc"><a href="xmarket-risk-paper-2026-09-30.md">docs/xmarket-risk-paper-2026-09-30.md</a></td><td class="what">Operator reference for the <code>[risk]</code> gate, the paper ledger and the kill switch: load rules, gate enforcement, exec tools, ledger, funding, audit, exits, the weekend fade, halts, <code>tengu risk</code>.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xmarket-risk-paper-2026-09-30.md">14</a></td></tr>
         <tr data-k="runtime trading xlab history backtest"><td class="doc"><a href="xlab-2026-10-01.md">docs/xlab-2026-10-01.md</a></td><td class="what">xlab, history first (PRD v0.5): <code>market.db</code> + backfill, strategy specs, the backtest engine, Jev on history (gate arm), tools, sandbox, commands, limits, the PRD review (§ 13), results on real history (§ 14).</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/xlab-2026-10-01.md">14</a></td></tr>
-        <tr data-k="lineage evidence generation W1 experiment variant experience capability roadmap"><td class="doc"><a href="lineage-2026-10-06.md">docs/lineage-2026-10-06.md</a></td><td class="what">Research lineage (TENGU_ROADMAP P0–P5): the <code>lineage/</code> registry (experiments, variants, Experience, incidents, capabilities, generations), <code>tengu evidence</code> (vault, grade, regrade, coverage), generation binding (<code>[generation]</code>).</td><td class="n">—</td></tr>
+
+        <tr class="group"><td colspan="3">Studio + control-loop lab <span class="gnote">tengu studio, tengu trace, the lab sandbox (PR #44)</span></td></tr>
+        <tr data-k="studio trace graph replay play stop browser ui"><td class="doc"><a href="studio-2026-10-08.md">docs/studio-2026-10-08.md</a><span class="also">+ <a href="tutorial/studio.html">tutorial</a> · screenshots <a href="studio-evidence/01-idle.png">idle</a> · <a href="studio-evidence/02-running.png">running</a> · <a href="studio-evidence/03-replay.png">replay</a></span></td><td class="what">Tengu Studio operator doc (<code>tengu studio</code>, <code>--features studio</code>): a local browser page over one sandbox — validated workflow graph, live + replayed runs, <code>doctor --live</code> health, Play / Stop where allowed. Quick start, routes, security model, troubleshooting. Screenshots (<code>docs/studio-evidence/</code>): the lab idle, running after Play, a stopped run replayed (2026-10-09).</td><td class="n">—</td></tr>
+        <tr data-k="studio plan tracker st-00 st-90 gates editor"><td class="doc"><a href="../TENGU_STUDIO_PLAN.md">TENGU_STUDIO_PLAN.md</a></td><td class="what">Control Loop Lab + Studio plan and tracker: outcome, scope, lab contract, UX + architecture, Play / Stop contract, the future editor, § 8 delivery items ST-00…ST-90 with evidence (Gates 1–4 waived by the operator; ST-90 clean room open), § 9 runbook.</td><td class="n">—</td></tr>
+        <tr data-k="studio lab control loop runbook acceptance matrix jev tick"><td class="doc"><a href="control-loop-lab-2026-10-08.md">docs/control-loop-lab-2026-10-08.md</a></td><td class="what"><code>sandboxes/control-loop-lab</code>: the safe reference run tick → Jev → tool → audit → health — the sandbox, setup (<code>TENGU_HOME=$HOME/tengu-lab/home</code> first), quick start, the CLI acceptance matrix A0–A15, graph + trace, the Studio server + page, troubleshooting, cleanup.</td><td class="n">—</td></tr>
+        <tr data-k="studio lab baseline real jev evidence st-03"><td class="doc"><a href="control-loop-lab-baseline-2026-10-08.md">docs/control-loop-lab-baseline-2026-10-08.md</a></td><td class="what">ST-03 evidence: the lab run row by row on real Jev — A0–A15 all pass; nine runbook corrections.</td><td class="n">—</td></tr>
+        <tr data-k="studio trace evidence gate 2 st-12 st-20 st-21 st-22"><td class="doc"><a href="studio-trace-evidence-2026-10-08.md">docs/studio-trace-evidence-2026-10-08.md</a></td><td class="what">ST-12 / Gate 2 evidence (Gate 2 waived): real lab runs, <code>tengu trace show</code> reconstructs each; live proofs of the Studio server (§ ST-20) and page (§ ST-21 / ST-22).</td><td class="n">—</td></tr>
+        <tr data-k="studio acceptance play stop guards csrf st-30 st-31 review"><td class="doc"><a href="studio-acceptance-2026-10-08.md">docs/studio-acceptance-2026-10-08.md</a></td><td class="what">ST-30 / ST-31 live acceptance on real Jev: Play / Attach / Stop, the lease, the request guards (token, Origin, Host, body limits), the adversarial review re-run (a live drain, <code>kill -9</code>, secrets sweep).</td><td class="n">—</td></tr>
+        <tr data-k="studio clean room st-90 fresh clone acceptance"><td class="doc"><a href="studio-clean-room-2026-10-09.md">docs/studio-clean-room-2026-10-09.md</a></td><td class="what">ST-90 clean room (PASS): a fresh clone of main at #44 followed the lab + Studio quick starts as written; release build, A0–A15, G1–G8, Studio Play / Stop on real Jev, both full test suites green; the 8 doc fixes it found</td><td class="n">—</td></tr>
+        <tr data-k="studio editor design st-40 review 3 palette toml"><td class="doc"><a href="studio-editor-design-2026-10-08.md">docs/studio-editor-design-2026-10-08.md</a></td><td class="what">ST-40, design only: palette from Rust, connections → TOML keys, <code>Config::load</code> validation, Save-as-new + diff; nothing built until Operator Review #3.</td><td class="n">—</td></tr>
+
+        <tr class="group"><td colspan="3">Research lineage + W1 → W2 <span class="gnote">operator intent, lineage registry, reviews, phase reports, rankings, forward weekends</span></td></tr>
+        <tr data-k="operator intent handoff product architecture w1 w2 evolution"><td class="doc"><a href="../TENGU_HANDOFF.md">TENGU_HANDOFF.md</a></td><td class="what">Operator intent for coding agents: sources of truth, the critical rule, X Market and X Lab context, the runtime loop, the W1 → W2 → evolution target and its state.</td><td class="n">—</td></tr>
+        <tr data-k="operator roadmap phases gates review stop w1 w2"><td class="doc"><a href="../TENGU_ROADMAP.md">TENGU_ROADMAP.md</a></td><td class="what">The gated roadmap: operating rules, invariants, the phase state machine, P0–P16 and their gates, Operator Reviews #1 and #2 (mandatory stops), rollback matrix, test families. Status: P0–P11 done, W1 kept.</td><td class="n">—</td></tr>
+        <tr data-k="lineage registry records families variants experiments capabilities generations rankings"><td class="doc"><a href="../lineage/README.md">lineage/README.md</a></td><td class="what">The <code>lineage/</code> registry at a glance: one TOML file per record, each dir's record kind, key fields and file count; add a record, bind a sandbox, run a ranking contract, verify, SOE-G0.</td><td class="n">—</td></tr>
+        <tr data-k="lineage evidence generation W1 experiment variant experience capability roadmap soe-g0"><td class="doc"><a href="lineage-2026-10-06.md">docs/lineage-2026-10-06.md</a></td><td class="what">Research lineage (TENGU_ROADMAP P0–P5): the <code>lineage/</code> registry (experiments, variants, Experience, incidents, capabilities, generations, ranking contracts), <code>tengu evidence</code> (vault, grade, regrade, coverage), generation binding (<code>[generation]</code>), as built, SOE-G0 (§ 7).</td><td class="n">—</td></tr>
         <tr data-k="review W1 operator roadmap evidence grading inventory"><td class="doc"><a href="w1-review-2026-10-06.md">docs/w1-review-2026-10-06.md</a></td><td class="what">Operator Review #1 package: gates G0–G5, the 15 items, unresolved questions, the Phase 6–10 proposal; with <a href="w1-p0-weekend-2026-10-06.md">P0 weekend grading</a> and <a href="w1-inventory-2026-10-06.md">W1 inventory</a>.</td><td class="n">—</td></tr>
         <tr data-k="phase 6 decision evaluation jev rules hold candidate gate G6"><td class="doc"><a href="p6-decision-evaluation-2026-10-08.md">docs/p6-decision-evaluation-2026-10-08.md</a></td><td class="what">Phase 6: the candidate table (rules · Jev · HOLD on the same candidates), <code>tengu evidence evaluate</code>, W1's result (Jev UNPROVEN), gate G6.</td><td class="n">—</td></tr>
         <tr data-k="phase 7 news labels sec edgar filings noise uncertain"><td class="doc"><a href="p7-news-labels-2026-10-08.md">docs/p7-news-labels-2026-10-08.md</a></td><td class="what">Phase 7: SEC EDGAR filings as point-in-time NEWS / UNCERTAIN / NOISE labels for rule W; no label policy beats the baseline.</td><td class="n">—</td></tr>
         <tr data-k="phase 8 hip-3 oracle microstructure trade.xyz weekend band"><td class="doc"><a href="p8-hip3-oracle-2026-10-08.md">docs/p8-hip3-oracle-2026-10-08.md</a></td><td class="what">Phase 8: trade.xyz's closed-session oracle measured on the recorded weekend, rule W across the 2026-04-30 oracle change (no STOP), unknowns and data needs.</td><td class="n">—</td></tr>
         <tr data-k="phase 9 cost liquidity fees spread stop loss ranking"><td class="doc"><a href="p9-cost-liquidity-2026-10-08.md">docs/p9-cost-liquidity-2026-10-08.md</a></td><td class="what">Phase 9: observed fees and spreads, cost model v2, the stop-loss and net-of-cost knobs for rule W.</td><td class="n">—</td></tr>
         <tr data-k="phase 10 11 w2 candidate evaluation g11 keep w1"><td class="doc"><a href="p10-w2-candidate-2026-10-08.md">docs/p10-w2-candidate-2026-10-08.md</a></td><td class="what">Phases 10–11: every candidate change and its evidence; none survives outside development, so no W2 candidate, W1 kept.</td><td class="n">—</td></tr>
-        <tr data-k="strategy ranking contract leaderboard xlab-w2 feeds sealed rankings"><td class="doc"><a href="strategy-ranking-automation-2026-10-08.md">docs/strategy-ranking-automation-2026-10-08.md</a></td><td class="what">Scheduled strategy ranking: the audit as built, the sealed ranking contract, the ranker and coordinator, <code>tengu ranking</code>, the <code>strategy_ranking</code> tool, xlab-w2's feeds, deviations, the operator's seal decision. Tutorial: <a href="tutorial/strategy-ranking.html">strategy ranking</a>.</td><td class="n">—</td></tr>
         <tr data-k="forward evidence runbook weekend rule w prereg"><td class="doc"><a href="forward-evidence-runbook-2026-10-08.md">docs/forward-evidence-runbook-2026-10-08.md</a></td><td class="what">Rule W forward weekend #2 (2026-10-09 → 10-12): one start, one stop for the operator, the Monday grading steps; preregistration sealed.</td><td class="n">—</td></tr>
+        <tr data-k="strategy ranking contract leaderboard xlab-w2 feeds unsealed rankings g-sr1"><td class="doc"><a href="strategy-ranking-automation-2026-10-08.md">docs/strategy-ranking-automation-2026-10-08.md</a></td><td class="what">Scheduled strategy ranking (PR #40): the audit as built, the ranking contract (committed unsealed: rankings refused until the operator's seal, gate G-SR1), the coordinator rules, <code>tengu ranking</code>, the <code>strategy_ranking</code> tool, xlab-w2's feeds, deviations, open issues. Tutorial: <a href="tutorial/strategy-ranking.html">strategy ranking</a>.</td><td class="n">—</td></tr>
+
+        <tr class="group"><td colspan="3">Software Opportunity Engine + sources <span class="gnote">offline until the operator's G-O0 (PRs #41, #43)</span></td></tr>
+        <tr data-k="soe software opportunity engine weekly cycle profile gates review hold"><td class="doc"><a href="soe-2026-10-08.md">docs/soe-2026-10-08.md</a><span class="also">+ <a href="tutorial/soe.html">tutorial</a></span></td><td class="what">SOE: a weekly, evidence-backed ranking of software opportunities where <code>HOLD</code> is a valid week — gates and phases (O0–O4 built offline), the private operator profile (field names only), sources, threat model, eval set, the weekly cycle, <code>[soe]</code>, replay + grading, stage tools, <code>tengu soe</code>, the operator's path to Operator Review #2 (§ 15).</td><td class="n">—</td></tr>
+        <tr data-k="source evidence sec edgar ted sources.db as-of provenance"><td class="doc"><a href="source-evidence-2026-10-08.md">docs/source-evidence-2026-10-08.md</a><span class="also">+ <a href="tutorial/source-evidence.html">tutorial</a></span></td><td class="what">The cross-domain source layer (O2): <code>[sources]</code> registry, <code>source_record/1</code>, the append-only <code>sources.db</code>, the two-clock as-of view, the <code>source_asof/1</code> packet, SEC EDGAR + EU TED, <code>tengu sources</code>, the read-only <code>source_evidence</code> tool, rights / retention / PII, tests, open items.</td><td class="n">—</td></tr>
 
         <tr class="group"><td colspan="3">Tools, engines, bridge, egress, config</td></tr>
         <tr data-k="tools engines bridge egress config"><td class="doc"><a href="tools.md">docs/tools.md</a></td><td class="what">Tools: pick the lightest option, the built-in catalog, adding a Rust tool, the schema subset, typed (cached) tools, giving tools to an agent, MCP servers.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/tools.md">21</a></td></tr>
         <tr data-k="tools engines bridge egress config"><td class="doc"><a href="engine-backends.md">docs/engine-backends.md</a></td><td class="what">The three engines — <code>openrouter</code>, <code>local</code>, <code>claude_code</code> — their settings, the engine matrix, adding a backend.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/engine-backends.md">15</a></td></tr>
         <tr data-k="tools engines bridge egress config"><td class="doc"><a href="mcp-bridge.md">docs/mcp-bridge.md</a></td><td class="what"><code>tengu mcp-bridge</code>, the stdio MCP server that serves tengu tools to Claude Code: protocol, tool mapping, dispatch, config, the standalone <code>agentic-memory</code> server, testing, the parity rule, limits.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/mcp-bridge.md">20</a></td></tr>
-        <tr data-k="tools engines bridge egress config tor network"><td class="doc"><a href="egress-2026-09-16.md">docs/egress-2026-09-16.md</a></td><td class="what">Egress policy (<code>[egress]</code>, <code>src/adapters/outbound/egress.rs</code>): Tor by default, host allowlist, the hosts of each tool family (Solana, Hyperliquid, xlab backfill), the Tor stack, the audit log.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/egress-2026-09-16.md">10</a></td></tr>
+        <tr data-k="tools engines bridge egress config tor network"><td class="doc"><a href="egress-2026-09-16.md">docs/egress-2026-09-16.md</a></td><td class="what">Egress policy (<code>[egress]</code>, <code>src/adapters/outbound/egress.rs</code>): Tor by default, host allowlist, the hosts of each tool family (Solana, Hyperliquid, xlab backfill, SEC / TED sources), the Tor stack, the audit log.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/egress-2026-09-16.md">10</a></td></tr>
         <tr data-k="tools engines bridge egress config"><td class="doc"><a href="webhooks-2026-05-11.md">docs/webhooks-2026-05-11.md</a></td><td class="what"><code>tengu webhooks</code>: HMAC-verified endpoints, 202 Accepted, one-shot orchestrator turns.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/webhooks-2026-05-11.md">4</a></td></tr>
-        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="configuration.md">docs/configuration.md</a></td><td class="what">One TOML per sandbox: the load pipeline, root sections, agents, scopes, orchestrator, memory, Telegram, webhooks, decision loops, egress, the Solana signer, <code>[xmarket]</code>, risk + paper, hardened sandboxes, rate limits, runtime, recorder, backtest, feeds, env vars, feature flags.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/configuration.md">2</a></td></tr>
+        <tr data-k="tools engines bridge egress config"><td class="doc"><a href="configuration.md">docs/configuration.md</a></td><td class="what">One TOML per sandbox: the load pipeline, root sections, agents, scopes, orchestrator, memory, Telegram, webhooks, decision loops, egress, the Solana signer, <code>[xmarket]</code>, risk + paper, hardened sandboxes, rate limits, runtime, recorder, backtest, strategy ranking, sources, feeds, SOE, Studio, skill lifecycle, sandboxes, env vars, feature flags.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=docs/configuration.md">2</a></td></tr>
         <tr data-k="tools engines bridge egress config archived"><td class="doc"><a href="claude-code-backend-prd.md">docs/claude-code-backend-prd.md</a></td><td class="what">Archived PRD of the <code>claude_code</code> engine (implemented).</td><td class="n">0</td></tr>
         <tr data-k="tools engines bridge egress config archived"><td class="doc"><a href="claude-code-backend-plan.md">docs/claude-code-backend-plan.md</a></td><td class="what">Archived technical plan of the <code>claude_code</code> engine (implemented).</td><td class="n">0</td></tr>
 
@@ -345,11 +373,12 @@
         <tr class="group"><td colspan="3">Orchestration + testing</td></tr>
         <tr data-k="orchestration testing"><td class="doc"><a href="orchestrator-pipeline.md">docs/orchestrator-pipeline.md</a><span class="also">+ <a href="orchestrator-pipeline.html">.html</a></span></td><td class="what">Orchestration diagrams + code refs: PR timeline, runtime pipeline, sequential / parallel / diamond execution, retention (line numbers as of 2026-09-18).</td><td class="n">0</td></tr>
         <tr data-k="orchestration testing"><td class="doc"><a href="orchestration-test-scenarios.md">docs/orchestration-test-scenarios.md</a></td><td class="what">Live orchestration runbook: prerequisites, sanity, sequential, parallel, mixed, replan, cancellation, edge cases, memory integration.</td><td class="n">0</td></tr>
-        <tr data-k="orchestration testing validation"><td class="doc"><a href="validation-checklist.md">docs/validation-checklist.md</a></td><td class="what">End-to-end acceptance check (~30 min): structural audit, unit tests, orchestration e2e, retention, TUI / Telegram smoke; § 9 xmarket paper desk and § 10 xlab history-first research (2026-10-02).</td><td class="n">0</td></tr>
-        <tr data-k="orchestration testing smoke"><td class="doc"><a href="manual-test-checklist.md">docs/manual-test-checklist.md</a></td><td class="what">Manual smoke test after every phase: pre-flight, TUI and Telegram smokes (default + lping / storage-test), debug probes, the xmarket paper-desk and xlab smokes, regression baselines, rollback.</td><td class="n">0</td></tr>
+        <tr data-k="orchestration testing validation"><td class="doc"><a href="validation-checklist.md">docs/validation-checklist.md</a></td><td class="what">End-to-end acceptance check (~30 min): structural audit, unit tests, orchestration e2e, retention, TUI / Telegram smoke; § 9 xmarket paper desk, § 10 xlab history-first research, § 11 lineage · strategy ranking · SOE (offline, no LLM, no network).</td><td class="n">0</td></tr>
+        <tr data-k="orchestration testing smoke"><td class="doc"><a href="manual-test-checklist.md">docs/manual-test-checklist.md</a></td><td class="what">Manual smoke test after every phase: pre-flight, TUI and Telegram smokes (default + lping / storage-test), debug probes, the xmarket paper-desk, xlab and lineage · sources smokes, regression baselines, skill lifecycle, rollback.</td><td class="n">0</td></tr>
 
         <tr class="group"><td colspan="3">Plans + history <span class="gnote">roadmaps, snapshots, superseded and archived docs</span></td></tr>
-        <tr data-k="plans history"><td class="doc"><a href="IMPLEMENTATION_PLAN.md">docs/IMPLEMENTATION_PLAN.md</a></td><td class="what">Phase-by-phase roadmap of the v2 redesign (phases 0–7.2, done) + § Since 2026-09-23 — what shipped: hexagonal layout, typed observations + decision loops, Solana writes, xmarket W1, xlab.</td><td class="n">0</td></tr>
+        <tr data-k="plans history"><td class="doc"><a href="IMPLEMENTATION_PLAN.md">docs/IMPLEMENTATION_PLAN.md</a></td><td class="what">Phase-by-phase roadmap of the v2 redesign (phases 0–7.2, done) + § Since 2026-09-23 — what shipped: hexagonal layout, typed observations + decision loops, Solana writes, xmarket W1, xlab, loop sequences + execution maps, the visual tutorial, lineage, P6–P11, strategy ranking, SOE.</td><td class="n">0</td></tr>
+        <tr data-k="plans history code findings bugs gaps stale tutorial"><td class="doc"><a href="code-findings-2026-10-07.md">docs/code-findings-2026-10-07.md</a></td><td class="what">Findings record from building the tutorial: every row read in the code (file:line) — 32 bugs + 18 stale docs fixed (#31, each bug with a test), 3 not a bug, 17 gaps (#38 closed 4: 13 open), 1 operator decision open (reduce-only exit with a stale book).</td><td class="n">—</td></tr>
         <tr data-k="plans history hexagonal"><td class="doc"><a href="hexagonal-plan-2026-09-23.md">docs/hexagonal-plan-2026-09-23.md</a></td><td class="what">The hexagonal rewrite plan (2026-09-23); its dependency rule is enforced by <code>tests/layering_lint.rs</code>.</td><td class="n">0</td></tr>
         <tr data-k="plans history comparison hermes"><td class="doc"><a href="comparison-2026-04-26.md">docs/comparison-2026-04-26.md</a><span class="also">+ <a href="comparison-2026-04-26.svg">.svg</a></span></td><td class="what">Tengu vs Hermes Agent vs PI/Cowork, 2026-04-26 snapshot — memory, skills, tools, routing (Tengu facts corrected in place) — plus the trading-runtime axes added 2026-10-02.</td><td class="n">0</td></tr>
         <tr data-k="plans history superseded"><td class="doc"><a href="architecture.md">docs/architecture.md</a></td><td class="what">Historical overview of the PR #6–#8-era design (banner refreshed 2026-10-02) — the canonical read is <code>architecture-2026-04-27.md</code>.</td><td class="n">0</td></tr>
@@ -374,15 +403,22 @@
 
 <!-- ============ OUTSIDE docs/ ============ -->
 <section id="outside" aria-labelledby="h-outside">
-  <h2 id="h-outside">Runbooks and protocols outside <code>docs/</code></h2>
+  <h2 id="h-outside">Runbooks, contracts and protocols outside <code>docs/</code></h2>
   <div class="table-wrap">
     <table id="outside-table">
       <thead><tr><th scope="col">File</th><th scope="col">What it holds</th><th scope="col" class="n">Commits</th></tr></thead>
       <tbody>
-        <tr data-k="runbook weekend sandbox xmarket-weekend frozen binary caffeinate"><td class="doc"><a href="../sandboxes/xmarket-weekend/config.toml">sandboxes/xmarket-weekend/config.toml</a></td><td class="what">The weekend fade run (rule W on paper, no LLM, no Jev). Runbook at the top: the frozen W1-gate binary, start in tmux under <code>caffeinate</code>, checks (<code>doctor --live</code>, <code>risk status</code>, <code>history range</code>).</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xmarket-weekend/config.toml">4</a></td></tr>
+        <tr data-k="runbook weekend sandbox xmarket-weekend frozen binary caffeinate"><td class="doc"><a href="../sandboxes/xmarket-weekend/config.toml">sandboxes/xmarket-weekend/config.toml</a></td><td class="what">The weekend fade run (rule W on paper, no LLM, no Jev). Runbook at the top: the frozen W1-gate binary, start in tmux under <code>caffeinate</code>, checks (<code>doctor --live</code>, <code>risk status</code>, <code>history range</code>). Weekend #2 (2026-10-09 → 10-12) runs <code>tengu-acdef66</code> instead: <a href="forward-evidence-runbook-2026-10-08.md">forward-evidence runbook</a>.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xmarket-weekend/config.toml">4</a></td></tr>
         <tr data-k="runbook xmarket paper desk m0 staged"><td class="doc"><a href="../sandboxes/xmarket/config.toml">sandboxes/xmarket/config.toml</a></td><td class="what">The xmarket paper desk at stage M0: runbook at the top, the STAGED list of what later items add; paper only, the $100 budget is <code>[risk]</code>.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xmarket/config.toml">6</a></td></tr>
         <tr data-k="runbook xlab quickstart backfill backtest"><td class="doc"><a href="../sandboxes/xlab/config.toml">sandboxes/xlab/config.toml</a></td><td class="what">The xlab sandbox. Quickstart at the top: backfill history → backtest the rules → add the Jev gate.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=sandboxes/xlab/config.toml">6</a></td></tr>
         <tr data-k="skill xlab research protocol architect holdout"><td class="doc"><a href="../skills/xlab-research/SKILL.md">skills/xlab-research/SKILL.md</a></td><td class="what">The xlab Architect's research protocol: hypothesis → strategy spec → backtest after costs → tune on the in-sample half → read the holdout once → criticise failures.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=skills/xlab-research/SKILL.md">6</a></td></tr>
+        <tr data-k="runbook xlab-w2 w2 research strategy ranking feeds xl_ranker"><td class="doc"><a href="../sandboxes/xlab-w2/config.toml">sandboxes/xlab-w2/config.toml</a></td><td class="what">W2 research: xlab without the W1 binding, sharing its state dir; SEC EDGAR events, <code>[strategy_ranking]</code>, private <code>xl_ranker</code>, feeds <code>history_refresh</code> / <code>strategy_ranking_daily</code> / <code>strategy_ranking_weekend</code> (<code>tengu run --sandbox xlab-w2</code>), <code>keep_runs = 200</code>.</td><td class="n">—</td></tr>
+        <tr data-k="contract ranking unsealed draft daily weekend lineage g-sr1"><td class="doc"><a href="../lineage/rankings/rank.xlab-w2.daily.v1.toml">lineage/rankings/rank.xlab-w2.daily.v1.toml</a><span class="also">+ <a href="../lineage/rankings/rank.xlab-w2.weekend.v1.toml">rank.xlab-w2.weekend.v1.toml</a></span></td><td class="what">The two strategy-ranking contracts, DRAFT — UNSEALED: the operator reviews them, then <code>tengu lineage seal ranking:&lt;id&gt;</code> (gate G-SR1); until then no ranking runs. Daily (New York cutoff) and Mondays after the weekend exits.</td><td class="n">—</td></tr>
+        <tr data-k="runbook soe sandbox sources registry job feed soe-g0 closed world"><td class="doc"><a href="../sandboxes/soe/config.toml">sandboxes/soe/config.toml</a></td><td class="what">The SOE sandbox: bound to SOE-G0, closed world; every <code>[sources.registry.*]</code> row ships <code>enabled = false</code> until the operator's reviewed terms; agents <code>soe_reader</code> / <code>soe_architect</code> / <code>soe_critic</code>; the <code>soe_cycle</code> job feed <code>[feeds.soe_week]</code> (Mon 07:00 Paris).</td><td class="n">—</td></tr>
+        <tr data-k="skill soe architect critic protocol propose challenge"><td class="doc"><a href="../skills/soe-architect/SKILL.md">skills/soe-architect/SKILL.md</a><span class="also">+ <a href="../skills/soe-critic/SKILL.md">skills/soe-critic/SKILL.md</a></span></td><td class="what">The SOE stage protocols: the Architect reads the week's evidence packet and writes mechanisms as data with <code>soe_propose</code> (HOLD always considered); the Critic challenges candidates with <code>soe_challenge</code>.</td><td class="n">—</td></tr>
+        <tr data-k="runbook control loop lab studio play stop sandbox jev"><td class="doc"><a href="../sandboxes/control-loop-lab/config.toml">sandboxes/control-loop-lab/config.toml</a></td><td class="what">The safe reference run for Studio: a 20 s tick → Jev picks <code>hold</code> · <code>write_marker</code> · <code>read_probe</code>, a probe feed that fails on purpose; no money, keys or shell, fs roots inside <code>~/tengu-lab/control-loop-lab</code>; <code>[studio] control = true</code> (Play / Stop).</td><td class="n">—</td></tr>
+        <tr data-k="skill execution map jev architect narrow loop"><td class="doc"><a href="../skills/execution-map/SKILL.md">skills/execution-map/SKILL.md</a></td><td class="what">How an architect agent hands a decision loop (Jev) an execution map: which loop steps run, in what order, on which values (<code>tengu decide --map</code>; a map only narrows a loop).</td><td class="n">—</td></tr>
+        <tr data-k="bench unlimited models historical"><td class="doc"><a href="../sandboxes/unlimited/BENCH.md">sandboxes/unlimited/BENCH.md</a></td><td class="what">Historical model-bench recipe (same question, N models, through <code>tengu run-agent</code>); banner 2026-09-18 says how to re-run it on one <code>[agents.&lt;model&gt;]</code> block each.</td><td class="n">—</td></tr>
         <tr data-k="config example every section"><td class="doc"><a href="../config.example.toml">config.example.toml</a></td><td class="what">Commented example configuration — the same schema every <code>sandboxes/&lt;name&gt;/config.toml</code> uses.</td><td class="n"><a href="changes-2026-09-29-to-10-02.html#files?q=config.example.toml">28</a></td></tr>
       </tbody>
     </table>
@@ -392,7 +428,8 @@
 
 <footer>
   <div>Not listed: <code>TENGU_PLAN.md</code>, <code>TENGU_PLANNER_REGISTRY.md</code> — gitignored runtime artifacts, regenerated by tengu; <code>lastrun.md</code> — a gitignored local copy of a terminal run log (no tengu code writes it).</div>
-  <div>Commit counts: <code>git log --format=%H main..HEAD -- &lt;path&gt;</code> at HEAD <span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span>, base <code>main</code> = <span class="hash">9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8</span>, run 2026-10-02.</div>
+  <div>Also not listed: <code>web/studio/</code> — the Studio page's HTML / CSS / JS, embedded in the binary and served by <code>tengu studio</code>; the private research docs kept untracked in the operator's checkout (<code>docs/SESSION_HANDOFF.md</code> § Local data, row C1).</div>
+  <div>Commit counts: <code>git log --format=%H main..HEAD -- &lt;path&gt;</code> at HEAD <span class="hash">699bb83e79e3dac2f76ca9cbef69b3573b31252d</span>, base <code>main</code> = <span class="hash">9bebd10d6ee7039e7f62e15b36f4fd1cc712bad8</span>, run 2026-10-02 — a dated record of the W1 build range; files added since show —. Hub refreshed 2026-10-09 against <code>main</code> @ <span class="hash">f7ac9a5636e2493e3839e896cba9951a2d41aefb</span>.</div>
 </footer>
 
 </main>
