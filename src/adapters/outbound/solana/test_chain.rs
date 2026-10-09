@@ -1,10 +1,10 @@
 //! Test-only fake cluster for the write path (`send.rs` and the write
 //! tools): simulation result, `sendTransaction` behaviour, a signature
 //! status that appears after `confirm_after` polls, a block height rising
-//! per call, fixed results per method (`fixed`), and account reads served
+//! per call, answers by request content (`route`), and account reads served
 //! by the shared `rpc::tests::FakeTransport` (`inner`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -42,8 +42,6 @@ pub(crate) struct Chain {
     pub height_step: u64,
     pub lvbh: u64,
     pub fee_estimate: f64,
-    /// `result` per method name, for reads the chain does not model.
-    pub fixed: Mutex<HashMap<String, Value>>,
     /// Account reads (`getMultipleAccounts`, `getSlot`) and anything else.
     pub inner: FakeTransport,
     /// Answers a request by content (`Some(result)`), before everything else.
@@ -66,19 +64,12 @@ impl Chain {
             height_step: 1,
             lvbh: 1_150,
             fee_estimate: 25_000.0,
-            fixed: Mutex::new(HashMap::new()),
             inner: FakeTransport::at_slot(500),
             route: Mutex::new(None),
         }
     }
     pub(crate) fn route(&self, f: impl Fn(&Value) -> Option<Value> + Send + Sync + 'static) {
         *self.route.lock().unwrap() = Some(Box::new(f));
-    }
-    pub(crate) fn fix(&self, method: &str, result: Value) {
-        self.fixed
-            .lock()
-            .unwrap()
-            .insert(method.to_string(), result);
     }
     pub(crate) fn methods(&self) -> Vec<String> {
         self.requests
@@ -98,9 +89,6 @@ impl RpcTransport for Chain {
         let method = body["method"].as_str().unwrap().to_string();
         if let Some(result) = self.route.lock().unwrap().as_ref().and_then(|f| f(&body)) {
             return Ok(ok_envelope(result));
-        }
-        if let Some(result) = self.fixed.lock().unwrap().get(&method) {
-            return Ok(ok_envelope(result.clone()));
         }
         match method.as_str() {
             "simulateTransaction" => Ok(ok_envelope(json!({"context": ctx, "value": {
