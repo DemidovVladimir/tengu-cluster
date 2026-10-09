@@ -438,38 +438,8 @@ pub(crate) mod tests {
     use crate::domain::soe::profile::tests::synthetic;
     use crate::domain::soe::record::{from_toml, validate};
 
-    pub(crate) const SET: &str = r#"
-schema = "soe.replay_set/1"
-id = "synthetic-replay"
-version = 1
-synthetic = true
-profile = "synthetic-operator"
-note = "two development weeks, one holdout week"
-
-[[cases]]
-id = "dev-hold"
-decided_at = "2026-10-05T12:00:00Z"
-split = "DEVELOPMENT"
-label = "HOLD"
-outcome_note = "nothing came of it"
-
-[[cases]]
-id = "dev-good"
-decided_at = "2026-10-05T12:00:00Z"
-split = "DEVELOPMENT"
-label = "GOOD"
-good = ["a"]
-bad = ["b"]
-outcome_note = "a paid"
-
-[[cases]]
-id = "late-holdout"
-decided_at = "2026-09-07T12:00:00Z"
-week = "2026-W36"
-split = "HOLDOUT"
-label = "BAD"
-outcome_note = "the buyer never paid"
-"#;
+    /// The synthetic set (`tests/fixtures/soe/replay.synthetic.toml`).
+    pub(crate) const SET: &str = include_str!("../../../tests/fixtures/soe/replay.synthetic.toml");
 
     fn answer(hold: bool, ranked: &[&str]) -> WeekAnswer {
         WeekAnswer {

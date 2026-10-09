@@ -20,6 +20,7 @@
 //! |---|---|
 //! | `cycle_already_frozen` | the run dir is frozen, or the forecast log holds the cycle |
 //! | `cycle_unfinished` | the run dir was claimed and never frozen |
+//! | `cycle_out_of_order` | a live cycle decided before the latest forecast-log line froze (the chain only moves forward) |
 //! | `stage_closed` | a tool write outside its phase, or to a run that is not open |
 //! | `generation_mismatch` | a stamp's generation is not the cycle's |
 //! | `too_many_proposals` | the cycle's `max_proposals` is reached |
@@ -44,6 +45,7 @@ pub(crate) mod tests;
 
 pub(crate) const CYCLE_ALREADY_FROZEN: &str = "cycle_already_frozen";
 pub(crate) const CYCLE_UNFINISHED: &str = "cycle_unfinished";
+pub(crate) const CYCLE_OUT_OF_ORDER: &str = "cycle_out_of_order";
 pub(crate) const STAGE_CLOSED: &str = "stage_closed";
 pub(crate) const GENERATION_MISMATCH: &str = "generation_mismatch";
 pub(crate) const TOO_MANY_PROPOSALS: &str = "too_many_proposals";

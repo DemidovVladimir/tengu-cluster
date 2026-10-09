@@ -406,6 +406,7 @@ sources = [
   "src/bootstrap/soe.rs",
   "src/config/soe.rs",
   "src/adapters/inbound/cli/soe.rs",
+  "src/adapters/inbound/cli/soe/",
   "tests/soe_cli.rs",
   "tests/fixtures/soe/",
   "sandboxes/soe/config.toml",

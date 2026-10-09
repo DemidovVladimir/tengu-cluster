@@ -6,7 +6,7 @@
 //!
 //! | Step | Writes (run dir) | Rule |
 //! |---|---|---|
-//! | Refuse | — | a frozen run (`cycle_already_frozen`), one claimed and never frozen (`cycle_unfinished`), an unsigned profile, a bad generation pin, agent or limit, a broken forecast log (live) — before anything is created |
+//! | Refuse | — | a frozen run (`cycle_already_frozen`), one claimed and never frozen (`cycle_unfinished`), an unsigned profile, a bad generation pin, agent or limit, a broken forecast log or a decision before its last line's freeze (`cycle_out_of_order`, live) — before anything is created |
 //! | Observe | `head.json`, `packet.json`, `profile.toml` | `application::sources::evidence_as_of` at `decided_at` — the `captured` clock for a live cycle (what was read by then), `knowable` for a replay; the packet is the stages' only fact input |
 //! | Carry | `carried.json` | live only: the previous frozen cycle's candidates outside its rejected list (`REJECT`, `REPRICE`) — verbatim records, never rewritten — and the challenges on them, each re-checked against this packet with its forecast set aside (it stays frozen in its own cycle); one that fails is dropped, with why |
 //! | Architect | `phase-propose.json` + its tools' `proposals.jsonl` | `StageRunner` with [`architect_goal`]: run, cycle, decision time, the packet's sha256, carried ids — never source text; no runner ⇒ skipped |
@@ -36,7 +36,7 @@ use super::submit::{
     self, json_line, open_phase, Carried, Dropped, GenerationPin, Phase, RunHead, CARRIED, HEAD,
     HEAD_SCHEMA, PACKET,
 };
-use super::{CYCLE_ALREADY_FROZEN, CYCLE_UNFINISHED};
+use super::{CYCLE_ALREADY_FROZEN, CYCLE_OUT_OF_ORDER, CYCLE_UNFINISHED};
 use crate::application::sources::{evidence_as_of, AsOfRequest};
 use crate::config::sources::SourcesConfig;
 use crate::domain::canonical::{canonical_json, canonical_sha256, sha256_hex};
@@ -688,6 +688,18 @@ fn preflight(env: &CycleEnv, p: &CycleParams, dir: &RunDir) -> Result<Option<Log
             StateLog::ForecastLog.file_name(),
             dir.id()
         );
+    }
+    if let Some(last) = lines.last() {
+        if p.decided_at_ms < last.frozen_at_ms {
+            bail!(
+                "{CYCLE_OUT_OF_ORDER}: {dir} decided at {} — before cycle {} (frozen at {}): a live \
+                 cycle decides after the latest one, or the forecast chain breaks; replay an \
+                 earlier week under replays/",
+                Time::At(p.decided_at_ms),
+                last.cycle_id,
+                Time::At(last.frozen_at_ms)
+            );
+        }
     }
     Ok(lines.last().cloned())
 }
