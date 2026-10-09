@@ -1,7 +1,7 @@
 # Scheduled strategy ranking — audit, plan and as-built state (2026-10-08)
 
-> **State (branch `feature/strategy-ranking`):** SR-0 to SR-8 are built and tested. Both contracts are committed **unsealed**, so the publisher refuses every real ranking until the operator seals one (SR-1 stop, § Operator decisions). Nothing has run on `~/.tengu/state/xlab`.
-> **Merge:** after weekend #2's Monday snapshot (Mon 2026-10-12, gate G-WKND). The frozen weekend binary refuses the new `lineage/rankings/` dir.
+> **State (main, 2026-10-09):** SR-0 to SR-8 are built and tested, merged as #40 (squash `117b2595b0864066502d156aca42c7180494d67a`, 2026-10-08). Both contracts are committed **unsealed**, so the publisher refuses every real ranking until the operator seals one (gate G-SR1, § Operator decisions). Nothing has run on `~/.tengu/state/xlab`.
+> **Local checkout:** not pulled until weekend #2 stops (Mon 2026-10-12, gate G-WKND): the frozen weekend binary refuses the new `lineage/rankings/` dir.
 > **Tutorial:** [`tutorial/strategy-ranking.html`](tutorial/strategy-ranking.html).
 
 ## Decision
@@ -11,7 +11,7 @@
 | Separate ranking sandbox? | **No.** The ranker runs in [`sandboxes/xlab-w2`](../sandboxes/xlab-w2/config.toml), the W2 research sandbox. It stays **unbound**: P10 built no W2 generation ([`p10-w2-candidate-2026-10-08.md`](p10-w2-candidate-2026-10-08.md)). |
 | Separate ranking component? | **Yes**, in deterministic Rust: the pure ranker [`domain/backtest/ranking.rs`](../src/domain/backtest/ranking.rs) and the coordinator [`application/ranking/`](../src/application/ranking/mod.rs). No LLM computes or reorders a ranking. |
 | Modify `xlab` / `xmarket-weekend`? | **No.** Both are W1-frozen and untouched. |
-| Scheduler? | `[feeds]` at-ticks under `tengu run --sandbox xlab-w2` (`kind = "tool"`). The deterministic cron fallback is the CLI `tengu ranking run`. A webhook is **not** a fallback: `POST /webhooks/:name` runs an LLM orchestrator turn or queues a decision-loop event ([`webhooks.rs`](../src/adapters/inbound/webhooks.rs) :1-28, route :297). There is no `/v1/message` route. |
+| Scheduler? | `[feeds]` at-ticks under `tengu run --sandbox xlab-w2` (`kind = "tool"`). The deterministic cron fallback is the CLI `tengu ranking run`. A webhook is **not** a fallback: `POST /webhooks/:name` runs an LLM orchestrator turn or queues a decision-loop event ([`webhooks.rs`](../src/adapters/inbound/webhooks.rs) :1-28, route :300). There is no `/v1/message` route. |
 | Generated document location? | The state dir, one folder per contract: `<state>/strategy-rankings/<contract id>/<YYYY-MM-DD>/{manifest.json, ranking.json, ranking.md}` + `<contract id>/latest.{json,md}`. |
 | Jev? | None. Rules arms only; every row says `evaluation = NOT_GATED` (§ Deviations #1). |
 
@@ -81,6 +81,8 @@
 
 ## Work plan and tasks (state)
 
+"Done by" = the `feature/strategy-ranking` branch commits, squashed into #40 (`117b2595b0864066502d156aca42c7180494d67a`) — not in main's history; SR-0's two are on main.
+
 | ID | Task | State | Done by |
 |---|---|---|---|
 | SR-0 | Phase 6 D1–D3 + evaluation | ✅ | b2494707e71d05166fe75df2e4338f0aa7949941, b0ca497df3bc427ded2af78aa71e57b76d67f66d |
@@ -115,6 +117,6 @@
 
 ## Sequence
 
-`SR-0 → SR-1 (drafted) → SR-2/SR-3 → SR-4 → SR-5 → SR-6 → SR-7/SR-8` ✅ → **G-WKND** merge → **G-SR1** operator seal → `tengu run --sandbox xlab-w2`.
+`SR-0 → SR-1 (drafted) → SR-2/SR-3 → SR-4 → SR-5 → SR-6 → SR-7/SR-8` ✅ → merged (#40) ✅ → **G-SR1** operator seal + **G-WKND** (local checkout pulled after Mon 2026-10-12), in either order → `tengu run --sandbox xlab-w2`.
 
 The SR-1 stop holds: the rating and comparability policy shape research conclusions, so the operator seals the contract before any ranked outcome is observed. Everything above ran on test fixtures only.

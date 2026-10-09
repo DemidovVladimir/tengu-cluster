@@ -13,7 +13,7 @@ One record = one TOML file; adding a record needs no Rust. Design: `docs/lineage
 | `generations/<id>.toml` | generation manifest (W1 …) | `status`, `sandboxes`, `[[capabilities]]`, `[[pins]]` | 2 (W1, FROZEN; SOE-G0, CANDIDATE) |
 | `evidence/<id>.toml` | evidence snapshot (`tengu evidence snapshot`) | `vault`, `[[items]]` + sha256 | 1 |
 | `rankings/<id>.toml` | strategy-ranking contract (`domain/lineage/ranking.rs`) | `sandbox`, `strategies`, `tz`, `cutoff`, `days`, `from`, `cohort`, `on_missing`, `[freshness]`, `[eligibility]`, `[rating]` | 2 (unsealed) |
-| `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only | — |
+| `locks.toml` | `[[frozen]]` generations, `[[sealed]]` preregistrations | append-only | 1 `[[frozen]]` (W1) · 1 `[[sealed]]` (`experiment:fwd.rule_w.2026-10-09`) |
 
 | Rule | Value |
 |---|---|

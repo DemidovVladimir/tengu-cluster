@@ -1,6 +1,6 @@
 # Control-loop lab — runbook + acceptance matrix (2026-10-08)
 
-`sandboxes/control-loop-lab`: the safe reference run of tick → Jev → tool → audit → health (TENGU_STUDIO_PLAN.md ST-01 / ST-02). Existing CLI and tools only — no new tool, no Studio. Guard test: `config::decision_loop::tests::control_loop_lab_has_no_dangerous_surface`. Live proof: ST-03 `docs/control-loop-lab-baseline-2026-10-08.md` — A0–A15 passed on real Jev (`typesafe/jev-1.13-20260917`, 32 calls, $0.000799134); the rows below carry what that run corrected. ST-10 – ST-12: `tengu studio graph` (the workflow graph) and `tengu trace` (each `run` / `decide` is a recording of every runtime, feed, loop, Jev, action and tool step; audit lines carry `runtime_id` / `run_id`) — § Graph + trace below.
+`sandboxes/control-loop-lab`: the safe reference run of tick → Jev → tool → audit → health (TENGU_STUDIO_PLAN.md ST-01 / ST-02). Existing CLI and tools only — no new tool; the Studio server and page (ST-20 – ST-31) are § Studio server + page below. Guard test: `config::decision_loop::tests::control_loop_lab_has_no_dangerous_surface`. Live proof: ST-03 `docs/control-loop-lab-baseline-2026-10-08.md` — A0–A15 passed on real Jev (`typesafe/jev-1.13-20260917`, 32 calls, $0.000799134); the rows below carry what that run corrected. ST-10 – ST-12: `tengu studio graph` (the workflow graph) and `tengu trace` (each `run` / `decide` is a recording of every runtime, feed, loop, Jev, action and tool step; audit lines carry `runtime_id` / `run_id`) — § Graph + trace below.
 
 ## The sandbox
 
@@ -15,6 +15,7 @@
 | egress | `[egress]` | `open` (Jev only; no tool host) |
 | events | `scenarios/{normal,act,tool-error}.json` | `{"scenario": …}` |
 | maps | `scenarios/uncertain.map.json` · `scenarios/act-dry.map.json` | `act_at 1.0` + dry-run on · dry-run on (`ExecutionMap::apply` narrows only) |
+| studio | `[studio]` | `control = true`: `tengu studio` may Play / Stop this runtime and send `scenarios/<name>.json` events (`config/studio.rs`; the only sandbox that sets it) |
 | never | — | `[risk]` · signer · `[generation]` · `run_command` · network tool · write outside `out/marker.txt` |
 
 ## Setup (both paths)
@@ -24,7 +25,7 @@
 | `TENGU_HOME` | **required** = `$HOME/tengu-lab/home`, exported **first** | isolates `logs/decisions.jsonl`, `logs/maps/`, `state/` from `~/.tengu` (the weekend run). tengu loads the nearest `.env` up from the cwd (dotenvy walks parent dirs): a worktree under `.claude/worktrees/` reads the main checkout's `.env`, which sets `TENGU_HOME=~/.tengu`. An exported value wins (dotenv never overrides) |
 | `OPENROUTER_API_KEY` | required | Jev decisions + the `lab` engine build (`doctor`). Export it; a parent `.env` may also supply it (see `TENGU_HOME`) — never print it |
 | `OPENROUTER_BASE_URL` | optional | default `https://openrouter.ai/api` |
-| `RUST_LOG` | optional | `tengu run` logs to stderr + `$TENGU_HOME/logs/tengu.log`; `decide` / `doctor` / `studio` / `trace` log to **stderr** (since ST-11; stdout = the JSON / report alone) — `tengu=info` is always added, so `RUST_LOG` cannot silence them |
+| `RUST_LOG` | optional | `tengu run` and the `tengu studio` server log to stderr + `$TENGU_HOME/logs/tengu.log` (`RUST_LOG` replaces their default `tengu=info`); `decide` / `doctor` / `studio graph` / `trace` log to **stderr** (since ST-11; stdout = the JSON / report alone, the server's stdout = its URL alone) — there `tengu=info` is always added, so `RUST_LOG` cannot silence them |
 
 ```bash
 cd <repo or worktree root>               # --sandbox is cwd-relative
@@ -89,14 +90,14 @@ Every event's fields, parents and the Studio visual it drives: `docs/runtime-202
 | # | Command | Expected |
 |---|---|---|
 | S1 | `$T studio --sandbox control-loop-lab` (any time; Ctrl-C stops it) | stdout `Studio: http://127.0.0.1:<port>/#t=<64 hex>`; open it: header sandbox + `config_hash`, health `not live` before A7 |
-| S2 | `curl -s -H "X-Studio-Token: <token>" http://127.0.0.1:<port>/api/v1/graph` | = G1 (16 nodes, 17 edges) · no token ⇒ 401 · `-H 'Host: evil.example'` ⇒ 421 · `-H 'Origin: http://evil.example'` ⇒ 403 · `-X POST` ⇒ 405 |
+| S2 | `curl -s -H "X-Studio-Token: <token>" http://127.0.0.1:<port>/api/v1/graph` | = G1 (16 nodes, 17 edges) · no token ⇒ 401 · `-H 'Host: evil.example'` ⇒ 421 · `-H 'Origin: http://evil.example'` ⇒ 403 · `-X POST` ⇒ 403 (no `Origin` / `Sec-Fetch-Site`: the CSRF guard holds before routing); with all three proofs ⇒ 405 (GET-only route) |
 | S3 | A7 running, page open (Live) | header: run = A7's `run_id`, runtime id = the A7 holder, runtime `running` (amber), model = the Jev build; graph per tick: `feed:tick`, `loop:demo`, `world:demo/tick`, `jev:demo`, `action:demo/hold` green, `feed:probe` + `tool:lab/read_file` red, edges `jev:demo → action:demo/hold` (green) and `feed:probe → tool:lab/read_file` (red) lit; `loop demo` counters = health `done N` (= `doctor --live`); timeline grows; A12 ⇒ the header's run switches to the new `run_id` |
 | S4 | `$T studio --sandbox control-loop-lab --bind 0.0.0.0` | refused (`loopback only`), exit 1 |
 | S5 | Replay, a closed A7 run (Runs table) | slider = `seq` 1…n; the board at each `seq` (`/api/v1/runs/<run_id>/board?upto=<seq>`); reload = the same run, position and selection (URL fragment); the `/events` pages = `tengu trace show` of the run |
 | S6 | Replay, A2 (act) · A4 (`uncertain.map.json`) | act: `action:demo/write_marker` + `tool:lab/write_file` green, edges `jev → write_marker → write_file` lit; map: drawn on the map's graph (`trigger:map/<sha256>`, `act_at 1.0`, dry run on), `gate:demo/act_at` amber (`action.escalated`), the picked action's `chooses` edge amber |
 | S7 | click a node · an event | node: the validated config section (`decision_loops.demo`, defaults filled in), edges, evidence files + store key (`feed/1:tick`, `loop/1:demo`), its events; event: answers + probabilities, args, result, duration, `call_id`, `decision_id`, payload |
 
-Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22. Play / Stop / send-event (ST-30 / ST-31; the lab sets `[studio] control = true`): `docs/studio-2026-10-08.md` § Play / Stop, recorded run `docs/studio-acceptance-2026-10-08.md`.
+Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22. Play / Stop / send-event (ST-30 / ST-31; the lab sets `[studio] control = true`): `docs/studio-2026-10-08.md` § Play / Stop, recorded run `docs/studio-acceptance-2026-10-08.md`; browser screenshots of a real-Jev Play → `act` → `tool-error` → Stop (run `cbd8cd05-30fb-4177-aa99-0b978f0e83e5`, 2026-10-09): `docs/studio-2026-10-08.md` § Live validation, `docs/studio-evidence/`.
 
 ## Troubleshooting
 
