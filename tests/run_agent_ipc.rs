@@ -264,7 +264,11 @@ fn run_agent_refuses_a_widening_compose_in_a_hardened_sandbox() {
         )
     };
 
-    let run = run_with("[solana]\nsigner_key_file = \"/nonexistent/tengu-ipc/signer.json\"\n\n");
+    let run = run_with(
+        "[solana]\nprivy_wallet_id = \"w1\"\n[keys]\nproxy = \"http://127.0.0.1:9\"\n\
+         agent_socket = \"/nonexistent\"\nstrip = [\"PRIVY_APP_SECRET\"]\n\
+         [keys.env]\nPRIVY_API_URL = \"privy\"\n\n",
+    );
     assert_ne!(run.code, Some(0), "stderr:\n{}", run.stderr);
     assert!(
         run.stderr

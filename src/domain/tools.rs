@@ -162,7 +162,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
 // `mode = "simulate"` (default) needs no key; `mode = "send"` signs with
-// `[solana] signer_key_file`, only for an agent whose scope for the tool
+// `[solana] privy_wallet_id` (Privy, through the seal proxy), only for an agent whose scope for the tool
 // lists the wallet (`wallets = ["<full pubkey>"]`). Config rules:
 // `config::solana`.
 pub(crate) const SOLANA_CLOSE_TOKEN_ACCOUNTS: &str = "solana_close_token_accounts";

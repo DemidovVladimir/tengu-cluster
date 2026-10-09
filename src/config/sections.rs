@@ -81,6 +81,9 @@ pub struct SandboxSections {
     /// run-dir retention bound or not (`application/backtest/mod.rs`);
     /// `None` = no ranking.
     pub ranking: Option<Arc<RankingSection>>,
+    /// `[solana] privy_wallet_id` (`config/solana.rs`): the Privy wallet the
+    /// Solana write tools' `mode = "send"` signs with; `None` = simulate only.
+    pub privy_wallet_id: Option<String>,
 }
 
 impl SandboxSections {

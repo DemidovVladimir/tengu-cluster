@@ -710,7 +710,7 @@ slots = { both = { from = "fetch", items = "/a/*", value = "x", path = "/b" }, h
         let cfg = Config::load(&dir.join("config.toml")).unwrap_or_else(|e| panic!("{e:#}"));
 
         assert!(cfg.risk.is_none() && cfg.paper.is_none() && cfg.xmarket.is_none());
-        assert!(cfg.solana.signer_key_file.is_none(), "no signer");
+        assert!(cfg.solana.privy_wallet_id.is_none(), "no signer");
         assert!(cfg.generation.is_none(), "unbound: no generation pins");
         assert!(cfg.mcp_servers.is_empty() && cfg.orchestrator.is_none());
         assert!(cfg.default_scopes.is_empty(), "scopes per agent only");

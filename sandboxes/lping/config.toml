@@ -15,7 +15,7 @@
 #   5. exec chains   — hedge_exec, lp_exec: every argument bound (event,
 #                      earlier step, `snap` row); writes simulate              (step A)
 #
-# Signing is OFF here: no [solana] signer_key_file and no wallet grant, so
+# Signing is OFF here: no [solana] privy_wallet_id and no wallet grant, so
 # every write tool refuses `send` but can simulate keylessly. To let
 # `lp_executor` send real transactions, see
 # "Signing" at the bottom of this file.
@@ -229,7 +229,7 @@ max_tool_result_chars = 50_000
 
 # Decision-loop executor: NOT routable (no `description`) — the planner can
 # never send chat or webhook content to it. Owns every tool the loops run.
-# Signing needs a per-agent wallet grant + [solana] signer_key_file (see
+# Signing needs a per-agent wallet grant + [solana] privy_wallet_id (see
 # "Signing" at the end); without them its write tools only simulate.
 [agents.lp_executor]
 engine = "openrouter"
@@ -636,20 +636,24 @@ mode = "simulate"
 
 # --- Signing (off) -------------------------------------------------------------
 # To let the loops SEND (docs/typed-observations-2026-09-24.md § Write tools):
-#  1. a DEDICATED wallet — never the TS bot's F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S
-#     (the per-wallet lease cannot see the bot's sends);
-#  2. its key file outside ~/lping-workspace, chmod 600, and
+#  1. a DEDICATED Privy Solana wallet — never the TS bot's F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S
+#     (the per-wallet lease cannot see the bot's sends); Privy signs through the
+#     seal proxy, no key on this machine (docs/cloudflare-secrets-setup.html):
 #       [solana]
-#       signer_key_file = "~/.tengu/keys/lping-signer.json"
-#  3. a grant on lp_executor per write tool — the whole scope, since a
+#       privy_wallet_id = "<Privy wallet id>"
+#       [keys]   proxy + client as in docs/cloudflare-secrets-setup.html § 7, and
+#       strip = ["PRIVY_APP_SECRET"]
+#       [keys.env]
+#       PRIVY_API_URL = "privy"
+#  2. a grant on lp_executor per write tool — the whole scope, since a
 #     per-agent scope replaces the default one:
 #       [agents.lp_executor.scopes.dlmm_open_position]
-#       net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag"]
-#       env_reads = ["SOLANA_RPC_URL"]
+#       net_hosts = ["api.mainnet-beta.solana.com", "lite-api.jup.ag", "tengu-seal.<subdomain>.workers.dev"]
+#       env_reads = ["SOLANA_RPC_URL", "PRIVY_API_URL", "PRIVY_APP_ID"]
 #       fs_roots = ["~/lping-workspace"]
-#       wallets = ["<the dedicated wallet, full address>"]
-#  4. the loop action's args: wallet = that address, mode = "send"; the loop
+#       wallets = ["<the Privy wallet's full address>"]
+#  3. the loop action's args: wallet = that address, mode = "send"; the loop
 #     dry_run = false.
 # Config load then refuses claude_code agents without builtin_tools_profile =
-# "none" (src/config/hardening.rs), [[mcp_servers]], shell scopes and a key
-# inside any fs root (src/config/solana.rs).
+# "none" (src/config/hardening.rs), [[mcp_servers]], shell scopes, and any
+# env_reads of the seal-proxy session (src/config/solana.rs).

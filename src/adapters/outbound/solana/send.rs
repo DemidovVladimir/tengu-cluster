@@ -438,7 +438,7 @@ impl SendSession<'_> {
         };
         let mut signers: Vec<&dyn SolanaSigner> = vec![self.signer.as_ref()];
         signers.extend(plan.extra_signers.iter().map(|s| s.as_ref()));
-        if let Err(e) = sign_transaction(&mut tx, &view, &signers) {
+        if let Err(e) = sign_transaction(&mut tx, &view, &signers).await {
             return refused(r, format!("{e:#}; not sent"));
         }
         let submitter = RpcSubmitter {
@@ -493,7 +493,7 @@ impl SendSession<'_> {
             Ok((_, h)) => h,
             Err(e) => return refused(r, format!("{e:#}; not sent")),
         };
-        if let Err(e) = sign_transaction(&mut tx, &view, &[self.signer.as_ref()]) {
+        if let Err(e) = sign_transaction(&mut tx, &view, &[self.signer.as_ref()]).await {
             return refused(r, format!("{e:#}; not sent"));
         }
         self.submit_signed(r, &tx, lvbh, submitter).await
@@ -739,7 +739,7 @@ mod tests {
         let sent = chain.sent.lock().unwrap()[0].clone();
         let (tx, view) = Transaction::parse(&sent).unwrap();
         assert_eq!(view.signers(), &[wallet().pubkey()]);
-        assert_eq!(tx.signatures[0], wallet().sign(&tx.message).0);
+        assert_eq!(tx.signatures[0], wallet().sign_now(&tx.message).0);
         assert_eq!(
             r.signature.unwrap(),
             Signature(tx.signatures[0]).to_string()

@@ -341,7 +341,7 @@ Restart=on-failure
 | `[default_scopes.<tool>]` | per-tool fallback scope (`fs_roots`, `net_hosts`, `env_reads`, `shell_bins`, `wallets`); an agent's own `scopes.<tool>` replaces it wholesale |
 | `[egress]` | `network = "tor"` (default) or `"open"`, proxy, host ceiling, shell isolation, JSONL audit — `docs/egress-2026-09-16.md` |
 | `[[mcp_servers]]` | external MCP servers; tools appear as `<server>__<tool>` |
-| `[solana]` | `signer_key_file` for the Solana write tools' `mode = "send"`; hardens the sandbox |
+| `[solana]` | `privy_wallet_id` — the Privy wallet the Solana write tools' `mode = "send"` signs with, through the seal proxy (`[keys]`); hardens the sandbox |
 | `[xmarket]` (+ `.calendars.<id>`, `.weekend_fade`) | state dir `<TENGU_HOME>/state/<state>`, session calendars, rule W |
 | `[risk]` (+ `.exits`, `.max_data_age_ms`) · `[paper]` | every limit of the gate inside the exec tools (all required) · the paper fill engine |
 | `[rate_limits.<name>]` | request budgets (`hyperliquid`, `geckoterminal`, `sec`, `ted`) |

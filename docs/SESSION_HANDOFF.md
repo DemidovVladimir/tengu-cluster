@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-10-09: Privy Solana signer — branch `feature/privy-solana-signer` (on top of `feature/sealed-keys`)
+
+| Item | State |
+|---|---|
+| Change | `[solana] signer_key_file` removed; `[solana] privy_wallet_id` = a Privy Solana wallet that signs through the seal proxy's `privy` route (`outbound/solana/privy.rs`: `signTransaction`, session + `privy-app-id`; reply message must be unchanged, only the wallet's slot taken, ed25519-verified for the `wallet` arg). `SolanaSigner::sign` async + fallible; `sign_transaction` signs every slot before writing any. Key-file loader gone; `LocalKeypair` = in-memory one-shot DLMM position keys + tests. Signer setting moved to `SandboxSections::privy_wallet_id` (`AgentConfig::signer_key_file` gone) |
+| Load rules (`config/solana.rs`) | id 1-64 `[A-Za-z0-9_-]`; `[keys.env] PRIVY_API_URL` set to a route; no scope's `env_reads` names the session (`TENGU_KEYS_SESSION_TOKEN`, an `@session` var, `"*"`); hardening unchanged otherwise (key-path rule dropped — no key) |
+| Verified | unit: request body, reply checks (other wallet / changed message / bad base64 refused), net_host denial, Privy 400 → nothing signed, one failing signer writes no slot; `write_tokens::send_signs_each_batch_through_privy` (fake Privy over HTTP → 2 batches sent, each signature verifies, Bearer session, no Basic). Full unit suite + bridge conformance + run_agent_ipc green. No live Privy call, no live send |
+| Open (operator) | create a Privy Solana wallet (Privy dashboard / API), fund it, set `[solana] privy_wallet_id` + the write tools' scopes (`docs/cloudflare-secrets-setup.html`); Privy wallet policies limit what it may sign; first live send = separate go (real money) |
+
 ## 2026-10-09: sealed keys — branch `feature/sealed-keys` (`docs/sealed-keys-2026-10-09.md`)
 
 | Item | State |
@@ -15,7 +24,7 @@
 | Verified | before the hardening, local `wrangler dev`, fake secrets, through httpbin: bearer 200, header template 200, wrong creds 401, echoed key masked, missing secret 500, dead upstream 502, path escape never forwarded, unknown route 400 · hardened, local `wrangler dev`, real OpenRouter key in the local Worker only, `sealed-check`: Jev `convert` `0xff` → `255`, tool error, dry run, maps, `tengu run` + `doctor --live`, Studio Play / Send / Stop, N1 fail closed, key-exfiltration requests refused, `allow` refused `v1/keys`, a 6.5 MB reply streamed · route `privy` (throwaway secret, httpbin): `get_wallet_address` through the Worker with the session, Basic key added + masked, `v1/apps` 403, no session → fails with no call to `api.privy.io`, config without `strip` refused |
 | Open (operator) | Secretive keys `tengu-attended` / `tengu-unattended`; `tengu keys setup` → `CLIENTS` with explicit `routes`; `npx wrangler login` + `npx wrangler deploy`; rotate each provider key, then `npx wrangler secret put` it + `SESSION_KEY` (`docs/cloudflare-secrets-setup.html`); `[keys] strip` the moved local names; then P0 numbers (CPU p95, Tor reachability of workers.dev) and opt-in per sandbox (`allow_hosts` sandboxes must list the Worker host; lping Solana scopes need it in `net_hosts`); `sealed-check` against the deployed Worker |
 | Open (code) | sessions are not refreshed in-process — a long run must restart before `session_hours` (unattended key: up to 168 h) · a session holder can still USE a route's key (e.g. call any Telegram Bot API method as the bot), never READ it |
-| Not moved | Solana signer key file (`[solana] signer_key_file`), local Postgres, Claude Code login |
+| Not moved | local Postgres, Claude Code login (the Solana signer moved to Privy — section above) |
 
 ## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
 

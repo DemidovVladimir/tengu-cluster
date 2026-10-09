@@ -125,7 +125,7 @@ mod tests {
             c.fold_default_scopes();
             c.agents.remove("main").unwrap()
         };
-        let hardened = agent_of("[solana]\nsigner_key_file = \"/keys/signer.json\"\n");
+        let hardened = agent_of("[solana]\nprivy_wallet_id = \"w1\"\n");
         let plain = agent_of("");
         assert!(hardened.hardened() && !plain.hardened());
         let tmp = TempDir::new().unwrap();

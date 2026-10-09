@@ -243,6 +243,7 @@ mod tests {
     use crate::adapters::outbound::solana::test_chain::Chain;
     use crate::adapters::outbound::solana::writes_store::SqliteWriteStore;
     use crate::adapters::outbound::tools::solana::write_common::run_write_with;
+    use crate::adapters::outbound::tools::solana::SignerSource;
     use crate::domain::observation::{ObsSource, ObsStatus, Observation};
     use crate::domain::scope::ToolScope;
     use crate::domain::solana_write::{WriteMode, WriteResult, WriteStatus};
@@ -289,21 +290,17 @@ mod tests {
                 .then(|| token_accounts(&wallet, b["params"][1]["programId"].as_str().unwrap(), n))
         });
         let dir = tempfile::tempdir().unwrap();
-        let key_file = with_key.then(|| {
-            use std::os::unix::fs::PermissionsExt;
-            let p = dir.path().join("signer.json");
-            let mut bytes = vec![1u8; 32];
-            bytes.extend_from_slice(&keypair().pubkey().0);
-            std::fs::write(&p, serde_json::to_vec(&bytes).unwrap()).unwrap();
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
-            p
-        });
+        let signer = if with_key {
+            SignerSource::Fixed(Arc::new(keypair()))
+        } else {
+            SignerSource::None
+        };
         let shared = SolanaShared {
             store: Some(Arc::new(SqliteObservationStore::open(dir.path()).unwrap())),
             writes: Some(Arc::new(
                 SqliteWriteStore::open(&dir.path().join("state")).unwrap(),
             )),
-            signer_key_file: key_file,
+            signer,
         };
         Rig {
             chain,
@@ -444,6 +441,55 @@ mod tests {
         );
         assert_eq!(r.chain.sent.lock().unwrap().len(), 2);
         drop(r.dir);
+    }
+
+    /// The real signer path: each batch goes to (fake) Privy over HTTP with
+    /// the session, comes back signed for the wallet, and is sent with a
+    /// signature that verifies — no key in this process.
+    #[tokio::test]
+    async fn send_signs_each_batch_through_privy() {
+        use crate::adapters::outbound::http_class::test_support::test_client;
+        use crate::adapters::outbound::solana::privy::{rpc_url, test_support, PrivySigner};
+        use crate::domain::solana_tx::Transaction;
+        use ed25519_dalek::{Signature as EdSignature, VerifyingKey};
+
+        let (base, seen) = test_support::fake_privy(keypair()).await;
+        let mut r = rig(10, false);
+        r.shared.signer = SignerSource::Fixed(Arc::new(PrivySigner::new(
+            test_client(),
+            rpc_url(&format!("{base}/privy"), "w1").unwrap(),
+            "app-1".into(),
+            "Bearer tss1.test".into(),
+            r.wallet,
+            ToolScope {
+                net_hosts: vec!["127.0.0.1".into()],
+                ..Default::default()
+            },
+            names::SOLANA_CLOSE_TOKEN_ACCOUNTS,
+        )));
+        let out = r.run(WriteMode::Send, &r.granted()).await;
+        assert_eq!(
+            out.status,
+            WriteStatus::Confirmed,
+            "{:?} {:?}",
+            out.refused,
+            out.txs
+        );
+        let sent = r.chain.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        let key = VerifyingKey::from_bytes(&r.wallet.0).unwrap();
+        for bytes in sent {
+            let (tx, _) = Transaction::parse(&bytes).unwrap();
+            key.verify_strict(&tx.message, &EdSignature::from_bytes(&tx.signatures[0]))
+                .expect("the sent transaction carries the wallet's signature");
+        }
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one Privy call per batch");
+        for req in seen.iter().map(|r| r.to_ascii_lowercase()) {
+            assert!(req.starts_with("post /privy/v1/wallets/w1/rpc "), "{req}");
+            assert!(req.contains("authorization: bearer tss1.test"), "{req}");
+            assert!(!req.contains("basic "), "{req}");
+        }
     }
 
     /// Live, keyless: simulate closing the funded operator wallet's empty

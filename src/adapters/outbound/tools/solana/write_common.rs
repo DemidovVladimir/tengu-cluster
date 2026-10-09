@@ -5,7 +5,7 @@
 //! | Mode | Needs | Does |
 //! |---|---|---|
 //! | `simulate` (default) | nothing | live reads → checks → keyless simulation of every transaction |
-//! | `send` | the tool's scope lists the wallet (`wallets = ["<pubkey>"]`), `[solana] signer_key_file` holds that wallet's key, the write store is up | lease + earlier send resolved → live reads (at or after the wallet's fence) → checks → sign + send + confirm each transaction → drop stale cache rows |
+//! | `send` | the tool's scope lists the wallet (`wallets = ["<pubkey>"]`), `[solana] privy_wallet_id` is that wallet (Privy signs through the seal proxy: the scope also reads `PRIVY_API_URL` + `PRIVY_APP_ID` and reaches the Worker host), the write store is up | lease + earlier send resolved → live reads (at or after the wallet's fence) → checks → sign + send + confirm each transaction → drop stale cache rows |
 //!
 //! A failed check refuses the write (nothing simulated or sent). Reads in
 //! a write tool are always live — never the observation cache.
@@ -15,17 +15,16 @@
 //! wSOL / USDC account, so DLMM writes leave the wSOL account open and
 //! perps orders and SOL-leg swaps refuse.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::SolanaShared;
+use super::{SignerSource, SolanaShared};
+use crate::adapters::outbound::solana::privy::PrivySigner;
 use crate::adapters::outbound::solana::rpc::SolanaRpc;
 use crate::adapters::outbound::solana::send::{Pipeline, TxPlan};
-use crate::adapters::outbound::solana::signer::load_key_file;
 use crate::domain::lp::perps::{
     decode_position_request, JupPositionRequest, POSITION_REQUEST_DISC,
 };
@@ -159,10 +158,11 @@ pub(crate) fn parse_mode(args: &Value, tool: &str) -> Result<WriteMode> {
 /// The signer for `wallet`, or the refusal reason. Only an agent whose
 /// scope for `tool` lists the full wallet address may sign
 /// (`check_wallet` has no wildcard; the permissive fallback never grants
-/// an address).
+/// an address). The Privy wallet must BE `wallet`: its signature is
+/// verified for that key on every transaction (`solana/privy.rs`).
 pub(crate) fn signer_for(
     scope: &ToolScope,
-    key_file: Option<&PathBuf>,
+    source: &SignerSource,
     wallet: &Pubkey,
     tool: &str,
 ) -> std::result::Result<Arc<dyn SolanaSigner>, String> {
@@ -172,17 +172,22 @@ pub(crate) fn signer_for(
              (wallets = [\"{wallet}\"] on [agents.<name>.scopes.{tool}])"
         )
     })?;
-    let path = key_file
-        .ok_or_else(|| "no_signer: [solana] signer_key_file is not configured".to_string())?;
-    let key =
-        load_key_file(path).map_err(|e| format!("signer_unavailable: {}: {e}", path.display()))?;
-    if key.pubkey() != *wallet {
-        return Err(format!(
-            "signer_mismatch: the key file holds {}, not {wallet}",
-            key.pubkey()
-        ));
+    match source {
+        SignerSource::None => {
+            Err("no_signer: [solana] privy_wallet_id is not configured".to_string())
+        }
+        SignerSource::Privy { wallet_id, http } => {
+            PrivySigner::for_send(http.clone(), scope, wallet_id, *wallet, tool)
+                .map(|s| Arc::new(s) as Arc<dyn SolanaSigner>)
+        }
+        #[cfg(test)]
+        SignerSource::Fixed(s) if s.pubkey() == *wallet => Ok(s.clone()),
+        #[cfg(test)]
+        SignerSource::Fixed(s) => Err(format!(
+            "signer_mismatch: the signer is {}, not {wallet}",
+            s.pubkey()
+        )),
     }
-    Ok(Arc::new(key))
 }
 
 fn refuse_on_failed_check(r: WriteResult) -> WriteResult {
@@ -273,12 +278,7 @@ async fn send(
     builder: &dyn WriteBuilder,
     mut r: WriteResult,
 ) -> WriteResult {
-    let signer = match signer_for(
-        scope,
-        shared.signer_key_file.as_ref(),
-        &pipeline.wallet,
-        &r.tool,
-    ) {
+    let signer = match signer_for(scope, &shared.signer, &pipeline.wallet, &r.tool) {
         Ok(s) => s,
         Err(reason) => return r.refuse(reason),
     };

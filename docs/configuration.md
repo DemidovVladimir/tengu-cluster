@@ -230,7 +230,7 @@ Tor by default. Full reference: `docs/egress-2026-09-16.md`.
 
 | Field | Default | Rules (`solana.rs`, `hardening.rs`) |
 |---|---|---|
-| `signer_key_file` | none = write tools simulate only | absolute or `~/…`, non-empty; solana-keygen JSON or base58, 0600; makes the sandbox hardened (§ Hardened sandboxes); a write tool's `wallets` grant only on a private agent's own scope, never in `[default_scopes]` |
+| `privy_wallet_id` | none = write tools simulate only | Privy Solana wallet id (not a secret), 1-64 chars `[A-Za-z0-9_-]`; needs `[keys.env] PRIVY_API_URL = "privy"` (signs through the seal proxy, no key on this machine); no scope's `env_reads` may name the session (`TENGU_KEYS_SESSION_TOKEN`, an `@session` var, `"*"`); makes the sandbox hardened (§ Hardened sandboxes); a write tool's `wallets` grant only on a private agent's own scope, never in `[default_scopes]`. Replaced `signer_key_file` (2026-10-09) |
 
 Write-tool send rules: `docs/typed-observations-2026-09-24.md` § Write tools.
 

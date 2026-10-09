@@ -45,7 +45,6 @@ pub(crate) mod write_perps;
 pub(crate) mod write_swap;
 pub(crate) mod write_tokens;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -59,6 +58,23 @@ use crate::ports::tool::{PluginCtx, Tool, ToolPlugin};
 
 pub(crate) use defs::defs_named;
 
+/// Who signs `mode = "send"` (`write_common::signer_for`).
+#[derive(Clone, Default)]
+pub(crate) enum SignerSource {
+    /// No `[solana] privy_wallet_id`: every send is refused (`no_signer`).
+    #[default]
+    None,
+    /// `[solana] privy_wallet_id`: the Privy wallet through the seal proxy,
+    /// over the egress tool client (`outbound/solana/privy.rs`).
+    Privy {
+        wallet_id: String,
+        http: reqwest::Client,
+    },
+    /// A signer handed in directly (tests).
+    #[cfg(test)]
+    Fixed(Arc<dyn crate::ports::solana_signer::SolanaSigner>),
+}
+
 /// Handles every family tool shares.
 #[derive(Clone, Default)]
 pub(crate) struct SolanaShared {
@@ -67,8 +83,8 @@ pub(crate) struct SolanaShared {
     /// Install-wide write store (lease / pending / fence); `None` ⇒ the
     /// write tools refuse `mode = "send"`.
     pub writes: Option<Arc<dyn SolanaWriteStore>>,
-    /// `[solana] signer_key_file` (loaded only at send time).
-    pub signer_key_file: Option<PathBuf>,
+    /// Who signs `mode = "send"` (built only at send time).
+    pub signer: SignerSource,
 }
 
 impl SolanaShared {
@@ -115,7 +131,13 @@ impl ToolPlugin for SolanaPlugin {
         let shared = SolanaShared {
             store,
             writes,
-            signer_key_file: ctx.config.signer_key_file.clone(),
+            signer: match &ctx.config.sandbox.privy_wallet_id {
+                Some(id) => SignerSource::Privy {
+                    wallet_id: id.clone(),
+                    http: ctx.http.clone(),
+                },
+                None => SignerSource::None,
+            },
         };
         let mut tools = Vec::new();
         tools.extend(price::tools(&shared));

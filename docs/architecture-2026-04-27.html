@@ -1428,7 +1428,7 @@ const FILE_MAP = [
   ["src/config/risk.rs", "xmarket", "[risk] + [paper] + [risk.exits] — every field required; the paper fill engine's knobs; load rules"],
   ["src/config/xmarket.rs", "xmarket", "[xmarket] state dir + layout (ledger_db, runtime_db, history_dir, market_db, backtests_dir), calendars, [xmarket.weekend_fade], xmarket load rules"],
   ["src/config/hardening.rs", "parity", "hardened sandboxes ([solana] signer or [risk]): claude_code only with profile none, no [[mcp_servers]], no shell scope, stores outside every fs root; compose only narrows"],
-  ["src/config/solana.rs", "tools", "[solana] signer_key_file + signing-sandbox rules"],
+  ["src/config/solana.rs", "tools", "[solana] privy_wallet_id + signing-sandbox rules"],
   ["src/config/backtest.rs", "xlab", "[backtest] — notional, bootstrap, seed, costs, universes, strategies, splits, gate, max_candidates, keep_runs; load rules"],
   ["src/config/lineage.rs", "lineage", "load_registry (lineage/ dirs, one TOML per record) + [generation] binding rules (tools, kinds, FROZEN pins) → GenerationScope"],
   ["src/config/strategy_ranking.rs", "ranking", "[strategy_ranking] registry, contracts — load rules → RankingSection (cited runs)"],

@@ -111,6 +111,11 @@ const TX_OK: &str =
     "L8TEY2sSvscX2R2EBChD1p1o3HApdBUHqVfTJKLxJ4zK4M6pebL3diuYKcKjPF5deW7GF6DVnMdPU2tBwgz1Mfi";
 const TOKENKEG: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const TOKEN_2022: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+/// A Solana signer (Privy wallet through the seal proxy); the agent socket
+/// does not exist, so no session is ever asked for.
+const PRIVY_SIGNER: &str = "[solana]\nprivy_wallet_id = \"w1\"\n\
+    [keys]\nproxy = \"http://127.0.0.1:9\"\nagent_socket = \"/nonexistent\"\n\
+    strip = [\"PRIVY_APP_SECRET\"]\n[keys.env]\nPRIVY_API_URL = \"privy\"\n";
 
 const BASE_TOML: &str = r#"
 [egress]
@@ -1140,7 +1145,7 @@ fn cases() -> Vec<Case> {
         // A signer makes every agent shell-free (`no_shell_fallback`).
         case("run_command", json!({"command": "echo denied"}))
             .named("no_shell")
-            .toml("[solana]\nsigner_key_file = \"{root}/keys/signer.json\"\n")
+            .toml(PRIVY_SIGNER)
             .err("not in allowed shell_bins"),
         // ── memory (no embeddings API in tests) ────────────────────────
         case("memory_ingest", json!({"content": "a fact"}))
