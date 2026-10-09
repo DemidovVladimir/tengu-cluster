@@ -829,7 +829,7 @@ These are not preferences. They're load-bearing.
   after a `web/studio/` edit. Lab runs: `export TENGU_HOME="$HOME/tengu-lab/home"`
   first (worktree gotcha below). The visual editor (ST-40) is a design only
   (`docs/studio-editor-design-2026-10-08.md`; no save until Operator Review #3);
-  ST-90 clean room open.
+  ST-90 clean room passed 2026-10-09 (`docs/studio-clean-room-2026-10-09.md`).
 - **Execution trace (2026-10-09, `domain/trace.rs`, `docs/runtime-2026-09-30.md`
   § Trace)** — `tengu run`, `tengu decide` and Studio (`kind = "studio"`) each
   write one JSONL file per recording: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`
@@ -938,7 +938,7 @@ State 2026-10-09 (origin/main = #39–#44: xlab-w2 retention, strategy ranking, 
 | G-WKND | operator | weekend #2 (2026-10-09 → 10-12): stop Mon 2026-10-12, vault, grade; then pull the main checkout (no-pull gotcha) |
 | G-SR1 | operator | seal `rank.xlab-w2.daily.v1` and `rank.xlab-w2.weekend.v1` (`tengu lineage seal ranking:<id>`) or change them first; every ranking is refused until then |
 | G-O0 → SOE Review #2 | operator | sign the SOE profile, approve each source row's terms + enable it, append SOE-G0's `[[frozen]]` row → 4 frozen weekly cycles → G-R2 (`docs/soe-2026-10-08.md` § 15) |
-| Studio | agent → operator | ST-90 clean room (`TENGU_STUDIO_PLAN.md` § 8) → Operator Review #3 decides on the editor (ST-40 = design only) |
+| Studio | operator | ST-90 clean room passed 2026-10-09 (`docs/studio-clean-room-2026-10-09.md`) → Operator Review #3 decides on the editor (ST-40 = design only) |
 | Engine parity | — | live legs `xlab_rank` · `sources` · `soe` not run; live `local` legs (the operator's PC); `agentic_memory` live; Privy / Solana `send` |
 | Trading | — | `TENGU_ROADMAP.md` P0–P11 done (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1 kept; forward rule W evidence every weekend (M3 tally 1 / 12); P12 / P13 + trading Operator Review #2 not reached; W2 research in `xlab-w2`, history first (`docs/xlab-2026-10-01.md` § 12) |
 
