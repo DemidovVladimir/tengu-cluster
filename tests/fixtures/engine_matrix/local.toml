@@ -139,6 +139,60 @@ interval = "1h"
 calendar = "us_equity"
 direction = "fade"
 
+# The xlab_rank set's `strategy_ranking`: the two move triggers of the test
+# contract rank.test.v1 (tests/fixtures/strategy_ranking/lineage). A contract
+# names its sandbox, so the leg runs a copy of this file at
+# <tmp>/sandboxes/rank-test/config.toml + [strategy_ranking] (the test adds it).
+[backtest.strategies.rank_fade]
+kind = "move_trigger"
+universe = "@matrix"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+
+[backtest.strategies.rank_follow]
+kind = "move_trigger"
+universe = "@matrix"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "follow"
+hold_bars = 3
+
+# The sources set: `source_evidence` reads <TENGU_HOME>/state/engine-matrix/
+# sources.db, seeded per leg by `tengu sources import` of the captured TED
+# pair tests/fixtures/ted/search_change_notice.json (no network). The row is
+# enabled with synthetic reviewed terms (an import passes the fetch gate);
+# nothing fetches — the tool cannot.
+[sources]
+state = "engine-matrix"
+
+[sources.registry.ted_search]
+kind = "ted_search"
+class = "law_regulator"
+trust = "primary"
+revision = "immutable"
+enabled = true
+hosts = ["api.ted.europa.eu"]
+auth = "none"
+rate_limit = "ted"
+store_raw = true
+jurisdiction = "EU"
+language = "en"
+query = "publication-date >= {from} AND publication-date <= {to}"
+license = "synthetic engine-matrix terms"
+terms_url = "https://example.org/terms"
+terms_sha256 = "6e81b3dc57dee4be066314f20ab0be61c23469c5ad56743239ee1bd399d8899a"
+terms_reviewed_at = "2026-10-08"
+raw_retention_days = 90
+record_retention_days = 0
+
+[rate_limits.ted]
+per_minute = 60
+burst = 2
+
 # [risk] turns Privy signing off: both signing tools need an explicit scope
 # without wallets (src/config/risk.rs).
 [default_scopes.sign_and_send_transaction]
@@ -180,6 +234,31 @@ env_reads = ["HL_API_URL", "GECKO_API_URL"]
 [default_scopes.backtest]
 fs_roots = ["/nonexistent/tengu-engine-matrix"]
 
+# `strategy_ranking` runs the contract's backtests on the same market.db and
+# writes <state dir>/strategy-rankings/: no network, no env.
+[default_scopes.strategy_ranking]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+# `source_evidence` writes only its observation row (the workspace store);
+# sources.db sits in the state dir. No network, no env.
+[default_scopes.source_evidence]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+# The soe set: the `[sources] state` dir above is also the SOE state root
+# <TENGU_HOME>/state/engine-matrix/ (seeded per leg from
+# tests/fixtures/soe/state/: a week open in PROPOSE, a replay open in
+# CHALLENGE). The three tools read and write only there — the state dir sits
+# outside every fs root; no network, no env. No [soe] section: it would close
+# this sandbox's world (config/soe.rs).
+[default_scopes.soe_view]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.soe_propose]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
+[default_scopes.soe_challenge]
+fs_roots = ["/nonexistent/tengu-engine-matrix"]
+
 # The xm set runs as a private agent (`xm_*`: no `description`, as exec tools
 # require) through `tengu tool turn` — the `@<agent>` chat path, no run-agent
 # workspace grant — so these scopes (and the xm agents' hl_ctx scope) cover
@@ -214,7 +293,7 @@ env_reads = ["HL_API_URL"]
 engine = "local"
 model = "gemma4:latest"
 description = "Engine-matrix fixture: local Ollama gemma4:latest."
-tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest"]
+tools = ["list_directory", "read_file", "write_file", "hl_ctx", "hl_book", "market_history", "backtest", "strategy_ranking", "source_evidence", "soe_view", "soe_propose", "soe_challenge"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 
 [agents.gemma.limits]

@@ -8,6 +8,7 @@ Reference notes behind [`xmarket-tracker-2026-09-29.md`](xmarket-tracker-2026-09
 | Rules | Every task follows tracker § 0 (rules R1–R13, definition of done); the operator's decisions are in the PRD addendum; how to execute: `xmarket-build-plan-2026-09-30.md` |
 | Precedence | Tracker § 4 Conventions win over any entry; entries carry a **Tracker note** where they diverge. Headings, size and kind follow the tracker; the bullets are the original research |
 | Known divergences | Postgres event store → SQLite; store paths (`state/xm-paper.db`, `state/xmarket.db`, `state/history/<sandbox>/`, `.tengu/series.db`, `.tengu/loops.db`, `.tengu/feeds.db`) → `<TENGU_HOME>/state/xmarket/…`; keys `hl_ctx/1`, `xm_mkt/1`, `xm_focus/1`, `hl_book/1:<coin>`, `rh_quote/1:<contract>` and ids `hl:<coin>` → conventions 1–2; loop names other than the four in convention 8; architect `researcher` / unhardened Claude Code → one `xm_architect` (OpenRouter or hardened `claude_code`, conventions 11–12); any "never `claude_code`" or "no `claude_code` agent" rule → hardened `claude_code` allowed (conventions 12, 20); `[news.sources]`, `[news.hosts]`, `[budget]`, `[budgets.<name>]` → `[feeds.<n>]`, `[spend]`, `[rate_limits.<name>]`; §16 Rust enums in `info-extract` / `jev-research-submit-tool` → runtime-validated strings; `--liveness` → `--live`; HIP-3 dex defaults naming `flx`, `km`, `cash` (0 listed markets) |
+| Status (2026-10-08) | an entry's meta-line status and **Have** bullets are the 2026-09-29 research, not updated; the tracker's ✅ / 🟡 column (with commits) is current — E0 + wave W1 done (#20), `info-edgar`'s adapter built in Phase 7, the M7 replay pieces pulled forward as xlab |
 | Meta line | milestone · size · kind · status · layer · PRD refs |
 | After | dependencies with their milestone; one in a later milestone means this item ships its early subset first |
 | Merged ids | an absorbed item's notes follow its kept item as **Absorbed** bullets |
@@ -315,6 +316,8 @@ M0 · S · rust · missing · outbound · PRD §15 §35 S3
 
 M0 · S · rust · missing · outbound · PRD §15 §16 §35 S3
 After: `info-fetch` (M0), `info-parsers` (M0)
+
+Status (2026-10-08): 🟡 — the adapter is built (`src/adapters/outbound/backfill/sec.rs`, decoders `src/domain/sec.rs`, `tengu history events`); open: the M0 feed and Ex-99.1 text (tracker row).
 
 - **Tracker note:** The M0 feed is scoped to the allow-listed CIK (Tesla `0001318605`). The Ex-99.1 exhibit fetch moved to `info-pipeline` (M4).
 - **Have:** Nothing: rg 'edgar|sec.gov' finds nothing in the repo.
@@ -1451,7 +1454,7 @@ After: `ops-openrouter-budget-key` (M0)
 - **Have:** The vault loads secrets into env (src/adapters/outbound/secrets.rs:239), and http_request expands $ENV only for names allowed by env_reads. There is no inventory of xmarket accounts or keys. rh-accounts covers only Robinhood-side keys. Four info gaps depend on an `ops-secrets` gap that no report defines.
 - **Need:** One table in the ops runbook, mirrored as comments in sandboxes/xmarket/config.toml. Entries: SEC_USER_AGENT (declared contact; EDGAR returns 403 without it); a dedicated OPENROUTER_API_KEY with a daily limit; an X developer app with prepaid credits (X_BEARER_TOKEN, per-cycle spending limit, auto-recharge off); Alpaca APCA_API_KEY_ID and APCA_API_SECRET_KEY; optional ROBINHOOD_RPC_URL (Alchemy), LIFI_API_KEY, OPENFIGI_API_KEY, COINGECKO_DEMO_API_KEY, FINNHUB_API_KEY; TELEGRAM_BOT_TOKEN and XM_ALERT_CHAT_ID. For each: owner, cost, env var, which agent's env_reads grants it (tokens never go in [default_scopes]), rotation. Optional Rust (S): `tengu doctor --sandbox xmarket` lists which names are set, never their values.
 - **No-Rust path:** Yes — accounts, vault entries and TOML only; the doctor listing is optional
-- **Evidence:** rg -n 'SEC_USER_AGENT|X_BEARER_TOKEN|APCA_API_KEY_ID|XM_ALERT_CHAT_ID' src sandboxes skills config.example.toml → 0; rg -i 'user_agent|user-agent' src → 0; info-store, info-sources-mvp, info-x-ingest and info-why-moving-skill all list `ops-secrets` in depends_on
+- **Evidence:** rg -n 'SEC_USER_AGENT|X_BEARER_TOKEN|APCA_API_KEY_ID|XM_ALERT_CHAT_ID' src sandboxes skills config.example.toml → 0; rg -i 'user_agent|user-agent' src → 0; info-store, info-sources-mvp, info-x-ingest and info-why-moving-skill all list `ops-secrets` in depends_on — **2026-10-08:** stale for SEC: `SEC_USER_AGENT` is read by `src/adapters/outbound/backfill/sec.rs` (P7) and named by the `[sources]` `sec_edgar` row (O2, `docs/source-evidence-2026-10-08.md`)
 
 ### `ops-log-rotation` — Rotation / retention for `logs/*.jsonl` + `tengu.log`; `decisions.jsonl` stays unrotated until `ops-audit-store` (M5)
 

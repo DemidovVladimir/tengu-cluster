@@ -253,9 +253,10 @@ pub(crate) fn node_evidence(cfg: &Config, node: &Node) -> Vec<EvidenceRef> {
     };
     let item = match node.kind {
         NodeKind::Feed => f.feed.as_deref().and_then(|name| {
-            // A tick feed's row is in its loop agent's store (its facets).
+            // A tick feed's row is in its loop agent's store, a job feed's in
+            // its job's agent's (its facets).
             let agent = match cfg.feeds.get(name).map(|c| c.kind()) {
-                Some(Ok(FeedKind::Tick)) | Some(Ok(FeedKind::Tool)) => f.agent.as_deref(),
+                Some(Ok(FeedKind::Tick | FeedKind::Tool | FeedKind::Job)) => f.agent.as_deref(),
                 _ => None,
             };
             row(agent, format!("feed/1:{name}"), "feed health row")

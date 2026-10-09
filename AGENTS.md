@@ -373,6 +373,25 @@ These are not preferences. They're load-bearing.
   Judge a Jev gate with `tengu evidence evaluate <run dir>` (rules · Jev · HOLD on
   the same candidates): Jev is PROVEN only when it beats rules and HOLD per
   candidate — W1's is UNPROVEN (`docs/p6-decision-evaluation-2026-10-08.md`).
+- **Strategy ranking (2026-10-08, `docs/strategy-ranking-automation-2026-10-08.md`)** —
+  a ranking contract is a lineage record `lineage/rankings/<id>.toml`, sealed by
+  the operator (`tengu lineage seal ranking:<id>`) before any ranking: unsealed =
+  verify Warn `ranking_unsealed`. The publisher (`application/ranking/`, behind
+  `tengu ranking run|show` and the opt-in tool `strategy_ranking`) reloads the
+  registry on every run and refuses `contract_unsealed` / `contract_changed` —
+  never seal a contract or run a ranking on `~/.tengu/state/xlab` yourself (SR-1:
+  the operator's call). `[strategy_ranking] registry, contracts`
+  (`config/strategy_ranking.rs`) lists a sandbox's contracts; `sandboxes/xlab-w2`
+  (unbound) runs the daily + weekend contracts by the feeds `history_refresh` →
+  `strategy_ranking_daily` / `strategy_ranking_weekend` on the private
+  `xl_ranker`. Output `<state>/strategy-rankings/<contract id>/<date>/` +
+  `latest.{md,json}`; a published date (COMPLETE or INCOMPLETE) is never
+  rewritten — an INCOMPLETE one reruns only after its date dir is deleted. Rules
+  arms only (`NOT_GATED`), never a split. Retention (`keep_runs`) keeps every run
+  the `[strategy_ranking]` registry cites (bound or not) and every run a
+  `latest.json` names. `lineage/rankings/` fails a pre-2026-10-08 binary's W1
+  load (unknown registry dir): keep it out of a checkout a frozen weekend binary
+  reads.
 - **`workspace_tools` is a narrow allow-list** — only the opt-in tool names
   in `domain/tools.rs::WORKSPACE_TOOLS` (memory and skill-lifecycle tools,
   the Solana, Hyperliquid and xmarket families — read the list there, don't
@@ -525,10 +544,12 @@ These are not preferences. They're load-bearing.
   to the store key), one that fits arrives whole
   (`Engine::tool_result_char_cap`, `Observation::compact_text`);
   `base_url` may end in `/v1`. Guide: `docs/engine-backends.md` § Local.
-- **Open-network sandboxes** — `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency) run
-  `network = "open"`; `xmarket` (M0 stage) and `xmarket-weekend` run `open`
-  with `allow_hosts = ["api.hyperliquid.xyz"]`, `xlab` with
-  `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, and must stay switchable to Tor
+- **Open-network sandboxes** — `lping`, `jev-exec` and `unlimited` (RPC, market APIs, latency)
+  and `control-loop-lab` (Jev only) run `network = "open"`; `xmarket` (M0 stage) and
+  `xmarket-weekend` run `open` with `allow_hosts = ["api.hyperliquid.xyz"]`, `xlab` with
+  `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]`, `xlab-w2` with those two
+  and `www.sec.gov`, `data.sec.gov`, `soe` with `www.sec.gov`, `data.sec.gov`,
+  `api.ted.europa.eu`, and must stay switchable to Tor
   (every transport through `egress.rs`). `tor-check`, `storage-test` and the
   base config run over Tor.
 - **Don't put a Claude Code agent in the planner role.** The Claude Code CLI

@@ -16,7 +16,10 @@ pub(crate) mod risk;
 pub(crate) mod runtime;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
+pub(crate) mod soe;
 pub(crate) mod solana;
+pub(crate) mod sources;
+pub(crate) mod strategy_ranking;
 pub(crate) mod studio;
 pub(crate) mod xmarket;
 
@@ -246,6 +249,19 @@ pub struct Config {
     #[serde(default)]
     pub studio: studio::StudioConfig,
 
+    /// `[sources]` — the source registry (O2, `config/sources.rs`): one row per
+    /// approved external source (SEC EDGAR, EU TED) and the state dir of
+    /// `sources.db`. Absent = no source layer.
+    #[serde(default)]
+    pub sources: Option<sources::SourcesConfig>,
+
+    /// `[soe]` — the Software Opportunity Engine's weekly cycle (O3,
+    /// `config/soe.rs`): the Architect and Critic agents, the cycle limits,
+    /// token prices. Present ⇒ a closed-world, hardened sandbox whose state
+    /// root is the `[sources]` state dir. Absent = no SOE cycle.
+    #[serde(default)]
+    pub soe: Option<soe::SoeConfig>,
+
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
     #[serde(default)]
@@ -262,6 +278,18 @@ pub struct Config {
     #[serde(skip)]
     pub generation_scope:
         Option<std::sync::Arc<crate::domain::lineage::generation::GenerationScope>>,
+
+    /// `[strategy_ranking]` — the strategy-ranking contracts this sandbox runs
+    /// and their lineage registry (`config/strategy_ranking.rs`); run-dir
+    /// retention keeps every run that registry cites. Absent = none.
+    #[serde(default)]
+    pub strategy_ranking: Option<strategy_ranking::StrategyRankingConfig>,
+
+    /// Runtime (never in TOML): `[strategy_ranking]` resolved by
+    /// `Config::load` (`strategy_ranking::section_errors`) →
+    /// `SandboxSections::ranking`.
+    #[serde(skip)]
+    pub ranking_section: Option<std::sync::Arc<strategy_ranking::RankingSection>>,
 
     /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
     /// `None` for the default user config. Populated by `load_sandbox_or` in
@@ -461,7 +489,7 @@ pub struct AgentConfig {
     pub local: Option<AgentLocalConfig>,
     /// Runtime (never in TOML): set by `Config::fold_default_scopes` on every
     /// agent of a hardened sandbox (`config/hardening.rs`: a `[solana]`
-    /// signer or a `[risk]` section) — tools without a configured scope then
+    /// signer, a `[risk]` or an `[soe]` section) — tools without a configured scope then
     /// get a fallback that runs no shell (`bootstrap::tools::resolve_tool_scopes`,
     /// in-process and in the bridge), and no shell skill loads
     /// (`bootstrap::tools::agent_skill_registry`).
@@ -485,8 +513,8 @@ fn default_lens() -> String {
 }
 
 impl AgentConfig {
-    /// A hardened sandbox (`config/hardening.rs`: `[risk]` or a `[solana]`
-    /// signer) — `fold_default_scopes` marks every agent of one
+    /// A hardened sandbox (`config/hardening.rs`: `[risk]`, `[soe]` or a
+    /// `[solana]` signer) — `fold_default_scopes` marks every agent of one
     /// (`no_shell_fallback`), the MCP bridge its fallback agent too. Its
     /// writers also refuse the workspace's prompt files
     /// (`domain::scope::protected_write_in`).
@@ -1187,11 +1215,14 @@ impl Config {
         // Pins hash the raw text (no `${VAR}` substitution), as `verify --pins`.
         let (generation_errors, scope) = lineage::binding_errors(&config, path, &raw);
         errors.extend(generation_errors);
+        let (ranking_errors, ranking) = strategy_ranking::section_errors(&config, path);
+        errors.extend(ranking_errors);
         Self::fail_on(errors)?;
         for warning in config.validation_warnings() {
             tracing::warn!(path = %path.display(), "{warning}");
         }
         config.generation_scope = scope.map(std::sync::Arc::new);
+        config.ranking_section = ranking.map(std::sync::Arc::new);
         config.loaded_from = Some(path.to_path_buf());
         config.source_sha256 = crate::domain::lineage::pins::toml_digest(&raw).ok();
         config.fold_default_scopes();
@@ -1256,6 +1287,10 @@ impl Config {
             weekend_fade: self.xmarket.as_ref().and_then(|x| x.weekend_fade.clone()),
             backtest: self.backtest.clone(),
             generation: self.generation_scope.clone(),
+            sources: self.sources.clone().map(std::sync::Arc::new),
+            sources_state_dir: self.sources.as_ref().map(|s| s.state_dir(&home)),
+            soe: self.soe.clone().map(std::sync::Arc::new),
+            ranking: self.ranking_section.clone(),
         }
     }
 
@@ -1409,6 +1444,12 @@ impl Config {
             errors.push(issue);
         }
         for issue in studio::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in sources::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in soe::validation_errors(self) {
             errors.push(issue);
         }
 
@@ -1716,9 +1757,13 @@ impl Default for Config {
             backtest: None,
             feeds: Default::default(),
             studio: Default::default(),
+            sources: None,
+            soe: None,
             skill_lifecycle: None,
             generation: None,
             generation_scope: None,
+            strategy_ranking: None,
+            ranking_section: None,
             sandbox_name: None,
             loaded_from: None,
             source_sha256: None,

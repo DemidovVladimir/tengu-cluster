@@ -1,0 +1,7 @@
+# Strategy-ranking test registry locks: the contract rank.test.v1 sealed
+# (`tengu lineage seal ranking:rank.test.v1 --registry tests/fixtures/strategy_ranking/lineage`).
+
+[[sealed]]
+record = "ranking:rank.test.v1"
+sha256 = "28c5d0c0339d82f13d14949dfebe2d423adc17a70aee292cbce55549d335f60d"
+sealed_at = "2026-10-08T18:26:29Z"

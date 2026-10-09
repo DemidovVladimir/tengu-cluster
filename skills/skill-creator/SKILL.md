@@ -45,7 +45,7 @@ Required fields:
 | `name` | Skill name. Letters, numbers, hyphens only. |
 | `description` | Starts with "Use when...". Triggering conditions only -- never summarize what the skill does. Third person. |
 
-Optional gating fields (prevent loading when prerequisites are missing):
+Optional gating fields (a skill whose prerequisites are missing is not loaded; a log line names why):
 
 | Field | Description |
 |-------|-------------|
@@ -57,24 +57,25 @@ Optional learner-platform fields:
 
 | Field | Description |
 |-------|-------------|
-| `editable_by_learner` | `bool` (default `false`). When `true`, this skill accepts in-chat `adjust yourself` / `fix it` proposals from the learner. |
-| `learner_facing` | `bool` (default `false`). When `true`, runner reads/writes per-learner state at `skills/<name>/state/<learner_id>.json`. Implies `editable_by_learner` unless explicitly `false`. |
+| `editable_by_learner` | `bool`. Absent = editable; only an explicit `false` makes `manage_skill` (`edit_body`, `patch`, `add_resource`, `remove_resource`), `apply_improver_proposal` and `tengu skill evolve` refuse to write it. |
+| `learner_facing` | `bool` marker written by `tengu skill seed` / `manage_skill create`. Per-learner state (`skills/<name>/state/<learner_id>.json`) is not read or written by the runtime yet. |
 
 ### Two Skill Types
 
-**Documentation skills** (most common): Frontmatter + SKILL.md body. Progressive disclosure -- compact catalog entry in the system prompt, agent reads the full SKILL.md on demand.
+**Documentation skills** (most common): Frontmatter + SKILL.md body. The body goes into the agent's system prompt (capped by `prompt_budget.max_skill_context_tokens`) for every agent that lists the skill in `skill_packages`.
 
-**Shell skills**: Create named tools with execution templates. The skill defines a tool name, description, and a command template that the runtime injects as a callable tool.
+**Shell skills**: Create named tools with execution templates. The skill defines a tool name, description, and a command template that the runtime injects as a callable tool. Not loaded for an agent that runs no shell (`[risk]` / Solana-signer sandbox).
 
 ## Three-Tier Hierarchy
 
 | Tier | Path | Use case |
 |------|------|----------|
 | Managed | `~/.tengu/skills/` | User's personal skills, shared across workspaces |
-| Workspace | `.tengu/skills/` | Workspace-specific, checked into the repo |
-| Project | `skills/` | Project-level at the repo root |
+| Workspace | `<workspace>/.tengu/skills/` | One agent workspace only |
+| Project | `<workspace>/skills/` | The agent workspace's `skills/` |
+| Cwd | `<cwd>/skills/` | The repo's `skills/` when tengu runs from the repo root (searched when it differs from Project) |
 
-Higher tiers shadow lower.
+First match wins, in that order: a managed skill shadows a workspace one of the same name, and so on.
 
 ## Writing Good Descriptions
 
@@ -108,14 +109,14 @@ description: Use when creating a new skill or modifying an existing skill for a 
 
 ## Modify Flow
 
-1. **Read the existing skill** with `read_file`.
+1. **Read the existing skill** with `view_skill` (`action: "read"` / `"read_resource"`).
 2. **Identify what to change.** Description not triggering? Body missing a case?
-3. **Edit** with `write_file`.
-4. **Test.**
+3. **Edit** with `manage_skill` (`edit_body`, `patch`, `add_resource`, `remove_resource`; opt-in — the agent must list it in `tools`). `write_file` refuses any path under a `skills/` directory.
+4. **Test.** Changes load on the next session.
 
 ## Distillation (from a live conversation)
 
-When the user says "let's save this as a skill", "distill this", "turn this into a skill", or equivalent after a successful workflow, ALWAYS call the `skill_distill` tool. Prefer it over `write_file` for skill authoring -- it handles fixture seeding and metric scaffolding in one step.
+When the user says "let's save this as a skill", "distill this", "turn this into a skill", or equivalent after a successful workflow, ALWAYS call the `skill_distill` tool (opt-in: the agent must list it in `tools`). `write_file` cannot write skills -- `skill_distill` handles fixture seeding and metric scaffolding in one step. Optional `tier`: `project` (default, `<workspace>/skills/`) or `workspace` (`<workspace>/.tengu/skills/`); `managed` is refused.
 
 ### Required inputs (you are the author)
 

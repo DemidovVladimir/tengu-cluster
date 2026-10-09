@@ -358,6 +358,7 @@
     <li><span><b>A deny stays a deny.</b> The <code>run-agent</code> workspace grant skips deny-all scopes.</span></li>
     <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches the signer key, <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file.</span></li>
     <li><span><b>Hardened fallback has no shell.</b> Tools without a scope get no <code>shell_bins</code>, and no shell skill loads.</span></li>
+    <li><span><b>Inside the generation.</b> A sandbox bound with <code>[generation]</code> never registers a tool its generation refuses: in-process and in the bridge, even if the agent lists it (<a href="lineage.html">Lineage</a>).</span></li>
   </ul>
   <p class="note warn"><b>Not a sandbox.</b> <code>shell_bins</code> gates only the first command word: what runs after <code>;</code>, <code>|</code> or <code>&amp;&amp;</code>, inside <code>$( )</code>, or in <code>node -e</code> is not checked. Write-path protection does not cover <code>run_command</code> or Claude Code built-ins (profiles other than <code>"none"</code>).</p>
 </section>
@@ -391,7 +392,7 @@
         <tr><td><code>src/adapters/outbound/tools/args.rs</code></td><td><code>validate_path</code>, <code>validate_write_path</code> (workspace, names, <code>skills/</code>)</td></tr>
         <tr><td><code>src/config/mod.rs</code></td><td><code>default_scopes</code>, <code>fold_default_scopes</code>, <code>AgentConfig::hardened</code></td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>hardened-sandbox load rules and path reach checks</td></tr>
-        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code></td></tr>
+        <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code>, <code>within_generation</code></td></tr>
         <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>the same scope map for Claude Code agents</td></tr>
         <tr><td><code>src/adapters/outbound/tools/workspace/</code></td><td><code>read_file</code>, <code>write_file</code>, <code>list_directory</code>, <code>run_command</code>: the checks in use</td></tr>
         <tr><td><code>tests/scope_lint.rs</code></td><td>fails a tool whose <code>execute</code> skips the scope check</td></tr>
@@ -465,7 +466,7 @@
   var DIRS = [[".tengu", "`.tengu/` holds tengu's own state"], [".claude", "`.claude/` configures Claude Code (hooks, commands, skills)"], [".git", "`.git/` holds git hooks"]];
   var FILES = [["CLAUDE.md", "a CLI agent loads `CLAUDE.md` as instructions"], ["CLAUDE.local.md", "a CLI agent loads `CLAUDE.local.md` as instructions"], ["AGENTS.md", "agents load `AGENTS.md` as instructions"], [".mcp.json", "a CLI agent starts the servers in `.mcp.json`"]];
   var PROMPT = ["MEMORY.md", "USER.md", "IDENTITY.md", "PROFILE.md", "CONTEXT.md"];
-  var HARD_WHY = "a hardened sandbox ([risk] or a Solana signer) keeps the workspace prompt files (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — tengu loads them into the system prompt";
+  var HARD_WHY = "a hardened sandbox ([risk], [soe] or a Solana signer) keeps the workspace prompt files (MEMORY.md, USER.md, IDENTITY.md, PROFILE.md, CONTEXT.md) out of agents' reach — tengu loads them into the system prompt";
   function named(name, list) { var lo = name.toLowerCase(); for (var i = 0; i < list.length; i++) if (list[i][0].toLowerCase() === lo) return list[i][1]; return null; }
   function protectedWrite(rel, hardened) {
     var comps = split(rel);
@@ -677,7 +678,7 @@
 
   /* ---------- hardening load check ---------- */
   var H = { risk: document.getElementById("h-risk"), sign: document.getElementById("h-sign"), prof: document.getElementById("h-prof"), root: document.getElementById("h-root"), mcp: document.getElementById("h-mcp"), sh: document.getElementById("h-sh") };
-  var WHY = "hardened sandbox: Solana signer or [risk]";
+  var WHY = "hardened sandbox: Solana signer, [risk] or [soe]";
   function hardCheck() {
     var out = document.getElementById("h-out"), head = document.getElementById("h-head");
     var hardened = H.risk.checked || H.sign.checked, errs = [];
@@ -690,10 +691,10 @@
     var prof = H.prof.value;
     if (prof !== "none") {
       var got = prof ? 'builtin_tools_profile = "' + prof + '"' : 'no [agents.exec.claude_code] block (= "editor_shell")';
-      errs.push('agents.exec: engine = "claude_code" in a hardened sandbox (Solana signer or [risk]) needs [agents.exec.claude_code] builtin_tools_profile = "none" — got ' + got + "; built-in tools run outside tengu scopes");
+      errs.push('agents.exec: engine = "claude_code" in a hardened sandbox (Solana signer, [risk] or [soe]) needs [agents.exec.claude_code] builtin_tools_profile = "none" — got ' + got + "; built-in tools run outside tengu scopes");
     }
-    if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer or [risk]): foreign processes with this filesystem");
-    if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer or [risk]) runs no shell");
+    if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): foreign processes with this filesystem");
+    if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer, [risk] or [soe]) runs no shell");
     var prot = [];
     if (H.sign.checked) prot.push({ what: "solana.signer_key_file", path: HOME + "/.tengu/keys/lping-signer.json", dir: false });
     prot.push({ what: "<TENGU_HOME>/state", path: HOME + "/.tengu/state", dir: true });

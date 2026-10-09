@@ -8,6 +8,7 @@
 //! | `verify` on a copy whose frozen W1 manifest changed | exit 1, `frozen_manifest_changed` naming `generation/W1` and both hashes in full |
 //! | `verify` on a copy where a capability W1 lists gained a binding (same version) | exit 1, `frozen_manifest_changed` on `generation/W1` |
 //! | a new preregistered variant in a copy | `verify` exit 1 (`seal_mismatch`); `seal variant:<id>` appends the row; `verify` exit 0; a second `seal` refused |
+//! | a new ranking contract in a copy | `verify` exit 0 with one Warn `ranking_unsealed`; `seal ranking:<id>` appends the row; `verify` clean; a second `seal` refused; the contract edited after → exit 1 `seal_mismatch` |
 //! | `report rule_w --forward rule_w.forward --format json` | 21 answers, none `UNKNOWN` |
 //! | `trace ep.recorder_gap` | the start marked, its family and incident shown |
 //! | `verify --pins` on the repo `lineage/` | W1 locked, every pin recomputes (G1 / G5) |
@@ -207,6 +208,65 @@ described = "rule_w.all with the exit at Monday 12:00 New York"
     );
     assert!(!o.status.success());
     assert!(text(&o).contains("not preregistered"), "{}", text(&o));
+}
+
+/// A ranking contract (`lineage/rankings/`): unsealed is a warning only (a
+/// draft may sit in the repo registry, whose verify CI runs), sealed once,
+/// and an edit after the seal is an error.
+#[test]
+fn a_ranking_contract_is_sealed_once() {
+    let (tmp, reg) = copy();
+    let r = reg.to_str().unwrap();
+    let src = std::fs::read_to_string(reg.join("rankings/rank.fixture.v1.toml")).unwrap();
+    let path = reg.join("rankings/rank.weekly.v1.toml");
+    std::fs::write(
+        &path,
+        src.replace("id = \"rank.fixture.v1\"", "id = \"rank.weekly.v1\"")
+            .replace("cutoff = \"00:00\"", "cutoff = \"10:00\"\ndays = [\"Mon\"]"),
+    )
+    .unwrap();
+    let o = tengu(tmp.path(), &["lineage", "verify", "--registry", r]);
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.contains("0 error(s), 1 warning(s)"), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.contains("ranking_unsealed") && l.contains("ranking/rank.weekly.v1")),
+        "{out}"
+    );
+    let o = tengu(
+        tmp.path(),
+        &["lineage", "seal", "ranking:rank.weekly.v1", "--registry", r],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let locks = std::fs::read_to_string(reg.join("locks.toml")).unwrap();
+    assert!(
+        locks.contains("record = \"ranking:rank.weekly.v1\""),
+        "{locks}"
+    );
+    let o = tengu(tmp.path(), &["lineage", "verify", "--registry", r]);
+    assert!(
+        text(&o).contains("0 error(s), 0 warning(s)"),
+        "{}",
+        text(&o)
+    );
+    let o = tengu(
+        tmp.path(),
+        &["lineage", "seal", "ranking:rank.weekly.v1", "--registry", r],
+    );
+    assert!(!o.status.success());
+    assert!(text(&o).contains("already sealed"), "{}", text(&o));
+    // Loosened after the seal: the seal no longer matches.
+    let sealed = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, sealed.replace("min_trades = 20", "min_trades = 5")).unwrap();
+    let o = tengu(tmp.path(), &["lineage", "verify", "--registry", r]);
+    let out = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{out}");
+    assert!(
+        out.lines()
+            .any(|l| l.contains("seal_mismatch") && l.contains("ranking/rank.weekly.v1")),
+        "{out}"
+    );
 }
 
 #[test]

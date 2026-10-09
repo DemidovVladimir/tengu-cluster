@@ -11,7 +11,7 @@
 //! | Sandbox | Control |
 //! |---|---|
 //! | `[generation]`-bound (a frozen design: view-only, plan § 7) | refused — always, `--allow-control` too; `[studio] control = true` there is a load error |
-//! | hardened (`[risk]` or a `[solana]` signer: `hardening::requires_hardened_claude_code`) | refused — always, the same way |
+//! | hardened (`[risk]`, `[soe]` or a `[solana]` signer: `hardening::requires_hardened_claude_code`) | refused — always, the same way |
 //! | `[studio] control = true` (the `control-loop-lab` sandbox) | on |
 //! | `--allow-control` | on |
 //! | otherwise | off (read-only Studio) |
@@ -62,8 +62,9 @@ fn never(cfg: &Config) -> Option<String> {
     }
     if super::hardening::requires_hardened_claude_code(cfg) {
         return Some(
-            "refused: hardened sandbox ([risk] or a [solana] signer) — Studio never starts or \
-             stops a runtime that can move money; use `tengu run` and its signals"
+            "refused: hardened sandbox ([risk], [soe] or a [solana] signer) — Studio never starts \
+             or stops a hardened runtime (money, signing, the SOE cycle); use `tengu run` and \
+             its signals"
                 .into(),
         );
     }

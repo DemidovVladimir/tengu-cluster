@@ -1,0 +1,9 @@
+id = "intel.soe_propose"
+title = "SOE Architect proposal (a mechanism as data into the open run, O3)"
+class = "INTELLIGENCE"
+version = 1
+permission = "RESEARCH"
+lifecycle = "CANDIDATE"
+contract = "tool_schema:soe_propose"
+bindings = ["tool:soe_propose"]
+notes = "One soe.mechanism_proposal/1 record into the open run dir of the private SOE state (application::soe::submit::submit_proposal: PROPOSE phase, no computed field, every cited id in the run's packet, forecasts within the horizon, the stamp's generation, the run's cap); a read-only preview of the gates and rank keys. Never contacts, spends, publishes or deploys. Offline-tested only."

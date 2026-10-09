@@ -324,7 +324,7 @@
       <thead><tr><th>Sandbox</th><th>Control</th></tr></thead>
       <tbody>
         <tr><td><code>[generation]</code>-bound (W1: a frozen design)</td><td>never — not with <code>--allow-control</code>; <code>[studio] control = true</code> there fails the config load</td></tr>
-        <tr><td>hardened (<code>[risk]</code> or a <code>[solana]</code> signer)</td><td>never, the same way</td></tr>
+        <tr><td>hardened (<code>[risk]</code>, <code>[soe]</code> or a <code>[solana]</code> signer)</td><td>never, the same way</td></tr>
         <tr><td><code>[studio] control = true</code> (only <code>control-loop-lab</code>)</td><td>on</td></tr>
         <tr><td>any other, started with <code>--allow-control</code></td><td>on, for that process</td></tr>
         <tr><td>otherwise (no <code>[studio]</code> = <code>control = false</code>)</td><td>off: every POST is 403 with the reason</td></tr>

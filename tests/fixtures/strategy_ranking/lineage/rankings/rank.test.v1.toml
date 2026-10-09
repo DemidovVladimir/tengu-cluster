@@ -1,0 +1,34 @@
+# Test fixture — a strategy-ranking contract (record kind `ranking`), sealed in
+# ../locks.toml. Two move triggers on the captured xyz:TSLA hours
+# (tests/fixtures/xlab/dataset_xyz_TSLA_1h.json: 67 bars, 2026-09-25T20:00Z to
+# 2026-09-28T15:00Z): tests/strategy_ranking.rs, the `strategy_ranking` bridge
+# conformance case and the engine-matrix set `xlab_rank` — each writes its
+# config at <tmp>/sandboxes/rank-test/config.toml (a contract names its
+# sandbox). Changing a byte here needs a new seal row (`tengu lineage seal`).
+id = "rank.test.v1"
+title = "Test ranking — fade vs follow a 25 bps hourly move on xyz:TSLA, weakest first"
+preregistered = true
+registered_at = "2026-10-08T12:00:00Z"
+sandbox = "rank-test"
+evidence_class = "DEVELOPMENT"
+arm = "research"
+tz = "UTC"
+cutoff = "15:00"   # the captures' last bar closes 2026-09-28T15:00Z
+from = "2026-09-25"
+strategies = ["rank_fade", "rank_follow"]
+cohort = ["generation", "evidence_class", "arm", "instruments_sha256", "costs_sha256", "interval", "from_ms", "to_ms", "data_through_ms"]
+on_missing = "INCOMPLETE"
+
+[freshness]
+max_lag_bars = 2
+
+[eligibility]
+min_trades = 1
+min_periods = 1
+max_funding_incomplete = 0
+exclude_status = ["SUPERSEDED"]
+
+[rating]
+order = ["evidence_tier", "verdict", "ci95_lo_bps", "mean_net_bps"]
+quantum = 0.01
+tie_break = "strategy_asc"

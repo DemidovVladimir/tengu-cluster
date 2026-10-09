@@ -32,7 +32,8 @@ fn the_fixture_loads_with_a_digest_per_record() {
         + reg.incidents.len()
         + reg.capabilities.len()
         + reg.generations.len()
-        + reg.evidence.len();
+        + reg.evidence.len()
+        + reg.rankings.len();
     assert_eq!(reg.digests.len(), records);
     assert_eq!(reg.locks.frozen.len(), 1);
     assert_eq!(
@@ -50,6 +51,49 @@ fn the_fixture_loads_with_a_digest_per_record() {
         "cba7a380444a5e6648f0d1421837ce5504c0a1e55e6b3126a8de6596ea343a7f"
     );
     assert!(sandbox_pin(&dir, &"tool_schema:backtest".parse().unwrap()).is_none());
+}
+
+/// `rankings/<id>.toml` loads as a `RankingContract` with its digest; a
+/// field outside the schema is a load error naming the file.
+#[test]
+fn the_loader_reads_rankings() {
+    use crate::domain::lineage::ranking::{CohortField, MissingPolicy};
+    let dir = fixture_root().join("registry");
+    let reg = load_registry(&dir).unwrap_or_else(|e| panic!("{e:#?}"));
+    let c = &reg.rankings["rank.fixture.v1"];
+    assert_eq!(c.sandbox, "ranked");
+    assert_eq!(c.strategies, ["rule_w", "rule_w_top4"]);
+    assert_eq!(c.cohort.len(), 9);
+    assert_eq!(c.cohort[0], CohortField::Generation);
+    assert_eq!(c.on_missing, MissingPolicy::Incomplete);
+    assert_eq!(c.rating.order[5].to_string(), "-max_drawdown_bps");
+    let key = (RecordKind::Ranking, "rank.fixture.v1".to_string());
+    let sealed = reg
+        .locks
+        .sealed
+        .iter()
+        .find(|s| s.record == "ranking:rank.fixture.v1")
+        .expect("the fixture seals it");
+    assert_eq!(reg.digests[&key], sealed.sha256);
+    assert_eq!(
+        record_path(&dir, RecordKind::Ranking, "rank.fixture.v1"),
+        dir.join("rankings/rank.fixture.v1.toml")
+    );
+    assert!(reg.kinds_of("rank.fixture.v1") == [RecordKind::Ranking]);
+    // An unknown field fails the load, naming the file.
+    let tmp = tempfile::tempdir().unwrap();
+    let copy = tmp.path().join("lineage");
+    copy_dir(&dir, &copy);
+    let f = copy.join("rankings/rank.fixture.v1.toml");
+    let text = std::fs::read_to_string(&f).unwrap();
+    std::fs::write(&f, text.replace("on_missing", "weight = 1\non_missing")).unwrap();
+    let errs = load_registry(&copy).unwrap_err();
+    assert!(
+        errs.len() == 1
+            && errs[0].contains("rankings/rank.fixture.v1.toml")
+            && errs[0].contains("weight"),
+        "{errs:#?}"
+    );
 }
 
 #[test]
@@ -392,4 +436,57 @@ fn the_scope_lists_the_runs_the_registry_cites() {
         ]))
     );
     assert_eq!(scope.cited_runs.len(), 1);
+}
+
+/// SOE-G0 (critic C13; roadmap § 13 generation isolation) on the repo's own
+/// registry: the SOE generation, its capability records and its family
+/// leave W1 alone — W1's manifest still hashes to its lock row, no Error
+/// finding (no `binding_conflict`), W1 cannot reach a `soe_*` tool or
+/// `source_evidence`, SOE-G0 reaches only those and binds only the `soe`
+/// sandbox, unlocked (its lock row waits for the operator's signed profile)
+/// — and W1's two sandboxes still load bound to W1, every FROZEN pin
+/// recomputing. (W1's rule-W golden:
+/// `config::xmarket::tests::weekend_sandbox_replays_the_golden`.)
+#[test]
+fn soe_generation_leaves_w1_manifest_and_golden() {
+    use crate::domain::tools::{SOE_CHALLENGE, SOE_PROPOSE, SOE_VIEW, SOURCE_EVIDENCE};
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let reg = load_registry(&repo.join("lineage")).unwrap_or_else(|e| panic!("{e:#?}"));
+    let w1_lock = reg
+        .locks
+        .frozen
+        .iter()
+        .rev()
+        .find(|f| f.generation == "W1")
+        .expect("W1 is locked");
+    assert_eq!(w1_lock.manifest_sha256, reg.frozen_digest("W1").unwrap());
+    let errors: Vec<String> = reg
+        .validate()
+        .into_iter()
+        .filter(|f| f.severity == Severity::Error)
+        .map(|f| format!("{} {}: {}", f.code, f.record, f.message))
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let g0 = &reg.generations["SOE-G0"];
+    assert_eq!(g0.status, GenerationStatus::Candidate);
+    assert_eq!(g0.sandboxes, ["soe"]);
+    assert!(reg.locks.frozen.iter().all(|f| f.generation != "SOE-G0"));
+    assert!(reg.families.contains_key("soe"));
+    let soe = GenerationScope::of(&reg, "SOE-G0").unwrap();
+    let w1 = GenerationScope::of(&reg, "W1").unwrap();
+    for t in [SOE_VIEW, SOE_PROPOSE, SOE_CHALLENGE, SOURCE_EVIDENCE] {
+        assert!(soe.tool_refusal(t).is_none(), "SOE-G0 reaches {t}");
+        assert!(w1.tool_refusal(t).is_some(), "W1 reaches {t}");
+    }
+    assert!(soe.available_kinds.is_empty());
+    assert!(w1.available_tools.is_disjoint(&soe.available_tools));
+    for s in ["xlab", "xmarket-weekend"] {
+        let file = repo.join("sandboxes").join(s).join("config.toml");
+        let cfg = Config::load(&file).unwrap_or_else(|e| panic!("{s}: {e:#}"));
+        assert_eq!(
+            cfg.generation_scope.as_ref().map(|g| g.id.as_str()),
+            Some("W1"),
+            "{s}"
+        );
+    }
 }

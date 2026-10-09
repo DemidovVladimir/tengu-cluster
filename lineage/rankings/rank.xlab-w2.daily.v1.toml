@@ -1,0 +1,54 @@
+# DRAFT — UNSEALED. The operator reviews this contract (SR-1 stop,
+# docs/strategy-ranking-automation-2026-10-08.md) before
+# `tengu lineage seal ranking:rank.xlab-w2.daily.v1`; until then
+# `tengu lineage verify` warns `ranking_unsealed` and no ranking runs under it.
+# Run by [feeds.strategy_ranking_daily] of sandboxes/xlab-w2 (daily, New York).
+id = "rank.xlab-w2.daily.v1"
+title = "xlab-w2 daily strategy ranking v1 — development evidence, weakest to strongest per cohort"
+notes = """
+Rolling development evidence: every listed strategy rerun each day on [from, cutoff) — no split, \
+the holdout never read, rules arms only (evaluation NOT_GATED: no Jev). Left out: the four \
+labelled strategies (weekend_fade_skip_news, weekend_fade_noise_only and their top-4 cuts) — \
+SEC event coverage has no refresh feed, so new weekends would turn UNCERTAIN silently. A trade \
+whose exit falls after the cutoff is cut from that day's run and counted the next day."""
+preregistered = true
+registered_at = "2026-10-08T17:11:25Z"
+sandbox = "xlab-w2"
+evidence_class = "DEVELOPMENT"
+arm = "research"
+tz = "America/New_York"
+cutoff = "00:00"   # data_through = local midnight starting the ranking date
+from = "2026-03-01" # decisions [from, cutoff)
+strategies = [
+    "weekend_fade",
+    "weekend_fade_liquid",
+    "weekend_fade_top4",
+    "weekend_fade_top4_stop300",
+    "weekend_fade_top4_stop500",
+    "weekend_fade_top4_net_of_cost",
+    "weekend_fade_top4_stop500_net_of_cost",
+    "weekend_follow",
+    "xyz_overnight_follow",
+    "xyz_weeknight_fade_top4",
+    "xyz_weeknight_fade_top4_0400",
+    "xyz_funding_carry",
+    "crypto_move_fade",
+    "crypto_funding_carry",
+    "sol_eth_spread",
+]
+cohort = ["generation", "evidence_class", "arm", "instruments_sha256", "costs_sha256", "interval", "from_ms", "to_ms", "data_through_ms"]
+on_missing = "INCOMPLETE"  # a listed strategy FAILED / STALE ⇒ status INCOMPLETE, latest kept
+
+[freshness]
+max_lag_bars = 2   # every instrument's newest stored bar closes ≥ cutoff − 2 bars, else STALE
+
+[eligibility]
+min_trades = 20
+min_periods = 8
+max_funding_incomplete = 0
+exclude_status = ["SUPERSEDED"]
+
+[rating]   # lexicographic, ascending = weaker first
+order = ["evidence_tier", "verdict", "ci95_lo_bps", "mean_net_bps", "-best2_periods_share", "-max_drawdown_bps"]
+quantum = 0.01   # numeric keys compared as round(x / quantum)
+tie_break = "strategy_asc"

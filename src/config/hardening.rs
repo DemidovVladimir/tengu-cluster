@@ -1,7 +1,9 @@
 //! Hardened sandboxes (tracker convention 12): where signing or money is
 //! involved nothing runs outside tengu scopes — a `[solana]` signer or a
-//! `[risk]` section (the xmarket paper / live budget). One code path for
-//! both (`risk-gate-enforcement`). Doc: `docs/engine-backends.md` § Claude
+//! `[risk]` section (the xmarket paper / live budget) — and where agents read
+//! untrusted source text: an `[soe]` section (the Software Opportunity
+//! Engine, `config/soe.rs`). One code path for all three
+//! (`risk-gate-enforcement`). Doc: `docs/engine-backends.md` § Claude
 //! Code, `docs/xmarket-risk-paper-2026-09-30.md` § Load rules.
 //!
 //! | Rule (hardened sandbox; a `validation_errors` violation fails `Config::load`) | Enforced by | Why |
@@ -16,7 +18,9 @@
 //!
 //! Signer-only rules (key path, wallet grants) live in `config/solana.rs`;
 //! `[risk]`-only rules (exec tools on a private agent, Privy signing off) in
-//! `config/risk.rs`; the xmarket workspace + state-dir rules in
+//! `config/risk.rs`; `[soe]`-only rules (the closed tool world, deny-all
+//! side-effect scopes, the state root) in `config/soe.rs`; the xmarket
+//! workspace + state-dir rules in
 //! `config/xmarket.rs` (which borrows the path check, [`dir_reach_errors`],
 //! for the `[xmarket]` state dir of a sandbox that is not hardened).
 
@@ -28,11 +32,11 @@ use super::Config;
 /// True when the sandbox is hardened: `claude_code` agents only with
 /// built-in tools off, and a no-shell fallback scope on every agent.
 pub(crate) fn requires_hardened_claude_code(cfg: &Config) -> bool {
-    cfg.solana.signer_key_file.is_some() || cfg.risk.is_some()
+    cfg.solana.signer_key_file.is_some() || cfg.risk.is_some() || cfg.soe.is_some()
 }
 
 /// Ends every path error of the hardened rules.
-const HARDENED: &str = "hardened sandbox: Solana signer or [risk]";
+const HARDENED: &str = "hardened sandbox: Solana signer, [risk] or [soe]";
 
 pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     if !requires_hardened_claude_code(cfg) {
@@ -97,8 +101,8 @@ fn claude_code_errors(cfg: &Config) -> Vec<String> {
                 None => format!("no [agents.{id}.claude_code] block (= \"editor_shell\")"),
             };
             Some(format!(
-                "agents.{id}: engine = \"claude_code\" in a hardened sandbox (Solana signer \
-                 or [risk]) needs [agents.{id}.claude_code] builtin_tools_profile = \"none\" — got {got}; \
+                "agents.{id}: engine = \"claude_code\" in a hardened sandbox (Solana signer, \
+                 [risk] or [soe]) needs [agents.{id}.claude_code] builtin_tools_profile = \"none\" — got {got}; \
                  built-in tools run outside tengu scopes"
             ))
         })
@@ -125,7 +129,7 @@ fn scopes(cfg: &Config) -> Vec<(String, &crate::domain::scope::ToolScope)> {
 fn foreign_process_errors(cfg: &Config, errors: &mut Vec<String>) {
     if !cfg.mcp_servers.is_empty() {
         errors.push(
-            "[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer or [risk]): \
+            "[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): \
              foreign processes with this filesystem"
                 .into(),
         );
@@ -133,7 +137,7 @@ fn foreign_process_errors(cfg: &Config, errors: &mut Vec<String>) {
     for (at, scope) in scopes(cfg) {
         if !scope.shell_bins.is_empty() {
             errors.push(format!(
-                "{at}.shell_bins grants a shell — a hardened sandbox (Solana signer or [risk]) \
+                "{at}.shell_bins grants a shell — a hardened sandbox (Solana signer, [risk] or [soe]) \
                  runs no shell"
             ));
         }
@@ -342,7 +346,10 @@ mod tests {
         assert!(requires_hardened_claude_code(&risk));
         let errs = claude_code_errors(&risk);
         assert_eq!(errs.len(), 1, "{errs:?}");
-        assert!(errs[0].contains("(Solana signer or [risk])"), "{errs:?}");
+        assert!(
+            errs[0].contains("(Solana signer, [risk] or [soe])"),
+            "{errs:?}"
+        );
         let mut hardened = risk.clone();
         hardened.agents.get_mut("exec").unwrap().claude_code =
             Some(crate::config::AgentClaudeCodeConfig {

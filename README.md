@@ -6,11 +6,16 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 |---|---|---|
 | Orchestrated chat: planner → `tengu run-agent` subagents | `tengu chat` / `telegram` / `webhooks` | § Orchestration |
 | Three engines, every tool under each (schema lint, bridge conformance, live engine matrix; the live `local` legs still to run on the operator's PC) | `[agents.<a>] engine` | § Engines, `docs/engine-backends.md` |
-| 44 catalog tools (45 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
+| 50 catalog tools (51 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
 | Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loop-plan-2026-09-24.md` |
 | Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime-2026-09-30.md` |
+| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never W1-bound / hardened) | `tengu studio` (`--features studio`), `tengu trace`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md` |
 | Paper desk: `[risk]` gate inside every order tool, paper ledger, kill switch, exit rules, weekend fade | sandboxes `xmarket`, `xmarket-weekend` | § Paper desk (xmarket) |
-| History-first research: `market.db` warehouse, strategy specs, deterministic backtests, Jev replayed on history | `tengu history`, `tengu backtest`, sandbox `xlab` | § History-first research (xlab) |
+| History-first research: `market.db` warehouse (+ SEC EDGAR filing events), strategy specs, deterministic backtests, Jev replayed on history | `tengu history`, `tengu backtest`, sandboxes `xlab` (W1), `xlab-w2` | § History-first research (xlab) |
+| Research lineage: `lineage/` registry (one TOML per record), generation W1 frozen + bound by `[generation]`, read-only evidence vault, forward grading | `tengu lineage`, `tengu evidence` | `docs/lineage-2026-10-06.md` |
+| Scheduled strategy ranking: sealed contracts, deterministic ranker + publisher, no LLM | `tengu ranking`, tool `strategy_ranking`, `tengu run --sandbox xlab-w2` | `docs/strategy-ranking-automation-2026-10-08.md` |
+| Source evidence (SOE O2): SEC EDGAR + EU TED records with provenance in `sources.db`, as-of view without lookahead | `tengu sources`, tool `source_evidence`, sandbox `soe` | `docs/source-evidence-2026-10-08.md` |
+| Software Opportunity Engine (O0–O1), offline: scenarios, hard gates, rank keys on a signed private profile | `tengu soe` | `docs/soe-2026-10-08.md` |
 
 ## Prerequisites
 
@@ -74,14 +79,24 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | `telegram` | `--sandbox` | Telegram bot channel; refuses to start without an allow-list | `telegram` (default) | `TELEGRAM_BOT_TOKEN`, `OPENROUTER_API_KEY` |
 | `webhooks` | `--sandbox` | `[webhooks.endpoints.<n>]` → `POST /webhooks/<n>` (HMAC `X-Tengu-Signature: sha256=<hex>` or a static `auth_header_env` header); 202 + a one-shot orchestrator turn, or `loop = "<name>"` → that decision loop. Takes the leases `tengu run` takes | `webhooks` | `OPENROUTER_API_KEY` (planner / Jev), each endpoint's `secret_env` / `auth_header_env` |
 | `run` | `--sandbox` | The sandbox's long-running process: every `[decision_loops.*]` built once, every `[feeds.*]`, the webhook routes (`webhooks` build + `[webhooks] enabled`); lease `runtime:<s>` (+ `state:<dir>` with `[xmarket]`), heartbeat `<state dir>/run-<s>.json`; SIGINT / SIGTERM drain ≤ `[runtime] shutdown_grace_secs` | default | `OPENROUTER_API_KEY` for Jev loops / LLM agents only |
-| `decide` | `--sandbox`, `--loop <name>`, `--event <file \| ->` | One event through `[decision_loops.<name>]` (Jev picks, tools run); prints the step outcomes; no escalation | default | `OPENROUTER_API_KEY` |
+| `decide` | `--sandbox`, `--loop <name>`, `--event <file \| ->`, `--map <file \| ->` (an execution map: order, event, tighter caps — only narrows the loop; names its loop) | One event through `[decision_loops.<name>]` (Jev picks, tools run); prints the step outcomes; no escalation | default | `OPENROUTER_API_KEY` |
+| `studio` | `--sandbox`, `[--port <n>]` (0 = any free), `[--bind <loopback ip>]`, `[--allow-control]` | Local Studio server: loopback only, prints its URL (+ per-process token in the fragment) on stdout; graph, runs, live SSE, health; Play / Stop / send-event with control on (`[studio] control = true` or `--allow-control`, never W1-bound / hardened) | `studio` | `OPENROUTER_API_KEY` (Jev, on Play) |
+| `studio graph` | `--sandbox`, `[--map <file \| ->]` | The sandbox's workflow graph (validated config + catalog tools; a map only narrows it) as redacted JSON | default | — |
+| `trace` | `--sandbox`; `runs` · `show --run <id> [--after <seq>] [--follow]` | The execution trace `tengu run` / `tengu decide` recorded under `<TENGU_HOME>/logs/trace/<sandbox>/`, JSON lines; no config, read-only | default | — |
 | `history range` | `<key> --from --to` | Recorded observation rows (`[recorder]`) of one key, JSON lines | default | — |
 | `history asof` | `<keys>... --at [--max-age-secs]` | Per key, the latest row at or before `--at` | default | — |
 | `history backfill` | `--instruments <ids \| @universe>` `--from [--to] [--source hl\|gecko] [--interval 1m\|5m\|15m\|1h\|4h\|1d] [--funding] [--no-bars]` | Fill `<state dir>/market.db` from Hyperliquid (bars, funding) or GeckoTerminal (`<id>@<pool>`); resumes | default | `HL_API_URL`, `GECKO_API_URL` (optional overrides) |
+| `history events` | `--instruments <ids \| @universe>` (`hyperliquid:xyz:<TICKER>`) `--from [--to]` | SEC EDGAR filings (8-K, 6-K, 10-Q, 10-K, 20-F, 40-F + amendments) → `market.db` `events` (published at the acceptance time) + `event_coverage`; exit 1 when any row failed | default | `SEC_USER_AGENT` ("Name email", required) |
 | `history import-hl-archive` | `--dir` | HL S3 archive asset contexts (`*.csv.lz4`, `*.csv`) → `market.db` `ctx` | default | — |
 | `history import-json` | `--file` | `[{instrument, interval, source?, bars?, funding?}]` → `market.db`; nothing written unless every row checks | default | — |
 | `history coverage` | `[--instrument]` | What `market.db` holds per instrument / kind / interval | default | — |
-| `backtest` | `--strategy <name>` \| `--spec <file.json>`, `--from`, `--to`, `--split time:<t>\|instruments:<ids>`, `--format table\|json`, `--fetch` (backfill first), `--gate [<loop>]` (+ the Jev gate arm), `--max-decisions` (500), `--concurrency` (4, 1–16), `--offline` (decision cache only) | Strategy spec on `market.db`, no LLM: research arm (+ `[risk]`-capped arm), optional in-sample / holdout split; writes `<state dir>/backtests/<run id>/` | default | `OPENROUTER_API_KEY` only for `--gate` without `--offline` |
+| `backtest` | `--strategy <name>` \| `--spec <file.json>`, `--from`, `--to`, `--split time:<t>\|instruments:<ids>`, `--data-through <t>` (rerun on a report's `data_through_ms`), `--format table\|json`, `--fetch` (backfill first), `--gate [<loop>]` (+ the Jev gate arm), `--max-decisions` (500), `--concurrency` (4, 1–16), `--offline` (decision cache only) | Strategy spec on `market.db`, no LLM: research arm (+ `[risk]`-capped arm), optional in-sample / holdout split; writes `<state dir>/backtests/<run id>/` | default | `OPENROUTER_API_KEY` only for `--gate` without `--offline` |
+| `ranking run` | `--sandbox`, `[--contract <id>]` (default: the only one), `[--date YYYY-MM-DD]` (default: newest date past its cutoff), `--format table\|json` | One ranking date of a sealed `[strategy_ranking]` contract (freshness → one backtest per strategy → rank) → `<state dir>/strategy-rankings/<contract>/<date>/` + `latest`; lease, resumable; refuses an unsealed contract; exit 1 when `INCOMPLETE`; no LLM, no network | default | — |
+| `ranking show` | `--sandbox`, `[--contract]`, `[--date]` | Print a published `ranking.md` (default `latest`) | default | — |
+| `evidence` | `snapshot --record <file>` · `verify <record>` · `coverage --history <dir>… --schema` · `grade --ledger` · `evaluate <run dir>` · `regrade --history <dir>…`; `--format text\|json` | Forward evidence: copy into the read-only vault `<TENGU_HOME>/state/evidence/<id>/` (a non-empty `-wal` is refused), re-hash it, recorder coverage, paper-ledger grade, rules · Jev · HOLD on a gated run (`PROVEN` / `UNPROVEN` / `REJECTED`), rule W replayed from recorded rows; no config, no network | default | — |
+| `lineage` | `verify [--pins] [--evidence]` · `show` · `trace` · `family` · `attempts` · `report` · `capabilities` · `generation <ID>` · `seal <variant:ID \| experiment:ID \| ranking:ID>`; `--registry` (default `./lineage`), `--format` | The `lineage/` registry: checks, views, pins against a generation's lock; only `seal` writes (appends to `locks.toml`); no config | default | — |
+| `soe` | `init` · `check <opportunity.toml>` · `portfolio <dir> --as-of` · `sensitivity` · `eval <cases dir>`; `--profile` (default `<TENGU_HOME>/state/soe/operator.toml`), `--allow-synthetic`, `--format` | Software Opportunity Engine, offline: three scenarios, hard gates, rank keys on the signed private profile (`init` writes the unsigned template, never in a git work tree); no config, secrets, network or LLM | default | — |
+| `sources` | `--sandbox`; `list` · `fetch --source <id> [--from --to --ciks]` · `import` · `asof --at [--mode captured\|knowable]` · `purge` · `terms` · `disable` / `enable --reason` | Source layer of a `[sources]` sandbox: the operator fetches SEC EDGAR / EU TED into `<TENGU_HOME>/state/<sources.state>/sources.db` (agents never fetch); as-of evidence packet; retention purge; runtime kill switch; no LLM | default | `SEC_USER_AGENT` (`sec_edgar` fetch) |
 | `risk status` | `--sandbox`, `[--account]` | Risk state, cash, positions of every ledger account (read-only) | default | — |
 | `risk halt` / `risk resume` | `--sandbox`, `[--account]` | Halt new entries / clear a halt — operator at a terminal only (refused in an agent process or with piped stdin); `resume` asks for the account name, refused while the kill-switch file exists | default | `TENGU_RISK_RESUME_SECRET_FILE` (optional 0600 resume secret) |
 | `eval` | `[<skill>...]`, `--sandbox`, `--judge-model` (`anthropic/claude-opus-4-7`), `--concurrency`, `--format table\|json`, `--out`, `--filter`, `--keep-workspace`, `--keep-runs` (10), `--no-persist`, `--max-runs` (10) | Skill evals scored by an LLM judge | default | `OPENROUTER_API_KEY` |
@@ -113,7 +128,7 @@ Hidden test command `tengu tool` (`src/adapters/inbound/cli/tool.rs`; bridge con
 
 ## History-first research (xlab)
 
-Answer strategy questions from backfilled public history, never by waiting for live recording (operator rule 2026-10-01). Sandbox `xlab`: Architect `xl_architect` (tools `market_history`, `backtest`, `read_file`, `list_directory`; skill `xlab-research`; never trades), Jev gate loop `xl_gate`, `[risk]` caps for the capped arm. State `~/.tengu/state/xlab/` (`market.db`, `backtests/<run id>/`), workspace `~/xlab-ws`. Run from the repo root.
+Answer strategy questions from backfilled public history, never by waiting for live recording (operator rule 2026-10-01). Sandbox `xlab`: Architect `xl_architect` (tools `market_history`, `backtest`, `read_file`, `list_directory`; skill `xlab-research`; never trades), Jev gate loop `xl_gate`, `[risk]` caps for the capped arm. State `~/.tengu/state/xlab/` (`market.db`, `backtests/<run id>/`), workspace `~/xlab-ws`. Run from the repo root. `xlab` is bound to generation W1 (`[generation]`): editing a pinned section fails the load (`pin … drifted`; a change is a new generation, never an edit of W1). W2 research runs in `xlab-w2` (unbound, same state dir; + `tengu history events`, + the strategy-ranking feeds of `tengu run --sandbox xlab-w2`).
 
 | Step | Command |
 |---|---|
@@ -133,7 +148,7 @@ Paper only — no key, no order leaves the process. The `[risk]` gate runs insid
 | Sandbox | Runs | Runbook |
 |---|---|---|
 | `xmarket` (M0) | `tengu run --sandbox xmarket`: HL contexts + a starter set of books recorded, exit rules every 15 s, daily risk roll; no planner: `xm_architect` default + routable (read-only, Claude CLI Opus), private `xm_executor` (Claude CLI Sonnet). Entries wait for later tracker items | top of `sandboxes/xmarket/config.toml`; `docs/runtime-2026-09-30.md` § xmarket sandbox |
-| `xmarket-weekend` | `tengu run --sandbox xmarket-weekend`: rule W (weekend fade) on 75 Hyperliquid xyz stock perps — capped + shadow ledgers, no LLM, no Jev | top of `sandboxes/xmarket-weekend/config.toml`; `docs/runtime-2026-09-30.md` § Weekend run |
+| `xmarket-weekend` | `tengu run --sandbox xmarket-weekend`: rule W (weekend fade) on 75 Hyperliquid xyz stock perps — capped + shadow ledgers, no LLM, no Jev; bound to W1 (`[generation]`) | top of `sandboxes/xmarket-weekend/config.toml`; `docs/runtime-2026-09-30.md` § Weekend run; `docs/forward-evidence-runbook-2026-10-08.md` |
 
 | Operator action | Command |
 |---|---|
@@ -207,10 +222,11 @@ One `catalog()` row per always-on group or opt-in name (`src/adapters/outbound/t
 | memory | `memory_ingest`, `memory_search` · `persistent_store` · `agentic_memory` | `[memory] enabled` · opt-in · opt-in + `postgres_memory` |
 | cache | `shared_cache` | opt-in |
 | skills | `skill_resource`, `view_skill` · `manage_skill`, `skill_distill`, `apply_improver_proposal` | always · opt-in |
-| solana | reads `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `hedge_decide`, `lp_decide`; writes `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` (simulate by default) | opt-in |
+| solana | reads `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide`; writes `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` (simulate by default) | opt-in |
 | hyperliquid | `hl_ctx`, `hl_book` | opt-in |
 | xm (paper desk) | `risk_status`, `paper_positions`; exec `paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` | opt-in; exec tools only on a private agent |
-| xlab (research) | `market_history`, `backtest` | opt-in; need `[xmarket]` (+ `[backtest]`) |
+| xlab (research) | `market_history`, `backtest`, `strategy_ranking` (run a sealed contract's ranking date or read the published one) | opt-in; need `[xmarket]` (+ `[backtest]`; `strategy_ranking` + `[strategy_ranking]`) |
+| sources | `source_evidence` (as-of evidence packet of `sources.db`; read-only — agents never fetch) | opt-in; needs `[sources]` |
 
 Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, keys, TTLs: `docs/typed-observations-2026-09-24.md`.
 
@@ -239,14 +255,17 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 
 | Sandbox | Network | Purpose |
 |---|---|---|
+| `control-loop-lab` | `open` (Jev only; no tool host) | Safe reference run of the control loop (tick → Jev → tool → audit → health): one loop `demo`, feeds `tick` + `probe`, private agent `lab` with `read_file` / `write_file` / `list_directory` inside `~/tengu-lab/control-loop-lab`; `[studio] control = true` — runbook `docs/control-loop-lab-2026-10-08.md` |
 | `jev-exec` | `open` | Experiment: a Claude Code architect (built-ins off, only `run_command` → `tengu`) drives Jev through `tengu decide --loop executor` |
-| `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch` over 10 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
+| `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch`, `hedge_exec`, `lp_exec` over 11 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
+| `soe` | `open`, `allow_hosts = ["www.sec.gov", "data.sec.gov", "api.ted.europa.eu"]` | Software Opportunity Engine — source layer (O2) + weekly cycle (O3): `[sources]` registry `sec_edgar`, `ted_search` (both ship `enabled = false` until the operator's reviewed terms); read-only `soe_reader` (`source_evidence` only); `[soe]` stage agents `soe_architect` · `soe_critic` (`claude_code`, built-ins off) and the `soe_week` job; closed world, bound to SOE-G0 — `docs/source-evidence-2026-10-08.md`, `docs/soe-2026-10-08.md` |
 | `storage-test` | tor | `persistent_store` file storage + vector indexing; agent `storage` (`claude_code`, skill `telegram-rag-ingest`) |
 | `tor-check` | tor | Minimal probe of the egress path over Tor (Arti + lyrebird-rs) |
 | `unlimited` | `open` | Single OpenRouter agent (`qwen/qwen3.8-27b`), no orchestrator. Bench recipe: `sandboxes/unlimited/BENCH.md` |
 | `xmarket` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Paper desk stage M0 ($100 `[risk]` budget) — § Paper desk |
-| `xmarket-weekend` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Rule W weekend run, floor profile (no LLM, no Jev) — § Paper desk |
-| `xlab` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]` | History-first harness (operator PRD v0.5) — § History-first research |
+| `xmarket-weekend` | `open`, `allow_hosts = ["api.hyperliquid.xyz"]` | Rule W weekend run, floor profile (no LLM, no Jev); bound to W1 — § Paper desk |
+| `xlab` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com"]` | History-first harness (operator PRD v0.5); bound to W1 — § History-first research |
+| `xlab-w2` | `open`, `allow_hosts = ["api.hyperliquid.xyz", "api.geckoterminal.com", "www.sec.gov", "data.sec.gov"]` | W2 research: `xlab` without the W1 binding, same state dir; + SEC EDGAR events, + `[strategy_ranking]` contracts `rank.xlab-w2.daily.v1`, `rank.xlab-w2.weekend.v1` (committed unsealed: nothing publishes until `tengu lineage seal ranking:<id>`) run by `[feeds.*]` under `tengu run`, private agent `xl_ranker` — `docs/strategy-ranking-automation-2026-10-08.md` |
 
 The `open` market sandboxes stay switchable to Tor: every transport goes through `egress.rs`.
 
@@ -278,10 +297,10 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 |---|---|
 | Tor proxy | `deploy/tor/`: Arti 2.6.0 + lyrebird-rs (managed obfs4/snowflake transport). Built from the sibling `../lyrebird-rs` checkout (`LYREBIRD_RS_DIR=<dir or git URL>` to override). `make tor-bridges` prints fresh bridge lines for `deploy/tor/arti.toml` |
 | `NETWORK=tor` (default) | `docker-compose.tor.yml` includes `deploy/tor/compose.yml` and puts tengu + Postgres on an internal network whose only exit is the `tor` container (`TENGU_TOR_PROXY=socks5h://tor:9050`); no host ports are published (7080 nor 9050) |
-| Baked into the image | `skills/`, `sandboxes/` under `/opt/tengu` |
-| Config | `./config.toml` (or `sandboxes/<name>/config.toml` with `SANDBOX=<name>`) mounted read-only at `/opt/tengu/config.toml` = `TENGU_CONFIG`; TOML edits apply on container restart |
+| Baked into the image | `skills/`, `sandboxes/`, `lineage/` under `/opt/tengu` (a `[generation]` sandbox loads `registry = "../../lineage"` at every config load; without it the load fails closed) |
+| Config | mounted read-only as `TENGU_CONFIG` (Makefile `TENGU_CONTAINER_CONFIG`): `./config.toml` at `/opt/tengu/config.toml`, or with `SANDBOX=<name>` `sandboxes/<name>/config.toml` at `/opt/tengu/sandboxes/<name>/config.toml` (its own path: the sandbox name and relative `registry` paths resolve); TOML edits apply on container restart |
 | Container command | `tengu telegram` (image `CMD`); `tengu run` is not wired into compose yet |
-| `engine = "claude_code"` sandboxes (`jev-exec`, `storage-test`, `xlab`, `xmarket`) | Not runnable in the image: it has no Claude Code CLI. `doctor` fails → container unhealthy |
+| `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) | Not runnable in the image: it has no Claude Code CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
 | Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
 | Features | `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build` |
@@ -320,11 +339,14 @@ Restart=on-failure
 | `[solana]` | `signer_key_file` for the Solana write tools' `mode = "send"`; hardens the sandbox |
 | `[xmarket]` (+ `.calendars.<id>`, `.weekend_fade`) | state dir `<TENGU_HOME>/state/<state>`, session calendars, rule W |
 | `[risk]` (+ `.exits`, `.max_data_age_ms`) · `[paper]` | every limit of the gate inside the exec tools (all required) · the paper fill engine |
-| `[rate_limits.<name>]` | request budgets (`hyperliquid`, `geckoterminal`) |
+| `[rate_limits.<name>]` | request budgets (`hyperliquid`, `geckoterminal`, `sec`, `ted`) |
 | `[runtime]` | `tengu run` knobs: shutdown grace, loop events in flight / queued, heartbeat |
 | `[recorder]` | observation history into `<state dir>/history/<YYYYMMDD>.db` |
-| `[backtest]` (+ `.costs`, `.universes`, `.strategies`, `.splits`; `gate`, `max_candidates`, `keep_runs`) | xlab: costs per id prefix, universes, the strategy library, share splits, the Jev gate loop, run guards |
+| `[backtest]` (+ `.costs`, `.universes`, `.strategies`, `.splits`; `notional_usd`, `bootstrap`, `seed`, `gate`, `max_candidates`, `keep_runs`) | xlab: costs per id prefix, universes, the strategy library, share splits, the Jev gate loop, run guards |
 | `[feeds.<n>]` | scheduled work of `tengu run`: `kind = "tool"` / `"tick"` on `every_secs` / `windows` / `at` |
+| `[generation]` | `id`, `registry` (relative to the config file): binds the sandbox to a frozen lineage generation — every load checks its tools, feeds, loop actions, strategy kinds and `config:` / `spec:` pins (a drifted pin fails it); `xlab`, `xmarket-weekend` = W1 — `docs/lineage-2026-10-06.md` § 4 |
+| `[strategy_ranking]` | `registry`, `contracts` (`<registry>/rankings/<id>.toml`): the ranking contracts `tengu ranking` and the `strategy_ranking` tool run (`xlab-w2`) |
+| `[sources]` (+ `.registry.<id>`) | `state` (`<TENGU_HOME>/state/<state>/sources.db`) and one row per approved source (`sec_edgar`, `ted_search`): hosts, auth, rate limit, retention, reviewed terms (`soe`) |
 | `[skill_lifecycle]` | `tengu skill evolve` (improver agent, cycles) |
 | `[hub]` | bind / port / auth — config-only (shown by `tengu status`; nothing listens) |
 
@@ -333,6 +355,7 @@ Restart=on-failure
 | Doc | Covers |
 |---|---|
 | `docs/index.html` | Docs hub |
+| `docs/tutorial/index.html` | Visual tutorial: one animated page per feature, built from the code; every code change updates its pages (`docs/tutorial/sources.toml`, `cargo test --test tutorial_map`, `docs/tutorial/AUTHORING.md`) |
 | `docs/changes-2026-09-29-to-10-02.html` | What changed 2026-09-29 → 2026-10-02 |
 | `docs/xmarket-2026-10-02.html` · `docs/xlab-2026-10-02.html` | xmarket paper desk · xlab history-first harness (visual) |
 | `docs/architecture-2026-04-27.md` (+ `.svg`, `.html`) | **Canonical** — seven steps from prompt to reply, file map per subsystem |
@@ -350,6 +373,12 @@ Restart=on-failure
 | `docs/xmarket-build-plan-2026-09-30.md` · `docs/xmarket-feasibility-2026-09-30.md` | Waves, gates, engine matrix · edge evidence after costs |
 | `docs/xmarket-risk-paper-2026-09-30.md` | `[risk]` gate, paper ledger, exits, weekend fade, halts, `tengu risk` |
 | `docs/xlab-2026-10-01.md` | xlab: `market.db`, spec DSL, backtest engine, Jev gate arm, tools, results |
+| `TENGU_HANDOFF.md` · `TENGU_ROADMAP.md` | Operator intent: W1 → W2 → evolution, gated phases, operator reviews |
+| `docs/lineage-2026-10-06.md` | `lineage/` registry, `tengu evidence` (vault, grade, regrade), `tengu lineage`, `[generation]` binding |
+| `docs/w1-review-2026-10-06.md` · `docs/p{6,7,8,9,10}-*-2026-10-08.md` | Operator Review #1 (verdict APPROVE) · Phases 6–11 reports (no W2 candidate built; W1 kept) |
+| `docs/forward-evidence-runbook-2026-10-08.md` | Rule W forward weekend #2: start, stop, snapshot, grade, regrade |
+| `docs/strategy-ranking-automation-2026-10-08.md` | Scheduled strategy ranking: contracts, ranker, publisher, `tengu ranking`, xlab-w2 feeds |
+| `docs/soe-2026-10-08.md` · `docs/source-evidence-2026-10-08.md` | Software Opportunity Engine contract + `tengu soe` · the source layer (SEC EDGAR, EU TED, as-of view, `tengu sources`) |
 
 ## Module map
 
@@ -359,20 +388,29 @@ Hexagonal, single crate. Every file, extension recipe (tools, engines, config, c
 src/main.rs                 14 lines → adapters::inbound::cli::run
 src/domain/                 plain data + pure policy: message, session, plan, scope (ToolScope), secrets, tools, metrics, memory,
                             observation, decision, schedule, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
-                            canonical (JSON + sha256); hl/ (ctx, book), lp/ (DLMM, perps, hedge), xm/ (risk gate, ledger, paper,
-                            exits, weekend_fade, cost), backtest/ (spec, kinds, engine, fills, costs, features, gate, stats, report, checks)
+                            canonical (JSON + sha256), evidence (+ _coverage), sec (EDGAR decoders); hl/ (ctx, book), lp/ (DLMM, perps,
+                            hedge), xm/ (risk gate, ledger, paper, exits, weekend_fade, cost, grade, regrade), backtest/ (spec, kinds,
+                            engine, fills, costs, features, gate, stats, report, checks, evaluation, labels, ranking), lineage/ (records,
+                            registry + checks, pins, locks, ranking contracts), source/ (records, as-of view, packet, SEC, TED),
+                            soe/ (opportunity, economics, gates, rank, portfolio, profile, eval)
 src/ports/                  traits: engine, tool, memory, orchestration, shell, observation, decision, clock, history, market_data,
-                            book, paper, runtime, solana_signer, solana_writes, skill_source, tool_activity
+                            book, paper, runtime, solana_signer, solana_writes, skill_source, tool_activity, evidence, lineage, source_store
 src/config/                 schema + validation (mod.rs) + one file per section: egress, decision_loop, solana, hardening, xmarket,
-                            risk, rate_limits, runtime, recorder, feeds, backtest, skill_lifecycle; sections (what tools read), paths
+                            risk, rate_limits, runtime, recorder, feeds, backtest, skill_lifecycle, lineage ([generation] + registry
+                            loader), strategy_ranking, sources; execution_map (`tengu decide --map`), soe (private profile loader);
+                            sections (what tools read), paths
 src/application/            use cases: chat/, orchestrator/, memory/, skills/, tools/, decision_loop/ (Jev loop, world, slots),
-                            runtime/ (feeds, loops, health), backtest/ (run, run dir, Jev gate arm), observe.rs, paper.rs, metrics.rs
+                            runtime/ (feeds, loops, health), backtest/ (run, run dir, Jev gate arm), ranking/ (coordinator, files),
+                            lineage/ (verify, attempts), evidence.rs, sources.rs (as-of packet, purge), observe.rs, paper.rs, metrics.rs
 src/bootstrap/              composition root: tools.rs, memory.rs, orchestrator.rs, sandbox.rs, decision.rs, runtime.rs
 src/adapters/outbound/      engines/ (openrouter, local, claude_code), tools/ (catalog: workspace, http, crypto, memory, cache, skill*,
-                            manage_skill, view_skill, agentic_memory, solana, hyperliquid, xm, xlab), mcp_client/, memory/,
-                            hyperliquid/ (info client), solana/ (RPC, send), backfill/ (hl, gecko, hl_archive, json), market_data.rs,
-                            paper_store.rs, history_sqlite.rs, decision_cache.rs, decisions.rs, observations.rs, runtime_store.rs,
-                            rate_limit.rs, http_class.rs, egress.rs, secrets.rs, shell.rs, subprocess_runner.rs, prune.rs, scaffold.rs
-src/adapters/inbound/       cli/ (mod + run_agent, doctor, decide, history, backtest, risk, skill, tool), run.rs (`tengu run`), tui/,
-                            telegram.rs, webhooks.rs, mcp_bridge.rs, eval.rs, evolve.rs, channel.rs, activity.rs
+                            manage_skill, view_skill, agentic_memory, solana, hyperliquid, xm, xlab, sources), mcp_client/, memory/,
+                            hyperliquid/ (info client), solana/ (RPC, send), backfill/ (hl, gecko, hl_archive, json, sec),
+                            sources/ (SEC, TED fetchers, sources.db), evidence/ (vault, read-only readers), lineage/ (read-only
+                            resolvers), market_data.rs, paper_store.rs, history_sqlite.rs, decision_cache.rs, decisions.rs,
+                            observations.rs, runtime_store.rs, rate_limit.rs, http_class.rs, clock.rs, egress.rs, secrets.rs, shell.rs,
+                            bridge_env.rs, subprocess_runner.rs, noop.rs, prune.rs, scaffold.rs
+src/adapters/inbound/       cli/ (mod + run_agent, doctor, decide, history, backtest, ranking, risk, evidence, lineage, soe, sources,
+                            skill, tool), run.rs (`tengu run`), tui/, telegram.rs, webhooks.rs, mcp_bridge.rs, eval.rs, evolve.rs,
+                            channel.rs, activity.rs
 ```

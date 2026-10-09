@@ -7,7 +7,10 @@
 //! `properties`: a spec's fields depend on its kind) whose description names
 //! the format; the tool also takes it as a string holding the object. Its
 //! `holdout` / `run_id` / `view` / `arm` / `limit` are the holdout read and the
-//! stored-run read (`holdout.rs`, `rows.rs`).
+//! stored-run read (`holdout.rs`, `rows.rs`). `strategy_ranking` (`rank.rs`)
+//! takes an `action` enum, a contract id and a date (`YYYY-MM-DD`). W1 pins
+//! the schemas of `market_history` and `backtest` (`tool_schema:<tool>`): a
+//! new tool here leaves both untouched.
 
 use serde_json::json;
 
@@ -16,7 +19,7 @@ use crate::domain::tools as names;
 
 /// Every xlab tool definition, in catalog order.
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
-    vec![market_history(), backtest()]
+    vec![market_history(), backtest(), strategy_ranking()]
 }
 
 /// The definition named `name` as a one-element vec (catalog rows); empty
@@ -145,6 +148,45 @@ fn backtest() -> ToolDef {
                     "description": "With run_id: the limit best and limit worst rows by Σ net USD, 1-25, default 10 (every row when they fit).",
                 },
             },
+            "additionalProperties": false,
+        }),
+    )
+}
+
+fn strategy_ranking() -> ToolDef {
+    ToolDef::new(
+        names::STRATEGY_RANKING,
+        "Rank the sandbox's strategies under a sealed ranking contract (a preregistered \
+         lineage record: its strategies, window, eligibility and rating order) on the stored \
+         market history, no network, no LLM. action run: backtest every strategy the contract \
+         lists over [from, the date's cutoff) — no split, the holdout never read, rules arms \
+         only — and publish the ranking, weakest to strongest per cohort (runs sharing \
+         instruments, costs, interval and window); a published date comes back as it is. \
+         action latest: the newest COMPLETE ranking (or, with date, that date's), nothing runs. \
+         A row names its run (run:<state>/<run id>): read it with backtest run_id. An \
+         INCOMPLETE ranking (a strategy failed or its data is stale) is returned as an error \
+         with its rows; latest keeps the previous COMPLETE one. Refusals start with their code: \
+         contract_unsealed (not sealed by the operator yet), contract_changed, \
+         cutoff_not_reached, not_a_ranking_day, ranking_busy. Read-only research: it never \
+         trades.",
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["run", "latest"],
+                    "description": "run: rank one date (run it, resume it, or return it when already published). latest: read a published ranking; nothing runs.",
+                },
+                "contract": {
+                    "type": "string",
+                    "description": "A ranking contract id of the sandbox's [strategy_ranking] contracts, verbatim (e.g. rank.xlab-w2.daily.v1). Default: the only one listed.",
+                },
+                "date": {
+                    "type": "string",
+                    "description": "The ranking date, YYYY-MM-DD in the contract's time zone. run: default the newest date whose cutoff has passed. latest: that date's published ranking instead of the newest COMPLETE one.",
+                },
+            },
+            "required": ["action"],
             "additionalProperties": false,
         }),
     )

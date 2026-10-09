@@ -239,7 +239,7 @@
         <li>Workspace: the agent's <code>workspace</code>, else a fresh <code>tengu-step-*</code> temp dir. Every inherited scope gains that root, except a deny-all scope.</li>
         <li>Prompt: a fixed base, the agent's identity (name, role, instructions), its skill bodies, the plan, a "call <code>compress_and_store</code>" suffix. Tools: the agent's list plus <code>compress_and_store</code>.</li>
         <li>Loop: model turn, tool calls through the redacting executor, capped results; older rounds shrink to 200 chars. At most the agent's <code>max_tool_rounds</code> (default 70).</li>
-        <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary, writes it to <code>agentic_memory</code> (with <code>postgres_memory</code>) and stops.</li>
+        <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary (on <code>claude_code</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and stops.</li>
         <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code> is the last model text, else the summary. A temp workspace is deleted after printing.</li>
         <li>The parent parses it. Ok: metrics re-emitted, output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
       </ol>
@@ -448,7 +448,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output; exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
         <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, <code>&lt;step-input&gt;</code>, leaves, aborts</td></tr>
         <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans, plan per session</td></tr>

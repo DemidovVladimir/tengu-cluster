@@ -19,6 +19,7 @@
 //! | Hyperliquid info (`outbound/hyperliquid/info.rs`) | tool client + `check_url` + scope `net_hosts` per request + `[rate_limits.hyperliquid]` + audit (`hl_info`) | enforced |
 //! | Market-data backfill (`outbound/backfill/`, `tengu history backfill`, `tengu backtest --fetch`) | HL via `HlInfo`; GeckoTerminal OHLCV via `backfill/gecko.rs`: tool client + `check_url` + scope `net_hosts` per request + `[rate_limits.geckoterminal]` + audit (`gecko_ohlcv`) | enforced |
 //! | SEC EDGAR filings (`backfill/sec.rs`, `tengu history events`) | tool client + `check_url` + scope `net_hosts` (`www.sec.gov`, `data.sec.gov`) per request + `[rate_limits.sec]` + audit (`sec_edgar`); `User-Agent` = `$SEC_USER_AGENT` | enforced |
+//! | Source fetches (`outbound/sources/`, `tengu sources fetch`, O2) | SEC through `SecClient` (the row's hosts, budget, User-Agent variable); EU TED through `sources/ted.rs::TedClient` (anonymous `POST /v3/notices/search`): tool client + `check_url` + scope `net_hosts` = the row's `hosts` per request + the row's `[rate_limits.<name>]` + audit (`ted_search`) | enforced |
 //! | MCP `http` servers | proxy, loopback exempt | enforced |
 //! | Telegram Bot API (`tengu telegram`) | teloxide client (reqwest 0.11) via HTTP CONNECT on the proxy port (`http_connect_proxy`), 30s/60s timeouts | enforced |
 //! | LLM API (OpenRouter chat, embeddings, wiki compiler) | proxy iff `route_llm_api` (default: on under Tor) | enforced |

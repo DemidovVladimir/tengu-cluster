@@ -1,0 +1,148 @@
+# Synthetic cycle case: invented example values and test sources
+# (`domain::source::testkit`, example.org urls) — no real firm, person or
+# figure. Expectations hold for the profile `synthetic-operator`
+# (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.cycle_case/1"
+id = "acquisition_unverifiable_transfer"
+version = 1
+synthetic = true
+profile = "synthetic-operator"
+note = "Roadmap O3 #3, relative to the synthetic profile: a 15000.00 tool under the 20000.00 cash cap; ownership is the seller's word, the hand-over unverified, the costs unknown and the payment account's transfer unresolved. HOLD with DILIGENCE only: the four questions and the next tranche (the pilot's 900.00, under the 1500.00 tranche) — no budget taken, nothing ranked."
+week = "2026-W41"
+decided_at = "2026-10-05T12:00:00Z"
+
+[[records]]
+src = "REPO"
+native = "invoice-tool"
+published = "2026-10-04T09:00:00Z"
+
+[expected]
+hold = true
+allocation = { owner_hours = 0, cash = "0.00" }
+ranked = []
+held = [
+  { id = "invoice-tool-acquisition", gates = ["LEGAL_UNRESOLVED", "DILIGENCE_OPEN"], action = { kind = "DILIGENCE", max_next_tranche = "900.00", questions = [
+    "deal.ownership: ownership: SELLER_CLAIM — verify it",
+    "deal.transition: transition: UNVERIFIED — verify it",
+    "risk.risks[0]: TRANSFERABILITY risk UNRESOLVED: the payment processor confirms the account transfer in writing",
+    "deal.costs: costs: UNKNOWN — verify it",
+  ] } },
+]
+next_information = ["deal.costs", "deal.ownership", "deal.transition", "risk.risks[0]"]
+rejected = []
+
+[[proposals]]
+novelty = "MEDIUM"
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "invoice-tool-acquisition"
+version = 1
+as_of = "2026-10-04"
+customer = "the invoicing tool's paying users (synthetic example)"
+pain = "a profitable tool whose founder wants to exit"
+mechanism = "ACQUIRE_TRANSFORM"
+alternatives = ["BUILD_ADJACENT", "HOLD"]
+requires_skills = ["integration"]
+signals = ["@invoice-tool"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "150.00", base = "200.00", high = "300.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 14 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 0, base = 0, high = 1 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "ACQUISITION"
+asset_monthly_revenue = { value = { low = "5900.00", base = "6400.00", high = "6700.00" }, evidence = ["url:https://example.org/repo_listing/invoice-tool"], as_of = "2026-10-01" }
+churn_per_month = { value = { low = 90, base = 150, high = 250 }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "15000.00", base = "15000.00", high = "15000.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "200.00", base = "400.00", high = "700.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "300.00", base = "450.00", high = "600.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "500.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = [{ kind = "TRANSFERABILITY", probability = { low = 500, base = 1500, high = 3000 }, impact = { low = "2000.00", base = "9000.00", high = "15000.00" }, control = "the payment processor confirms the account transfer in writing", status = "UNRESOLVED" }]
+concentration = [{ dimension = "PLATFORM", name = "the payment processor", share = 9000 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "3000.00", base = "9000.00", high = "16800.00" }
+owner_hours = { low = 40, base = 70, high = 120 }
+reputation = "users lose a tool they rely on"
+dependency = "the payment processor account"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "the seller can prove ownership and hand over"
+metric = "verified diligence blocks"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-30"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "900.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.deal]
+red_flags = []
+identity = { status = "VERIFIED", evidence = ["url:https://example.org/synthetic-diligence"] }
+ownership = { status = "SELLER_CLAIM", evidence = [] }
+revenue_proof = { status = "VERIFIED", evidence = ["url:https://example.org/synthetic-diligence"] }
+costs = { status = "UNKNOWN", evidence = [] }
+technical = { status = "VERIFIED", evidence = ["url:https://example.org/synthetic-diligence"] }
+distribution = { status = "VERIFIED", evidence = ["url:https://example.org/synthetic-diligence"] }
+legal = { status = "VERIFIED", evidence = ["url:https://example.org/synthetic-diligence"] }
+transition = { status = "UNVERIFIED", evidence = [] }
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "LOW"
+
+[[proposals.bases]]
+field = "economics.revenue.asset_monthly_revenue"
+basis = { kind = "FACT", evidence = ["@invoice-tool"] }
+
+[[proposals.bases]]
+field = "economics.revenue.churn_per_month"
+basis = { kind = "INFERENCE", why = "the churn the listing implies over twelve months" }
+
+[[proposals.bases]]
+field = "economics.initial.acquisition"
+basis = { kind = "INFERENCE", why = "the asking price on the listing" }
+
+[[proposals.forecast]]
+observable = { kind = "OPERATOR_RESOLVES", question = "does the seller prove ownership of the processor account" }
+probability = 5000
+resolve_by = "2026-11-16"

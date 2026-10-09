@@ -45,7 +45,14 @@
 //! its read mode (`run_id`) reads a stored run seeded by `.home_file(..)` (a
 //! file under the side's `TENGU_HOME`) from `tests/fixtures/xlab/run_conf_rows/`.
 //! `.row(..)` seeds the workspace observation store (the opportunity row a
-//! paper entry names).
+//! paper entry names). `.setup(..)` runs a `tengu` CLI on each side before
+//! the first step: `source_evidence` reads a `sources.db` filled by `tengu
+//! sources import` of the captured TED pair `ted/search_change_notice.json`
+//! (`<TENGU_HOME>/state/conf/sources.db`), as of before and after the change
+//! notice. The SOE cases (`soe(..)`) seed the fixture state root
+//! `tests/fixtures/soe/state/` under `<TENGU_HOME>/state/conf/`
+//! (`[sources] state = "conf"`) with `TENGU_AGENT_NAME = conf` on both
+//! sides, as a `run-agent` stage sets it: the stamped records compare alike.
 //!
 //! `normalize`, applied to both sides alike:
 //!
@@ -61,6 +68,7 @@
 //! | epoch ms / s within 2 days of now (fixture timestamps stay) | `<EPOCH_MS>` / `<EPOCH_S>` |
 //! | JSON-RPC `"id":<n>` (request bodies) | `"id":<N>` |
 //! | call-id nonce `mcp:<32 hex>:` (bridge and `tengu tool call`: one per process) | `mcp:<NONCE>:` |
+//! | a strategy ranking's `"report_sha256": "<64 hex>"` (the hash of a `report.json` holding its run id) | `<SHA256>` |
 //!
 //! Add a case: one `case("<tool>", json!({..}))` row in `cases()` plus the
 //! TOML its scope needs, `.route(..)` replies and `.ok("…")` / `.err("…")`
@@ -168,6 +176,10 @@ struct Case {
     home_files: Vec<(String, String)>,
     /// Observation rows seeded into the workspace store, stamped now.
     rows: Vec<Value>,
+    /// `.setup(..)`: `tengu -c <side config> <args>` run on each side before
+    /// the first step (`{fixtures}`, `{ws}`, `{root}` expanded) — the CLI an
+    /// operator runs to fill a store (`tengu sources import`); exit 0.
+    setup: Vec<Vec<String>>,
     routes: Vec<Route>,
     /// `TENGU_BRIDGE_MCP_SERVERS` handed to the bridge — server names, as
     /// the Claude Code engine writes them (the bridge takes each from the
@@ -178,6 +190,9 @@ struct Case {
     /// `TENGU_BRIDGE_TRANSCRIPT_FILE` for the bridge, as a Claude Code run
     /// hands its bridge.
     transcript: Option<Value>,
+    /// `.sandbox(<name>)`: the config at `<root>/sandboxes/<name>/config.toml`
+    /// (a ranking contract names its sandbox), else `<root>/config.toml`.
+    sandbox: Option<String>,
     /// The tool may be absent from this build (cargo feature): skipped then.
     gated: bool,
     /// Not a catalog tool (an `[[mcp_servers]]` proxy tool).
@@ -208,9 +223,11 @@ fn case(tool: &str, args: Value) -> Case {
         files: Vec::new(),
         home_files: Vec::new(),
         rows: Vec::new(),
+        setup: Vec::new(),
         routes: Vec::new(),
         mcp_servers: None,
         transcript: None,
+        sandbox: None,
         gated: false,
         extra: false,
     }
@@ -301,6 +318,12 @@ impl Case {
         self.rows.push(observation);
         self
     }
+    /// A `tengu` CLI run on each side before the first step (`Case::setup`).
+    fn setup(mut self, args: &[&str]) -> Self {
+        self.setup
+            .push(args.iter().map(|a| a.to_string()).collect());
+        self
+    }
     fn route(mut self, r: Route) -> Self {
         self.routes.push(r);
         self
@@ -312,6 +335,11 @@ impl Case {
     }
     fn gated(mut self) -> Self {
         self.gated = true;
+        self
+    }
+    /// The config as sandbox `name`'s (`Case::sandbox`).
+    fn sandbox(mut self, name: &str) -> Self {
+        self.sandbox = Some(name.to_string());
         self
     }
     fn agent_tools(&self) -> Vec<String> {
@@ -433,6 +461,13 @@ const XLAB_TOML: &str = "[xmarket]\nstate = \"conf\"\n";
 /// replies and the window `[from, to)` they fill.
 fn recent_tsla_history() -> (String, String, i64, i64) {
     const H: i64 = 3_600_000;
+    tsla_history_closing_at(now_ms() / H * H - 2 * H)
+}
+
+/// [`recent_tsla_history`] with the last bar closing at `close_ms` (a whole
+/// hour).
+fn tsla_history_closing_at(close_ms: i64) -> (String, String, i64, i64) {
+    const H: i64 = 3_600_000;
     let mut candles: Value =
         serde_json::from_str(&fixture("hyperliquid/candleSnapshot_xyz_TSLA_1h.json")).unwrap();
     let mut funding: Value =
@@ -440,7 +475,7 @@ fn recent_tsla_history() -> (String, String, i64, i64) {
     let bars = candles.as_array_mut().unwrap();
     let first = bars[0]["t"].as_i64().unwrap();
     let last = bars[bars.len() - 1]["t"].as_i64().unwrap();
-    let shift = (now_ms() / H * H - 3 * H) - last;
+    let shift = (close_ms - H) - last;
     let moved = |v: &Value| json!(v.as_i64().unwrap() + shift);
     for b in bars.iter_mut() {
         b["t"] = moved(&b["t"]);
@@ -717,6 +752,221 @@ fn backtest_rows() -> Case {
             json!({"run_id": "20200101T000000Z-nope", "view": "notes"}),
         )
         .err("no run `<TIME>-nope` in the state dir's backtests/ (the newest: <TIME>-conf_rows)")
+}
+
+/// The SOE fixture runs (`tests/fixtures/soe/state/`): a live week open in
+/// `PROPOSE` and a replay open in `CHALLENGE`.
+const SOE_RUN: &str = "cycles/2026-W42";
+const SOE_REPLAY: &str = "replays/fixture.w42";
+
+/// An SOE case: `[sources] state = "conf"` and the fixture state root
+/// (written by `tools::soe::tests::fixture_state_is_current`) under the
+/// side's `<TENGU_HOME>/state/conf/`; `TENGU_AGENT_NAME` = the agent, as a
+/// `run-agent` stage sets it (its bridge inherits it).
+fn soe(c: Case) -> Case {
+    let root = Path::new(FIXTURES).join("soe/state");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    files.sort();
+    let mut c = c
+        .toml("[sources]\nstate = \"conf\"\n")
+        .env("TENGU_AGENT_NAME", AGENT);
+    for f in files {
+        let rel = f
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        c = c.home_file(
+            &format!("state/conf/{rel}"),
+            &fixture(&format!("soe/state/{rel}")),
+        );
+    }
+    c
+}
+
+/// A fixture draft (`tests/fixtures/soe/drafts/`).
+fn soe_draft(name: &str) -> Value {
+    serde_json::from_str(&fixture(&format!("soe/drafts/{name}"))).unwrap()
+}
+
+/// `soe_challenge`'s flat fixture arguments on `run`, aimed at `target`.
+fn soe_challenge_args(run: &str, target: &str) -> Value {
+    let mut a = soe_draft("challenge.json");
+    a["run"] = run.into();
+    a["target"] = target.into();
+    a
+}
+
+/// `[sources]` with one enabled `ted_search` row (synthetic reviewed terms;
+/// its host the loopback the fixture egress allows — nothing is fetched)
+/// and `source_evidence`'s workspace scope: `sources.db` lands in
+/// `<TENGU_HOME>/state/conf/`.
+const SOURCES_TOML: &str = r#"
+[sources]
+state = "conf"
+
+[sources.registry.ted_search]
+kind = "ted_search"
+class = "law_regulator"
+trust = "primary"
+revision = "immutable"
+enabled = true
+hosts = ["127.0.0.1"]
+auth = "none"
+rate_limit = "ted"
+store_raw = true
+jurisdiction = "EU"
+language = "en"
+query = "publication-date >= {from} AND publication-date <= {to}"
+license = "synthetic conformance terms"
+terms_url = "https://example.org/terms"
+terms_sha256 = "6e81b3dc57dee4be066314f20ab0be61c23469c5ad56743239ee1bd399d8899a"
+terms_reviewed_at = "2026-10-08"
+raw_retention_days = 90
+record_retention_days = 0
+
+[rate_limits.ted]
+per_minute = 60
+burst = 2
+
+[default_scopes.source_evidence]
+fs_roots = ["{ws}"]
+"#;
+
+/// `source_evidence` on the captured TED pair of `ted/search_change_notice.json`
+/// (657981-2026 and its change notice 674231-2026), imported into each
+/// side's `sources.db` by `tengu sources import` (the operator's CLI) as read
+/// 2026-10-02: knowable at 2026-09-30 the original stands; at 2026-10-03 the
+/// change supersedes it (`correction`). No fetch argument exists.
+fn source_evidence_asof() -> Case {
+    let at = |day: &str| json!({"at": day, "mode": "knowable", "source": "ted_search"});
+    case("source_evidence", at("2026-09-30"))
+        .named("asof")
+        .toml(SOURCES_TOML)
+        .setup(&[
+            "sources",
+            "import",
+            "--source",
+            "ted_search",
+            "--file",
+            "{fixtures}/ted/search_change_notice.json",
+            "--observed-at",
+            "2026-10-02T08:00:00Z",
+        ])
+        .ok("source_asof <TIME> knowable: 1 facts · 0 pending")
+        .then("source_evidence", at("2026-10-03"))
+        .ok("\nsuperseded ted_search:657981-2026:")
+        .then(
+            "source_evidence",
+            json!({"at": "2026-10-03", "fetch": true}),
+        )
+        .err("unknown argument(s) [\"fetch\"]")
+}
+
+/// The `strategy_ranking` case's sandbox: the fixture contract
+/// `rank.test.v1` (`tests/fixtures/strategy_ranking/lineage`, sealed; it
+/// names sandbox `rank-test`, so the config sits at
+/// `<root>/sandboxes/rank-test/config.toml`) and its two move triggers on
+/// `xyz:TSLA` (`tests/fixtures/strategy_ranking/config.toml`'s library).
+const RANK_TOML: &str = r#"
+[backtest]
+bootstrap = 200
+seed = 7
+
+[backtest.costs."hyperliquid:xyz:"]
+taker_fee_bps = 0.9
+half_spread = { model = "fixed", bps = 1.0 }
+
+[backtest.universes]
+tsla = ["hyperliquid:xyz:TSLA"]
+
+[backtest.strategies.rank_fade]
+kind = "move_trigger"
+universe = "@tsla"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "fade"
+hold_bars = 3
+
+[backtest.strategies.rank_follow]
+kind = "move_trigger"
+universe = "@tsla"
+interval = "1h"
+lookback_bars = 1
+threshold_bps = 25
+direction = "follow"
+hold_bars = 3
+
+[strategy_ranking]
+registry = "{fixtures}/strategy_ranking/lineage"
+contracts = ["rank.test.v1"]
+"#;
+
+/// `strategy_ranking` on the HL captures fetched through the mock, moved so
+/// their last bar closes at the contract's newest past cutoff (15:00 UTC):
+/// the date's ranking runs both move triggers (a run dir each, the files
+/// under `<TENGU_HOME>/state/conf/strategy-rankings/`, `report_sha256`
+/// normalised); a rerun returns the published date; `latest` reads it; a
+/// contract not listed is refused alike.
+fn strategy_ranking_hl() -> Case {
+    const H: i64 = 3_600_000;
+    const DAY: i64 = 24 * H;
+    let today_15 = now_ms() / DAY * DAY + 15 * H;
+    let cutoff = if today_15 <= now_ms() {
+        today_15
+    } else {
+        today_15 - DAY
+    };
+    let date = chrono::DateTime::from_timestamp_millis(cutoff)
+        .unwrap()
+        .format("%Y-%m-%d")
+        .to_string();
+    let (candles, funding, from, to) = tsla_history_closing_at(cutoff);
+    let fetch = json!({"instrument": "hyperliquid:xyz:TSLA", "interval": "1h",
+                       "from": from, "to": to, "fetch": true});
+    let run = json!({"action": "run", "date": date});
+    case("market_history", fetch)
+        .sandbox("rank-test")
+        .toml(XLAB_TOML)
+        .toml(RANK_TOML)
+        .scoped("HL_API_URL")
+        .route(
+            info("candleSnapshot")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&candles),
+        )
+        .route(
+            info("fundingHistory")
+                .has("\"coin\":\"xyz:TSLA\"")
+                .json(&funding),
+        )
+        .ok("fetched: 67 bar(s), 67 funding row(s) written from hl:127.0.0.1")
+        .then("strategy_ranking", run.clone())
+        .ok(&format!(
+            "strategy_ranking run rank.test.v1 {date} COMPLETE · ran now · latest replaced · 2 \
+             ranked, 0 ineligible, 0 failed, 0 dropped\nstrategy ranking `rank.test.v1` {date}: \
+             COMPLETE · contract sha256 \
+             28c5d0c0339d82f13d14949dfebe2d423adc17a70aee292cbce55549d335f60d\n"
+        ))
+        .then("strategy_ranking", run)
+        .ok(
+            "\ncohort 1 of 1, weakest → strongest:\n  1. rank_fade  ci95_lo -56.86  mean -27.39  \
+             n 2  run:conf/<TIME>-rank_fade\n  2. rank_follow  ci95_lo -9.67  mean +19.79  n 2  \
+             run:conf/<TIME>-rank_follow\n",
+        )
+        .then("strategy_ranking", json!({"action": "latest"}))
+        .ok(&format!(
+            "strategy_ranking latest rank.test.v1 {date} COMPLETE · the newest COMPLETE ranking — \
+             nothing ran"
+        ))
+        .then(
+            "strategy_ranking",
+            json!({"action": "run", "contract": "rank.nope"}),
+        )
+        .err("contract_not_listed: `rank.nope` is not in [strategy_ranking] contracts (rank.test.v1)")
+        .retool("strategy_ranking")
 }
 
 /// `[xmarket]` + the $100 `[risk]` / `[paper]` budget (tracker § 7 #3): the
@@ -1264,6 +1514,8 @@ fn cases() -> Vec<Case> {
         // a stored run's rows by run id.
         backtest_holdout(),
         backtest_rows(),
+        // A sealed ranking contract's date: run, rerun (published), latest.
+        strategy_ranking_hl(),
         // A bad inline spec: refused alike, every problem named, no run dir.
         case(
             "backtest",
@@ -1285,6 +1537,46 @@ fn cases() -> Vec<Case> {
             .named("no_backtest")
             .toml(XLAB_TOML)
             .err("backtest_config_missing: backtests unavailable: no [backtest] section"),
+        // ── O2 source evidence: `[sources]` → `sources.db` in the state dir
+        source_evidence_asof(),
+        // Without `[sources]` there is no source store: refused alike.
+        case("source_evidence", json!({}))
+            .named("no_sources")
+            .err("sources_state_missing: no [sources] section"),
+        // ── SOE (O3): the fixture state root under <TENGU_HOME>/state/conf
+        soe(case("soe_view", json!({"run": SOE_RUN})))
+            .ok("soe_view cycles/2026-W42 head OPEN PROPOSE decided_at=<TIME> shown=1 of 1 from 0 | ok")
+            .then("soe_view", json!({"run": SOE_RUN, "view": "candidates"}))
+            .ok(" · news-automation v1 · AUTOMATE · revenue RECURRING · carried from 2026-W41 · ")
+            .then("soe_view", json!({"run": SOE_RUN, "view": "history"}))
+            .ok("## 2026-W41.e01 · news-automation v1 · decided <TIME> · verdict HOLD")
+            .then("soe_view", json!({"run": SOE_RUN, "view": "packet", "limit": 1}))
+            .ok("more: 3 of 4 left")
+            .then("soe_view", json!({"run": "cycles/2026-W01"}))
+            .err("run_not_found: cycles/2026-W01"),
+        soe(case(
+            "soe_propose",
+            json!({"run": SOE_RUN, "proposal": soe_draft("proposal.json")}),
+        ))
+        .ok("soe_propose 2026-W42.p01 news-automation v1 AUTOMATE run=cycles/2026-W42 | written")
+        .then(
+            "soe_propose",
+            json!({"run": SOE_RUN, "proposal": soe_draft("proposal.json")}),
+        )
+        .err("- duplicate: opportunity `news-automation` is already proposal `2026-W42.p01`"),
+        soe(case("soe_challenge", soe_challenge_args(SOE_REPLAY, "news-automation")))
+            .ok(
+                "soe_challenge 2026-W42.c01 target=news-automation kind=HIDDEN_LABOR effect=WIDEN \
+                 economics.owner_hours_per_month run=replays/fixture.w42 | written",
+            )
+            .then("soe_challenge", soe_challenge_args(SOE_REPLAY, "nobody"))
+            .err("- unknown_target:")
+            .then("soe_challenge", soe_challenge_args(SOE_RUN, "news-automation"))
+            .err("- stage_closed: cycles/2026-W42 is in phase Propose"),
+        // No `[sources]`: no state root, refused alike.
+        case("soe_view", json!({"run": SOE_RUN}))
+            .named("no_sources")
+            .err("soe_state_missing: no [sources] section"),
     ];
     // ── [[mcp_servers]] proxy tool (not a catalog row) ─────────────────
     let mut proxy = case("fake__echo", json!({}))
@@ -1628,7 +1920,14 @@ impl Side {
         let toml = format!("{BASE_TOML}{}", case.full_toml())
             .replace("{tools}", &tools.join(", "))
             .replace("{skills}", &skills.join(", "));
-        let config = root.join("config.toml");
+        let config = match &case.sandbox {
+            Some(name) => {
+                let dir = root.join("sandboxes").join(name);
+                std::fs::create_dir_all(&dir).unwrap();
+                dir.join("config.toml")
+            }
+            None => root.join("config.toml"),
+        };
         std::fs::write(&config, expand(&toml, &root, &ws, mock)).unwrap();
         if let Some(messages) = &case.transcript {
             std::fs::write(root.join("transcript.json"), messages.to_string()).unwrap();
@@ -1667,6 +1966,32 @@ impl Side {
             cmd.env(k, expand(&v, &self.root, &self.ws, mock));
         }
         cmd
+    }
+
+    /// Each `Case::setup` run, with this side's config and env; exit 0.
+    fn setup(&self, case: &Case, mock: &str) -> Result<(), String> {
+        for args in &case.setup {
+            let args: Vec<String> = args
+                .iter()
+                .map(|a| expand(a, &self.root, &self.ws, mock))
+                .collect();
+            let out = self
+                .command(case, mock)
+                .arg("-c")
+                .arg(&self.config)
+                .args(&args)
+                .stdin(Stdio::null())
+                .output()
+                .map_err(|e| format!("spawn tengu {args:?}: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "setup tengu {args:?} failed:\n{}\n{}",
+                    String::from_utf8_lossy(&out.stdout),
+                    tail(&String::from_utf8_lossy(&out.stderr))
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn args(&self, step: &Step, mock: &str) -> Value {
@@ -1864,6 +2189,8 @@ fn normalize(s: &str, roots: &[String]) -> String {
             (r"\b20\d{6}\.db\b", "<DAY>.db"),
             (r#""id":\d+"#, r#""id":<N>"#),
             (r"\bmcp:[0-9a-f]{32}:", "mcp:<NONCE>:"),
+            // A run's report.json bytes hold its run id (the UTC second).
+            (r#"("report_sha256": ?")[0-9a-f]{64}""#, r#"$1<SHA256>""#),
         ]
         .into_iter()
         .map(|(re, to)| (Regex::new(re).unwrap(), to))
@@ -2018,6 +2345,8 @@ fn run_case(case: &Case) -> Result<(), String> {
     let mock = Mock::start(case.routes.clone());
     let local = Side::new(case, &mock.base);
     let bridged = Side::new(case, &mock.base);
+    local.setup(case, &mock.base)?;
+    bridged.setup(case, &mock.base)?;
 
     let a = run_in_process(&local, case, &mock.base)?;
     let split = mock.requests().len();

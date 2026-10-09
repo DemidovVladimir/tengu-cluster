@@ -266,6 +266,22 @@ sources = [
   "lineage/locks.toml",
 ]
 
+[pages.strategy-ranking]
+sources = [
+  "src/domain/lineage/ranking.rs",
+  "src/domain/lineage/validate.rs",
+  "src/domain/backtest/ranking.rs",
+  "src/config/strategy_ranking.rs",
+  "src/application/backtest/mod.rs",
+  "src/application/ranking/",
+  "src/adapters/inbound/cli/ranking.rs",
+  "src/adapters/outbound/tools/xlab/rank.rs",
+  "lineage/rankings/",
+  "lineage/capabilities/intel.strategy_ranking.toml",
+  "sandboxes/xlab-w2/config.toml",
+  "tests/strategy_ranking.rs",
+]
+
 # ── Runtime ───────────────────────────────────────────────────────────────
 
 [pages.decision-loop]
@@ -411,6 +427,40 @@ sources = [
   "src/adapters/inbound/cli/backtest.rs",
   "src/adapters/outbound/tools/xlab/",
   "src/bootstrap/decision.rs",
+]
+
+# ── Opportunities ─────────────────────────────────────────────────────────
+
+[pages.soe]
+sources = [
+  "src/domain/soe/",
+  "src/ports/soe.rs",
+  "src/application/soe/",
+  "src/adapters/outbound/soe/",
+  "src/adapters/outbound/tools/soe/",
+  "src/bootstrap/soe.rs",
+  "src/config/soe.rs",
+  "src/adapters/inbound/cli/soe.rs",
+  "src/adapters/inbound/cli/soe/",
+  "tests/soe_cli.rs",
+  "tests/fixtures/soe/",
+  "sandboxes/soe/config.toml",
+  "skills/soe-architect/",
+  "skills/soe-critic/",
+  "lineage/generations/SOE-G0.toml",
+  "docs/soe-2026-10-08.md",
+]
+
+[pages.source-evidence]
+sources = [
+  "src/domain/source/",
+  "src/domain/canonical.rs",
+  "src/config/sources.rs",
+  "src/ports/source_store.rs",
+  "src/adapters/outbound/sources/",
+  "src/adapters/outbound/tools/sources/",
+  "src/application/sources.rs",
+  "src/adapters/inbound/cli/sources.rs",
 ]
 
 # ── Operate ───────────────────────────────────────────────────────────────

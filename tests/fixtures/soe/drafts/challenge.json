@@ -1,0 +1,9 @@
+{
+  "claim": "the filing format changes again: support takes more hours than the setup",
+  "effect": "WIDEN",
+  "evidence": [],
+  "field": "economics.owner_hours_per_month",
+  "high": "20",
+  "kind": "HIDDEN_LABOR",
+  "target": "news-automation"
+}

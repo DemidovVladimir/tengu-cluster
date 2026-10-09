@@ -10,7 +10,7 @@
 //!
 //! | Fixture family | Files | Sandbox | Sets |
 //! |---|---|---|---|
-//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]`: no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab`, `xlab_holdout` |
+//! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]` + `[sources]` (one enabled `ted_search` row, synthetic terms; its state dir `engine-matrix` is also the SOE state root, no `[soe]`): no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab`, `xlab_holdout`, `xlab_rank` (a copy at `<tmp>/sandboxes/rank-test/config.toml` + `[strategy_ranking]`: a ranking contract names its sandbox), `sources`, `soe` |
 //! | open | `tests/fixtures/engine_matrix/open/{openrouter,claude_code,local}.toml` | `[memory]` on, a shell, the `matrix` `[[mcp_servers]]` (`token_mcp_server.sh`), no signer | every other set |
 //!
 //! | Tool set | Scripted calls | The leg also asserts |
@@ -20,6 +20,9 @@
 //! | `xm` | `hl_ctx` `xyz:TSLA` (live) → `paper_order` $15 market buy naming a seeded opportunity row → `paper_positions` → `paper_close` → a second $15 buy with `exit_at_ms` in the past → `xm_exits` → `risk_status` → `xm_weekend_fade` (one step of rule W on `xyz:TSLA`: `waiting` outside the weekend), on a new paper account (`[xmarket]` + `[risk]` + `[paper]` + `[xmarket.weekend_fade]` + the recorder, ledger in a temp `TENGU_HOME`) | the answer quotes the first buy's `avg_px`; `ledger.db` (under that `TENGU_HOME`) holds the filled buys, the filled `paper_close` sell and the filled `xm_exits` sell under `exit:matrix:hyperliquid:xyz:TSLA:deadline:<opened_ms>`, every order with its call id (`chat:` on this chat path), no open position, and the fade's `matrix-shadow` account; `logs/risk.jsonl` has the exit's verdict (tool `xm_exits`) |
 //! | `xlab` | `market_history` `xyz:TSLA` 1h over 2026-09-25T20:00Z … 2026-09-28T15:00Z → `backtest` the fixtures' library strategy `matrix_fade` (rule W on `xyz:TSLA`) → `backtest` an inline spec (`matrix_move`, a move trigger) over the same window — no network: the leg's warehouse (`<TENGU_HOME>/state/engine-matrix/market.db`) is seeded first by `tengu history import-json` from `tests/fixtures/xlab/dataset_xyz_TSLA_1h.json` (67 captured HL bars + 68 funding rows) | the answer quotes the last close (360.2), `ret_bps` (−331.2, within 0.05) and each run's research mean net bps (+76.43, −27.39, within 0.005); both run dirs under `<TENGU_HOME>/state/engine-matrix/backtests/` |
 //! | `xlab_holdout` | `backtest` `{"run_id": "20261001T182112Z-conf_rows", "view": "trades", "holdout": true}` (a stored split run's rows by id, its holdout shown: a read; first, before any other run id is in the conversation) → `matrix_move` with `split = time:2026-09-27` (the holdout hidden: the in-sample run) → the same + `holdout = true` (both halves: a second read) — the xlab warehouse + the stored run from `tests/fixtures/xlab/run_conf_rows/` seeded first; a set of its own: weak models misread five results in one turn | the answer quotes the hidden run's mean (+2.07), the holdout half's mean (−56.86) and the worst trade's gross bps (−52.88, only in the `trades` rows) within 0.005; `holdout-reads.jsonl` holds both scripted reads (`backtest` · `matrix_move`, `rows` · `conf_rows`; any order — a repeated or extra read of the split is one more line) and no read of another split |
+//! | `xlab_rank` | `strategy_ranking` `{"action": "run", "date": "2026-09-28"}` → `{"action": "latest"}` under the sealed test contract `rank.test.v1` (`tests/fixtures/strategy_ranking/lineage`: `rank_fade` / `rank_follow`, the fixtures' move triggers, cutoff 15:00 UTC) — the xlab warehouse seeded first; a set of its own | the answer names `rank_fade` (weakest) before `rank_follow` (strongest) and quotes both research means (−27.39, +19.79, within 0.005); the date's manifest COMPLETE, both run dirs and `latest.json` under `<TENGU_HOME>/state/engine-matrix/`; no `holdout-reads.jsonl` |
+//! | `sources` | `source_evidence` `{"at": "2026-09-30", "mode": "knowable", "source": "ted_search"}` → the same at `2026-10-03` — no network: the leg's `<TENGU_HOME>/state/engine-matrix/sources.db` is seeded first by `tengu sources import` of `tests/fixtures/ted/search_change_notice.json` (notice 657981-2026 and its change notice 674231-2026, read 2026-10-02) | the answer quotes the original's publication number (657981-2026) and the superseding record id in full (`ted_search:674231-2026:<content hash>`, read from the leg's `sources.db`) |
+//! | `soe` | `soe_view` `{"run": "cycles/2026-W42", "view": "candidates"}` → `soe_propose` the fixture draft (`tests/fixtures/soe/drafts/proposal.json`) into that week → `soe_challenge` the fixture's flat arguments on `replays/fixture.w42` — the SOE state root `<TENGU_HOME>/state/engine-matrix/` seeded first from `tests/fixtures/soe/state/` (a week open in `PROPOSE`, a replay open in `CHALLENGE`; no network) | the answer quotes `2026-W42.p01` and `2026-W42.c01`; one stamped record each in `proposals.jsonl` / `challenges.jsonl`, the step's agent its `provenance.agent`, generation `UNBOUND` |
 //! | `shell` | `run_command` `cat shell-token.txt` → the shell skill `matrix_cat` (`tests/fixtures/skills/matrix_cat`, IPC `compose.skills`) on `skill-token.txt` → the `[[mcp_servers]]` proxy `matrix__token` | the answer holds the three tokens (the MCP one only in the server's env: `$TENGU_MATRIX_MCP_VALUE`, resolved by the run-agent child or the step's bridge) |
 //! | `memory` | `memory_ingest` → `memory_search` → `persistent_store` `store` `memo.txt` → `persistent_store` `search` | the answer holds `memo.txt`'s token (only in the file); the disk store `<ws>/memory` exists |
 //! | `skills` | `view_skill` + `skill_resource` on the workspace skill `matrix-doc` → `manage_skill` `create` → `skill_distill` (`from_message_index` 1) → `apply_improver_proposal` on `matrix-doc` | the answer holds the doc token and the resource token; the two new skills sit under `<ws>/.tengu/skills/`, the distilled one's `evals/prompts.yaml` holds a fixture from the goal (the step's conversation; Claude Code: the engine's transcript through the bridge); `matrix-doc` holds the improved body |
@@ -49,7 +52,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole) (no network; not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole), `offline_local_xlab_rank` (the ranking run and `latest`, each whole, rows weakest first), `offline_local_sources` (`source_evidence` before / after the change notice: the original stands, then `superseded … (correction)`; each text whole under the 16k cap, the buyer's name fenced), `offline_local_soe` (the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
@@ -123,6 +126,37 @@ const XLAB_STORED_RUN_FIXTURE: &str = concat!(
     "/tests/fixtures/xlab/run_conf_rows"
 );
 const XLAB_WORST_GROSS_BPS: f64 = -52.88;
+/// The xlab_rank set's registry: the sealed test contract `rank.test.v1`
+/// (`rank_fade` / `rank_follow`, cutoff 15:00 UTC, sandbox `rank-test`).
+const RANK_REGISTRY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/strategy_ranking/lineage"
+);
+const RANK_CONTRACT: &str = "rank.test.v1";
+/// The sandbox the contract names: the leg's config dir.
+const RANK_SANDBOX: &str = "rank-test";
+/// The ranked date: its cutoff (15:00 UTC) closes the seeded bars.
+const RANK_DATE: &str = "2026-09-28";
+/// Research-arm means of the ranked pair over the seeded bars: the fade
+/// (rank 1, weakest) is [`xlab_spec`]; the follow is its placebo (rank 2).
+const RANK_FADE_MEAN_BPS: f64 = -27.39;
+const RANK_FOLLOW_MEAN_BPS: f64 = 19.79;
+
+/// The sources set's seed (`tengu sources import`): the captured TED pair —
+/// notice 657981-2026 (published 2026-09-24) and its change notice
+/// 674231-2026 (2026-10-01) of one procedure — read as of 2026-10-02.
+const SOURCES_SEED: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/ted/search_change_notice.json"
+);
+const SOURCES_OBSERVED_AT: &str = "2026-10-02T08:00:00Z";
+/// The two publication numbers, in full.
+const SOURCES_ORIGINAL: &str = "657981-2026";
+const SOURCES_CHANGE: &str = "674231-2026";
+/// The sources set's reads (knowable mode): before the change notice was
+/// published, then after it.
+const SOURCES_BEFORE: &str = "2026-09-30";
+const SOURCES_AFTER: &str = "2026-10-03";
 
 /// The xlab set's inline strategy spec (the Architect's level-2 capability):
 /// fade a ≥ 25 bps hourly move on `xyz:TSLA`, out after 3 bars.
@@ -131,6 +165,19 @@ fn xlab_spec() -> Value {
            "interval": "1h", "lookback_bars": 1, "threshold_bps": 25,
            "direction": "fade", "hold_bars": 3})
 }
+/// The soe set's fixtures and the hardened fixtures' `[sources] state` (the
+/// SOE state root under the leg's `TENGU_HOME`).
+const SOE_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/soe");
+/// The SOE state root = the hardened fixtures' `[sources] state` (critic
+/// C8), shared with `[xmarket]`.
+const SOE_STATE: &str = XM_STATE;
+/// The seeded runs: a week open in `PROPOSE`, a replay open in `CHALLENGE`.
+const SOE_RUN: &str = "cycles/2026-W42";
+const SOE_REPLAY: &str = "replays/fixture.w42";
+/// What the two writes print: the stamped ids.
+const SOE_PROPOSAL_ID: &str = "2026-W42.p01";
+const SOE_CHALLENGE_ID: &str = "2026-W42.c01";
+
 /// `xm_exits`' id for the second buy (its `exit_at_ms` is in the past),
 /// up to the position's `opened_ms`.
 const EXIT_ID_PREFIX: &str = "exit:matrix:hyperliquid:xyz:TSLA:deadline:";
@@ -222,6 +269,9 @@ enum Set {
     Xm,
     Xlab,
     XlabHoldout,
+    XlabRank,
+    Sources,
+    Soe,
     Shell,
     Memory,
     Skills,
@@ -235,12 +285,15 @@ enum Set {
 }
 
 impl Set {
-    const ALL: [Set; 15] = [
+    const ALL: [Set; 18] = [
         Set::Workspace,
         Set::Hyperliquid,
         Set::Xm,
         Set::Xlab,
         Set::XlabHoldout,
+        Set::XlabRank,
+        Set::Sources,
+        Set::Soe,
         Set::Shell,
         Set::Memory,
         Set::Skills,
@@ -260,6 +313,9 @@ impl Set {
             Set::Xm => "xm",
             Set::Xlab => "xlab",
             Set::XlabHoldout => "xlab_holdout",
+            Set::XlabRank => "xlab_rank",
+            Set::Sources => "sources",
+            Set::Soe => "soe",
             Set::Shell => "shell",
             Set::Memory => "memory",
             Set::Skills => "skills",
@@ -277,7 +333,14 @@ impl Set {
     fn hardened(self) -> bool {
         matches!(
             self,
-            Set::Workspace | Set::Hyperliquid | Set::Xm | Set::Xlab | Set::XlabHoldout
+            Set::Workspace
+                | Set::Hyperliquid
+                | Set::Xm
+                | Set::Xlab
+                | Set::XlabHoldout
+                | Set::XlabRank
+                | Set::Sources
+                | Set::Soe
         )
     }
 
@@ -306,6 +369,9 @@ impl Set {
             ],
             Set::Xlab => &["market_history", "backtest"],
             Set::XlabHoldout => &["backtest"],
+            Set::XlabRank => &["strategy_ranking"],
+            Set::Sources => &["source_evidence"],
+            Set::Soe => &["soe_view", "soe_propose", "soe_challenge"],
             Set::Shell => &["run_command", "matrix__token"],
             Set::Memory => &["memory_ingest", "memory_search", "persistent_store"],
             Set::Skills => &[
@@ -487,6 +553,40 @@ impl Set {
                 ],
                 "the gross_bps of the worst trade step 1 listed, then the mean_net_bps= value step 2 returned on its first line, then the mean_net_bps= value step 3 printed on its first line (the HOLDOUT line), exactly as printed",
                 "",
+            ),
+            Set::XlabRank => (
+                vec![
+                    call(
+                        "strategy_ranking",
+                        json!({"action": "run", "date": RANK_DATE}),
+                    ),
+                    call("strategy_ranking", json!({"action": "latest"})),
+                ],
+                "the name and the mean of the weakest strategy the ranking lists (rank 1), then the name and the mean of the strongest (the last rank), exactly as printed",
+                "",
+            ),
+            Set::Sources => {
+                let at = |day: &str| json!({"at": day, "mode": "knowable", "source": "ted_search"});
+                (
+                    vec![
+                        call("source_evidence", at(SOURCES_BEFORE)),
+                        call("source_evidence", at(SOURCES_AFTER)),
+                    ],
+                    "the publication number inside the record id of the one fact step 1 listed (between `ted_search:` and the next `:`), then the full record id that step 2's superseded line names after `by`, exactly as printed",
+                    "",
+                )
+            }
+            Set::Soe => (
+                vec![
+                    call("soe_view", json!({"run": SOE_RUN, "view": "candidates"})),
+                    call(
+                        "soe_propose",
+                        json!({"run": SOE_RUN, "proposal": soe_draft("proposal.json")}),
+                    ),
+                    call("soe_challenge", soe_challenge_args(SOE_REPLAY)),
+                ],
+                "the proposal id soe_propose returned, then the challenge id soe_challenge returned, exactly as printed",
+                "Pass every argument verbatim, the proposal object whole. ",
             ),
             Set::Shell => (
                 vec![
@@ -697,6 +797,9 @@ live_legs! {
     openrouter_gemini_xm => GEMINI, Set::Xm;
     openrouter_gemini_xlab => GEMINI, Set::Xlab;
     openrouter_gemini_xlab_holdout => GEMINI, Set::XlabHoldout;
+    openrouter_gemini_xlab_rank => GEMINI, Set::XlabRank;
+    openrouter_gemini_sources => GEMINI, Set::Sources;
+    openrouter_gemini_soe => GEMINI, Set::Soe;
     openrouter_gemini_shell => GEMINI, Set::Shell;
     openrouter_gemini_memory => GEMINI, Set::Memory;
     openrouter_gemini_skills => GEMINI, Set::Skills;
@@ -712,6 +815,9 @@ live_legs! {
     openrouter_haiku_xm => HAIKU, Set::Xm;
     openrouter_haiku_xlab => HAIKU, Set::Xlab;
     openrouter_haiku_xlab_holdout => HAIKU, Set::XlabHoldout;
+    openrouter_haiku_xlab_rank => HAIKU, Set::XlabRank;
+    openrouter_haiku_sources => HAIKU, Set::Sources;
+    openrouter_haiku_soe => HAIKU, Set::Soe;
     openrouter_haiku_shell => HAIKU, Set::Shell;
     openrouter_haiku_memory => HAIKU, Set::Memory;
     openrouter_haiku_skills => HAIKU, Set::Skills;
@@ -727,6 +833,9 @@ live_legs! {
     claude_code_xm => CLAUDE, Set::Xm;
     claude_code_xlab => CLAUDE, Set::Xlab;
     claude_code_xlab_holdout => CLAUDE, Set::XlabHoldout;
+    claude_code_xlab_rank => CLAUDE, Set::XlabRank;
+    claude_code_sources => CLAUDE, Set::Sources;
+    claude_code_soe => CLAUDE, Set::Soe;
     claude_code_shell => CLAUDE, Set::Shell;
     claude_code_memory => CLAUDE, Set::Memory;
     claude_code_skills => CLAUDE, Set::Skills;
@@ -742,6 +851,9 @@ live_legs! {
     local_xm => GEMMA, Set::Xm;
     local_xlab => GEMMA, Set::Xlab;
     local_xlab_holdout => GEMMA, Set::XlabHoldout;
+    local_xlab_rank => GEMMA, Set::XlabRank;
+    local_sources => GEMMA, Set::Sources;
+    local_soe => GEMMA, Set::Soe;
     local_shell => GEMMA, Set::Shell;
     local_memory => GEMMA, Set::Memory;
     local_skills => GEMMA, Set::Skills;
@@ -962,6 +1074,10 @@ struct Prep {
     address: Option<String>,
     /// Values that must never appear in the child's stdout or stderr.
     secrets: Vec<String>,
+    /// The leg's config when not its fixture: the xlab_rank set's copy at
+    /// `<dir>/sandboxes/rank-test/config.toml` ([`rank_config`]).
+    config: Option<PathBuf>,
+    _config_dir: Option<tempfile::TempDir>,
 }
 
 impl Prep {
@@ -980,6 +1096,8 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
         position: STALE_POSITION.to_string(),
         address: None,
         secrets: vec![ws.secret.clone()],
+        config: None,
+        _config_dir: None,
     };
     let write = |rel: &str, text: &str| {
         let p = ws.path.join(rel);
@@ -993,6 +1111,14 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
             seed_market_history(target, ws, envs);
             seed_stored_run(ws);
         }
+        Set::XlabRank => {
+            seed_market_history(target, ws, envs);
+            let (dir, config) = rank_config(target);
+            prep.config = Some(config);
+            prep._config_dir = Some(dir);
+        }
+        Set::Sources => seed_sources(target, ws, envs),
+        Set::Soe => seed_soe_state(ws),
         Set::Shell => {
             write("shell-token.txt", &ws.shell_token);
             write("skill-token.txt", &ws.skill_token);
@@ -1195,8 +1321,11 @@ fn run_leg(
     timeout: Duration,
 ) -> Leg {
     let mut cmd = leg_command(target, ws, envs, &["run-agent"]);
-    cmd.env("TENGU_AGENT_IPC", "1")
-        .env("TENGU_CONFIG", fixture(set.fixture(target)));
+    let config = prep
+        .config
+        .clone()
+        .unwrap_or_else(|| fixture(set.fixture(target)));
+    cmd.env("TENGU_AGENT_IPC", "1").env("TENGU_CONFIG", config);
     let input = json!({
         "goal": set.goal(ws, prep),
         "agent_name": target.agent,
@@ -1354,6 +1483,106 @@ fn seed_market_history(target: Target, ws: &Workspace, envs: &[(&str, String)]) 
     );
 }
 
+/// The sources set's store: `tengu sources import` of [`SOURCES_SEED`] as
+/// read at [`SOURCES_OBSERVED_AT`] into the leg's
+/// `<TENGU_HOME>/state/engine-matrix/sources.db` — the CLI an operator runs.
+/// Through the openrouter fixture whatever the target: the hardened
+/// fixtures share `[sources]` (`fixtures_load_and_agree`).
+fn seed_sources(target: Target, ws: &Workspace, envs: &[(&str, String)]) {
+    let config = fixture("openrouter.toml").display().to_string();
+    let args = [
+        "-c",
+        &config,
+        "sources",
+        "import",
+        "--source",
+        "ted_search",
+        "--file",
+        SOURCES_SEED,
+        "--observed-at",
+        SOURCES_OBSERVED_AT,
+    ];
+    let out = leg_command(target, ws, envs, &args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn tengu sources import");
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success() && stored_record_id(ws, SOURCES_CHANGE).is_some(),
+        "seeding sources.db failed:\n{stdout}\n{stderr}"
+    );
+}
+
+/// The stored record id of TED notice `publication` in the leg's
+/// `sources.db`, in full.
+fn stored_record_id(ws: &Workspace, publication: &str) -> Option<String> {
+    let db = ws.home.join("state").join(XM_STATE).join("sources.db");
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .ok()?;
+    conn.query_row(
+        "SELECT record_id FROM records WHERE source_id = 'ted_search' AND native_id = ?1",
+        [publication],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// The soe set's state root: `tests/fixtures/soe/state/` (a week open in
+/// `PROPOSE`, a replay open in `CHALLENGE`; written by
+/// `tools::soe::tests::fixture_state_is_current`) copied to
+/// `<TENGU_HOME>/state/<SOE_STATE>/`.
+fn seed_soe_state(ws: &Workspace) {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let target = to.join(e.file_name());
+            if e.path().is_dir() {
+                copy(&e.path(), &target);
+            } else {
+                std::fs::copy(e.path(), &target).unwrap();
+            }
+        }
+    }
+    copy(
+        &Path::new(SOE_FIXTURES).join("state"),
+        &ws.home.join("state").join(SOE_STATE),
+    );
+}
+
+/// A fixture draft (`tests/fixtures/soe/drafts/`).
+fn soe_draft(name: &str) -> Value {
+    let path = Path::new(SOE_FIXTURES).join("drafts").join(name);
+    serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+}
+
+/// `soe_challenge`'s flat fixture arguments on `run`.
+fn soe_challenge_args(run: &str) -> Value {
+    let mut a = soe_draft("challenge.json");
+    a["run"] = run.into();
+    a
+}
+
+/// The records the soe set's two writes appended: proposals of the week,
+/// challenges of the replay (one JSON line each).
+fn soe_records(ws: &Workspace) -> (Vec<Value>, Vec<Value>) {
+    let root = ws.home.join("state").join(SOE_STATE);
+    let lines = |rel: &str| -> Vec<Value> {
+        std::fs::read_to_string(root.join(rel))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    (
+        lines("cycles/2026-W42/proposals.jsonl"),
+        lines("replays/fixture.w42/challenges.jsonl"),
+    )
+}
+
 /// The stored run the xlab set reads by id ([`XLAB_STORED_RUN`]): its
 /// `report.json` and trade files into the leg's
 /// `<TENGU_HOME>/state/engine-matrix/backtests/<run id>/`, as the tool wrote
@@ -1374,6 +1603,73 @@ fn seed_stored_run(ws: &Workspace) {
         std::fs::copy(Path::new(XLAB_STORED_RUN_FIXTURE).join(f), dir.join(f))
             .unwrap_or_else(|e| panic!("seed {f}: {e}"));
     }
+}
+
+/// The xlab_rank set's config: the target's hardened fixture + a
+/// `[strategy_ranking]` naming [`RANK_REGISTRY`], at
+/// `<tmp>/sandboxes/rank-test/config.toml` — a ranking contract names its
+/// sandbox (the config's dir), and the fixtures sit outside `sandboxes/`.
+/// Same `[xmarket]` state: the seeded warehouse.
+fn rank_config(target: Target) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("config dir");
+    let sandbox = dir.path().join("sandboxes").join(RANK_SANDBOX);
+    std::fs::create_dir_all(&sandbox).unwrap();
+    let text = std::fs::read_to_string(fixture(target.fixture)).unwrap();
+    let config = sandbox.join("config.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "{text}\n[strategy_ranking]\nregistry = \"{RANK_REGISTRY}\"\ncontracts = [\"{RANK_CONTRACT}\"]\n"
+        ),
+    )
+    .unwrap();
+    (dir, config)
+}
+
+/// The xlab_rank set: the answer names the weakest strategy before the
+/// strongest and quotes both means; the date is published COMPLETE (both run
+/// dirs, `latest`), and no holdout was read.
+fn assert_rank(label: &str, leg: &Leg, ws: &Workspace, answer: &str) {
+    let (weak, strong) = (answer.find("rank_fade"), answer.find("rank_follow"));
+    assert!(
+        matches!((weak, strong), (Some(w), Some(s)) if w < s),
+        "{label}: the answer does not name rank_fade (weakest) before rank_follow (strongest)\n{}",
+        leg.context()
+    );
+    for (what, bps) in [
+        ("rank_fade's mean", RANK_FADE_MEAN_BPS),
+        ("rank_follow's mean", RANK_FOLLOW_MEAN_BPS),
+    ] {
+        assert!(
+            quotes_within(answer, bps.abs(), 0.0051),
+            "{label}: the answer does not quote {what} {bps:+.2}\n{}",
+            leg.context()
+        );
+    }
+    let state = ws.home.join("state").join(XM_STATE);
+    let dir = state.join("strategy-rankings").join(RANK_CONTRACT);
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(dir.join(RANK_DATE).join("manifest.json")).unwrap_or_default(),
+    )
+    .unwrap_or(Value::Null);
+    assert_eq!(
+        manifest["status"], "COMPLETE",
+        "{label}: {RANK_DATE} not published COMPLETE: {manifest:#}"
+    );
+    assert!(dir.join("latest.json").is_file(), "{label}: no latest.json");
+    for s in ["rank_fade", "rank_follow"] {
+        let run = manifest["strategies"][s]["run"].as_str().unwrap_or("");
+        let id = run.rsplit('/').next().unwrap_or("");
+        assert!(
+            run.starts_with(&format!("run:{XM_STATE}/"))
+                && state.join("backtests").join(id).is_dir(),
+            "{label}: {s}'s run `{run}` has no run dir"
+        );
+    }
+    assert!(
+        !state.join("backtests/holdout-reads.jsonl").exists(),
+        "{label}: a ranking read a holdout"
+    );
 }
 
 /// One order in the leg's ledger.
@@ -1610,6 +1906,26 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
                 );
             }
         }
+        Set::Soe => {
+            quotes("the proposal id", SOE_PROPOSAL_ID);
+            quotes("the challenge id", SOE_CHALLENGE_ID);
+            // One stamped record each, the step's agent in its provenance
+            // (a run-agent child names it: TENGU_AGENT_NAME, or the
+            // bridge's TENGU_BRIDGE_AGENT).
+            let (proposals, challenges) = soe_records(ws);
+            for (what, rows, id) in [
+                ("proposals", &proposals, SOE_PROPOSAL_ID),
+                ("challenges", &challenges, SOE_CHALLENGE_ID),
+            ] {
+                assert_eq!(rows.len(), 1, "{label}: {what}: {rows:?}");
+                assert_eq!(rows[0]["id"], id, "{label}: {what}");
+                assert_eq!(
+                    rows[0]["provenance"]["agent"], target.agent,
+                    "{label}: {what}"
+                );
+                assert_eq!(rows[0]["provenance"]["generation"], "UNBOUND", "{label}");
+            }
+        }
         Set::XlabHoldout => {
             // The hidden run's in-sample mean, the read's holdout half, and
             // the stored run's worst trade — only its `trades` rows, the
@@ -1658,6 +1974,15 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
                 reads.iter().all(|(_, _, split)| split == XLAB_SPLIT),
                 "{label}: holdout reads of another split: {reads:?}"
             );
+        }
+        Set::XlabRank => assert_rank(&label, leg, ws, &answer),
+        Set::Sources => {
+            // The original notice stood before its change; after it, the
+            // change supersedes it — its record id is only in step 2's text.
+            quotes("the original notice's publication number", SOURCES_ORIGINAL);
+            let change = stored_record_id(ws, SOURCES_CHANGE)
+                .unwrap_or_else(|| panic!("{label}: {SOURCES_CHANGE} is not stored"));
+            quotes("the superseding record id", &change);
         }
         Set::Shell => {
             quotes("the run_command token", &ws.shell_token);
@@ -2449,6 +2774,228 @@ fn offline_local_xlab_holdout() {
         assert!(read.contains(want), "{want}: {read}");
     }
     for result in [hidden, read, rows] {
+        assert!(
+            result.len() < 8_192
+                && !result.contains("bytes in observation")
+                && !result.contains("[truncated"),
+            "{} chars: {result}",
+            result.len()
+        );
+    }
+}
+
+/// The soe set on the local engine, scripted, through `run-agent`: the
+/// week's candidates read (the carried one, its inputs and computed
+/// verdict), the fixture proposal written into the week open in `PROPOSE`,
+/// the fixture challenge into the replay open in `CHALLENGE` — each record
+/// stamped with the step's agent, each text whole under the 16k agent's
+/// 8 192-char cap, and the model sees only the composed set.
+#[test]
+fn offline_local_soe() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::Soe, &ws, &[]);
+    let (leg, bodies) = offline_leg(
+        Set::Soe,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply(
+                "c1",
+                "soe_view",
+                &json!({"run": SOE_RUN, "view": "candidates"}),
+            ),
+            tool_call_reply(
+                "c2",
+                "soe_propose",
+                &json!({"run": SOE_RUN, "proposal": soe_draft("proposal.json")}),
+            ),
+            tool_call_reply("c3", "soe_challenge", &soe_challenge_args(SOE_REPLAY)),
+            text_reply(&format!("{SOE_PROPOSAL_ID} {SOE_CHALLENGE_ID}")),
+        ],
+    );
+    assert_leg(MOCK, Set::Soe, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 4, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "compress_and_store",
+            "soe_challenge",
+            "soe_propose",
+            "soe_view"
+        ]
+    );
+    let latest = |i: usize| tool_messages(&bodies[i]).pop().unwrap_or_default();
+    for (i, head) in [
+        (
+            1,
+            "soe_view cycles/2026-W42 candidates OPEN PROPOSE decided_at=2026-10-12T12:00:00Z shown=1 of 1",
+        ),
+        (
+            2,
+            "soe_propose 2026-W42.p01 news-automation v1 AUTOMATE run=cycles/2026-W42 | written",
+        ),
+        (
+            3,
+            "soe_challenge 2026-W42.c01 target=news-automation kind=HIDDEN_LABOR effect=WIDEN",
+        ),
+    ] {
+        let result = latest(i);
+        assert!(result.starts_with(head), "result {i}: {result}");
+        assert!(
+            result.len() < 8_192
+                && !result.contains("bytes in observation")
+                && !result.contains("[truncated"),
+            "{} chars: {result}",
+            result.len()
+        );
+    }
+    assert!(
+        latest(1).contains("carried from 2026-W41") && latest(2).contains("verdict HOLD"),
+        "{}\n{}",
+        latest(1),
+        latest(2)
+    );
+}
+
+/// The sources set on the local engine, scripted, through `run-agent`: the
+/// leg's `sources.db` (seeded by `tengu sources import`, no network) read
+/// as of before and after the change notice, knowable — the original notice
+/// stands, then the change supersedes it (`correction`). Each text arrives
+/// whole under the 16k agent's 8 192-char cap: typed lines with full record
+/// ids, the buyer's name inside one fence after one system note; the model
+/// sees only the composed set.
+#[test]
+fn offline_local_sources() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::Sources, &ws, &[]);
+    let original = stored_record_id(&ws, SOURCES_ORIGINAL).expect("seeded");
+    let change = stored_record_id(&ws, SOURCES_CHANGE).expect("seeded");
+    let at = |day: &str| json!({"at": day, "mode": "knowable", "source": "ted_search"});
+    let (leg, bodies) = offline_leg(
+        Set::Sources,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply("c1", "source_evidence", &at(SOURCES_BEFORE)),
+            tool_call_reply("c2", "source_evidence", &at(SOURCES_AFTER)),
+            text_reply(&format!("{SOURCES_ORIGINAL} {change}")),
+        ],
+    );
+    assert_leg(MOCK, Set::Sources, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 3, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(names, ["compress_and_store", "source_evidence"]);
+    let latest = |i: usize| tool_messages(&bodies[i]).pop().unwrap_or_default();
+    let (before, after) = (latest(1), latest(2));
+    assert!(
+        before.starts_with(&format!(
+            "source_asof {SOURCES_BEFORE}T00:00:00Z knowable: 1 facts · 0 pending · 0 expired"
+        )),
+        "{before}"
+    );
+    assert!(
+        before.contains(&format!("\nfact {original} event=ted:procedure:")),
+        "{before}"
+    );
+    assert!(
+        !before.contains(&change),
+        "the change is not yet public: {before}"
+    );
+    assert!(
+        after.contains(&format!("\nsuperseded {original} by {change} (correction)")),
+        "{after}"
+    );
+    assert!(
+        after.contains(&format!("\nfact {change} event=")),
+        "{after}"
+    );
+    for result in [&before, &after] {
+        let note = "[System note: each source-text block below quotes external data";
+        assert_eq!(result.matches(note).count(), 1, "{result}");
+        assert!(
+            result.contains("field=\"buyer_name\">") && result.contains("</source-text>"),
+            "{result}"
+        );
+        assert!(
+            result.len() < 8_192
+                && !result.contains("bytes in observation")
+                && !result.contains("[truncated"),
+            "{} chars: {result}",
+            result.len()
+        );
+    }
+}
+
+/// The xlab_rank set on the local engine, scripted, through `run-agent` on a
+/// copy of the hardened fixture as sandbox `rank-test` + `[strategy_ranking]`
+/// (the sealed test contract): `strategy_ranking` runs the date over the
+/// seeded warehouse (configured scope + the run-agent grant, no network) and
+/// publishes it; `latest` reads it back. Each text reaches the model whole
+/// under the 16k agent's 8 192-char cap — line 1 with the full contract id,
+/// rows with whole run locators, the files relative to the state dir, never
+/// its path — and the model sees only the composed set.
+#[test]
+fn offline_local_xlab_rank() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::XlabRank, &ws, &[]);
+    let (leg, bodies) = offline_leg(
+        Set::XlabRank,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply(
+                "c1",
+                "strategy_ranking",
+                &json!({"action": "run", "date": RANK_DATE}),
+            ),
+            tool_call_reply("c2", "strategy_ranking", &json!({"action": "latest"})),
+            text_reply(&format!(
+                "rank_fade {RANK_FADE_MEAN_BPS:+.2} rank_follow {RANK_FOLLOW_MEAN_BPS:+.2}"
+            )),
+        ],
+    );
+    assert_leg(MOCK, Set::XlabRank, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 3, "{}", leg.context());
+    let mut names = advertised(&bodies[0]);
+    names.sort();
+    assert_eq!(names, ["compress_and_store", "strategy_ranking"]);
+    let latest = |i: usize| tool_messages(&bodies[i]).pop().unwrap_or_default();
+    let state = ws.home.join("state").join(XM_STATE);
+    for (i, head) in [
+        (
+            1,
+            format!(
+                "strategy_ranking run {RANK_CONTRACT} {RANK_DATE} COMPLETE · ran now · latest \
+                 replaced · 2 ranked, 0 ineligible, 0 failed, 0 dropped\n"
+            ),
+        ),
+        (
+            2,
+            format!(
+                "strategy_ranking latest {RANK_CONTRACT} {RANK_DATE} COMPLETE · the newest \
+                 COMPLETE ranking — nothing ran · 2 ranked"
+            ),
+        ),
+    ] {
+        let result = &latest(i);
+        assert!(result.starts_with(&head), "{result}");
+        let rows = regex::Regex::new(&format!(
+            r"\n  1\. rank_fade  ci95_lo \S+  mean {}  n 2  run:{XM_STATE}/\d{{8}}T\d{{6}}Z-rank_fade\n  2\. rank_follow  ci95_lo \S+  mean \+{:.2}  n 2  run:{XM_STATE}/\d{{8}}T\d{{6}}Z-rank_follow\n",
+            regex::escape(&format!("{RANK_FADE_MEAN_BPS:+.2}")),
+            RANK_FOLLOW_MEAN_BPS
+        ))
+        .unwrap();
+        assert!(rows.is_match(result), "{result}");
+        assert!(
+            result.ends_with(&format!(
+                "in state dir `{XM_STATE}` — outside your workspace"
+            )),
+            "{result}"
+        );
+        assert!(!result.contains(&state.display().to_string()), "{result}");
         assert!(
             result.len() < 8_192
                 && !result.contains("bytes in observation")

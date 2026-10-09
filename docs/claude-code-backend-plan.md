@@ -1,7 +1,7 @@
 # Claude Code Backend Technical Plan
 
 > **Status:** Implemented. This is an archived planning document. For live documentation see [[engine-backends]] and [[mcp-bridge]].
-> **Key files:** `adapters/outbound/engines/claude_code.rs`, `mcp_bridge.rs`, `adapters/outbound/engines/mod.rs`, `config.rs`
+> **Key files:** `src/adapters/outbound/engines/claude_code.rs`, `src/adapters/inbound/mcp_bridge.rs`, `src/adapters/outbound/engines/mod.rs`, `src/config/mod.rs`, `src/config/hardening.rs`
 
 ## Summary
 Add `claude_code` as a real backend next to `openrouter`, using the local Claude Code CLI for execution while keeping Tengu's orchestration, channel adapters, prompts, and routing intact.
@@ -42,12 +42,12 @@ This is a config-only backend switch. The same agent definition can run on eithe
 | Plan Item | Implemented In |
 |-----------|---------------|
 | Config + validation | `src/config/mod.rs` — `ClaudeCodeConfig`, `AgentClaudeCodeConfig`, engine validation |
-| Runtime refactor | `src/bootstrap/` — `advertised_defs()`, TUI/Telegram wiring |
-| EngineContext extension | `src/domain/message.rs` — `bridge_tools` field |
+| Runtime refactor | `src/adapters/outbound/tools/mod.rs::advertised_defs()`, `src/bootstrap/tools.rs` (TUI / Telegram wiring) |
+| EngineContext extension | `src/ports/engine.rs` — `EngineContext.bridge_tools` |
 | Claude engine | `src/adapters/outbound/engines/claude_code.rs` — `ClaudeCodeEngine` |
 | MCP bridge | `src/adapters/inbound/mcp_bridge.rs` + `tengu mcp-bridge` subcommand |
-| Engine dispatch | `src/adapters/outbound/engines/mod.rs` — `build_engine()`, `build_planner_engine()` |
-| Safety policy | `src/adapters/outbound/engines/claude_code.rs` — `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`; `src/adapters/inbound/mcp_bridge.rs` — `TENGU_BRIDGE_SCOPES`; `src/adapters/outbound/egress.rs` — `claude_code_profile()` (no `build_safety_policy()` / `can_use_tool` exists) |
+| Engine dispatch | `src/adapters/outbound/engines/mod.rs` — `build_engine()`, `build_step_engine()` (`build_planner_engine()` is dead code) |
+| Safety policy | `src/adapters/outbound/engines/claude_code.rs` — `--tools <profile>` + `--allowedTools mcp__tengu-tools__*`; `src/adapters/inbound/mcp_bridge.rs` — the agent's folded scopes from `TENGU_CONFIG` (`TENGU_BRIDGE_SCOPES` only as fallback); `src/adapters/outbound/egress.rs` — `claude_code_profile()` (no `build_safety_policy()` / `can_use_tool` exists) |
 
 ## Safety Policy
 - Explicit `can_use_tool` callback for every Claude-backed request
@@ -63,7 +63,7 @@ This is a config-only backend switch. The same agent definition can run on eithe
 - Each turn spawns a fresh `claude` CLI process (~1-2s overhead)
 - Sessions are stateless (history re-formatted into prompt each turn)
 - Bridge re-creates executors per invocation (no shared state with parent)
-- Secret redaction not yet applied in the MCP bridge path
+- Secret redaction not yet applied in the MCP bridge path — Status (2026-10-08): done, the bridge wraps every call in `SanitizedToolExecutor` (text, observations, errors; `mcp_bridge.rs::serve_mcp_stdio`)
 
 ## Related
 - [[engine-backends]] — live engine documentation

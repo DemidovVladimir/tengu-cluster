@@ -8,8 +8,8 @@
 //! | Module | Holds |
 //! |---|---|
 //! | `value` | ids, `Time`, `Count`, `Locator`, `EvidenceRef`, `PinTarget`, `Binding` |
-//! | `family` · `variant` · `experiment` · `episode` · `incident` · `capability` · `generation` · `locks` | one record type each (`lineage/<dir>/<id>.toml`, `locks.toml`); evidence records are `domain/evidence.rs`'s `EvidenceRecord` |
-//! | `registry` | [`Registry`], [`Registry::validate`] (the codes below), the locator walk |
+//! | `family` · `variant` · `experiment` · `episode` · `incident` · `capability` · `generation` · `ranking` · `locks` | one record type each (`lineage/<dir>/<id>.toml`, `locks.toml`); evidence records are `domain/evidence.rs`'s `EvidenceRecord`; `ranking` = a strategy-ranking contract (`lineage/rankings/`) |
+//! | `registry` | [`Registry`], [`Registry::validate`] (the codes below), the locator walk, the cited run dirs |
 //! | `query` · `acceptance` | `trace`, `family_report` (search accounting), `attempt_rows` · the 21 Rule-W answers (handoff § 57) |
 //! | `pins` | record digests and pin hashes |
 //!
@@ -17,7 +17,7 @@
 //! |---|---|---|
 //! | `invalid_id` | Error | an id outside `^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$` |
 //! | `duplicate_id` | Error | one id used by two records (any kinds: `show` / `trace` take a bare id) |
-//! | `invalid_field` | Error | a shape rule: title empty or > 160 chars, a hash not 64 hex, `[spec]` not exactly one shape, `version` 0, a window ending before it starts, `ci95` low > high, a FROZEN generation without `frozen_at`, alternatives without exactly one chosen, an OPERATIONAL_INCIDENT episode without incidents, a loop in variant parents, an evidence record's own rules |
+//! | `invalid_field` | Error | a shape rule: title empty or > 160 chars, a hash not 64 hex, `[spec]` not exactly one shape, `version` 0, a window ending before it starts, `ci95` low > high, a FROZEN generation without `frozen_at`, alternatives without exactly one chosen, an OPERATIONAL_INCIDENT episode without incidents, a loop in variant parents, an evidence record's own rules, a ranking contract's shape (`RankingContract::shape_errors`) |
 //! | `dangling_ref` | Error | a reference (`family`, `variant`, `generation`, `parent`, `preceded_by`, `controls`, `capabilities`, `incidents`, `record:` locators, lock rows) to no record; `UNKNOWN` / `NONE` (`ROOT` for a variant parent) exempt |
 //! | `inconsistent_ref` | Error | a variant of another family than the record naming both |
 //! | `capability_version_missing` | Error | a generation names a capability version the registry does not hold |
@@ -29,7 +29,8 @@
 //! | `window_unknown` | Warn | a CLEAN HOLDOUT / DEVELOPMENT window with an UNKNOWN bound |
 //! | `forward_incomplete` | Error | a FORWARD_PAPER experiment without a FORWARD window with known bounds, a `validity`, FORWARD_PAPER evidence, or with every FORWARD_PAPER result's evidence UNKNOWN |
 //! | `frozen_manifest_changed` | Error | a generation whose `Registry::frozen_digest` (its file + every capability record it lists) differs from its last `[[frozen]]` row; a FROZEN one without a row |
-//! | `seal_mismatch` | Error · Warn | a sealed record changed since, or sealed after its first outcome (a forward experiment's: its FORWARD window start; Warn: same day, or an UNKNOWN outcome time); a preregistered record neither sealed nor carrying a `prereg` evidence ref |
+//! | `seal_mismatch` | Error · Warn | a sealed record changed since, or sealed after its first outcome (a forward experiment's: its FORWARD window start; Warn: same day, or an UNKNOWN outcome time); a preregistered variant / experiment neither sealed nor carrying a `prereg` evidence ref |
+//! | `ranking_unsealed` | Warn | a ranking contract with no `[[sealed]]` row (`ranking:<id>`): a draft the operator has not sealed — the publisher refuses it |
 //!
 //! Codes of `tengu lineage verify --pins / --evidence` (`application/lineage/verify.rs`):
 //! `pin_drift`, `pin_unresolved`, `unknown_binding`, `sandbox_unbound`, `evidence_missing`,
@@ -46,6 +47,7 @@ pub(crate) mod incident;
 pub(crate) mod locks;
 pub(crate) mod pins;
 pub(crate) mod query;
+pub(crate) mod ranking;
 pub(crate) mod registry;
 mod validate;
 pub(crate) mod value;

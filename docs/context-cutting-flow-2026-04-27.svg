@@ -58,14 +58,14 @@
     <g transform="translate(40,55)">
       <rect width="240" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
       <text x="14" y="22" font-weight="700">system_prompt</text>
-      <text x="14" y="40" class="small">base + skills + grounding</text>
+      <text x="14" y="40" class="small">base + identity + skills + tools</text>
       <text x="14" y="56" class="small mono muted">estimate_tokens_approx_min1()</text>
     </g>
 
     <g transform="translate(310,55)">
       <rect width="240" height="64" rx="8" fill="#1e1e2e" stroke="#45475a"/>
       <text x="14" y="22" font-weight="700">memory_block</text>
-      <text x="14" y="40" class="small">Open Brain recall — fixed cost</text>
+      <text x="14" y="40" class="small">chat recall (disk store) — fixed cost</text>
       <text x="14" y="56" class="small mono muted">memory_tokens = estimate(block)</text>
     </g>
 
@@ -124,8 +124,8 @@
       <rect width="1340" height="100" rx="8" fill="#1e1e2e" stroke="#45475a"/>
       <text x="20" y="26" class="small">① <tspan class="mono">run_single_engine_turn</tspan> → text + tool_calls + token usage</text>
       <text x="20" y="46" class="small">② push assistant msg with tool_calls; <tspan class="mono">compact_cutoff = messages.len()</tspan></text>
-      <text x="20" y="66" class="small">③ for each tool_call: <tspan class="mono">executor.execute</tspan> → result</text>
-      <text x="20" y="86" class="small">④ push <tspan class="mono">Role::Tool { content: <tspan class="warn">truncate_tool_result</tspan>(result, max_tool_result_chars=300_000) }</tspan></text>
+      <text x="20" y="66" class="small">③ for each tool_call: <tspan class="mono">executor.execute_typed</tspan> → result (+ typed observation)</text>
+      <text x="20" y="86" class="small">④ push <tspan class="mono">Role::Tool { content: tool_result_content → <tspan class="warn">truncate_tool_result</tspan>(result, max_tool_result_chars=300_000) }</tspan>  (local: fit_tool_result, window / 8 × 4)</text>
     </g>
 
     <!-- Mechs #3, #4, #5 callouts at round 0 -->
@@ -147,9 +147,9 @@
       <text x="44" y="28" font-weight="700">CUT — MCP bridge cap</text>
       <text x="14" y="50" class="small mono">max_mcp_result_chars = 50_000</text>
       <text x="14" y="68" class="small">env <tspan class="mono">TENGU_BRIDGE_MAX_RESULT_CHARS</tspan></text>
-      <text x="14" y="84" class="small">enforced inside Claude Code engine —</text>
+      <text x="14" y="84" class="small">set by the engine, cut in tengu mcp-bridge —</text>
       <text x="14" y="100" class="small">Claude CLI has no in-loop compaction</text>
-      <text x="14" y="114" class="small muted">adapters/outbound/engines/claude_code.rs:551</text>
+      <text x="14" y="114" class="small muted">claude_code.rs:223 → inbound/mcp_bridge.rs:634</text>
     </g>
 
     <g transform="translate(940,165)">
@@ -161,7 +161,7 @@
       <text x="14" y="66" class="small mono">"[OUTPUT_TRUNCATED]"</text>
       <text x="14" y="84" class="small">→ inject "Your output was truncated.</text>
       <text x="14" y="100" class="small">Continue from where you left off."</text>
-      <text x="14" y="116" class="small muted">adapters/outbound/engines/mod.rs:706 — extends, doesn't cut</text>
+      <text x="14" y="116" class="small muted">application/chat/tool_loop.rs:135 — extends, doesn't cut</text>
     </g>
 
     <!-- Round 1 -->
@@ -194,7 +194,7 @@
 
       <text x="68" y="194" class="small">Rationale (the inline comment): tool results "typically put key info on the first line" — tx hashes, IDs, status —</text>
       <text x="68" y="210" class="small">so keeping the first line preserves the model's working memory of what happened without paying for the body.</text>
-      <text x="68" y="226" class="small muted">Config: <tspan class="mono">limits.compact_result_limit</tspan> (default 200 chars). 0 disables. Rounds 0 keep full bodies; round 1+ shrinks them.</text>
+      <text x="68" y="226" class="small muted">Config: <tspan class="mono">limits.compact_result_limit</tspan> (default 200 chars; 0 does not disable — older results become "…"). Round 0 keeps full bodies; round 1+ shrinks them. run-agent: same, from turn 1.</text>
     </g>
 
     <!-- Round 2..N -->
@@ -213,9 +213,9 @@
 
   <g transform="translate(40,1350)">
     <rect class="panel" width="1420" height="120"/>
-    <text x="20" y="32" class="small mono">application/skills/registry.rs:1129  — truncate_to_token_budget(instructions, max_file_tokens)</text>
-    <text x="20" y="52" class="small mono">application/skills/registry.rs:1141  — truncate_to_token_budget(content, max_file_tokens)         (referenced files)</text>
-    <text x="20" y="72" class="small mono">application/skills/registry.rs:1159  — truncate_to_token_budget(ctx, max_skill_context_tokens)   (skill recall context)</text>
+    <text x="20" y="32" class="small mono">application/skills/registry.rs:1286  — truncate_to_token_budget(instructions, max_file_tokens)       (identity.instructions)</text>
+    <text x="20" y="52" class="small mono">application/skills/registry.rs:1298  — truncate_to_token_budget(content, max_file_tokens)            (IDENTITY.md / PROFILE.md / CONTEXT.md)</text>
+    <text x="20" y="72" class="small mono">application/skills/registry.rs:1316  — truncate_to_token_budget(ctx, max_skill_context_tokens)      (each skill fragment; past max_total_tokens it is dropped)</text>
     <text x="20" y="98" class="small">Char-cap with the shared "~4 chars/token" heuristic. Appends "<tspan class="mono">\n\n[truncated]</tspan>". Runs once at prompt-build time, not per turn.</text>
   </g>
 
@@ -223,7 +223,7 @@
   <g transform="translate(40,1495)">
     <rect class="panel" width="1420" height="160" stroke="#f38ba8" stroke-width="2"/>
     <text x="20" y="32" font-weight="700" class="err">What tengu does NOT have</text>
-    <text x="20" y="58" class="small">— No LLM-driven auto-compact pass. The model never sees a fresh summary of its own history; old turns just drop off via mechanism #1.</text>
+    <text x="20" y="58" class="small">— No LLM-driven auto-compact pass. The model never sees an LLM-written summary; old turns drop off via mechanism #1 or fold into maybe_compact_flow's truncated concat.</text>
     <text x="20" y="78" class="small">— No "/compact" slash command equivalent in the TUI.</text>
     <text x="20" y="98" class="small">— No semantic dedupe of repeated tool calls.</text>
     <text x="20" y="118" class="small">— Subagent step traces are NEVER fed back into the planner's history. The only thing that survives is the <tspan class="mono accent">compress_and_store</tspan> summary in Open Brain memory,</text>

@@ -1,0 +1,127 @@
+# Synthetic cycle case: invented example values and test sources
+# (`domain::source::testkit`, example.org urls) — no real firm, person or
+# figure. Expectations hold for the profile `synthetic-operator`
+# (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.cycle_case/1"
+id = "weekly_rerun_w42"
+version = 1
+synthetic = true
+profile = "synthetic-operator"
+note = "PRD § 12 #5, week 2 (after `weekly_rerun_w41`): the old candidates are re-ranked with the new without duplicates or rewrites. The fact-backed automation is carried verbatim with the Critic's churn challenge; the demand-backed one is re-proposed as version 2 with a second post (it supersedes the carried one and now passes); the rejected rebuild is not carried. Week 1's files and log lines stay as they were."
+week = "2026-W42"
+decided_at = "2026-10-12T12:00:00Z"
+after = "weekly_rerun_w41"
+
+[[records]]
+src = "FORUM"
+native = "p-71"
+published = "2026-10-08T12:00:00Z"
+
+[expected]
+hold = false
+allocation = { owner_hours = 10, cash = "0.00" }
+ranked = [
+  { id = "steady-automation", action = { kind = "CHEAP_TEST", max_cash = "0.00", max_hours = 5 } },
+  { id = "demand-automation", action = { kind = "CHEAP_TEST", max_cash = "0.00", max_hours = 5 } },
+]
+held = []
+rejected = []
+
+[[proposals]]
+novelty = "HIGH"
+
+[proposals.opportunity]
+schema = "soe.opportunity/1"
+id = "demand-automation"
+version = 2
+as_of = "2026-10-11"
+customer = "small accounting firms (synthetic example)"
+pain = "a changed filing format, re-keyed by hand"
+mechanism = "AUTOMATE"
+alternatives = ["PRODUCTIZE", "HOLD"]
+requires_skills = ["automation"]
+signals = ["@p-70", "@p-71"]
+
+[proposals.opportunity.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[proposals.opportunity.economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "30.00", base = "40.00", high = "60.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 13 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 1, base = 2, high = 3 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.revenue]
+kind = "RECURRING"
+leads_per_month = { value = { low = 7, base = 10, high = 14 }, evidence = ["url:https://example.org/buyer_forum/p-70", "url:https://example.org/buyer_forum/p-71"], as_of = "2026-10-01" }
+conversion = { value = { low = 1500, base = 2000, high = 2500 }, evidence = [], as_of = "2026-10-01" }
+churn_per_month = { value = { low = 300, base = 500, high = 900 }, evidence = [], as_of = "2026-10-01" }
+price_per_month = { value = { low = "450.00", base = "600.00", high = "750.00" }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "700.00", base = "900.00", high = "1400.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "200.00", base = "300.00", high = "450.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, evidence = [], as_of = "2026-10-01" }
+
+[proposals.opportunity.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the filing portal", share = 7500 }]
+
+[proposals.opportunity.risk.max_loss]
+cash = { low = "900.00", base = "1300.00", high = "2100.00" }
+owner_hours = { low = 25, base = 40, high = 70 }
+reputation = "a missed delivery for one pilot client"
+dependency = "the filing portal's format"
+
+[proposals.opportunity.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[proposals.opportunity.experiment]
+hypothesis = "firms pay to stop re-keying filings"
+metric = "paid pilots"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-10-30"
+expires_at = "2026-11-15"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[proposals.opportunity.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[proposals.opportunity.experiment.stages]]
+name = "pilot"
+cash = "750.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[proposals.opportunity.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"
+
+[[proposals.bases]]
+field = "economics.revenue.leads_per_month"
+basis = { kind = "FACT", evidence = ["@p-70", "@p-71"] }
+
+[[proposals.forecast]]
+observable = { kind = "OPERATOR_RESOLVES", question = "do both posters book a demo" }
+probability = 4500
+resolve_by = "2026-11-09"

@@ -16,6 +16,12 @@
 > Hermes and PI/Cowork it states only what this snapshot already establishes;
 > anything else is marked "not covered here".
 >
+> **2026-10-08:** Tengu column refreshed against the code — research lineage +
+> forward evidence (`tengu lineage`, `tengu evidence`), sealed strategy
+> rankings (`tengu ranking`, tool `strategy_ranking`), the source evidence
+> layer (`tengu sources`, tool `source_evidence`) and the offline Software
+> Opportunity Engine (`tengu soe`); tool and engine-matrix counts.
+>
 > Companion to `docs/tengu-analysis.html` (the deep version). This doc is the
 > obsidian-friendly **state snapshot** taken at the end of the 2026-04-26
 > session that landed per-example vectors, TUI debug panel, and durable
@@ -30,9 +36,9 @@
 |---|---|---|---|
 | **Language** | Rust | Python | TypeScript + Claude Agent SDK |
 | **Origin** | Vibe-coded v2 redesign | Nous Research, mature | Anthropic, this product |
-| **Surfaces** | TUI (cursive), Telegram, webhooks listener; long-running `tengu run` (feeds + decision loops); CLIs `tengu decide`, `tengu backtest`, `tengu history` | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
+| **Surfaces** | TUI (cursive), Telegram, webhooks listener; long-running `tengu run` (feeds + decision loops); CLIs `tengu decide`, `tengu backtest`, `tengu history`, `tengu ranking`, `tengu lineage`, `tengu evidence`, `tengu sources`, `tengu soe` | CLI, Telegram, Discord, Slack, WhatsApp, Signal | Desktop app, browser ext |
 | **Models** | OpenRouter (any) + `local` (any OpenAI-compatible server: Ollama, llama.cpp, vLLM, Unsloth) + Claude Code engine; Jev (`~typesafe/jev-latest`) as the decision model of `[decision_loops]` | 200+ providers, multi-backend terminal | Sonnet / Opus / Haiku |
-| **Persistence** | Open Brain Postgres + Karpathy LLM Wiki Markdown + file registry; SQLite stores for typed observations, the paper ledger and the market-data warehouse | SQLite + FTS5 + Honcho dialectic model | CLAUDE.md + plain-text memory files |
+| **Persistence** | Open Brain Postgres + Karpathy LLM Wiki Markdown + file registry; SQLite stores for typed observations, the paper ledger, the market-data warehouse and the source store (`sources.db`); `lineage/` TOML registry + read-only evidence vaults | SQLite + FTS5 + Honcho dialectic model | CLAUDE.md + plain-text memory files |
 | **Network** | Tor by default (`[egress] network = "tor"`: Arti + lyrebird-rs proxy, host allow/deny ceiling, JSONL audit — code-enforced, fail-closed; `"open"` per sandbox) | not a first-class feature | platform-managed |
 | **Strength** | Doctrine clarity (LLM=heart, Open Brain / Karpathy LLM Wiki=brain, tools=hands) | Breadth: platforms, scheduler, self-improving skills | UX: artifacts, computer-use, MCP marketplace |
 | **Weakness** | Agent-layer features partial / vibecoded gaps | Heavier deployment surface, Python perf | No vector memory; no autonomous skill evolution |
@@ -47,7 +53,7 @@ Three stores (2026-09-18 state — the 2026-04-26 Qdrant collections are gone):
 
 - `TENGU_PLANNER_REGISTRY.md` — Markdown roster rendered from the `[agents.<name>]` blocks that carry a `description` (+ `example_queries`), skills, core + MCP tools. Regenerated every planner turn (`shared_files::render_registry`); no embeddings, no reindex step.
 - Postgres `agentic_memory` (pgvector + FTS, feature `postgres_memory`) — user messages (`RagPlanner::persist_user_message` on every `plan()`), step summaries (`compress_and_store` + the `run-agent` backstop), `promote` → `compile_wiki` for the Karpathy LLM Wiki. Read back by three planner lanes: cross-session (`[memory] cross_session_msg_top_k`), within-session (`within_session_output_top_k`), cross-plan on `replan()` (`cross_plan_top_k`).
-- Disk bincode vector store (`memory/vector/disk.rs`) — in-process `memory_ingest` / `memory_search` / `persistent_store`; the only built-in `VectorStore`.
+- Disk bincode vector store (`adapters/outbound/memory/disk_vector.rs`) — in-process `memory_ingest` / `memory_search` / `persistent_store`; the only built-in `VectorStore`.
 
 Plus an in-memory ring buffer in `RagPlanner` for within-session "recent user messages" (`session_recent_n`). Lost on restart.
 
@@ -73,13 +79,13 @@ Plain Markdown files in a memory directory. The `consolidate-memory` skill perio
 
 | | Tengu | Hermes | PI/Cowork |
 |---|---|---|---|
-| **Discovery** | 3-tier scanner (managed `~/.tengu/skills`, workspace dotdir, workspace root) | Skills Hub + agentskills.io standard | Plugin marketplace + per-session skill list |
+| **Discovery** | scanner, first name wins: managed `~/.tengu/skills`, workspace `.tengu/skills`, workspace `skills/`, then the cwd's `skills/` (`skills::registry::skill_directories`) | Skills Hub + agentskills.io standard | Plugin marketplace + per-session skill list |
 | **Trigger** | Planner LLM reads `TENGU_PLANNER_REGISTRY.md` (descriptions + `example_queries`) and picks | Description-match + slash command | Description-match (slash commands) |
-| **Creation** | `skill_distill` tool; `learning-agent` with `view_skill` / `manage_skill`; `tengu skill install` | Autonomous skill creation after complex tasks | `skill-creator` skill, manual / LLM-assisted |
-| **Self-improvement** | `tengu skill evolve` (metric-gated, improver agent, approval gate) — no post-turn auto-trigger | live in-use refinement | none |
+| **Creation** | tools `skill_distill`, `manage_skill`, `view_skill` (the orchestrator skill routes lifecycle verbs to a `learning-agent` — no shipped sandbox defines one); `tengu skill install` | Autonomous skill creation after complex tasks | `skill-creator` skill, manual / LLM-assisted |
+| **Self-improvement** | `tengu skill evolve` (metric-gated, `[skill_lifecycle] improver_agent`, approval gate — only a commented sample in `config.example.toml`) — no post-turn auto-trigger | live in-use refinement | none |
 | **Standard** | own format (SKILL.md + frontmatter) | agentskills.io | SKILL.md + frontmatter (close to Hermes) |
 
-The big gap for Tengu here: **Hermes has a closed learning loop** — it creates skills from experience, refines them as it uses them, and persists the refinements. Tengu has the *building blocks* (`skill_distill`, `learning-agent` + `manage_skill`, `tengu skill evolve` with metric gate + approval, three-tier scanner) but nothing triggers them after a task. Closing that loop is one of the highest-leverage open items.
+The big gap for Tengu here: **Hermes has a closed learning loop** — it creates skills from experience, refines them as it uses them, and persists the refinements. Tengu has the *building blocks* (`skill_distill`, `manage_skill` / `view_skill`, `tengu skill evolve` with metric gate + approval, the skill scanner) but nothing triggers them after a task. Closing that loop is one of the highest-leverage open items.
 
 PI/Cowork takes a different path: rather than autonomous evolution, it leans on a curated **plugin marketplace** so users adopt vetted skills.
 
@@ -88,8 +94,8 @@ PI/Cowork takes a different path: rather than autonomous evolution, it leans on 
 ## Tools
 
 ### Tengu
-- `PluginToolExecutor` over a plugin registry; tools are namespaced and scoped. One catalog row per tool (`adapters/outbound/tools/mod.rs::catalog()`): 44 tools in the default build (`tengu tool list`), + `agentic_memory` with `postgres_memory`.
-- `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the opt-ins named in `domain/tools.rs::WORKSPACE_TOOLS` (31 names: memory / skill lifecycle, Solana read + write, Hyperliquid, xmarket risk / paper, xlab); `[agents.<name>].tools` narrows it on every surface (`bootstrap::tools::agent_base_tools`).
+- `PluginToolExecutor` over a plugin registry; tools are namespaced and scoped. One catalog row per tool (`adapters/outbound/tools/mod.rs::catalog()`): 50 tools in the default build (`tengu tool list`: 14 default + 36 opt-in), + `agentic_memory` with `postgres_memory`.
+- `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the opt-ins named in `domain/tools.rs::WORKSPACE_TOOLS` (34 names: memory / skill lifecycle, Solana read + write, Hyperliquid, xmarket risk / paper, xlab incl. `strategy_ranking`, `source_evidence`); `[agents.<name>].tools` narrows it on every surface (`bootstrap::tools::agent_base_tools`).
 - Every catalog tool works under `openrouter`, `local` and `claude_code` (the latter through `tengu mcp-bridge`): schema lint, bridge conformance, live engine matrix — § Trading runtime axes.
 - `compress_and_store` is implicitly appended to every subagent — never list it in `[agents.<name>].tools`.
 - Real MCP bridge via `outbound/mcp_client/client.rs::tools/list`; the planner registry lists core tool defs plus enumerated MCP server tools (`<server>__<tool>`, once per `RagPlanner`). Item 6.6 closed 2026-09-12.
@@ -124,7 +130,7 @@ Each is suited to its product's context. Tengu's registry + planner design wins 
 
 ## Trading runtime axes (added 2026-10-02)
 
-What Tengu gained 2026-09-24 → 10-01. Hermes / PI cells hold only what this snapshot already says (§ Tools, § TL;DR); "not covered here" = this doc has no evidence either way.
+What Tengu gained 2026-09-24 → 10-08. Hermes / PI cells hold only what this snapshot already says (§ Tools, § TL;DR); "not covered here" = this doc has no evidence either way.
 
 | Axis | Tengu | Hermes | PI / Cowork |
 |---|---|---|---|
@@ -132,8 +138,10 @@ What Tengu gained 2026-09-24 → 10-01. Hermes / PI cells hold only what this sn
 | Decision model ("System One") | ✅ `[decision_loops.*]`: Jev picks the next action + argument slots from a typed menu, existing tools execute it, low confidence (`act_at`) escalates to the orchestrator, `dry_run` by default, audit `logs/decisions.jsonl` — `docs/decision-loop-plan-2026-09-24.md` | not covered here (this snapshot lists the agent loop + model-spawned subagents) | not covered here |
 | Long-running runtime | ✅ `tengu run`: `[feeds.*]` on a UTC grid / local windows, single-runner lease, heartbeat, `tengu doctor --live`, graceful drain — `docs/runtime-2026-09-30.md` | built-in cron scheduler with delivery to any platform (§ Tools) | not covered here |
 | Money safety | ✅ `[risk]` gate inside every exec tool (gate + fill + ledger write in one transaction, fail closed), kill-switch file, exit rules (`xm_exits`), paper ledger filled against live L2 books; only private agents hold exec tools — `docs/xmarket-risk-paper-2026-09-30.md` | not covered here | not covered here |
-| Research on history | ✅ `market.db` warehouse + backfill (HL candles / funding, GeckoTerminal, HL S3 archive), strategy-spec DSL (six kinds — data, never code), pure backtest engine (costs, funding, `[risk]` caps, time-integrity checks), Jev replayed on history with a decision cache, holdout reads counted — `docs/xlab-2026-10-01.md` | not covered here | not covered here |
-| Engine parity | ✅ every catalog tool on `openrouter`, `local` and `claude_code` (through `tengu mcp-bridge`, run as the sandbox agent): schema lint, a bridge conformance case per tool, live engine matrix (15 tool sets; `local` legs on the operator's PC) — `docs/mcp-bridge.md`, `docs/engine-backends.md` | 200+ providers, 6 terminal backends (§ TL;DR, § Tools); per-tool parity checks not covered here | one model vendor (Sonnet / Opus / Haiku); not applicable |
+| Research on history | ✅ `market.db` warehouse + backfill (HL candles / funding, GeckoTerminal, HL S3 archive), strategy-spec DSL (six kinds — data, never code), pure backtest engine (costs, funding, `[risk]` caps, time-integrity checks), Jev replayed on history with a decision cache, holdout reads counted; `tengu evidence evaluate` scores rules · Jev · HOLD on the same candidates (verdict PROVEN / UNPROVEN / REJECTED); sealed strategy rankings (`[strategy_ranking]`: freshness → backtest → evaluate → rank → publish under a lease, no LLM; `tengu ranking`, tool `strategy_ranking`) — `docs/xlab-2026-10-01.md`, `docs/strategy-ranking-automation-2026-10-08.md` | not covered here | not covered here |
+| Research lineage + forward evidence | ✅ `lineage/` registry (one TOML file per family, variant, experiment, evidence record, episode, incident, capability, generation, ranking contract; `tengu lineage verify / trace / seal`, preregistration sealed in append-only `locks.toml`); generation binding (`[generation]`: a pinned section edited ⇒ the config load fails, `pin_drift`); `tengu evidence snapshot / verify / grade / regrade / coverage` over read-only vaults `<TENGU_HOME>/state/evidence/<id>/` — `docs/lineage-2026-10-06.md` | not covered here | not covered here |
+| Source evidence | ✅ `[sources]` registry (SEC EDGAR, EU TED): operator-run fetches into an append-only `sources.db`, as-of evidence packets (`captured` / `knowable`), retention purges, a runtime kill switch; agents read only (`source_evidence`); the offline, deterministic `tengu soe` (economics + hard gates, no LLM) — `docs/source-evidence-2026-10-08.md`, `docs/soe-2026-10-08.md` | not covered here | not covered here |
+| Engine parity | ✅ every catalog tool on `openrouter`, `local` and `claude_code` (through `tengu mcp-bridge`, run as the sandbox agent): schema lint, a bridge conformance case per tool, live engine matrix (18 tool sets; `local` legs on the operator's PC) — `docs/mcp-bridge.md`, `docs/engine-backends.md` | 200+ providers, 6 terminal backends (§ TL;DR, § Tools); per-tool parity checks not covered here | one model vendor (Sonnet / Opus / Haiku); not applicable |
 
 Net: these axes are Tengu's xmarket / xlab work. The snapshot holds no evidence that Hermes or PI ship equivalents — which is not evidence that they lack them; check their current docs before deciding "build vs borrow".
 
@@ -185,7 +193,7 @@ Added 2026-04-28 to Tengu; included here so the comparison stays current.
 
 ### Tengu
 
-First-class. `src/domain/metrics.rs` records one `MetricsRecord` per LLM call (planner + each subagent inner-loop turn) and per embedding call. Three surfaces: `RUST_LOG=tengu=info` baseline (always-on), in-process broadcast bus (`OnceLock<broadcast::Sender>`), and `OrchestratorEvent::MetricsRecorded` re-broadcast on the event bus. Per-call telemetry includes prompt/completion/total tokens, prompt chars + bytes, response chars, latency, and (for the planner) per-context-layer breakdown (`system` / `roster` / `cross_session` / `history` / `recall` / `failure` / `user_message`). Subagent records cross the IPC boundary in `AgentIpcOutput.metrics`. TUI bubble opt-in via `TENGU_TUI_METRICS=1`.
+First-class. `src/domain/metrics.rs` records one `MetricsRecord` per LLM call (planner + each subagent inner-loop turn, the wiki compiler, each Jev decision) and per embedding call. Three surfaces: `RUST_LOG=tengu=info` baseline (always-on), in-process broadcast bus (`OnceLock<broadcast::Sender>`), and `OrchestratorEvent::MetricsRecorded` re-broadcast on the event bus. Per-call telemetry includes prompt/completion/total tokens, prompt chars + bytes, response chars, latency, and (for the planner) per-context-layer breakdown (`system` / `roster` / `cross_session` / `history` / `user_message`, plus `session_recall` on `plan`, `recall` / `failure` on `replan`). Subagent records cross the IPC boundary in `AgentIpcOutput.metrics`. TUI bubble opt-in via `TENGU_TUI_METRICS=1`.
 
 ### Hermes
 
@@ -205,7 +213,7 @@ Tengu now has the most granular *attribution* (per-context-layer planner breakdo
 
 Beyond the open items above, three architectural directions where Tengu lags behind one of the other two:
 
-1. **Borrow Hermes's closed learning loop.** Tengu has `skill_distill`, `learning-agent` + `manage_skill`, `tengu skill evolve` and the three-tier scanner — the building blocks of in-use refinement — but no orchestrator wiring that says "after this complex task, propose a skill update." Adding a post-turn hook that runs `skill_distill` against successful long sessions (gated on user confirmation, like PI's `AskUserQuestion`) would close the same loop without going fully autonomous.
+1. **Borrow Hermes's closed learning loop.** Tengu has `skill_distill`, `manage_skill` / `view_skill`, `tengu skill evolve` and the skill scanner — the building blocks of in-use refinement — but no orchestrator wiring that says "after this complex task, propose a skill update." Adding a post-turn hook that runs `skill_distill` against successful long sessions (gated on user confirmation, like PI's `AskUserQuestion`) would close the same loop without going fully autonomous.
 2. **Borrow Hermes's session search + summarisation.** With durable msg persistence shipped today, the data is now there. A follow-up that runs LLM summarisation on session-old messages and writes back into `agentic_memory step outputs` would make Tengu's recall comparable to Hermes's FTS5 + summary path, while keeping the vector-first design.
 3. **Borrow PI's MCP marketplace shape.** Tengu has the MCP bridge but no UX for discovering or installing servers. A `tengu mcp install <name>` subcommand backed by a tiny registry (even just a JSON manifest) would let users adopt connectors without editing TOML.
 
@@ -213,4 +221,4 @@ These are all additive — they don't conflict with the doctrine ("LLM = heart, 
 
 ---
 
-*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above, a 2026-09-18 fact pass (banner at top) and a 2026-10-02 pass (§ Trading runtime axes; Tengu rows of the TL;DR and § Tools). The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*
+*Last updated 2026-04-26 with a 2026-04-28 follow-up adding the Observability section above, a 2026-09-18 fact pass (banner at top), a 2026-10-02 pass (§ Trading runtime axes; Tengu rows of the TL;DR and § Tools) and a 2026-10-08 code check (lineage + evidence, strategy ranking, source evidence, counts, skill rows). The "What landed today" section is the 2026-04-26 snapshot and is intentionally not amended in place — see `SESSION_HANDOFF.md` for everything since. Companion files: `comparison-2026-04-26.svg` for the diagram, `SESSION_HANDOFF.md` for the day-to-day handoff doc, `tengu-analysis.html` for the deep historical analysis.*

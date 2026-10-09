@@ -12,6 +12,7 @@ window.TUTORIAL = {
     { id: "runtime", kanji: "動", name: "Runtime", blurb: "Long-running loops, typed observations and the numbers they leave." },
     { id: "desk", kanji: "市", name: "Trading desk", blurb: "Solana LP tools and the paper desk with its risk gate." },
     { id: "research", kanji: "史", name: "Research", blurb: "History first: backfill public data, then backtest on it." },
+    { id: "opportunity", kanji: "機", name: "Opportunities", blurb: "Software opportunities: sourced evidence, exact money, HOLD as a real answer." },
     { id: "operate", kanji: "営", name: "Operate", blurb: "Diagnose, deploy and clean up." }
   ],
   pages: [
@@ -49,6 +50,10 @@ window.TUTORIAL = {
     { slug: "backtest", chapter: "research", title: "Backtests", blurb: "A pure engine that proves no future bar can change a past decision." },
     { slug: "evidence", chapter: "research", title: "Forward evidence", blurb: "Freeze what a forward run recorded, then grade it from the books it saw." },
     { slug: "lineage", chapter: "research", title: "Lineage and generations", blurb: "Every idea, run and verdict as a record; a frozen generation cannot drift." },
+    { slug: "strategy-ranking", chapter: "research", title: "Strategy ranking", blurb: "A sealed contract says how strategies rank, weakest first, on the same data." },
+    { slug: "source-evidence", chapter: "research", title: "Source evidence", blurb: "Facts from approved sources with full provenance; an inference is never a fact." },
+
+    { slug: "soe", chapter: "opportunity", title: "Software opportunities", blurb: "tengu soe: gate and rank software opportunities offline on a private, signed profile." },
 
     { slug: "ops", chapter: "operate", title: "Diagnose and deploy", blurb: "doctor, prune, Docker and the Tor proxy." }
   ]

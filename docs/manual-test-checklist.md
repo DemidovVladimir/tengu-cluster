@@ -9,7 +9,7 @@ Run this at the end of every implementation phase. Both the TUI and Telegram cha
 - [ ] `cargo test --test scope_lint --test run_agent_ipc` passes (structural scope lint + IPC boundary)
 - [ ] `cargo clippy --all-targets -- -D warnings` passes
 - [ ] Network: `make tor` is up (Arti + lyrebird-rs on 127.0.0.1:9050 — `[egress] network = "tor"` is the default) OR the config sets `[egress] network = "open"`; `cargo run -- doctor [--sandbox <name>]` prints `network:` + proxy reachability (`--tor` = live exit check)
-- [ ] (with `--features postgres_memory`) Postgres reachable: `psql "$TENGU_MEMORY_DATABASE_URL" -c 'select count(*) from agentic_memory'` succeeds
+- [ ] (with `--features postgres_memory`) Postgres reachable: `psql "$TENGU_MEMORY_DATABASE_URL" -c 'select count(*) from memory_events'` succeeds (the `agentic_memory` tool's tables are created on first use)
 - [ ] `git status --short` shows only the changes expected for the current phase
 
 ## TUI smoke (default agent)
@@ -31,7 +31,7 @@ Launch with `cargo run -- chat --sandbox lping` (the sandbox sets `[egress] netw
 
 ## Telegram smoke (default)
 
-Launch with `cargo run -- telegram` (`TELEGRAM_BOT_TOKEN` env var required; `[telegram]` has no token key). From the phone client associated with that bot token:
+Launch with `cargo run -- telegram` (`TELEGRAM_BOT_TOKEN` env var required; `[telegram]` has no token key; an allow-list is required too — `[telegram] allowed_users` or `TENGU_TELEGRAM_ALLOWED_USERS`, else it refuses to start). From the phone client associated with that bot token:
 
 - [ ] `/agents` lists the configured agents
 - [ ] `hello` returns a direct reply
@@ -50,13 +50,13 @@ Launch with `cargo run --features claude_code -- telegram --sandbox storage-test
 
 - [ ] `TENGU_PLANNER_REGISTRY.md` at the repo root is regenerated on a planner turn and lists agents (`[agents.*]` with a `description`) + skills + core/MCP tools
 - [ ] `TENGU_PLAN.md` at the repo root holds the last accepted plan (debug mirror — children receive the plan over IPC as `plan_state`)
-- [ ] (with `--features postgres_memory`) step summaries landed: `psql "$TENGU_MEMORY_DATABASE_URL" -c "select session_id, agent, left(content, 80) from agentic_memory order by created_at desc limit 5"`
+- [ ] (with `--features postgres_memory`) step summaries landed: `psql "$TENGU_MEMORY_DATABASE_URL" -c "select session_id, agent, kind, left(content, 80) from memory_events order by created_at desc limit 5"` (`kind = step_output`)
 
 ## xmarket paper desk smoke (`sandboxes/xmarket`, ~10 min, no LLM)
 
 From the repo root. Build: `CARGO_TARGET_DIR=$HOME/.cache/tengu-xm.noindex/main CARGO_BUILD_JOBS=2 nice -n 10 cargo build --release`; `T=$HOME/.cache/tengu-xm.noindex/main/release/tengu`. Enter skips the vault prompt. Runbook: top of `sandboxes/xmarket/config.toml`; full checks: `docs/validation-checklist.md` § 9.
 
-- [ ] `"$T" doctor --sandbox xmarket </dev/null` exits 0 (agents `xm`, `xm_architect`, `xm_executor`; `network: open`)
+- [ ] `"$T" doctor --sandbox xmarket </dev/null` exits 0 (agents `xm_architect`, `xm_executor` — no planner; `network: open`)
 - [ ] `tmux new -s xm`, then `nice -n 10 "$T" run --sandbox xmarket` in the pane (foreground — never `&`)
 - [ ] a second `"$T" run --sandbox xmarket </dev/null` exits 1 (lease `runtime:xmarket`)
 - [ ] `"$T" doctor --sandbox xmarket --live </dev/null` exits 0 at +2 min (heartbeat fresh, 4 / 4 required feeds live)
@@ -73,6 +73,14 @@ Same `$T`. Runbook: top of `sandboxes/xlab/config.toml`; expected numbers: `docs
 - [ ] `"$T" backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01T00:00:00Z </dev/null` → research `n=1500 mean_net_bps=+50.45`, holdout `n=886 mean_net_bps=+45.44` (data through 2026-10-01), a run dir under `~/.tengu/state/xlab/backtests/`
 - [ ] the same + `--gate xl_gate --max-decisions 1500 --offline` → `cache 1500 hits · 0 misses`, `jev − rules +28.93 bps`
 - [ ] (live, optional) `"$T" chat --sandbox xlab`: "test a weekend follow placebo on the holdout split" → in-sample runs first, one counted holdout read (`~/.tengu/state/xlab/backtests/holdout-reads.jsonl` gains a line)
+
+## Lineage · sources smoke (no LLM, no network)
+
+Same `$T`, from the repo root. Docs: `docs/lineage-2026-10-06.md`, `docs/source-evidence-2026-10-08.md`.
+
+- [ ] `"$T" lineage verify --pins </dev/null` exits 0 (no Error finding; W1 pins of `xlab` / `xmarket-weekend` intact)
+- [ ] `"$T" lineage generation W1 </dev/null`: frozen digest matches its lock, every pin `OK`
+- [ ] `"$T" sources list --sandbox soe </dev/null` prints every `[sources.registry.*]` row (kind, enabled, runtime switch, retention) without creating `sources.db`
 
 ## Regression baselines
 

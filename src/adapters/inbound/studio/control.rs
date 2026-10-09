@@ -683,6 +683,7 @@ pub(crate) mod tests {
             sandbox: SANDBOX.into(),
             state_dir: dir.to_path_buf(),
             ledger: false,
+            soe_state: None,
         }
     }
 

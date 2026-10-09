@@ -7,9 +7,12 @@ mod doctor;
 mod evidence;
 mod history;
 mod lineage;
+mod ranking;
 mod risk;
 mod run_agent;
 mod skill;
+mod soe;
+mod sources;
 mod studio;
 mod tool;
 mod trace;
@@ -168,6 +171,17 @@ enum Commands {
         #[command(flatten)]
         args: backtest::BacktestArgs,
     },
+    /// Strategy rankings of a [strategy_ranking] sandbox (no LLM): `run`
+    /// one ranking date of a sealed contract — freshness, one backtest per
+    /// strategy, rank, publish <state dir>/strategy-rankings/<contract>/<date>/
+    /// and latest — under a lease, resumable; `show` a published ranking.md.
+    Ranking {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: ranking::RankingAction,
+    },
     /// Preserve and grade forward evidence (docs/lineage-2026-10-06.md § 3):
     /// `snapshot` a record into a read-only vault, `verify` it, recorder
     /// `coverage`, `grade` a paper ledger, `regrade` rule W from recorded
@@ -181,6 +195,27 @@ enum Commands {
     /// capabilities, generations, seal a preregistration. No config needed.
     /// See docs/lineage-2026-10-06.md § 5.
     Lineage(lineage::LineageArgs),
+    /// Software Opportunity Engine (docs/soe-2026-10-08.md). Offline: `init`
+    /// writes the UNSIGNED private profile template; `check` an opportunity
+    /// (three scenarios, hard gates, rank keys), `portfolio` a week,
+    /// `sensitivity` a tornado, `eval` the dated eval set — each on the
+    /// signed private profile. Weekly (private SOE state, --sandbox):
+    /// `cycle`, `replay`, `grade`, `resolve`, `review` (the Operator Review #2
+    /// packet), `verify`, `show`. No contact, spend, publish or deploy.
+    Soe(soe::SoeArgs),
+    /// The source layer (O2) of a `[sources]` sandbox (sandboxes/soe): `list`
+    /// the registry, `fetch` / `import` records into
+    /// <TENGU_HOME>/state/<sources.state>/sources.db (operator only — agents
+    /// never fetch), `terms` (store the reviewed terms page), `asof` the evidence
+    /// packet, `purge` per retention, `disable` / `enable` a source at runtime
+    /// (kill switch). No LLM.
+    Sources {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: sources::SourcesAction,
+    },
     /// Paper-ledger risk state of a `[risk]` sandbox: `status` (read-only),
     /// `halt` / `resume` (operator at a terminal only; resume asks for the
     /// account name, and for the content of `TENGU_RISK_RESUME_SECRET_FILE`
@@ -474,6 +509,20 @@ pub(crate) async fn run() -> Result<()> {
         return lineage::run_lineage(args);
     }
 
+    if let Some(Commands::Soe(args)) = cli.command {
+        // Profile + record files only — no config, secrets or egress; stdout
+        // carries the report.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return soe::run_soe(args, cli.config).await;
+    }
+
     if let Some(Commands::Trace { sandbox, action }) = cli.command {
         // Trace files only — no config, no secrets; stdout carries JSON lines.
         tracing_subscriber::fmt()
@@ -693,9 +742,17 @@ pub(crate) async fn run() -> Result<()> {
             let config = load_sandbox_or(sandbox, config)?;
             risk::run_risk(&config, action).await
         }
+        Commands::Sources { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            sources::run_sources(&config, action).await
+        }
         Commands::Backtest { sandbox, args } => {
             let config = load_sandbox_or(sandbox, config)?;
             backtest::run_backtest(&config, args).await
+        }
+        Commands::Ranking { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            ranking::run_ranking_command(&config, action).await
         }
         Commands::Eval {
             skills,
@@ -839,6 +896,9 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Lineage(_) => {
             unreachable!("Commands::Lineage is dispatched earlier in run()")
         }
+        Commands::Soe(_) => {
+            unreachable!("Commands::Soe is dispatched earlier in run()")
+        }
         Commands::Tool { .. } => {
             unreachable!("Commands::Tool is dispatched earlier in main()")
         }
@@ -865,7 +925,9 @@ fn replacing_sandbox(command: &Option<Commands>) -> Option<&str> {
         | Commands::Studio { sandbox, .. }
         | Commands::History { sandbox, .. }
         | Commands::Backtest { sandbox, .. }
-        | Commands::Risk { sandbox, .. } => sandbox.as_deref(),
+        | Commands::Ranking { sandbox, .. }
+        | Commands::Risk { sandbox, .. }
+        | Commands::Sources { sandbox, .. } => sandbox.as_deref(),
         _ => None,
     }
 }
@@ -880,6 +942,8 @@ fn stdout_is_data(command: &Option<Commands>) -> bool {
             Commands::History { .. }
                 | Commands::Risk { .. }
                 | Commands::Backtest { .. }
+                | Commands::Sources { .. }
+                | Commands::Ranking { .. }
                 | Commands::Decide { .. }
                 | Commands::Doctor { .. }
                 | Commands::Studio { .. }
@@ -912,6 +976,20 @@ mod tests {
             replacing_sandbox(&command(&["tengu", "run", "--sandbox", "xmarket"])),
             Some("xmarket")
         );
+        assert_eq!(
+            replacing_sandbox(&command(&["tengu", "sources", "list", "--sandbox", "soe"])),
+            Some("soe")
+        );
+        assert_eq!(
+            replacing_sandbox(&command(&[
+                "tengu",
+                "ranking",
+                "run",
+                "--sandbox",
+                "xlab-w2"
+            ])),
+            Some("xlab-w2")
+        );
         assert_eq!(replacing_sandbox(&command(&["tengu", "chat"])), None);
         assert_eq!(replacing_sandbox(&command(&["tengu", "status"])), None);
         assert_eq!(replacing_sandbox(&command(&["tengu"])), None);
@@ -942,6 +1020,8 @@ mod tests {
                 "0",
             ],
             &["tengu", "history", "range", "k", "--from", "0", "--to", "1"],
+            &["tengu", "sources", "--sandbox", "soe", "list"],
+            &["tengu", "ranking", "--sandbox", "xlab-w2", "show"],
         ] {
             assert!(stdout_is_data(&command(args)), "{args:?}");
         }
@@ -967,6 +1047,110 @@ mod tests {
             ]),
             Some(Commands::Trace { .. })
         ));
+    }
+
+    /// Every `tengu sources` subcommand parses with its documented flags.
+    #[test]
+    fn sources_subcommands_parse() {
+        for args in [
+            vec!["sources", "--sandbox", "soe", "list"],
+            vec![
+                "sources",
+                "fetch",
+                "--source",
+                "ted_search",
+                "--from",
+                "2026-10-01",
+                "--to",
+                "2026-10-02",
+            ],
+            vec!["sources", "fetch", "--source", "ted_search"],
+            vec![
+                "sources",
+                "fetch",
+                "--source",
+                "sec_edgar",
+                "--from",
+                "2026-01-01",
+                "--ciks",
+                "0000320193",
+            ],
+            vec![
+                "sources",
+                "import",
+                "--source",
+                "ted_search",
+                "--file",
+                "p.json",
+                "--observed-at",
+                "2026-10-02",
+            ],
+            vec![
+                "sources",
+                "asof",
+                "--at",
+                "2026-10-09",
+                "--mode",
+                "knowable",
+                "--source",
+                "ted_search",
+                "--entity",
+                "ted:buyer:CZE:60457856",
+                "--event",
+                "ted:procedure:x",
+                "--published-from",
+                "2026-10-01",
+                "--text",
+            ],
+            vec![
+                "sources",
+                "terms",
+                "--source",
+                "ted_search",
+                "--file",
+                "terms.html",
+            ],
+            vec!["sources", "purge"],
+            vec!["sources", "purge", "--source", "ted_search"],
+            vec![
+                "sources",
+                "disable",
+                "--source",
+                "ted_search",
+                "--reason",
+                "review",
+            ],
+            vec![
+                "sources",
+                "enable",
+                "--source",
+                "ted_search",
+                "--reason",
+                "reviewed",
+            ],
+        ] {
+            let full: Vec<&str> = std::iter::once("tengu")
+                .chain(args.iter().copied())
+                .collect();
+            let parsed = Cli::try_parse_from(&full);
+            assert!(
+                matches!(
+                    parsed,
+                    Ok(Cli {
+                        command: Some(Commands::Sources { .. }),
+                        ..
+                    })
+                ),
+                "{args:?}"
+            );
+        }
+        for bad in [
+            vec!["tengu", "sources", "disable", "--source", "ted_search"],
+            vec!["tengu", "sources", "asof"],
+            vec!["tengu", "sources", "asof", "--at", "1", "--mode", "later"],
+        ] {
+            assert!(Cli::try_parse_from(&bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

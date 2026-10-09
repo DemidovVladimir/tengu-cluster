@@ -240,7 +240,7 @@
     <div class="toggles">
       <label><input type="checkbox" id="a-proxy" checked> <span>Tor egress (default)</span></label>
       <label><input type="checkbox" id="a-bridge" checked> <span>Tengu tools for this run</span></label>
-      <label><input type="checkbox" id="a-hard"> <span>hardened sandbox (<code>[risk]</code> or Solana signer)</span></label>
+      <label><input type="checkbox" id="a-hard"> <span>hardened sandbox (<code>[risk]</code>, <code>[soe]</code> or Solana signer)</span></label>
     </div>
     <pre class="argv" id="argv"></pre>
     <span class="verdict ok" id="argv-verdict" aria-live="polite">-</span>
@@ -420,7 +420,7 @@ builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># requir
     var eff = proxy.checked && prof === "editor_shell" ? "editor" : prof;
     envAdd.classList.toggle("off", !proxy.checked);
     if (hard.checked && prof !== "none") {
-      out.innerHTML = '<span class="drop">' + esc('Config validation failed (1 issue):\n- agents.xm_architect: engine = "claude_code" in a hardened sandbox (Solana signer or [risk]) needs [agents.xm_architect.claude_code] builtin_tools_profile = "none" — got builtin_tools_profile = "' + prof + '"; built-in tools run outside tengu scopes') + "</span>";
+      out.innerHTML = '<span class="drop">' + esc('Config validation failed (1 issue):\n- agents.xm_architect: engine = "claude_code" in a hardened sandbox (Solana signer, [risk] or [soe]) needs [agents.xm_architect.claude_code] builtin_tools_profile = "none" — got builtin_tools_profile = "' + prof + '"; built-in tools run outside tengu scopes') + "</span>";
       verdict.className = "verdict bad";
       verdict.textContent = "Config::load refuses: no CLI is ever started";
       return;

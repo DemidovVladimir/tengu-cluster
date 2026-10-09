@@ -1,0 +1,9 @@
+id = "intel.soe_challenge"
+title = "SOE Critic challenge (conservative-only, into the open run, O3)"
+class = "INTELLIGENCE"
+version = 1
+permission = "RESEARCH"
+lifecycle = "CANDIDATE"
+contract = "tool_schema:soe_challenge"
+bindings = ["tool:soe_challenge"]
+notes = "One soe.challenge/1 record into the open run dir (application::soe::submit::submit_challenge: CHALLENGE phase, a target among the week's candidates, evidence in the packet); the week merges it only toward the conservative side (an input made worse or unknown, a gate held). Never contacts, spends, publishes or deploys. Offline-tested only."

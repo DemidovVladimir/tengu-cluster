@@ -37,8 +37,8 @@
 | DB | Postgres + pgvector | Open Brain live memory |
 | Wiki | `.agentic-memory/wiki/` or host-selected root | Karpathy LLM Wiki compiled memory |
 | Raw store | `.agentic-memory/raw/` | Immutable source snapshots |
-| MCP server | Standalone plugin command | Portable tool surface for Codex/Claude/Cowork |
-| Tengu spike | `channel_runtime`, `planner.rs`, `run-agent` capture | Reference only; not product target |
+| MCP server | Standalone plugin command (as built: `tengu agentic-memory-server`, `--features postgres_memory`, `mcp_bridge.rs::run_agentic_memory_mcp_server`; workspace = cwd or `TENGU_BRIDGE_WORKSPACE`) | Portable tool surface for Codex/Claude/Cowork |
+| Tengu spike | `application/orchestrator/planner.rs` (recall lanes + user-message writes via `ports::memory::RecallStore` → `AgenticRecallStore`), `inbound/cli/run_agent.rs::try_persist_agentic_step_summary`, `inbound/webhooks.rs` (output capture) | Reference only; not product target |
 | Codex adapter | future `.codex-plugin` or MCP config | Inject recall/wiki and propose AGENTS/skill patches |
 | Claude Cowork adapter | future MCP + project files | Inject recall/wiki and propose CLAUDE/project rule patches |
 
@@ -62,20 +62,20 @@
 | Fast recall | Postgres FTS + pgvector | Plugin |
 | Graph/claims | Postgres tables | Consolidator |
 | Compiled wiki | Markdown under `.tengu/agentic-memory/wiki/` | LLM compiler |
-| Schema | `.tengu/agentic-memory/AGENTS.md` | Human-reviewed |
+| Schema | `.tengu/agentic-memory/AGENTS.md` (planned, not built) | Human-reviewed |
 
 ## Minimal Schema
 
-| Table | Columns |
-|---|---|
-| `memory_events` | id, session_id, agent, role, kind, content, summary, embedding, metadata, created_at |
-| `memory_sources` | id, kind, uri, title, raw_path, hash, metadata, created_at |
-| `memory_chunks` | id, source_id, event_id, content, embedding, metadata |
-| `memory_claims` | id, claim, confidence, source_ids, status, created_at |
-| `memory_links` | from_id, to_id, relation, reason |
-| `memory_promotions` | id, target_kind, target_id, status, reason, evidence |
+As built: `ensure_schema` in `src/adapters/outbound/tools/agentic_memory/mod.rs` (once per process, advisory lock; `vector(1536)`, HNSW cosine + English FTS indexes).
 
-Planned graph tables: `memory_claims`, `memory_links`.
+| Table | Columns | Built |
+|---|---|---|
+| `memory_events` | id, session_id, agent, role, kind, content, summary, embedding, metadata, created_at | yes |
+| `memory_sources` | id, kind, uri, title, raw_path, hash, metadata, created_at | yes |
+| `memory_chunks` | id, source_id, event_id, content, embedding, metadata, created_at | yes |
+| `memory_promotions` | id, target_kind, target_id, status, reason, evidence, created_at | yes |
+| `memory_claims` | id, claim, confidence, source_ids, status, created_at | planned |
+| `memory_links` | from_id, to_id, relation, reason | planned |
 
 ## Tool API
 
@@ -85,8 +85,8 @@ Planned graph tables: `memory_claims`, `memory_links`.
 | `recall` | Retrieve token-budgeted context |
 | `ingest_source` | Add file, URL, note, or transcript to raw memory |
 | `promote` | Mark stable/high-value memory for wiki compilation |
-| `compile_wiki` | Update Markdown wiki from promoted items |
-| `lint` | Find duplicates, contradictions, stale pages, missing citations |
+| `compile_wiki` | Update Markdown wiki from promoted items (as built: one page `<workspace>/.tengu/agentic-memory/wiki/<title-slug>.md` from the newest 30 promotions; LLM `TENGU_WIKI_COMPILER_MODEL`, default `anthropic/claude-sonnet-4-6`, via OpenRouter; deterministic bullet page on LLM failure; a title naming an instruction file is refused) |
+| `lint` | Find duplicates, contradictions, stale pages, missing citations (as built: counts only — events, sources, chunks, promotions, wiki pages) |
 | `propose_behavior` | Produce reviewable skill/config patch from evidence (planned; not in the Tengu `agentic_memory` op enum yet) |
 
 ## Tengu Spike Touchpoints
@@ -102,6 +102,7 @@ Planned graph tables: `memory_claims`, `memory_links`.
 | `run-agent` env | `TENGU_SESSION_ID` + `TENGU_AGENT_NAME` (= the `[agents.<name>]` key) stamped onto `capture` rows when the LLM omits them |
 | `planner.rs` recall/write paths | Spike only |
 | `compress_and_store` path | Spike only |
+| `tengu agentic-memory-server` | Standalone MCP stdio server exposing only `agentic_memory` (`--features postgres_memory`) |
 | External hosts | Use MCP server first; add native plugin packaging only when host needs richer lifecycle hooks |
 
 ## Config Sketch (not implemented — `TENGU_MEMORY_DATABASE_URL` is the only knob today)

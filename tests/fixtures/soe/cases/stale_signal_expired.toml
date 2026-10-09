@@ -1,0 +1,111 @@
+# Synthetic eval case: invented example values, `synthetic:` record ids — no
+# real firm, person or figure. Expectations hold for the profile
+# `synthetic-operator` (tests/fixtures/soe/profile.synthetic.toml).
+schema = "soe.eval_case/1"
+id = "stale_signal_expired"
+version = 1
+as_of = "2026-10-05T18:00:00Z"
+class = "STALE"
+synthetic = true
+profile = "synthetic-operator"
+note = "The only cited record is a listing valid until 2026-09-30: expired at the decision, it supports nothing and the candidate holds."
+
+[[cited]]
+record_id = "synthetic:listing-filing-helper:d89302d36a48716af9f898fae9c03d88ff225c205b167123c7f179fab46c8c74"
+event_key = "synthetic:listing:filing-helper"
+kind = "FACT"
+knowable_at = "2026-09-01"
+valid_until = "2026-09-30"
+
+[expected]
+verdicts = { filing-automation-stale = "HOLD" }
+ranked = []
+next_information = ["signals"]
+gates = { filing-automation-stale = ["NO_TESTABLE_EVIDENCE"] }
+
+[[candidates]]
+schema = "soe.opportunity/1"
+id = "filing-automation-stale"
+version = 1
+as_of = "2026-10-05"
+customer = "small accounting firms (synthetic example)"
+pain = "a changed filing format, re-keyed by hand"
+mechanism = "AUTOMATE"
+alternatives = ["PRODUCTIZE", "HOLD"]
+requires_skills = ["automation"]
+signals = ["synthetic:listing-filing-helper:d89302d36a48716af9f898fae9c03d88ff225c205b167123c7f179fab46c8c74"]
+
+[candidates.jurisdictions]
+customer = "DE"
+operator = "DE"
+entity = "DE"
+delivery = "EU"
+tax = "DE"
+payment = "EU"
+data = "EU"
+
+[candidates.economics]
+currency = "EUR"
+revenue_quality = "RECURRING"
+tax_review = "UNKNOWN"
+variable_cost = { value = { low = 700, base = 900, high = 1100 }, evidence = [], as_of = "2026-10-01" }
+fixed_costs_per_month = { value = { low = "30.00", base = "40.00", high = "60.00" }, evidence = [], as_of = "2026-10-01" }
+owner_hours_per_month = { value = { low = 7, base = 9, high = 13 }, evidence = [], as_of = "2026-10-01" }
+ramp_months = { value = { low = 1, base = 2, high = 3 }, evidence = [], as_of = "2026-10-01" }
+
+[candidates.economics.revenue]
+kind = "RECURRING"
+leads_per_month = { value = { low = 7, base = 10, high = 14 }, evidence = ["url:https://example.org/synthetic-evidence"], as_of = "2026-10-01" }
+conversion = { value = { low = 1500, base = 2000, high = 2500 }, evidence = [], as_of = "2026-10-01" }
+churn_per_month = { value = { low = 300, base = 500, high = 900 }, evidence = [], as_of = "2026-10-01" }
+price_per_month = { value = { low = "450.00", base = "600.00", high = "750.00" }, evidence = [], as_of = "2026-10-01" }
+collection_loss = { value = { low = 0, base = 150, high = 300 }, evidence = [], as_of = "2026-10-01" }
+
+[candidates.economics.initial]
+acquisition = { value = { low = "0.00", base = "0.00", high = "0.00" }, evidence = [], as_of = "2026-10-01" }
+setup = { value = { low = "700.00", base = "900.00", high = "1400.00" }, evidence = [], as_of = "2026-10-01" }
+validation = { value = { low = "200.00", base = "300.00", high = "450.00" }, evidence = [], as_of = "2026-10-01" }
+working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, evidence = [], as_of = "2026-10-01" }
+
+[candidates.risk]
+risks = []
+concentration = [{ dimension = "PLATFORM", name = "the filing portal", share = 7500 }]
+
+[candidates.risk.max_loss]
+cash = { low = "900.00", base = "1300.00", high = "2100.00" }
+owner_hours = { low = 25, base = 40, high = 70 }
+reputation = "a missed delivery for one pilot client"
+dependency = "the filing portal's format"
+
+[candidates.risk.bounds]
+owner_time = "BOUNDED"
+support = "BOUNDED"
+payment_access = "BOUNDED"
+scope = "BOUNDED"
+
+[candidates.experiment]
+hypothesis = "firms pay to stop re-keying filings"
+metric = "paid pilots"
+threshold = { op = "GE", value = 3, unit = "paying clients" }
+deadline = "2026-11-13"
+expires_at = "2026-11-27"
+max_owner_hours = 20
+stop_rule = "fewer than 3 paying clients by the deadline"
+approvals = ["CONTACT", "SPEND"]
+
+[[candidates.experiment.stages]]
+name = "interviews"
+cash = "0.00"
+recoverable = "0.00"
+owner_hours = 5
+
+[[candidates.experiment.stages]]
+name = "pilot"
+cash = "750.00"
+recoverable = "0.00"
+owner_hours = 15
+stop_rule = "no paying client after 4 demos"
+
+[candidates.ordinal]
+defensibility = "MEDIUM"
+reversibility = "HIGH"

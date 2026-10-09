@@ -21,12 +21,13 @@
 //! | Errors | `http_class` mapping (403 `auth_required`: a missing / blocked User-Agent; 429 `rate_limited`; 5xx `transient`; a body that does not decode `decode`); retried per `Retry`; a failed request stops that instrument — events already written stay, no coverage row is written |
 //! | Audit | one egress line per request: `tool = "sec_edgar"`, `host`, `path` (CIK and accession in full), `status`, `ms` |
 //! | Notes | per instrument: the CIK, filings in the span, index pages read / already stored, how `acceptanceDateTime` related to the index time (`domain::sec::json_clock`), an index whose `Last-Modified` disagrees |
+//! | Raw replies (O2) | `submissions_reply` / `older_page_reply` / `index_reply`: the same requests, the 2xx [`Reply`] undecoded (URL, status, content type, body) — the source store keeps the bytes (`outbound/sources/sec.rs`); `with_budget` names the `[sources]` row's budget, `user_agent_from` its User-Agent variable |
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Result};
-use reqwest::header::{HeaderValue, ACCEPT, USER_AGENT};
+use reqwest::header::{HeaderValue, ACCEPT, CONTENT_TYPE, USER_AGENT};
 use reqwest::Url;
 use serde_json::{json, Value};
 
@@ -66,19 +67,35 @@ const DAY_MS: i64 = 86_400_000;
 /// `$SEC_USER_AGENT` → the header (module table); unset or blank refused,
 /// naming the variable — the value itself is never echoed.
 pub(crate) fn user_agent(env: Option<String>) -> Result<HeaderValue> {
+    user_agent_from(USER_AGENT_ENV, env)
+}
+
+/// [`user_agent`] read from the variable `var` (a `[sources]` row's
+/// `auth = "user_agent_env:<VAR>"`).
+pub(crate) fn user_agent_from(var: &str, env: Option<String>) -> Result<HeaderValue> {
     let value = env
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             anyhow!(
-                "{USER_AGENT_ENV} is not set: SEC EDGAR asks every automated client for a \
+                "{var} is not set: SEC EDGAR asks every automated client for a \
                  User-Agent naming it and an email (\"Sample Company admin@example.com\", \
                  https://www.sec.gov/os/accessing-edgar-data) — set it in the environment or \
                  the repo .env"
             )
         })?;
-    HeaderValue::from_str(&value)
-        .map_err(|_| anyhow!("{USER_AGENT_ENV} is not a valid HTTP header value"))
+    HeaderValue::from_str(&value).map_err(|_| anyhow!("{var} is not a valid HTTP header value"))
+}
+
+/// One 2xx reply as read (the source store keeps it as a raw snapshot).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Reply {
+    /// The URL read, in full.
+    pub url: String,
+    pub status: u16,
+    /// The reply's `Content-Type`, else what was asked for.
+    pub content_type: String,
+    pub body: String,
 }
 
 /// The EDGAR endpoints with their scope, budget and User-Agent.
@@ -87,11 +104,17 @@ pub(crate) struct SecClient {
     www: Url,
     data: Url,
     scope: ToolScope,
+    /// The `[rate_limits.<name>]` it budgets against ([`RATE_LIMIT`] unless
+    /// a `[sources]` row names another).
+    budget_name: String,
     budget: Option<RateLimitConfig>,
     user_agent: HeaderValue,
     timeout: Duration,
     max_budget_wait: Duration,
     limiters: &'static Limiters,
+    /// Tests: every audit event, as sent to the egress log.
+    #[cfg(test)]
+    audit_tap: Option<std::sync::Arc<std::sync::Mutex<Vec<Value>>>>,
 }
 
 /// An operator command's client (`tengu history events`): the public hosts,
@@ -135,22 +158,46 @@ impl SecClient {
             www: base(www)?,
             data: base(data)?,
             scope,
+            budget_name: RATE_LIMIT.to_string(),
             budget,
             user_agent,
             timeout: TIMEOUT,
             max_budget_wait: MAX_BUDGET_WAIT,
             limiters: limiters(),
+            #[cfg(test)]
+            audit_tap: None,
         })
     }
 
+    /// Budget against `[rate_limits.<name>]` = `budget` instead.
+    pub(crate) fn with_budget(mut self, name: &str, budget: Option<RateLimitConfig>) -> Self {
+        self.budget_name = name.to_string();
+        self.budget = budget;
+        self
+    }
+
     #[cfg(test)]
-    fn with_limiters(mut self, limiters: &'static Limiters) -> Self {
+    pub(crate) fn with_limiters(mut self, limiters: &'static Limiters) -> Self {
         self.limiters = limiters;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_audit_tap(
+        mut self,
+        tap: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    ) -> Self {
+        self.audit_tap = Some(tap);
         self
     }
 
     /// One GET (module table): the 2xx body; errors carry an [`HttpError`].
     async fn get(&self, base: &Url, path: &str, accept: &'static str) -> Result<String> {
+        Ok(self.get_reply(base, path, accept).await?.body)
+    }
+
+    /// One GET (module table): the 2xx [`Reply`]; errors carry an [`HttpError`].
+    async fn get_reply(&self, base: &Url, path: &str, accept: &'static str) -> Result<Reply> {
         let mut url = base.clone();
         url.set_path(path);
         let host = url.host_str().unwrap_or_default().to_string();
@@ -166,7 +213,13 @@ impl SecClient {
         let budget = self.budget.as_ref();
         if let Err(err) = self
             .limiters
-            .acquire(RATE_LIMIT, budget, 1, Priority::Read, self.max_budget_wait)
+            .acquire(
+                &self.budget_name,
+                budget,
+                1,
+                Priority::Read,
+                self.max_budget_wait,
+            )
             .await
         {
             self.audit(&url, &host, Err(&err), None);
@@ -186,23 +239,34 @@ impl SecClient {
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let retry_after = retry_after_ms(resp.headers());
+                let content_type = resp
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or(accept)
+                    .to_string();
                 match resp.text().await {
                     Err(e) => Err(reqwest_error(e, &host, &scrub)),
-                    Ok(body) if (200..300).contains(&status) => Ok((status, body)),
+                    Ok(body) if (200..300).contains(&status) => Ok(Reply {
+                        url: url.to_string(),
+                        status,
+                        content_type,
+                        body,
+                    }),
                     Ok(body) => Err(http_status_error(status, retry_after, &body, &host, &scrub)),
                 }
             }
         };
         let ms = Some(started.elapsed().as_millis() as u64);
         match result {
-            Ok((status, body)) => {
-                self.audit(&url, &host, Ok(status), ms);
-                Ok(body)
+            Ok(reply) => {
+                self.audit(&url, &host, Ok(reply.status), ms);
+                Ok(reply)
             }
             Err(err) => {
                 if err.class == ErrorClass::RateLimited {
                     self.limiters
-                        .penalize(RATE_LIMIT, budget, err.retry_after_ms);
+                        .penalize(&self.budget_name, budget, err.retry_after_ms);
                 }
                 self.audit(&url, &host, Err(&err), ms);
                 Err(err.into())
@@ -237,6 +301,10 @@ impl SecClient {
                 }
             }
         }
+        #[cfg(test)]
+        if let Some(tap) = &self.audit_tap {
+            tap.lock().unwrap().push(event.clone());
+        }
         egress::policy().audit(event);
     }
 
@@ -260,6 +328,16 @@ impl SecClient {
         submissions(&v).map_err(|e| decode_err(&self.data, e).into())
     }
 
+    /// `CIK##########.json` as read, undecoded (the source store keeps the
+    /// bytes even when they do not decode).
+    pub(crate) async fn submissions_reply(&self, cik10: &str) -> Result<Reply> {
+        if !(cik10.len() == 10 && cik10.bytes().all(|b| b.is_ascii_digit())) {
+            bail!("CIK `{cik10}` is not 10 digits");
+        }
+        let path = format!("/submissions/CIK{cik10}.json");
+        self.get_reply(&self.data, &path, "application/json").await
+    }
+
     /// An older page (`filings.files[].name`).
     pub(crate) async fn older_page(&self, name: &str) -> Result<Vec<Filing>> {
         if !is_page_name(name) {
@@ -271,12 +349,36 @@ impl SecClient {
         filings_page(&v).map_err(|e| decode_err(&self.data, format!("{name}: {e}")).into())
     }
 
+    /// An older page as read, undecoded.
+    pub(crate) async fn older_page_reply(&self, name: &str) -> Result<Reply> {
+        if !is_page_name(name) {
+            bail!("`{name}` is not a submissions page name");
+        }
+        self.get_reply(
+            &self.data,
+            &format!("/submissions/{name}"),
+            "application/json",
+        )
+        .await
+    }
+
     /// A filing's index page → its acceptance.
     pub(crate) async fn index(&self, cik10: &str, accession: &str) -> Result<IndexAcceptance> {
         let path = index_path(cik10, accession).map_err(|e| anyhow!(e))?;
         let html = self.get(&self.www, &path, "text/html").await?;
         index_acceptance(&html, accession).map_err(|e| decode_err(&self.www, e).into())
     }
+
+    /// A filing's index page as read, undecoded.
+    pub(crate) async fn index_reply(&self, cik10: &str, accession: &str) -> Result<Reply> {
+        let path = index_path(cik10, accession).map_err(|e| anyhow!(e))?;
+        self.get_reply(&self.www, &path, "text/html").await
+    }
+}
+
+/// A reply's JSON (`decode` when it is not).
+pub(crate) fn reply_json(reply: &Reply) -> std::result::Result<Value, String> {
+    serde_json::from_str(reply.body.trim()).map_err(|e| format!("the reply is not JSON ({e})"))
 }
 
 fn decode_err(base: &Url, m: String) -> HttpError {

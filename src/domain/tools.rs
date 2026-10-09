@@ -47,6 +47,24 @@ pub(crate) const XM_WEEKEND_FADE: &str = "xm_weekend_fade";
 // xmarket workspace.
 pub(crate) const MARKET_HISTORY: &str = "market_history";
 pub(crate) const BACKTEST: &str = "backtest";
+/// Strategy rankings of a `[strategy_ranking]` sandbox (`tools/xlab/rank.rs`):
+/// runs the ranking coordinator (`application/ranking/`) or reads a
+/// published ranking; its state is the state dir's (`strategy-rankings/`).
+pub(crate) const STRATEGY_RANKING: &str = "strategy_ranking";
+
+// Source family (O2, `adapters/outbound/tools/sources/`) — read-only typed
+// rows over the sandbox's source store (`<sources state dir>/sources.db`);
+// one `sources` plugin. Agents never fetch: the operator does
+// (`tengu sources fetch`).
+pub(crate) const SOURCE_EVIDENCE: &str = "source_evidence";
+
+// SOE family (O3, `adapters/outbound/tools/soe/`) — the weekly cycle's
+// stage tools over the private SOE state root (`<sources state dir>/cycles/`,
+// `replays/`): one read, two writes into the open run dir (never a file, a
+// contact, a spend or a publish); one `soe` plugin serves all of them.
+pub(crate) const SOE_VIEW: &str = "soe_view";
+pub(crate) const SOE_PROPOSE: &str = "soe_propose";
+pub(crate) const SOE_CHALLENGE: &str = "soe_challenge";
 
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
@@ -135,6 +153,11 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     XM_WEEKEND_FADE,
     MARKET_HISTORY,
     BACKTEST,
+    STRATEGY_RANKING,
+    SOURCE_EVIDENCE,
+    SOE_VIEW,
+    SOE_PROPOSE,
+    SOE_CHALLENGE,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
@@ -155,4 +178,30 @@ pub(crate) const SOLANA_WRITE_TOOLS: &[&str] = &[
     DLMM_OPEN_POSITION,
     DLMM_CLOSE_POSITION,
     JUP_PERPS_ORDER,
+];
+
+/// The closed world of a Software Opportunity Engine sandbox (`[soe]`,
+/// `config/soe.rs`): every tool one of its agents may list — reads, the two
+/// stage writes into the open run dir (`soe_propose`, `soe_challenge`), skill
+/// docs, and the O2 `source_evidence` read. No write, contact, spend, publish
+/// or shell tool.
+pub(crate) const SOE_ALLOWED: &[&str] = &[
+    SOE_VIEW,
+    SOE_PROPOSE,
+    SOE_CHALLENGE,
+    SOURCE_EVIDENCE,
+    "read_file",
+    "list_directory",
+    "view_skill",
+    "skill_resource",
+];
+
+/// Tools with an effect outside the workspace store — a `[soe]` sandbox
+/// needs a deny-all `[default_scopes.<tool>]` for each (`config/soe.rs`).
+pub(crate) const SIDE_EFFECT_TOOLS: &[&str] = &[
+    "http_request",
+    "write_file",
+    "run_command",
+    SIGN_AND_SEND_TRANSACTION,
+    SIGN_MESSAGE,
 ];

@@ -4,24 +4,30 @@
 //!
 //! | Key | Kind | Default | Meaning |
 //! |---|---|---|---|
-//! | `kind` | — | required | `"tool"` calls a tool · `"tick"` sends a loop event; `"poll"` (`info-fetch`, W2) and `"stream"` / `"ws"` / `"rows"` are refused until built |
-//! | `every_secs` | both | — | base interval (1 s – 7 d) on the UTC epoch grid |
-//! | `windows` | both | `[]` | `{ days = ["Sun"], from = "17:00", to = "19:00", every_secs = 60 }`: local time in `tz`, replaces `every_secs` inside; `to <= from` ends the next day, `"24:00"` = midnight; no `days` = every day |
-//! | `at` | both | `[]` | clock ticks in `tz`: `"Sun 18:00"`, `"daily 09:00"` |
-//! | `tz` | both | `UTC` | `America/New_York` · `Europe/Paris` · `UTC` |
-//! | `jitter_pct` | both | 0 | a grid fire starts up to this % (0–50) of its interval late; at-ticks are exact |
-//! | `run_on_start` | both | `false` | one run as soon as `tengu run` starts |
+//! | `kind` | — | required | `"tool"` calls a tool · `"tick"` sends a loop event · `"job"` runs a named application job; `"poll"` (`info-fetch`, W2) and `"stream"` / `"ws"` / `"rows"` are refused until built |
+//! | `every_secs` | all | — | base interval (1 s – 7 d) on the UTC epoch grid |
+//! | `windows` | all | `[]` | `{ days = ["Sun"], from = "17:00", to = "19:00", every_secs = 60 }`: local time in `tz`, replaces `every_secs` inside; `to <= from` ends the next day, `"24:00"` = midnight; no `days` = every day |
+//! | `at` | all | `[]` | clock ticks in `tz`: `"Sun 18:00"`, `"daily 09:00"` |
+//! | `tz` | all | `UTC` | `America/New_York` · `Europe/Paris` · `UTC` |
+//! | `jitter_pct` | all | 0 | a grid fire starts up to this % (0–50) of its interval late; at-ticks are exact |
+//! | `run_on_start` | all | `false` | one run as soon as `tengu run` starts |
 //! | `agent`, `tool` | tool | required | `[agents.<agent>]` runs `tool` — listed in its `tools` (or opted in via `workspace_tools`) — with the executor a decision loop of that agent gets |
 //! | `args` | tool | `{}` | the tool's arguments |
 //! | `each` | tool | `{}` | fan-out, `{ coin = ["xyz:TSLA", "xyz:NVDA"] }` = one call per value; several keys = every combination (keys in name order, the last varying fastest); ≤ 500 calls per run |
 //! | `concurrency` | tool | 1 | calls of one run in flight at once (1–32) |
 //! | `target` | tick | required | the `[decision_loops.<target>]` the event goes to |
 //! | `event` | tick | `{}` | the event table; the scheduler adds `ts_ms` (the slot time) |
-//! | `required` | both | `false` | `tengu doctor --live` fails when the feed is down or stale |
-//! | `stale_after_secs` | both | 3 × the longest interval (≥ 60); no `every_secs` (idle between windows / at-ticks): 8 days | no item for this long ⇒ stale |
+//! | `job` | job | required | one of [`JOBS`] — a closed list of application jobs, never a command from config |
+//! | `required` | all | `false` | `tengu doctor --live` fails when the feed is down or stale |
+//! | `stale_after_secs` | all | 3 × the longest interval (≥ 60); no `every_secs` (idle between windows / at-ticks): 8 days | no item for this long ⇒ stale |
+//!
+//! | Job ([`JOBS`]) | Needs | Runs (`bootstrap/runtime.rs::job_for`) |
+//! |---|---|---|
+//! | `soe_cycle` | `[soe]` (`config/soe.rs`) | the week's SOE cycle (`application/soe/job.rs`): the ISO week of the slot in `tz`, decided at the slot time; a week already frozen is a no-op |
 //!
 //! At least one of `every_secs`, `windows`, `at`. No `budget` key: tools
 //! budget themselves against `[rate_limits.<name>]` (`hl-info-client`).
+//! Strategy ranking stays a `kind = "tool"` feed (critic C14).
 
 use std::collections::BTreeMap;
 
@@ -44,13 +50,17 @@ const MAX_WINDOWS: usize = 32;
 const MAX_AT: usize = 64;
 /// `stale_after_secs` default of a feed without `every_secs`.
 const IDLE_STALE_SECS: u64 = 8 * 86_400;
+/// The weekly SOE cycle (`application/soe/job.rs`).
+pub const JOB_SOE_CYCLE: &str = "soe_cycle";
+/// Every job a `kind = "job"` feed may name (module table).
+pub const JOBS: &[&str] = &[JOB_SOE_CYCLE];
 
 /// One `[feeds.<name>]` block (module table).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeedConfig {
-    /// `"tool"` or `"tick"` (a string, so `"poll"` gets a validation error
-    /// naming its item instead of a parse error).
+    /// `"tool"`, `"tick"` or `"job"` (a string, so `"poll"` gets a
+    /// validation error naming its item instead of a parse error).
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub every_secs: Option<u64>,
@@ -79,6 +89,9 @@ pub struct FeedConfig {
     pub target: Option<String>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub event: Map<String, Value>,
+    /// `kind = "job"`: one of [`JOBS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
     #[serde(default)]
     pub required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +117,8 @@ pub struct FeedWindow {
 pub enum FeedKind {
     Tool,
     Tick,
+    /// A named application job ([`JOBS`]).
+    Job,
 }
 
 impl FeedConfig {
@@ -112,17 +127,18 @@ impl FeedConfig {
         match self.kind.as_str() {
             "tool" => Ok(FeedKind::Tool),
             "tick" => Ok(FeedKind::Tick),
+            "job" => Ok(FeedKind::Job),
             "poll" => Err(
                 "kind = \"poll\" is reserved for `info-fetch` (xmarket wave W2) and \
-                           not built yet — use \"tool\" or \"tick\""
+                           not built yet — use \"tool\", \"tick\" or \"job\""
                     .to_string(),
             ),
             k @ ("stream" | "ws" | "rows") => Err(format!(
                 "kind = \"{k}\" is reserved for a later xmarket milestone and not built yet — \
-                 use \"tool\" or \"tick\""
+                 use \"tool\", \"tick\" or \"job\""
             )),
             k => Err(format!(
-                "kind = \"{k}\" is unknown — use \"tool\" or \"tick\""
+                "kind = \"{k}\" is unknown — use \"tool\", \"tick\" or \"job\""
             )),
         }
     }
@@ -290,6 +306,10 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
             Err(e) => out.push(format!("{p}.{e}")),
             Ok(FeedKind::Tool) => tool_errors(cfg, &p, feed, &mut out),
             Ok(FeedKind::Tick) => tick_errors(cfg, &p, feed, &mut out),
+            Ok(FeedKind::Job) => job_errors(cfg, &p, feed, &mut out),
+        }
+        if feed.job.is_some() && feed.kind().is_ok_and(|k| k != FeedKind::Job) {
+            out.push(format!("{p}.job is only for kind = \"job\""));
         }
     }
     out
@@ -360,6 +380,33 @@ fn tick_errors(cfg: &Config, p: &str, feed: &FeedConfig, out: &mut Vec<String>) 
         out.push(format!(
             "{p}.event.ts_ms is set by the scheduler (the slot time)"
         ));
+    }
+}
+
+/// `kind = "job"`: a known job and what it needs (module table).
+fn job_errors(cfg: &Config, p: &str, feed: &FeedConfig, out: &mut Vec<String>) {
+    for (key, set) in [
+        ("agent", feed.agent.is_some()),
+        ("tool", feed.tool.is_some()),
+        ("args", !feed.args.is_empty()),
+        ("each", !feed.each.is_empty()),
+        ("concurrency", feed.concurrency.is_some()),
+        ("target", feed.target.is_some()),
+        ("event", !feed.event.is_empty()),
+    ] {
+        if set {
+            out.push(format!("{p}.{key} is not for kind = \"job\""));
+        }
+    }
+    match required(feed.job.as_deref(), p, "job", "job", out) {
+        Some(JOB_SOE_CYCLE) if cfg.soe.is_none() => out.push(format!(
+            "{p}.job: `{JOB_SOE_CYCLE}` needs a [soe] section (config/soe.rs)"
+        )),
+        Some(j) if !JOBS.contains(&j) => out.push(format!(
+            "{p}.job: `{j}` is not a known job ({})",
+            JOBS.join(", ")
+        )),
+        _ => {}
     }
 }
 
@@ -655,6 +702,106 @@ mod tests {
         assert!(e.contains("info-fetch"), "{e}");
     }
 
+    /// `sandboxes/xlab-w2`'s strategy-ranking feeds (SR-6): they load and
+    /// validate on the private ranker; the refresh fans out over exactly the
+    /// ranked universes (a name left out would go STALE); each ranking feed
+    /// runs a listed contract after its cutoff and after its refresh, at the
+    /// same New York times across both DST changes.
+    #[test]
+    fn xlab_w2_feeds_validate() {
+        use crate::domain::schedule::next_fire;
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/xlab-w2/config.toml");
+        let cfg = Config::load(&path).unwrap_or_else(|e| panic!("{e:#}"));
+        assert_eq!(validation_errors(&cfg), Vec::<String>::new());
+        let names: Vec<&str> = cfg.feeds.keys().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "history_refresh",
+                "strategy_ranking_daily",
+                "strategy_ranking_weekend"
+            ]
+        );
+        let ranker = &cfg.agents["xl_ranker"];
+        assert!(ranker.description.is_none() && !ranker.default);
+        for f in cfg.feeds.values() {
+            assert_eq!(f.agent.as_deref(), Some("xl_ranker"));
+            assert!(f.required);
+        }
+        // The refresh: every ranked name, once, in the universes' order.
+        let refresh = &cfg.feeds["history_refresh"];
+        let bt = cfg.backtest.as_ref().unwrap();
+        let want: Vec<Value> = ["xyz_stocks", "crypto"]
+            .iter()
+            .flat_map(|u| bt.universes[*u].iter())
+            .map(|id| json!({"interval": "1h", "fetch": true, "instrument": id}))
+            .collect();
+        assert_eq!(want.len(), 79);
+        assert_eq!(refresh.calls(), want);
+        assert_eq!(refresh.concurrency(), 1);
+        // Each contract a feed runs is listed in [strategy_ranking].
+        let section = cfg.ranking_section.as_ref().unwrap();
+        for (feed, contract) in [
+            ("strategy_ranking_daily", "rank.xlab-w2.daily.v1"),
+            ("strategy_ranking_weekend", "rank.xlab-w2.weekend.v1"),
+        ] {
+            let f = &cfg.feeds[feed];
+            assert_eq!(f.tool.as_deref(), Some("strategy_ranking"));
+            assert_eq!(
+                f.calls(),
+                vec![json!({"action": "run", "contract": contract})]
+            );
+            assert!(section.contracts.iter().any(|c| c == contract), "{feed}");
+        }
+        // Fire times (UTC) in summer and winter time: the refresh after each
+        // cutoff (daily 00:00, Mon 12:00 New York), each ranking after it.
+        let ms = |s: &str| {
+            chrono::DateTime::parse_from_rfc3339(s)
+                .unwrap()
+                .timestamp_millis()
+        };
+        let fire = |feed: &str, after: &str| {
+            let s = cfg.feeds[feed].schedule().unwrap();
+            let at = next_fire(&s, ms(after), None).unwrap().at_ms;
+            chrono::DateTime::from_timestamp_millis(at)
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        for (after, refresh, daily, weekend) in [
+            // EDT: New York = UTC − 4.
+            (
+                "2026-10-11T12:00:00Z",
+                "2026-10-12T09:00:00Z",
+                "2026-10-12T10:00:00Z",
+                "2026-10-12T17:00:00Z",
+            ),
+            // EST from Sun 2026-11-01: UTC − 5.
+            (
+                "2026-11-01T12:00:00Z",
+                "2026-11-02T10:00:00Z",
+                "2026-11-02T11:00:00Z",
+                "2026-11-02T18:00:00Z",
+            ),
+            // EDT again from Sun 2027-03-14.
+            (
+                "2027-03-14T12:00:00Z",
+                "2027-03-15T09:00:00Z",
+                "2027-03-15T10:00:00Z",
+                "2027-03-15T17:00:00Z",
+            ),
+        ] {
+            assert_eq!(fire("history_refresh", after), refresh, "{after}");
+            assert_eq!(fire("strategy_ranking_daily", after), daily, "{after}");
+            assert_eq!(fire("strategy_ranking_weekend", after), weekend, "{after}");
+        }
+        // The Monday refresh after the weekend cutoff, before its ranking.
+        assert_eq!(
+            fire("history_refresh", "2026-10-12T09:30:00Z"),
+            "2026-10-12T16:05:00Z"
+        );
+    }
+
     #[test]
     fn unknown_keys_are_parse_errors() {
         let e = toml::from_str::<Config>(&format!(
@@ -668,6 +815,93 @@ mod tests {
         ))
         .unwrap_err();
         assert!(e.to_string().contains("every"), "{e}");
+    }
+
+    const WEEKLY_JOB: &str = r#"
+        [feeds.soe_week]
+        kind = "job"
+        job = "soe_cycle"
+        tz = "Europe/Paris"
+        at = ["Mon 07:00"]
+        required = true
+    "#;
+
+    fn soe_section() -> crate::config::soe::SoeConfig {
+        toml::from_str(
+            "architect = \"a\"\ncritic = \"c\"\nmax_proposals = 12\nforecast_max_weeks = 12",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn job_kind_needs_known_job() {
+        let mut cfg = load(WEEKLY_JOB);
+        cfg.soe = Some(soe_section());
+        assert_eq!(validation_errors(&cfg), Vec::<String>::new());
+        let f = &cfg.feeds["soe_week"];
+        assert_eq!(f.kind(), Ok(FeedKind::Job));
+        assert_eq!(f.job.as_deref(), Some(JOB_SOE_CYCLE));
+        let s = f.schedule().unwrap();
+        assert_eq!((s.zone, s.every_ms, s.at.len()), (Zone::Paris, None, 1));
+        // Idle between weekly ticks: stale only after 8 days.
+        assert_eq!(f.stale_after_secs(), 8 * 86_400);
+        for (feed, want) in [
+            (
+                "[feeds.x]\nkind = \"job\"\nat = [\"Mon 07:00\"]",
+                "feeds.x.job is required for kind = \"job\"",
+            ),
+            (
+                "[feeds.x]\nkind = \"job\"\njob = \"rm -rf\"\nat = [\"Mon 07:00\"]",
+                "feeds.x.job: `rm -rf` is not a known job (soe_cycle)",
+            ),
+            (
+                "[feeds.x]\nkind = \"job\"\njob = \"soe_cycle\"\nat = [\"Mon 07:00\"]\nagent = \"open\"\ntool = \"read_file\"",
+                "feeds.x.agent is not for kind = \"job\"",
+            ),
+            (
+                "[feeds.x]\nkind = \"job\"\njob = \"soe_cycle\"\nat = [\"Mon 07:00\"]\ntarget = \"xm_main\"",
+                "feeds.x.target is not for kind = \"job\"",
+            ),
+            (
+                "[feeds.x]\nkind = \"tool\"\nagent = \"open\"\ntool = \"read_file\"\nevery_secs = 60\njob = \"soe_cycle\"",
+                "feeds.x.job is only for kind = \"job\"",
+            ),
+            (
+                "[feeds.x]\nkind = \"tick\"\ntarget = \"xm_main\"\nevery_secs = 60\njob = \"soe_cycle\"",
+                "feeds.x.job is only for kind = \"job\"",
+            ),
+            (
+                "[feeds.x]\nkind = \"job\"\njob = \"soe_cycle\"",
+                "feeds.x.every_secs: set every_secs, windows or at",
+            ),
+        ] {
+            let mut cfg = load(feed);
+            cfg.soe = Some(soe_section());
+            let errs = validation_errors(&cfg);
+            assert!(
+                errs.iter().any(|e| e.starts_with(want)),
+                "{feed}\nwant: {want}\ngot: {errs:#?}"
+            );
+        }
+        // An unknown kind names the three built ones.
+        let errs = errors("[feeds.x]\nkind = \"cron\"\nevery_secs = 60");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("use \"tool\", \"tick\" or \"job\"")),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn job_needs_soe_section() {
+        let errs = errors(WEEKLY_JOB);
+        assert_eq!(
+            errs,
+            ["feeds.soe_week.job: `soe_cycle` needs a [soe] section (config/soe.rs)"]
+        );
+        let mut cfg = load(WEEKLY_JOB);
+        cfg.soe = Some(soe_section());
+        assert!(validation_errors(&cfg).is_empty());
     }
 
     /// The commented `[feeds.*]` block of `config.example.toml`, uncommented

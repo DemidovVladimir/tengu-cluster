@@ -1,0 +1,16 @@
+id = "soe"
+title = "Software Opportunity Engine: a weekly, evidence-backed software-opportunity portfolio"
+hypothesis = "A weekly cycle that ranks software opportunities from as-of public evidence only — deterministic economics and gates, a separate Critic, HOLD a valid week — chooses better than ad-hoc research (fewer false positives, calibrated forecasts) before anything is contacted, spent, published or deployed."
+mechanism = "The Architect proposes mechanisms as data from the cycle's evidence packet; the Critic challenges toward the conservative side only; the pure domain decides (decide_week); forecasts are frozen before their outcomes and the operator grades every week (O4)."
+role = "PRIMARY"
+status = "OPEN"
+status_reason = "No live cycle yet: the signed private profile and the approved sources (G-O0), then four shadow weeks, precede Operator Review #2."
+origin_at = "2026-10-04"
+origin = "repo:docs/soe-2026-10-08.md"
+origin_by = "operator PRD (software opportunity engine, 2026-10-04)"
+parent = "NONE"
+
+[prior_search]
+count = "UNKNOWN"
+source = "repo:docs/soe-2026-10-08.md"
+note = "The planning set stays local to the operator (private figures); no search outside the registry is recorded."

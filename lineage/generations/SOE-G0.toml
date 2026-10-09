@@ -1,0 +1,99 @@
+id = "SOE-G0"
+title = "SOE-G0 — the Software Opportunity Engine's weekly shadow cycle (O3 / O4), before Operator Review #2"
+status = "CANDIDATE"
+parent = "NONE"
+sandboxes = ["soe"]
+notes = "Hash-only public record (critic C13): ids, pins and sha256 only — the signed operator profile (its rank order included), capability baseline, eval and holdout labels, cycles, grades and episodes stay private under <TENGU_HOME>/state/soe/. Not frozen: the [[frozen]] row in locks.toml waits for the operator's signed profile and approved sources (G-O0) and the merge after G-WKND; `tengu lineage generation SOE-G0` prints the manifest digest to lock. Until then a change to a pinned section updates its pin here (verify --pins). [sources] and [egress] are not pinned: the operator fills the registry rows' reviewed terms before the freeze. No contact, spend, publish or deploy capability exists (O5–O8 wait for Operator Review #2)."
+
+[code]
+commit = "UNKNOWN"
+
+[[capabilities]]
+id = "intel.soe_view"
+version = 1
+
+[[capabilities]]
+id = "intel.soe_propose"
+version = 1
+
+[[capabilities]]
+id = "intel.soe_challenge"
+version = 1
+
+[[capabilities]]
+id = "intel.source_evidence"
+version = 1
+
+[decision_policy]
+primary = "DETERMINISTIC"
+summary = "domain::soe::allocate::decide_week: the O1 gates and three-scenario economics, the Critic's challenges merged toward the conservative side, then the one portfolio builder under the signed profile's weekly owner hours and validation tranche, ranked by the profile's rank order (private; its sha256 is each cycle's inputs.json policy_sha256). HOLD is a valid week; no LAUNCH action exists."
+
+[research_policy]
+summary = "Observe only the cycle's as-of evidence packet (captured clock live, knowable clock in replays). The Architect proposes mechanisms as data (soe_propose: no computed field, every cited id in the packet); a separate Critic challenges (soe_challenge). Each record stamped with agent, model, engine, skill sha256, generation and call id; each stage recorded by sha256 for byte-identical replays; forecasts frozen at the decision and graded by the operator (O4)."
+
+[[models]]
+role = "architect"
+engine = "claude_code"
+model = "claude-opus-5-5"
+where = "config:soe/agents.soe_architect"
+
+[[models]]
+role = "critic"
+engine = "claude_code"
+model = "claude-sonnet-5-5"
+where = "config:soe/agents.soe_critic"
+
+[[pins]]
+target = "config:soe/soe"
+role = "CONFIG"
+sha256 = "0b5a4575ab69cfcc409ad996a4b58c8eb73df8dcb72335820d85403c27b06089"
+
+[[pins]]
+target = "config:soe/feeds.soe_week"
+role = "CONFIG"
+sha256 = "a7903cc32e03db1099590496c186759e88192d6de2c3ea4e0c71852f5247028b"
+
+[[pins]]
+target = "config:soe/agents.soe_architect"
+role = "MODEL"
+sha256 = "888a89464fa6e502167635a1d32ce321158e70d3911090285117618b6046f77f"
+
+[[pins]]
+target = "config:soe/agents.soe_critic"
+role = "MODEL"
+sha256 = "201c30e37ec4f31b304249fe3cfb6433dbb16cdb4f365c64c54e921b23ee3a85"
+
+[[pins]]
+target = "config:soe/default_scopes"
+role = "CONFIG"
+sha256 = "fc57029d7637e47fc571e0ef78cacb2db0bed7c8f2c0662a64a569073d231d34"
+
+[[pins]]
+target = "tool_schema:soe_view"
+role = "SCHEMA"
+sha256 = "1f17823be53faa3965357068fad11c921684e6d586a52b8dce7c3bc56eb33b11"
+
+[[pins]]
+target = "tool_schema:soe_propose"
+role = "SCHEMA"
+sha256 = "ecda977f1935b554bc3fca9019e4574d98e72348f81dae6e232cec400200af7b"
+
+[[pins]]
+target = "tool_schema:soe_challenge"
+role = "SCHEMA"
+sha256 = "e729bac4c971af42af2642e91b486aa5f1c725e18dfa23ffe8ac554ddf61bcb5"
+
+[[pins]]
+target = "tool_schema:source_evidence"
+role = "SCHEMA"
+sha256 = "994bb32eaaafe8ac9b1e1402e3ebbe39fca6efb2bd7e6a81d3de20c546c28fef"
+
+[[pins]]
+target = "skill:soe-architect"
+role = "RESEARCH_POLICY"
+sha256 = "83e4330c5dd2097754cfc5293d235c10ab9a416546b566265443548149d63474"
+
+[[pins]]
+target = "skill:soe-critic"
+role = "RESEARCH_POLICY"
+sha256 = "b27d6beb85d3175d09f531a8f2c6abe4af99012363933385150bf7a5c8534454"

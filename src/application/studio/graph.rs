@@ -11,7 +11,7 @@
 //! | `[webhooks.endpoints.<e>] loop = "<l>"` | `trigger:webhook/<e>` —fires→ `loop:<l>` (auth kind only, never a secret) |
 //! | `[decision_loops.<l>]` | `agent:<agent>` —owns→ `loop:<l>` —reads→ `world:<l>/<alias>` · —asks→ `jev:<l>` ←guards— `gate:<l>/act_at` (—escalates→ `escalation:<l>` when `escalate`) · `jev:<l>` —chooses→ `action:<l>/<a>` |
 //! | `actions.<a>` | —calls→ `tool:<agent>/<tool>` ←guards— `scope:<agent>/<tool>` (a configured scope) · `gate:<l>/<a>/caps` —guards→ · `world` —guards→ (`requires`) · —binds→ from `{from}` / `{observation}` slots · `sequence` —next→ |
-//! | `[feeds.<f>]` | tick: `feed:<f>` —fires→ `loop:<target>` · tool: `agent:<a>` —owns→ `feed:<f>` —calls→ `tool:<a>/<tool>` |
+//! | `[feeds.<f>]` | tick: `feed:<f>` —fires→ `loop:<target>` · tool: `agent:<a>` —owns→ `feed:<f>` —calls→ `tool:<a>/<tool>` · job `soe_cycle`: `agent:<[soe] architect>` —owns→ `feed:<f>` |
 //! | `--map` | `ExecutionMap::apply` of its loop (refused ⇒ every reason); `trigger:map/<sha256>` —fires→ `loop:<l>`; a base action the map drops stays as a node with `narrowed_out` (grey, no `chooses` / `next`), its tool / scope / caps too when nothing kept uses them; a changed knob shows `map_changes: {knob: {base, map}}` |
 //!
 //! Attrs carry config values as validated (scope roots shown `~/…` like the
@@ -32,7 +32,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config::decision_loop::{ActionConfig, DecisionLoopConfig, SlotConfig};
 use crate::config::execution_map::ExecutionMap;
-use crate::config::feeds::FeedKind;
+use crate::config::feeds::{FeedKind, JOB_SOE_CYCLE};
 use crate::config::Config;
 use crate::domain::message::ToolDef;
 use crate::domain::scope::ToolScope;
@@ -543,8 +543,17 @@ impl<'a> Builder<'a> {
             Value::Object(o) => o.into_iter().collect(),
             _ => BTreeMap::new(),
         };
+        // A job feed's health row (`bootstrap/runtime.rs::job_for`): the
+        // `soe_cycle` job's goes to the `[soe] architect`'s store.
+        let job_agent = match (feed.kind(), feed.job.as_deref()) {
+            (Ok(FeedKind::Job), Some(JOB_SOE_CYCLE)) => {
+                self.cfg.soe.as_ref().map(|s| s.architect.clone())
+            }
+            _ => None,
+        };
         // A tick feed belongs to its target loop (and that loop's agent,
-        // whose store holds its health row); a tool feed to its agent + tool.
+        // whose store holds its health row); a tool feed to its agent + tool;
+        // a job feed to the agent whose store holds its health row.
         let f = match feed.kind() {
             Ok(FeedKind::Tick) => {
                 let target = feed.target.as_deref();
@@ -553,6 +562,7 @@ impl<'a> Builder<'a> {
                     .map(|dl| dl.agent.as_str());
                 facets(target, None, Some(name), agent, None)
             }
+            Ok(FeedKind::Job) => facets(None, None, Some(name), job_agent.as_deref(), None),
             _ => facets(
                 None,
                 None,
@@ -576,6 +586,12 @@ impl<'a> Builder<'a> {
                     self.edge(&aid, &fid, EdgeKind::Owns);
                     let tid = self.add_tool(agent, tool);
                     self.edge(&fid, &tid, EdgeKind::Calls);
+                }
+            }
+            Ok(FeedKind::Job) => {
+                if let Some(agent) = &job_agent {
+                    let aid = self.add_agent(agent);
+                    self.edge(&aid, &fid, EdgeKind::Owns);
                 }
             }
             Err(_) => {}

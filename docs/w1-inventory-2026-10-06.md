@@ -72,6 +72,8 @@
 
 ## 5. Known defects (recorded, not fixed — W1 is frozen)
 
+Status (2026-10-08): D1 · D2 · D3 fixed (#33, `b2494707e71d05166fe75df2e4338f0aa7949941`: `data_through_ms` + `--data-through`, CLI holdout reads counted `via = "cli"`, cited runs never pruned); D8 priced per name in `sandboxes/xlab-w2` only (cost model v2, P9 — W1's costs pinned); D10 eased: reports carry `instruments_sha256` / `costs_sha256` (strategy-ranking cohort); D5, D7, D11 still open.
+
 | # | Defect | Effect | Proposed |
 |---|---|---|---|
 | D1 | A run's identity (`spec_sha256` + window) does not pin the warehouse; exits may read bars past `to_ms` | reruns change when `market.db` grows (2 funding-carry runs) | record `data_asof` in `report.json`; bound exits by it (P6) |

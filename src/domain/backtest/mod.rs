@@ -18,6 +18,7 @@
 //! | `evaluation.rs` | decision evaluation (Phase 6): one row per candidate of a gated run — rules · Jev · HOLD on the same candidates, paired per-candidate CIs, the Jev verdict (`tengu evidence evaluate`) |
 //! | `stats.rs` | `Summary` (mean / median / t / hit, USD, drawdown, Sharpe, seeded cluster-bootstrap CI, robustness), paired arm difference, calibration |
 //! | `report.rs` | `BacktestReport` = `report.json` + row `backtest/1:<run id>`, `report.md`, compact CLI / tool text |
+//! | `ranking.rs` | strategy ranking (SR-2 / SR-3): a ranking contract's runs → `select` (one run per strategy and cohort, rejections with reasons) → `rank` (per cohort, weakest first) → `ranking.json` / `ranking.md`, `content_sha256` |
 //! | `testkit.rs` · `checks.rs` | tests only: fixtures; time integrity (§ 39) + the rule W golden |
 
 #[cfg(test)]
@@ -30,6 +31,7 @@ pub(crate) mod fills;
 pub(crate) mod gate;
 pub(crate) mod kinds;
 pub(crate) mod labels;
+pub(crate) mod ranking;
 pub(crate) mod report;
 pub(crate) mod spec;
 pub(crate) mod stats;

@@ -449,6 +449,8 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
 <span class="ln o">name                         tier       fixtures  gated metrics             last_run</span>
 <span class="ln o">execution-map                project           0                            -</span>
 <span class="ln o">skill-creator                project           1  distill_quality           <span class="hl">&lt;rfc3339&gt;</span></span>
+<span class="ln o">soe-architect                project           0                            -</span>
+<span class="ln o">soe-critic                   project           0                            -</span>
 <span class="ln o">xlab-research                project           0                            -</span>
 <span class="ln cmd"><span class="p">$ </span>tengu skill doctor --sandbox xlab --no-fail</span>
 <span class="ln o"># tengu skill doctor</span>
@@ -476,7 +478,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
         <tr><td><code>src/adapters/outbound/tools/manage_skill/</code></td><td><code>manage_skill</code>: the six write actions</td></tr>
         <tr><td><code>src/domain/scope.rs</code></td><td>protected write names (<code>protected_write_in</code>)</td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>prompt rebuild, <code>agent_skill_registry</code>, compose rules</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>skill bodies in a plan step's prompt</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>skill bodies in a plan step's prompt; the step's skill identity (<code>TENGU_AGENT_SKILL_SHA256</code>, what the SOE tools stamp)</td></tr>
         <tr><td><code>src/adapters/inbound/cli/skill.rs</code></td><td><code>tengu skill list | doctor | seed | remove | export | install</code></td></tr>
         <tr><td><code>skills/</code></td><td>the project tier: nine skills</td></tr>
       </tbody>
@@ -485,7 +487,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>
@@ -551,6 +553,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
   var SK = [
     ["execution-map", 2700], ["german-teacher", 887], ["orchestrator", 9726],
     ["privy-agentic-wallets", 6931], ["skill-creator", 7143], ["skill-eval", 2077],
+    ["soe-architect", 4796], ["soe-critic", 3295],
     ["spanish-teacher", 2312], ["telegram-rag-ingest", 6679], ["xlab-research", 6576]
   ];
   var on = { "xlab-research": true };

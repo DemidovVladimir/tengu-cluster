@@ -6,6 +6,7 @@ Why: Phases 7–11 kept W1 (`docs/p10-w2-candidate-2026-10-08.md`). Forward week
 
 | When (New York · UTC · Berlin) | Do |
 |---|---|
+| Before the stop (Mon 2026-10-12) | Do NOT `git pull` in the main checkout: origin/main now has `lineage/rankings/`, which the frozen binary `tengu-acdef66` refuses (W1 load error, verified 2026-10-08). After the stop: delete the untracked local copies `docs/strategy-ranking-automation-2026-10-08.md` and `TENGU_STUDIO_PLAN.md` (they are tracked upstream), then pull. |
 | ≤ Fri 10-09 19:30 · 23:30 · Sat 01:30 | Mac on AC power, lid open, online. In a terminal: `tmux new -s xmw`, then `cd ~/development/tengu-cluster && TENGU_SECRETS_LOADED= caffeinate -i -s nice -n 10 ~/.cache/tengu-xm.noindex/weekend/tengu-acdef66 run --sandbox xmarket-weekend` (detach: Ctrl-b d) |
 | any time | `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66 doctor --sandbox xmarket-weekend --live` (exit 0 = heartbeat fresh, feeds live) · `… risk status --sandbox xmarket-weekend` |
 | Fri 20:00 · Sat 00:00 · Sat 02:00 | anchor: `mkt_ctx/1` recorded |
