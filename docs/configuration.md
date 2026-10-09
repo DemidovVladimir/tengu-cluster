@@ -478,7 +478,7 @@ The weekly cycle's stage agents and limits; its state root is the `[sources]` st
 |---|---|---|
 | `control` | `false` | `true` = `tengu studio` may Play (start this sandbox's runtime in its own process), Stop it (graceful drain) and send a scenario event; `false` = read-only unless `tengu studio --allow-control`. A load error in a `[generation]`-bound or hardened sandbox, where control is always refused (`--allow-control` too) |
 
-Set only in `control-loop-lab`. Server: `--features studio`, loopback only. Code `config/studio.rs` (`control_policy`); doc `docs/studio-2026-10-08.md`.
+Set only in `control-loop-lab`. Server: the default build (feature `studio`), loopback only. Code `config/studio.rs` (`control_policy`); doc `docs/studio-2026-10-08.md`.
 
 ## Skill lifecycle — `[skill_lifecycle]`
 

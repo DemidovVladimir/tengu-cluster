@@ -56,14 +56,19 @@ impl DagExecutor {
                 let events = events.clone();
                 let step_clone = step.clone();
                 in_flight.insert(step.id.clone());
-                let _ = events.send(OrchestratorEvent::StepStarted {
+                // A recording bus: the step's work (its `run-agent` child's
+                // tool events) runs caused by its `step.started`.
+                let cause = events.send_with_cause(OrchestratorEvent::StepStarted {
                     step_id: step.id.clone(),
                     agent: step.agent.clone(),
                 });
                 futures.push(tokio::spawn(async move {
-                    let outcome =
-                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events)
-                            .await;
+                    let work =
+                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events);
+                    let outcome = match cause {
+                        Some(c) => crate::application::trace_exec::caused_by(c, work).await,
+                        None => work.await,
+                    };
                     (step_clone.id, outcome)
                 }));
             }
@@ -232,6 +237,78 @@ mod tests {
 
     fn no_cancel() -> Arc<std::sync::atomic::AtomicBool> {
         Arc::new(std::sync::atomic::AtomicBool::new(false))
+    }
+
+    /// Each step id with the trace cause its work ran under.
+    type Seen = Arc<Mutex<Vec<(String, Option<crate::application::trace_exec::Cause>)>>>;
+
+    /// Records the trace cause each step's work runs under.
+    struct CauseRecordingWorker {
+        seen: Seen,
+    }
+    #[async_trait]
+    impl WorkerHandle for CauseRecordingWorker {
+        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+            let cause = crate::application::trace_exec::cause();
+            self.seen.lock().await.push((step.id.0.clone(), cause));
+            Ok(format!("out-{}", step.id.0))
+        }
+    }
+
+    /// A recording bus: each step's work (what `SubprocessRunner` hands its
+    /// `run-agent` child) runs caused by its own `step.started`, in the
+    /// bus's session; an untraced bus sets no cause.
+    #[tokio::test]
+    async fn traced_bus_runs_each_step_under_its_step_started() {
+        use crate::application::orchestrator::trace::{OrchestratorTrace, TraceBridge};
+        use crate::application::trace_exec::tests::MemTrace;
+        let sink = Arc::new(MemTrace::default());
+        let bridge = TraceBridge::new(
+            OrchestratorTrace {
+                sink: sink.clone(),
+                parent: None,
+            },
+            "chat-session".into(),
+        );
+        let bus = new_bus().traced(bridge);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let worker = Arc::new(CauseRecordingWorker { seen: seen.clone() });
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus, no_cancel()).await;
+        assert!(matches!(result, ExecResult::Done { .. }));
+        let d = sink.all();
+        let started: Vec<String> = d
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.kind == "step.started")
+            .map(|(i, _)| MemTrace::id(i))
+            .collect();
+        let seen = seen.lock().await.clone();
+        let got: Vec<(&str, Option<&str>, Option<&str>)> = seen
+            .iter()
+            .map(|(s, c)| {
+                (
+                    s.as_str(),
+                    c.as_ref().and_then(|c| c.parent.as_deref()),
+                    c.as_ref().and_then(|c| c.session.as_deref()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("s1", Some(started[0].as_str()), Some("chat-session")),
+                ("s2", Some(started[1].as_str()), Some("chat-session")),
+            ]
+        );
+
+        let untraced = Arc::new(Mutex::new(Vec::new()));
+        let worker = Arc::new(CauseRecordingWorker {
+            seen: untraced.clone(),
+        });
+        DagExecutor::run(&linear_plan(), worker, &policy, &new_bus(), no_cancel()).await;
+        assert!(untraced.lock().await.iter().all(|(_, c)| c.is_none()));
     }
 
     #[tokio::test]

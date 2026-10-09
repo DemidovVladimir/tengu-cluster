@@ -12,6 +12,7 @@
 //! | `[decision_loops.<l>]` | `agent:<agent>` —owns→ `loop:<l>` —reads→ `world:<l>/<alias>` · —asks→ `jev:<l>` ←guards— `gate:<l>/act_at` (—escalates→ `escalation:<l>` when `escalate`) · `jev:<l>` —chooses→ `action:<l>/<a>` |
 //! | `actions.<a>` | —calls→ `tool:<agent>/<tool>` ←guards— `scope:<agent>/<tool>` (a configured scope) · `gate:<l>/<a>/caps` —guards→ · `world` —guards→ (`requires`) · —binds→ from `{from}` / `{observation}` slots · `sequence` —next→ |
 //! | `[feeds.<f>]` | tick: `feed:<f>` —fires→ `loop:<target>` · tool: `agent:<a>` —owns→ `feed:<f>` —calls→ `tool:<a>/<tool>` · job `soe_cycle`: `agent:<[soe] architect>` —owns→ `feed:<f>` |
+//! | `[orchestrator]` | `planner` (its agent, engine, model, retry / replan knobs) —delegates→ `agent:<a>` for every routable agent (`[agents.<a>]` with a `description`: `shared_files::routable_agents`) —calls→ `tool:<a>/<tool>` for each catalog tool it gets (+ its scope) · `[webhooks.endpoints.<e>] agent = …` → `trigger:webhook/<e>` —fires→ `planner` · `escalation:<l>` —escalates→ `planner` |
 //! | `--map` | `ExecutionMap::apply` of its loop (refused ⇒ every reason); `trigger:map/<sha256>` —fires→ `loop:<l>`; a base action the map drops stays as a node with `narrowed_out` (grey, no `chooses` / `next`), its tool / scope / caps too when nothing kept uses them; a changed knob shows `map_changes: {knob: {base, map}}` |
 //!
 //! Attrs carry config values as validated (scope roots shown `~/…` like the
@@ -30,10 +31,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Map, Value};
 
+use crate::application::orchestrator::shared_files::routable_agents;
 use crate::config::decision_loop::{ActionConfig, DecisionLoopConfig, SlotConfig};
 use crate::config::execution_map::ExecutionMap;
 use crate::config::feeds::{FeedKind, JOB_SOE_CYCLE};
-use crate::config::Config;
+use crate::config::{Config, OrchestratorConfig, WebhookEndpointConfig};
 use crate::domain::message::ToolDef;
 use crate::domain::scope::ToolScope;
 use crate::domain::workflow::{
@@ -122,13 +124,6 @@ pub(crate) fn build_graph(
     endpoints.sort();
     for (ep, l) in endpoints {
         let c = &cfg.webhooks.endpoints[ep];
-        let auth = if c.auth_header_env.is_some() {
-            "header"
-        } else if c.secret_env.is_some() || c.secret.is_some() {
-            "hmac"
-        } else {
-            "none"
-        };
         let id = node_id::trigger_webhook(ep);
         let n = b.node(
             &id,
@@ -137,12 +132,52 @@ pub(crate) fn build_graph(
             layer::TRIGGER,
             attrs([
                 ("loop", json!(l)),
-                ("auth", json!(auth)),
+                ("auth", json!(endpoint_auth(c))),
                 ("enabled", json!(cfg.webhooks.enabled)),
             ]),
         );
         belongs(n, facets(Some(l), None, None, None, None));
         b.edge(&id, &node_id::loop_(l), EdgeKind::Fires);
+    }
+
+    if let Some(o) = &cfg.orchestrator {
+        let planner = b.add_planner(o);
+        let mut agent_eps: Vec<&String> = cfg
+            .webhooks
+            .endpoints
+            .iter()
+            .filter(|(_, ep)| ep.decision_loop.is_none())
+            .map(|(e, _)| e)
+            .collect();
+        agent_eps.sort();
+        for ep in agent_eps {
+            let c = &cfg.webhooks.endpoints[ep];
+            let id = node_id::trigger_webhook(ep);
+            let n = b.node(
+                &id,
+                NodeKind::Trigger,
+                &format!("/webhooks/{ep}"),
+                layer::TRIGGER,
+                attrs([
+                    ("agent", json!(c.agent)),
+                    ("auth", json!(endpoint_auth(c))),
+                    ("enabled", json!(cfg.webhooks.enabled)),
+                ]),
+            );
+            belongs(n, facets(None, None, None, Some(o.agent.as_str()), None));
+            b.edge(&id, &planner, EdgeKind::Fires);
+        }
+        // A loop's low-confidence step becomes an orchestrator turn
+        // (`inbound::webhooks::OrchestratorEscalator`).
+        let escalations: Vec<String> = b
+            .nodes
+            .keys()
+            .filter(|id| id.starts_with("escalation:"))
+            .cloned()
+            .collect();
+        for esc in escalations {
+            b.edge(&esc, &planner, EdgeKind::Escalates);
+        }
     }
 
     let map_ref = mapped.as_ref().map(|(m, _)| {
@@ -166,6 +201,17 @@ pub(crate) fn build_graph(
     let mut graph = b.finish(sandbox, cfg.source_sha256.clone(), map_ref);
     graph.normalize();
     Ok(graph)
+}
+
+/// How an endpoint authenticates (its kind only, never a secret).
+fn endpoint_auth(c: &WebhookEndpointConfig) -> &'static str {
+    if c.auth_header_env.is_some() {
+        "header"
+    } else if c.secret_env.is_some() || c.secret.is_some() {
+        "hmac"
+    } else {
+        "none"
+    }
 }
 
 fn attrs<const N: usize>(kv: [(&str, Value); N]) -> BTreeMap<String, Value> {
@@ -282,6 +328,43 @@ impl<'a> Builder<'a> {
             ]),
         );
         belongs(n, facets(None, None, None, Some(agent), None));
+        id
+    }
+
+    /// `planner` (the `[orchestrator]` agent) —delegates→ every routable
+    /// agent (an `[agents.*]` block with a `description`, the planner's own
+    /// rule: `shared_files::routable_agents`) —calls→ each catalog tool it
+    /// gets.
+    fn add_planner(&mut self, o: &OrchestratorConfig) -> String {
+        let id = node_id::planner();
+        let a = self.cfg.agents.get(&o.agent);
+        let n = self.node(
+            &id,
+            NodeKind::Planner,
+            &format!("planner ({})", o.agent),
+            layer::LOOP,
+            attrs([
+                ("agent", json!(o.agent)),
+                ("engine", json!(a.map(|a| &a.engine))),
+                ("model", json!(a.map(|a| &a.model))),
+                ("max_attempts_per_step", json!(o.max_attempts_per_step)),
+                ("max_replans", json!(o.max_replans)),
+            ]),
+        );
+        belongs(n, facets(None, None, None, Some(o.agent.as_str()), None));
+        for (name, _) in routable_agents(&self.cfg.agents) {
+            let aid = self.add_agent(&name);
+            self.edge(&id, &aid, EdgeKind::Delegates);
+            let tools: Vec<String> = self
+                .tools
+                .get(&name)
+                .map(|ts| ts.iter().map(|t| t.name.clone()).collect())
+                .unwrap_or_default();
+            for t in tools {
+                let tid = self.add_tool(&name, &t);
+                self.edge(&aid, &tid, EdgeKind::Calls);
+            }
+        }
         id
     }
 
@@ -799,7 +882,9 @@ mod tests {
     }
 
     /// lping: four loops with `world`, `requires`, `sequence`, history /
-    /// observation / event bindings, caps and a webhook trigger.
+    /// observation / event bindings, caps and a webhook trigger; its
+    /// `[orchestrator]`: the planner, its one routable agent and that
+    /// agent's tools, the planner webhook endpoint, loop escalations.
     #[test]
     fn golden_lping() {
         assert_golden("lping");
@@ -814,10 +899,41 @@ mod tests {
             "loop:lp_watch",
             EdgeKind::Fires
         ));
-        assert!(
-            g.node("trigger:webhook/solana_events").is_none(),
-            "agent endpoint"
+        let planner = g.node("planner").expect("planner");
+        assert_eq!(planner.kind, NodeKind::Planner);
+        assert_eq!(planner.attrs["agent"], json!("lping"));
+        assert_eq!(planner.attrs["max_replans"], json!(2));
+        assert!(has(
+            "trigger:webhook/solana_events",
+            "planner",
+            EdgeKind::Fires
+        ));
+        assert_eq!(
+            g.node("trigger:webhook/solana_events").unwrap().attrs["auth"],
+            json!("hmac")
         );
+        assert!(has(
+            "planner",
+            "agent:crypto_researcher",
+            EdgeKind::Delegates
+        ));
+        let delegated: Vec<&str> = g
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Delegates)
+            .map(|e| e.to.as_str())
+            .collect();
+        assert_eq!(
+            delegated,
+            ["agent:crypto_researcher"],
+            "routable = has a description: not lping, not lp_executor"
+        );
+        assert!(has(
+            "agent:crypto_researcher",
+            "tool:crypto_researcher/sol_price",
+            EdgeKind::Calls
+        ));
+        assert!(has("escalation:lp_watch", "planner", EdgeKind::Escalates));
         assert_eq!(
             g.node("trigger:webhook/helius").unwrap().attrs["auth"],
             json!("header")

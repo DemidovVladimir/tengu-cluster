@@ -47,18 +47,21 @@ pub async fn run_step_with_retry(
             Ok(output) => return StepOutcome::Ok(output),
             Err(err) => {
                 last_err = err.to_string();
+                let retry_in = (attempt < policy.max_attempts).then(|| {
+                    policy
+                        .backoff
+                        .get((attempt - 1) as usize)
+                        .copied()
+                        .unwrap_or(Duration::from_secs(9))
+                });
                 let _ = events.send(OrchestratorEvent::StepFailed {
                     step_id: step.id.clone(),
                     attempt,
                     error: last_err.clone(),
+                    retry_in_ms: retry_in.map(|d| d.as_millis() as u64),
                 });
                 warn!(step = ?step.id, attempt, error = %last_err, "step failed");
-                if attempt < policy.max_attempts {
-                    let delay = policy
-                        .backoff
-                        .get((attempt - 1) as usize)
-                        .copied()
-                        .unwrap_or(Duration::from_secs(9));
+                if let Some(delay) = retry_in {
                     sleep(delay).await;
                 }
             }

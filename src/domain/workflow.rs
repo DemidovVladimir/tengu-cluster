@@ -10,7 +10,7 @@
 //! | `runtime:<sandbox>` | `runtime` | 0 | `tengu run` of the sandbox (`[runtime]` knobs) |
 //! | `trigger:decide` · `trigger:webhook/<endpoint>` · `trigger:map/<sha256>` | `trigger` | 1 | what can hand a loop an event |
 //! | `feed:<name>` | `feed` | 1 | a `[feeds.<name>]` schedule |
-//! | `agent:<name>` · `loop:<name>` | `agent` · `loop` | 2 | a loop and the agent whose tools, scopes and workspace it uses |
+//! | `agent:<name>` · `loop:<name>` · `planner` | `agent` · `loop` · `planner` | 2 | a loop and the agent whose tools, scopes and workspace it uses; the `[orchestrator]` planner and each routable agent (an `[agents.*]` block with a `description`) it may hand a plan step |
 //! | `world:<loop>/<alias>` | `world` | 3 | an observation the loop reads every step (never fetched) |
 //! | `jev:<loop>` · `gate:<loop>/act_at` | `jev` · `gate` | 4 | the decisions call and its confidence gate |
 //! | `action:<loop>/<action>` · `escalation:<loop>` | `action` · `escalation` | 5 | a choice Jev may pick; where a low-confidence step goes |
@@ -19,15 +19,16 @@
 //!
 //! | Edge | From → to |
 //! |---|---|
-//! | `fires` | trigger / tick feed → loop |
+//! | `fires` | trigger / tick feed → loop · a planner webhook endpoint → planner |
 //! | `reads` | loop → world |
 //! | `asks` | loop → jev |
 //! | `chooses` | jev → action (kept actions only) |
-//! | `calls` | action / tool feed → tool |
+//! | `calls` | action / tool feed → tool · routable agent → each catalog tool it gets |
 //! | `binds` | world / earlier action → action whose slot it fills |
 //! | `next` | `sequence` step → the step after it |
 //! | `guards` | gate → jev / action · world (`requires`) → action · scope → tool |
-//! | `escalates` | act_at gate → escalation |
+//! | `escalates` | act_at gate → escalation · escalation → planner (with `[orchestrator]`) |
+//! | `delegates` | planner → routable agent (a plan step it may hand that agent) |
 //! | `owns` | agent → loop / tool feed · runtime → feed |
 //!
 //! Ids keep every name in full — tool names, `{server}__{tool}`, the 64-hex
@@ -145,6 +146,7 @@ pub(crate) enum NodeKind {
     Feed,
     Agent,
     Loop,
+    Planner,
     World,
     Jev,
     Gate,
@@ -174,6 +176,7 @@ pub(crate) enum EdgeKind {
     Guards,
     Escalates,
     Owns,
+    Delegates,
 }
 
 /// Node ids (module table). Every name goes in whole.
@@ -198,6 +201,9 @@ pub(crate) mod node_id {
     }
     pub(crate) fn loop_(name: &str) -> String {
         format!("loop:{name}")
+    }
+    pub(crate) fn planner() -> String {
+        "planner".to_string()
     }
     pub(crate) fn world(loop_name: &str, alias: &str) -> String {
         format!("world:{loop_name}/{alias}")

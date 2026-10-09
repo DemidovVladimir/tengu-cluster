@@ -76,13 +76,15 @@ hmac = { version = "0.12", optional = true }
 curve25519-dalek = { version = "~4.1", default-features = false }
 
 [features]
-default = ["openrouter", "telegram"]
+default = ["openrouter", "telegram", "studio"]
 telegram = ["teloxide", "dptree", "reqwest011"]
 openrouter = []
 postgres_memory = ["tokio-postgres"]
 claude_code = []
 webhooks = ["axum", "hmac"]
-# `tengu studio --sandbox <s>`: the local, read-only Studio server (loopback
-# only; HTML/CSS/JS from web/studio/ embedded with include_str!). axum as
-# for webhooks; not a default feature (default build + Docker unchanged).
+# `tengu studio --sandbox <s>`: the local Studio server (loopback only;
+# HTML/CSS/JS from web/studio/ embedded with include_str!). axum as for
+# webhooks. A default feature since 2026-10-09 (the normal build and the Docker
+# image carry it); `--no-default-features` without `studio` leaves the server
+# out and `tengu studio --sandbox` says which flag to add.
 studio = ["axum"]

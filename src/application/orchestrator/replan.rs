@@ -24,6 +24,7 @@ pub async fn drive(
         let _ = events.send(OrchestratorEvent::PlanCompleted {
             final_response: "Stopped by user.".into(),
             cancelled: true,
+            failed: false,
         });
         return "Stopped by user.".into();
     }
@@ -33,6 +34,7 @@ pub async fn drive(
             let _ = events.send(OrchestratorEvent::PlanCompleted {
                 final_response: response.clone(),
                 cancelled: false,
+                failed: false,
             });
             return response;
         }
@@ -42,6 +44,7 @@ pub async fn drive(
             let _ = events.send(OrchestratorEvent::PlanCompleted {
                 final_response: msg.clone(),
                 cancelled: false,
+                failed: true,
             });
             return msg;
         }
@@ -74,6 +77,7 @@ pub async fn drive(
                 let _ = events.send(OrchestratorEvent::PlanCompleted {
                     final_response: final_output.clone(),
                     cancelled: false,
+                    failed: false,
                 });
                 return final_output;
             }
@@ -81,6 +85,7 @@ pub async fn drive(
                 let _ = events.send(OrchestratorEvent::PlanCompleted {
                     final_response: "Stopped by user.".into(),
                     cancelled: true,
+                    failed: false,
                 });
                 return "Stopped by user.".into();
             }
@@ -93,6 +98,7 @@ pub async fn drive(
                     let _ = events.send(OrchestratorEvent::PlanCompleted {
                         final_response: msg.clone(),
                         cancelled: false,
+                        failed: true,
                     });
                     return msg;
                 }
@@ -105,6 +111,7 @@ pub async fn drive(
                         let _ = events.send(OrchestratorEvent::PlanCompleted {
                             final_response: response.clone(),
                             cancelled: false,
+                            failed: false,
                         });
                         return response;
                     }
@@ -116,6 +123,7 @@ pub async fn drive(
                         let _ = events.send(OrchestratorEvent::PlanCompleted {
                             final_response: msg.clone(),
                             cancelled: false,
+                            failed: true,
                         });
                         return msg;
                     }

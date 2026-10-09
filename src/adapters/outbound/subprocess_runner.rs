@@ -5,7 +5,10 @@
 //! implements `WorkerHandle` so the DagExecutor drives it; the child runs the
 //! real LLM mini-loop (`inbound/cli/run_agent.rs::run_agent_subprocess`). The accepted plan
 //! reaches the child as `AgentIpcInput.plan_state` (per session), not via
-//! the global `TENGU_PLAN.md`.
+//! the global `TENGU_PLAN.md`. A recording orchestrator (`with_trace`) asks
+//! the child for its tool events (`AgentIpcInput.trace`: the step's
+//! `step.started`) and writes the ones it hands back (`AgentIpcOutput.trace`)
+//! into its own run (`trace_exec::replay_child`).
 //!
 //! The child subprocess is the same `tengu` binary re-invoked with a dedicated
 //! `run-agent` subcommand and the `TENGU_AGENT_IPC=1` environment guard. The
@@ -76,6 +79,20 @@ pub struct AgentIpcInput {
     /// `None` (old parents) → the child falls back to the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_state: Option<String>,
+    /// The parent's execution trace this step runs under: set ⇒ the child
+    /// records its tool calls (`trace_exec::DraftBuffer`) and hands them
+    /// back in `AgentIpcOutput.trace`; the parent writes them into this run
+    /// under `parent_event_id` (the step's `step.started`). `None` (old
+    /// parents, a surface that does not record) ⇒ nothing is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<IpcTraceRef>,
+}
+
+/// [`AgentIpcInput::trace`]: which recording, under which event.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IpcTraceRef {
+    pub run_id: String,
+    pub parent_event_id: String,
 }
 
 fn default_max_turns() -> u32 {
@@ -86,6 +103,8 @@ fn default_max_turns() -> u32 {
 ///
 /// `metrics` carries per-turn LLM telemetry collected during the subagent's
 /// inner tool loop — empty for the legacy/test paths that don't fill it in.
+/// `trace` is the step's `tool.*` events when `AgentIpcInput.trace` asked for
+/// them (`trace_exec::DraftBuffer`; the parent writes them into its run).
 /// `tools` is the step's tool activity in call order (`ToolRun`: name + ok):
 /// calls the child ran (`compress_and_store` included) and the ones a Claude
 /// Code engine ran through the bridge (`StreamEvent::ToolRan`) — what
@@ -104,6 +123,8 @@ pub enum AgentIpcOutput {
         metrics: Vec<crate::domain::metrics::MetricsRecord>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tools: Vec<crate::domain::message::ToolRun>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trace: Vec<crate::domain::trace::EventDraft>,
     },
     /// Step failed. `output` contains partial text up to the failure.
     Failed {
@@ -113,6 +134,8 @@ pub enum AgentIpcOutput {
         metrics: Vec<crate::domain::metrics::MetricsRecord>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tools: Vec<crate::domain::message::ToolRun>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trace: Vec<crate::domain::trace::EventDraft>,
     },
 }
 
@@ -138,6 +161,11 @@ pub struct SubprocessRunner {
     /// inherits the parent's scopes/secrets/MCP servers. `None` when the
     /// parent is running with the default user config.
     pub sandbox_name: Option<String>,
+    /// The recording a step's child tool events go to (`with_trace`): asked
+    /// for over `AgentIpcInput.trace` when the step runs caused by a
+    /// `step.started` (`trace_exec::cause`), written back by
+    /// `trace_exec::replay_child`. `None` = no child records.
+    pub trace: Option<std::sync::Arc<dyn crate::ports::trace::TraceSink>>,
 }
 
 impl Default for SubprocessRunner {
@@ -148,6 +176,7 @@ impl Default for SubprocessRunner {
             agents: std::collections::HashMap::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             sandbox_name: None,
+            trace: None,
         }
     }
 }
@@ -178,6 +207,26 @@ impl SubprocessRunner {
             agents,
             ..Self::default()
         }
+    }
+
+    /// `AgentIpcInput.trace` for the step running now: this runner records
+    /// and the step runs caused by its `step.started` (`trace_exec::cause`).
+    fn trace_ref(&self) -> Option<IpcTraceRef> {
+        let run_id = self.trace.as_ref()?.run_id()?.to_string();
+        let parent_event_id = crate::application::trace_exec::cause()?.parent?;
+        Some(IpcTraceRef {
+            run_id,
+            parent_event_id,
+        })
+    }
+
+    /// Record each step's child tool events into `sink` (module docs).
+    pub(crate) fn with_trace(
+        mut self,
+        sink: Option<std::sync::Arc<dyn crate::ports::trace::TraceSink>>,
+    ) -> Self {
+        self.trace = sink;
+        self
     }
 }
 
@@ -387,12 +436,28 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             plan_state: crate::application::orchestrator::shared_files::active_plan(
                 &self.session_id,
             ),
+            trace: self.trace_ref(),
+        };
+        let step_event = input.trace.as_ref().map(|t| t.parent_event_id.clone());
+        let replay = |drafts: Vec<crate::domain::trace::EventDraft>| {
+            if let (Some(sink), Some(parent)) = (&self.trace, &step_event) {
+                crate::application::trace_exec::replay_child(
+                    sink.as_ref(),
+                    drafts,
+                    parent,
+                    &self.session_id,
+                );
+            }
         };
 
         match self.run_with_timeout(input, step_timeout_secs).await? {
             AgentIpcOutput::Ok {
-                output, metrics, ..
+                output,
+                metrics,
+                trace,
+                ..
             } => {
+                replay(trace);
                 // Re-emit per-turn subagent telemetry on the parent's global
                 // metrics sink. The IPC boundary is the only path these
                 // records can take from the child to the TUI / aggregator.
@@ -406,8 +471,10 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
                 error,
                 output,
                 metrics,
+                trace,
                 ..
             } => {
+                replay(trace);
                 for rec in metrics {
                     crate::application::metrics::forward(rec);
                 }
@@ -517,6 +584,7 @@ mod tests {
             compose: None,
             sandbox_config: None,
             plan_state: None,
+            trace: None,
         };
         let json = serde_json::to_string(&input).unwrap();
         // `None` is skipped on the wire so old children keep parsing.
@@ -542,6 +610,7 @@ mod tests {
             compose: None,
             sandbox_config: None,
             plan_state: Some("# Tengu Current Plan\n".to_string()),
+            trace: None,
         };
         let json = serde_json::to_string(&input).unwrap();
         assert!(json.contains("\"plan_state\""));
@@ -555,6 +624,47 @@ mod tests {
         let json = r#"{"goal":"g","agent_name":"a","model":"m","session_id":"s","step_id":"x"}"#;
         let back: AgentIpcInput = serde_json::from_str(json).unwrap();
         assert!(back.plan_state.is_none());
+        assert!(back.trace.is_none(), "an old parent records nothing");
+    }
+
+    /// The trace ref crosses only when set (an old child never sees the
+    /// key); an old child's output (no `trace`) parses to no events; a new
+    /// one's drafts round-trip.
+    #[test]
+    fn ipc_trace_is_compatible_both_ways() {
+        let json = r#"{"goal":"g","agent_name":"a","model":"m","session_id":"s","step_id":"x"}"#;
+        let mut input: AgentIpcInput = serde_json::from_str(json).unwrap();
+        assert!(!serde_json::to_string(&input).unwrap().contains("\"trace\""));
+        input.trace = Some(IpcTraceRef {
+            run_id: "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e".into(),
+            parent_event_id: "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e:7".into(),
+        });
+        let back: AgentIpcInput =
+            serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
+        assert_eq!(back.trace, input.trace);
+
+        let old: AgentIpcOutput =
+            serde_json::from_str(r#"{"status":"ok","output":"o","summary":"s"}"#).unwrap();
+        assert!(matches!(old, AgentIpcOutput::Ok { trace, .. } if trace.is_empty()));
+        let draft = crate::domain::trace::EventDraft::new(
+            crate::domain::trace::Component::Tool,
+            "tool.started",
+            crate::domain::trace::Status::Running,
+        )
+        .node("tool:crypto_researcher/sol_price");
+        let out = AgentIpcOutput::Failed {
+            error: "e".into(),
+            output: String::new(),
+            metrics: Vec::new(),
+            tools: Vec::new(),
+            trace: vec![draft.clone()],
+        };
+        let AgentIpcOutput::Failed { trace, .. } =
+            serde_json::from_str(&serde_json::to_string(&out).unwrap()).unwrap()
+        else {
+            panic!("expected Failed");
+        };
+        assert_eq!(trace, [draft]);
     }
 
     #[test]
@@ -564,6 +674,7 @@ mod tests {
             summary: "summary".to_string(),
             metrics: Vec::new(),
             tools: Vec::new(),
+            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"ok\""));
@@ -582,6 +693,7 @@ mod tests {
             output: "partial".to_string(),
             metrics: Vec::new(),
             tools: Vec::new(),
+            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"status\":\"failed\""));
@@ -600,6 +712,7 @@ mod tests {
             summary: "s".into(),
             metrics: Vec::new(),
             tools: vec![run("read_file", true), run("lp_decide", false)],
+            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(
@@ -640,6 +753,7 @@ mod tests {
             summary: "summary".to_string(),
             metrics: vec![m],
             tools: Vec::new(),
+            trace: Vec::new(),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("\"metrics\""));
