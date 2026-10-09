@@ -413,7 +413,7 @@ Example queries:
         <tr><td><code>StepSucceeded</code></td><td><code>step.completed</code> ok, <code>output_chars</code>, duration</td><td><code>agent:&lt;a&gt;</code></td></tr>
         <tr><td><code>ReplanTriggered</code></td><td><code>plan.replanned</code> pending, line 1 of the reason</td><td><code>planner</code></td></tr>
         <tr><td><code>PlanCompleted</code></td><td><code>plan.completed</code>: ok · failed · dropped (cancelled); <code>direct</code> when the planner answered itself</td><td><code>planner</code></td></tr>
-        <tr><td><code>MetricsRecorded</code> (this session)</td><td><code>metrics.recorded</code>: tokens, chars, latency</td><td>none</td></tr>
+        <tr><td><code>MetricsRecorded</code> (this session)</td><td><code>metrics.recorded</code>: tokens, chars, latency; a subagent record under its step, even one that reaches the bus after <code>plan.completed</code></td><td>none</td></tr>
       </tbody>
     </table>
   </div>

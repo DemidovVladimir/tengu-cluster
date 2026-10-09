@@ -279,7 +279,7 @@
       </tbody>
     </table>
   </div>
-  <p class="note">Not traced yet: a typed scope refusal (today a <code>tool.failed</code> with the refusal text); a <code>claude_code</code> step's tool calls (they run in its MCP bridge process). Who records: <code>tengu run</code>, <code>tengu decide</code>, <code>tengu webhooks</code>, and, with <code>[orchestrator]</code>, <code>tengu chat</code>, <code>tengu telegram</code> and each <code>tengu eval</code> row.</p>
+  <p class="note">Not traced yet: a typed scope refusal (today a <code>tool.failed</code> with the refusal text); a <code>claude_code</code> step's tool calls (they run in its MCP bridge process); the tool calls of a <code>run-agent</code> child that ends without its output (an engine error mid-loop, a timeout kill); a step aborted with its turn (no outcome event). Who records: <code>tengu run</code>, <code>tengu decide</code>, <code>tengu webhooks</code>, and, with <code>[orchestrator]</code>, <code>tengu chat</code>, <code>tengu telegram</code> and each <code>tengu eval</code> row.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-server">

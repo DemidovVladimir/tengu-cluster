@@ -391,8 +391,9 @@ pub(crate) fn build_orchestrator(
     // onto the orchestrator event bus so a single subscriber can render
     // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
     // subsequent `build_orchestrator` calls reuse the already-installed
-    // sink. The forwarder ends with the orchestrator (a weak bus handle:
-    // a webhook turn's orchestrator used to keep it running forever).
+    // sink. The forwarder holds a weak bus handle: it ends at the first
+    // record after the orchestrator is gone (a webhook turn's orchestrator
+    // used to keep its forwarder, and the bus, alive forever).
     let metrics_tx = crate::application::metrics::install_global_sink();
     {
         let mut metrics_rx = metrics_tx.subscribe();

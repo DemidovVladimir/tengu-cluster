@@ -2210,6 +2210,13 @@ async fn run_row_via_orchestrator(
         Ok(text) => (false, text),
         Err(_) => (true, String::new()),
     };
+    // Let the event drain finish — PlanCompleted should already have
+    // fired. Give it a brief grace window to flush before we snapshot.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    event_task.abort();
+    // After the grace window: a record the metrics forwarder hands the bus
+    // late (`metrics.recorded`) lands before `run.closed`, not after it
+    // (an event after it would leave the run `open`).
     if let Some(t) = &trace {
         let reason = if timed_out {
             "row timed out"
@@ -2218,11 +2225,6 @@ async fn run_row_via_orchestrator(
         };
         crate::bootstrap::trace::close(&**t, reason, timed_out);
     }
-
-    // Let the event drain finish — PlanCompleted should already have
-    // fired. Give it a brief grace window to flush before we snapshot.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    event_task.abort();
 
     // Snapshot results from the accumulator.
     let obs_snapshot = accum.observations.lock().unwrap().clone();

@@ -40,3 +40,10 @@ jobs:
       # and its test (`cli::studio::tests`).
       - name: Studio tests (without the studio feature)
         run: cargo test --no-default-features --features openrouter,telegram --bin tengu studio
+
+      # The webhook listener (`--features webhooks`, not a default feature):
+      # auth, queue bounds, each request's `trigger.webhook` /
+      # `webhook.responded` trace events. `cargo test --workspace` above
+      # compiles none of these tests.
+      - name: Webhook tests (feature webhooks)
+        run: cargo test --features webhooks --bin tengu webhooks

@@ -16,7 +16,7 @@
 //! | `StepSucceeded` | `step.completed` (ok) | `agent:<agent>` | its `step.started` | `step`, `output_chars`; `duration_ms` = the step |
 //! | `ReplanTriggered` | `plan.replanned` (pending) | `planner` | the last `step.failed`, else the `plan.created` | `reason` (line 1), `plans` |
 //! | `PlanCompleted` | `plan.completed` (ok · failed when `failed` · dropped when `cancelled`) | `planner` | the turn's last `plan.created`, else the root | `direct` (no plan: the planner answered itself), `cancelled`, `failed`, `response_chars`, `error` (line 1, failed only); `duration_ms` = the turn |
-//! | `MetricsRecorded` of this session, a planner / subagent record | `metrics.recorded` (ok) | none | the step's `step.started` (subagent), else the turn's `plan.created`, else the root | `kind`, `agent`, `model`, `step`, token / char counts; `duration_ms` = `latency_ms` |
+//! | `MetricsRecorded` of this session, a planner / subagent record | `metrics.recorded` (ok) | none | the step's `step.started` (subagent — also when the record reaches the bus after its turn's `plan.completed`), else the running turn's `plan.created`, else the root | `kind`, `agent`, `model`, `step`, token / char counts; `duration_ms` = `latency_ms` |
 //! | `StepExhausted` · `StepProgress` · `RagQueried` | not written (the last `step.failed` says it · never sent · the query is the user's text) | | | |
 //!
 //! A turn = one `Orchestrator::handle` (its first event to its
@@ -80,6 +80,10 @@ pub(crate) struct TraceBridge {
 /// The current turn: what later events of it are parented to.
 struct Turn {
     started: Instant,
+    /// `plan.completed` written: the next event starts a new turn; until
+    /// then a late `metrics.recorded` (the forwarder hands records to the
+    /// bus after the step that made them) still finds its step here.
+    ended: bool,
     /// `plan.created` written so far this turn.
     plans: u32,
     plan: Option<String>,
@@ -141,8 +145,12 @@ impl TraceBridge {
         }
         let mut guard = self.turn.lock().unwrap_or_else(|p| p.into_inner());
         let now = Instant::now();
+        if guard.as_ref().is_some_and(|t| t.ended) {
+            *guard = None;
+        }
         let turn = guard.get_or_insert_with(|| Turn {
             started: now,
+            ended: false,
             plans: 0,
             plan: None,
             replanned: None,
@@ -289,7 +297,7 @@ impl TraceBridge {
                     .payload(payload);
                 let parent = turn.plan.clone().or_else(|| self.root.clone());
                 let id = self.emit(d, parent);
-                *guard = None;
+                turn.ended = true;
                 id
             }
             OrchestratorEvent::StepExhausted { .. }
@@ -316,7 +324,9 @@ impl TraceBridge {
                     .and_then(|s| s.event.clone()),
                 _ => None,
             };
-            step.or_else(|| turn.and_then(|t| t.plan.clone()))
+            // An ended turn lends only its steps: a planner record seen
+            // now may be the next turn's, before its `plan.created`.
+            step.or_else(|| turn.filter(|t| !t.ended).and_then(|t| t.plan.clone()))
                 .or_else(|| self.root.clone())
         };
         let d = self
@@ -600,6 +610,52 @@ mod tests {
         assert_eq!(d[3].parent_event_id, Some(MemTrace::id(0)));
         assert_eq!(d[2].payload["total_tokens"], json!(120));
         assert_eq!(d[2].duration_ms, Some(950));
+    }
+
+    /// The metrics forwarder hands a record to the bus after the step that
+    /// made it, so a step's record can land after its turn's
+    /// `plan.completed`: it still hangs under that step. A planner record
+    /// then (the next turn's, before its plan) is a root of a chat turn,
+    /// and the next turn starts fresh.
+    #[test]
+    fn a_late_subagent_record_keeps_its_step() {
+        let (sink, b) = bridge(None);
+        b.record(&OrchestratorEvent::PlanCreated {
+            plan: Plan {
+                steps: vec![step("s1", "crypto_researcher", &[])],
+            },
+        });
+        b.record(&OrchestratorEvent::StepStarted {
+            step_id: StepId::new("s1"),
+            agent: "crypto_researcher".into(),
+        });
+        b.record(&OrchestratorEvent::StepSucceeded {
+            step_id: StepId::new("s1"),
+            output: "x".into(),
+        });
+        b.record(&OrchestratorEvent::PlanCompleted {
+            final_response: "x".into(),
+            cancelled: false,
+            failed: false,
+        });
+        for r in [
+            metrics(MetricsKind::Subagent, SESSION, Some("s1")),
+            metrics(MetricsKind::Planner, SESSION, None),
+        ] {
+            b.record(&OrchestratorEvent::MetricsRecorded { record: r });
+        }
+        b.record(&OrchestratorEvent::PlanCreated {
+            plan: Plan {
+                steps: vec![step("s1", "crypto_researcher", &[])],
+            },
+        });
+        let d = sink.all();
+        assert_eq!(d[4].kind, "metrics.recorded");
+        assert_eq!(d[4].parent_event_id, Some(MemTrace::id(1)), "its step");
+        assert_eq!(d[5].parent_event_id, None, "not the ended turn's plan");
+        assert_eq!(d[6].kind, "plan.created");
+        assert_eq!(d[6].parent_event_id, None);
+        assert_eq!(d[6].payload["replan"], json!(false), "a new turn");
     }
 
     /// Through the bus: recorded in send order before subscribers see it;

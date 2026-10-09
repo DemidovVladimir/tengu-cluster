@@ -145,7 +145,8 @@ impl EventBus {
     }
 
     /// A handle that does not keep the bus alive (the metrics forwarder in
-    /// `bootstrap::orchestrator` ends once the orchestrator is gone).
+    /// `bootstrap::orchestrator` ends at its first record after the
+    /// orchestrator is gone).
     pub(crate) fn downgrade(&self) -> WeakEventBus {
         WeakEventBus {
             tx: self.tx.downgrade(),

@@ -2208,13 +2208,15 @@ pub(crate) fn run_telegram(config: Config, secret_registry: Arc<SecretRegistry>)
         .build()
         .expect("Failed to create Telegram runtime");
 
-    // With `[orchestrator]`, one recording of every sender's plans.
-    let trace = crate::bootstrap::trace::open_orchestration(
-        &config,
-        crate::domain::trace::RunKind::Telegram,
-        &secret_registry,
-    );
     let (mut session, inbound_rx) = TelegramSession::build(config, secret_registry, &rt)?;
+    // With `[orchestrator]`, one recording of every sender's plans — opened
+    // once the session is built, so a refused start (no allow-list) leaves
+    // no run without its `run.closed`.
+    let trace = crate::bootstrap::trace::open_orchestration(
+        &session.config,
+        crate::domain::trace::RunKind::Telegram,
+        &session.secret_registry,
+    );
     session.trace.clone_from(&trace);
     let out = session.run(rt, inbound_rx);
     if let Some(t) = &trace {
