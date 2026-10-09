@@ -20,7 +20,8 @@
 //! | Rule | Value |
 //! |---|---|
 //! | Fail-soft | a stage that fails (`Err` or `ok = false`) is recorded; the cycle goes on with what its tools wrote — a `HOLD` week is a valid answer |
-//! | Fail-hard | an IO or domain error after the claim writes `failed.json` and returns `Err`: nothing frozen or logged; the dir stays (`cycle_unfinished` on a rerun) |
+//! | Fail-hard | an IO or domain error after the claim writes `failed.json` (ownership renewed first) and returns `Err`: nothing frozen or logged; the dir stays (`cycle_unfinished` on a rerun) |
+//! | Fail-stop on a lost lease | [`CycleEnv::owner`] (`ports::runtime::Ownership`: `tengu soe cycle`'s and `tengu run`'s leases, `Unleased` for a replay) is renewed before every irreversible step — each resumed state-log line, the claim, each phase marker, each model stage, the freeze, each state-log line — and raced by each model stage (dropped once a lease is lost: its `run-agent` child is `kill_on_drop`, its stage-cache record written only after it returns); lost ⇒ `lease_lost`, and nothing more is written, `failed.json` included: the dir stays `OPEN` (`cycle_unfinished` on a rerun), lines already appended are resumed by the next owner (Resume) |
 //! | Reproducible | every file but `ops.json` is a function of the inputs — canonical JSON, the injected clock only in `ops.json`, ids by append order, forecasts frozen at `decided_at`: the same packet, profile, generation and stage records give the same bytes (`freeze::decision_sha256`) |
 //! | No look-ahead | nothing after `decided_at` reaches a stage or the decision: the packet's clock cuts it; carried records are re-checked against it |
 //! | No side effect | the cycle writes the SOE state only; no contact, spend, publish or deploy exists |
@@ -63,6 +64,7 @@ use crate::domain::soe::record::{validate, Tier};
 use crate::domain::soe::value::{Est, Minor, SchemaTag, ValueError};
 use crate::domain::source::{fence_untrusted, AsOfMode, EvidencePacket};
 use crate::ports::clock::Clock;
+use crate::ports::runtime::{LeaseLost, Ownership};
 use crate::ports::soe::{
     CycleStore, RunDir, RunStatus, StageReply, StageRequest, StageRunner, StateLog,
 };
@@ -107,6 +109,9 @@ pub(crate) struct CycleEnv<'a> {
     pub runner: Option<&'a dyn StageRunner>,
     pub clock: &'a dyn Clock,
     pub profile: ProfileIn<'a>,
+    /// The leases the cycle writes under (module table: Fail-stop);
+    /// `ports::runtime::Unleased` for a replay.
+    pub owner: &'a dyn Ownership,
 }
 
 /// Live cycle or replay (module table).
@@ -578,7 +583,7 @@ fn cycle_section(
 pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<CycleOutcome> {
     let cycle_id = p.week.to_string();
     let dir = p.target.dir(&cycle_id);
-    let prev_line = preflight(env, p, &dir)?;
+    let prev_line = preflight(env, p, &dir).await?;
     let t0 = env.clock.now_ms();
     let mode = if dir.is_replay() {
         AsOfMode::Knowable
@@ -620,6 +625,7 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
         forecast_max_weeks: p.forecast_max_weeks,
     };
     let observe = local_run(Stage::Observe, elapsed(env.clock, t0));
+    env.owner.ensure().await?;
     env.store
         .claim(&dir)
         .with_context(|| format!("claim {dir} in {}", env.store.root_display()))?;
@@ -635,7 +641,14 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
     };
     match claimed.run(observe).await {
         Ok(o) => Ok(o),
+        // Lost: nothing more is written (module table: Fail-stop).
+        Err(e) if LeaseLost::of(&e).is_some() => Err(e),
         Err(e) => {
+            if let Err(lost) = env.owner.ensure().await {
+                let error = format!("{e:#}");
+                tracing::warn!(run = %dir, %error, "soe cycle failed, then lost its lease: no failed.json");
+                return Err(lost);
+            }
             if let Ok(b) = json_line(&json!({"run": dir.to_string(), "error": format!("{e:#}")})) {
                 let _ = env.store.write(&dir, FAILED, &b);
             }
@@ -645,7 +658,7 @@ pub(crate) async fn run_cycle(env: &CycleEnv<'_>, p: &CycleParams) -> Result<Cyc
 }
 
 /// The refusals before anything is created; the forecast log's last line (live).
-fn preflight(env: &CycleEnv, p: &CycleParams, dir: &RunDir) -> Result<Option<LogLine>> {
+async fn preflight(env: &CycleEnv<'_>, p: &CycleParams, dir: &RunDir) -> Result<Option<LogLine>> {
     let mut problems = p.generation.problems();
     if !env.profile.record.is_signed() {
         problems.push(format!(
@@ -676,7 +689,7 @@ fn preflight(env: &CycleEnv, p: &CycleParams, dir: &RunDir) -> Result<Option<Log
     let lines = if dir.is_replay() {
         Vec::new()
     } else {
-        resume_learn(env.store)?.1
+        resume_learn(env.store, env.owner).await?.1
     };
     match env.store.status(dir)? {
         RunStatus::Frozen => bail!(
@@ -742,8 +755,13 @@ fn forecast_log(store: &dyn CycleStore) -> Result<Vec<LogLine>> {
 /// cycle's order — `candidates.jsonl`, `episodes.jsonl` (each line once:
 /// those already appended are skipped), then `forecast-line.json` — only
 /// when that line follows the chain's tip; else `chain_broken`, nothing
-/// appended. The cycles resumed and the log after.
-pub(crate) fn resume_learn(store: &dyn CycleStore) -> Result<(Vec<String>, Vec<LogLine>)> {
+/// appended — each line after `owner` is renewed (a loss stops the resume
+/// between two lines; the next owner resumes the rest). The cycles resumed
+/// and the log after.
+pub(crate) async fn resume_learn(
+    store: &dyn CycleStore,
+    owner: &dyn Ownership,
+) -> Result<(Vec<String>, Vec<LogLine>)> {
     let mut lines = forecast_log(store)?;
     let mut resumed = Vec::new();
     for id in store.cycles()? {
@@ -775,9 +793,11 @@ pub(crate) fn resume_learn(store: &dyn CycleStore) -> Result<(Vec<String>, Vec<L
             let own = store.read(&dir, name)?.unwrap_or_default();
             let own = String::from_utf8(own).with_context(|| format!("{dir}/{name}: not UTF-8"))?;
             for l in own.lines().filter(|l| !have.contains(*l)) {
+                owner.ensure().await?;
                 store.append_line(log, l)?;
             }
         }
+        owner.ensure().await?;
         store.append_line(StateLog::ForecastLog, &canonical_line(&line)?)?;
         lines.push(line);
         resumed.push(id);
@@ -943,18 +963,23 @@ impl Claimed<'_> {
             RunDir::Replay(_) | RunDir::Review(_) => None,
         };
 
-        // Freeze, then learn (live only; the lines are the run dir's).
+        // Freeze, then learn (live only; the lines are the run dir's) —
+        // each step under a renewed lease (module table: Fail-stop).
+        env.owner.ensure().await?;
         let manifest_sha256 = freeze(env.store, dir)?;
         let decision = decision_sha256(env.store, dir)?;
         if let Some(l) = line {
             for e in &learned.events {
+                env.owner.ensure().await?;
                 env.store
                     .append_line(StateLog::Candidates, &canonical_line(e)?)?;
             }
             for e in &learned.episodes {
+                env.owner.ensure().await?;
                 env.store
                     .append_line(StateLog::Episodes, &canonical_line(e)?)?;
             }
+            env.owner.ensure().await?;
             env.store
                 .append_line(StateLog::ForecastLog, &canonical_line(&l)?)?;
         }
@@ -971,14 +996,16 @@ impl Claimed<'_> {
         })
     }
 
-    /// One model stage; `goal` `Err` = skipped, with why.
+    /// One model stage; `goal` `Err` = skipped, with why. A run starts
+    /// under a renewed lease and is dropped once one is lost (module table:
+    /// Fail-stop) — the only `Err`.
     async fn stage(
         &self,
         s: &mut Stages,
         stage: Stage,
         agent: &str,
         goal: std::result::Result<String, &str>,
-    ) {
+    ) -> Result<()> {
         match (self.env.runner, goal) {
             (Some(r), Ok(goal)) => {
                 let req = StageRequest {
@@ -988,7 +1015,12 @@ impl Claimed<'_> {
                     cycle_id: self.head.cycle_id.clone(),
                     goal,
                 };
-                let (run, line) = run_stage(r, self.env.clock, req).await;
+                self.env.owner.ensure().await?;
+                let (run, line) = tokio::select! {
+                    biased;
+                    lost = self.env.owner.lost() => return Err(lost.into()),
+                    out = run_stage(r, self.env.clock, req) => out,
+                };
                 s.runs.push(run);
                 s.lines.push(line);
             }
@@ -997,11 +1029,14 @@ impl Claimed<'_> {
                 .push(StageLine::skipped(stage, agent, "no stage runner")),
             (Some(_), Err(why)) => s.lines.push(StageLine::skipped(stage, agent, why)),
         }
+        Ok(())
     }
 
-    /// Architect, then Critic, each inside its phase (module table).
+    /// Architect, then Critic, each inside its phase (module table); each
+    /// phase marker under a renewed lease.
     async fn model_stages(&self, s: &mut Stages) -> Result<()> {
-        let (store, p, dir) = (self.env.store, self.p, &self.dir);
+        let (store, p, dir, owner) = (self.env.store, self.p, &self.dir, self.env.owner);
+        owner.ensure().await?;
         open_phase(store, dir, Phase::Propose)?;
         let goal = architect_goal(
             &self.head,
@@ -1010,7 +1045,8 @@ impl Claimed<'_> {
             &self.carried,
         );
         self.stage(s, Stage::Architect, &p.architect, Ok(goal))
-            .await;
+            .await?;
+        owner.ensure().await?;
         open_phase(store, dir, Phase::Challenge)?;
         let candidates = submit::candidates(store, dir)?;
         let goal = if candidates.is_empty() {
@@ -1022,7 +1058,8 @@ impl Claimed<'_> {
                 &candidates,
             ))
         };
-        self.stage(s, Stage::Challenge, &p.critic, goal).await;
+        self.stage(s, Stage::Challenge, &p.critic, goal).await?;
+        owner.ensure().await?;
         open_phase(store, dir, Phase::Closed)
     }
 

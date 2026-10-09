@@ -13,13 +13,13 @@
 //! | 1 Contract | listed in `[strategy_ranking]` (`contract_not_listed`); the registry reloaded from disk (a seal appended after start counts); its newest `[[sealed]]` row `ranking:<id>` hashes the file now — else `contract_unsealed` / `contract_changed`; nothing is written before this passes |
 //! | 2 Date | [`ranking_date`]: the given date, else the newest local date in `tz` whose cutoff has passed; a weekday of `days` (none = every day) — else `not_a_ranking_day`; cutoff = `Zone::at(date, cutoff)` (DST-correct), ≤ now — else `cutoff_not_reached` — and after `from` — else `before_from` |
 //! | 3 Idempotency | a `COMPLETE` / `INCOMPLETE` manifest: the published ranking comes back (`published = false`), nothing runs or is written — checked before and after the lease; only the operator reruns a published date (by deleting its `<date>/` dir) |
-//! | 4 Lease | `ranking:<contract id>` in the state dir's `runtime.db`, TTL 15 min, renewed before each strategy and again before its manifest write (so before the publish too); another holder ⇒ `ranking_busy` (named); a lost renewal (a step outlived the TTL and another holder took the date) ⇒ `ranking_lease_lost`, and this run writes nothing more; released at the end |
+//! | 4 Lease | `ranking:<contract id>` in the state dir's `runtime.db`, TTL 15 min, renewed before each strategy, before each manifest write (each strategy's, the terminal one, a `FAILED` one) and before each publish write (the dated ranking, `latest`); another holder ⇒ `ranking_busy` (named); a lost renewal — another holder has it, or it lapsed and another had it since (`acquired_at_ms` changed: a step outlived the TTL) — ⇒ `ranking_lease_lost`, and this run writes nothing more; released at the end |
 //! | 5 Manifest | a `RUNNING` / `FAILED` one of the same contract sha256 is resumed: a `DONE` strategy whose `report.json` still hashes its `report_sha256` is reused, the rest run again; rewritten after each strategy |
 //! | 6 Freshness | per instrument the strategy reads: its newest stored bar at the spec's interval closes ≥ cutoff − `max_lag_bars` × interval, else `STALE` (no run) |
 //! | 7 Backtest | one strategy at a time: `prepare` (from = `from`, to = data through = the cutoff, no split — never a holdout read), `evaluate` (the rules arms), `write_run_dir` (retention also keeps this date's `DONE` runs) |
 //! | 8 Evaluate | `report.json` read back: its sha256, `RunFacts`, the standing from the reloaded registry as of the cutoff (a PASS decided after it lifts nothing: a grade landed since lifts only later dates, a rerun of an earlier one too); evaluation `NOT_GATED`; skips and data notes are never failures |
 //! | 9 Rank | `select` → `rank`, stamped with the contract sha256, the date and now |
-//! | 10 Publish | `<date>/ranking.json` + `ranking.md`; `COMPLETE` and no newer date in `latest` ⇒ `latest.md`, then `latest.json`; then the manifest's final status. A failure after step 5 marks the manifest `FAILED` (resumable) — a lost lease excepted: the manifest is the new holder's |
+//! | 10 Publish | lease renewed ⇒ `<date>/ranking.json` + `ranking.md`; `COMPLETE` and no newer date in `latest` ⇒ renewed ⇒ `latest.md`, then `latest.json`; renewed ⇒ the manifest's final status. A failure after step 5 marks the manifest `FAILED` (resumable) once the lease is renewed — a lost lease excepted: the manifest is the new holder's (a store error there: no `FAILED` either, ownership unproven) |
 //!
 //! A failed strategy's `error` names the state dir `<state>` (never its
 //! path), so a copy of the state ranks to the same `content_sha256`.
@@ -325,6 +325,7 @@ pub(crate) async fn run_ranking(env: &RankingEnv, req: RankRequest) -> Result<Ra
         dir,
         holder: &req.holder,
         resource: &resource,
+        acquired_at_ms: lease.acquired_at_ms,
     };
     let out = run.go().await;
     if let Err(e) = env.runtime.release_lease(&resource, &req.holder).await {
@@ -343,24 +344,28 @@ struct Run<'a> {
     dir: PathBuf,
     holder: &'a str,
     resource: &'a str,
+    /// The lease's `acquired_at_ms` when this run took it: a renewal granted
+    /// with another one lapsed in between (step 4).
+    acquired_at_ms: i64,
 }
 
 /// `ranking_lease_lost`: the lease expired during a step and another holder
-/// took it — this run writes nothing more (no FAILED manifest over the new
-/// holder's).
+/// took it (it may hold it still, or have released it since) — this run
+/// writes nothing more (no FAILED manifest over the new holder's).
 #[derive(Debug)]
 struct LeaseLost {
     resource: String,
-    holder: String,
+    /// `passed to `<holder>`` · `lapsed …`.
+    how: String,
 }
 
 impl std::fmt::Display for LeaseLost {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ranking_lease_lost: `{}` passed to `{}` — this run stops and writes nothing more; \
+            "ranking_lease_lost: `{}` {} — this run stops and writes nothing more; \
              that holder runs the date (a later run resumes its manifest)",
-            self.resource, self.holder
+            self.resource, self.how
         )
     }
 }
@@ -421,6 +426,18 @@ impl Run<'_> {
             // Another holder runs the date now: the manifest is its to write.
             Err(e) if e.downcast_ref::<LeaseLost>().is_some() => Err(e),
             Err(e) => {
+                // The FAILED manifest only under a renewed lease (step 4).
+                if let Err(r) = self.renew().await {
+                    warn!(
+                        error = %format!("{e:#}"), renewal = %format!("{r:#}"),
+                        "strategy ranking: the run failed and its lease is not renewed — no FAILED manifest"
+                    );
+                    return Err(if r.downcast_ref::<LeaseLost>().is_some() {
+                        r
+                    } else {
+                        e
+                    });
+                }
                 m.status = ManifestStatus::Failed;
                 m.error = Some(format!("{e:#}"));
                 m.updated_at_ms = self.env.clock.now_ms();
@@ -478,11 +495,15 @@ impl Run<'_> {
         let ranking = rank(c, &stamp, select(c, self.cutoff_ms, &inputs));
         let json = json_bytes(&ranking)?;
         let md = ranking.render_markdown();
+        // Step 10, each write under a renewed lease (step 4): a run that
+        // stalled here past the TTL never overwrites the new holder's.
+        self.renew().await?;
         write_atomic(&self.dir, RANKING_JSON, &json)?;
         write_atomic(&self.dir, RANKING_MD, md.as_bytes())?;
         let latest_replaced = ranking.status == RankingStatus::Complete
             && !matches!(latest_date(&self.env.state_dir, &c.id), Some(d) if d > self.date);
         if latest_replaced {
+            self.renew().await?;
             let cdir = contract_dir(&self.env.state_dir, &c.id);
             write_atomic(&cdir, LATEST_MD, md.as_bytes())?;
             write_atomic(&cdir, LATEST_JSON, &json)?;
@@ -496,6 +517,7 @@ impl Run<'_> {
         m.latest_replaced = latest_replaced;
         m.finished_at_ms = Some(now);
         m.updated_at_ms = now;
+        self.renew().await?;
         write_manifest(&self.dir, m)?;
         info!(
             contract = %c.id, date = %self.date, status = ?m.status, latest_replaced,
@@ -512,7 +534,10 @@ impl Run<'_> {
         })
     }
 
-    /// Step 4: renew the lease (TTL from now), else [`LeaseLost`].
+    /// Step 4: renew the lease (TTL from now), else [`LeaseLost`] — also
+    /// when it is granted with another `acquired_at_ms`: it lapsed and
+    /// another holder had it since (the store keeps `acquired_at_ms` only
+    /// across one holder).
     async fn renew(&self) -> Result<()> {
         let lease = self
             .env
@@ -524,12 +549,19 @@ impl Run<'_> {
                 self.env.clock.now_ms(),
             )
             .await?;
-        if lease.granted {
-            return Ok(());
-        }
+        let how = match (lease.granted, lease.acquired_at_ms == self.acquired_at_ms) {
+            (true, true) => return Ok(()),
+            (true, false) => format!(
+                "lapsed and another holder had it since this run took it (acquired at {}, now \
+                 {})",
+                fmt_time(self.acquired_at_ms),
+                fmt_time(lease.acquired_at_ms)
+            ),
+            (false, _) => format!("passed to `{}`", lease.current_holder),
+        };
         Err(LeaseLost {
             resource: self.resource.to_string(),
-            holder: lease.current_holder,
+            how,
         }
         .into())
     }
@@ -1286,12 +1318,29 @@ pub(crate) mod tests {
 
     /// The runtime store, except that `holder`'s `steal_at`-th acquire finds
     /// the lease taken by `thief` — as when a step outlives the TTL and
-    /// another process takes the date.
+    /// another process takes the date (`release`: and has released it again
+    /// since, `clock` a second later); its `fail_at`-th acquire is a store
+    /// error (0 = never).
     struct Thief {
         inner: Arc<SqliteRuntimeStore>,
         holder: &'static str,
         steal_at: usize,
         calls: std::sync::atomic::AtomicUsize,
+        release: Option<Arc<SimClock>>,
+        fail_at: usize,
+    }
+
+    impl Thief {
+        fn at(inner: &Arc<SqliteRuntimeStore>, steal_at: usize) -> Thief {
+            Thief {
+                inner: Arc::clone(inner),
+                holder: "test:a",
+                steal_at,
+                calls: Default::default(),
+                release: None,
+                fail_at: 0,
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -1304,15 +1353,29 @@ pub(crate) mod tests {
             now_ms: i64,
         ) -> Result<crate::domain::runtime::RunnerLease> {
             use std::sync::atomic::Ordering;
-            if holder == self.holder
-                && self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.steal_at
-            {
+            let n = if holder == self.holder {
+                self.calls.fetch_add(1, Ordering::SeqCst) + 1
+            } else {
+                0
+            };
+            if n > 0 && n == self.steal_at {
                 let expired = now_ms + ttl_ms;
                 let stolen = self
                     .inner
                     .acquire_lease(resource, "thief", ttl_ms, expired)
                     .await?;
                 assert!(stolen.granted);
+                if let Some(clock) = &self.release {
+                    self.inner.release_lease(resource, "thief").await?;
+                    clock.advance(1_000);
+                    return self
+                        .inner
+                        .acquire_lease(resource, holder, ttl_ms, clock.now_ms())
+                        .await;
+                }
+            }
+            if n > 0 && n == self.fail_at {
+                anyhow::bail!("database is locked");
             }
             self.inner
                 .acquire_lease(resource, holder, ttl_ms, now_ms)
@@ -1335,12 +1398,7 @@ pub(crate) mod tests {
         let mut env = f.env.clone();
         // Acquires of `test:a`: the run's, the renewal before rule_w, the
         // one after it (stolen).
-        env.runtime = Arc::new(Thief {
-            inner: f.runtime.clone(),
-            holder: "test:a",
-            steal_at: 3,
-            calls: Default::default(),
-        });
+        env.runtime = Arc::new(Thief::at(&f.runtime, 3));
         let req = RankRequest {
             contract: ID.into(),
             date: Some(day("2026-10-09")),
@@ -1366,6 +1424,101 @@ pub(crate) mod tests {
         f.clock.advance(3 * LEASE_TTL_MS);
         let out = f.run("2026-10-09").await.unwrap();
         assert_eq!(out.manifest.status, ManifestStatus::Complete);
+    }
+
+    /// Review P2: a run that stalled after its last strategy past the TTL
+    /// never publishes over the new holder. Acquires of `test:a`: the run's
+    /// (1), before and after each of the two strategies (2–5), then before
+    /// the dated ranking (6), `latest` (7) and the terminal manifest (8).
+    /// Stolen at 6: no ranking, no `latest`, no terminal manifest; at 7: the
+    /// dated ranking only; at 8: no terminal manifest — each time the
+    /// manifest stays the last one written under the lease (`RUNNING`, both
+    /// strategies `DONE`) and the run fails `ranking_lease_lost`. A thief
+    /// that has released the lease again is a loss too (it lapsed). A step
+    /// failing at the publish writes `FAILED` only under a renewed lease.
+    #[tokio::test]
+    async fn a_lease_lost_before_publish_publishes_nothing() {
+        let req = || RankRequest {
+            contract: ID.into(),
+            date: Some(day("2026-10-09")),
+            holder: "test:a".into(),
+        };
+        for (steal_at, ranking, latest) in [(6, false, false), (7, true, false), (8, true, true)] {
+            let f = fx().await;
+            let mut env = f.env.clone();
+            env.runtime = Arc::new(Thief::at(&f.runtime, steal_at));
+            let e = format!("{:#}", run_ranking(&env, req()).await.unwrap_err());
+            assert!(
+                e.starts_with("ranking_lease_lost: `ranking:rank.fixture.v1` passed to `thief`"),
+                "{steal_at}: {e}"
+            );
+            let dir = f.dir("2026-10-09");
+            let m = read_manifest(&dir).unwrap().unwrap();
+            assert_eq!(m.status, ManifestStatus::Running, "{steal_at}: {m:#?}");
+            assert!(m.finished_at_ms.is_none() && m.content_sha256.is_none() && m.error.is_none());
+            assert_eq!(m.strategies.len(), 2, "{steal_at}");
+            assert!(m
+                .strategies
+                .values()
+                .all(|e| e.status == StrategyStatus::Done));
+            for name in [RANKING_JSON, RANKING_MD] {
+                assert_eq!(dir.join(name).exists(), ranking, "{steal_at}: {name}");
+            }
+            for name in [LATEST_JSON, LATEST_MD] {
+                assert_eq!(
+                    f.contract_dir().join(name).exists(),
+                    latest,
+                    "{steal_at}: {name}"
+                );
+            }
+            // The thief gone, the next run resumes the manifest and publishes.
+            f.clock.advance(3 * LEASE_TTL_MS);
+            let out = f.run("2026-10-09").await.unwrap();
+            assert_eq!(out.manifest.status, ManifestStatus::Complete, "{steal_at}");
+            assert!(f.latest().exists());
+        }
+
+        // The thief took the date and released it again: lapsed, lost.
+        let f = fx().await;
+        let mut env = f.env.clone();
+        env.runtime = Arc::new(Thief {
+            release: Some(f.clock.clone()),
+            ..Thief::at(&f.runtime, 6)
+        });
+        let e = format!("{:#}", run_ranking(&env, req()).await.unwrap_err());
+        assert!(
+            e.starts_with(
+                "ranking_lease_lost: `ranking:rank.fixture.v1` lapsed and another holder had it"
+            ),
+            "{e}"
+        );
+        assert!(!f.dir("2026-10-09").join(RANKING_JSON).exists() && !f.latest().exists());
+
+        // A store error at the publish's renewal fails the run; the FAILED
+        // manifest only after its own renewal: renewed ⇒ written …
+        let f = fx().await;
+        let mut env = f.env.clone();
+        env.runtime = Arc::new(Thief {
+            fail_at: 6,
+            ..Thief::at(&f.runtime, 0)
+        });
+        let e = format!("{:#}", run_ranking(&env, req()).await.unwrap_err());
+        assert!(e.contains("database is locked"), "{e}");
+        let m = read_manifest(&f.dir("2026-10-09")).unwrap().unwrap();
+        assert_eq!(m.status, ManifestStatus::Failed, "{m:#?}");
+        assert!(!f.dir("2026-10-09").join(RANKING_JSON).exists());
+        // … lost meanwhile ⇒ none, and the loss is the answer.
+        let f = fx().await;
+        let mut env = f.env.clone();
+        env.runtime = Arc::new(Thief {
+            fail_at: 6,
+            ..Thief::at(&f.runtime, 7)
+        });
+        let e = format!("{:#}", run_ranking(&env, req()).await.unwrap_err());
+        assert!(e.starts_with("ranking_lease_lost: "), "{e}");
+        let m = read_manifest(&f.dir("2026-10-09")).unwrap().unwrap();
+        assert_eq!(m.status, ManifestStatus::Running, "{m:#?}");
+        assert!(m.error.is_none());
     }
 
     #[tokio::test]

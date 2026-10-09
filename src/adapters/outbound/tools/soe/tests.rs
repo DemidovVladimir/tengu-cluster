@@ -41,6 +41,7 @@ use crate::domain::soe::record::from_json;
 use crate::domain::source::testkit::{rec, Src};
 use crate::domain::source::FENCE_NOTE;
 use crate::ports::clock::SimClock;
+use crate::ports::runtime::Unleased;
 use crate::ports::soe::{StageReply, StageRequest, StageRunner, StateLog, CHALLENGES, PROPOSALS};
 use crate::ports::tool::{Tool, ToolOutput};
 
@@ -789,6 +790,7 @@ async fn fixture_cycle(
             sha256: &bench.profile.sha256,
             text: &bench.text,
         },
+        owner: &Unleased,
     };
     crate::application::soe::cycle::run_cycle(&env, &p)
         .await

@@ -11,6 +11,7 @@
 //! | generation pin ([`generation_pin`]) | bound (`[generation]`) ⇒ its id + `toml_digest` of `<registry>/generations/<id>.toml`; unbound ⇒ `UNBOUND` + `toml_digest` of the config file `Config::load` read |
 //! | profile | `<state root>/operator.toml` (`config::soe::SoeConfig::profile_path`); a synthetic profile refused |
 //! | clock · zone | `SystemClock` (latency only; the decision time is the slot) · the feed's `tz` |
+//! | ownership | the runtime's leases (`bootstrap::runtime::OwnerLeases::ownership`): the cycle renews them before each stage, its freeze and each state-log append, and stops on a loss (`lease_lost`, nothing more written) |
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,14 +36,19 @@ use crate::config::Config;
 use crate::domain::lineage::pins::toml_digest;
 use crate::domain::lineage::value::RecordKind;
 use crate::domain::tz::Zone;
-use crate::ports::runtime::RuntimeJob;
+use crate::ports::runtime::{Ownership, RuntimeJob};
 use crate::ports::soe::{CycleStore, StageRunner};
 
 /// The id of an unbound sandbox's pin (the `soe_*` tools stamp the same).
 pub(crate) use crate::application::soe::submit::UNBOUND;
 
-/// The weekly cycle job of `config` for a feed in `zone` (module table).
-pub(crate) fn soe_cycle_job(config: &Config, zone: Zone) -> Result<Arc<dyn RuntimeJob>> {
+/// The weekly cycle job of `config` for a feed in `zone`, writing under
+/// `owner` (module table).
+pub(crate) fn soe_cycle_job(
+    config: &Config,
+    zone: Zone,
+    owner: Arc<dyn Ownership>,
+) -> Result<Arc<dyn RuntimeJob>> {
     let soe = config
         .soe
         .clone()
@@ -76,6 +82,7 @@ pub(crate) fn soe_cycle_job(config: &Config, zone: Zone) -> Result<Arc<dyn Runti
         zone,
         generation: generation_pin(config)?,
         soe,
+        owner,
     }))
 }
 
@@ -188,7 +195,8 @@ mod tests {
         let mut cfg: Config = toml::from_str(&text).unwrap();
         cfg.loaded_from = Some(file);
         cfg.fold_default_scopes();
-        let job = soe_cycle_job(&cfg, Zone::Paris).unwrap();
+        let owner: Arc<dyn Ownership> = Arc::new(crate::ports::runtime::Unleased);
+        let job = soe_cycle_job(&cfg, Zone::Paris, Arc::clone(&owner)).unwrap();
         let root = resolve_tengu_home().join("state").join(&state);
         // Mon 2026-10-05 07:00 Paris.
         match job.run(1_791_176_400_000, "feed:soe_week:1").await {
@@ -203,7 +211,7 @@ mod tests {
         assert!(!root.exists(), "nothing created in {}", root.display());
         let mut no_soe = cfg.clone();
         no_soe.soe = None;
-        assert!(soe_cycle_job(&no_soe, Zone::Paris).is_err());
+        assert!(soe_cycle_job(&no_soe, Zone::Paris, owner).is_err());
     }
 
     /// § 13 no unapproved side effect (roadmap O4 safety): no catalog tool

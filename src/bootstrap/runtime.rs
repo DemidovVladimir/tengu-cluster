@@ -33,7 +33,9 @@ use crate::adapters::outbound::runtime_store::{read_heartbeat, SqliteRuntimeStor
 use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, Rand01};
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
-use crate::application::runtime::{keep_lease, LeaseTiming, Stop, StopRx, Stopper, Supervisor};
+use crate::application::runtime::{
+    keep_lease, HeldLeases, LeaseTiming, Stop, StopRx, Stopper, Supervisor,
+};
 use crate::application::trace_exec::TracedExecutor;
 use crate::bootstrap::trace::Recording;
 use crate::config::feeds::{FeedConfig, FeedKind, JOBS, JOB_SOE_CYCLE};
@@ -52,7 +54,7 @@ use crate::ports::clock::Clock;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
-use crate::ports::runtime::{RuntimeJob, RuntimeStore};
+use crate::ports::runtime::{LeaseLost, Ownership, RuntimeJob, RuntimeStore};
 use crate::ports::trace::TraceSink;
 
 /// Runner name: the `--sandbox` name, else `default`.
@@ -304,12 +306,15 @@ impl std::error::Error for LeaseHeld {}
 
 /// The leases a process holds ([`LeasePlan`]): taken all or none, renewed
 /// by [`OwnerLeases::keep`] on the process's supervisor, freed by
-/// [`OwnerLeases::release`]. `tengu run` ([`Runtime`]) and `tengu webhooks`
-/// hold the same set.
+/// [`OwnerLeases::release`]; what the process writes under them asks
+/// [`OwnerLeases::ownership`] first. `tengu run` ([`Runtime`]), `tengu
+/// webhooks` and `tengu soe cycle` hold the same set.
 pub(crate) struct OwnerLeases {
     store: Arc<dyn RuntimeStore>,
     holder: String,
     leases: Vec<(RunnerLease, LeaseKind)>,
+    /// The taken leases as the renewal tasks and the writers share them.
+    held: Arc<HeldLeases>,
 }
 
 impl OwnerLeases {
@@ -321,6 +326,7 @@ impl OwnerLeases {
         let db = store.path().display().to_string();
         let store: Arc<dyn RuntimeStore> = Arc::new(store);
         let mut taken = Self {
+            held: Arc::new(HeldLeases::new(Arc::clone(&store), Vec::new(), ttl_ms)),
             store,
             holder: holder_id(),
             leases: Vec::new(),
@@ -343,24 +349,36 @@ impl OwnerLeases {
             taken.release().await;
             return Err(refusal);
         }
+        let leases = taken.leases.iter().map(|(l, _)| l.clone()).collect();
+        taken.held = Arc::new(HeldLeases::new(Arc::clone(&taken.store), leases, ttl_ms));
         Ok(taken)
     }
 
-    /// One renewal task per lease on `supervisor` (`keep_lease`): a lost
-    /// lease fires its stop signal (failed).
+    /// One renewal task per lease on `supervisor` (`keep_lease` over the
+    /// shared [`HeldLeases`]): a lost lease fires its stop signal (failed)
+    /// and is lost for [`OwnerLeases::ownership`] too.
     pub(crate) fn keep(&self, supervisor: &mut Supervisor, timing: LeaseTiming) {
-        for (lease, kind) in &self.leases {
-            let (store, lease, stopper) =
-                (Arc::clone(&self.store), lease.clone(), supervisor.stopper());
+        for (i, (_, kind)) in self.leases.iter().enumerate() {
+            let (held, stopper) = (Arc::clone(&self.held), supervisor.stopper());
             let name = match kind {
                 LeaseKind::Runner => "lease",
                 LeaseKind::State => "state lease",
                 LeaseKind::SoeState => "soe state lease",
             };
-            supervisor.spawn(name, move |stop| {
-                keep_lease(store, lease, timing, stopper, stop)
-            });
+            supervisor.spawn(name, move |stop| keep_lease(held, i, timing, stopper, stop));
         }
+    }
+
+    /// What a use case writing under these leases asks before every
+    /// irreversible step (`ports::runtime::Ownership`): renewed now, else
+    /// `lease_lost` — the same loss the renewal tasks see.
+    pub(crate) fn ownership(&self) -> Arc<dyn Ownership> {
+        Arc::clone(&self.held) as Arc<dyn Ownership>
+    }
+
+    /// The loss of a lease so far (a renewal task's or a writer's), if any.
+    pub(crate) fn lost(&self) -> Option<LeaseLost> {
+        self.held.lost_now()
     }
 
     /// `<host>:<pid>:<uuid>` — one id for every lease of this process.
@@ -593,6 +611,7 @@ fn feed_spec(
                 config,
                 feed.job.as_deref().unwrap_or_default(),
                 schedule.zone,
+                rt.ownership(),
             )?;
             (FeedJob::Job { job }, agent)
         }
@@ -608,15 +627,21 @@ fn feed_spec(
 }
 
 /// The named job of a `kind = "job"` feed (`config/feeds.rs` `JOBS`, a
-/// closed list) + the agent whose store takes its `feed/1` row.
-fn job_for(config: &Config, job: &str, zone: Zone) -> Result<(Arc<dyn RuntimeJob>, String)> {
+/// closed list) + the agent whose store takes its `feed/1` row; `owner` =
+/// the runtime's leases, which the job asks before each irreversible write.
+fn job_for(
+    config: &Config,
+    job: &str,
+    zone: Zone,
+    owner: Arc<dyn Ownership>,
+) -> Result<(Arc<dyn RuntimeJob>, String)> {
     match job {
         JOB_SOE_CYCLE => {
             let soe = config
                 .soe
                 .as_ref()
                 .ok_or_else(|| anyhow!("job: `{JOB_SOE_CYCLE}` needs a [soe] section"))?;
-            let job = crate::bootstrap::soe::soe_cycle_job(config, zone)
+            let job = crate::bootstrap::soe::soe_cycle_job(config, zone, owner)
                 .with_context(|| format!("job `{JOB_SOE_CYCLE}`"))?;
             Ok((job, soe.architect.clone()))
         }
@@ -900,6 +925,12 @@ impl Runtime {
     /// Lease holder id: `<host>:<pid>:<uuid>`.
     pub(crate) fn holder(&self) -> &str {
         self.owner.holder()
+    }
+
+    /// The runtime's leases as a job writing under them asks
+    /// ([`OwnerLeases::ownership`]).
+    pub(crate) fn ownership(&self) -> Arc<dyn Ownership> {
+        self.owner.ownership()
     }
 
     /// Where loop events go (webhook endpoints, tick feeds).

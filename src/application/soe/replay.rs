@@ -690,6 +690,7 @@ mod tests {
         build_records, chain_specs, drafts, generation, load_case, Bench,
     };
     use crate::domain::source::SourceRecord;
+    use crate::ports::runtime::Unleased;
 
     const SET_SHA: &str = "00000000000000000000000000000000000000000000000000000000000000aa";
 
@@ -763,6 +764,7 @@ mod tests {
                 sha256: &bench.profile.sha256,
                 text: &bench.text,
             },
+            owner: &Unleased,
         };
         run_replay(
             &env,
@@ -916,6 +918,7 @@ mod tests {
                 sha256: &bench.profile.sha256,
                 text: &bench.text,
             },
+            owner: &Unleased,
         };
         let set_in = SetIn {
             record: &set,
