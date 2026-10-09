@@ -2,6 +2,14 @@
 
 Concise schema. Tables. No prose.
 
+| Status (2026-10-08) | Evidence |
+|---|---|
+| `view_skill` built (always on): `list` / `read` / `read_resource` | `src/adapters/outbound/tools/view_skill/mod.rs`, `domain/tools.rs::DEFAULT_TOOLS` |
+| `manage_skill` built (opt-in): all six actions; `patch` = exact, then whitespace-normalized (`fuzzy_find_and_replace`) | `src/adapters/outbound/tools/manage_skill/mod.rs` |
+| Migration not done as planned: `skill_distill` is still its own tool (not a `manage_skill` wrapper); `apply_improver_proposal` was kept (opt-in catalog row); `skill_resource` kept | `tools/skill_lifecycle/{distill,apply_improver_proposal}.rs`, `domain/tools.rs::WORKSPACE_TOOLS` |
+| `[agents.learning-agent]` is in no shipped sandbox — the orchestrator's lifecycle rows need one defined first | `sandboxes/*/config.toml`, `skills/orchestrator/SKILL.md` |
+| Tier walk is four dirs (managed → `<ws>/.tengu/skills` → `<ws>/skills` → `<cwd>/skills`), first wins | `application/skills/registry.rs::skill_directories` |
+
 ---
 
 ## The patchwork problem
@@ -141,9 +149,9 @@ All `manage_skill` writes return `loaded_in_current_conversation: false`. Agent 
 3. Smoke test: `mkdir -p`-free seed, `adjust yourself`, paste output.
 
 Code pointers (existing, reusable):
-- Atomic write pattern: `src/adapters/outbound/tools/skill_lifecycle/distill.rs:148–204`
+- Atomic write pattern: `src/adapters/outbound/tools/skill_lifecycle/distill.rs:156–218`
 - Path validation: `src/application/skills/lifecycle/evolve.rs::validate_resource_path`
-- Three-tier walk: `src/adapters/outbound/tools/view_skill/mod.rs` (managed → workspace → project, first wins)
+- Tier walk: `src/application/skills/registry.rs::skill_directories` (managed → workspace → project → cwd, first wins; `view_skill` mirrors it)
 - `editable_by_learner` check: `src/application/skills/lifecycle/evolve.rs::is_editable_by_learner`
 - Audit log: `src/application/skills/lifecycle/audit.rs`
 
