@@ -14,9 +14,10 @@
 //! | A plan step's `compose` only narrows its base agent's tools and skills | `run-agent` (`bootstrap::tools::compose_agent`) | a planner fed hostile text must not hand a routable agent `write_file` or an exec tool |
 //! | No `[[mcp_servers]]` | `validation_errors` | foreign processes with this filesystem |
 //! | No configured scope grants `shell_bins`; tools without a scope run no shell (`AgentConfig::no_shell_fallback`, set by `Config::fold_default_scopes`; the bridge too) | `validation_errors` + runtime | a shell reads and writes any file |
-//! | Outside every `fs_roots` and agent `workspace` (symlinks resolved): the signer key; `<TENGU_HOME>/state` (no overlap either way); `[risk] kill_switch_file`; the config file itself | `validation_errors`, the config file in `config_file_errors` (`Config::load`) | `read_file` / `write_file` must not read the key, edit `ledger.db` or a lease, delete the kill-switch file or raise the limits |
+//! | Outside every `fs_roots` and agent `workspace` (symlinks resolved): `<TENGU_HOME>/state` (no overlap either way); `[risk] kill_switch_file`; the config file itself | `validation_errors`, the config file in `config_file_errors` (`Config::load`) | `read_file` / `write_file` must not edit `ledger.db` or a lease, delete the kill-switch file or raise the limits |
 //!
-//! Signer-only rules (key path, wallet grants) live in `config/solana.rs`;
+//! Signer-only rules (the Privy wallet id and its proxy route, no agent
+//! reading the session, wallet grants) live in `config/solana.rs`;
 //! `[risk]`-only rules (exec tools on a private agent, Privy signing off) in
 //! `config/risk.rs`; `[soe]`-only rules (the closed tool world, deny-all
 //! side-effect scopes, the state root) in `config/soe.rs`; the xmarket
@@ -32,7 +33,7 @@ use super::Config;
 /// True when the sandbox is hardened: `claude_code` agents only with
 /// built-in tools off, and a no-shell fallback scope on every agent.
 pub(crate) fn requires_hardened_claude_code(cfg: &Config) -> bool {
-    cfg.solana.signer_key_file.is_some() || cfg.risk.is_some() || cfg.soe.is_some()
+    cfg.solana.privy_wallet_id.is_some() || cfg.risk.is_some() || cfg.soe.is_some()
 }
 
 /// Ends every path error of the hardened rules.
@@ -182,18 +183,10 @@ impl Protected {
     }
 }
 
-/// The signer key (absolute only — `config/solana.rs` reports the rest),
-/// `<tengu_home>/state`, and `[risk] kill_switch_file` (absolute only —
+/// `<tengu_home>/state` and `[risk] kill_switch_file` (absolute only —
 /// `config/risk.rs` reports the rest).
 fn protected_paths(cfg: &Config, tengu_home: &Path) -> Vec<Protected> {
     let mut out = Vec::new();
-    if let Some(key) = cfg
-        .solana
-        .signer_path()
-        .filter(|k| k.is_absolute() && !k.as_os_str().is_empty())
-    {
-        out.push(Protected::file("solana.signer_key_file", &key));
-    }
     out.push(Protected::dir(
         "<TENGU_HOME>/state",
         &tengu_home.join("state"),
@@ -283,7 +276,9 @@ mod tests {
     use super::*;
     use crate::domain::scope::ToolScope;
 
-    const SIGNER: &str = "[solana]\nsigner_key_file = \"/keys/signer.json\"\n";
+    const SIGNER: &str = "[solana]\nprivy_wallet_id = \"w1\"\n\
+        [keys]\nproxy = \"https://seal.example.workers.dev\"\nstrip = [\"PRIVY_APP_SECRET\"]\n\
+        [keys.env]\nPRIVY_API_URL = \"privy\"\n";
 
     /// `Config::load` of a sandbox: a signer (or not), an OpenRouter default
     /// agent and one `claude_code` agent with `extra` appended to its block.
@@ -421,9 +416,9 @@ mod tests {
         cfg
     }
 
-    fn with_signer(key: &str) -> Config {
+    fn with_signer() -> Config {
         let mut cfg = base();
-        cfg.solana.signer_key_file = Some(key.into());
+        cfg.solana.privy_wallet_id = Some("w1".into());
         cfg
     }
 
@@ -470,7 +465,7 @@ mod tests {
     #[test]
     fn hardened_sandboxes_refuse_mcp_servers_and_shell_scopes() {
         let risk: Config = toml::from_str(RISK_SANDBOX).expect("parse");
-        for mut cfg in [with_signer("/keys/signer.json"), risk] {
+        for mut cfg in [with_signer(), risk] {
             cfg.mcp_servers.push(crate::config::McpServerConfig {
                 name: "x".into(),
                 transport: "stdio".into(),
@@ -496,34 +491,6 @@ mod tests {
                 "{e}"
             );
         }
-    }
-
-    /// `/srv/…`: not a symlink on macOS (`/home` is), so messages show the
-    /// paths as written.
-    #[test]
-    fn signer_key_must_be_outside_fs_roots_and_workspaces() {
-        let mut cfg = with_signer("/srv/op/ws/keys/../signer.json");
-        cfg.default_scopes.insert(
-            "read_file".into(),
-            scope(|s| s.fs_roots = vec![PathBuf::from("/srv/op/ws")]),
-        );
-        let e = errs(&cfg);
-        assert!(
-            e.contains("solana.signer_key_file `/srv/op/ws/signer.json` is inside default_scopes.read_file.fs_roots"),
-            "{e}"
-        );
-
-        let mut cfg = with_signer("/srv/op/keys/signer.json");
-        cfg.agents.get_mut("main").unwrap().workspace = Some(PathBuf::from("/srv/op"));
-        assert!(errs(&cfg).contains("is inside agents.main.workspace"));
-
-        let mut cfg = with_signer("/srv/op/keys/signer.json");
-        cfg.default_scopes.insert(
-            "read_file".into(),
-            scope(|s| s.fs_roots = vec![PathBuf::from("/srv/op/ws")]),
-        );
-        cfg.agents.get_mut("main").unwrap().workspace = Some(PathBuf::from("/srv/op/ws"));
-        assert_eq!(errs(&cfg), "", "sibling of the workspace is fine");
     }
 
     /// `<TENGU_HOME>/state` (ledger, leases, runtime) may not overlap a root
@@ -564,7 +531,7 @@ mod tests {
             errs(&cfg)
         );
         // A signer sandbox protects the state dir (Solana leases) too.
-        let mut cfg = with_signer("/keys/signer.json");
+        let mut cfg = with_signer();
         cfg.agents.get_mut("main").unwrap().workspace = Some(PathBuf::from("/srv"));
         let e = errs(&cfg);
         assert!(e.contains("<TENGU_HOME>/state"), "{e}");

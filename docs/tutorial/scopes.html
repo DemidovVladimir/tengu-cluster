@@ -210,7 +210,7 @@
     <div class="stage-side">
       <ol class="captions">
         <li>The sandbox TOML grants each tool what it may touch: <code>[default_scopes.&lt;tool&gt;]</code> for every agent, <code>[agents.&lt;a&gt;.scopes.&lt;tool&gt;]</code> for one. An empty field grants nothing.</li>
-        <li>A <code>[risk]</code> section or a Solana signer hardens the sandbox: Claude Code built-ins off, no <code>[[mcp_servers]]</code>, no <code>shell_bins</code>, key and state out of reach. Any break fails the load.</li>
+        <li>A <code>[risk]</code> section or a Solana signer hardens the sandbox: Claude Code built-ins off, no <code>[[mcp_servers]]</code>, no <code>shell_bins</code>, state and config out of reach. Any break fails the load.</li>
         <li><code>fold_default_scopes</code> copies each default into every agent with no entry for that tool. An agent's own entry wins whole, never field-merged. <code>~</code> in <code>fs_roots</code> expands.</li>
         <li>A <code>run-agent</code> step, and its Claude Code bridge, adds the step workspace to every configured scope. A deny-all scope (every field empty) stays a deny.</li>
         <li>Each tool gets its configured scope. A tool with none gets the fallback: the workspace, any host, env var and binary, the <code>default</code> wallet. Hardened: no shell.</li>
@@ -232,7 +232,7 @@
   <div class="fields" data-inview>
     <div class="fld"><b>fs_roots</b><code class="fn">check_fs_read · check_fs_write</code><small>The resolved path (symlinks, <code>..</code>) must sit under a root.</small><span class="wild">no wildcard</span></div>
     <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>.</small><span class="wild">"*" = any host</span></div>
-    <div class="fld"><b>env_reads</b><code class="fn">check_env_read</code><small>Exact var name. Gates <code>$VAR</code> in <code>http_request</code>, <code>SOLANA_RPC_URL</code>, <code>HL_API_URL</code>.</small><span class="wild">"*" = any var</span></div>
+    <div class="fld"><b>env_reads</b><code class="fn">check_env_read</code><small>Exact var name. Gates <code>$VAR</code> in <code>http_request</code>, <code>SOLANA_RPC_URL</code>, <code>HL_API_URL</code>, <code>PRIVY_API_URL</code>.</small><span class="wild">"*" = any var</span></div>
     <div class="fld"><b>shell_bins</b><code class="fn">check_shell_bin</code><small>Basename of the command's first word. <code>run_command</code> and shell skills.</small><span class="wild">"*" = any binary</span></div>
     <div class="fld"><b>wallets</b><code class="fn">check_wallet</code><small>Exact label. Privy tools; Solana writes use the full pubkey.</small><span class="wild">no wildcard</span></div>
   </div>
@@ -303,7 +303,7 @@
   <div class="widget">
     <div class="ctl wide">
       <label class="tick" for="h-risk"><input type="checkbox" id="h-risk" checked> <span><code>[risk]</code> with <code>kill_switch_file = "~/.tengu/state/xmarket/KILL"</code></span></label>
-      <label class="tick" for="h-sign"><input type="checkbox" id="h-sign"> <span><code>[solana] signer_key_file = "~/.tengu/keys/lping-signer.json"</code></span></label>
+      <label class="tick" for="h-sign"><input type="checkbox" id="h-sign"> <span><code>[solana] privy_wallet_id = "&lt;wallet id&gt;"</code></span></label>
       <label for="h-prof"><span>claude_code agent <code>exec</code>: <code>builtin_tools_profile</code></span>
         <select id="h-prof">
           <option value="">(no claude_code block)</option>
@@ -324,7 +324,7 @@
       <label class="tick" for="h-sh"><input type="checkbox" id="h-sh"> <span><code>[default_scopes.run_command] shell_bins = ["ls"]</code></span></label>
     </div>
     <div class="card guard"><h3 id="h-head">Result</h3><ul class="errs" id="h-out"></ul></div>
-    <p class="note">Only the <code>hardening.rs</code> rules are shown. <code>[risk]</code> and <code>[solana]</code> add their own load rules (<code>config/risk.rs</code>, <code>config/solana.rs</code>).</p>
+    <p class="note">Only the <code>hardening.rs</code> rules are shown. <code>[risk]</code> and <code>[solana]</code> add their own load rules (<code>config/risk.rs</code>; <code>config/solana.rs</code>: <code>[keys.env] PRIVY_API_URL</code> on a proxy route, no <code>env_reads</code> of the seal-proxy session).</p>
   </div>
 </section>
 
@@ -356,7 +356,7 @@
     <li><span><b>Paths are resolved first.</b> File tools follow symlinks and apply <code>..</code> before comparing, so <code>new/../../x</code> cannot land outside; a dangling symlink is refused.</span></li>
     <li><span><b>Agent state is off-limits to writers.</b> <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>CLAUDE.local.md</code>, <code>AGENTS.md</code>, <code>.mcp.json</code>: any depth, any case. Hardened: also <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code>, <code>CONTEXT.md</code>.</span></li>
     <li><span><b>A deny stays a deny.</b> The <code>run-agent</code> workspace grant skips deny-all scopes.</span></li>
-    <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches the signer key, <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file.</span></li>
+    <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file. With a Solana signer, no scope's <code>env_reads</code> may name the seal-proxy session (<code>TENGU_KEYS_SESSION_TOKEN</code>, an <code>@session</code> var) or <code>"*"</code>.</span></li>
     <li><span><b>Hardened fallback has no shell.</b> Tools without a scope get no <code>shell_bins</code>, and no shell skill loads.</span></li>
     <li><span><b>Inside the generation.</b> A sandbox bound with <code>[generation]</code> never registers a tool its generation refuses: in-process and in the bridge, even if the agent lists it (<a href="lineage.html">Lineage</a>).</span></li>
   </ul>
@@ -696,7 +696,6 @@
     if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): foreign processes with this filesystem");
     if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer, [risk] or [soe]) runs no shell");
     var prot = [];
-    if (H.sign.checked) prot.push({ what: "solana.signer_key_file", path: HOME + "/.tengu/keys/lping-signer.json", dir: false });
     prot.push({ what: "<TENGU_HOME>/state", path: HOME + "/.tengu/state", dir: true });
     if (H.risk.checked) prot.push({ what: "risk.kill_switch_file", path: HOME + "/.tengu/state/xmarket/KILL", dir: false });
     var roots = [["agents.exec.workspace", HOME + "/xmarket-workspace"], ["default_scopes.read_file.fs_roots", tilde(H.root.value)]];

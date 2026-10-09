@@ -1,44 +1,42 @@
-//! `[solana]` — the signing key of the Solana write tools (phase 6b) and the
-//! sandbox rules that keep it private. Doc:
+//! `[solana]` — who signs the Solana write tools' `mode = "send"` (phase 6b)
+//! and the sandbox rules that keep that signer private. Doc:
 //! `docs/typed-observations-2026-09-24.md` § Write tools.
 //!
 //! ```toml
 //! [solana]
-//! signer_key_file = "~/.tengu/keys/lping-signer.json"   # chmod 600
+//! privy_wallet_id = "<Privy Solana wallet id>"   # not a secret
+//!
+//! [keys.env]
+//! PRIVY_API_URL = "privy"                         # signs through the seal proxy
 //! ```
+//!
+//! The wallet is a Privy server wallet; Privy signs through the seal
+//! proxy's `privy` route (`docs/sealed-keys-2026-10-09.md`), so no key and
+//! no app secret is on this machine (`outbound/solana/privy.rs`).
 //!
 //! | Rule (load time — any violation fails `Config::load`) | Why |
 //! |---|---|
-//! | Signer: a hardened sandbox (`config/hardening.rs`, shared with `[risk]`) — `claude_code` agents only with `builtin_tools_profile = "none"`, no `[[mcp_servers]]`, no scope granting `shell_bins` (tools without a scope get a no-shell fallback), the key, `<TENGU_HOME>/state` and the config file outside every `fs_roots` and agent `workspace` | built-in tools, foreign processes and a shell ignore tengu scopes; `read_file` / `list_directory` must not reach the key |
-//! | Signer: the key file is set, absolute (or `~/…`) | one file for the parent, `run-agent` children and the bridge |
+//! | Signer: a hardened sandbox (`config/hardening.rs`, shared with `[risk]`) — `claude_code` agents only with `builtin_tools_profile = "none"`, no `[[mcp_servers]]`, no scope granting `shell_bins` (tools without a scope get a no-shell fallback), `<TENGU_HOME>/state` and the config file outside every `fs_roots` and agent `workspace` | built-in tools, foreign processes and a shell ignore tengu scopes |
+//! | Signer: `privy_wallet_id` 1-64 chars `[A-Za-z0-9_-]`; `[keys.env] PRIVY_API_URL` set to a route | the id goes into a URL path; Privy is only reached through the proxy |
+//! | Signer: no scope's `env_reads` names the session (`TENGU_KEYS_SESSION_TOKEN`, a `[keys.env]` `@session` var) or `"*"` | the session can sign with the wallet through the proxy — an agent must never hold it |
 //! | A write tool's scope with `wallets`: never in `[default_scopes]`; the agent has no `description`, is not `default`, is no webhook endpoint's `agent` | only a non-routable agent (decision loops, direct runs) may send |
 //! | A loop action running a write tool with `read_only = true` sets `args.mode = "simulate"` | `read_only` bypasses `dry_run` |
 
-use std::path::{Path, PathBuf};
-
 use serde::{Deserialize, Serialize};
 
-use super::paths::expand_tilde;
+use super::keys::{is_route_target, SESSION_VALUE};
 use super::Config;
+use crate::domain::solana_write::valid_privy_wallet_id;
 use crate::domain::tools::SOLANA_WRITE_TOOLS;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SolanaConfig {
-    /// Signing key of the write tools' `mode = "send"`: a solana-keygen JSON
-    /// array or a base58 64-byte key, mode 0600. Absent = every write tool
-    /// is simulate-only.
+    /// Privy Solana wallet that signs the write tools' `mode = "send"`
+    /// (Privy's wallet id, not a secret). Absent = every write tool is
+    /// simulate-only.
     #[serde(default)]
-    pub signer_key_file: Option<String>,
-}
-
-impl SolanaConfig {
-    /// Expanded key path, when a signer is configured.
-    pub(crate) fn signer_path(&self) -> Option<PathBuf> {
-        self.signer_key_file
-            .as_deref()
-            .map(|p| expand_tilde(Path::new(p)))
-    }
+    pub privy_wallet_id: Option<String>,
 }
 
 pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
@@ -49,20 +47,53 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
     errors
 }
 
-/// The key path itself; where it may live (outside every fs root and
-/// workspace) is a hardened-sandbox rule (`config/hardening.rs`).
+/// The wallet id, the proxy route it signs through, and no agent holding
+/// the session that can use that route.
 fn signer_rules(cfg: &Config, errors: &mut Vec<String>) {
-    let Some(raw) = cfg.solana.signer_key_file.as_deref() else {
+    let Some(id) = cfg.solana.privy_wallet_id.as_deref() else {
         return;
     };
-    if raw.trim().is_empty() {
-        errors.push("solana.signer_key_file must not be empty when set".into());
-        return;
-    }
-    if !expand_tilde(Path::new(raw)).is_absolute() {
+    if !valid_privy_wallet_id(id) {
         errors.push(format!(
-            "solana.signer_key_file `{raw}` must be absolute or start with `~/`"
+            "solana.privy_wallet_id `{id}` must be 1-64 chars of A-Z a-z 0-9 _ -"
         ));
+    }
+    if !cfg
+        .keys
+        .env
+        .get("PRIVY_API_URL")
+        .is_some_and(|v| v != SESSION_VALUE && is_route_target(v))
+    {
+        errors.push(
+            "solana.privy_wallet_id needs [keys.env] PRIVY_API_URL = \"privy\" — Privy signs \
+             through the seal proxy only"
+                .into(),
+        );
+    }
+    let session = cfg.keys.session_vars();
+    let mut scopes: Vec<(String, &crate::domain::scope::ToolScope)> = cfg
+        .default_scopes
+        .iter()
+        .map(|(t, s)| (format!("default_scopes.{t}"), s))
+        .collect();
+    for (id, agent) in &cfg.agents {
+        scopes.extend(
+            agent
+                .scopes
+                .iter()
+                .map(|(t, s)| (format!("agents.{id}.scopes.{t}"), s)),
+        );
+    }
+    scopes.sort_by(|a, b| a.0.cmp(&b.0));
+    for (at, scope) in scopes {
+        for name in &scope.env_reads {
+            if name == "*" || session.contains(&name.as_str()) {
+                errors.push(format!(
+                    "{at}.env_reads: '{name}' hands an agent the seal-proxy session, which can \
+                     sign with the Privy wallet ([solana] privy_wallet_id)"
+                ));
+            }
+        }
     }
 }
 
@@ -148,9 +179,12 @@ mod tests {
         cfg
     }
 
-    fn with_signer(key: &str) -> Config {
+    fn with_signer(id: &str) -> Config {
         let mut cfg = base();
-        cfg.solana.signer_key_file = Some(key.into());
+        cfg.solana.privy_wallet_id = Some(id.into());
+        cfg.keys.proxy = Some("https://seal.example.workers.dev".into());
+        cfg.keys.env.insert("PRIVY_API_URL".into(), "privy".into());
+        cfg.keys.strip = vec!["PRIVY_APP_SECRET".into()];
         cfg
     }
 
@@ -172,23 +206,75 @@ mod tests {
             "run_command".into(),
             scope(|s| s.shell_bins = vec!["*".into()]),
         );
+        cfg.default_scopes.insert(
+            "http_request".into(),
+            scope(|s| s.env_reads = vec!["*".into()]),
+        );
         assert_eq!(errs(&cfg), "");
     }
 
-    /// The key path must be set and absolute; where it may live, and the
-    /// no-MCP / no-shell rules, are hardened-sandbox rules
-    /// (`config/hardening.rs` tests).
+    /// The id and its proxy route; the no-MCP / no-shell rules are
+    /// hardened-sandbox rules (`config/hardening.rs` tests).
     #[test]
-    fn signer_key_path_must_be_absolute() {
-        let mut cfg = with_signer("/keys/signer.json");
+    fn signer_needs_a_plain_id_and_the_proxy_route() {
+        let mut cfg = with_signer("cmw1abc-2_x");
         cfg.agents.get_mut("main").unwrap().engine = "claude_code".into();
+        assert_eq!(errs(&cfg), "", "hardening.rs owns the claude_code rule");
+        assert!(errs(&with_signer("../x")).contains("must be 1-64 chars"));
+        assert!(errs(&with_signer("")).contains("must be 1-64 chars"));
+
+        let mut cfg = with_signer("w1");
+        cfg.keys.env.remove("PRIVY_API_URL");
+        assert!(errs(&cfg).contains("needs [keys.env] PRIVY_API_URL"));
+        let mut cfg = with_signer("w1");
+        cfg.keys
+            .env
+            .insert("PRIVY_API_URL".into(), "@session".into());
+        assert!(errs(&cfg).contains("needs [keys.env] PRIVY_API_URL"));
+    }
+
+    #[test]
+    fn no_agent_may_read_the_session_beside_a_signer() {
+        let mut cfg = with_signer("w1");
+        cfg.keys
+            .env
+            .insert("OPENROUTER_API_KEY".into(), "@session".into());
+        cfg.keys
+            .env
+            .insert("OPENROUTER_BASE_URL".into(), "openrouter".into());
         cfg.default_scopes.insert(
-            "read_file".into(),
-            scope(|s| s.fs_roots = vec![PathBuf::from("/keys")]),
+            "http_request".into(),
+            scope(|s| s.env_reads = vec!["*".into()]),
         );
-        assert_eq!(errs(&cfg), "", "hardening.rs owns those");
-        assert!(errs(&with_signer("keys/signer.json")).contains("must be absolute"));
-        assert!(errs(&with_signer("  ")).contains("must not be empty"));
+        let main = cfg.agents.get_mut("main").unwrap();
+        main.scopes.insert(
+            "jupiter_swap".into(),
+            scope(|s| {
+                s.env_reads = vec![
+                    "PRIVY_API_URL".into(),
+                    "PRIVY_APP_ID".into(),
+                    "TENGU_KEYS_SESSION_TOKEN".into(),
+                    "OPENROUTER_API_KEY".into(),
+                ]
+            }),
+        );
+        let e = errs(&cfg);
+        assert!(
+            e.contains("default_scopes.http_request.env_reads: '*'"),
+            "{e}"
+        );
+        assert!(
+            e.contains("agents.main.scopes.jupiter_swap.env_reads: 'TENGU_KEYS_SESSION_TOKEN'"),
+            "{e}"
+        );
+        assert!(
+            e.contains("agents.main.scopes.jupiter_swap.env_reads: 'OPENROUTER_API_KEY'"),
+            "{e}"
+        );
+        assert!(
+            !e.contains("'PRIVY_API_URL'") && !e.contains("'PRIVY_APP_ID'"),
+            "{e}"
+        );
     }
 
     #[test]

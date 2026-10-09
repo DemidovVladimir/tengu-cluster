@@ -52,7 +52,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">市</span> Trading desk · Solana</div>
   <h1>Solana LP tools</h1>
-  <p class="lede">Eleven typed read tools watch Meteora DLMM pools, Jupiter perps and a wallet. Five write tools build real transactions: they simulate by default, with no key. Sending needs a signer grant, a per-wallet lease and fresh checks.</p>
+  <p class="lede">Eleven typed read tools watch Meteora DLMM pools, Jupiter perps and a wallet. Five write tools build real transactions and simulate by default. Sending needs a wallet grant, Privy signing via the seal proxy, a wallet lease and fresh checks.</p>
   <ul class="facts">
     <li><b>11</b> read · <b>5</b> write tools</li>
     <li><code>mode</code> = <b>simulate</b> by default</li>
@@ -75,7 +75,7 @@
   <figure class="stage" data-stage data-interval="3600">
     <div class="stage-canvas">
       <svg viewBox="0 0 860 490" role="img" aria-labelledby="flow-t">
-        <title id="flow-t">Read tools fill the observation cache, decide tools read it, a loop or private agent calls a write tool; simulate needs no key; send passes the signer gate, takes the wallet lease, checks live reads, signs and sends each transaction, confirms it and raises the wallet's write fence, which pins later reads.</title>
+        <title id="flow-t">Read tools fill the observation cache, decide tools read it, a loop or private agent calls a write tool; simulate needs no signer; send passes the signer gate, takes the wallet lease, checks live reads, has Privy sign each transaction through the seal proxy, verifies the signature, sends and confirms it and raises the wallet's write fence, which pins later reads.</title>
         <path class="e" id="p-read-store" d="M100 96 L100 148" data-at="1"/>
         <path class="e" id="p-store-decide" d="M100 220 L100 268" data-at="2"/>
         <path class="e" id="p-decide-loop" d="M100 326 L100 378" data-at="3"/>
@@ -127,12 +127,12 @@
         <g class="n data" data-at="4">
           <rect x="230" y="380" width="170" height="56" rx="8"/>
           <text x="315" y="403" text-anchor="middle" class="t-title">Simulated</text>
-          <text x="315" y="422" text-anchor="middle" class="t-small">no key · nothing sent</text>
+          <text x="315" y="422" text-anchor="middle" class="t-small">no signer · nothing sent</text>
         </g>
         <g class="n guard" data-at="5">
           <rect x="450" y="40" width="170" height="56" rx="8"/>
           <text x="535" y="63" text-anchor="middle" class="t-title">Signer gate</text>
-          <text x="535" y="82" text-anchor="middle" class="t-small">wallet grant · key 0600</text>
+          <text x="535" y="82" text-anchor="middle" class="t-small">wallet grant · Privy id</text>
         </g>
         <g class="n guard" data-at="6">
           <rect x="450" y="130" width="170" height="56" rx="8"/>
@@ -147,7 +147,7 @@
         <g class="n hands" data-at="8">
           <rect x="450" y="310" width="170" height="56" rx="8"/>
           <text x="535" y="333" text-anchor="middle" class="t-title">Sign and send</text>
-          <text x="535" y="352" text-anchor="middle" class="t-small">simulate first, each tx</text>
+          <text x="535" y="352" text-anchor="middle" class="t-small">Privy via seal proxy</text>
         </g>
         <g class="n guard" data-at="9">
           <rect x="450" y="400" width="170" height="56" rx="8"/>
@@ -199,11 +199,11 @@
         <li>Read tools fetch over Solana RPC, Jupiter and Meteora. Each answer is a typed row in the workspace cache; <code>lp_snapshot</code> reads pool, positions, perps and wallet together.</li>
         <li><code>hedge_decide</code> and <code>lp_decide</code> make no network call. They decide from the cached snapshot row. Every knob is required; <code>commit</code> defaults to false.</li>
         <li>A private agent or a decision loop calls a write tool, such as <code>dlmm_open_position</code>, with a <code>mode</code>. No mode means <code>simulate</code>.</li>
-        <li><b>simulate</b>: live reads, checks, then each transaction simulated as the wallet. No key is loaded, nothing is sent. Result: <code>write/1</code>, status <code>simulated</code>.</li>
-        <li><b>send</b>: this agent's own scope for the tool must list the wallet in full, and <code>[solana] signer_key_file</code> (mode 0600) must hold that wallet's key.</li>
+        <li><b>simulate</b>: live reads, checks, then each transaction simulated as the wallet. No signer is called, nothing is sent. Result: <code>write/1</code>, status <code>simulated</code>.</li>
+        <li><b>send</b>: this agent's own scope for the tool must list the wallet in full, and <code>[solana] privy_wallet_id</code> must be that wallet, reached only through the seal proxy (<a href="sealed-keys.html">sealed keys</a>).</li>
         <li>The tool takes lease <code>wallet:&lt;address&gt;</code> in <code>&lt;TENGU_HOME&gt;/state/solana-writes.db</code> for 150 s. Held, or an earlier send still in flight: refused.</li>
         <li>Reads are live, never cached, and pinned at or after the wallet's fence. Any failed check refuses the whole write before anything is signed.</li>
-        <li>Per transaction: renew the lease, simulate, CU limit, priority fee, blockhash, ≤ 1232 bytes, sign, write a pending record, then <code>sendTransaction</code>.</li>
+        <li>Per transaction: renew the lease, simulate, CU limit, priority fee, blockhash, ≤ 1232 bytes. Privy signs via the seal proxy; tengu verifies the signature, writes a pending record, then <code>sendTransaction</code>.</li>
         <li>Poll up to 120 s. Landed: the fence rises to its slot and the record clears. Then stale cache rows are dropped and the lease released.</li>
         <li>Later reads of that wallet are pinned at the fence. A cached snapshot from before it blocks <code>hedge_decide</code> with <code>stale_input</code>.</li>
       </ol>
@@ -265,15 +265,19 @@
     </div>
     <div class="grid two">
       <div class="ctrl-group"><b>Config load</b>
-        <label for="g-signer"><input type="checkbox" id="g-signer" checked> <code>[solana] signer_key_file</code> is set</label>
+        <label for="g-signer"><input type="checkbox" id="g-signer" checked> <code>[solana] privy_wallet_id</code> is set</label>
+        <label for="g-route"><input type="checkbox" id="g-route" checked> <code>[keys.env] PRIVY_API_URL = "privy"</code></label>
+        <label for="g-sess"><input type="checkbox" id="g-sess"> a scope's <code>env_reads</code> lists <code>TENGU_KEYS_SESSION_TOKEN</code></label>
         <label for="g-default"><input type="checkbox" id="g-default"> the <code>wallets</code> grant sits in <code>[default_scopes]</code></label>
         <label for="g-desc"><input type="checkbox" id="g-desc"> the signing agent has a <code>description</code></label>
         <label for="g-mcp"><input type="checkbox" id="g-mcp"> the sandbox lists <code>[[mcp_servers]]</code></label>
       </div>
       <div class="ctrl-group"><b>At call time</b>
         <label for="g-grant"><input type="checkbox" id="g-grant" checked> agent's scope lists the wallet</label>
-        <label for="g-perm"><input type="checkbox" id="g-perm" checked> key file is mode 0600</label>
-        <label for="g-match"><input type="checkbox" id="g-match" checked> key is this wallet's</label>
+        <label for="g-env"><input type="checkbox" id="g-env" checked> scope reads <code>PRIVY_API_URL</code>, <code>PRIVY_APP_ID</code></label>
+        <label for="g-url"><code>PRIVY_API_URL</code>
+          <select id="g-url"><option value="proxy">seal-proxy route, session up</option><option value="unset">unset (no session)</option><option value="direct">set, not the seal proxy</option></select>
+        </label>
         <label for="g-store"><input type="checkbox" id="g-store" checked> <code>solana-writes.db</code> opens</label>
         <label for="g-lease"><input type="checkbox" id="g-lease"> another process holds the lease</label>
         <label for="g-pend">earlier send
@@ -281,6 +285,10 @@
         </label>
         <label for="g-check"><input type="checkbox" id="g-check" checked> checks pass (e.g. divergence)</label>
         <label for="g-sim"><input type="checkbox" id="g-sim" checked> simulation succeeds</label>
+        <label for="g-host"><input type="checkbox" id="g-host" checked> Worker host in <code>net_hosts</code></label>
+        <label for="g-reply">Privy's reply
+          <select id="g-reply"><option value="ok">same message, signature verifies</option><option value="other">signed by another wallet</option><option value="changed">message changed</option><option value="http">HTTP error</option></select>
+        </label>
       </div>
     </div>
     <ol class="gates" id="g-list" aria-live="polite"></ol>
@@ -341,13 +349,18 @@ workspace = <span class="s">"~/lping-workspace"</span>
 tools = [<span class="s">"lp_snapshot"</span>, <span class="s">"hedge_decide"</span>, <span class="s">"dlmm_open_position"</span>, <span class="c">…</span>]</pre></div>
     <div class="tabpanel" id="tab-sign" hidden><pre><span class="c"># the steps written at the end of sandboxes/lping/config.toml</span>
 <span class="k">[solana]</span>
-signer_key_file = <span class="s">"~/.tengu/keys/lping-signer.json"</span>   <span class="c"># chmod 600, outside every fs root</span>
+privy_wallet_id = <span class="s">"&lt;Privy Solana wallet id&gt;"</span>   <span class="c"># not a secret: 1-64 chars A-Z a-z 0-9 _ -</span>
+
+<span class="k">[keys]</span>                                         <span class="c"># the seal proxy: proxy + client as on sealed keys</span>
+strip = [<span class="s">"PRIVY_APP_SECRET"</span>]                   <span class="c"># the app secret lives only in Cloudflare</span>
+<span class="k">[keys.env]</span>
+PRIVY_API_URL = <span class="s">"privy"</span>                        <span class="c"># Privy signs through this Worker route only</span>
 
 <span class="k">[agents.lp_executor.scopes.dlmm_open_position]</span>  <span class="c"># the whole scope: a per-agent scope replaces the default</span>
-net_hosts = [<span class="s">"api.mainnet-beta.solana.com"</span>, <span class="s">"lite-api.jup.ag"</span>]
-env_reads = [<span class="s">"SOLANA_RPC_URL"</span>]
+net_hosts = [<span class="s">"api.mainnet-beta.solana.com"</span>, <span class="s">"lite-api.jup.ag"</span>, <span class="s">"tengu-seal.&lt;subdomain&gt;.workers.dev"</span>]
+env_reads = [<span class="s">"SOLANA_RPC_URL"</span>, <span class="s">"PRIVY_API_URL"</span>, <span class="s">"PRIVY_APP_ID"</span>]   <span class="c"># never the session, never "*"</span>
 fs_roots  = [<span class="s">"~/lping-workspace"</span>]
-wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
+wallets   = [<span class="s">"&lt;the Privy wallet's full address&gt;"</span>]
 
 <span class="c"># then: the loop action's args mode = "send", the loop's dry_run = false.</span>
 <span class="c"># Never the TS bot's wallet: the lease cannot see the bot's sends.</span></pre></div>
@@ -368,11 +381,12 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>No mode is simulate.</b> Simulate never loads the key and never sends.</span></li>
+    <li><span><b>No mode is simulate.</b> Simulate never calls the signer and never sends.</span></li>
     <li><span><b>Send needs the full wallet in this agent's own scope.</b> <code>check_wallet</code> has no wildcard; a grant in <code>[default_scopes]</code> fails the load.</span></li>
     <li><span><b>Only private agents sign.</b> A grant on an agent with a <code>description</code>, the default agent or a webhook agent fails the load.</span></li>
-    <li><span><b>A signer hardens the sandbox.</b> No <code>[[mcp_servers]]</code>, no shell scopes, <code>claude_code</code> only with built-ins off, the key outside every fs root.</span></li>
-    <li><span><b>The key file is strict.</b> Mode 0600, ≤ 1 KiB, its public half must match its secret half; errors never echo its content.</span></li>
+    <li><span><b>A signer hardens the sandbox.</b> No <code>[[mcp_servers]]</code>, no shell scopes, <code>claude_code</code> only with built-ins off, state and config outside every fs root.</span></li>
+    <li><span><b>No wallet key on this machine.</b> <code>privy_wallet_id</code> needs <code>[keys.env] PRIVY_API_URL</code> on a proxy route and <code>PRIVY_APP_SECRET</code> stripped; the signer calls Privy only through the proxy; no scope may read the session.</span></li>
+    <li><span><b>Privy's answer is checked.</b> The message must come back unchanged and the wallet's signature must verify (ed25519); else nothing is signed or sent.</span></li>
     <li><span><b>One sender per wallet</b> across every process of the install, through one SQL lease.</span></li>
     <li><span><b>An unknown send blocks the next</b> until it lands or its blockhash expires.</span></li>
     <li><span><b>Never sent blind.</b> A failed simulation, missing compute units or a transaction over 1232 bytes is not sent.</span></li>
@@ -414,7 +428,8 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
         <tr><td><code>src/adapters/outbound/tools/solana/write_*.rs</code></td><td>the five write tools and their checks</td></tr>
         <tr><td><code>src/adapters/outbound/solana/send.rs</code></td><td>the send pipeline: lease, pending record, confirm, fence</td></tr>
         <tr><td><code>src/adapters/outbound/solana/writes_store.rs</code></td><td><code>solana-writes.db</code>: leases, pending sends, fences</td></tr>
-        <tr><td><code>src/adapters/outbound/solana/rpc.rs</code> · <code>signer.rs</code></td><td>JSON-RPC client, URL rules · local ed25519 key file</td></tr>
+        <tr><td><code>src/adapters/outbound/solana/privy.rs</code></td><td>Privy wallet signer through the seal proxy; reply and signature checks</td></tr>
+        <tr><td><code>src/adapters/outbound/solana/rpc.rs</code> · <code>signer.rs</code></td><td>JSON-RPC client, URL rules · in-memory one-shot position keys, <code>sign_transaction</code></td></tr>
         <tr><td><code>src/domain/solana_write.rs</code></td><td><code>write/1</code>, statuses, CU limit and price, lease TTL</td></tr>
         <tr><td><code>src/domain/lp/</code></td><td>snapshot, gates, hedge and LP policy, DLMM and perps decoding</td></tr>
         <tr><td><code>src/config/solana.rs</code> · <code>src/config/hardening.rs</code></td><td>signer and wallet-grant rules · hardened sandbox</td></tr>
@@ -431,11 +446,17 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
 </div>
 
 <script>
-/* page-only: the send gate walker (config/solana.rs, config/hardening.rs, write_common.rs, send.rs) */
+/* page-only: the send gate walker (config/solana.rs, config/hardening.rs, write_common.rs, solana/privy.rs, send.rs) */
 (function () {
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
-  var ids = ["g-tool", "g-mode", "g-signer", "g-default", "g-desc", "g-mcp", "g-grant", "g-perm", "g-match", "g-store", "g-lease", "g-pend", "g-check", "g-sim"];
+  var ids = ["g-tool", "g-mode", "g-signer", "g-route", "g-sess", "g-default", "g-desc", "g-mcp", "g-grant", "g-env", "g-url", "g-store", "g-lease", "g-pend", "g-check", "g-sim", "g-host", "g-reply"];
+  var WORKER = "tengu-seal.<subdomain>.workers.dev";
+  var REPLY = {
+    other: "privy's signature does not verify for <wallet> — is [solana] privy_wallet_id this wallet?; not sent",
+    changed: "privy returned a different message — not signed; not sent",
+    http: "privy signTransaction @ " + WORKER + ": <status>: <error>; not sent"
+  };
   function walk() {
     var tool = $("g-tool").value, send = $("g-mode").value === "send", signer = $("g-signer").checked;
     var G = [], stopped = false, verdict = null;
@@ -446,6 +467,11 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
       G.push({ cfg: cfg, t: title, s: "fail", st: cfg ? "load fails" : "refused", msg: msg });
       stopped = true;
     }
+    var noSigner = signer ? null : "no signer: rule off";
+    gate(true, "privy_wallet_id signs through the seal proxy", $("g-route").checked,
+      "solana.privy_wallet_id needs [keys.env] PRIVY_API_URL = \"privy\" — Privy signs through the seal proxy only", noSigner);
+    gate(true, "No scope reads the seal-proxy session", !$("g-sess").checked,
+      "agents.lp_executor.scopes." + tool + ".env_reads: 'TENGU_KEYS_SESSION_TOKEN' hands an agent the seal-proxy session, which can sign with the Privy wallet ([solana] privy_wallet_id)", noSigner);
     gate(true, "A wallet grant never sits in [default_scopes]", !$("g-default").checked,
       "default_scopes." + tool + ".wallets: signing grants go on one agent ([agents.<name>.scopes." + tool + "]), never in [default_scopes]");
     gate(true, "The signing agent is private", !$("g-desc").checked,
@@ -456,10 +482,13 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
     var cs = send ? null : "simulate: skipped";
     gate(false, "This agent's scope for " + tool + " lists the wallet", $("g-grant").checked,
       "signer_not_allowed: this agent's scope for " + tool + " does not list wallet <wallet> (wallets = [\"<wallet>\"] on [agents.<name>.scopes." + tool + "])", cs);
-    gate(false, "[solana] signer_key_file is set", signer, "no_signer: [solana] signer_key_file is not configured", cs);
-    gate(false, "Key file: mode 0600, readable, well formed", $("g-perm").checked,
-      "signer_unavailable: <key file>: key file mode is 644; group / other must have no access (chmod 600)", cs);
-    gate(false, "The key is this wallet's", $("g-match").checked, "signer_mismatch: the key file holds <other pubkey>, not <wallet>", cs);
+    gate(false, "[solana] privy_wallet_id is set", signer, "no_signer: [solana] privy_wallet_id is not configured", cs);
+    gate(false, "The scope reads PRIVY_API_URL and PRIVY_APP_ID", $("g-env").checked,
+      "signer_unavailable: PRIVY_API_URL is not in this agent's env_reads for " + tool, cs);
+    var url = $("g-url").value;
+    gate(false, "PRIVY_API_URL is the seal proxy, with a session", url === "proxy",
+      url === "unset" ? "signer_unavailable: PRIVY_API_URL is not set"
+        : "signer_unavailable: PRIVY_API_URL is not the seal proxy with a session ([keys.env] PRIVY_API_URL = \"privy\"; `tengu keys status`) — Privy is never called with a local app secret", cs);
     gate(false, "solana-writes.db opens", $("g-store").checked,
       "write_store_unavailable: <TENGU_HOME>/state/solana-writes.db could not be opened", cs);
     gate(false, "Lease wallet:<wallet> is free (150 s)", !$("g-lease").checked,
@@ -472,6 +501,10 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
       tool === "dlmm_open_position" ? "divergence: pool 149.13 vs oracle 148.18: 64.1 bps (max 50)" : "<check name>: <detail> (example)");
     gate(false, "Each transaction simulates", $("g-sim").checked,
       "status sim_failed: the simulation returned an error — never sent");
+    gate(false, "[egress] and net_hosts allow the Worker host", $("g-host").checked,
+      "host '" + WORKER + "' not in allowed net_hosts [\"api.mainnet-beta.solana.com\", \"lite-api.jup.ag\"]; not sent", cs);
+    var reply = $("g-reply").value;
+    gate(false, "Privy's reply: same message, signature verifies for <wallet>", reply === "ok", REPLY[reply], cs);
     var html = G.map(function (g) {
       return '<li class="' + g.s + (g.cfg ? " cfg" : "") + '"><span><b>' + esc(g.t) + "</b>" + (g.cfg ? "config load" : "inside the tool") +
         (g.msg ? '<code class="msg">' + esc(g.msg) + "</code>" : "") + '</span><span class="st">' + g.st + "</span></li>";
@@ -482,10 +515,10 @@ wallets   = [<span class="s">"&lt;a dedicated wallet, full address&gt;"</span>]
       v.className = "verdict bad";
       v.textContent = last.cfg ? "Config does not load — no tool runs" : /simulates/.test(last.t) ? "sim_failed — never sent" : (send ? "Refused — nothing signed, nothing sent" : "Refused — nothing simulated");
     } else if (!send) {
-      v.className = "verdict ok"; v.textContent = "Simulated as the wallet — no key, nothing sent";
+      v.className = "verdict ok"; v.textContent = "Simulated as the wallet — no signer, nothing sent";
     } else {
       v.className = "verdict ok";
-      v.textContent = "Signed and sent → poll ≤ 120 s → confirmed raises the fence";
+      v.textContent = "Privy signed, signature verified, sent → poll ≤ 120 s → confirmed raises the fence";
       if (pend === "landed") v.textContent += " (the earlier send was resolved first: landed, fence raised)";
       if (pend === "expired") v.textContent += " (the earlier send was resolved first: expired unseen)";
     }

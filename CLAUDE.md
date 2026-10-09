@@ -801,7 +801,8 @@ These are not preferences. They're load-bearing.
   refreshed in-process: restart a long `tengu run` before `session_hours` (≤ 168 h).
   Proof sandbox `sealed-check`. Revoke = delete the `CLIENTS` line + deploy. Privy
   wallet tools: route `privy` (`PRIVY_API_URL = "privy"`; `strip` must list
-  `PRIVY_APP_SECRET` — load error otherwise); the Solana signer key file is not moved.
+  `PRIVY_APP_SECRET` — load error otherwise); the Solana write tools sign with a
+  Privy wallet on the same route (`[solana] privy_wallet_id`).
   Deploy with `npx wrangler` (cf hands Rust Workers to wrangler);
   a Cargo `strip = true` profile breaks worker-build.
 - **Telegram fails closed (2026-10-01)** — `tengu telegram` refuses to start
@@ -956,14 +957,17 @@ These are not preferences. They're load-bearing.
   `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`,
   `jup_perps_order` (opt-in rows; runner `tools/solana/write_common.rs`,
   pipeline `outbound/solana/send.rs`). `mode = "simulate"` (default) is
-  keyless. `mode = "send"` needs BOTH `[solana] signer_key_file` (0600, key =
-  the `wallet` arg) AND `wallets = ["<full pubkey>"]` in that agent's own
+  keyless. `mode = "send"` needs BOTH `[solana] privy_wallet_id` (a Privy
+  Solana wallet = the `wallet` arg; signs through the seal proxy's `privy`
+  route, `outbound/solana/privy.rs` — no key file on the machine, 2026-10-09)
+  AND `wallets = ["<full pubkey>"]` in that agent's own
   scope for the tool — never in `[default_scopes]`, only on an agent with no
   `description`, not `default`, no webhook `agent`. With a signer,
   `Config::load` refuses `claude_code` agents unless `builtin_tools_profile =
   "none"` (`config/hardening.rs`), `[[mcp_servers]]`, any scope granting
-  `shell_bins`, and a key inside any fs root / workspace (`config/solana.rs`);
-  the permissive fallback then runs no shell. Sends are
+  `shell_bins`, a missing `[keys.env] PRIVY_API_URL`, and any `env_reads` of
+  the session (`TENGU_KEYS_SESSION_TOKEN`, an `@session` var, `"*"`)
+  (`config/solana.rs`); the permissive fallback then runs no shell. Sends are
   serialized per wallet by a lease in `<TENGU_HOME>/state/solana-writes.db`
   (+ pending record resolved before the next send, + write fence that makes
   older `lp_snapshot` rows `stale_input`) — it cannot see the TS bot, so

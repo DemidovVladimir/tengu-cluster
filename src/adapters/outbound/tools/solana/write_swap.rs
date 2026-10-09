@@ -398,7 +398,7 @@ pub(crate) async fn swap_with(
     // `send`: signer + lease (+ earlier send resolved) before the order.
     let mut session = None;
     if req.mode == WriteMode::Send {
-        let signer = match signer_for(scope, shared.signer_key_file.as_ref(), &wallet, tool) {
+        let signer = match signer_for(scope, &shared.signer, &wallet, tool) {
             Ok(s) => s,
             Err(reason) => return r.refuse(reason),
         };
@@ -540,6 +540,7 @@ mod tests {
     use crate::adapters::outbound::solana::signer::LocalKeypair;
     use crate::adapters::outbound::solana::test_chain::Chain;
     use crate::adapters::outbound::solana::writes_store::SqliteWriteStore;
+    use crate::adapters::outbound::tools::solana::SignerSource;
     use crate::domain::solana::AccountRead;
     use crate::domain::solana_tx::{system_transfer, LegacyMessage};
     use crate::ports::solana_signer::SolanaSigner;
@@ -628,18 +629,12 @@ mod tests {
                 .then(|| json!({"context": {"slot": 500}, "value": []}))
         });
         let dir = tempfile::tempdir().unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        let p = dir.path().join("signer.json");
-        let mut bytes = vec![1u8; 32];
-        bytes.extend_from_slice(&wallet().pubkey().0);
-        std::fs::write(&p, serde_json::to_vec(&bytes).unwrap()).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)).unwrap();
         let shared = SolanaShared {
             store: None,
             writes: Some(Arc::new(
                 SqliteWriteStore::open(&dir.path().join("state")).unwrap(),
             )),
-            signer_key_file: Some(p),
+            signer: SignerSource::Fixed(Arc::new(wallet())),
         };
         Rig {
             chain,
@@ -733,7 +728,7 @@ mod tests {
         assert_eq!(sent[0], sent[1], "same signed bytes");
         let (tx, view) = Transaction::parse(&B64.decode(&sent[0]).unwrap()).unwrap();
         assert_eq!(view.signers()[0], wallet().pubkey());
-        assert_eq!(tx.signatures[0], wallet().sign(&tx.message).0);
+        assert_eq!(tx.signatures[0], wallet().sign_now(&tx.message).0);
         let w = wallet().pubkey().to_string();
         let writes = r.shared.writes.clone().unwrap();
         assert_eq!(writes.fence(&w).await.unwrap(), Some(901));

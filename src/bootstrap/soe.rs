@@ -289,7 +289,7 @@ mod tests {
         assert!(cfg.mcp_servers.is_empty() && cfg.decision_loops.is_empty());
         assert!(cfg.feeds.values().all(|f| f.kind == "job"));
         assert!(
-            cfg.risk.is_none() && cfg.xmarket.is_none() && cfg.solana.signer_key_file.is_none()
+            cfg.risk.is_none() && cfg.xmarket.is_none() && cfg.solana.privy_wallet_id.is_none()
         );
         let hosts: std::collections::BTreeSet<&str> = cfg
             .sources

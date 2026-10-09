@@ -722,7 +722,7 @@ mod golden_tests {
         let mut cfg = crate::config::Config::default();
         cfg.fold_default_scopes();
         assert!(!cfg.agents["main"].no_shell_fallback);
-        cfg.solana.signer_key_file = Some("/keys/signer.json".into());
+        cfg.solana.privy_wallet_id = Some("w1".into());
         cfg.fold_default_scopes();
         assert!(cfg.agents["main"].no_shell_fallback);
     }

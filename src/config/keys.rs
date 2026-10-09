@@ -25,6 +25,25 @@ use crate::domain::scope::host_matches;
 /// `[keys.env]` value that exports the session token itself.
 pub(crate) const SESSION_VALUE: &str = "@session";
 
+/// Env var holding the session token in every tengu process
+/// (`outbound/keys::install`).
+pub(crate) const SESSION_TOKEN_ENV: &str = "TENGU_KEYS_SESSION_TOKEN";
+
+impl KeysConfig {
+    /// Env var names that carry the session: [`SESSION_TOKEN_ENV`] and every
+    /// `[keys.env]` var set to `@session`.
+    pub(crate) fn session_vars(&self) -> Vec<&str> {
+        let mut out = vec![SESSION_TOKEN_ENV];
+        out.extend(
+            self.env
+                .iter()
+                .filter(|(_, v)| *v == SESSION_VALUE)
+                .map(|(k, _)| k.as_str()),
+        );
+        out
+    }
+}
+
 /// The only vars that may carry `@session`, each with the var that must
 /// point its client at the proxy — so the token is never sent to the
 /// provider itself (`auth_header_for` covers every other client).
@@ -260,7 +279,7 @@ mod tests {
         let cfg = Config::load(&dir.join("config.toml")).unwrap_or_else(|e| panic!("{e:#}"));
 
         assert!(cfg.risk.is_none() && cfg.paper.is_none() && cfg.xmarket.is_none());
-        assert!(cfg.solana.signer_key_file.is_none() && cfg.generation.is_none());
+        assert!(cfg.solana.privy_wallet_id.is_none() && cfg.generation.is_none());
         assert!(cfg.mcp_servers.is_empty() && cfg.orchestrator.is_none());
         assert!(cfg.default_scopes.is_empty() && !cfg.memory.enabled);
         assert!(!cfg.studio.control, "control via --allow-control only");

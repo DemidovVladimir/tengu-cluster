@@ -43,7 +43,7 @@
 //! | every agent's `tools` non-empty (empty = every base tool) and, like `workspace_tools`, inside `domain::tools::SOE_ALLOWED` | closed world: no write, contact, spend, publish or shell tool |
 //! | `[default_scopes.<t>]` deny-all (no keys) for each `domain::tools::SIDE_EFFECT_TOOLS`; an agent's own scope for one stays deny-all | defence in depth behind the tool lists |
 //! | no `[decision_loops]`; every `[feeds.*]` `kind = "job"` | the cycle is the only scheduled work |
-//! | no `[risk]`, `[paper]`, `[xmarket]`, `[backtest]`, `[solana] signer_key_file`, `[telegram]` (enabled or users), `[webhooks]` (enabled or endpoints) | no trading, signing or inbound surface |
+//! | no `[risk]`, `[paper]`, `[xmarket]`, `[backtest]`, `[solana] privy_wallet_id`, `[telegram]` (enabled or users), `[webhooks]` (enabled or endpoints) | no trading, signing or inbound surface |
 //! | `[egress] allow_hosts` ⊆ the hosts of the `[sources.registry.*]` rows (every listed row: `[sources]` checks the other way, so they are equal); non-empty under `network = "open"` | the sandbox reaches its listed sources only |
 //! | the state root outside every git work tree; an existing `operator.toml` there with no group / other permission bit | private data never sits in a repo or opens to other users |
 //! | hardened (`config/hardening.rs`): `claude_code` agents `builtin_tools_profile = "none"`, no shell fallback, no `[[mcp_servers]]`, `<TENGU_HOME>/state` outside every fs root and workspace | nothing runs outside tengu scopes |
@@ -478,8 +478,8 @@ fn closed_world_errors(cfg: &Config, out: &mut Vec<String>) {
         ("xmarket", cfg.xmarket.is_some()),
         ("backtest", cfg.backtest.is_some()),
         (
-            "solana] signer_key_file",
-            cfg.solana.signer_key_file.is_some(),
+            "solana] privy_wallet_id",
+            cfg.solana.privy_wallet_id.is_some(),
         ),
         (
             "telegram",
@@ -1048,7 +1048,7 @@ mod tests {
         let Some(h) = home() else { return };
         let mut cfg = soe(SOE);
         cfg.xmarket = Some(toml::from_str("state = \"xm\"").unwrap());
-        cfg.solana.signer_key_file = Some(h.path().join("key.json").display().to_string());
+        cfg.solana.privy_wallet_id = Some("w1".into());
         cfg.telegram.enabled = true;
         cfg.webhooks.enabled = true;
         let mut tick = soe(
@@ -1059,7 +1059,7 @@ mod tests {
         let errs = rules_at(&cfg, h.path());
         for want in [
             "[xmarket]: not allowed beside [soe]",
-            "[solana] signer_key_file]: not allowed beside [soe]",
+            "[solana] privy_wallet_id]: not allowed beside [soe]",
             "[telegram]: not allowed beside [soe]",
             "[webhooks]: not allowed beside [soe]",
             "decision_loops: an SOE sandbox runs no decision loop",

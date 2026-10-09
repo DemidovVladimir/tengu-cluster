@@ -1168,7 +1168,7 @@ net_hosts = ["api.hyperliquid.xyz"]
     async fn no_shell_fallback_removes_the_fallback_shell() {
         let ws = TempDir::new().unwrap();
         let mut signing = Config::default();
-        signing.solana.signer_key_file = Some("/keys/signer.json".into());
+        signing.solana.privy_wallet_id = Some("w1".into());
         signing.fold_default_scopes();
         let shell_ok =
             |exec: &PluginToolExecutor| exec.scopes["run_command"].check_shell_bin("ls").is_ok();
@@ -1324,7 +1324,7 @@ net_hosts = ["api.hyperliquid.xyz"]
         assert!(exec.registry.get("matrix_cat").is_none());
 
         let mut signing = config;
-        signing.solana.signer_key_file = Some("/keys/signer.json".into());
+        signing.solana.privy_wallet_id = Some("w1".into());
         signing.fold_default_scopes();
         let s = setup(ws.path(), &["matrix_cat"], Some(signing), Some("main"));
         let exec = sanitized(
