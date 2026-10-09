@@ -1,9 +1,11 @@
-// Tengu Studio — read-only (ST-21 graph, inspector, timeline; ST-22 runs and
-// replay). Draws what /api/v1 serves and decides nothing: the graph and its
+// Tengu Studio (ST-21 graph, inspector, timeline; ST-22 runs and replay;
+// ST-30 controls). Draws what /api/v1 serves and decides nothing: the graph and its
 // columns (`layer` / `order`), each node's tone, the highlighted edges, the
 // grey legal set and the header facts (the board, folded in Rust from the
 // trace), run states, the health verdict and the validated config all
-// arrive computed. Here: pixels, a list filter, and keeping the place on
+// arrive computed; so do the control state and which button may act (GET
+// /api/v1/control — the controls are hidden unless it says control is on).
+// Here: pixels, a list filter, a POST per button, and keeping the place on
 // reload (the URL fragment). No animation: the screen changes when an
 // event arrives.
 "use strict";
@@ -56,6 +58,8 @@
     syncing: false,
     again: false,
     seekTimer: null,
+    control: null,
+    ctlBusy: false,
   };
 
   // ---- small helpers -------------------------------------------------------
@@ -156,6 +160,20 @@
     const body = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(`${path}: ${r.status} ${body.error || r.statusText}`);
     return body;
+  }
+
+  // A change request: the token header + JSON; the browser adds `Origin` and
+  // `Sec-Fetch-Site: same-origin` itself (the server requires all three).
+  // Answers with its verdict even when refused (403 / 409 / 422 / 429 / 500).
+  async function post(path, body) {
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "X-Studio-Token": S.token, "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+      cache: "no-store",
+    });
+    const out = await r.json().catch(() => ({}));
+    return { status: r.status, body: out };
   }
 
   // ---- meta, legend, health, runs ------------------------------------------
@@ -939,6 +957,71 @@
     }
   }
 
+  // ---- control (ST-30): state + allowed actions from GET /api/v1/control --
+
+  async function loadControl() {
+    S.control = await api("/api/v1/control");
+    renderControl();
+  }
+
+  function renderControl() {
+    const c = S.control;
+    const box = $("controls");
+    box.hidden = !(c && c.enabled);
+    const note = $("ctl-note");
+    if (box.hidden) {
+      note.hidden = true;
+      return;
+    }
+    const badge = $("ctl-state");
+    badge.textContent = c.state;
+    badge.className = `badge t-${c.tone}`;
+    badge.title = c.own ? `this Studio runs ${c.own.holder}` : c.seen ? `heartbeat: ${c.seen.holder}` : c.why;
+    const by = new Map(c.actions.map((a) => [a.action, a]));
+    for (const [id, action] of [
+      ["btn-play", "play"],
+      ["btn-stop", "stop"],
+      ["btn-event", "event"],
+    ]) {
+      const a = by.get(action);
+      const b = $(id);
+      b.disabled = S.ctlBusy || !a || !a.ok;
+      b.title = S.ctlBusy ? "waiting for the answer" : a && !a.ok ? a.why_not : "";
+    }
+    const sel = $("ctl-scenario");
+    const names = c.scenarios.map((s) => s.name);
+    if (names.join("\n") !== [...sel.options].map((o) => o.value).join("\n")) {
+      const keep = sel.value;
+      sel.replaceChildren(...names.map((n) => new Option(n, n)));
+      if (names.includes(keep)) sel.value = keep;
+    }
+    const pick = c.scenarios.find((s) => s.name === sel.value);
+    sel.title = pick ? `${pick.file}: ${JSON.stringify(pick.event)}` : "";
+    const last = c.last;
+    note.hidden = !last;
+    if (last) {
+      note.className = `ctl-note t-${last.status === "ok" ? "green" : "red"}`;
+      note.textContent = `${last.action} · ${last.status} · ${last.detail}` + (last.event_id ? ` · ${last.event_id}` : "");
+    }
+  }
+
+  async function control(action, body) {
+    S.ctlBusy = true;
+    renderControl();
+    try {
+      const r = await post(`/api/v1/control/${action}`, body);
+      if (r.body.control) S.control = r.body.control;
+      else if (r.body.error) notice(`${action}: ${r.status} ${r.body.error}`);
+      if (action === "play" && r.body.ok) goLive();
+    } catch (e) {
+      notice(String(e.message || e));
+    } finally {
+      S.ctlBusy = false;
+      renderControl();
+    }
+    await poll();
+  }
+
   // ---- wiring --------------------------------------------------------------
 
   function wire() {
@@ -957,11 +1040,15 @@
     $("filters").addEventListener("reset", () => setTimeout(renderTimeline, 0));
     $("filters").addEventListener("submit", (e) => e.preventDefault());
     window.addEventListener("resize", fitGraph);
+    $("btn-play").addEventListener("click", () => control("play", {}));
+    $("btn-stop").addEventListener("click", () => control("stop", {}));
+    $("btn-event").addEventListener("click", () => control("event", { scenario: $("ctl-scenario").value }));
+    $("ctl-scenario").addEventListener("change", renderControl);
   }
 
   async function poll() {
     try {
-      await Promise.all([loadHealth(), loadRuns()]);
+      await Promise.all([loadHealth(), loadRuns(), loadControl()]);
     } catch (e) {
       notice(String(e.message || e));
     }

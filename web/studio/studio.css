@@ -97,6 +97,7 @@ button {
 }
 button:hover { border-color: var(--accent); }
 button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+button:disabled { cursor: not-allowed; opacity: 0.55; border-color: var(--line); }
 button:focus-visible, [tabindex]:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input, select {
   border: 1px solid var(--line);
@@ -125,6 +126,9 @@ input, select {
 .facts dt { color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
 .modes { display: flex; gap: 0.3rem; }
+/* controls (ST-30): shown only when /api/v1/control says control is on */
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.ctl-scenario { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--muted); font-size: 0.8rem; }
 
 .badge {
   display: inline-block;
@@ -144,7 +148,7 @@ input, select {
 .t-grey { color: var(--t-grey); border-color: var(--t-grey); background: var(--t-grey-soft); }
 .t-none { color: var(--muted); border-color: var(--line); background: transparent; }
 
-.notice, .run-note {
+.notice, .run-note, .ctl-note {
   margin: 10px 16px 0;
   padding: 0.5rem 0.8rem;
   border-radius: var(--radius);
@@ -152,6 +156,7 @@ input, select {
 }
 .notice { background: var(--t-red-soft); color: var(--t-red); }
 .run-note { background: var(--t-amber-soft); color: var(--ink); border: 1px solid var(--t-amber); }
+.ctl-note { border: 1px solid; font-size: 0.85rem; }
 
 /* layout: graph + inspector, timeline, runs + health */
 .layout {

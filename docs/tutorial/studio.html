@@ -36,14 +36,14 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · Studio read model</div>
   <h1>Studio graph and trace</h1>
-  <p class="lede">Two read models for Studio. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is one redacted, ordered event file per run: every runtime, feed, loop, Jev, action and tool step. <code>tengu studio</code> serves both, read-only, to a browser on this machine.</p>
+  <p class="lede">Two read models for Studio. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is one redacted, ordered event file per run: every runtime, feed, loop, Jev, action and tool step. <code>tengu studio</code> serves both to a browser on this machine, and — only where the sandbox allows it — plays and stops that sandbox's runtime.</p>
   <ul class="facts">
     <li>schema <b>v1</b> for both</li>
     <li>payload ≤ <b>4096</b> bytes</li>
     <li>graph in <b>8</b> columns</li>
-    <li><b>8</b> event families</li>
+    <li><b>9</b> event families</li>
     <li>follow: <b>250 ms</b> poll · <b>256</b> buffered</li>
-    <li>server: <b>loopback</b> · GET only</li>
+    <li>server: <b>loopback</b> · POST = control only, body ≤ <b>1 MiB</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip heart"><span class="k">心</span> heart</span> Architect / map</li>
@@ -231,7 +231,7 @@
 <section class="sec" aria-labelledby="s-fam">
   <div class="sec-head">
     <span class="kicker">What a run records</span>
-    <h2 id="s-fam">Eight event families</h2>
+    <h2 id="s-fam">Nine event families</h2>
     <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool. A tool feed's calls hang on its <code>feed.fired</code>.</p>
   </div>
   <div class="table-wrap">
@@ -246,6 +246,7 @@
         <tr><td><code>jev</code></td><td><code>jev.completed</code> (answers, model, usage, the <b>legal set</b> offered) · <code>jev.failed</code></td><td><code>loop.started</code> or the trigger</td></tr>
         <tr><td><code>action</code></td><td><code>action.selected</code> → <code>completed</code> · <code>refused</code>; <code>escalated</code>, <code>rejected</code>; payload <code>outcome</code> = the loop's own result</td><td><code>selected</code> ← its <code>jev.completed</code></td></tr>
         <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code> (an error, an error row, or an HTTP status that is not 2xx — the loop's own test), with <code>duration_ms</code> and the call id</td><td><code>action.selected</code> or <code>feed.fired</code></td></tr>
+        <tr><td><code>studio</code></td><td>Studio's own run (control on): <code>studio.started</code>; <code>studio.control</code> pending → ok · refused · failed per Play, Stop or event; <code>studio.runtime</code> when the runtime it started ends; <code>studio.stopped</code></td><td>verdict ← its request; <code>studio.runtime</code> ← the Play verdict</td></tr>
       </tbody>
     </table>
   </div>
@@ -280,16 +281,16 @@
 
 <section class="sec" aria-labelledby="s-server">
   <div class="sec-head">
-    <span class="kicker">Read-only, loopback only</span>
+    <span class="kicker">Loopback only</span>
     <h2 id="s-server">The Studio server</h2>
     <p><code>tengu studio --sandbox &lt;s&gt;</code> (build with <code>--features studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code>.</p>
   </div>
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Route (GET only)</th><th>Serves</th></tr></thead>
+      <thead><tr><th>Route</th><th>Serves</th></tr></thead>
       <tbody>
         <tr><td><code>/</code> · <code>/assets/&lt;file&gt;</code></td><td>the page, compiled into the binary (<code>include_str!</code>); nothing loads from the network</td></tr>
-        <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only: true</code>, <code>control_enabled: false</code>, evidence paths</td></tr>
+        <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only</code> / <code>control_enabled</code>, evidence paths, the colour legend</td></tr>
         <tr><td><code>/api/v1/graph[?map=&lt;sha256&gt;]</code></td><td>the graph above; with <code>map</code>, a map <code>tengu decide --map</code> kept, re-hashed and re-applied to this config</td></tr>
         <tr><td><code>/api/v1/health</code></td><td>the heartbeat and the <code>tengu doctor --live</code> checks (one function, <code>runtime::read_live</code>)</td></tr>
         <tr><td><code>/api/v1/runs</code></td><td>every recorded run, the heartbeat holder, the live run, each run's state (live, closed, open) and whether its config hash is the current one</td></tr>
@@ -298,15 +299,56 @@
         <tr><td><code>/api/v1/nodes/&lt;node_id&gt;</code></td><td>the validated config behind a node (never the TOML text), its edges and the files that hold its facts</td></tr>
         <tr><td><code>/api/v1/runs/&lt;run_id&gt;/stream</code></td><td>SSE: the run after <code>Last-Event-ID</code> or <code>?after=</code>, then live</td></tr>
         <tr><td><code>/api/v1/live/stream</code></td><td>SSE: the run of the runtime holding the lease; <code>event: run</code> on attach and on every restart</td></tr>
+        <tr><td><code>/api/v1/control</code></td><td>the control state, its tone, each button's verdict (ok, or why not), the runtime Studio runs, the heartbeat seen, the scenarios and loops, the last verdict</td></tr>
+        <tr><td>POST <code>/api/v1/control/play</code> · <code>stop</code> · <code>event</code></td><td>Play, Stop, send a scenario (next section). Only with control on; otherwise 403 with the reason</td></tr>
       </tbody>
     </table>
   </div>
   <ul class="states">
     <li><span class="chip guard">bind</span><span><b>Loopback only</b><code>127.0.0.1</code> (default) or <code>::1</code>; any other <code>--bind</code> is refused before anything listens. Port 0 = a free one.</span></li>
-    <li><span class="chip guard">key</span><span><b>Token</b>32 random bytes per process. Every <code>/api/</code> call sends it (<code>X-Studio-Token</code>, or <code>?token=</code> for <code>EventSource</code>); compared in constant time, else 401.</span></li>
-    <li><span class="chip guard">host</span><span><b>Host / Origin</b>a <code>Host</code> other than <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> is 421 (DNS rebinding); a foreign <code>Origin</code> or a cross-site fetch is 403; no CORS header.</span></li>
+    <li><span class="chip guard">key</span><span><b>Token</b>32 random bytes per process. Every <code>/api/</code> GET sends it (<code>X-Studio-Token</code>, or <code>?token=</code> for <code>EventSource</code>); compared in constant time, else 401.</span></li>
+    <li><span class="chip guard">csrf</span><span><b>A POST needs three proofs</b>the token in the <code>X-Studio-Token</code> header (never the query), <code>Origin</code> = this server and <code>Sec-Fetch-Site: same-origin</code> — else 403. JSON body only (415 else), at most 1 MiB (413), unknown fields refused.</span></li>
+    <li><span class="chip guard">host</span><span><b>Host / Origin</b>a <code>Host</code> other than <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> is 421 (DNS rebinding); a foreign <code>Origin</code> or a cross-site fetch is 403; no CORS header, no preflight answer.</span></li>
     <li><span class="chip data">sse</span><span><b>Bounded per client</b>the backlog waits for a slow client; a live event that does not fit its 256-item buffer sends <code>event: lagged</code> (id = the last event handed) and closes. The browser reconnects with that id and reads the rest from the file: no gap, no repeat.</span></li>
   </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-control">
+  <div class="sec-head">
+    <span class="kicker">One runtime, never a copy</span>
+    <h2 id="s-control">Play, Stop, send an event</h2>
+    <p>With control on, Play starts the sandbox's runtime inside the Studio process through the start <code>tengu run</code> uses (<a href="runtime.html">tengu run</a>): the same leases, loops, feeds, heartbeat and recording. Stop is the path SIGINT takes. The page shows the buttons only when <code>GET /api/v1/control</code> says control is on, and greys each one with the reason Rust gives.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Sandbox</th><th>Control</th></tr></thead>
+      <tbody>
+        <tr><td><code>[generation]</code>-bound (W1: a frozen design)</td><td>never — not with <code>--allow-control</code>; <code>[studio] control = true</code> there fails the config load</td></tr>
+        <tr><td>hardened (<code>[risk]</code> or a <code>[solana]</code> signer)</td><td>never, the same way</td></tr>
+        <tr><td><code>[studio] control = true</code> (only <code>control-loop-lab</code>)</td><td>on</td></tr>
+        <tr><td>any other, started with <code>--allow-control</code></td><td>on, for that process</td></tr>
+        <tr><td>otherwise (no <code>[studio]</code> = <code>control = false</code>)</td><td>off: every POST is 403 with the reason</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip">idle</span><span><b>idle</b>Studio started nothing and no live heartbeat: Play only.</span></li>
+    <li><span class="chip">attached</span><span><b>attached</b>a fresh heartbeat of another holder (a CLI <code>tengu run</code>): read-only, every button refused, the holder named in full. A Play that races it is refused by the lease itself (409).</span></li>
+    <li><span class="chip warn">starting · stopping</span><span><b>starting, stopping</b>Studio is taking the lease, or draining (≤ <code>shutdown_grace_secs</code>): no button.</span></li>
+    <li><span class="chip ok">running</span><span><b>running</b>Studio's own runtime: Stop and Send event; a second Play is 409.</span></li>
+    <li><span class="chip">stopped · failed</span><span><b>stopped, failed</b>it ended cleanly, or its start or run failed (the error is the last verdict): Play again.</span></li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Request</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>POST <code>play</code> <code>{"scenario"?}</code></td><td>200 running (holder, <code>run_id</code>) · 409 attached or not now · 422 unknown scenario · 500 the start failed</td></tr>
+        <tr><td>POST <code>stop</code></td><td>200 once drained (the drain report, <code>lease_released</code>) · 202 still draining after the grace + 5 s · 409 not Studio's runtime</td></tr>
+        <tr><td>POST <code>event</code> <code>{"scenario", "loop"?}</code></td><td>202 queued, session <code>studio-&lt;scenario&gt;-&lt;uuid&gt;</code> · 422 no such scenario or loop · 429 the loop's queue is full · 409 nothing running</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">A scenario is a file <code>sandboxes/&lt;s&gt;/scenarios/&lt;name&gt;.json</code> — what <code>tengu decide --event</code> takes; a <code>*.map.json</code> is a map, never an event. The page sends a name, never an event body. Each request and its verdict (ok, refused, failed) lands in Studio's own recording, kind <code>studio</code>.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-page">
@@ -349,7 +391,10 @@
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
-    <li><span><b>The server cannot change anything.</b> Only GET / HEAD routes exist (anything else is 405); no control route is built yet. The page decides nothing: tones, lit edges, grey nodes, run states and the health verdict all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
+    <li><span><b>Only the control routes change anything.</b> Every other route is GET / HEAD (anything else is 405). A POST passes the guard only with the token header, its own <code>Origin</code> and <code>Sec-Fetch-Site: same-origin</code>; a <code>Host</code> that is not this server is 421 first. The page decides nothing: tones, lit edges, grey nodes, run states, the health verdict and which button may act all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
+    <li><span><b>One runtime per sandbox.</b> Play is <code>tengu run</code>'s own start, so the lease refuses a second runner either way: a CLI <code>tengu run</code> while Studio runs one, a Play while the CLI runs one (Studio then attaches read-only). Stop never touches a runtime Studio did not start.</span></li>
+    <li><span><b>No orphan.</b> The runtime lives in the Studio process. SIGINT / SIGTERM drain it first (no new Play, the Stop path, then <code>studio.stopped</code>); a killed Studio takes it along and its lease frees after 30 s.</span></li>
+    <li><span><b>A click never pretends.</b> Every Play, Stop and event is a <code>studio.control</code> request and its verdict in Studio's recording; a failed start is <code>failed</code> with the error, a held lease <code>refused</code> with the holder.</span></li>
     <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read. Shared tests live in one place (<code>ObsStatus::usable</code>, <code>reduce::http_ok</code>, <code>DecisionLoopConfig::logs_only</code>), so the trace and the graph never judge differently from the loop.</span></li>
   </ul>
 </section>
@@ -357,7 +402,7 @@
 <section class="sec" aria-labelledby="s-try">
   <div class="sec-head">
     <span class="kicker">Try it</span>
-    <h2 id="s-try">Graph, then a recorded run</h2>
+    <h2 id="s-try">Graph, a recorded run, then Play</h2>
     <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab-2026-10-08.md</code>). Logs go to stderr, so stdout pipes straight into <code>jq</code>. Ids below are examples.</p>
   </div>
   <div class="term-wrap">
@@ -383,7 +428,18 @@
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>
 <span class="ln o">Studio: http://127.0.0.1:&lt;port&gt;/#t=&lt;64 hex token&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab --bind 0.0.0.0</span>
-<span class="ln o">Error: --bind 0.0.0.0: refused — tengu studio binds to loopback only (127.0.0.1 or ::1) …</span></pre>
+<span class="ln o">Error: --bind 0.0.0.0: refused — tengu studio binds to loopback only (127.0.0.1 or ::1) …</span>
+<span class="ln o"># control (the lab sets [studio] control = true): a POST carries the token header, its Origin, Sec-Fetch-Site</span>
+<span class="ln cmd"><span class="p">$ </span>P() { curl -sS -X POST -H "X-Studio-Token: $TOK" -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' --data "$2" "$BASE$1"; }</span>
+<span class="ln cmd"><span class="p">$ </span>P /api/v1/control/play '{}' | jq -c '{ok, holder, run_id}'</span>
+<span class="ln o">{"ok":true,"holder":"Vladimirs-MacBook-Pro-2.local:31302:64331316-a1f3-4a4f-a2c0-948380f5f8a8","run_id":"93668d55-372f-45a3-9b45-cfec64055960"}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu run --sandbox control-loop-lab</span>
+<span class="ln o">Error: sandbox `control-loop-lab` is already running: lease `runtime:control-loop-lab` … is held by `Vladimirs-MacBook-Pro-2.local:31302:64331316-a1f3-4a4f-a2c0-948380f5f8a8` for 30 s more. …</span>
+<span class="ln cmd"><span class="p">$ </span>P /api/v1/control/event '{"scenario":"act"}' | jq -r .session_id</span>
+<span class="ln o">studio-act-759ba3d9-dc8a-4bc3-8d44-1cb9b00c7898</span>
+<span class="ln cmd"><span class="p">$ </span>P /api/v1/control/stop '' | jq -c '.end | {reason, lease_released}'</span>
+<span class="ln o">{"reason":"studio stop","lease_released":true}</span>
+<span class="ln o"># example run of 2026-10-09; the full record: docs/studio-acceptance-2026-10-08.md</span></pre>
   </div>
 </section>
 
@@ -407,12 +463,15 @@
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
-        <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (<code>--features studio</code>): routes, guard, SSE, embedded page; tests on a real listener</td></tr>
+        <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (<code>--features studio</code>): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
         <tr><td><code>src/application/studio/stream.rs</code></td><td>live delivery: backlog waits, live overflow = <code>lagged</code>, the lease holder's run across restarts</td></tr>
         <tr><td><code>src/application/studio/board.rs</code></td><td>the board: a run folded over its graph — tones, lit edges, grey legal set, header facts, each event's view</td></tr>
         <tr><td><code>src/application/studio/inspect.rs</code></td><td>the validated config section behind a node; the store rows it names</td></tr>
+        <tr><td><code>src/config/studio.rs</code></td><td><code>[studio] control</code> and <code>control_policy</code>: on, off, or never (W1-bound, hardened)</td></tr>
+        <tr><td><code>src/application/studio/control.rs</code></td><td>the control rules: state from Studio's phase + the heartbeat, each action ok or why not, scenario names</td></tr>
+        <tr><td><code>src/adapters/inbound/studio/control.rs</code> · <code>inbound/run.rs</code></td><td>Play / Stop / event on the runtime (<code>start_session</code>, the stopper, the loop dispatch), <code>studio.*</code> events, Studio's shutdown drain</td></tr>
         <tr><td><code>src/bootstrap/studio.rs</code> · <code>bootstrap/runtime.rs</code></td><td><code>StudioContext</code> (graph, trace reader, kept maps, evidence paths) · <code>read_live</code>, shared with <code>doctor --live</code></td></tr>
-        <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>)</td></tr>
+        <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>); the control buttons draw <code>/api/v1/control</code></td></tr>
         <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code></td></tr>
       </tbody>
     </table>

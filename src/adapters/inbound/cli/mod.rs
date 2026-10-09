@@ -119,8 +119,9 @@ enum Commands {
         map: Option<PathBuf>,
     },
     /// Tengu Studio (TENGU_STUDIO_PLAN.md): with no subcommand, the local
-    /// read-only browser UI (`--features studio`): loopback only, prints
-    /// its URL (with a per-process token) on stdout. `graph` prints the
+    /// browser UI (`--features studio`): loopback only, prints its URL (with
+    /// a per-process token) on stdout; Play / Stop / send-event only with
+    /// `[studio] control = true` or `--allow-control`. `graph` prints the
     /// sandbox's workflow graph — validated config + catalog tools as
     /// nodes and edges, optionally narrowed by an execution map — as JSON.
     Studio {

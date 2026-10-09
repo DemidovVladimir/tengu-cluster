@@ -4,7 +4,7 @@
 //! | Step | What |
 //! |---|---|
 //! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else `<TENGU_HOME>/state`; `runtime.db` lives there |
-//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
+//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start ([`LeaseHeld`] in the error: Studio attaches read-only); lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
 //! | trace | [`start`] opens this process's recording (`bootstrap::trace::open_sink`, `RunKind::Run`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, `runtime_id` = the lease holder; every loop's `decisions.jsonl` lines carry both ids ([`Runtime::trace`]) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
@@ -201,21 +201,21 @@ impl LeasePlan {
     }
 
     /// Why `lease` (refused) stops this process from starting — the holder
-    /// in full.
+    /// in full; a [`LeaseHeld`] inside the `anyhow::Error`.
     fn refusal(&self, kind: LeaseKind, db: &str, lease: &RunnerLease, now: i64) -> anyhow::Error {
         let (resource, holder, secs) = (
             &lease.resource,
             &lease.current_holder,
             lease.remaining_secs(now),
         );
-        match kind {
-            LeaseKind::Runner => anyhow!(
+        let message = match kind {
+            LeaseKind::Runner => format!(
                 "sandbox `{}` is already running: lease `{resource}` in {db} is held by \
                  `{holder}` for {secs} s more. Stop that `tengu run` / `tengu webhooks` first \
                  (SIGTERM drains it); if it crashed, retry once the lease expires.",
                 self.sandbox
             ),
-            LeaseKind::State => anyhow!(
+            LeaseKind::State => format!(
                 "state dir {} already has an owner: lease `{resource}` in {db} is held by \
                  `{holder}` for {secs} s more — a `tengu run` or `tengu webhooks` of a sandbox \
                  naming the same [xmarket] state owns its ledger, and a ledger has one owner. \
@@ -223,9 +223,45 @@ impl LeasePlan {
                  [xmarket] state; if it crashed, retry once the lease expires.",
                 self.state_dir.display()
             ),
-        }
+        };
+        anyhow::Error::new(LeaseHeld {
+            resource: resource.clone(),
+            holder: holder.clone(),
+            remaining_secs: secs,
+            message,
+        })
     }
 }
+
+/// A lease another process holds — why [`OwnerLeases::take`] (and so
+/// [`start`]) refused. Carried inside the `anyhow::Error` ([`LeaseHeld::of`]):
+/// Studio's Play tells "another process runs this sandbox — attach
+/// read-only" from a start that failed. `Display` = the operator message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeaseHeld {
+    pub resource: String,
+    /// The holder `<host>:<pid>:<uuid>`, in full.
+    pub holder: String,
+    /// Whole seconds until it expires (a crashed holder's lease frees then).
+    pub remaining_secs: u64,
+    message: String,
+}
+
+impl LeaseHeld {
+    /// The refusal inside `e`, if `e` is one (anywhere in its chain).
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
+    pub(crate) fn of(e: &anyhow::Error) -> Option<&LeaseHeld> {
+        e.chain().find_map(|c| c.downcast_ref::<LeaseHeld>())
+    }
+}
+
+impl std::fmt::Display for LeaseHeld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LeaseHeld {}
 
 /// The leases a process holds ([`LeasePlan`]): taken all or none, renewed
 /// by [`OwnerLeases::keep`] on the process's supervisor, freed by
@@ -677,7 +713,8 @@ impl Runtime {
     /// build the loops, launch them + the heartbeat, start the feeds
     /// (`runtime.running`); a failure is `runtime.start_failed`, then the
     /// shutdown (`runtime.stopping` → `runtime.stopped`) and the error.
-    async fn start_recorded(
+    /// Studio's control tests start a runtime on a temp state dir this way.
+    pub(crate) async fn start_recorded(
         mut self,
         config: &Config,
         secrets: Arc<SecretRegistry>,
@@ -1094,10 +1131,15 @@ mod tests {
         let first = begin(dir.path(), slow_timing()).await.unwrap();
         let holder = first.holder().to_string();
         assert!(holder.contains(&format!(":{}:", std::process::id())));
-        let err = format!(
-            "{:#}",
-            begin(dir.path(), slow_timing()).await.err().unwrap()
+        let refused = begin(dir.path(), slow_timing()).await.err().unwrap();
+        // Typed: Studio's Play tells a held lease from any other failure.
+        let held = LeaseHeld::of(&refused).expect("a LeaseHeld refusal");
+        assert_eq!(
+            (held.resource.as_str(), held.holder.as_str()),
+            ("runtime:xmarket-weekend", holder.as_str())
         );
+        assert!(held.remaining_secs > 0 && held.remaining_secs <= 60);
+        let err = format!("{refused:#}");
         assert!(
             err.contains("sandbox `xmarket-weekend` is already running"),
             "{err}"

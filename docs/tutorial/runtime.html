@@ -365,6 +365,7 @@
     <li><span><b>No URLs in health.</b> Heartbeats and <code>loop/1</code> / <code>feed/1</code> rows replace every URL with <code>&lt;url&gt;</code>.</span></li>
     <li><span><b>Shutdown is bounded.</b> <code>shutdown_grace_secs</code> ≤ 3600; a second signal exits 130 at once.</span></li>
     <li><span><b>Each start is its own recording.</b> A new trace <code>run_id</code> per process; every loop audit line carries it and the lease holder as <code>runtime_id</code>. The run writes <code>runtime.*</code> (starting, running, stopping, stopped with the drain), <code>feed.*</code> per slot and <code>loop.*</code> per event with the counters (<a href="studio.html">Studio graph and trace</a>).</span></li>
+    <li><span><b>Studio's Play is this same start.</b> <code>tengu studio</code> with control on calls the start <code>tengu run</code> calls (<code>start_session</code>): the same leases, loops, feeds, heartbeat and recording, in the Studio process. Its Stop is the SIGINT path (<code>"studio stop"</code>); while Studio runs it, <code>tengu run</code> is refused by the lease (<a href="studio.html">Studio</a>).</span></li>
   </ul>
 </section>
 
@@ -397,7 +398,7 @@
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, stop report</td></tr>
+        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play</td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, feeds, health, shutdown; <code>read_live</code> (the <code>--live</code> verdict, shared with Studio)</td></tr>
         <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, lease keeper</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td><code>LoopDispatch</code>: turn, permits, queue bound, drain</td></tr>

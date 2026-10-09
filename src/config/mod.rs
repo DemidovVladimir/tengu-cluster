@@ -17,6 +17,7 @@ pub(crate) mod runtime;
 pub(crate) mod sections;
 pub(crate) mod skill_lifecycle;
 pub(crate) mod solana;
+pub(crate) mod studio;
 pub(crate) mod xmarket;
 
 use serde::{Deserialize, Serialize};
@@ -239,6 +240,11 @@ pub struct Config {
     /// Absent = no feeds.
     #[serde(default)]
     pub feeds: std::collections::BTreeMap<String, feeds::FeedConfig>,
+
+    /// `[studio]` — Tengu Studio knobs (`config/studio.rs`): `control` lets
+    /// `tengu studio` Play / Stop this sandbox's runtime. Default: read-only.
+    #[serde(default)]
+    pub studio: studio::StudioConfig,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1402,6 +1408,9 @@ impl Config {
         for issue in feeds::validation_errors(self) {
             errors.push(issue);
         }
+        for issue in studio::validation_errors(self) {
+            errors.push(issue);
+        }
 
         for (name, dl) in &self.decision_loops {
             for issue in dl.validation_errors(name) {
@@ -1706,6 +1715,7 @@ impl Default for Config {
             recorder: recorder::RecorderConfig::default(),
             backtest: None,
             feeds: Default::default(),
+            studio: Default::default(),
             skill_lifecycle: None,
             generation: None,
             generation_scope: None,

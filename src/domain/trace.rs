@@ -211,10 +211,12 @@ impl Tone {
 /// `kind` + `status` that end a recording: `tengu run` writes
 /// `runtime.stopped` last; `tengu decide` ends with `trigger.completed` /
 /// `trigger.failed`, or a failed root `trigger.decide` / `trigger.map` (the
-/// loop could not be built).
+/// loop could not be built); a `tengu studio` with control ends with
+/// `studio.stopped`.
 #[cfg_attr(not(feature = "studio"), allow(dead_code))]
 pub(crate) fn closes_run(kind: &str, status: Status) -> bool {
     kind == "runtime.stopped"
+        || kind == "studio.stopped"
         || (kind.starts_with("trigger.") && matches!(status, Status::Ok | Status::Failed))
 }
 
@@ -254,7 +256,9 @@ pub(crate) enum RunKind {
     Run,
     /// One `tengu decide` (its own loop, outside the runtime lease).
     Decide,
-    /// The Studio server's own events.
+    /// A `tengu studio` with control on: `studio.started`, each
+    /// `studio.control` (Play / Stop / send-event: requested, then ok /
+    /// refused / failed), `studio.stopped`.
     Studio,
 }
 
@@ -707,6 +711,7 @@ mod tests {
             ("trigger.completed", Status::Ok),
             ("trigger.failed", Status::Failed),
             ("trigger.decide", Status::Failed),
+            ("studio.stopped", Status::Ok),
         ] {
             assert_eq!(RunState::of(&run(kind, status), Some(id)), RunState::Closed);
         }
@@ -714,6 +719,7 @@ mod tests {
             ("runtime.running", Status::Running),
             ("trigger.decide", Status::Running),
             ("runtime.stopping", Status::Pending),
+            ("studio.control", Status::Failed),
         ] {
             assert_eq!(RunState::of(&run(kind, status), Some(id)), RunState::Live);
             assert_eq!(RunState::of(&run(kind, status), None), RunState::Open);

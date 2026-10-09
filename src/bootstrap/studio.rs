@@ -6,7 +6,7 @@
 //! |---|---|
 //! | [`graph_inputs`] | each agent's catalog tools — `agent_base_tools` (`tools` allow-list + workspace opt-ins, `[generation]` filter), as every surface advertises them |
 //! | [`workflow_graph`] | `build_graph` over [`graph_inputs`], every attr scrubbed as a trace payload is (`domain::trace::scrub_value`: the process `SecretRegistry`, then every URL → `<url>` — a `${VAR}` substituted into an arg never leaves, registered or not); a refused map lists every reason |
-//! | `StudioContext` (`--features studio`) | what `tengu studio` serves, built once: the validated config, its redacted graph, the sandbox's trace reader (`<home>/logs/trace/<sandbox>/`), the runtime state dir; per request: a kept map's graph (`<home>/logs/maps/<sha256>.json`, re-hashed and re-applied to this config), the live verdict (`runtime::read_live`, as `tengu doctor --live`), the heartbeat holder (the live run), the evidence paths |
+//! | `StudioContext` (`--features studio`) | what `tengu studio` serves, built once: the validated config, its redacted graph, the sandbox's trace reader (`<home>/logs/trace/<sandbox>/`), the runtime state dir, the scenarios Studio's control may send (`read_scenarios`: `<sandbox dir>/scenarios/*.json`, not the `*.map.json` maps, redacted); per request: a kept map's graph (`<home>/logs/maps/<sha256>.json`, re-hashed and re-applied to this config), the live verdict (`runtime::read_live`, as `tengu doctor --live`), the heartbeat holder (the live run) and, for the control, the heartbeat seen now (`seen_fn`: holder, pid, state, fresh), the evidence paths |
 
 use anyhow::{anyhow, Result};
 
@@ -66,6 +66,9 @@ mod context {
     use crate::adapters::outbound::runtime_store::read_heartbeat;
     use crate::adapters::outbound::trace_store::{run_file, trace_root, JsonlTraceReader};
     use crate::application::studio::board::run_map;
+    use crate::application::studio::control::{
+        scenario_name, Scenario, Seen, SeenFn, MAX_SCENARIOS, MAX_SCENARIO_BYTES,
+    };
     use crate::application::studio::graph::AgentTools;
     use crate::application::studio::inspect::{config_slice, node_evidence, EvidenceRef};
     use crate::application::studio::stream::HolderFn;
@@ -74,6 +77,7 @@ mod context {
     use crate::config::execution_map::ExecutionMap;
     use crate::config::paths::contract_tilde;
     use crate::config::Config;
+    use crate::domain::observation::now_ms;
     use crate::domain::runtime::heartbeat_file;
     use crate::domain::secrets::SecretRegistry;
     use crate::domain::trace::{scrub_value, ExecutionEvent};
@@ -96,6 +100,9 @@ mod context {
         pub home: PathBuf,
         /// Where the runtime's `run-<sandbox>.json` lives.
         pub state_dir: PathBuf,
+        /// The events the page may send (`<sandbox dir>/scenarios/*.json`,
+        /// redacted), read once: [`read_scenarios`].
+        pub scenarios: Vec<Scenario>,
     }
 
     /// Why a kept map has no graph.
@@ -172,6 +179,7 @@ mod context {
             let graph = redacted_graph(&config, None, &secrets)
                 .map_err(|e| anyhow::anyhow!("workflow graph: {}", e.join("; ")))?;
             let tools = graph_inputs(&config);
+            let scenarios = read_scenarios(&config, &secrets);
             Ok(Self {
                 sandbox,
                 config,
@@ -181,6 +189,7 @@ mod context {
                 reader,
                 home: home.to_path_buf(),
                 state_dir: state_dir.to_path_buf(),
+                scenarios,
             })
         }
 
@@ -341,6 +350,23 @@ mod context {
             read_live(&self.config, &self.state_dir).await
         }
 
+        /// The heartbeat now as Studio's control reads it
+        /// (`application::studio::control::Seen`): holder, pid, state, fresh
+        /// within `[runtime] heartbeat_stale_secs`.
+        pub(crate) fn seen_fn(&self) -> SeenFn {
+            let (dir, sandbox) = (self.state_dir.clone(), self.sandbox.clone());
+            let stale_ms = (self.config.runtime.heartbeat_stale_secs as i64).saturating_mul(1000);
+            Arc::new(move || {
+                let hb = read_heartbeat(&dir, &sandbox).ok().flatten()?;
+                Some(Seen {
+                    fresh: now_ms().saturating_sub(hb.ts_ms) <= stale_ms,
+                    holder: hb.holder,
+                    pid: hb.pid,
+                    state: hb.state,
+                })
+            })
+        }
+
         /// The heartbeat's lease holder now (the live run's `runtime_id`).
         pub(crate) fn holder_fn(&self) -> HolderFn {
             let (dir, sandbox) = (self.state_dir.clone(), self.sandbox.clone());
@@ -366,6 +392,73 @@ mod context {
                 maps_dir: t(maps_dir(&self.home)),
             }
         }
+    }
+
+    /// The scenarios of the sandbox `config` was loaded from:
+    /// `<its dir>/scenarios/<name>.json` (`control::scenario_name`; not the
+    /// `*.map.json` maps), each a JSON object ≤ `MAX_SCENARIO_BYTES`, by
+    /// name, at most `MAX_SCENARIOS`; shown redacted (`scrub_value`), sent
+    /// as the file says (`Scenario::raw`, as `tengu decide --event`). A file
+    /// that is none of that is skipped with a warn. No config file = none.
+    pub(crate) fn read_scenarios(config: &Config, secrets: &SecretRegistry) -> Vec<Scenario> {
+        let Some(dir) = config
+            .loaded_from
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|d| d.join("scenarios"))
+        else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut found: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let file = e.file_name().to_string_lossy().into_owned();
+                let name = scenario_name(&file)?.to_string();
+                Some((name, e.path()))
+            })
+            .collect();
+        found.sort();
+        let mut out = Vec::new();
+        for (name, path) in found {
+            if out.len() == MAX_SCENARIOS {
+                tracing::warn!(dir = %dir.display(), max = MAX_SCENARIOS, "more scenarios than Studio lists; the rest skipped");
+                break;
+            }
+            let read = std::fs::metadata(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|m| {
+                    if m.len() > MAX_SCENARIO_BYTES {
+                        Err(format!("larger than {MAX_SCENARIO_BYTES} bytes"))
+                    } else {
+                        std::fs::read_to_string(&path).map_err(|e| e.to_string())
+                    }
+                })
+                .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()))
+                .and_then(|v| {
+                    v.is_object()
+                        .then_some(v)
+                        .ok_or_else(|| "not a JSON object".to_string())
+                });
+            match read {
+                Ok(raw) => {
+                    let mut event = raw.clone();
+                    scrub_value(&mut event, secrets);
+                    out.push(Scenario {
+                        name,
+                        file: contract_tilde(&path),
+                        event,
+                        raw,
+                    });
+                }
+                Err(why) => {
+                    tracing::warn!(file = %path.display(), %why, "scenario skipped");
+                }
+            }
+        }
+        out
     }
 }
 

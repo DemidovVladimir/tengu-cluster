@@ -2,18 +2,23 @@
 //! Rust that already decided it — the validated graph, the trace store, the
 //! `tengu doctor --live` verdict, the board fold (`application::studio::board`:
 //! colours, edges, grey), the inspector slice (`application::studio::inspect`);
-//! nothing here re-derives a rule. Errors are
-//! `{"error": …}` with a status: 400 bad input, 404 unknown, 422 a kept map
-//! this config refuses, 500 a store that cannot be read.
+//! nothing here re-derives a rule; the control routes hand a parsed request
+//! to `control::Controller` (rules `application::studio::control`). Errors
+//! are `{"error": …}` with a status: 400 bad input, 404 unknown, 415 a body
+//! that is not JSON, 422 a kept map this config refuses, 500 a store that
+//! cannot be read; a control verdict is `{ok, status, detail, …}` with its
+//! own status (`studio/mod.rs` route table).
 
 use std::sync::Arc;
 
+use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::control::Verdict;
 use super::AppState;
 use crate::adapters::outbound::trace_store::check_run_id;
 use crate::application::studio::board::{fold_run, EventView};
@@ -61,8 +66,8 @@ pub(super) async fn meta(State(st): St) -> Response {
         "sandbox": st.ctx.sandbox,
         "config_hash": st.ctx.graph.config_hash,
         "schema": {"workflow": WORKFLOW_SCHEMA_VERSION, "trace": TRACE_SCHEMA_VERSION},
-        "read_only": true,
-        "control_enabled": false,
+        "read_only": !st.control.enabled(),
+        "control_enabled": st.control.enabled(),
         "server": {
             "pid": std::process::id(),
             "started_ms": st.started_ms,
@@ -365,4 +370,104 @@ pub(super) async fn node(
         }
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// `GET /api/v1/control` (`Controller::view`), redacted.
+pub(super) async fn control(State(st): St) -> Response {
+    let mut v = st.control.view();
+    scrub_value(&mut v, &st.ctx.secrets);
+    Json(v).into_response()
+}
+
+/// A control body: empty = every field absent; else JSON
+/// (`Content-Type: application/json`, unknown fields refused).
+fn control_body<T: serde::de::DeserializeOwned + Default>(
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<T, (StatusCode, String)> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(T::default());
+    }
+    let json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"));
+    if !json {
+        return Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "a control body is JSON: Content-Type: application/json".into(),
+        ));
+    }
+    serde_json::from_slice(body).map_err(|e| (StatusCode::BAD_REQUEST, format!("body: {e}")))
+}
+
+/// A verdict as HTTP: its status; `{ok, action, status, detail, at_ms,
+/// event_id, …, extra fields, control: the view after it}`, redacted.
+fn answer(st: &AppState, v: Verdict) -> Response {
+    let mut body = json!({
+        "ok": v.outcome.status == Status::Ok,
+        "outcome": v.outcome,
+    });
+    if let (Value::Object(o), Value::Object(x)) = (&mut body, v.extra) {
+        o.extend(x);
+    }
+    body["control"] = st.control.view();
+    scrub_value(&mut body, &st.ctx.secrets);
+    (v.code, Json(body)).into_response()
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PlayBody {
+    /// Also send this scenario once running.
+    scenario: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StopBody {}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct EventBody {
+    scenario: Option<String>,
+    /// The loop (else the only one).
+    #[serde(rename = "loop")]
+    loop_name: Option<String>,
+}
+
+/// `POST /api/v1/control/play {scenario?}`.
+pub(super) async fn play(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
+    let b: PlayBody = match control_body(&headers, &body) {
+        Ok(b) => b,
+        Err((code, why)) => return error(code, why),
+    };
+    let v = st.control.play(b.scenario).await;
+    answer(&st, v)
+}
+
+/// `POST /api/v1/control/stop`.
+pub(super) async fn stop(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
+    if let Err((code, why)) = control_body::<StopBody>(&headers, &body) {
+        return error(code, why);
+    }
+    let v = st.control.stop().await;
+    answer(&st, v)
+}
+
+/// `POST /api/v1/control/event {scenario, loop?}`.
+pub(super) async fn event(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
+    let b: EventBody = match control_body(&headers, &body) {
+        Ok(b) => b,
+        Err((code, why)) => return error(code, why),
+    };
+    let Some(scenario) = b.scenario else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "body: {\"scenario\": \"<name>\"} (GET /api/v1/control lists them)",
+        );
+    };
+    let v = st.control.event(&scenario, b.loop_name.as_deref()).await;
+    answer(&st, v)
 }

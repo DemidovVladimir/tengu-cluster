@@ -1,9 +1,8 @@
-//! `tengu studio` — Tengu Studio (`TENGU_STUDIO_PLAN.md`). Read-only; logs
-//! go to stderr.
+//! `tengu studio` — Tengu Studio (`TENGU_STUDIO_PLAN.md`). Logs go to stderr.
 //!
 //! | Command | Does |
 //! |---|---|
-//! | `tengu studio --sandbox <s> [--port <n>] [--bind <ip>]` | the local browser UI (`adapters/inbound/studio`, `--features studio`): loopback only (`127.0.0.1` default, `::1`; anything else refused), port 0 (default) = any free one; prints `Studio: http://127.0.0.1:<port>/#t=<token>` on stdout; SIGINT / SIGTERM stop it. Without the feature: an error naming the build flag |
+//! | `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control]` | the local browser UI (`adapters/inbound/studio`, `--features studio`): loopback only (`127.0.0.1` default, `::1`; anything else refused), port 0 (default) = any free one; prints `Studio: http://127.0.0.1:<port>/#t=<token>` on stdout; SIGINT / SIGTERM drain a runtime it started, then stop it. Play / Stop / send-event when the sandbox sets `[studio] control = true` or with `--allow-control` — never for a `[generation]`-bound or hardened sandbox (`config/studio.rs`). Without the feature: an error naming the build flag |
 //! | `tengu studio graph --sandbox <s> [--map <file\|->]` | the sandbox's `WorkflowGraph` (`domain/workflow.rs`) as JSON on stdout: validated config + catalog tools, narrowed by an execution map when given (a refused map lists every reason), attrs redacted |
 
 use std::path::PathBuf;
@@ -40,6 +39,11 @@ pub(super) struct ServeArgs {
     /// address is refused: remote access needs authentication + TLS.
     #[arg(long)]
     bind: Option<String>,
+    /// Allow Play / Stop / send-event for this sandbox in this process
+    /// (default: only when its config sets `[studio] control = true`).
+    /// Never for a `[generation]`-bound or hardened sandbox.
+    #[arg(long)]
+    allow_control: bool,
 }
 
 pub(super) async fn run_studio(
@@ -51,7 +55,7 @@ pub(super) async fn run_studio(
     match action {
         Some(StudioAction::Graph { map }) => {
             if serve != ServeArgs::default() {
-                bail!("--port / --bind are the server's flags: `tengu studio --sandbox <s> [--port <n>] [--bind <ip>]` (no subcommand)");
+                bail!("--port / --bind / --allow-control are the server's flags: `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control]` (no subcommand)");
             }
             let map = match map {
                 None => None,
@@ -77,6 +81,7 @@ async fn serve_studio(
     let opts = crate::adapters::inbound::studio::ServeOpts {
         bind: serve.bind.unwrap_or_else(|| DEFAULT_BIND.to_string()),
         port: serve.port.unwrap_or(0),
+        allow_control: serve.allow_control,
     };
     crate::adapters::inbound::studio::run_studio(config, secrets, opts).await
 }
@@ -87,7 +92,7 @@ async fn serve_studio(
     serve: ServeArgs,
     _secrets: Arc<SecretRegistry>,
 ) -> Result<()> {
-    let _ = (serve.port, serve.bind, DEFAULT_BIND);
+    let _ = (serve.port, serve.bind, serve.allow_control, DEFAULT_BIND);
     bail!(
         "the Studio server requires: cargo build --features studio \
          (`tengu studio graph` works in every build)"
@@ -121,9 +126,12 @@ mod tests {
             cli.serve,
             ServeArgs {
                 port: Some(0),
-                bind: Some("::1".into())
+                bind: Some("::1".into()),
+                allow_control: false,
             }
         );
+        let cli = Cli::try_parse_from(["studio", "--allow-control"]).unwrap();
+        assert!(cli.serve.allow_control && cli.action.is_none());
         let cli = Cli::try_parse_from(["studio", "--port", "8080", "graph"]).unwrap();
         let err = run_studio(Config::default(), cli.serve, cli.action, secrets())
             .await

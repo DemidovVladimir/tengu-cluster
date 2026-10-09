@@ -1,7 +1,8 @@
 //! Studio request guard (`studio/mod.rs` § Guard): loopback bind, the
-//! per-process token, `Host` / `Origin` / `Sec-Fetch-Site` checks, GET only,
-//! security headers on every response. Read-only server: no CORS, no
-//! cookie, no state a request can change.
+//! per-process token, `Host` / `Origin` / `Sec-Fetch-Site` checks, the CSRF
+//! proofs every change request (POST) carries, security headers on every
+//! response. No CORS, no cookie: a page of another origin can neither read
+//! an answer nor send a change request that passes.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -85,7 +86,7 @@ impl Policy {
     }
 
     /// `Ok` = serve; else the status + why. Pure: method, path, query,
-    /// headers.
+    /// headers (module table in `studio/mod.rs` § Guard).
     pub(crate) fn check(
         &self,
         method: &Method,
@@ -101,7 +102,8 @@ impl Policy {
                 "Host is not this loopback server (DNS rebinding guard)",
             ));
         }
-        if let Some(origin) = headers.get(header::ORIGIN) {
+        let origin = headers.get(header::ORIGIN);
+        if let Some(origin) = origin {
             let ok = origin
                 .to_str()
                 .ok()
@@ -112,27 +114,46 @@ impl Policy {
                 return Err((StatusCode::FORBIDDEN, "cross-origin request refused"));
             }
         }
-        if method != Method::GET && method != Method::HEAD {
-            // Read-only: the router answers 405 for every route; nothing
-            // past this guard changes state.
+        if !path.starts_with("/api/") {
+            // The page and its assets: GET / HEAD routes only (405 else).
             return Ok(());
         }
-        if path.starts_with("/api/") {
-            let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
-            if matches!(site, Some("cross-site" | "same-site")) {
-                return Err((StatusCode::FORBIDDEN, "cross-site request refused"));
-            }
-            let given = headers
-                .get(TOKEN_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string)
-                .or_else(|| query_token(query));
-            if !given.is_some_and(|t| self.token.matches(&t)) {
+        let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+        let header_token = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok());
+        if method != Method::GET && method != Method::HEAD {
+            // A change request: all three CSRF proofs, the token in the
+            // header only (a query string can end up in a log).
+            if site != Some("same-origin") {
                 return Err((
-                    StatusCode::UNAUTHORIZED,
-                    "missing or wrong studio token (open the URL `tengu studio` printed)",
+                    StatusCode::FORBIDDEN,
+                    "change request refused: Sec-Fetch-Site must be same-origin",
                 ));
             }
+            if origin.is_none() {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "change request refused: Origin must be this server",
+                ));
+            }
+            if !header_token.is_some_and(|t| self.token.matches(t)) {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "change request refused: missing or wrong X-Studio-Token header",
+                ));
+            }
+            return Ok(());
+        }
+        if matches!(site, Some("cross-site" | "same-site")) {
+            return Err((StatusCode::FORBIDDEN, "cross-site request refused"));
+        }
+        let given = header_token
+            .map(str::to_string)
+            .or_else(|| query_token(query));
+        if !given.is_some_and(|t| self.token.matches(&t)) {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "missing or wrong studio token (open the URL `tengu studio` printed)",
+            ));
         }
         Ok(())
     }

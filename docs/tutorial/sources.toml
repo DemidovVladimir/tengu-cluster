@@ -339,6 +339,7 @@ sources = [
   "src/application/studio/",
   "src/application/trace_exec.rs",
   "src/bootstrap/studio.rs",
+  "src/config/studio.rs",
   "src/bootstrap/trace.rs",
   "src/adapters/outbound/trace_store.rs",
   "src/adapters/inbound/cli/studio.rs",

@@ -11,13 +11,18 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use tokio::sync::{watch, Semaphore};
 
+use super::control::tests::slow_starter;
+use super::control::Controller;
 use super::guard::{loopback, Token, TOKEN_HEADER};
 use super::{router, run_studio, AppState, ServeOpts};
 use crate::adapters::outbound::runtime_store::write_heartbeat;
 use crate::adapters::outbound::trace_store::{trace_root, JsonlTraceSink};
+use crate::application::runtime::loops::tests::SlowLoop;
+use crate::application::trace_exec::tests::MemTrace;
 use crate::bootstrap::runtime::read_live;
 use crate::bootstrap::studio::StudioContext;
 use crate::config::execution_map::ExecutionMap;
+use crate::config::studio::control_policy;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
 use crate::domain::runtime::{Heartbeat, RunState};
@@ -154,6 +159,30 @@ impl Studio {
         .unwrap();
     }
 
+    /// A change request (POST …) with every CSRF proof a same-origin page
+    /// sends: the token header, `Origin` = this server, `Sec-Fetch-Site:
+    /// same-origin`, a JSON content type.
+    fn change(&self, method: &str, path: &str) -> reqwest::RequestBuilder {
+        self.http
+            .request(method.parse().unwrap(), self.url(path))
+            .header(TOKEN_HEADER, &self.token)
+            .header(ORIGIN, format!("http://127.0.0.1:{}", self.port))
+            .header("sec-fetch-site", "same-origin")
+            .header("content-type", "application/json")
+    }
+
+    /// POST `path` with every proof and `body`; status + JSON.
+    async fn post(&self, path: &str, body: &str) -> (StatusCode, Value) {
+        let r = self
+            .change("POST", path)
+            .body(body.to_string())
+            .send()
+            .await
+            .unwrap();
+        let code = r.status();
+        (code, r.json().await.unwrap_or(Value::Null))
+    }
+
     /// An SSE stream (`path` + the token header, `headers` added).
     async fn sse(&self, path: &str, headers: &[(&str, String)]) -> Sse {
         let mut req = self.get(path);
@@ -261,6 +290,7 @@ async fn refuses_non_loopback_bind() {
     let opts = ServeOpts {
         bind: "0.0.0.0".into(),
         port: 0,
+        allow_control: false,
     };
     let err = run_studio(lab(), Arc::new(SecretRegistry::new()), opts)
         .await
@@ -410,8 +440,9 @@ async fn token_guards_every_api_route() {
     }
 }
 
-/// Read-only: the meta says so, and every method but GET / HEAD is 405 on
-/// every route (no control route exists: 404).
+/// Read-only (control off): the meta says so; every method but GET / HEAD
+/// is 405 on every read route (with the CSRF proofs; 403 without them);
+/// the control routes refuse with the policy's reason (403), start nothing.
 #[tokio::test]
 async fn get_routes_only_without_control() {
     let s = Studio::start().await;
@@ -447,33 +478,57 @@ async fn get_routes_only_without_control() {
         "/api/v1/graph",
         "/api/v1/runs",
         "/api/v1/health",
+        "/api/v1/control",
     ] {
         for method in ["POST", "PUT", "DELETE", "PATCH"] {
-            let r = s
-                .http
-                .request(method.parse().unwrap(), s.url(path))
-                .header(TOKEN_HEADER, &s.token)
-                .body("{}")
-                .send()
-                .await
-                .unwrap();
+            let r = s.change(method, path).body("{}").send().await.unwrap();
             assert_eq!(
                 r.status(),
                 StatusCode::METHOD_NOT_ALLOWED,
                 "{method} {path}"
             );
+            if path.starts_with("/api/") {
+                let bare = s
+                    .http
+                    .request(method.parse().unwrap(), s.url(path))
+                    .header(TOKEN_HEADER, &s.token)
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(bare.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            }
         }
     }
-    for path in ["/api/v1/control/play", "/api/v1/control/stop"] {
-        let r = s
-            .http
-            .post(s.url(path))
-            .header(TOKEN_HEADER, &s.token)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(r.status(), StatusCode::NOT_FOUND, "{path}");
+    let (code, control) = s.json("/api/v1/control").await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(control["enabled"], json!(false));
+    assert_eq!(control["state"], json!("idle"));
+    for path in [
+        "/api/v1/control/play",
+        "/api/v1/control/stop",
+        "/api/v1/control/event",
+    ] {
+        let body = if path.ends_with("/event") {
+            r#"{"scenario":"act"}"#
+        } else {
+            ""
+        };
+        let r = s.change("POST", path).body(body).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN, "{path}");
+        let body: Value = r.json().await.unwrap();
+        assert_eq!(body["ok"], json!(false), "{path}");
+        assert!(
+            body["outcome"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("read-only"),
+            "{body}"
+        );
     }
+    assert!(
+        !s.state_dir().join("runtime.db").exists(),
+        "nothing started"
+    );
     let head = s
         .http
         .head(s.url("/api/v1/meta"))
@@ -1410,4 +1465,261 @@ async fn runs_are_not_mixed_across_restarts() {
         let f = live.frame().await;
         assert_eq!((f.seq(), f.data["run_id"].clone()), (want, json!(new_id)));
     }
+}
+
+// ---- ST-30 / ST-31: control over HTTP --------------------------------------
+
+/// A Studio with control on (the lab's `[studio] control = true`): Play
+/// starts a runtime in this home's state dir (`slow` as loop `demo`, no
+/// Jev), Studio's own events in the returned trace.
+async fn control_studio(slow: Arc<SlowLoop>) -> (Studio, Arc<MemTrace>) {
+    let trace = Arc::new(MemTrace::default());
+    let t2 = Arc::clone(&trace);
+    let s = Studio::with(move |st| {
+        let policy = control_policy(&st.ctx.config, false);
+        assert!(policy.enabled, "the lab sets [studio] control = true");
+        let starter = slow_starter(st.ctx.state_dir.clone(), slow);
+        st.control = Arc::new(Controller::new(
+            policy,
+            &st.ctx,
+            starter,
+            t2 as Arc<dyn TraceSink>,
+        ));
+    })
+    .await;
+    (s, trace)
+}
+
+/// ST-31: a change request is 403 without the token header — none, a
+/// wrong one, or the token in the query string (it can end up in a log);
+/// nothing starts. With every proof it runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_without_token_is_403() {
+    let (s, _) = control_studio(SlowLoop::new(1)).await;
+    let play = s.url("/api/v1/control/play");
+    let origin = format!("http://127.0.0.1:{}", s.port);
+    let proofs = |r: reqwest::RequestBuilder| {
+        r.header(ORIGIN, &origin)
+            .header("sec-fetch-site", "same-origin")
+    };
+    let cases = [
+        ("no token", proofs(s.http.post(&play))),
+        (
+            "wrong token",
+            proofs(s.http.post(&play)).header(TOKEN_HEADER, "0".repeat(64)),
+        ),
+        (
+            "token in the query",
+            proofs(s.http.post(format!("{play}?token={}", s.token))),
+        ),
+    ];
+    for (what, req) in cases {
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN, "{what}");
+        assert!(r.headers().get("access-control-allow-origin").is_none());
+        let body: Value = r.json().await.unwrap();
+        assert!(
+            body["error"].as_str().unwrap().contains("X-Studio-Token"),
+            "{what}: {body}"
+        );
+    }
+    assert!(
+        !s.state_dir().join("runtime.db").exists(),
+        "nothing started"
+    );
+    let (code, body) = s.post("/api/v1/control/play", "").await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    let (code, _) = s.post("/api/v1/control/stop", "").await;
+    assert_eq!(code, StatusCode::OK);
+}
+
+/// ST-31: a change request from another origin, without an `Origin`, or not
+/// marked `same-origin` is 403 — what a cross-site form or fetch sends; a
+/// CORS preflight gets no `Access-Control-*` header.
+#[tokio::test]
+async fn post_cross_origin_is_403() {
+    let (s, trace) = control_studio(SlowLoop::new(1)).await;
+    let own = format!("http://127.0.0.1:{}", s.port);
+    let play = s.url("/api/v1/control/play");
+    let req = |origin: Option<&str>, site: Option<&str>| {
+        let mut r = s.http.post(&play).header(TOKEN_HEADER, &s.token);
+        if let Some(o) = origin {
+            r = r.header(ORIGIN, o);
+        }
+        if let Some(v) = site {
+            r = r.header("sec-fetch-site", v);
+        }
+        r
+    };
+    let evil = format!("http://evil.example:{}", s.port);
+    let cases = [
+        (Some("http://evil.example"), Some("cross-site")),
+        (Some(evil.as_str()), Some("same-origin")),
+        (Some("null"), Some("same-origin")),
+        (None, Some("same-origin")),
+        (Some(own.as_str()), Some("cross-site")),
+        (Some(own.as_str()), Some("same-site")),
+        (Some(own.as_str()), Some("none")),
+        (Some(own.as_str()), None),
+    ];
+    for (origin, site) in cases {
+        let r = req(origin, site).send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::FORBIDDEN, "{origin:?} {site:?}");
+        for h in r.headers().keys() {
+            assert!(!h.as_str().starts_with("access-control-"), "{h}");
+        }
+    }
+    let preflight = s
+        .http
+        .request(reqwest::Method::OPTIONS, &play)
+        .header(ORIGIN, "http://evil.example")
+        .header("access-control-request-method", "POST")
+        .header("access-control-request-headers", "x-studio-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preflight.status(), StatusCode::FORBIDDEN);
+    assert!(preflight
+        .headers()
+        .keys()
+        .all(|h| !h.as_str().starts_with("access-control-")));
+    assert!(trace.kinds().is_empty(), "no request reached the control");
+    assert!(!s.state_dir().join("runtime.db").exists());
+}
+
+/// ST-31: DNS rebinding — a change request whose `Host` is not this
+/// loopback server is 421, whatever else it carries.
+#[tokio::test]
+async fn dns_rebinding_host_is_421() {
+    let (s, trace) = control_studio(SlowLoop::new(1)).await;
+    for host in [
+        "evil.example".to_string(),
+        format!("evil.example:{}", s.port),
+        "127.0.0.1:1".to_string(),
+        format!("192.168.1.20:{}", s.port),
+    ] {
+        for path in ["/api/v1/control/play", "/api/v1/control/stop"] {
+            let r = s
+                .change("POST", path)
+                .header(HOST, &host)
+                .header(ORIGIN, format!("http://{host}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::MISDIRECTED_REQUEST, "{host} {path}");
+        }
+    }
+    assert!(trace.kinds().is_empty());
+}
+
+/// ST-31: a body over 1 MiB is 413; not JSON 415; an unknown field (an
+/// event body: the page sends names only) 400; nothing reaches the control.
+#[tokio::test]
+async fn control_body_is_capped_and_strict() {
+    let (s, trace) = control_studio(SlowLoop::new(1)).await;
+    let big = format!(r#"{{"scenario":"{}"}}"#, "a".repeat(super::MAX_BODY));
+    let r = s
+        .change("POST", "/api/v1/control/event")
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // A form or `text/plain` POST (what a cross-site page can send without a
+    // preflight) is not a control request.
+    let r = s
+        .http
+        .post(s.url("/api/v1/control/event"))
+        .header(TOKEN_HEADER, &s.token)
+        .header(ORIGIN, format!("http://127.0.0.1:{}", s.port))
+        .header("sec-fetch-site", "same-origin")
+        .header("content-type", "text/plain")
+        .body(r#"{"scenario":"act"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    for body in [
+        r#"{"scenario":"act","event":{"scenario":"act"}}"#,
+        r#"{"event":{"scenario":"act"}}"#,
+        r#"{"scenario":"act""#,
+        "{}",
+    ] {
+        let (code, _) = s.post("/api/v1/control/event", body).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{body}");
+    }
+    let (code, _) = s.post("/api/v1/control/stop", r#"{"force":true}"#).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    assert!(trace.kinds().is_empty(), "{:?}", trace.kinds());
+}
+
+/// ST-30 over HTTP: GET control (idle, the lab's scenarios) → Play → event
+/// → a second Play 409 → Stop → stopped; the page's buttons come from
+/// `actions`; Studio's trace has each request and its verdict.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn control_routes_play_event_stop() {
+    let slow = SlowLoop::new(50);
+    let (s, trace) = control_studio(Arc::clone(&slow)).await;
+    let (_, meta) = s.json("/api/v1/meta").await;
+    assert_eq!(
+        (&meta["control_enabled"], &meta["read_only"]),
+        (&json!(true), &json!(false))
+    );
+    let (code, c) = s.json("/api/v1/control").await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!((&c["enabled"], &c["state"]), (&json!(true), &json!("idle")));
+    let names: Vec<&str> = c["scenarios"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["act", "normal", "tool-error"]);
+    assert_eq!(c["loops"], json!(["demo"]));
+    let ok: Vec<bool> = c["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["ok"].as_bool().unwrap())
+        .collect();
+    assert_eq!(ok, [true, false, false], "play only");
+
+    let (code, p) = s.post("/api/v1/control/play", "{}").await;
+    assert_eq!(code, StatusCode::OK, "{p}");
+    assert_eq!(p["ok"], json!(true));
+    assert_eq!(p["control"]["state"], json!("running"));
+    let holder = p["holder"].as_str().unwrap().to_string();
+    let (code, e) = s
+        .post("/api/v1/control/event", r#"{"scenario":"act"}"#)
+        .await;
+    assert_eq!(code, StatusCode::ACCEPTED, "{e}");
+    let session = e["session_id"].as_str().unwrap().to_string();
+    assert!(session.starts_with("studio-act-"), "{session}");
+    for _ in 0..500 {
+        if slow.seen.lock().unwrap().contains(&session) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(slow.seen.lock().unwrap().contains(&session));
+    let (code, _) = s
+        .post("/api/v1/control/event", r#"{"scenario":"nope"}"#)
+        .await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+    let (code, again) = s.post("/api/v1/control/play", "").await;
+    assert_eq!(code, StatusCode::CONFLICT, "{again}");
+
+    let (code, st) = s.post("/api/v1/control/stop", "").await;
+    assert_eq!(code, StatusCode::OK, "{st}");
+    assert_eq!(st["end"]["lease_released"], json!(true));
+    let (_, c) = s.json("/api/v1/control").await;
+    assert_eq!(c["state"], json!("stopped"));
+    assert_eq!(c["last_run"]["holder"], json!(holder));
+    assert_eq!(c["last_run"]["end"]["reason"], json!("studio stop"));
+    let (_, h) = s.json("/api/v1/health").await;
+    assert_eq!(h["heartbeat"]["value"]["state"], json!("stopped"));
+    let kinds = trace.kinds();
+    assert_eq!(kinds.iter().filter(|k| *k == "studio.runtime").count(), 1);
+    // play, event, event (nope), play (409), stop: request + verdict each.
+    assert_eq!(kinds.iter().filter(|k| *k == "studio.control").count(), 10);
 }

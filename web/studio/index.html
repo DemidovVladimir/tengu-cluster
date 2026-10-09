@@ -9,11 +9,13 @@
 <script src="/assets/studio.js" defer></script>
 </head>
 <body>
-<!-- Tengu Studio, read-only (ST-20 server, ST-21 graph / inspector /
-     timeline, ST-22 runs + replay). Every value on this page comes from the
+<!-- Tengu Studio (ST-20 server, ST-21 graph / inspector / timeline, ST-22
+     runs + replay, ST-30 controls). Every value on this page comes from the
      Rust API (/api/v1/...): the graph and its layout columns, each node's
      colour (the board fold), the legal set, the run state, the health
-     verdict, the validated config. This page draws; it decides nothing. -->
+     verdict, the validated config, the control state and which button may
+     act (GET /api/v1/control). This page draws; it decides nothing. The
+     controls stay hidden unless the API says control is on. -->
 <header class="bar">
   <div class="brand">
     <h1>Tengu Studio</h1>
@@ -34,9 +36,17 @@
     <button type="button" id="btn-live" aria-pressed="false">Live</button>
     <button type="button" id="btn-replay" aria-pressed="false">Replay</button>
   </div>
+  <div id="controls" class="controls" role="group" aria-label="Runtime control" hidden>
+    <span id="ctl-state" class="badge">…</span>
+    <button type="button" id="btn-play">Play</button>
+    <button type="button" id="btn-stop">Stop</button>
+    <label class="ctl-scenario">scenario <select id="ctl-scenario"></select></label>
+    <button type="button" id="btn-event">Send event</button>
+  </div>
 </header>
 
 <p id="notice" class="notice" hidden></p>
+<p id="ctl-note" class="ctl-note" hidden></p>
 <p id="run-note" class="run-note" hidden></p>
 
 <main class="layout">

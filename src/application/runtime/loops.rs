@@ -203,8 +203,8 @@ impl LoopDispatch {
     /// Queue `event` for `loop_name` and return at once; it runs when the
     /// loop and an in-flight slot are free. Refused after [`Self::drain`]
     /// began, and while `max_queued` events already wait for the loop.
-    /// Callers: webhook loop endpoints.
-    #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+    /// Callers: webhook loop endpoints, Studio's send-event.
+    #[cfg_attr(not(any(feature = "webhooks", feature = "studio")), allow(dead_code))]
     pub(crate) fn submit(
         &self,
         loop_name: &str,
