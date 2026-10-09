@@ -199,7 +199,7 @@ Branch commits (23):
 |---|---|
 | Branch | `docs/sweep-b-2026-10-09` — deleted after merge; tip kept as tag `archive/docs/sweep-b-2026-10-09` |
 
-Branch commits (the last one adds this file):
+Branch commits (the authoritative list, incl. follow-ups after this file was written: `git log --oneline f7ac9a5636e2493e3839e896cba9951a2d41aefb..archive/docs/sweep-b-2026-10-09`):
 
 - `37abe0ce62083ea83578e3aa8c7b91078c14691e` docs: studio validation screenshots (run cbd8cd05-30fb-4177-aa99-0b978f0e83e5)
 - `f23db47766f28035d7cea2e982ff8fb9299bcb6c` docs: agent guides (CLAUDE.md + AGENTS.md) match main #39-#44
@@ -211,7 +211,8 @@ Branch commits (the last one adds this file):
 - `88460f661fa1b16f24fb9f2ac4a0a8694b834062` docs: README, architecture, comparison match main #39-#44
 - `dac8d9c7689750d775e19ff1acf33f145b008435` docs: Studio, lab, ranking, lineage, xlab, SOE, source docs match main
 - `5234bdd992f06988255e812ecc2929bbbc8ac729` Studio ST-90: clean-room acceptance passed; its 8 doc fixes applied
-- this file: `handoff_for_check.md` (commit message "handoff_for_check.md: commits, PRs, branches, gates for the architecture check")
+- `367bfa4282d3ccc89ccff80f71250ee919e9f39a` handoff_for_check.md: commits, PRs, branches, gates for the architecture check
+- `f9056da70b879da49ff11c9270c42c891e37a93c` docs: full commit ids instead of short ones (handoff, clean-room record, tracker)
 
 ## 4. Branches and tags
 
