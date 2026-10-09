@@ -111,11 +111,17 @@ impl RuntimeConfig {
     }
 }
 
-/// Directory of `runtime.db` and the heartbeat: the `[xmarket]` state dir
-/// when the sandbox has one (`SandboxSections::xm_state_dir`), else
-/// `<tengu_home>/state`.
-pub fn state_dir(xm_state_dir: Option<&Path>, tengu_home: &Path) -> PathBuf {
+/// Directory of `runtime.db` and the heartbeat: the sandbox's own state
+/// dir — the `[xmarket]` one (`SandboxSections::xm_state_dir`), else the
+/// `[sources]` one (`SandboxSections::sources_state_dir`: the SOE state root,
+/// critic C9) — else `<tengu_home>/state`.
+pub fn state_dir(
+    xm_state_dir: Option<&Path>,
+    sources_state_dir: Option<&Path>,
+    tengu_home: &Path,
+) -> PathBuf {
     xm_state_dir
+        .or(sources_state_dir)
         .map(Path::to_path_buf)
         .unwrap_or_else(|| tengu_home.join("state"))
 }
@@ -164,8 +170,12 @@ mod tests {
     #[test]
     fn state_dir_prefers_the_xmarket_dir() {
         let home = Path::new("/h");
-        assert_eq!(state_dir(None, home), PathBuf::from("/h/state"));
+        assert_eq!(state_dir(None, None, home), PathBuf::from("/h/state"));
         let xm = Path::new("/h/state/xmarket-weekend");
-        assert_eq!(state_dir(Some(xm), home), xm.to_path_buf());
+        assert_eq!(state_dir(Some(xm), None, home), xm.to_path_buf());
+        // Then the [sources] (SOE) state dir.
+        let soe = Path::new("/h/state/soe");
+        assert_eq!(state_dir(None, Some(soe), home), soe.to_path_buf());
+        assert_eq!(state_dir(Some(xm), Some(soe), home), xm.to_path_buf());
     }
 }

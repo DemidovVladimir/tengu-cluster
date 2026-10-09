@@ -156,3 +156,30 @@ pub(crate) const SOLANA_WRITE_TOOLS: &[&str] = &[
     DLMM_CLOSE_POSITION,
     JUP_PERPS_ORDER,
 ];
+
+/// The closed world of a Software Opportunity Engine sandbox (`[soe]`,
+/// `config/soe.rs`): every tool one of its agents may list — reads, the two
+/// stage writes into the open run dir (`soe_propose`, `soe_challenge`), skill
+/// docs. No write, contact, spend, publish or shell tool. `source_evidence`
+/// (O2) and the `soe_*` rows (O3) join the catalog with their tools; until
+/// then such a name is no catalog tool and the load warns it is dropped.
+pub(crate) const SOE_ALLOWED: &[&str] = &[
+    "soe_view",
+    "soe_propose",
+    "soe_challenge",
+    "source_evidence",
+    "read_file",
+    "list_directory",
+    "view_skill",
+    "skill_resource",
+];
+
+/// Tools with an effect outside the workspace store — a `[soe]` sandbox
+/// needs a deny-all `[default_scopes.<tool>]` for each (`config/soe.rs`).
+pub(crate) const SIDE_EFFECT_TOOLS: &[&str] = &[
+    "http_request",
+    "write_file",
+    "run_command",
+    SIGN_AND_SEND_TRANSACTION,
+    SIGN_MESSAGE,
+];

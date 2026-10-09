@@ -390,7 +390,7 @@
   <div class="sec-head">
     <span class="kicker">O3, over ports</span>
     <h2 id="s-cycle">One weekly cycle, end to end</h2>
-    <p><code>run_cycle</code> runs one week in its own run dir of the private SOE state: <code>cycles/&lt;week&gt;/</code> for a live cycle, <code>replays/&lt;run id&gt;/</code> for a replay. The Architect and the Critic run as agents; their tools hand drafts to <code>submit_proposal</code> / <code>submit_challenge</code>. The store, the stage runner and the command come next; the tests run on in-memory fakes.</p>
+    <p><code>run_cycle</code> runs one week in its own run dir of the private SOE state: <code>cycles/&lt;week&gt;/</code> for a live cycle, <code>replays/&lt;run id&gt;/</code> for a replay. The Architect and the Critic run as agents; their tools hand drafts to <code>submit_proposal</code> / <code>submit_challenge</code>. The store, the stage runners and the weekly job are below; the <code>soe_*</code> tools and <code>tengu soe cycle</code> come next.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -421,6 +421,33 @@
       </tbody>
     </table>
   </div>
+</section>
+
+<section class="sec" aria-labelledby="s-infra">
+  <div class="sec-head">
+    <span class="kicker">O3, wired</span>
+    <h2 id="s-infra">The <code>[soe]</code> section and the weekly job</h2>
+    <p>An <code>[soe]</code> section names the Architect and the Critic and closes the sandbox. A <code>kind = "job"</code> feed runs the <code>soe_cycle</code> job under <code>tengu run</code>: one frozen cycle per ISO week, on the state root <code>&lt;TENGU_HOME&gt;/state/&lt;sources.state&gt;/</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Piece</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td><code>[soe]</code></td><td><code>architect</code>, <code>critic</code> (two agents with a description), <code>max_proposals</code>, <code>forecast_max_weeks</code>; <code>token_prices</code> optional — absent, the cost is <code>UNKNOWN</code></td></tr>
+        <tr><td>Closed world</td><td>every agent lists its tools, only from <code>soe_view</code>, <code>soe_propose</code>, <code>soe_challenge</code>, <code>source_evidence</code>, <code>read_file</code>, <code>list_directory</code>, <code>view_skill</code>, <code>skill_resource</code></td></tr>
+        <tr><td>No side effect</td><td>deny-all scopes for <code>http_request</code>, <code>write_file</code>, <code>run_command</code> and the two signing tools; no loops, MCP servers, trading or inbound sections; feeds of kind <code>job</code> only</td></tr>
+        <tr><td>Network</td><td><code>[egress] allow_hosts</code> equals the registry rows' hosts</td></tr>
+        <tr><td><code>FsCycleStore</code></td><td>run dirs claimed once, files written once, appends one line per write, freeze = manifest then read-only</td></tr>
+        <tr><td>Stage runners</td><td>one <code>tengu run-agent</code> child per stage, behind a cache keyed by the sha256 of agent, model, skill, stage and goal: a rerun asks no model; offline, a miss names the full key</td></tr>
+        <tr><td><code>soe_cycle</code> job</td><td>the slot's ISO week, decided at the slot; a frozen week is a no-op; no signed profile ⇒ the run fails before anything is created, and the at-tick slot retries for 15 min</td></tr>
+        <tr><td>Lease</td><td><code>tengu run</code> of an <code>[soe]</code> sandbox owns its state root: <code>state:&lt;sources.state&gt;</code>, <code>runtime.db</code> inside it</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">Done</span><span><b>frozen</b>The week ran, or was frozen already: nothing written twice.</span></li>
+    <li><span class="chip bad">Failed</span><span><b>refused or broken</b>Unsigned profile, a claimed week never frozen, an IO error: retried in the slot's 15 min, then next week.</span></li>
+  </ul>
 </section>
 
 <section class="sec" aria-labelledby="s-o4">
@@ -580,6 +607,9 @@
     <li><span><b>Nothing after the decision reaches a week.</b> A record read or published later changes no byte of the run, the stage goals included.</span></li>
     <li><span><b>The models see the packet only.</b> A stage goal holds ids and the packet's sha256; a tool refuses a draft citing a record outside the packet.</span></li>
     <li><span><b>Old candidates are never rewritten.</b> A rerun carries last week's records as they were; a new version replaces one only in the new week.</span></li>
+    <li><span><b>An SOE sandbox has no hands.</b> A tool outside the closed list, a scope that grants a side-effect tool, an MCP server, a loop or a trading section fails the load.</span></li>
+    <li><span><b>A recorded stage replays verbatim.</b> A cache hit re-submits the same drafts through the tools' checks; the decision bytes match the recorded run.</span></li>
+    <li><span><b>One owner per state root.</b> A second <code>tengu run</code> on the same <code>[sources] state</code> is refused and names the holder.</span></li>
   </ul>
 </section>
 
@@ -645,8 +675,12 @@
         <tr><td><code>src/application/soe/cycle.rs</code> · <code>submit.rs</code> · <code>freeze.rs</code></td><td><code>run_cycle</code>, carry-forward, stage goals, episodes · <code>submit_proposal</code>, <code>submit_challenge</code>, phases · <code>freeze</code>, <code>verify</code>, <code>decision_sha256</code></td></tr>
         <tr><td><code>src/domain/soe/replay.rs</code></td><td><code>ReplaySet</code>, <code>score_case</code>, <code>summarize</code>, <code>rank_stability</code></td></tr>
         <tr><td><code>src/application/soe/replay.rs</code> · <code>grade.rs</code> · <code>review.rs</code></td><td><code>run_replay</code>, <code>RecordedStages</code>, the holdout read · <code>grade_cycle</code>, <code>resolve_cycle</code> · <code>build_review</code>, <code>STOP_LINE</code>; <code>freeze::verify_state</code></td></tr>
+        <tr><td><code>src/application/soe/job.rs</code></td><td><code>SoeCycleJob</code>: the <code>soe_cycle</code> job (week of the slot, frozen week a no-op)</td></tr>
         <tr><td><code>src/application/soe/tests.rs</code></td><td>the cycle on in-memory fakes and the synthetic cycle cases</td></tr>
-        <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code></td></tr>
+        <tr><td><code>src/adapters/outbound/soe/store.rs</code></td><td><code>FsCycleStore</code>: run dirs, write-once files, appends, freeze, state logs</td></tr>
+        <tr><td><code>src/adapters/outbound/soe/runner.rs</code> · <code>cache.rs</code></td><td><code>SubprocessStageRunner</code>, <code>skill_sha256</code> · <code>CachedStageRunner</code>, <code>stage_key</code></td></tr>
+        <tr><td><code>src/bootstrap/soe.rs</code></td><td><code>soe_cycle_job</code>, <code>stage_runner</code>, <code>generation_pin</code></td></tr>
+        <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code>; <code>SoeConfig</code> and the <code>[soe]</code> load rules</td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
         <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases, the example week (<code>week/</code>) and the 11 cycle cases (<code>cycles/</code>)</td></tr>

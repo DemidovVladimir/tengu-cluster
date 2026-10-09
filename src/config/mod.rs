@@ -248,6 +248,13 @@ pub struct Config {
     #[serde(default)]
     pub sources: Option<sources::SourcesConfig>,
 
+    /// `[soe]` — the Software Opportunity Engine's weekly cycle (O3,
+    /// `config/soe.rs`): the Architect and Critic agents, the cycle limits,
+    /// token prices. Present ⇒ a closed-world, hardened sandbox whose state
+    /// root is the `[sources]` state dir. Absent = no SOE cycle.
+    #[serde(default)]
+    pub soe: Option<soe::SoeConfig>,
+
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
     #[serde(default)]
@@ -453,7 +460,7 @@ pub struct AgentConfig {
     pub local: Option<AgentLocalConfig>,
     /// Runtime (never in TOML): set by `Config::fold_default_scopes` on every
     /// agent of a hardened sandbox (`config/hardening.rs`: a `[solana]`
-    /// signer or a `[risk]` section) — tools without a configured scope then
+    /// signer, a `[risk]` or an `[soe]` section) — tools without a configured scope then
     /// get a fallback that runs no shell (`bootstrap::tools::resolve_tool_scopes`,
     /// in-process and in the bridge), and no shell skill loads
     /// (`bootstrap::tools::agent_skill_registry`).
@@ -477,8 +484,8 @@ fn default_lens() -> String {
 }
 
 impl AgentConfig {
-    /// A hardened sandbox (`config/hardening.rs`: `[risk]` or a `[solana]`
-    /// signer) — `fold_default_scopes` marks every agent of one
+    /// A hardened sandbox (`config/hardening.rs`: `[risk]`, `[soe]` or a
+    /// `[solana]` signer) — `fold_default_scopes` marks every agent of one
     /// (`no_shell_fallback`), the MCP bridge its fallback agent too. Its
     /// writers also refuse the workspace's prompt files
     /// (`domain::scope::protected_write_in`).
@@ -1249,6 +1256,7 @@ impl Config {
             generation: self.generation_scope.clone(),
             sources: self.sources.clone().map(std::sync::Arc::new),
             sources_state_dir: self.sources.as_ref().map(|s| s.state_dir(&home)),
+            soe: self.soe.clone().map(std::sync::Arc::new),
         }
     }
 
@@ -1402,6 +1410,9 @@ impl Config {
             errors.push(issue);
         }
         for issue in sources::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in soe::validation_errors(self) {
             errors.push(issue);
         }
 
@@ -1709,6 +1720,7 @@ impl Default for Config {
             backtest: None,
             feeds: Default::default(),
             sources: None,
+            soe: None,
             skill_lifecycle: None,
             generation: None,
             generation_scope: None,

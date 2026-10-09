@@ -13,6 +13,7 @@ use std::sync::Arc;
 use super::backtest::BacktestConfig;
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
+use super::soe::SoeConfig;
 use super::sources::SourcesConfig;
 use super::xmarket::WeekendFadeConfig;
 use crate::config::recorder::RecorderConfig;
@@ -70,6 +71,10 @@ pub struct SandboxSections {
     /// lives; outside every fs root and workspace (load rule). Read by
     /// `outbound/sources::open_source_store`.
     pub sources_state_dir: Option<PathBuf>,
+    /// `[soe]` (`config/soe.rs`): the weekly cycle's agents and limits, read
+    /// by the `soe_cycle` job and the `soe_*` tools; its state root is
+    /// [`SandboxSections::sources_state_dir`] (critic C8).
+    pub soe: Option<Arc<SoeConfig>>,
 }
 
 impl SandboxSections {

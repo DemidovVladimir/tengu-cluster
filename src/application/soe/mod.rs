@@ -10,6 +10,7 @@
 //! | `cycle.rs` | [`cycle::run_cycle`] (`CycleEnv`, `CycleParams`, `Target` cycle · replay, `CycleOutcome`): the step table, carry-forward of the previous frozen cycle, the stage goals, `decided.json` / `inputs.json` / `stages.json`, candidate events and `OpportunityEpisode`s (C20) |
 //! | `submit.rs` | the stage window: `head.json` (`RunHead`, `GenerationPin`), `packet.json`, `carried.json` (`Carried`), phase markers (`Phase`); the tools' writes [`submit::submit_proposal`] / [`submit::submit_challenge`]; the week's `candidates` |
 //! | `freeze.rs` | `freeze` (`MANIFEST.json` + read-only), `verify` (re-hash), `decision_sha256` (every file but `ops.json`), `verify_state` (every run dir, the forecast chain, each cycle's log line) |
+//! | `job.rs` | [`job::SoeCycleJob`]: the `soe_cycle` job of a `kind = "job"` feed (`ports::runtime::RuntimeJob`) — the slot's week, decided at the slot, a frozen week a no-op |
 //! | `replay.rs` | [`replay::run_replay`]: a `soe.replay_set/1` re-run case by case under `replays/` (recorded drafts through `submit_*`, else the caller's runner), scored against the labels; holdout cases only with a counted read (`holdout-reads.jsonl`); `report.json` / `report.md`, frozen, one `replays.jsonl` line |
 //! | `grade.rs` | the operator's answers on a frozen live cycle: [`grade::grade_cycle`] (`soe.cycle_grade/1` → `grades.jsonl`; a regrade is the next version) · [`grade::resolve_cycle`] (forecast items → `resolutions.jsonl`: `EVIDENCE_APPEARS` from the source store, the rest from the operator's answers) |
 //! | `review.rs` | [`review::build_review`]: the Operator Review #2 packet of a period — six roadmap sections, replays, integrity, § 14 stop flags, the STOP line — under `reviews/<day>/`, frozen, one `reviews.jsonl` line |
@@ -34,6 +35,7 @@
 pub(crate) mod cycle;
 pub(crate) mod freeze;
 pub(crate) mod grade;
+pub(crate) mod job;
 pub(crate) mod replay;
 pub(crate) mod review;
 pub(crate) mod submit;

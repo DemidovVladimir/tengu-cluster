@@ -2,8 +2,8 @@
 //! cycle (`application/soe/`) and its tools read and write besides the
 //! source store — `ports::source_store::SourceStore`, the cycle's only fact
 //! input, read through `application::sources::evidence_as_of`. Impls:
-//! `adapters/outbound/soe/` (next O3 step); the application tests use
-//! in-memory fakes.
+//! `adapters/outbound/soe/` (wired by `bootstrap/soe.rs`); the application
+//! tests use in-memory fakes.
 //!
 //! | Port | Does | Impl |
 //! |---|---|---|
@@ -22,7 +22,7 @@
 //! | `cycles` | the run ids under `cycles/`, sorted |
 //! | `append_line` · `lines` | `<state>/<log>.jsonl` ([`StateLog::file_name`]): one line (no `\n` inside) per call with one `write_all`, its 1-based number returned (a holdout read's `#n`); never rewritten; read back in order |
 
-// Consumers land with the cycle (`application/soe/`), its adapters and tools.
+// Some helpers wait for their consumers: the `soe_*` tools and `tengu soe`.
 #![allow(dead_code)]
 
 use std::fmt;
