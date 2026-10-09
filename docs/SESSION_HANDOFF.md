@@ -137,9 +137,9 @@ Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568
 
 | What | State |
 |---|---|
-| Site | `docs/tutorial/index.html` + 25 feature pages, one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
+| Site | `docs/tutorial/index.html` + 32 feature pages (2026-10-09; 25 at launch), one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
 | Sync rule | every code change updates the pages whose `sources` cover it (`docs/tutorial/sources.toml`) — CLAUDE.md / AGENTS.md "REQUIRED updates"; `cargo test --test tutorial_map`; Claude Code `PostToolUse` hook in `.claude/settings.json` (`.gitignore` now `/.claude/*` + `!/.claude/settings.json`) |
-| Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` — done with #32; 2026-10-09: 31 feature pages (`docs/tutorial/sources.toml`), incl. `strategy-ranking`, `studio`, `soe`, `source-evidence` |
+| Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` — done with #32; 2026-10-09: 32 feature pages (+ `trace`) (`docs/tutorial/sources.toml`), incl. `strategy-ranking`, `studio`, `soe`, `source-evidence` |
 | Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (PR #31, each with a test; pages re-checked), 3 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) — #38 closed 4 gaps 2026-10-08: 13 open, the decision still open |
 
 ## Local data to clean up later (operator, 2026-10-07)

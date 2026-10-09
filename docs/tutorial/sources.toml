@@ -348,6 +348,27 @@ sources = [
   "src/bootstrap/orchestrator.rs",
 ]
 
+[pages.trace]
+sources = [
+  "src/domain/trace.rs",
+  "src/ports/trace.rs",
+  "src/adapters/outbound/trace_store.rs",
+  "src/bootstrap/trace.rs",
+  "src/application/trace_exec.rs",
+  "src/application/orchestrator/trace.rs",
+  "src/bootstrap/runtime.rs",
+  "src/application/runtime/feeds.rs",
+  "src/application/runtime/loops.rs",
+  "src/application/decision_loop/mod.rs",
+  "src/adapters/inbound/cli/decide.rs",
+  "src/adapters/inbound/webhooks.rs",
+  "src/adapters/outbound/subprocess_runner.rs",
+  "src/adapters/inbound/cli/run_agent.rs",
+  "src/adapters/inbound/studio/control.rs",
+  "src/adapters/inbound/cli/trace.rs",
+  "sandboxes/control-loop-lab/config.toml",
+]
+
 [pages.studio]
 sources = [
   "src/domain/workflow.rs",

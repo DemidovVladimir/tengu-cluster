@@ -9,7 +9,7 @@ window.TUTORIAL = {
     { id: "team", kanji: "組", name: "Build a team", blurb: "Agents, tools, skills and chat surfaces, all composed in TOML." },
     { id: "memory", kanji: "脳", name: "Memory", blurb: "Open Brain for live memory, the LLM Wiki for reviewed knowledge." },
     { id: "safety", kanji: "守", name: "Safety", blurb: "Scopes, Tor egress and secrets: the fences around every tool call." },
-    { id: "runtime", kanji: "動", name: "Runtime", blurb: "Long-running loops, typed observations, the numbers they leave and the Studio that shows them." },
+    { id: "runtime", kanji: "動", name: "Runtime", blurb: "Long-running loops, typed observations, the numbers and traces they leave, and the Studio that shows them." },
     { id: "desk", kanji: "市", name: "Trading desk", blurb: "Solana LP tools and the paper desk with its risk gate." },
     { id: "research", kanji: "史", name: "Research", blurb: "History first: backfill, backtest, grade forward runs, rank strategies, cite approved sources." },
     { id: "opportunity", kanji: "機", name: "Opportunities", blurb: "Software opportunities: sourced evidence, exact money, HOLD as a real answer." },
@@ -41,6 +41,7 @@ window.TUTORIAL = {
     { slug: "observations", chapter: "runtime", title: "Typed observations", blurb: "Tool results with status, age and features, cached and recorded." },
     { slug: "runtime", chapter: "runtime", title: "tengu run", blurb: "One long-running process per sandbox: feeds, loops, leases, heartbeat." },
     { slug: "metrics", chapter: "runtime", title: "Metrics and audit trails", blurb: "Every model call leaves a record; every risky action leaves a line." },
+    { slug: "trace", chapter: "runtime", title: "Execution trace", blurb: "One ordered, redacted event file per run; every event names its cause; read back with tengu trace or in Studio." },
     { slug: "studio", chapter: "runtime", title: "Studio graph and trace", blurb: "A sandbox as a graph from its config; every run as an ordered, redacted event file; a local browser UI." },
 
     { slug: "solana", chapter: "desk", title: "Solana LP tools", blurb: "Read pools and positions; simulate or send writes behind a lease." },

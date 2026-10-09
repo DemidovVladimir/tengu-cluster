@@ -189,7 +189,7 @@
   <div class="sec-head">
     <span class="kicker">One shape for every event</span>
     <h2 id="s-env">The event envelope</h2>
-    <p>Every field is always present, <code>null</code> when unknown. A reader ignores fields it does not know, so an older reader takes newer lines.</p>
+    <p>Every field is always present, <code>null</code> when unknown. A reader ignores fields it does not know, so an older reader takes newer lines. One recorded run, event by event: <a href="trace.html">Execution trace</a>.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -232,7 +232,7 @@
   <div class="sec-head">
     <span class="kicker">What a run records</span>
     <h2 id="s-fam">Eleven event families</h2>
-    <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool, or webhook → plan → step → the subagent's tool. A tool feed's calls hang on its <code>feed.fired</code>.</p>
+    <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool, or webhook → plan → step → the subagent's tool. A tool feed's calls hang on its <code>feed.fired</code>. The trees, drawn: <a href="trace.html#s-nest">Execution trace</a>.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -503,7 +503,7 @@
       </tbody>
     </table>
   </div>
-  <p class="note">Related: <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>. Operator doc (quick start, routes, security, troubleshooting): <code>docs/studio-2026-10-08.md</code>.</p>
+  <p class="note">Related: <a href="trace.html">Execution trace</a> (one run, event by event; safety; <code>tengu trace</code>), <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>. Operator doc (quick start, routes, security, troubleshooting): <code>docs/studio-2026-10-08.md</code>.</p>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
