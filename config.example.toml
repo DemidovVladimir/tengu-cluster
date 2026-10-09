@@ -646,6 +646,12 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [xmarket], [backtest], signer, [telegram] or [webhooks]; feeds of kind = "job"
 # only; [egress] allow_hosts = the hosts of the registry rows. Every key is
 # required (no built-in default). Rules: src/config/soe.rs.
+# The stage agents (claude_code with builtin_tools_profile = "none", a
+# description, tools from the list above), the deny-all scopes and the job:
+# sandboxes/soe/config.toml. Weekly commands: `tengu soe --sandbox <s> cycle |
+# replay | grade | resolve | review | verify | show`. The operator's steps to
+# Operator Review #2 (sign the profile, approve the sources, four graded
+# weeks): docs/soe-2026-10-08.md § 15.
 # [soe]
 # architect = "soe_architect"               # an [agents.*] with a description; never lists soe_challenge
 # critic = "soe_critic"                     # another one (never the Architect); never lists soe_propose

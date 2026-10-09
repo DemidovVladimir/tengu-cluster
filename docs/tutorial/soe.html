@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Software opportunities · Tengu</title>
-<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command, the O3 weekly allocation, memo and forecast log as pure code, the weekly cycle that runs them, and the O4 replay, grades, forecast resolution and Operator Review #2 packet.">
+<meta name="description" content="The Software Opportunity Engine: exact money in integer minor units, unknown-safe three-point estimates, typed versioned records, a private signed operator profile, three-scenario economics, the hard gates that return PASS, HOLD or REJECT, the ranking of what passes, a dated eval set, the offline tengu soe command, the O3 weekly allocation, memo and forecast log as pure code, the weekly cycle that runs them with its stage tools and closed sandbox, the O4 replay, grades, forecast resolution and Operator Review #2 packet, and the operator's steps from a signed profile to that review.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,12 +22,12 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">機</span> Opportunities · Software Opportunity Engine</div>
   <h1>Software opportunities</h1>
-  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. <code>tengu soe</code> runs it offline on a private, signed profile: three scenarios, the hard gates, the ranking, the week and a dated eval set. The O3 allocation turns the week into tests within the weekly hours and tranche. Nothing here reads the network or acts.</p>
+  <p class="lede">A weekly, evidence-backed ranking of software opportunities, where <code>HOLD</code> is a valid answer. A private, signed profile, three scenarios, the hard gates and one allocation decide each week; two agents only propose and challenge. Nothing here contacts, spends or publishes.</p>
   <ul class="facts">
     <li>money in <b>2</b> minor digits, never a float</li>
     <li><b>22</b> gate codes, <b>3</b> verdicts</li>
     <li><b>8</b> rank keys, <b>16</b> dated eval cases</li>
-    <li><b>5</b> <code>tengu soe</code> commands, no network</li>
+    <li><b>12</b> <code>tengu soe</code> commands, <b>4</b> graded weeks to Review #2</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip guard"><span class="k">守</span> guard</span> refusals, gates</li>
@@ -396,7 +396,7 @@
   <div class="sec-head">
     <span class="kicker">O3, over ports</span>
     <h2 id="s-cycle">One weekly cycle, end to end</h2>
-    <p><code>run_cycle</code> runs one week in its own run dir of the private SOE state: <code>cycles/&lt;week&gt;/</code> for a live cycle, <code>replays/&lt;run id&gt;/</code> for a replay. The Architect and the Critic run as agents; their tools hand drafts to <code>submit_proposal</code> / <code>submit_challenge</code>. The store, the stage runners and the weekly job are below; the <code>soe_*</code> tools and <code>tengu soe cycle</code> come next.</p>
+    <p><code>run_cycle</code> runs one week in its own run dir of the private SOE state: <code>cycles/&lt;week&gt;/</code> for a live cycle, <code>replays/&lt;run id&gt;/</code> for a replay. The Architect and the Critic run as agents; their tools hand drafts to <code>submit_proposal</code> / <code>submit_challenge</code>. The store, the stage runners, the weekly job and the stage tools are below; <code>tengu soe cycle</code> runs one week by hand.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -513,6 +513,35 @@
     <li><span class="chip warn">MISSING</span><span><b>log gap</b>The week froze but its log lines were not appended. Its own copies stay in the run dir.</span></li>
     <li><span class="chip bad">MISMATCH</span><span><b>edited</b>A frozen file or a forecast line changed. The review packet shows it.</span></li>
   </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-path">
+  <div class="sec-head">
+    <span class="kicker">G-O0 → four weeks → G-R2</span>
+    <h2 id="s-path">From a signed profile to Review #2</h2>
+    <p>Everything above is built and tested on synthetic fixtures. No week has run on a live model or a signed profile yet. These are the operator's steps, in order; <code>$T</code> is a <code>--features claude_code</code> release build. The full table is § 15 of <code>docs/soe-2026-10-08.md</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>When</th><th>Step</th><th>Command</th></tr></thead>
+      <tbody>
+        <tr><td>once</td><td>write the profile template, review every value, add the capabilities, sign it</td><td><code>$T soe init</code>; then <code>$T soe portfolio &lt;empty dir&gt; --as-of &lt;now&gt;</code> prints an empty <code>HOLD</code> week</td></tr>
+        <tr><td>once</td><td>approve each source: save its terms page, put its sha256, licence, review date and retention in the row, set <code>enabled = true</code>, keep the page</td><td><code>$T sources --sandbox soe terms --source &lt;id&gt; --file &lt;page&gt;</code></td></tr>
+        <tr><td>once</td><td>backfill the history the replay and the first week read</td><td><code>$T sources --sandbox soe fetch --source &lt;id&gt; --from &lt;day&gt;</code></td></tr>
+        <tr><td>once</td><td>lock SOE-G0 (proposed before week 1): a <code>[[frozen]]</code> row in <code>lineage/locks.toml</code>; check one live engine leg</td><td><code>$T lineage verify --pins</code> · <code>$T doctor --sandbox soe</code></td></tr>
+        <tr><td>each Monday</td><td>fetch first, then the job decides the week at 07:00 Paris</td><td><code>$T run --sandbox soe</code> (or once by hand: <code>$T soe --sandbox soe cycle</code>)</td></tr>
+        <tr><td>each week</td><td>read the memo, grade the week, resolve forecasts as evidence arrives</td><td><code>show &lt;week&gt;</code> · <code>grade &lt;week&gt; --file</code> · <code>resolve &lt;week&gt;</code></td></tr>
+        <tr><td>once labelled</td><td>replay ≥ 8 older dated cases; read the holdout once, counted</td><td><code>replay --set &lt;file&gt;</code>, then <code>--holdout</code></td></tr>
+        <tr><td>after 4 graded weeks</td><td>build the packet; the operator decides <code>STOP</code>, <code>REWORK</code> or O5</td><td><code>$T soe --sandbox soe review</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip warn">G-O0</span><span><b>open</b>Signed profile, approved sources, sanitized docs: no source is enabled and no live week runs before it.</span></li>
+    <li><span class="chip warn">G-R2</span><span><b>open</b>Four frozen, graded live weeks, a counted holdout read and an intact packet.</span></li>
+    <li><span class="chip bad">STOP</span><span><b>hard stop</b>After the review nothing runs: no contact, spend, publish, purchase or deploy exists.</span></li>
+  </ul>
+  <p class="note">Don't try <code>soe cycle</code> on the real state root, not even with <code>--no-llm</code>: it freezes that week as a live cycle, which the review counts. Try it with <code>TENGU_HOME</code> set to a scratch dir, as below.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-eval">
@@ -678,6 +707,8 @@
 <span class="ln o"># verdict, gates, the three scenarios, rank keys, capability fit, next information</span>
 <span class="ln cmd"><span class="p">$ </span>soe sensitivity $F/week/opportunities/final-rule-automation.toml --cited $F/week/cited.toml</span>
 <span class="ln o"># 8 rows: OWNER_HOURS, CONVERSION, CHURN, PRICE at -2000 and +2000 bps</span>
+<span class="ln cmd"><span class="p">$ </span>export TENGU_HOME=$(mktemp -d)</span>
+<span class="ln o"># a scratch home: a live cycle freezes its week, so never try one on the real state</span>
 <span class="ln cmd"><span class="p">$ </span>tengu soe init</span>
 <span class="ln o"># writes &lt;TENGU_HOME&gt;/state/soe/operator.toml, UNSIGNED; review the values, then sign</span>
 <span class="ln o"># soe.toml: a config with [sources] and [soe], e.g. the SOE_CONFIG of tests/soe_cli.rs; its state root sits under &lt;TENGU_HOME&gt;/state/</span>
@@ -736,7 +767,7 @@
         <tr><td><code>src/adapters/inbound/cli/soe/weekly.rs</code></td><td><code>tengu soe cycle|replay|grade|resolve|review|verify|show</code></td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
         <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases, the example week (<code>week/</code>), the 11 cycle cases (<code>cycles/</code>), a state root with open runs (<code>state/</code>) and the tools' drafts (<code>drafts/</code>) — what the bridge conformance cases and the engine matrix seed</td></tr>
-        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set, the command</td></tr>
+        <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set, the cycle, replay, grades, the review packet, the stage tools, the sandbox, the commands, the operator's steps to Review #2 (§ 15) and the roadmap invariants → tests (§ 16)</td></tr>
       </tbody>
     </table>
   </div>

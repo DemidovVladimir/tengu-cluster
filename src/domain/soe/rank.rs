@@ -5,9 +5,8 @@
 //! how sensitive a verdict is to one input — plus the pieces of a
 //! `WeeklyPortfolio`. Pure and deterministic. The allocation (who gets a
 //! test within the weekly hours and the tranche) is `allocate.rs` (O3), the
-//! one portfolio builder; here only weeks with nothing allocated are
-//! assembled: the `HOLD` week (nothing passes) and the unallocated week
-//! `tengu soe portfolio` prints until the command moves to `allocate`.
+//! one portfolio builder (`tengu soe portfolio` and the weekly cycle use
+//! it); here only the `HOLD` week (nothing passes) is assembled.
 //!
 //! | `RankKey` | Value ([`KeyValue`]) | Ranks first |
 //! |---|---|---|

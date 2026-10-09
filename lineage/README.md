@@ -41,3 +41,7 @@ tengu lineage report rule_w --forward <forward experiment>   # the 21 Rule-W ans
 ```
 
 Exit 1 on any Error finding. Views: `show`, `trace`, `family`, `attempts`, `capabilities`, `generation` (`--format json`).
+
+## SOE-G0 (CANDIDATE)
+
+The Software Opportunity Engine's generation: `generations/SOE-G0.toml`, `capabilities/intel.soe_{view,propose,challenge}.toml`, `families/soe.toml` — ids, pins and sha256 only; every private value stays under `<TENGU_HOME>/state/soe/`. `sandboxes/soe` is bound to it. No `[[frozen]]` row yet: the operator locks it after signing the profile and approving the sources (`docs/soe-2026-10-08.md` § 15.1 #8); until then a pinned edit updates its `[[pins]]` sha256. Rules: `docs/lineage-2026-10-06.md` § 7.
