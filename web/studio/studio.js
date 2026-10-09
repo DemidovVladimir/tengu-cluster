@@ -413,15 +413,15 @@
     svg.classList.toggle("fit", scale < 1 && scale >= FIT_MIN);
   }
 
-  // The board says each node's tone (+ why) and which edges an action / tool
-  // event highlighted; without a run only a map's narrowed_out nodes are grey.
+  // The board says each node's tone (+ why: an event, the step's legal set, a
+  // map's narrowed_out) and which edges an action / tool event highlighted;
+  // without a board (no run yet) nothing is coloured.
   function paintGraph() {
     if (!S.nodeEls) return;
     const draws = new Map((S.board ? S.board.nodes : []).map((d) => [d.node_id, d]));
     for (const [id, g1] of S.nodeEls) {
-      const node = S.layout.pos.get(id).node;
       const d = draws.get(id);
-      const tone = d ? d.tone : node.narrowed_out ? "grey" : null;
+      const tone = d ? d.tone : null;
       const cls = ["n", tone ? `t-${tone}` : "", d && d.latest ? "latest" : "", S.sel.node === id ? "sel" : ""];
       g1.setAttribute("class", cls.filter(Boolean).join(" "));
       const title = g1.querySelector("title");
@@ -824,7 +824,7 @@
     const draw = S.board ? S.board.nodes.find((x) => x.node_id === n.id) : null;
     const rows = [];
     if (draw && draw.tone) rows.push(["drawn", chip(`${draw.tone} · ${draw.why}`, draw.tone)]);
-    else if (n.narrowed_out) rows.push(["drawn", chip("grey · narrowed_out", "grey")]);
+    else if (n.narrowed_out) rows.push(["drawn", "narrowed out by the execution map (no run folded yet)"]);
     else rows.push(["drawn", S.board ? "no event yet in this run" : "no run selected"]);
     if (draw && draw.mark) {
       const ev = S.bySeq.get(draw.mark.seq);
@@ -1000,7 +1000,7 @@
     const last = c.last;
     note.hidden = !last;
     if (last) {
-      note.className = `ctl-note t-${last.status === "ok" ? "green" : "red"}`;
+      note.className = `ctl-note t-${last.tone || "none"}`;
       note.textContent = `${last.action} · ${last.status} · ${last.detail}` + (last.event_id ? ` · ${last.event_id}` : "");
     }
   }

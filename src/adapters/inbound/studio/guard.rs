@@ -114,15 +114,13 @@ impl Policy {
                 return Err((StatusCode::FORBIDDEN, "cross-origin request refused"));
             }
         }
-        if !path.starts_with("/api/") {
-            // The page and its assets: GET / HEAD routes only (405 else).
-            return Ok(());
-        }
         let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
         let header_token = headers.get(TOKEN_HEADER).and_then(|v| v.to_str().ok());
         if method != Method::GET && method != Method::HEAD {
-            // A change request: all three CSRF proofs, the token in the
-            // header only (a query string can end up in a log).
+            // A change request, on any path — not only `/api/`: the guard
+            // never relies on how the router spells or matches a path. All
+            // three CSRF proofs, the token in the header only (a query
+            // string can end up in a log).
             if site != Some("same-origin") {
                 return Err((
                     StatusCode::FORBIDDEN,
@@ -141,6 +139,11 @@ impl Policy {
                     "change request refused: missing or wrong X-Studio-Token header",
                 ));
             }
+            return Ok(());
+        }
+        if !path.starts_with("/api/") {
+            // The page and its assets (GET / HEAD routes only): no token —
+            // it reaches the page in the URL fragment.
             return Ok(());
         }
         if matches!(site, Some("cross-site" | "same-site")) {

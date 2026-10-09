@@ -500,12 +500,18 @@ pub(crate) async fn run() -> Result<()> {
     // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
-    // Webhook listener and `tengu run` use the same dual-output (file +
+    // Webhook listener, `tengu run` and the Studio server (its Play runs the
+    // `tengu run` runtime in-process) use the same dual-output (file +
     // stderr) pattern as telegram so operators can `tail -f tengu.log` while
-    // also watching the console for HMAC-fail / dispatch events.
+    // also watching the console for HMAC-fail / dispatch events. Never
+    // stdout: the Studio server prints its URL there alone.
     let is_webhooks = matches!(
         cli.command,
-        Some(Commands::Webhooks { .. } | Commands::Run { .. })
+        Some(
+            Commands::Webhooks { .. }
+                | Commands::Run { .. }
+                | Commands::Studio { action: None, .. }
+        )
     );
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");

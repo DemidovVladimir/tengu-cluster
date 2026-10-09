@@ -50,7 +50,7 @@ use crate::config::studio::ControlPolicy;
 use crate::config::Config;
 use crate::domain::observation::now_ms;
 use crate::domain::secrets::SecretRegistry;
-use crate::domain::trace::{Component, EventDraft, Status};
+use crate::domain::trace::{Component, EventDraft, Status, Tone};
 use crate::domain::workflow::node_id;
 use crate::ports::trace::TraceSink;
 
@@ -92,6 +92,9 @@ pub(crate) struct Outcome {
     pub action: Action,
     /// `ok` · `refused` · `failed`.
     pub status: Status,
+    /// `status`'s tone (`Status::tone`): the page draws it, never maps
+    /// a status itself.
+    pub tone: Tone,
     pub detail: String,
     pub at_ms: i64,
     /// The verdict's event in Studio's recording.
@@ -307,6 +310,7 @@ impl Controller {
         let outcome = Outcome {
             action: req.action,
             status,
+            tone: status.tone(),
             detail,
             at_ms: now_ms(),
             event_id,

@@ -487,16 +487,15 @@ async fn get_routes_only_without_control() {
                 StatusCode::METHOD_NOT_ALLOWED,
                 "{method} {path}"
             );
-            if path.starts_with("/api/") {
-                let bare = s
-                    .http
-                    .request(method.parse().unwrap(), s.url(path))
-                    .header(TOKEN_HEADER, &s.token)
-                    .send()
-                    .await
-                    .unwrap();
-                assert_eq!(bare.status(), StatusCode::FORBIDDEN, "{method} {path}");
-            }
+            // Without the proofs: 403 on every path, the page's too.
+            let bare = s
+                .http
+                .request(method.parse().unwrap(), s.url(path))
+                .header(TOKEN_HEADER, &s.token)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(bare.status(), StatusCode::FORBIDDEN, "{method} {path}");
         }
     }
     let (code, control) = s.json("/api/v1/control").await;
@@ -1650,6 +1649,23 @@ async fn control_body_is_capped_and_strict() {
     }
     let (code, _) = s.post("/api/v1/control/stop", r#"{"force":true}"#).await;
     assert_eq!(code, StatusCode::BAD_REQUEST);
+    // A name is short and printable (each is echoed in the verdict and the
+    // trace): an empty, a 200-byte or a multi-line one is 400 at the door.
+    let long = "a".repeat(200);
+    for (path, body) in [
+        ("/api/v1/control/event", json!({"scenario": long})),
+        ("/api/v1/control/event", json!({"scenario": ""})),
+        ("/api/v1/control/event", json!({"scenario": "act\nx"})),
+        (
+            "/api/v1/control/event",
+            json!({"scenario": "act", "loop": long}),
+        ),
+        ("/api/v1/control/play", json!({"scenario": long})),
+    ] {
+        let (code, b) = s.post(path, &body.to_string()).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{path} {body}: {b}");
+        assert!(!b.to_string().contains(&long), "the name is not echoed");
+    }
     assert!(trace.kinds().is_empty(), "{:?}", trace.kinds());
 }
 
@@ -1687,6 +1703,8 @@ async fn control_routes_play_event_stop() {
     let (code, p) = s.post("/api/v1/control/play", "{}").await;
     assert_eq!(code, StatusCode::OK, "{p}");
     assert_eq!(p["ok"], json!(true));
+    // The verdict carries its tone (`Status::tone`): the page draws it.
+    assert_eq!(p["outcome"]["tone"], json!("green"));
     assert_eq!(p["control"]["state"], json!("running"));
     let holder = p["holder"].as_str().unwrap().to_string();
     let (code, e) = s
@@ -1708,6 +1726,8 @@ async fn control_routes_play_event_stop() {
     assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
     let (code, again) = s.post("/api/v1/control/play", "").await;
     assert_eq!(code, StatusCode::CONFLICT, "{again}");
+    assert_eq!(again["outcome"]["tone"], json!("red"));
+    assert_eq!(again["control"]["last"]["tone"], json!("red"));
 
     let (code, st) = s.post("/api/v1/control/stop", "").await;
     assert_eq!(code, StatusCode::OK, "{st}");
@@ -1722,4 +1742,108 @@ async fn control_routes_play_event_stop() {
     assert_eq!(kinds.iter().filter(|k| *k == "studio.runtime").count(), 1);
     // play, event, event (nope), play (409), stop: request + verdict each.
     assert_eq!(kinds.iter().filter(|k| *k == "studio.control").count(), 10);
+}
+
+// ---- review: the guard against odd request spellings -------------------------
+
+/// One raw HTTP/1.1 request on a fresh connection (no client-side path
+/// normalisation): the status code and the body.
+async fn raw(port: u16, request: &str) -> (u16, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    c.write_all(request.as_bytes()).await.unwrap();
+    let mut out = Vec::new();
+    tokio::time::timeout(WAIT, c.read_to_end(&mut out))
+        .await
+        .expect("raw request timed out")
+        .unwrap();
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let code = text
+        .split(' ')
+        .nth(1)
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let body = text
+        .split_once("\r\n\r\n")
+        .map_or("", |(_, b)| b)
+        .to_string();
+    (code, body)
+}
+
+/// Review (ST-31): the token / CSRF guard cannot be stepped around by how
+/// the path is spelled — a doubled slash, a dot segment, a percent-encoded
+/// `api`, a `..` out of `/assets/` — for a read (no token) or a change
+/// request (no proofs): none reads the API or reaches the control.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guard_holds_for_odd_path_spellings() {
+    let (s, trace) = control_studio(SlowLoop::new(1)).await;
+    let host = format!("127.0.0.1:{}", s.port);
+    let spellings = [
+        "//api/v1/{}",
+        "/./api/v1/{}",
+        "/%61pi/v1/{}",
+        "/%2Fapi/v1/{}",
+        "/assets/../api/v1/{}",
+        "/assets/%2E%2E/api/v1/{}",
+        "/API/v1/{}",
+    ];
+    for spelling in spellings {
+        for route in ["meta", "graph", "control", "runs"] {
+            let path = spelling.replace("{}", route);
+            let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+            let (code, body) = raw(s.port, &req).await;
+            assert!(
+                code == 400 || code == 401 || code == 404,
+                "GET {path}: {code} {body}"
+            );
+            assert!(!body.contains("config_hash"), "GET {path} read: {body}");
+        }
+        for action in ["play", "stop", "event"] {
+            let path = spelling.replace("{}", &format!("control/{action}"));
+            let req = format!(
+                "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\n\
+                 Content-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            );
+            let (code, body) = raw(s.port, &req).await;
+            assert_eq!(code, 403, "POST {path}: {body}");
+        }
+    }
+    assert!(trace.kinds().is_empty(), "{:?}", trace.kinds());
+    assert!(
+        !s.state_dir().join("runtime.db").exists(),
+        "nothing started"
+    );
+}
+
+/// Review (plan § 5 "web assets: rendering only"): the page never turns a
+/// status into a colour or a verdict itself — no comparison of a value with
+/// a `Status` or `Tone` name (`Status::ALL`, `Tone::ALL`) anywhere in
+/// `studio.js`; it draws the tone each answer carries (`Status::tone`,
+/// the board, the control verdict's `tone`).
+#[test]
+fn page_compares_no_status_or_tone() {
+    use crate::domain::trace::Tone;
+    let js = include_str!("../../../../web/studio/studio.js");
+    let names: Vec<String> = Status::ALL
+        .iter()
+        .map(|s| serde_json::to_value(s).unwrap())
+        .chain(Tone::ALL.iter().map(|t| serde_json::to_value(t).unwrap()))
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let alt = names.join("|");
+    let cmp = regex::Regex::new(&format!(
+        r#"(?:[!=]==?\s*["'`](?:{alt})["'`])|(?:["'`](?:{alt})["'`]\s*[!=]==?)"#
+    ))
+    .unwrap();
+    let found: Vec<&str> = js
+        .lines()
+        .filter(|l| cmp.is_match(l))
+        .map(str::trim)
+        .collect();
+    assert!(
+        found.is_empty(),
+        "studio.js decides a status/tone: {found:#?}"
+    );
 }

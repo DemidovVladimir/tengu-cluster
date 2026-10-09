@@ -307,7 +307,7 @@
   <ul class="states">
     <li><span class="chip guard">bind</span><span><b>Loopback only</b><code>127.0.0.1</code> (default) or <code>::1</code>; any other <code>--bind</code> is refused before anything listens. Port 0 = a free one.</span></li>
     <li><span class="chip guard">key</span><span><b>Token</b>32 random bytes per process. Every <code>/api/</code> GET sends it (<code>X-Studio-Token</code>, or <code>?token=</code> for <code>EventSource</code>); compared in constant time, else 401.</span></li>
-    <li><span class="chip guard">csrf</span><span><b>A POST needs three proofs</b>the token in the <code>X-Studio-Token</code> header (never the query), <code>Origin</code> = this server and <code>Sec-Fetch-Site: same-origin</code> — else 403. JSON body only (415 else), at most 1 MiB (413), unknown fields refused.</span></li>
+    <li><span class="chip guard">csrf</span><span><b>Any request but GET / HEAD needs three proofs</b>on any path, the page's too: the token in the <code>X-Studio-Token</code> header (never the query), <code>Origin</code> = this server and <code>Sec-Fetch-Site: same-origin</code> — else 403. JSON body only (415 else), at most 1 MiB (413), unknown fields refused, a <code>scenario</code> / <code>loop</code> name of 1–128 bytes (400 else).</span></li>
     <li><span class="chip guard">host</span><span><b>Host / Origin</b>a <code>Host</code> other than <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> is 421 (DNS rebinding); a foreign <code>Origin</code> or a cross-site fetch is 403; no CORS header, no preflight answer.</span></li>
     <li><span class="chip data">sse</span><span><b>Bounded per client</b>the backlog waits for a slow client; a live event that does not fit its 256-item buffer sends <code>event: lagged</code> (id = the last event handed) and closes. The browser reconnects with that id and reads the rest from the file: no gap, no repeat.</span></li>
   </ul>
@@ -391,7 +391,7 @@
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
-    <li><span><b>Only the control routes change anything.</b> Every other route is GET / HEAD (anything else is 405). A POST passes the guard only with the token header, its own <code>Origin</code> and <code>Sec-Fetch-Site: same-origin</code>; a <code>Host</code> that is not this server is 421 first. The page decides nothing: tones, lit edges, grey nodes, run states, the health verdict and which button may act all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
+    <li><span><b>Only the control routes change anything.</b> Every other route is GET / HEAD (anything else is 405). Any request but GET / HEAD — on any path, however it is spelled — passes the guard only with the token header, its own <code>Origin</code> and <code>Sec-Fetch-Site: same-origin</code>; a <code>Host</code> that is not this server is 421 first. The page decides nothing: tones, lit edges, grey nodes, run states, the health verdict and which button may act all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
     <li><span><b>One runtime per sandbox.</b> Play is <code>tengu run</code>'s own start, so the lease refuses a second runner either way: a CLI <code>tengu run</code> while Studio runs one, a Play while the CLI runs one (Studio then attaches read-only). Stop never touches a runtime Studio did not start.</span></li>
     <li><span><b>No orphan.</b> The runtime lives in the Studio process. SIGINT / SIGTERM drain it first (no new Play, the Stop path, then <code>studio.stopped</code>); a killed Studio takes it along and its lease frees after 30 s.</span></li>
     <li><span><b>A click never pretends.</b> Every Play, Stop and event is a <code>studio.control</code> request and its verdict in Studio's recording; a failed start is <code>failed</code> with the error, a held lease <code>refused</code> with the holder.</span></li>
@@ -403,7 +403,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Graph, a recorded run, then Play</h2>
-    <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab-2026-10-08.md</code>). Logs go to stderr, so stdout pipes straight into <code>jq</code>. Ids below are examples.</p>
+    <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab-2026-10-08.md</code>). Logs go to stderr (the server: also <code>$TENGU_HOME/logs/tengu.log</code>, as <code>tengu run</code>), so stdout pipes straight into <code>jq</code>. Ids below are examples.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln o"># export TENGU_HOME="$HOME/tengu-lab/home" first — never ~/.tengu</span>

@@ -31,7 +31,7 @@
 //! | token | 32 random bytes, hex, new each process; printed once in the URL fragment (`#t=`, never sent in a request line by the browser); compared in constant time; a GET carries it as `X-Studio-Token` (or `?token=` for `EventSource`) — else 401 |
 //! | Host | `127.0.0.1:<port>` / `localhost:<port>` (`[::1]:<port>`) only — else 421 (DNS rebinding), every method |
 //! | Origin · Sec-Fetch-Site | an `Origin` must be this server — else 403; a GET marked `cross-site` / `same-site` — 403 |
-//! | change request (POST, any non-GET on `/api/`) | CSRF: `X-Studio-Token` header (never `?token=`), `Origin` = this server, `Sec-Fetch-Site: same-origin` — all three, else 403; JSON body (`Content-Type: application/json`, unknown fields refused) ≤ [`MAX_BODY`] (1 MiB, else 413); no CORS headers, no preflight route |
+//! | change request (any method but GET / HEAD, on any path — never decided by how the router matches a path) | CSRF: `X-Studio-Token` header (never `?token=`), `Origin` = this server, `Sec-Fetch-Site: same-origin` — all three, else 403; JSON body (`Content-Type: application/json`, unknown fields refused) ≤ [`MAX_BODY`] (1 MiB, else 413); no CORS headers, no preflight route |
 //! | headers | `Cache-Control: no-store`, CSP `default-src 'self'` (no inline script, `frame-ancestors 'none'`), `nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` |
 //!
 //! | SSE | Wire |

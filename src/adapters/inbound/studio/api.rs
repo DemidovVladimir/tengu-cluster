@@ -437,12 +437,34 @@ pub(super) struct EventBody {
     loop_name: Option<String>,
 }
 
+/// Longest `scenario` / `loop` a control body may name: each is echoed in
+/// the verdict, the served control view and Studio's trace (a scenario name
+/// is ≤ 64 characters, `control::scenario_name`).
+const MAX_NAME: usize = 128;
+
+/// `field` (when given) is a name: 1–[`MAX_NAME`] bytes, no control
+/// character — else a 400 (this response) before anything reaches the
+/// control; the value itself is never echoed.
+fn bad_name(field: &str, v: Option<&str>) -> Option<Response> {
+    let s = v?;
+    let bad = s.is_empty() || s.len() > MAX_NAME || s.chars().any(char::is_control);
+    bad.then(|| {
+        error(
+            StatusCode::BAD_REQUEST,
+            format!("body: \"{field}\" is a name of 1–{MAX_NAME} bytes (GET /api/v1/control lists them)"),
+        )
+    })
+}
+
 /// `POST /api/v1/control/play {scenario?}`.
 pub(super) async fn play(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
     let b: PlayBody = match control_body(&headers, &body) {
         Ok(b) => b,
         Err((code, why)) => return error(code, why),
     };
+    if let Some(r) = bad_name("scenario", b.scenario.as_deref()) {
+        return r;
+    }
     let v = st.control.play(b.scenario).await;
     answer(&st, v)
 }
@@ -462,6 +484,14 @@ pub(super) async fn event(State(st): St, headers: HeaderMap, body: Bytes) -> Res
         Ok(b) => b,
         Err((code, why)) => return error(code, why),
     };
+    for (field, v) in [
+        ("scenario", b.scenario.as_deref()),
+        ("loop", b.loop_name.as_deref()),
+    ] {
+        if let Some(r) = bad_name(field, v) {
+            return r;
+        }
+    }
     let Some(scenario) = b.scenario else {
         return error(
             StatusCode::BAD_REQUEST,
