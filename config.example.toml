@@ -519,7 +519,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # the Studio process — the `tengu run` composition, lease and stores), Stop it (the
 # graceful drain) and send a scenario event (sandboxes/<name>/scenarios/*.json) to
 # it. Default false (read-only; `tengu studio --allow-control` turns it on for one
-# process). Refused in a [generation]-bound or hardened ([risk] / signer) sandbox.
+# process). Refused in a [generation]-bound or hardened ([risk] / [soe] / signer) sandbox.
 # [studio]
 # control = false
 
