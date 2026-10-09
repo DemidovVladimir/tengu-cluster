@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sealed keys · Tengu</title>
-<meta name="description" content="Provider keys never sit on this machine: each one is sealed to a Cloudflare Worker, which opens it, injects it and forwards the request.">
+<meta name="description" content="Provider keys never sit on this machine: they are secrets of a Cloudflare Worker you set yourself. tengu names a route; the Worker adds the key, forwards and masks the reply.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,7 +13,7 @@
 <script src="assets/nav.js" defer></script>
 <script src="assets/site.js" defer></script>
 <style>
-  /* page-only: inject-mode cards and the "who holds what" grid */
+  /* page-only: "how the key goes in" cards */
   .modes { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); }
   .modes div { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); display: grid; gap: 4px; align-content: start; }
   .modes b { font-family: var(--font-mono); font-size: 0.86rem; }
@@ -22,6 +22,7 @@
   .modes.in-view div { animation: rise .45s ease both; }
   .modes.in-view div:nth-child(2) { animation-delay: .06s } .modes.in-view div:nth-child(3) { animation-delay: .12s }
   .modes.in-view div:nth-child(4) { animation-delay: .18s } .modes.in-view div:nth-child(5) { animation-delay: .24s }
+  .modes.in-view div:nth-child(6) { animation-delay: .30s }
   @keyframes rise { from { transform: translateY(6px); opacity: .2 } to { transform: none; opacity: 1 } }
 </style>
 </head>
@@ -34,38 +35,41 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">守</span> Safety · Sealed keys</div>
   <h1>Sealed keys</h1>
-  <p class="lede">No provider key sits on this machine. Each one is sealed to a Cloudflare Worker that alone can open it; tengu sends the sealed blob with the request, and the Worker adds the key and forwards.</p>
+  <p class="lede">No provider key sits on this machine. Keys are secrets of a Cloudflare Worker that you set yourself; tengu signs a session with an SSH-agent key and names a route, and the Worker adds the key and forwards.</p>
   <ul class="facts">
-    <li>seal <b>HPKE X25519 · ChaCha20-Poly1305</b></li>
     <li>session <b>24 h</b> (1–168 per key)</li>
-    <li>revoke <b>≤ 60 s</b></li>
-    <li>secret <b>≤ 4096</b> bytes</li>
+    <li><code>SESSION_KEY</code> <b>≥ 32</b> chars</li>
+    <li>signature clock <b>±60 s</b></li>
+    <li>reply masked <b>≤ 2 MiB</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip guard"><span class="k">守</span> guard</span> Secure Enclave, Worker checks</li>
     <li><span class="chip hands"><span class="k">手</span> hands</span> the upstream API</li>
-    <li><span class="chip data">data</span> blobs, vault key, allow-list</li>
+    <li><span class="chip data">data</span> <code>wrangler.toml</code> vars, Worker secrets</li>
   </ul>
 </header>
 
 <section class="sec" aria-labelledby="s-flow">
   <div class="sec-head">
-    <span class="kicker">Seal once, call many times</span>
-    <h2 id="s-flow">The life of one sealed key</h2>
+    <span class="kicker">Set up once, call many times</span>
+    <h2 id="s-flow">From setup to one call</h2>
   </div>
   <figure class="stage" data-stage data-interval="3600">
     <div class="stage-canvas">
       <svg viewBox="0 0 860 420" role="img" aria-labelledby="flow-t">
-        <title id="flow-t">tengu pins the Worker's public key, seals a secret into a blob file, gets a session by an SSH-agent signature, exports env vars that point the clients at the Worker; each call carries the blob and the session; the Worker opens the blob, checks the client and the path, injects the key and forwards to the upstream API.</title>
-        <path class="e" id="p-se-t" d="M170 70 L250 70" data-at="3"/>
-        <path class="e" id="p-t-w" d="M400 60 L520 60" data-at="1,4,6"/>
-        <path class="e" id="p-w-t" d="M520 84 L400 84" data-at="1,4,8"/>
-        <path class="e" id="p-t-b" d="M325 98 L325 250" data-at="2,5-6"/>
-        <path class="e" id="p-w-v" d="M570 98 L570 250" data-at="1,7"/>
-        <path class="e" id="p-w-k" d="M650 98 L720 250" data-at="4,9"/>
-        <path class="e" id="p-w-u" d="M670 70 L700 70 C740 70 740 160 700 160" data-at="7-8"/>
+        <title id="flow-t">tengu keys setup prints a CLIENTS line per ssh-agent key, which the operator pastes into wrangler.toml and deploys; the operator puts each provider key in Cloudflare as a Worker secret; at sandbox load tengu gets a session signed by the agent key and exports env vars that point the clients at the Worker's routes; each call carries the session; the Worker checks it, adds the route's key, forwards to the upstream API and masks the key out of the reply; deleting the CLIENTS line revokes the machine.</title>
+        <path class="e" id="p-se-t" d="M170 70 L250 70" data-at="1,3"/>
+        <path class="e" id="p-t-op" d="M280 98 L150 250" data-at="1"/>
+        <path class="e" id="p-op-c" d="M170 278 L245 278" data-at="1,9"/>
+        <path class="e" id="p-c-w" d="M380 250 L545 98" data-at="1,4,7,9"/>
+        <path class="e" id="p-op-s" d="M95 306 L95 392 L590 392 L590 306" data-at="2"/>
+        <path class="e" id="p-t-w" d="M400 60 L520 60" data-at="4,6"/>
+        <path class="e" id="p-w-t" d="M520 84 L400 84" data-at="4,8"/>
+        <path class="e" id="p-s-w" d="M610 250 L610 98" data-at="4,7"/>
+        <path class="e" id="p-w-u" d="M670 62 L710 62" data-at="7"/>
+        <path class="e" id="p-u-w" d="M710 86 L670 86" data-at="8"/>
 
-        <g class="n guard" data-at="3">
+        <g class="n guard" data-at="1,3">
           <rect x="20" y="42" width="150" height="56" rx="8"/>
           <text x="95" y="66" text-anchor="middle" class="t-title">Secretive</text>
           <text x="95" y="84" text-anchor="middle" class="t-small">Secure Enclave · Touch ID</text>
@@ -80,60 +84,70 @@
           <text x="595" y="66" text-anchor="middle" class="t-title t-mono">tengu-seal</text>
           <text x="595" y="84" text-anchor="middle" class="t-small">Cloudflare Worker</text>
         </g>
-        <g class="n hands" data-at="8">
-          <rect x="560" y="140" width="140" height="44" rx="8"/>
-          <text x="630" y="167" text-anchor="middle" class="t-title">upstream API</text>
+        <g class="n hands" data-at="7-8">
+          <rect x="710" y="42" width="140" height="56" rx="8"/>
+          <text x="780" y="66" text-anchor="middle" class="t-title">upstream API</text>
+          <text x="780" y="84" text-anchor="middle" class="t-small">openrouter.ai/api</text>
         </g>
-        <g class="n data" data-at="2,5-6">
+        <g class="n" data-at="1-2,9">
+          <rect x="20" y="250" width="150" height="56" rx="8"/>
+          <text x="95" y="274" text-anchor="middle" class="t-title">operator</text>
+          <text x="95" y="292" text-anchor="middle" class="t-small">dashboard · wrangler</text>
+        </g>
+        <g class="n data" data-at="1,4,7,9">
           <rect x="245" y="250" width="160" height="56" rx="8"/>
-          <text x="325" y="274" text-anchor="middle" class="t-title t-mono">*.sealed</text>
-          <text x="325" y="292" text-anchor="middle" class="t-small">ciphertext · safe in git</text>
+          <text x="325" y="274" text-anchor="middle" class="t-title t-mono">wrangler.toml</text>
+          <text x="325" y="292" text-anchor="middle" class="t-small">ROUTES · CLIENTS</text>
         </g>
-        <g class="n data" data-at="1,7">
-          <rect x="500" y="250" width="140" height="56" rx="8"/>
-          <text x="570" y="274" text-anchor="middle" class="t-title t-mono">KeyVault</text>
-          <text x="570" y="292" text-anchor="middle" class="t-small">Durable Object seed</text>
-        </g>
-        <g class="n data" data-at="4,9">
-          <rect x="660" y="250" width="150" height="56" rx="8"/>
-          <text x="735" y="274" text-anchor="middle" class="t-title t-mono">CLIENTS KV</text>
-          <text x="735" y="292" text-anchor="middle" class="t-small">clients:&lt;fp&gt;</text>
-        </g>
-        <g class="pop badge" data-at="9">
-          <rect x="660" y="330" width="150" height="34" rx="8"/>
-          <text x="735" y="352" text-anchor="middle" class="t-small">delete → 401</text>
+        <g class="n data" data-at="2,4,7">
+          <rect x="520" y="250" width="180" height="56" rx="8"/>
+          <text x="610" y="274" text-anchor="middle" class="t-title">Worker secrets</text>
+          <text x="610" y="292" text-anchor="middle" class="t-small">SESSION_KEY + route keys</text>
         </g>
         <g class="pop badge" data-at="5">
-          <rect x="40" y="330" width="380" height="34" rx="8"/>
-          <text x="230" y="352" text-anchor="middle" class="t-small t-mono">OPENROUTER_BASE_URL = &lt;proxy&gt;/s/&lt;blob&gt;</text>
+          <rect x="150" y="322" width="360" height="34" rx="8"/>
+          <text x="330" y="344" text-anchor="middle" class="t-small t-mono">OPENROUTER_BASE_URL = &lt;proxy&gt;/openrouter</text>
+        </g>
+        <g class="pop badge" data-at="8">
+          <rect x="692" y="130" width="160" height="34" rx="8"/>
+          <text x="772" y="152" text-anchor="middle" class="t-small">key → [REDACTED]</text>
+        </g>
+        <g class="pop badge" data-at="9">
+          <rect x="692" y="190" width="160" height="34" rx="8"/>
+          <text x="772" y="212" text-anchor="middle" class="t-small">line gone → 401</text>
         </g>
 
-        <circle class="tok data" r="6" data-path="p-w-v" data-at="1" data-reverse data-dur="700"/>
-        <circle class="tok data" r="6" data-path="p-w-t" data-at="1" data-delay="700" data-dur="700"/>
-        <circle class="tok data" r="6" data-path="p-t-b" data-at="2" data-dur="900"/>
+        <circle class="tok guard" r="6" data-path="p-se-t" data-at="1" data-dur="700"/>
+        <circle class="tok" r="6" data-path="p-t-op" data-at="1" data-delay="700" data-dur="700"/>
+        <circle class="tok data" r="6" data-path="p-op-c" data-at="1" data-delay="1400" data-dur="500"/>
+        <circle class="tok data" r="6" data-path="p-c-w" data-at="1" data-delay="1900" data-dur="700"/>
+        <circle class="tok data" r="6" data-path="p-op-s" data-at="2" data-dur="1600"/>
         <circle class="tok guard" r="6" data-path="p-se-t" data-at="3" data-dur="800"/>
         <circle class="tok guard" r="6" data-path="p-t-w" data-at="4" data-dur="700"/>
-        <circle class="tok data" r="6" data-path="p-w-k" data-at="4" data-delay="700" data-dur="600"/>
-        <circle class="tok guard" r="6" data-path="p-w-t" data-at="4" data-delay="1300" data-dur="700"/>
-        <circle class="tok data" r="6" data-path="p-t-b" data-at="5" data-reverse data-dur="800"/>
+        <circle class="tok data" r="6" data-path="p-c-w" data-at="4" data-delay="700" data-dur="500"/>
+        <circle class="tok data" r="6" data-path="p-s-w" data-at="4" data-delay="1200" data-dur="500"/>
+        <circle class="tok guard" r="6" data-path="p-w-t" data-at="4" data-delay="1700" data-dur="700"/>
         <circle class="tok" r="6" data-path="p-t-w" data-at="6" data-dur="800"/>
-        <circle class="tok data" r="6" data-path="p-w-v" data-at="7" data-dur="600"/>
-        <circle class="tok hands" r="6" data-path="p-w-u" data-at="7" data-delay="700" data-dur="800"/>
-        <circle class="tok hands" r="6" data-path="p-w-t" data-at="8" data-dur="800"/>
-        <circle class="tok bad" r="6" data-path="p-w-k" data-at="9" data-dur="700"/>
+        <circle class="tok data" r="6" data-path="p-c-w" data-at="7" data-dur="500"/>
+        <circle class="tok data" r="6" data-path="p-s-w" data-at="7" data-delay="500" data-dur="500"/>
+        <circle class="tok hands" r="6" data-path="p-w-u" data-at="7" data-delay="1100" data-dur="600"/>
+        <circle class="tok hands" r="6" data-path="p-u-w" data-at="8" data-dur="600"/>
+        <circle class="tok hands" r="6" data-path="p-w-t" data-at="8" data-delay="700" data-dur="800"/>
+        <circle class="tok bad" r="6" data-path="p-op-c" data-at="9" data-dur="600"/>
+        <circle class="tok bad" r="6" data-path="p-c-w" data-at="9" data-delay="600" data-dur="700"/>
       </svg>
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li><code>tengu keys setup --proxy &lt;url&gt;</code> calls <code>GET /pubkey</code>. On first use the <code>KeyVault</code> Durable Object makes a 32-byte seed; the X25519 key and the session key come from it and never leave Cloudflare. You pin the public key in <code>[keys]</code>.</li>
-        <li><code>tengu keys seal openrouter --upstream https://openrouter.ai/api</code> reads the key once from a hidden prompt (or <code>--stdin</code>) and seals it. Name, upstream, inject mode, allowed clients and <code>kid</code> are the AAD, so none can be changed.</li>
-        <li>At sandbox load tengu asks the SSH agent to sign <code>tengu-seal/session/v1</code> with the fingerprint, time, a random nonce and the Worker origin. Secretive keeps the key in the Secure Enclave and can ask for Touch ID.</li>
-        <li><code>POST /session</code>: the Worker checks the key is listed under <code>clients:&lt;fp&gt;</code>, the signature, and the clock within ±60 s, then returns a session sealed with its own key. tengu keeps it in RAM only.</li>
-        <li><code>[keys.env]</code> is exported: a blob name becomes <code>&lt;proxy&gt;/s/&lt;blob&gt;</code>, <code>@session</code> becomes the token. Children (<code>run-agent</code>, the MCP bridge) inherit the env and reuse the session.</li>
-        <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/s/&lt;blob&gt;/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. RPC and Telegram clients add the header themselves.</li>
-        <li>The Worker opens the session, re-checks the allow-list (cached 60 s), opens the blob, checks the client may use it and that the path stays under the sealed upstream, then injects the key.</li>
-        <li>It forwards and streams the answer back. A redirect is returned, never followed, so the key cannot follow a 3xx to another host.</li>
-        <li>Revoke a machine: delete its <code>clients:&lt;fp&gt;</code> entry. New sessions fail at once; live ones fail within 60 s.</li>
+        <li><code>tengu keys setup</code> prints a <code>CLIENTS</code> line per SSH-agent key: full fingerprint, label, 24 h, the routes this config uses. Paste it into <code>wrangler.toml</code>, then <code>npx wrangler deploy</code>.</li>
+        <li>You put each provider key in Cloudflare: the dashboard or <code>npx wrangler secret put OPENROUTER_API_KEY</code>, plus a random <code>SESSION_KEY</code> of 32+ chars. They are Worker secrets; tengu never sees one.</li>
+        <li>At sandbox load tengu asks the SSH agent to sign <code>tengu-seal/session/v1</code>: fingerprint, time, a random nonce, the Worker origin and the routes <code>[keys.env]</code> uses. Secretive can ask for Touch ID.</li>
+        <li><code>POST /session</code>: fingerprint in <code>CLIENTS</code>, signature valid, clock within ±60 s. The Worker grants the asked routes <code>CLIENTS</code> allows (none: 403) in a <code>tss1</code> token, HMAC under <code>SESSION_KEY</code>.</li>
+        <li><code>[keys] strip</code> removes local key copies. <code>[keys.env]</code> is exported: a route value becomes <code>&lt;proxy&gt;/&lt;route&gt;[/path][?query]</code>, <code>@session</code> the token. Children reuse the session and strip again.</li>
+        <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/openrouter/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. RPC and Telegram clients add that header themselves, to the proxy only.</li>
+        <li>The Worker checks the route is in the session and still in <code>CLIENTS</code>, puts the key only at its header, path or query spot, checks <code>allow</code>, forwards with <code>redirect: manual</code>.</li>
+        <li>Reply: the key becomes <code>[REDACTED]</code> in every header and in text or JSON bodies up to 2 MiB; larger ones stream on. One JSON log line, never a key.</li>
+        <li>Revoke a machine: delete its <code>CLIENTS</code> line and <code>npx wrangler deploy</code>; its next request gets 401. Rotating <code>SESSION_KEY</code> ends every session at once.</li>
       </ol>
     </div>
   </figure>
@@ -143,14 +157,15 @@
   <div class="sec-head">
     <span class="kicker">tengu-seal target::build</span>
     <h2 id="s-modes">How the Worker puts the key in</h2>
-    <p>The mode is sealed inside the blob; the caller only picks the path under the upstream.</p>
+    <p>Each route in <code>ROUTES</code> names its upstream, its Worker secret and exactly one spot for the key. <code>TENGU_SECRET</code> anywhere else is 403, so a session can use a key but never copy it out.</p>
   </div>
   <div class="modes" data-inview>
-    <div><b>bearer</b><small>Default. OpenRouter, embeddings, Jev.</small><code>Authorization: Bearer &lt;key&gt;</code></div>
-    <div><b>header:&lt;Name&gt;</b><small>APIs that want their own header. Host, cookie, cf-*, tengu-* are refused.</small><code>X-Api-Key: &lt;key&gt;</code></div>
-    <div><b>basic</b><small>The secret is <code>user:pass</code>.</small><code>Authorization: Basic …</code></div>
-    <div><b>placeholder</b><small><code>TENGU_SECRET</code> in the path or query is swapped. Telegram <code>bot…</code>, <code>?api-key=</code>.</small><code>/botTENGU_SECRET/getMe</code></div>
-    <div><b>url</b><small>The secret is the whole URL (an RPC URL with a key). Its host must be the upstream host; no extra path.</small><code>https://rpc.example/?api-key=…</code></div>
+    <div><b>header</b><small><code>"header"</code>, <code>{secret}</code> once in the value; any name but host, cookie, content-length, hop-by-hop, <code>cf-*</code>, <code>tengu-*</code>. The caller sends no <code>TENGU_SECRET</code>. OpenRouter, embeddings, Jev.</small><code>Authorization: Bearer {secret}</code></div>
+    <div><b>path</b><small><code>"path"</code> templates: the caller starts the path with <code>TENGU_SECRET</code>, exactly once, as one template. Telegram, EVM RPC. A key with URL characters needs a header route.</small><code>bot{secret}/ · botTENGU_SECRET/getMe</code></div>
+    <div><b>query</b><small><code>"query"</code>: the caller sends that parameter as <code>TENGU_SECRET</code>, once, and nowhere else. Helius.</small><code>?api-key=TENGU_SECRET</code></div>
+    <div><b>allow</b><small>Optional path prefixes a route accepts (after a path key part); any other path is 403. The shipped <code>openrouter</code> route allows four.</small><code>v1/keys → 403</code></div>
+    <div><b>Tengu-Route</b><small>For clients that build absolute paths (teloxide): base URL <code>&lt;proxy&gt;/</code>, route in a header. Set by <code>header_mode</code>.</small><code>Tengu-Route: telegram</code></div>
+    <div><b>route-scoped session</b><small>tengu asks for the routes <code>[keys.env]</code> uses; the session gets those the key's <code>CLIENTS</code> <code>routes</code> allow (empty = none). Each call needs both. <code>/whoami</code> shows the grant.</small><code>"routes": ["openrouter"]</code></div>
   </div>
 </section>
 
@@ -160,10 +175,12 @@
     <h2 id="s-out">What can come back</h2>
   </div>
   <ul class="states">
-    <li><span class="chip ok">200</span><span><b>forwarded</b>The upstream's own answer, streamed back unchanged.</span></li>
-    <li><span class="chip bad">401</span><span><b>not allow-listed, expired or forged</b>No <code>clients:&lt;fp&gt;</code>, a session past its expiry, or one from another Worker key.</span></li>
-    <li><span class="chip bad">403</span><span><b>refused</b>A tampered blob, a <code>kid</code> mismatch (reseal), a client not in the blob's list, or a path that leaves the upstream.</span></li>
-    <li><span class="chip warn">400</span><span><b>malformed</b>No blob, an unknown route, a bad session request.</span></li>
+    <li><span class="chip ok">200</span><span><b>forwarded</b>The upstream's own status and body, the key masked out. A 3xx comes back as is.</span></li>
+    <li><span class="chip warn">400</span><span><b>malformed</b>An unknown route, a session request with no route or an unknown one, a bad session request.</span></li>
+    <li><span class="chip bad">401</span><span><b>no session</b>Missing, forged or expired; <code>SESSION_KEY</code> rotated; the key not (or no longer) in <code>CLIENTS</code>; the clock more than 60 s off.</span></li>
+    <li><span class="chip bad">403</span><span><b>refused</b>No asked route allowed for this key; a route not in the session or gone from <code>CLIENTS</code>; <code>TENGU_SECRET</code> off its spot; a path outside <code>allow</code> or the upstream.</span></li>
+    <li><span class="chip bad">500</span><span><b>misconfigured</b>A route's Worker secret or <code>SESSION_KEY</code> missing or short; <code>ROUTES</code> / <code>CLIENTS</code> do not parse; a <code>CLIENTS</code> route not in <code>ROUTES</code>.</span></li>
+    <li><span class="chip bad">502</span><span><b>upstream unreachable</b>The message never carries the upstream URL, which may hold the key.</span></li>
   </ul>
 </section>
 
@@ -173,34 +190,45 @@
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>Only the Worker can open a blob.</b> HPKE to the Durable Object's key; the metadata is the AAD, so changing the upstream breaks the seal.</span></li>
-    <li><span><b>The key goes only where it was sealed for.</b> The target is built from the sealed upstream and re-parsed: same scheme, host, port, and a path inside the base path.</span></li>
-    <li><span><b>No session without the agent key.</b> Every session needs a fresh signature by an allow-listed key; a signature for another Worker origin fails.</span></li>
+    <li><span><b>No provider key here.</b> Keys are Worker secrets; tengu only ever holds a session token.</span></li>
+    <li><span><b>The key goes only to its route's upstream.</b> The target comes from <code>ROUTES</code>; the caller's path is checked, then the parsed URL must keep the scheme, host, port and base path.</span></li>
+    <li><span><b>The key goes only to its spot.</b> One header, the path start or one query parameter; <code>TENGU_SECRET</code> anywhere else is 403. A shipped-config test parses <code>wrangler.toml</code>.</span></li>
+    <li><span><b>Sessions are route-scoped.</b> The signed request names its routes; the token carries the grant; each call needs the route in the session and still in <code>CLIENTS</code>.</span></li>
+    <li><span><b>No session without the agent key.</b> A fresh signature by a key in <code>CLIENTS</code>, within ±60 s, bound to this Worker's origin.</span></li>
+    <li><span><b>Revocation on the next request.</b> <code>CLIENTS</code> is read on every request, not only at <code>/session</code>.</span></li>
     <li><span><b>The session goes only to the proxy.</b> <code>auth_header_for</code> and <code>header_mode</code> return nothing for any other origin.</span></li>
-    <li><span><b>Never on disk.</b> The session lives in process env; its name ends in <code>_TOKEN</code>, so every redaction registry built after it masks it.</span></li>
+    <li><span><b>Fail closed.</b> If no session can be had, every <code>[keys.env]</code> var and the session vars are unset, so a stray local key cannot bypass the proxy. <code>tengu telegram</code> routed through the proxy refuses to start.</span></li>
+    <li><span><b>Local copies stripped.</b> <code>[keys] strip</code> names are removed at load, success or not, and again in every child. <code>@session</code> only for <code>OPENROUTER_API_KEY</code> next to an <code>OPENROUTER_BASE_URL</code> route.</span></li>
+    <li><span><b>Never on disk.</b> The session lives in process env; its name ends in <code>_TOKEN</code>. The redaction registry is extended after the export, so old <code>.env</code> / vault values stay masked.</span></li>
+    <li><span><b>Replies are masked.</b> Every header value; text, JSON and XML bodies up to 2 MiB, on bytes. A bigger body streams on unmasked past 2 MiB; event streams and binary pass through.</span></li>
     <li><span><b>No redirect follow.</b> The Worker fetches with <code>redirect: manual</code>.</span></li>
-    <li><span><b>Quiet logs.</b> One line per request: route, client label, upstream host, status, ms. Never headers, bodies or secrets.</span></li>
+    <li><span><b>Quiet logs.</b> One JSON line per request: client label, route, upstream host, status, masked count, ms.</span></li>
   </ul>
-  <p class="note warn"><b>Not a sandbox.</b> While tengu runs, an agent with a shell on the same machine can use the session or the agent socket too. What it cannot do is read a provider key: there is none here.</p>
+  <p class="note warn"><b>Not a sandbox.</b> While tengu runs, an agent with a shell on the same machine can use the session or the agent socket too, and a session can use a route's key (any Telegram Bot API method, as the bot). What it cannot do is read a provider key: there is none here. Sessions are not refreshed: restart a long run before <code>session_hours</code> ends.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
   <div class="sec-head">
     <span class="kicker">Try it</span>
-    <h2 id="s-try">Seal a key</h2>
-    <p>Run <code>wrangler</code> in <code>cloudflare/seal-worker</code>. Fingerprints, ids and URLs below are examples.</p>
+    <h2 id="s-try">Put a key in Cloudflare</h2>
+    <p>Run <code>wrangler</code> in <code>cloudflare/seal-worker</code>. The fingerprint, URL, label, dates and numbers below are examples. Dashboard walkthrough: <a href="../cloudflare-secrets-setup.html">Cloudflare secrets setup</a>.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>npx wrangler kv namespace create CLIENTS   # paste the id into wrangler.toml</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu keys setup</span>
+<span class="ln o">1. In cloudflare/seal-worker/wrangler.toml, CLIENTS (then `npx wrangler deploy`):</span>
+<span class="ln o">  "SHA256:EXAMPLEexampleEXAMPLEexampleEXAMPLEexample0": { "label": "tengu-attended", "session_hours": 24, "routes": ["openrouter"] }</span>
 <span class="ln cmd"><span class="p">$ </span>npx wrangler deploy</span>
-<span class="ln cmd"><span class="p">$ </span>tengu keys setup --proxy https://tengu-seal.example.workers.dev</span>
-<span class="ln o">[keys]  proxy = … · pubkey = … · client = "tengu-attended"</span>
-<span class="ln o">  npx wrangler kv key put --binding CLIENTS --remote "clients:SHA256:EXAMPLEexampleEXAMPLEexampleEXAMPLEexample00" '{"label":"tengu-attended","session_hours":24}'</span>
-<span class="ln cmd"><span class="p">$ </span>tengu keys seal openrouter --upstream https://openrouter.ai/api</span>
-<span class="ln o">Secret for 'openrouter' (input hidden):</span>
-<span class="ln o">wrote ~/.tengu/sealed/openrouter.sealed (upstream https://openrouter.ai/api, inject Bearer, kid …)</span>
+<span class="ln cmd"><span class="p">$ </span>npx wrangler secret put SESSION_KEY</span>
+<span class="ln cmd"><span class="p">$ </span>npx wrangler secret put OPENROUTER_API_KEY</span>
+<span class="ln cmd"><span class="p">$ </span>tengu keys status</span>
+<span class="ln o">proxy:   https://tengu-seal.example.workers.dev</span>
+<span class="ln o">routes:  evm-rpc, openrouter, solana-rpc, telegram</span>
+<span class="ln o">[keys.env]:</span>
+<span class="ln o">  OPENROUTER_API_KEY ← @session</span>
+<span class="ln o">  OPENROUTER_BASE_URL ← openrouter</span>
+<span class="ln o">session: ok · label tengu-attended · key SHA256:EXAMPLEexampleEXAMPLEexampleEXAMPLEexample0 · expires 2026-10-10T09:00:00+00:00 · granted openrouter</span>
 <span class="ln cmd"><span class="p">$ </span>tengu keys check openrouter --path v1/models</span>
-<span class="ln">  <span class="hl">openrouter → https://openrouter.ai/api/v1/models: 200 OK · application/json · 412345 bytes · 420 ms</span></span></pre>
+<span class="ln">  <span class="hl">openrouter/v1/models: 200 OK · application/json · 412345 bytes · 420 ms</span></span></pre>
   </div>
 </section>
 
@@ -213,12 +241,18 @@
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>crates/tengu-seal/</code></td><td>blob, session, SSH-signature and target formats, shared by both sides</td></tr>
-        <tr><td><code>cloudflare/seal-worker/</code></td><td>the Worker routes, the <code>KeyVault</code> Durable Object, <code>wrangler.toml</code></td></tr>
-        <tr><td><code>src/config/keys.rs</code></td><td><code>[keys]</code>: proxy, pinned key, client, agent socket, sealed dir, <code>[keys.env]</code></td></tr>
-        <tr><td><code>src/adapters/outbound/keys/mod.rs</code></td><td>session, <code>install</code> (env export at sandbox load), <code>auth_header_for</code>, <code>header_mode</code></td></tr>
+        <tr><td><code>crates/tengu-seal/src/route.rs</code></td><td><code>ROUTES</code> / <code>CLIENTS</code> tables, key positions, <code>allow</code>, <code>TENGU_SECRET</code>, reserved names, session hours; the shipped-<code>wrangler.toml</code> test</td></tr>
+        <tr><td><code>crates/tengu-seal/src/session.rs</code></td><td><code>tss1</code> tokens: HMAC-SHA256 under <code>SESSION_KEY</code></td></tr>
+        <tr><td><code>crates/tengu-seal/src/ssh.rs</code></td><td>SSH key parse, fingerprint, signature check, <code>session_message</code></td></tr>
+        <tr><td><code>crates/tengu-seal/src/target.rs</code></td><td>upstream target from a route, key-position and <code>allow</code> checks, path checks, <code>split_path</code>, header filter, <code>mask</code> / <code>mask_bytes</code> / <code>maskable</code></td></tr>
+        <tr><td><code>cloudflare/seal-worker/src/lib.rs</code></td><td>the Worker endpoints, forward, reply masking, the log line</td></tr>
+        <tr><td><code>cloudflare/seal-worker/wrangler.toml</code></td><td><code>ROUTES</code>, <code>CLIENTS</code>, build, Workers Logs</td></tr>
+        <tr><td><code>src/config/keys.rs</code></td><td><code>[keys]</code>: proxy, client, agent socket, <code>strip</code>, <code>[keys.env]</code> (<code>@session</code> rule), <code>routes()</code>; guard test of <code>sandboxes/sealed-check</code></td></tr>
+        <tr><td><code>src/adapters/outbound/keys/mod.rs</code></td><td>session for the routes asked, <code>install</code> (strip, env export at sandbox load and in children, fail closed), canonical proxy origin, <code>auth_header_for</code>, <code>header_mode</code></td></tr>
         <tr><td><code>src/adapters/outbound/keys/agent.rs</code></td><td>SSH-agent client: list keys, sign</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/keys.rs</code></td><td><code>tengu keys setup · seal · status · check</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/keys.rs</code></td><td><code>tengu keys setup · status · check</code></td></tr>
+        <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>Telegram through the proxy (placeholder token, <code>Tengu-Route</code>); refuses to start without a session</td></tr>
+        <tr><td><code>sandboxes/sealed-check/config.toml</code></td><td>end-to-end proof: Jev, loop, <code>tengu run</code>, Studio only through the Worker (<code>docs/sealed-check-2026-10-09.md</code>)</td></tr>
       </tbody>
     </table>
   </div>

@@ -215,7 +215,7 @@
   <div class="sec-head">
     <span class="kicker">The read side</span>
     <h2 id="s-reads">Eleven read tools, their keys and hosts</h2>
-    <p>Each takes an optional <code>max_age_secs</code> (0 = live), except the pure <code>lp_swap_plan</code>. Hosts are the <code>net_hosts</code> of <code>sandboxes/lping</code>; RPC = <code>api.mainnet-beta.solana.com</code> or the <code>$SOLANA_RPC_URL</code> host; with <code>[keys]</code> that URL can be the seal proxy (<code>&lt;proxy&gt;/s/&lt;blob&gt;</code>), and the RPC client sends the session to it alone (<a href="sealed-keys.html">sealed keys</a>).</p>
+    <p>Each takes an optional <code>max_age_secs</code> (0 = live), except the pure <code>lp_swap_plan</code>. Hosts are the <code>net_hosts</code> of <code>sandboxes/lping</code>; RPC = <code>api.mainnet-beta.solana.com</code> or the <code>$SOLANA_RPC_URL</code> host; with <code>[keys]</code> that URL can be the seal proxy's route (<code>&lt;proxy&gt;/solana-rpc/?api-key=TENGU_SECRET</code>; the Worker swaps in its Helius key), and the RPC client sends the session to it alone (<a href="sealed-keys.html">sealed keys</a>).</p>
   </div>
   <div class="table-wrap">
     <table class="reads">

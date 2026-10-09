@@ -148,14 +148,25 @@ impl PublicKey {
     }
 }
 
-/// The exact bytes a client signs to get a session.
+/// The exact bytes a client signs to get a session for `routes`.
 ///
 /// `aud` is the Worker origin the client called (`https://host`), so a
 /// signature cannot be replayed against another deployment; `ts_ms` is
-/// checked within ±60 s by the Worker.
-pub fn session_message(fp: &str, ts_ms: u64, nonce_b64: &str, aud: &str) -> Vec<u8> {
-    format!("{SESSION_DOMAIN}\nfp: {fp}\nts_ms: {ts_ms}\nnonce: {nonce_b64}\naud: {aud}\n")
-        .into_bytes()
+/// checked within ±60 s by the Worker; `routes` cannot be widened. The
+/// Worker keeps no nonce list: a captured request body (it travels only
+/// inside TLS) can be replayed within that minute for the same routes.
+pub fn session_message(
+    fp: &str,
+    ts_ms: u64,
+    nonce_b64: &str,
+    aud: &str,
+    routes: &[String],
+) -> Vec<u8> {
+    let routes = routes.join(",");
+    format!(
+        "{SESSION_DOMAIN}\nfp: {fp}\nts_ms: {ts_ms}\nnonce: {nonce_b64}\naud: {aud}\nroutes: {routes}\n"
+    )
+    .into_bytes()
 }
 
 /// `POST /session` body.
@@ -166,6 +177,9 @@ pub struct SessionRequest {
     pub ts_ms: u64,
     /// 16 random bytes, base64url.
     pub nonce: String,
+    /// Routes the session is for (signed); the Worker grants those the
+    /// client's `CLIENTS` entry allows.
+    pub routes: Vec<String>,
     /// SSH signature blob over [`session_message`], base64url.
     pub sig: String,
 }
@@ -183,7 +197,13 @@ impl SessionRequest {
         if b64d(&self.nonce)?.len() != 16 {
             return Err(bad("nonce must be 16 bytes"));
         }
-        let msg = session_message(&key.fingerprint(), self.ts_ms, &self.nonce, aud);
+        let msg = session_message(
+            &key.fingerprint(),
+            self.ts_ms,
+            &self.nonce,
+            aud,
+            &self.routes,
+        );
         key.verify(&msg, &b64d(&self.sig)?)?;
         Ok(key)
     }
@@ -324,11 +344,13 @@ mod tests {
         let (sk, pk) = p256_pair();
         let nonce = b64e(&[3u8; 16]);
         let aud = "https://seal.example.workers.dev";
-        let msg = session_message(&pk.fingerprint(), 1_000_000, &nonce, aud);
+        let routes = vec!["openrouter".to_string()];
+        let msg = session_message(&pk.fingerprint(), 1_000_000, &nonce, aud, &routes);
         let req = SessionRequest {
             pubkey: pk.to_openssh(),
             ts_ms: 1_000_000,
             nonce: nonce.clone(),
+            routes,
             sig: b64e(&ssh_sig_p256(&sk, &msg)),
         };
         assert_eq!(req.verify(aud, 1_030_000).unwrap(), pk);
@@ -337,5 +359,9 @@ mod tests {
         let mut bad_nonce = req.clone();
         bad_nonce.nonce = b64e(&[3u8; 8]);
         assert!(bad_nonce.verify(aud, 1_000_000).is_err());
+        // The routes are signed: widening them breaks the signature.
+        let mut wider = req.clone();
+        wider.routes.push("telegram".into());
+        assert!(wider.verify(aud, 1_000_000).is_err());
     }
 }

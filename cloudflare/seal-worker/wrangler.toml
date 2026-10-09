@@ -1,6 +1,9 @@
-# tengu-seal Worker — see docs/sealed-keys-2026-10-09.md.
-# No secrets here: provider keys reach the Worker only inside sealed blobs,
-# and the private key is made by the KeyVault Durable Object on first use.
+# tengu-seal Worker — see docs/sealed-keys-2026-10-09.md and
+# docs/cloudflare-secrets-setup.html (step-by-step setup).
+#
+# No secrets in this file. Secrets live in Cloudflare only (dashboard, or):
+#   openssl rand -hex 32 | npx wrangler secret put SESSION_KEY
+#   npx wrangler secret put OPENROUTER_API_KEY      (one per route below)
 name = "tengu-seal"
 main = "build/index.js"
 compatibility_date = "2026-10-01"
@@ -9,21 +12,52 @@ workers_dev = true
 [build]
 command = "cargo install -q worker-build@0.8.7 && worker-build --release"
 
-# Client allow-list: key `clients:<OpenSSH fingerprint>` → {"label": "..."}.
-# Create once with `npx wrangler kv namespace create CLIENTS` and paste the id.
-[[kv_namespaces]]
-binding = "CLIENTS"
-id = "REPLACE_WITH_CLIENTS_KV_ID"
-
-[durable_objects]
-bindings = [{ name = "VAULT", class_name = "KeyVault" }]
-
-# Free plan: Durable Objects must be SQLite-backed.
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["KeyVault"]
-
 # Workers Logs (free: 200k events/day, 3-day retention). One JSON line per
-# request: route, client label, upstream host, status, ms.
+# request: client label, route, upstream host, status, masked count, ms.
+# Keep traces off: on a path / query route the subrequest URL holds the key.
 [observability]
 enabled = true
+
+[vars]
+# Route name → upstream, the Worker secret holding its key, and exactly
+# where the key goes — one of:
+#   "header": "<Name>: <value with {secret}>"   (caller sends no TENGU_SECRET)
+#   "path":  ["bot{secret}/", …]                 (caller starts the path with it, once)
+#   "query": "api-key"                           (caller sends ?api-key=TENGU_SECRET, once)
+# A request that puts TENGU_SECRET anywhere else is refused (403), so a
+# session can use a key but never copy it out. "allow" (optional) limits the
+# paths a route accepts. tengu reaches a route as <worker>/<route>/<rest>.
+ROUTES = '''
+{
+  "openrouter": {
+    "upstream": "https://openrouter.ai/api",
+    "secret": "OPENROUTER_API_KEY",
+    "header": "Authorization: Bearer {secret}",
+    "allow": ["v1/chat/completions", "v1/embeddings", "v1/models", "alpha/decisions"]
+  },
+  "telegram": {
+    "upstream": "https://api.telegram.org",
+    "secret": "TELEGRAM_BOT_TOKEN",
+    "path": ["bot{secret}/", "file/bot{secret}/"]
+  },
+  "solana-rpc": {
+    "upstream": "https://mainnet.helius-rpc.com",
+    "secret": "HELIUS_API_KEY",
+    "query": "api-key"
+  },
+  "evm-rpc": {
+    "upstream": "https://eth-sepolia.g.alchemy.com/v2",
+    "secret": "ALCHEMY_API_KEY",
+    "path": ["{secret}"]
+  }
+}
+'''
+
+# Client keys allowed to start a session: full OpenSSH fingerprint (what
+# `tengu keys setup` / `ssh-add -l` prints) → label, session length (1-168 h,
+# default 24) and the routes it may use (names, or ["*"]; empty = none).
+# Fingerprints are public. Revoke a machine: delete its line + `npx wrangler deploy`.
+CLIENTS = '''
+{
+}
+'''

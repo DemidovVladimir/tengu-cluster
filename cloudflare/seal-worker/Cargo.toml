@@ -3,7 +3,7 @@ name = "tengu-seal-worker"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Cloudflare Worker that opens tengu's sealed blobs, injects the secret and forwards the request."
+description = "Cloudflare Worker that adds a route's secret to tengu's requests and forwards them; provider keys never reach the harness."
 publish = false
 
 [lib]
@@ -14,10 +14,12 @@ tengu-seal = { path = "../../crates/tengu-seal" }
 worker = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Browser/Workers RNG for the vault seed and session nonces.
+# Pulled in by the curve crates; wasm needs its `js` backend.
 getrandom = { version = "0.2", features = ["js"] }
-base64 = "0.22"
+futures-util = "0.3"
 
+# `strip = true` breaks worker-build (wasm-bindgen: "externref table
+# required for catch wrappers").
 [profile.release]
 lto = true
 codegen-units = 1

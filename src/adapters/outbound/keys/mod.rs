@@ -1,21 +1,21 @@
-//! Sealed keys — the tengu side of the `tengu-seal` Cloudflare Worker
+//! Seal proxy — the tengu side of the `tengu-seal` Cloudflare Worker
 //! (`cloudflare/seal-worker`, `docs/sealed-keys-2026-10-09.md`).
 //!
-//! No provider key is stored here. `tengu keys seal` HPKE-seals each one to
-//! the Worker's public key (`<TENGU_HOME>/sealed/<name>.sealed`, safe in
-//! git). At startup [`install`] gets a session: the SSH agent (Secretive →
-//! Secure Enclave, Touch ID) signs a challenge, the Worker returns a token
-//! kept in RAM only. It then exports `[keys.env]`, so the existing clients
-//! talk to the Worker without code changes:
+//! No provider key is stored here: keys are Worker secrets the operator sets
+//! in Cloudflare. At startup [`install`] gets a session: the SSH agent
+//! (Secretive → Secure Enclave, Touch ID) signs a challenge, the Worker
+//! returns a token kept in RAM only. It then exports `[keys.env]`, so the
+//! existing clients talk to the Worker without code changes:
 //!
 //! | Export | Value | Who reads it |
 //! |---|---|---|
-//! | `[keys.env]` blob entry (`OPENROUTER_BASE_URL = "openrouter"`) | `<proxy>/s/<blob>` | OpenRouter engine, embeddings, Jev, wiki compiler, Solana / EVM RPC, Telegram (`TELEGRAM_API_URL`) |
+//! | `[keys.env]` route entry (`OPENROUTER_BASE_URL = "openrouter"`) | `<proxy>/<route>[/path][?query]` | OpenRouter engine, embeddings, Jev, wiki compiler, Solana / EVM RPC, Telegram (`TELEGRAM_API_URL`) |
 //! | `[keys.env]` `@session` entry (`OPENROUTER_API_KEY`) | session token, sent as `Authorization: Bearer` | the same clients |
-//! | `TENGU_KEYS_PROXY`, `TENGU_KEYS_SESSION_TOKEN`, `TENGU_KEYS_SESSION_EXP_MS` | proxy origin, token, expiry | children reuse the session; [`auth_header_for`] adds it to clients that send no `Authorization` |
+//! | `TENGU_KEYS_PROXY`, `TENGU_KEYS_SESSION_TOKEN`, `TENGU_KEYS_SESSION_EXP_MS` | proxy origin, token, expiry | children reuse the session; [`auth_header_for`] / [`header_mode`] add it for clients that send no `Authorization` |
 //!
 //! The token's env name ends in `_TOKEN`, so every redaction registry built
-//! after [`install`] hides it (`domain::secrets::is_env_secret`).
+//! after [`install`] hides it (`domain::secrets::is_env_secret`). The Worker
+//! masks its keys out of replies, so a provider echoing one cannot leak it.
 
 pub(crate) mod agent;
 
@@ -24,18 +24,17 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
-use tengu_seal::blob::Blob;
 use tengu_seal::ssh::{session_message, SessionRequest};
 use tracing::{info, warn};
 
 use crate::config::keys::{KeysConfig, SESSION_VALUE};
-use crate::config::paths::{expand_tilde, resolve_tengu_home};
+use crate::config::paths::expand_tilde;
 
 pub(crate) const PROXY_ENV: &str = "TENGU_KEYS_PROXY";
 pub(crate) const SESSION_ENV: &str = "TENGU_KEYS_SESSION_TOKEN";
 pub(crate) const SESSION_EXP_ENV: &str = "TENGU_KEYS_SESSION_EXP_MS";
 /// Telegram `bot<token>` placeholder the Worker swaps for the real token.
-pub(crate) const PLACEHOLDER: &str = "TENGU_SECRET";
+pub(crate) const PLACEHOLDER: &str = tengu_seal::route::PLACEHOLDER;
 /// An inherited session closer than this to expiry is replaced.
 const REUSE_MARGIN_MS: u64 = 5 * 60 * 1000;
 
@@ -47,6 +46,9 @@ pub(crate) struct Session {
     pub exp_ms: u64,
     pub fp: String,
     pub label: String,
+    /// Routes the Worker granted (asked ∩ the key's `CLIENTS` routes).
+    #[serde(default)]
+    pub routes: Vec<String>,
 }
 
 fn now_ms() -> u64 {
@@ -56,35 +58,16 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
 }
 
-/// The proxy origin without a trailing slash.
+/// The proxy origin in canonical form (lowercase host, no default port, no
+/// trailing slash) — what the Worker sees as the signature's `aud` and what
+/// the origin checks of [`auth_header_for`] / [`header_mode`] compare.
 pub(crate) fn proxy(cfg: &KeysConfig) -> Result<String> {
-    cfg.proxy
+    let raw = cfg
+        .proxy
         .as_deref()
-        .map(|p| p.trim_end_matches('/').to_string())
-        .ok_or_else(|| anyhow!("[keys] proxy is not set"))
-}
-
-pub(crate) fn sealed_dir(cfg: &KeysConfig) -> PathBuf {
-    match &cfg.sealed_dir {
-        Some(d) => expand_tilde(Path::new(d)),
-        None => resolve_tengu_home().join("sealed"),
-    }
-}
-
-pub(crate) fn blob_path(cfg: &KeysConfig, name: &str) -> PathBuf {
-    sealed_dir(cfg).join(format!("{name}.sealed"))
-}
-
-/// The sealed blob `name`, checked to parse.
-pub(crate) fn read_blob(cfg: &KeysConfig, name: &str) -> Result<Blob> {
-    let path = blob_path(cfg, name);
-    let text = std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "sealed blob '{name}' not found at {} — run `tengu keys seal {name} …`",
-            path.display()
-        )
-    })?;
-    Blob::parse(&text).map_err(|e| anyhow!("sealed blob '{name}' ({}): {e}", path.display()))
+        .ok_or_else(|| anyhow!("[keys] proxy is not set"))?;
+    let u = reqwest::Url::parse(raw).with_context(|| format!("[keys] proxy '{raw}'"))?;
+    Ok(u.origin().ascii_serialization())
 }
 
 pub(crate) fn agent_socket(cfg: &KeysConfig) -> Result<PathBuf> {
@@ -114,8 +97,15 @@ pub(crate) fn select_identity(cfg: &KeysConfig) -> Result<agent::Identity> {
     }
 }
 
-/// Ask the Worker for a session, signed by the agent key.
-pub(crate) async fn mint(cfg: &KeysConfig, client: &reqwest::Client) -> Result<Session> {
+/// Ask the Worker for a session for `routes`, signed by the agent key.
+pub(crate) async fn mint(
+    cfg: &KeysConfig,
+    client: &reqwest::Client,
+    routes: &[String],
+) -> Result<Session> {
+    if routes.is_empty() {
+        bail!("no Worker route to ask a session for — add one to [keys.env]");
+    }
     let origin = proxy(cfg)?;
     let id = select_identity(cfg)?;
     let fp = id.key.fingerprint();
@@ -126,7 +116,7 @@ pub(crate) async fn mint(cfg: &KeysConfig, client: &reqwest::Client) -> Result<S
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce)
     };
     let ts_ms = now_ms();
-    let msg = session_message(&fp, ts_ms, &nonce, &origin);
+    let msg = session_message(&fp, ts_ms, &nonce, &origin, routes);
     let socket = agent_socket(cfg)?;
     let key = id.key.clone();
     let sig = tokio::task::spawn_blocking(move || agent::sign(&socket, &key, &msg))
@@ -136,6 +126,7 @@ pub(crate) async fn mint(cfg: &KeysConfig, client: &reqwest::Client) -> Result<S
         pubkey: id.key.to_openssh(),
         ts_ms,
         nonce,
+        routes: routes.to_vec(),
         sig: {
             use base64::Engine;
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig)
@@ -174,35 +165,93 @@ fn inherited_session(origin: &str) -> Option<(String, u64)> {
     (same && exp > now_ms() + REUSE_MARGIN_MS && !token.is_empty()).then_some((token, exp))
 }
 
-/// What `[keys.env]` exports, given the session token. Blob files must
-/// exist; a missing one is an error naming the `tengu keys seal` command.
+/// What `[keys.env]` exports, given the session token: `@session` → the
+/// token, a route target → `<proxy>/<route>[/path][?query]`.
 pub(crate) fn env_exports(cfg: &KeysConfig, token: &str) -> Result<Vec<(String, String)>> {
     let origin = proxy(cfg)?;
-    let mut out = Vec::new();
-    for (name, value) in &cfg.env {
-        let v = if value == SESSION_VALUE {
-            token.to_string()
-        } else {
-            let blob = read_blob(cfg, value)?;
-            format!("{origin}/s/{}", blob.encode())
-        };
-        out.push((name.clone(), v));
+    Ok(cfg
+        .env
+        .iter()
+        .map(|(name, value)| {
+            let v = if value == SESSION_VALUE {
+                token.to_string()
+            } else {
+                format!("{origin}/{value}")
+            };
+            (name.clone(), v)
+        })
+        .collect())
+}
+
+/// Values `[keys]` removed or overwrote in this process (a local key in
+/// `.env` / the vault), and the names it removed. Every redaction registry
+/// built later still masks those values (`secrets::process_secret_registry`),
+/// and the vault loader never puts a removed name back
+/// (`secrets::load_secrets_into_env`) — in whatever order a command builds
+/// its registry or opens the vault.
+static DISPLACED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+static REMOVED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn displace(name: &str, removed: bool) {
+    if let Ok(v) = std::env::var(name) {
+        if !v.is_empty() {
+            if let Ok(mut d) = DISPLACED.lock() {
+                d.push((name.to_string(), v));
+            }
+        }
     }
-    Ok(out)
+    if removed {
+        if let Ok(mut r) = REMOVED.lock() {
+            if !r.iter().any(|n| n == name) {
+                r.push(name.to_string());
+            }
+        }
+    }
+}
+
+/// `(name, value)` pairs `[keys]` removed or overwrote (see [`DISPLACED`]).
+pub(crate) fn displaced() -> Vec<(String, String)> {
+    DISPLACED.lock().map(|d| d.clone()).unwrap_or_default()
+}
+
+/// Whether `[keys]` removed this env var (`strip`, or a failed session).
+pub(crate) fn was_removed(name: &str) -> bool {
+    REMOVED
+        .lock()
+        .map(|r| r.iter().any(|n| n == name))
+        .unwrap_or(false)
 }
 
 /// Get a session (reuse a parent's, else sign a new one) and export
-/// `[keys.env]`. No-op without `[keys] proxy`. Fail-soft: on error the env is
-/// left alone and a warning names the cause, so commands that need no keys
-/// still run.
+/// `[keys.env]`. No-op without `[keys] proxy`. Fail-soft for the command
+/// (one that needs no key still runs) but fail-closed for the keys: on error
+/// every `[keys.env]` var and the session vars are removed, so a stray local
+/// key (shell, `.env`, vault) can never bypass the proxy.
 pub(crate) fn install(cfg: &KeysConfig) {
     if !cfg.enabled() {
         return;
     }
+    // Local copies of keys that live in the Worker go first, whatever happens
+    // next (`.env` / the vault may still hold them).
+    for name in &cfg.strip {
+        displace(name, true);
+        std::env::remove_var(name);
+    }
     if let Err(e) = try_install(cfg) {
+        for name in
+            cfg.env
+                .keys()
+                .map(String::as_str)
+                .chain([PROXY_ENV, SESSION_ENV, SESSION_EXP_ENV])
+        {
+            displace(name, true);
+            std::env::remove_var(name);
+        }
+        let cleared: Vec<&str> = cfg.env.keys().map(String::as_str).collect();
         warn!(
             error = %format!("{e:#}"),
-            "[keys] sealed-key session not set up — calls through the seal proxy will fail"
+            cleared = ?cleared,
+            "[keys] seal-proxy session not set up — the [keys.env] vars are unset, calls that need them will fail"
         );
     }
 }
@@ -212,7 +261,15 @@ fn try_install(cfg: &KeysConfig) -> Result<()> {
     let (token, exp_ms, who) = match inherited_session(&origin) {
         Some((t, exp)) => (t, exp, None),
         None => {
-            let s = mint_blocking(cfg)?;
+            let asked = cfg.routes();
+            let s = mint_blocking(cfg, asked.clone())?;
+            let missing: Vec<&String> = asked.iter().filter(|r| !s.routes.contains(r)).collect();
+            if !missing.is_empty() {
+                warn!(
+                    missing = ?missing,
+                    "[keys] the Worker did not grant every route this config uses — add them to this key's CLIENTS routes"
+                );
+            }
             (s.token, s.exp_ms, Some((s.label, s.fp)))
         }
     };
@@ -223,6 +280,7 @@ fn try_install(cfg: &KeysConfig) -> Result<()> {
     std::env::set_var(SESSION_ENV, &token);
     std::env::set_var(SESSION_EXP_ENV, exp_ms.to_string());
     for (k, v) in &exports {
+        displace(k, false);
         std::env::set_var(k, v);
     }
     let names: Vec<&str> = exports.iter().map(|(k, _)| k.as_str()).collect();
@@ -240,7 +298,7 @@ fn try_install(cfg: &KeysConfig) -> Result<()> {
 
 /// [`mint`] from sync code: its own thread and current-thread runtime, so it
 /// works inside or outside the main runtime.
-pub(crate) fn mint_blocking(cfg: &KeysConfig) -> Result<Session> {
+pub(crate) fn mint_blocking(cfg: &KeysConfig, routes: Vec<String>) -> Result<Session> {
     let cfg = cfg.clone();
     std::thread::spawn(move || -> Result<Session> {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -249,7 +307,7 @@ pub(crate) fn mint_blocking(cfg: &KeysConfig) -> Result<Session> {
             .context("keys: session runtime")?;
         rt.block_on(async {
             let client = http_client()?;
-            mint(&cfg, &client).await
+            mint(&cfg, &client, &routes).await
         })
     })
     .join()
@@ -278,9 +336,9 @@ pub(crate) fn auth_header_for(url: &str) -> Option<String> {
 }
 
 /// For a client library that builds absolute request paths (teloxide's
-/// `/bot<token>/<method>`), turn an exported `<proxy>/s/<blob>` URL into
-/// header mode: (`<proxy>/` as the base URL, `Authorization` + `Tengu-Sealed`
-/// headers). `None` when `url` is not a seal-proxy blob URL.
+/// `/bot<token>/<method>`), turn an exported `<proxy>/<route>` URL into
+/// header mode: (`<proxy>/` as the base URL, `Authorization` + `Tengu-Route`
+/// headers). `None` when `url` is not a bare seal-proxy route URL.
 pub(crate) fn header_mode(url: &str) -> Option<(String, Vec<(&'static str, String)>)> {
     header_mode_for(
         std::env::var(PROXY_ENV).ok().as_deref(),
@@ -295,16 +353,16 @@ fn header_mode_for(
     url: &str,
 ) -> Option<(String, Vec<(&'static str, String)>)> {
     let (origin, token) = (origin?, token?);
-    let blob = url.strip_prefix(origin)?.strip_prefix("/s/")?;
-    let blob = blob.trim_end_matches('/');
-    if blob.is_empty() || blob.contains('/') {
+    let route = url.strip_prefix(origin)?.strip_prefix('/')?;
+    let route = route.trim_end_matches('/');
+    if !tengu_seal::route::is_route_name(route) {
         return None;
     }
     Some((
         format!("{origin}/"),
         vec![
             ("authorization", format!("Bearer {token}")),
-            ("tengu-sealed", blob.to_string()),
+            ("tengu-route", route.to_string()),
         ],
     ))
 }
@@ -319,80 +377,60 @@ fn bearer_for(origin: Option<&str>, token: Option<&str>, url: &str) -> Option<St
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    use tengu_seal::blob::{seal, Inject, SealedMeta};
-    use tengu_seal::vault::Vault;
 
-    fn cfg(dir: &Path) -> KeysConfig {
+    fn cfg() -> KeysConfig {
         KeysConfig {
             proxy: Some("https://seal.example.workers.dev/".into()),
-            sealed_dir: Some(dir.display().to_string()),
             env: BTreeMap::from([
                 ("OPENROUTER_BASE_URL".into(), "openrouter".into()),
                 ("OPENROUTER_API_KEY".into(), "@session".into()),
+                (
+                    "SOLANA_RPC_URL".into(),
+                    "solana-rpc/?api-key=TENGU_SECRET".into(),
+                ),
             ]),
             ..Default::default()
         }
     }
 
-    fn write_blob(dir: &Path, name: &str) -> String {
-        let v = Vault::from_seed(&[5u8; 32]);
-        let meta = SealedMeta {
-            v: 1,
-            name: name.into(),
-            upstream: "https://openrouter.ai/api".into(),
-            inject: Inject::Bearer,
-            clients: vec![],
-            kid: String::new(),
-            created_ms: 0,
-        };
-        let wire = seal(&v.public_key(), meta, b"sk-x", &mut tengu_seal::OsRng)
-            .unwrap()
-            .encode();
-        std::fs::write(dir.join(format!("{name}.sealed")), format!("{wire}\n")).unwrap();
-        wire
-    }
-
     #[test]
-    fn exports_blob_urls_and_the_session() {
-        let dir = tempfile::tempdir().unwrap();
-        let wire = write_blob(dir.path(), "openrouter");
-        let out = env_exports(&cfg(dir.path()), "tss1.tok").unwrap();
+    fn exports_route_urls_and_the_session() {
+        let out = env_exports(&cfg(), "tss1.tok").unwrap();
         assert_eq!(
             out,
             vec![
                 ("OPENROUTER_API_KEY".to_string(), "tss1.tok".to_string()),
                 (
                     "OPENROUTER_BASE_URL".to_string(),
-                    format!("https://seal.example.workers.dev/s/{wire}")
+                    "https://seal.example.workers.dev/openrouter".to_string()
+                ),
+                (
+                    "SOLANA_RPC_URL".to_string(),
+                    "https://seal.example.workers.dev/solana-rpc/?api-key=TENGU_SECRET".to_string()
                 ),
             ]
         );
     }
 
     #[test]
-    fn missing_blob_names_the_seal_command() {
-        let dir = tempfile::tempdir().unwrap();
-        let err = env_exports(&cfg(dir.path()), "t").unwrap_err();
-        assert!(format!("{err:#}").contains("tengu keys seal openrouter"));
-    }
-
-    #[test]
-    fn header_mode_splits_a_blob_url() {
+    fn header_mode_splits_a_route_url() {
         let o = Some("https://seal.example.workers.dev");
         let t = Some("tss1.x");
         let (base, headers) =
-            header_mode_for(o, t, "https://seal.example.workers.dev/s/tsb1.a.b.c").unwrap();
+            header_mode_for(o, t, "https://seal.example.workers.dev/telegram").unwrap();
         assert_eq!(base, "https://seal.example.workers.dev/");
         assert_eq!(
             headers,
             vec![
                 ("authorization", "Bearer tss1.x".to_string()),
-                ("tengu-sealed", "tsb1.a.b.c".to_string()),
+                ("tengu-route", "telegram".to_string()),
             ]
         );
+        assert!(header_mode_for(o, t, "https://seal.example.workers.dev/telegram/").is_some());
         assert!(header_mode_for(o, t, "https://api.telegram.org/").is_none());
-        assert!(header_mode_for(o, t, "https://seal.example.workers.dev/s/a/b").is_none());
-        assert!(header_mode_for(o, None, "https://seal.example.workers.dev/s/a").is_none());
+        assert!(header_mode_for(o, t, "https://seal.example.workers.dev/a/b").is_none());
+        assert!(header_mode_for(o, t, "https://seal.example.workers.dev/session").is_none());
+        assert!(header_mode_for(o, None, "https://seal.example.workers.dev/telegram").is_none());
     }
 
     #[test]
@@ -400,7 +438,7 @@ mod tests {
         let o = Some("https://seal.example.workers.dev");
         let t = Some("tss1.x");
         assert_eq!(
-            bearer_for(o, t, "https://seal.example.workers.dev/s/b").as_deref(),
+            bearer_for(o, t, "https://seal.example.workers.dev/solana-rpc").as_deref(),
             Some("Bearer tss1.x")
         );
         assert_eq!(
@@ -424,5 +462,29 @@ mod tests {
             "nope"
         );
         assert_eq!(worker_error("plain"), "plain");
+    }
+
+    #[test]
+    fn proxy_origin_is_canonical() {
+        for raw in [
+            "https://Tengu-Seal.X.workers.dev",
+            "https://tengu-seal.x.workers.dev:443/",
+            "https://tengu-seal.x.workers.dev/",
+        ] {
+            let c = KeysConfig {
+                proxy: Some(raw.into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                proxy(&c).unwrap(),
+                "https://tengu-seal.x.workers.dev",
+                "{raw}"
+            );
+        }
+        let local = KeysConfig {
+            proxy: Some("http://127.0.0.1:8787/".into()),
+            ..Default::default()
+        };
+        assert_eq!(proxy(&local).unwrap(), "http://127.0.0.1:8787");
     }
 }

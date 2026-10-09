@@ -470,6 +470,7 @@ ufw: allow 22/tcp and 7080/tcp
     "control-loop-lab": { file: "sandboxes/control-loop-lab/config.toml", open: true, cc: 0, or: 1, tg: false },
     "jev-exec":{ file: "sandboxes/jev-exec/config.toml", open: true, cc: 1, or: 1, tg: false },
     "lping": { file: "sandboxes/lping/config.toml", open: true, cc: 0, or: 3, tg: false },
+    "sealed-check": { file: "sandboxes/sealed-check/config.toml", open: true, cc: 0, or: 1, tg: false, keys: true },
     "soe": { file: "sandboxes/soe/config.toml", open: true, cc: 3, or: 0, tg: false, gen: true },
     "storage-test": { file: "sandboxes/storage-test/config.toml", open: false, cc: 1, or: 0, tg: true },
     "tor-check": { file: "sandboxes/tor-check/config.toml", open: false, cc: 0, or: 1, tg: false },
@@ -497,7 +498,8 @@ ufw: allow 22/tcp and 7080/tcp
     var h = [];
     if (s.cc && !cc) h.push('<span class="bad">doctor exits 1: ' + s.cc + " <code>claude_code</code> agent" + (s.cc > 1 ? "s" : "") + " need the feature → unhealthy</span>");
     if (s.cc && cc) h.push('<span class="bad">doctor exits 1: the image has no Claude CLI (<code>claude</code> not on PATH) → unhealthy</span>');
-    if (s.or) h.push("needs <code>OPENROUTER_API_KEY</code> in <code>.env</code> (" + s.or + " openrouter agent" + (s.or > 1 ? "s" : "") + ")");
+    if (s.keys) h.push('<span class="bad">doctor exits 1: <code>[keys]</code> needs an ssh-agent key and the seal proxy (<code>127.0.0.1:8787</code> = the container itself); no session → <code>[keys.env]</code> unset → <code>OPENROUTER_API_KEY is required</code>. Run it natively (<code>docs/sealed-check-2026-10-09.md</code>)</span>');
+    else if (s.or) h.push("needs <code>OPENROUTER_API_KEY</code> in <code>.env</code> (" + s.or + " openrouter agent" + (s.or > 1 ? "s" : "") + ")");
     if (net === "open" && !s.open) h.push('<span class="warn">NETWORK=open but the config still says tor: doctor\'s proxy check fails without a proxy on 127.0.0.1:9050</span>');
     if (net === "tor" && s.open && ov) h.push('<span class="warn">NETWORK=tor but the config says open: tengu goes direct inside a network with no exit</span>');
     if (!h.some(function (x) { return x.indexOf("bad") >= 0; })) h.push('<span class="good">doctor can pass</span>');

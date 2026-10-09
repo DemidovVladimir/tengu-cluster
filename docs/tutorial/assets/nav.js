@@ -36,7 +36,7 @@ window.TUTORIAL = {
     { slug: "scopes", chapter: "safety", title: "Scopes and hardening", blurb: "Every tool call checks what it may touch, deny by default." },
     { slug: "egress", chapter: "safety", title: "Tor egress", blurb: "All traffic leaves through one policy, Tor unless a sandbox opts out." },
     { slug: "secrets", chapter: "safety", title: "Secrets and redaction", blurb: "An encrypted vault in, redacted text out." },
-    { slug: "sealed-keys", chapter: "safety", title: "Sealed keys", blurb: "No provider key on this machine: a Cloudflare Worker opens sealed blobs, injects the key, forwards." },
+    { slug: "sealed-keys", chapter: "safety", title: "Sealed keys", blurb: "No provider key on this machine: keys are Cloudflare Worker secrets; a route-scoped session names a route, the Worker puts the key at its one spot and forwards." },
 
     { slug: "decision-loop", chapter: "runtime", title: "Decision loop", blurb: "Jev reads the analysis map, walks the execution map; tools do the work." },
     { slug: "observations", chapter: "runtime", title: "Typed observations", blurb: "Tool results with status, age and features, cached and recorded." },

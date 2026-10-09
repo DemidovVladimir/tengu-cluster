@@ -1,77 +1,78 @@
-//! Session token: claims sealed by the Worker with its own session key, so
-//! the Worker stores nothing per session. tengu keeps it in RAM only.
+//! Session token: claims signed by the Worker with HMAC-SHA256 under its
+//! `SESSION_KEY` secret, so the Worker stores nothing per session. tengu
+//! keeps the token in RAM only.
 //!
-//! Wire form: `tss1.<b64url 12-byte nonce>.<b64url ChaCha20-Poly1305(claims JSON)>`,
-//! AAD `tss1`. Revocation does not wait for expiry: the Worker re-checks the
-//! client allow-list (`clients:<fp>`) on every request.
+//! Wire form: `tss1.<b64url claims JSON>.<b64url HMAC(prefix "." claims)>`.
+//! Rotating `SESSION_KEY` ends every session at once; removing a client from
+//! `CLIENTS` ends its sessions too (checked on every request).
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
-use crate::vault::Vault;
 use crate::{b64d, b64e, Code, Error};
 
 pub const PREFIX: &str = "tss1";
-/// Session lifetime the Worker issues.
-pub const TTL_MS: u64 = 24 * 60 * 60 * 1000;
+/// Shortest `SESSION_KEY` the Worker accepts.
+pub const MIN_KEY_BYTES: usize = 32;
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claims {
     /// OpenSSH fingerprint of the client key that signed `/session`.
     pub fp: String,
-    /// Operator-chosen label from the allow-list entry.
+    /// Label from the `CLIENTS` entry.
     pub label: String,
     pub exp_ms: u64,
-    /// Worker key the session belongs to.
-    pub kid: String,
+    /// Routes granted: the signed request ∩ the client's `CLIENTS` routes.
+    pub routes: Vec<String>,
 }
 
-/// Seal `claims` into a token; `nonce` must be fresh random bytes.
-pub fn issue(vault: &Vault, claims: &Claims, nonce: [u8; 12]) -> String {
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(vault.session_key()));
-    let pt = serde_json::to_vec(claims).expect("claims serialize");
-    let ct = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: &pt,
-                aad: PREFIX.as_bytes(),
-            },
-        )
-        .expect("ChaCha20-Poly1305 encrypt cannot fail for small inputs");
-    format!("{PREFIX}.{}.{}", b64e(&nonce), b64e(&ct))
+fn mac(key: &[u8], body_b64: &str) -> HmacSha256 {
+    let mut m = HmacSha256::new_from_slice(key).expect("HMAC takes any key length");
+    m.update(PREFIX.as_bytes());
+    m.update(b".");
+    m.update(body_b64.as_bytes());
+    m
 }
 
-/// Open and check a token: authentic, this Worker key, not expired.
-pub fn verify(vault: &Vault, token: &str, now_ms: u64) -> Result<Claims, Error> {
+/// Check the `SESSION_KEY` length (the Worker refuses to issue otherwise).
+pub fn check_key(key: &[u8]) -> Result<(), Error> {
+    if key.len() < MIN_KEY_BYTES {
+        return Err(Error::new(
+            Code::Misconfigured,
+            format!("SESSION_KEY must be at least {MIN_KEY_BYTES} characters"),
+        ));
+    }
+    Ok(())
+}
+
+pub fn issue(key: &[u8], claims: &Claims) -> String {
+    let body = b64e(&serde_json::to_vec(claims).expect("claims serialize"));
+    let tag = mac(key, &body).finalize().into_bytes();
+    format!("{PREFIX}.{body}.{}", b64e(&tag))
+}
+
+/// Check a token: authentic under `key`, not expired.
+pub fn verify(key: &[u8], token: &str, now_ms: u64) -> Result<Claims, Error> {
     let unauth = |m: &str| Error::new(Code::Unauthorized, m.to_string());
     let mut parts = token.trim().split('.');
     if parts.next() != Some(PREFIX) {
         return Err(unauth("not a session token"));
     }
-    let nonce = b64d(parts.next().ok_or_else(|| unauth("malformed session"))?)?;
-    let ct = b64d(parts.next().ok_or_else(|| unauth("malformed session"))?)?;
-    if parts.next().is_some() || nonce.len() != 12 {
+    let body = parts.next().ok_or_else(|| unauth("malformed session"))?;
+    let tag = b64d(parts.next().ok_or_else(|| unauth("malformed session"))?)?;
+    if parts.next().is_some() {
         return Err(unauth("malformed session"));
     }
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(vault.session_key()));
-    let pt = cipher
-        .decrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: &ct,
-                aad: PREFIX.as_bytes(),
-            },
-        )
-        .map_err(|_| unauth("session is forged or from another Worker key"))?;
+    mac(key, body)
+        .verify_slice(&tag)
+        .map_err(|_| unauth("session is forged or SESSION_KEY was rotated"))?;
     let claims: Claims =
-        serde_json::from_slice(&pt).map_err(|_| unauth("malformed session claims"))?;
-    if claims.kid != vault.public_key().kid() {
-        return Err(unauth("session is from another Worker key"));
-    }
+        serde_json::from_slice(&b64d(body)?).map_err(|_| unauth("malformed session claims"))?;
     if now_ms >= claims.exp_ms {
-        return Err(unauth("session expired — tengu renews it on the next call"));
+        return Err(unauth("session expired — restart tengu for a new one"));
     }
     Ok(claims)
 }
@@ -80,38 +81,45 @@ pub fn verify(vault: &Vault, token: &str, now_ms: u64) -> Result<Claims, Error> 
 mod tests {
     use super::*;
 
-    fn claims(v: &Vault, exp_ms: u64) -> Claims {
+    const KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
+
+    fn claims(exp_ms: u64) -> Claims {
         Claims {
             fp: "SHA256:abc".into(),
             label: "mac".into(),
             exp_ms,
-            kid: v.public_key().kid(),
+            routes: vec!["openrouter".into()],
         }
     }
 
     #[test]
     fn issue_verify_round_trip() {
-        let v = Vault::from_seed(&[4u8; 32]);
-        let t = issue(&v, &claims(&v, 2_000), [1u8; 12]);
+        let t = issue(KEY, &claims(2_000));
         assert!(t.starts_with("tss1."));
-        assert_eq!(verify(&v, &t, 1_000).unwrap().label, "mac");
+        assert_eq!(verify(KEY, &t, 1_000).unwrap().label, "mac");
     }
 
     #[test]
-    fn expired_forged_and_foreign_tokens_fail() {
-        let v = Vault::from_seed(&[4u8; 32]);
-        let other = Vault::from_seed(&[5u8; 32]);
-        let t = issue(&v, &claims(&v, 2_000), [1u8; 12]);
-        assert_eq!(verify(&v, &t, 2_000).unwrap_err().code, Code::Unauthorized);
+    fn expired_forged_and_rotated_tokens_fail() {
+        let t = issue(KEY, &claims(2_000));
+        assert_eq!(verify(KEY, &t, 2_000).unwrap_err().code, Code::Unauthorized);
+        let other = b"ffffffffffffffffffffffffffffffff";
         assert_eq!(
-            verify(&other, &t, 1_000).unwrap_err().code,
+            verify(other, &t, 1_000).unwrap_err().code,
             Code::Unauthorized
         );
-        let mut flipped = t.clone();
-        flipped.pop();
-        flipped.push(if t.ends_with('A') { 'B' } else { 'A' });
-        assert!(verify(&v, &flipped, 1_000).is_err());
-        assert!(verify(&v, "tss1.x", 1_000).is_err());
-        assert!(verify(&v, "Bearer x", 1_000).is_err());
+        // Changed claims with the old tag.
+        let mut parts: Vec<&str> = t.split('.').collect();
+        let forged_body = b64e(&serde_json::to_vec(&claims(9_999_999)).unwrap());
+        parts[1] = &forged_body;
+        assert!(verify(KEY, &parts.join("."), 1_000).is_err());
+        assert!(verify(KEY, "tss1.x", 1_000).is_err());
+        assert!(verify(KEY, "Bearer x", 1_000).is_err());
+    }
+
+    #[test]
+    fn short_keys_are_refused() {
+        assert!(check_key(b"short").is_err());
+        assert!(check_key(KEY).is_ok());
     }
 }

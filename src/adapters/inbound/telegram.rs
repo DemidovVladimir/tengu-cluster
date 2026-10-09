@@ -61,8 +61,8 @@ const EVICTION_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// Idle threshold before evicting a user state.
 const IDLE_EVICTION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1800);
 
-/// `[keys.env]` target for the Telegram blob: `TELEGRAM_API_URL = "telegram"`
-/// exports `<proxy>/s/<blob>`, and then no `TELEGRAM_BOT_TOKEN` is needed.
+/// `[keys.env]` target for the Telegram route: `TELEGRAM_API_URL = "telegram"`
+/// exports `<proxy>/telegram`, and then no `TELEGRAM_BOT_TOKEN` is needed.
 const TELEGRAM_API_URL_ENV: &str = "TELEGRAM_API_URL";
 
 /// The seal-proxy Telegram URL, when `[keys]` exported one.
@@ -120,9 +120,10 @@ impl TelegramPipe {
                 .connect_timeout(std::time::Duration::from_secs(30))
                 .timeout(std::time::Duration::from_secs(60));
         }
-        // `[keys]`: `TELEGRAM_API_URL = <proxy>/s/<blob>` — the bot talks to
-        // the seal proxy with a placeholder token, which the Worker swaps for
-        // the sealed one; the real token never reaches this process.
+        // `[keys]`: `TELEGRAM_API_URL = <proxy>/telegram` — the bot talks to
+        // the seal proxy with a placeholder token (header mode: `Tengu-Route`),
+        // which the Worker swaps for its secret; the real token never reaches
+        // this process.
         let sealed =
             sealed_api_url().and_then(|u| crate::adapters::outbound::keys::header_mode(&u));
         if let Some((_, headers)) = &sealed {
@@ -595,13 +596,19 @@ impl TelegramSession {
         require_allowed_users(&allowed_users)?;
         info!(count = allowed_users.len(), "Telegram allowed users loaded");
 
-        // With a sealed `TELEGRAM_API_URL` the Worker holds the token and
-        // `build_bot` sends a placeholder; a local token is ignored.
+        // With `TELEGRAM_API_URL` from `[keys]` the Worker holds the token
+        // and `build_bot` sends a placeholder; a local token is ignored. A
+        // config that routes Telegram through the proxy never falls back to
+        // a local token when the session is missing — it refuses to start.
+        let via_proxy = config.keys.enabled() && config.keys.env.contains_key(TELEGRAM_API_URL_ENV);
         let bot_token = match sealed_api_url() {
             Some(_) => crate::adapters::outbound::keys::PLACEHOLDER.to_string(),
+            None if via_proxy => anyhow::bail!(
+                "[keys] routes Telegram through the seal proxy but no session is set up — see the [keys] warning above; refusing to use a local TELEGRAM_BOT_TOKEN"
+            ),
             None => std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| {
                 anyhow::anyhow!(
-                    "TELEGRAM_BOT_TOKEN env var is required (or seal it: [keys.env] TELEGRAM_API_URL)"
+                    "TELEGRAM_BOT_TOKEN env var is required (or route it through the seal proxy: [keys.env] TELEGRAM_API_URL = \"telegram\")"
                 )
             })?,
         };

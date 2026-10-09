@@ -248,6 +248,15 @@ pub(crate) fn load_secrets_into_env(path: &Path) -> Result<Vec<(String, String)>
             continue;
         }
         if let Some((k, v)) = trimmed.split_once('=') {
+            // A key `[keys]` removed (it lives in the seal-proxy Worker) is
+            // never put back — but its value is still returned, so it is
+            // registered for redaction.
+            if crate::adapters::outbound::keys::was_removed(k) {
+                if !v.is_empty() {
+                    loaded.push((k.to_string(), v.to_string()));
+                }
+                continue;
+            }
             let existing = std::env::var(k).unwrap_or_default();
             if existing.is_empty() {
                 std::env::set_var(k, v);
@@ -291,7 +300,22 @@ pub(crate) fn process_secret_registry(vault: Option<&Path>) -> SecretRegistry {
         registry.register(pw);
     }
     register_env_secrets(&mut registry, std::env::vars_os());
+    // Local keys `[keys]` removed or overwrote earlier in this process
+    // (`strip`, the `[keys.env]` exports) — still masked, e.g. when an agent
+    // reads the `.env` file that holds them.
+    for (name, value) in crate::adapters::outbound::keys::displaced() {
+        if crate::domain::secrets::is_env_secret(&name, &value) {
+            registry.register(value.trim().to_string());
+        }
+    }
     registry
+}
+
+/// [`register_env_secrets`] over the process env as it is now — adds what
+/// a later step exported (the `[keys]` session token) to a registry built
+/// at startup, keeping everything it already holds (`.env`, vault values).
+pub(crate) fn register_process_env(registry: &mut SecretRegistry) {
+    register_env_secrets(registry, std::env::vars_os());
 }
 
 /// Register the value of every `name = value` in `vars` that

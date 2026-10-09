@@ -1,25 +1,25 @@
-//! Sealed-secret formats shared by tengu (seals, signs, calls) and the
-//! `tengu-seal` Cloudflare Worker (opens, checks, injects, forwards).
+//! Seal-proxy formats shared by tengu (signs, calls) and the `tengu-seal`
+//! Cloudflare Worker (checks, injects, forwards, masks).
 //!
-//! The harness never holds a provider key in plaintext:
+//! The harness never holds a provider key: keys are Worker secrets, set by
+//! the operator in Cloudflare. A request names a route; the Worker adds that
+//! route's key and forwards.
 //!
 //! | Piece | Lives | Module |
 //! |---|---|---|
-//! | Vault seed (32 bytes) → X25519 key pair + session key | Worker's `KeyVault` Durable Object, never exported | [`vault`] |
-//! | Sealed blob `tsb1.<meta>.<enc>.<ct>`: HPKE ciphertext of one secret, metadata as AAD | tengu (`<TENGU_HOME>/sealed/*.sealed`, safe in git) | [`blob`] |
-//! | Session token `tss1.<nonce>.<ct>`: claims sealed with the session key | tengu RAM only, 24 h | [`session`] |
+//! | Route table `name → {upstream, secret, header?}` | Worker `ROUTES` var (`wrangler.toml`, no secrets) | [`route`] |
+//! | Client list `SHA256:<fp> → {label, session_hours, routes}` | Worker `CLIENTS` var (fingerprints are public) | [`route`] |
 //! | Client identity: an SSH key held by an agent (Secure Enclave via Secretive, Touch ID) | the operator's Mac | [`ssh`] |
-//! | Upstream request: target URL + injected header, bound to the blob's upstream | built in the Worker | [`target`] |
+//! | Session token `tss1.<claims>.<hmac>`, key = Worker secret `SESSION_KEY` | tengu RAM only, 24 h default | [`session`] |
+//! | Upstream request (target URL + injected header) and reply masking | built in the Worker | [`target`] |
 //!
-//! Everything here is pure Rust (no I/O, no clock, no RNG except the
-//! caller-supplied one), so it builds natively and for
-//! `wasm32-unknown-unknown`.
+//! Everything here is pure Rust (no I/O, no clock, no RNG), so it builds
+//! natively and for `wasm32-unknown-unknown`.
 
-pub mod blob;
+pub mod route;
 pub mod session;
 pub mod ssh;
 pub mod target;
-pub mod vault;
 
 use std::fmt;
 
@@ -48,6 +48,9 @@ pub enum Code {
     /// The upstream could not be reached (502); never carries its URL,
     /// which may hold the secret.
     BadGateway,
+    /// The Worker itself is misconfigured (500): a route names a missing
+    /// secret, `ROUTES` / `CLIENTS` do not parse, `SESSION_KEY` is unset.
+    Misconfigured,
 }
 
 impl Code {
@@ -57,6 +60,7 @@ impl Code {
             Code::Unauthorized => 401,
             Code::Forbidden => 403,
             Code::BadGateway => 502,
+            Code::Misconfigured => 500,
         }
     }
 
@@ -66,6 +70,7 @@ impl Code {
             Code::Unauthorized => "unauthorized",
             Code::Forbidden => "forbidden",
             Code::BadGateway => "bad_gateway",
+            Code::Misconfigured => "misconfigured",
         }
     }
 }
@@ -93,6 +98,3 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
-
-/// The OS RNG (`getrandom`), for [`blob::seal`] on the tengu side.
-pub use rand_core::OsRng;

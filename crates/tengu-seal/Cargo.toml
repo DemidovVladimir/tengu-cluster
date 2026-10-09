@@ -4,25 +4,20 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.78"
 license = "MIT"
-description = "Sealed-secret formats shared by tengu and the tengu-seal Cloudflare Worker: HPKE blobs, session tokens, SSH signature checks, target building."
+description = "Seal-proxy formats shared by tengu and the tengu-seal Cloudflare Worker: route table, client list, session tokens, SSH signature checks, target building, reply masking."
 publish = false
 
 [lib]
 path = "src/lib.rs"
 
 # Pure Rust only, so the same code builds natively (tengu) and for
-# wasm32-unknown-unknown (cloudflare/seal-worker). Versions match the
-# rand_core 0.6 / getrandom 0.2 generation already in tengu's lockfile.
+# wasm32-unknown-unknown (cloudflare/seal-worker).
 [dependencies]
 base64 = "0.22"
-chacha20poly1305 = "0.10"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-hkdf = "0.12"
-hpke = { version = "0.12", default-features = false, features = ["alloc", "x25519"] }
+hmac = "0.12"
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 url = "2"
-zeroize = "1"

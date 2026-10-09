@@ -492,11 +492,12 @@ Set only in `control-loop-lab`. Server: the default build (feature `studio`), lo
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Eleven today: `control-loop-lab`, `jev-exec`, `lping`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes.
+`sandboxes/<name>/config.toml`, run from the repo root. Twelve today: `control-loop-lab`, `jev-exec`, `lping`, `sealed-check`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes.
 
 | Sandbox | What its config shows |
 |---|---|
 | `control-loop-lab` | the safe control-loop reference run: one Jev loop, two feeds, `[studio] control = true`; nothing touches money, keys, the shell or the network (`docs/control-loop-lab-2026-10-08.md`) |
+| `sealed-check` | proves the seal proxy: Jev, loop `check`, `tengu run`, Studio reach OpenRouter only through the `tengu-seal` Worker (`[keys]`); one pure-compute tool, own root `~/tengu-sealed-check` (`docs/sealed-check-2026-10-09.md`) |
 | `soe` | the SOE weekly cycle: `[sources]` (rows off), `[soe]` with `soe_architect` / `soe_critic` (`claude_code`, built-ins off), the read-only `soe_reader`, `[feeds.soe_week]` (`kind = "job"`), bound to `SOE-G0` (`docs/soe-2026-10-08.md`) |
 | `xlab-w2` | `[strategy_ranking]` (contracts `rank.xlab-w2.daily.v1`, `rank.xlab-w2.weekend.v1`, unsealed until G-SR1), `strategy_ranking` on the private `xl_ranker` + its feeds `strategy_ranking_daily` / `_weekend`, unbound (no `[generation]`), `[backtest] keep_runs = 200` (cited runs never pruned) |
 
