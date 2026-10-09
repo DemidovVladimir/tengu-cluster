@@ -1465,6 +1465,21 @@ async fn frozen_cycle_refused() {
     assert_eq!(bench.store.snapshot().dirs, before.dirs);
     assert_eq!(bench.store.snapshot().logs, before.logs);
 
+    // A live week decided before the last frozen one would break the chain.
+    let p = bench.params("2026-W40", t("2026-09-28T12:00:00Z"), Target::Cycle);
+    let e = format!("{:#}", bench.cycle(None, &p).await.unwrap_err());
+    assert!(e.starts_with("cycle_out_of_order: cycles/2026-W40"), "{e}");
+    assert_eq!(bench.store.snapshot().dirs, before.dirs);
+    // A replay of that week is fine: it never touches the chain.
+    let p = bench.params(
+        "2026-W40",
+        t("2026-09-28T12:00:00Z"),
+        Target::Replay {
+            run_id: "r-w40".into(),
+        },
+    );
+    bench.cycle(None, &p).await.unwrap();
+
     // An unfinished dir (claimed, never frozen) is refused too.
     let w42 = RunDir::Cycle("2026-W42".into());
     bench.store.claim(&w42).unwrap();

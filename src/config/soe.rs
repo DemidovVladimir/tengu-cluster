@@ -10,6 +10,7 @@
 //! | [`load_profile`] | no file ⇒ `operator_profile_missing` — never a built-in default (PRD § 14); a parse or rule error ⇒ `invalid_profile`, every problem listed; `synthetic = true` ⇒ `synthetic_profile_refused` unless allowed (public fixtures); a real profile inside a git work tree (a `.git` dir or file in any ancestor) ⇒ `profile_in_repo`, with any group / other permission bit ⇒ `profile_mode` (`chmod 600`); `signed_by = "UNSIGNED"` ⇒ `operator_profile_unsigned` |
 //! | [`load_opportunity`] | one `soe.opportunity/1` file, any name; problems listed |
 //! | [`load_record_dir`] | `<id>.toml` per record (file stem = `id`); `*.md` and dotfiles skipped; another entry refused; sorted by id; every error names its file |
+//! | [`load_replay_set`] | one `soe.replay_set/1` file (O4 replay): problems listed (`invalid_replay_set`); `synthetic = true` ⇒ `synthetic_replay_set_refused` unless allowed; the operator's labels (`synthetic = false`) inside a git work tree ⇒ `replay_set_in_repo`, with a group / other permission bit ⇒ `replay_set_mode` — holdout outcomes stay private |
 //! | [`load_cited`] | a `--cited` file: `[[cited]]` `gates::CitedRecord` views (what each cited source record shows; the O2 as-of view builds them later) — record ids unique, unknown keys refused, problems listed |
 //! | digest | `lineage::pins::toml_digest` of the file text (the profile's is `profile_sha256`) |
 //!
@@ -229,6 +230,40 @@ pub fn load_cited(path: &Path) -> Result<Vec<CitedRecord>, String> {
     cited_problems(&file.cited, &mut p);
     p.into_result().map_err(|errors| listed(path, &errors))?;
     Ok(file.cited)
+}
+
+/// Module table: one replay set (the profile's privacy rules).
+pub fn load_replay_set(
+    path: &Path,
+    allow_synthetic: bool,
+) -> Result<Loaded<crate::domain::soe::replay::ReplaySet>, String> {
+    let loaded = read_record::<crate::domain::soe::replay::ReplaySet>(path)
+        .map_err(|e| format!("invalid_replay_set:\n{e}"))?;
+    if loaded.record.synthetic {
+        if !allow_synthetic {
+            return Err(format!(
+                "synthetic_replay_set_refused: {}: a synthetic test set (`synthetic = true`) — \
+                 allow synthetic records to use it",
+                path.display()
+            ));
+        }
+        return Ok(loaded);
+    }
+    if let Some(tree) = git_work_tree(path) {
+        return Err(format!(
+            "replay_set_in_repo: {}: inside the git work tree {} — the operator's labels and \
+             holdout outcomes are private; keep the set under <TENGU_HOME>/state/{SOE_STATE}/eval/",
+            path.display(),
+            tree.display()
+        ));
+    }
+    if let Some(mode) = loose_mode(path)? {
+        return Err(format!(
+            "replay_set_mode: {}: mode {mode:o} lets others read it — chmod 600",
+            path.display()
+        ));
+    }
+    Ok(loaded)
 }
 
 /// Module table: every `<id>.toml` record under `dir`, sorted by id; `Err`
@@ -614,6 +649,53 @@ mod tests {
             write(&home, &real(), 0o640);
             let e = load_profile(&home, false).unwrap_err();
             assert!(e.starts_with("profile_mode: ") && e.contains("640"), "{e}");
+        }
+    }
+
+    /// A replay set: synthetic only when allowed; the operator's labels
+    /// never inside a git work tree or open to other users.
+    #[test]
+    fn replay_set_privacy() {
+        use crate::domain::soe::replay::tests::SET;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let synthetic = tmp.path().join("set.toml");
+        write(&synthetic, SET, 0o644);
+        let e = load_replay_set(&synthetic, false).unwrap_err();
+        assert!(e.starts_with("synthetic_replay_set_refused: "), "{e}");
+        assert_eq!(
+            load_replay_set(&synthetic, true)
+                .unwrap()
+                .record
+                .cases
+                .len(),
+            3
+        );
+        let labels = SET.replace("synthetic = true", "synthetic = false");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let in_repo = repo.join("eval/set.toml");
+        write(&in_repo, &labels, 0o600);
+        let e = load_replay_set(&in_repo, false).unwrap_err();
+        assert!(e.starts_with("replay_set_in_repo: "), "{e}");
+        let broken = tmp.path().join("broken.toml");
+        write(
+            &broken,
+            &SET.replace("label = \"HOLD\"", "label = \"MAYBE\""),
+            0o600,
+        );
+        let e = load_replay_set(&broken, true).unwrap_err();
+        assert!(e.starts_with("invalid_replay_set:"), "{e}");
+        if git_work_tree(tmp.path()).is_some() {
+            return; // the temp dir itself sits in a repo here
+        }
+        let home = tmp.path().join("home/state/soe/eval/set.toml");
+        write(&home, &labels, 0o600);
+        assert!(!load_replay_set(&home, false).unwrap().record.synthetic);
+        #[cfg(unix)]
+        {
+            write(&home, &labels, 0o640);
+            let e = load_replay_set(&home, false).unwrap_err();
+            assert!(e.starts_with("replay_set_mode: "), "{e}");
         }
     }
 

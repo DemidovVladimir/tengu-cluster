@@ -142,7 +142,7 @@
         <li>The economics turn each input range into downside, base and upside figures, in integer minor units of the profile's currency. A figure that needs an unknown input names it.</li>
         <li>The hard gates run on those figures and the profile's caps. A known violation rejects; anything unknown or open holds; a figure exactly at a cap passes.</li>
         <li>Only <code>PASS</code> candidates rank, by the signed profile's <code>rank_order</code>. Each neighbour pair is explained by the first key that tells them apart.</li>
-        <li>The week lists ranked, held and rejected rows and the next information. Until the O3 allocation every ranked row holds. When nothing passes it is a valid <code>HOLD</code> week.</li>
+        <li>The week lists ranked, held and rejected rows and the next information. The allocation gives the best-ranked candidates a cheap test within the weekly hours and tranche; the rest hold. When nothing passes it is a valid <code>HOLD</code> week.</li>
         <li><code>tengu soe eval</code> replays the dated cases against the profile they name: expected vs answered, with no look-ahead. Any difference exits 1.</li>
       </ol>
     </div>
@@ -151,9 +151,9 @@
 
 <section class="sec" aria-labelledby="s-cli">
   <div class="sec-head">
-    <span class="kicker">No config, secrets, network or LLM</span>
+    <span class="kicker">Offline, then weekly</span>
     <h2 id="s-cli">The <code>tengu soe</code> command</h2>
-    <p>Every command but <code>init</code> loads the signed profile first and stops on any refusal. Ids and hashes print in full; <code>--format json</code> prints the same data as JSON.</p>
+    <p>The first five commands need no config, secrets, network or LLM. The weekly ones work on the private SOE state of the config named by <code>--sandbox</code> or <code>tengu -c &lt;file&gt;</code>. Every deciding command loads the signed profile first and stops on any refusal. Ids and hashes print in full; <code>--format json</code> prints the same data as JSON.</p>
   </div>
   <div class="table-wrap">
     <table>
@@ -161,9 +161,13 @@
       <tbody>
         <tr><td><code>init</code></td><td>writes the <code>UNSIGNED</code> template (the PRD's proposed values, no capability), mode 0600; its path and sha256</td><td>the file exists (<code>profile_exists</code>); the path is inside a git work tree (<code>profile_in_repo</code>)</td></tr>
         <tr><td><code>check &lt;opportunity.toml&gt;</code></td><td>the verdict with every failed gate, the three scenarios, the rank keys, capability fit, the next information</td><td>the profile or the file is refused; the decision is before the opportunity (<code>future_leakage</code>)</td></tr>
-        <tr><td><code>portfolio &lt;dir&gt; --as-of &lt;t&gt;</code></td><td>the week: ranked (each <code>HOLD</code>, nothing allocated before O3) with why each ranks above the next, held, rejected, next information; JSON = its canonical JSON</td><td>as <code>check</code>, for any file in the dir</td></tr>
+        <tr><td><code>portfolio &lt;dir&gt; --as-of &lt;t&gt;</code></td><td>the week as the O3 allocation builds it, every candidate new: ranked with their actions and why each ranks above the next, held, rejected, a note per candidate, next information; JSON = its canonical JSON</td><td>as <code>check</code>, for any file in the dir</td></tr>
         <tr><td><code>sensitivity &lt;opportunity.toml&gt;</code></td><td>the tornado: each input at ± <code>--scale-bps</code> (default 2000), the time-adjusted change, the verdict, gates added or removed</td><td>as <code>check</code>; a scale outside 1..=10000 is a usage error</td></tr>
         <tr><td><code>eval &lt;cases dir&gt;</code></td><td>ok or <code>FAIL</code> per case with every difference; classes without a case</td><td>any case fails, or is refused (another profile id)</td></tr>
+        <tr><td><code>cycle [--week] [--at] [--offline | --no-llm]</code></td><td>one live week, frozen under <code>cycles/&lt;week&gt;/</code>; the stages and the hashes</td><td>the week ran already, was left unfinished, or is earlier than the last one (<code>cycle_out_of_order</code>)</td></tr>
+        <tr><td><code>replay --set &lt;file&gt; [--holdout]</code></td><td>the labelled dates as weeks under <code>replays/</code>; the report</td><td>another profile's labels; a run id used before; <code>--holdout</code> with no holdout case</td></tr>
+        <tr><td><code>grade &lt;week&gt; --file</code> · <code>resolve &lt;week&gt;</code></td><td>one grade line · the forecast items resolved now and still pending</td><td>the week is not frozen; a stale version; evidence from before the freeze</td></tr>
+        <tr><td><code>review</code> · <code>verify</code> · <code>show</code></td><td>the Review #2 packet · every frozen run re-hashed and the chain · one run</td><td>the state is not intact; the run is absent</td></tr>
       </tbody>
     </table>
   </div>
@@ -176,6 +180,8 @@
         <tr><td><code>--as-of &lt;t&gt;</code></td><td><code>check</code>, <code>sensitivity</code>: the opportunity's own <code>as_of</code>; <code>portfolio</code>: required</td></tr>
         <tr><td><code>--week YYYY-Www</code></td><td>the ISO week of <code>--as-of</code> (UTC)</td></tr>
         <tr><td><code>--cited &lt;file&gt;</code></td><td>none: no record supports anything, so the evidence gates hold. A TOML file of <code>[[cited]]</code> record views until the O2 as-of view builds them</td></tr>
+        <tr><td><code>--sandbox &lt;name&gt;</code></td><td>weekly commands: its <code>[sources]</code> state dir is the SOE state root, <code>[soe]</code> the stage agents; none: <code>&lt;TENGU_HOME&gt;/state/soe/</code> (<code>cycle</code> and <code>replay</code> need one)</td></tr>
+        <tr><td><code>--offline</code> · <code>--no-llm</code></td><td>the stage cache only, a miss fails the stage · no model stage at all</td></tr>
       </tbody>
     </table>
   </div>
@@ -593,7 +599,8 @@
     <li><span><b>Unsigned never decides.</b> <code>check</code>, <code>portfolio</code>, <code>sensitivity</code> and <code>eval</code> refuse an unsigned profile, an <code>init</code> template included.</span></li>
     <li><span><b>The profile is never overwritten.</b> <code>init</code> creates the file only when none exists, mode 0600, and never inside a git work tree.</span></li>
     <li><span><b>Same inputs, same week.</b> A <code>portfolio</code> rerun prints the same bytes, whatever the file order.</span></li>
-    <li><span><b>The command allocates nothing yet.</b> <code>tengu soe portfolio</code> holds every ranked candidate until it moves to the O3 allocation; no command contacts, spends or publishes.</span></li>
+    <li><span><b>One portfolio builder.</b> <code>tengu soe portfolio</code> and every weekly cycle build the week with the O3 allocation; no command contacts, spends or publishes.</span></li>
+    <li><span><b>The chain only moves forward.</b> A live week decided before the last frozen one is refused (<code>cycle_out_of_order</code>); replay it instead.</span></li>
     <li><span><b>A model never writes a number the code computes.</b> A proposal or challenge with a figure, verdict, rank key, action or provenance key is refused, path by path.</span></li>
     <li><span><b>Evidence traces.</b> A proposal cites only records of the cycle's packet, and an input's evidence link must be the link of a record it cites.</span></li>
     <li><span><b>A Critic only makes things worse.</b> Each end of a challenged input moves only against the candidate; an unknown stays unknown; a block holds, never passes.</span></li>
@@ -624,12 +631,14 @@
 <span class="ln cmd"><span class="p">$ </span>soe eval $F/cases</span>
 <span class="ln o">16 case(s): 16 ok, 0 FAIL · classes without a case: none</span>
 <span class="ln cmd"><span class="p">$ </span>soe portfolio $F/week/opportunities --cited $F/week/cited.toml --as-of 2026-09-21T18:00:00Z</span>
+<span class="ln o">ranked (3) · allocated 10 owner h, 0.00 cash of 10 h, 1500.00 (weekly hours, validation tranche)</span>
 <span class="ln o"># the first three of the eight key columns, in the profile's order:</span>
-<span class="ln o">rank  id                     version  action  EVIDENCE_CONFIDENCE  TIME_ADJUSTED_BASE  PAYBACK_BASE</span>
-<span class="ln o">1     final-rule-automation  1        HOLD    HIGH                 5818.67 EUR         4 months</span>
-<span class="ln o">2     reseller-at-cap        1        HOLD    HIGH                 3760.00 EUR         2 months</span>
-<span class="ln o">3     erp-integration        1        HOLD    MEDIUM               6162.40 EUR         2 months</span>
+<span class="ln o">rank  id                     version  action      EVIDENCE_CONFIDENCE  TIME_ADJUSTED_BASE  PAYBACK_BASE</span>
+<span class="ln o">1     final-rule-automation  1        CHEAP_TEST  HIGH                 5818.67 EUR         4 months</span>
+<span class="ln o">2     reseller-at-cap        1        CHEAP_TEST  HIGH                 3760.00 EUR         2 months</span>
+<span class="ln o">3     erp-integration        1        HOLD        MEDIUM               6162.40 EUR         2 months</span>
 <span class="ln o">  why: `reseller-at-cap` before `erp-integration`: EVIDENCE_CONFIDENCE HIGH vs MEDIUM</span>
+<span class="ln o">  erp-integration HOLD: rank 3: over budget: stage `interviews` needs 5 h + 0.00 EUR; 0 h + 1500.00 EUR left of 10 h + 1500.00 EUR</span>
 <span class="ln o"># held: draft-rule-automation (NO_TESTABLE_EVIDENCE, CONTRADICTED_EVIDENCE) · rejected: reseller-over-cap (CASH_EXPOSURE_ABOVE_CAP)</span>
 <span class="ln cmd"><span class="p">$ </span>soe check $F/week/opportunities/erp-integration.toml --cited $F/week/cited.toml</span>
 <span class="ln o"># verdict, gates, the three scenarios, rank keys, capability fit, next information</span>
@@ -637,8 +646,13 @@
 <span class="ln o"># 8 rows: OWNER_HOURS, CONVERSION, CHURN, PRICE at -2000 and +2000 bps</span>
 <span class="ln cmd"><span class="p">$ </span>tengu soe init</span>
 <span class="ln o"># writes &lt;TENGU_HOME&gt;/state/soe/operator.toml, UNSIGNED; review the values, then sign</span>
+<span class="ln o"># soe.toml: a config with [sources] and [soe], e.g. the SOE_CONFIG of tests/soe_cli.rs; its state root sits under &lt;TENGU_HOME&gt;/state/</span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c soe.toml soe cycle --week 2026-W41 --at 2026-10-05T12:00:00Z --no-llm --profile $F/profile.synthetic.toml --allow-synthetic</span>
+<span class="ln o">cycles/2026-W41 frozen · HOLD week · 0 ranked, 0 held, 0 rejected · decided at 2026-10-05T12:00:00Z</span>
+<span class="ln cmd"><span class="p">$ </span>tengu -c soe.toml soe review</span>
+<span class="ln o"># the six sections, integrity, stop flags; last line: STOP — Operator Review #2 decides …</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --test soe_cli</span>
-<span class="ln o"># 9 tests: eval, init, refusals, a byte-identical portfolio rerun, check JSON, the tornado, the week fixture</span>
+<span class="ln o"># 13 tests: eval, init, refusals, the allocated portfolio rerun, check JSON, the tornado, the week fixture, a HOLD cycle end to end, verify, grade + review, replay with a counted holdout read</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --bin tengu soe</span>
 <span class="ln o"># unit tests: values, records, economics goldens, gates, ranking, the eval set, the loaders, init, the O3 stages, the six roadmap cases, the cycle on its 11 synthetic cycle cases, replay, grades, resolution and the review packet</span></pre>
   </div>
@@ -664,7 +678,7 @@
         <tr><td><code>src/domain/soe/economics.rs</code></td><td><code>scenarios</code>, <code>ScenarioMetrics</code>, <code>Metric</code>, <code>Payback</code>, <code>expected_loss</code></td></tr>
         <tr><td><code>src/domain/soe/gates.rs</code></td><td><code>gates</code>, <code>GateVerdict</code>, <code>GateCode</code>, <code>CitedRecord</code>, <code>next_information</code></td></tr>
         <tr><td><code>src/domain/soe/matching.rs</code></td><td><code>fit</code>, <code>active_at</code>, <code>FitLevel</code></td></tr>
-        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code>, <code>unallocated_week</code></td></tr>
+        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code></td></tr>
         <tr><td><code>src/domain/soe/eval.rs</code></td><td><code>EvalCase</code>, <code>run_case</code></td></tr>
         <tr><td><code>src/domain/soe/observe.rs</code></td><td><code>EvidenceIndex</code>, <code>cited_views</code> (the O2 packet in)</td></tr>
         <tr><td><code>src/domain/soe/proposal.rs</code> · <code>challenge.rs</code></td><td><code>ProposalDraft</code>, <code>MechanismProposal</code>, <code>COMPUTED_KEYS</code> · <code>ChallengeDraft</code>, <code>Challenge</code>, <code>apply</code></td></tr>
@@ -682,6 +696,7 @@
         <tr><td><code>src/bootstrap/soe.rs</code></td><td><code>soe_cycle_job</code>, <code>stage_runner</code>, <code>generation_pin</code></td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code>; <code>SoeConfig</code> and the <code>[soe]</code> load rules</td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/soe/weekly.rs</code></td><td><code>tengu soe cycle|replay|grade|resolve|review|verify|show</code></td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
         <tr><td><code>tests/fixtures/soe/</code></td><td>the synthetic profile, the 16 eval cases, the example week (<code>week/</code>) and the 11 cycle cases (<code>cycles/</code>)</td></tr>
         <tr><td><code>docs/soe-2026-10-08.md</code></td><td>phase gates, the operator contract's field names, sources, threat model, economics, hard-gate and ranking rules, the eval set, the command</td></tr>

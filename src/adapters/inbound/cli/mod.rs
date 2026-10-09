@@ -156,11 +156,13 @@ enum Commands {
     /// capabilities, generations, seal a preregistration. No config needed.
     /// See docs/lineage-2026-10-06.md § 5.
     Lineage(lineage::LineageArgs),
-    /// Software Opportunity Engine, offline (docs/soe-2026-10-08.md): `init`
+    /// Software Opportunity Engine (docs/soe-2026-10-08.md). Offline: `init`
     /// writes the UNSIGNED private profile template; `check` an opportunity
     /// (three scenarios, hard gates, rank keys), `portfolio` a week,
     /// `sensitivity` a tornado, `eval` the dated eval set — each on the
-    /// signed private profile. No config, secrets, network or LLM.
+    /// signed private profile. Weekly (private SOE state, --sandbox):
+    /// `cycle`, `replay`, `grade`, `resolve`, `review` (the Operator Review #2
+    /// packet), `verify`, `show`. No contact, spend, publish or deploy.
     Soe(soe::SoeArgs),
     /// The source layer (O2) of a `[sources]` sandbox (sandboxes/soe): `list`
     /// the registry, `fetch` / `import` records into
@@ -479,7 +481,7 @@ pub(crate) async fn run() -> Result<()> {
             .compact()
             .with_writer(std::io::stderr)
             .init();
-        return soe::run_soe(args);
+        return soe::run_soe(args, cli.config).await;
     }
 
     let tengu_home = resolve_tengu_home();
