@@ -58,7 +58,7 @@
   <p class="lede">Every built-in tool is one row in <code>catalog()</code>. Default rows are on for every agent; opt-in rows need their name in <code>tools</code> or <code>workspace_tools</code>. The same rows feed chat, plan steps, loops and the Claude Code bridge.</p>
   <ul class="facts">
     <li><b>12</b> default tools, <b>+2</b> with <code>[memory]</code></li>
-    <li><b>33</b> opt-in names</li>
+    <li><b>37</b> opt-in names</li>
     <li>scope check within <b>30</b> lines of <code>execute</code></li>
     <li>tool name ≤ <b>64</b> chars</li>
   </ul>
@@ -243,9 +243,9 @@
     <div class="bar"><span class="lbl">crypto (Privy)</span><span class="track"><span class="fill" style="--w:31.3%"></span></span><span class="val">5</span></div>
     <div class="bar"><span class="lbl">skills</span><span class="track"><span class="fill" style="--w:31.3%"></span></span><span class="val">5</span></div>
     <div class="bar"><span class="lbl">workspace</span><span class="track"><span class="fill" style="--w:25%"></span></span><span class="val">4</span></div>
-    <div class="bar"><span class="lbl">hyperliquid</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
+    <div class="bar"><span class="lbl">xlab</span><span class="track"><span class="fill" style="--w:18.8%"></span></span><span class="val">3</span></div>
     <div class="bar"><span class="lbl">soe</span><span class="track"><span class="fill" style="--w:18.8%"></span></span><span class="val">3</span></div>
-    <div class="bar"><span class="lbl">xlab</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
+    <div class="bar"><span class="lbl">hyperliquid</span><span class="track"><span class="fill" style="--w:12.5%"></span></span><span class="val">2</span></div>
     <div class="bar"><span class="lbl">sources</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
     <div class="bar"><span class="lbl">http</span><span class="track"><span class="fill" style="--w:6.3%"></span></span><span class="val">1</span></div>
   </div>
@@ -341,7 +341,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
   <ul class="checks">
     <li><span><b>One row, every surface.</b> Chat, plan steps, loops, <code>tengu tool</code> and the MCP bridge all register through <code>register_catalog</code>.</span></li>
     <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
-    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 33 fails the config.</span></li>
+    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 37 fails the config.</span></li>
     <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
     <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
@@ -427,7 +427,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     { id: "jev-exec · architect", tools: [], wt: [], mem: false, hint: "tools empty: every default tool is listed; its scopes deny all but run_command (tengu)." },
     { id: "lping · lping", tools: ["http_request", "read_file", "list_directory"], wt: [], mem: true, hint: "Planner + chat agent: three tools." },
     { id: "lping · crypto_researcher", tools: SOL, wt: [], mem: true, hint: "Opt-ins named in tools are switched on." },
-    { id: "storage-test · storage", tools: ["persistent_store", "read_file", "http_request", "write_file"], wt: [], mem: true, hint: "persistent_store needs the memory backend." },
+    { id: "storage-test · storage", tools: ["persistent_store", "read_file", "http_request", "write_file"], wt: ["persistent_store"], mem: true, hint: "persistent_store needs the memory backend." },
     { id: "xmarket · xm_architect", tools: ["read_file", "list_directory", "hl_ctx", "hl_book", "risk_status", "paper_positions"], wt: [], mem: false, hint: "Read-only research agent of a [risk] sandbox." },
     { id: "xlab · xl_architect", tools: ["market_history", "backtest", "read_file", "list_directory"], wt: [], mem: false, hint: "History tools only." },
     { id: "soe · soe_architect", tools: ["soe_view", "soe_propose", "skill_resource"], wt: [], mem: false, hint: "Closed world ([soe]): its stage's tools only; the Critic holds soe_challenge instead of soe_propose." },
@@ -497,10 +497,11 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     "solana": ["hands", "Typed, cached LP reads and pure decisions; five write tools that simulate unless signing is set up."],
     "hyperliquid": ["data", "Typed market contexts and order books from Hyperliquid."],
     "xm paper": ["guard", "Paper ledger reads and exec tools; the [risk] gate runs inside each exec tool."],
-    "xlab": ["data", "Read-only market history and backtests on the sandbox's market.db."],
+    "xlab": ["data", "Market history and backtests on the sandbox's market.db; strategy_ranking runs or reads a ranking of a [strategy_ranking] sandbox."],
+    "sources": ["data", "Read-only typed rows over the sandbox's sources.db. Agents never fetch; the operator runs tengu sources fetch."],
     "soe": ["guard", "The weekly cycle's stage tools: read a run, propose or challenge as data into its open run dir. Never a contact, spend or publish."]
   };
-  var LINKS = { "solana": "solana.html", "xm paper": "paper-desk.html", "xlab": "backtest.html", "memory": "memory.html", "skills": "skills.html", "http": "egress.html", "crypto (Privy)": "secrets.html", "workspace": "scopes.html", "hyperliquid": "observations.html", "soe": "soe.html" };
+  var LINKS = { "solana": "solana.html", "xm paper": "paper-desk.html", "xlab": "backtest.html", "sources": "source-evidence.html", "memory": "memory.html", "skills": "skills.html", "http": "egress.html", "crypto (Privy)": "secrets.html", "workspace": "scopes.html", "hyperliquid": "observations.html", "soe": "soe.html" };
   document.getElementById("famcards").innerHTML = FAMS.map(function (f) {
     var rows = C.filter(function (r) { return r[1] === f; });
     return '<div class="card ' + NOTES[f][0] + '"><h3>' + esc(f) + ' <span class="chip data">' + rows.length + "</span></h3>" +

@@ -165,9 +165,9 @@
         <tr><td><code>sensitivity &lt;opportunity.toml&gt;</code></td><td>the tornado: each input at ± <code>--scale-bps</code> (default 2000), the time-adjusted change, the verdict, gates added or removed</td><td>as <code>check</code>; a scale outside 1..=10000 is a usage error</td></tr>
         <tr><td><code>eval &lt;cases dir&gt;</code></td><td>ok or <code>FAIL</code> per case with every difference; classes without a case</td><td>any case fails, or is refused (another profile id)</td></tr>
         <tr><td><code>cycle [--week] [--at] [--offline | --no-llm]</code></td><td>one live week, frozen under <code>cycles/&lt;week&gt;/</code>, under the sandbox's leases; the stages and the hashes</td><td>a <code>tengu run</code> of the sandbox holds the leases; the week ran already, was left unfinished, or is earlier than the last one (<code>cycle_out_of_order</code>)</td></tr>
-        <tr><td><code>replay --set &lt;file&gt; [--holdout]</code></td><td>the labelled dates as weeks under <code>replays/</code>; the report</td><td>another profile's labels; a run id used before; <code>--holdout</code> with no holdout case</td></tr>
-        <tr><td><code>grade &lt;week&gt; --file</code> · <code>resolve &lt;week&gt;</code></td><td>one grade line · the forecast items resolved now and still pending</td><td>the week is not frozen; a stale version; evidence from before the freeze</td></tr>
-        <tr><td><code>review</code> · <code>verify</code> · <code>show</code></td><td>the Review #2 packet · every frozen run re-hashed and the chain · one run</td><td>the state is not intact; the run is absent</td></tr>
+        <tr><td><code>replay --set &lt;file&gt; [--run-id] [--holdout] [--offline | --no-llm] [--scale-bps]</code></td><td>the labelled dates as weeks under <code>replays/</code>; the report</td><td>another profile's labels; a run id used before; <code>--holdout</code> with no holdout case</td></tr>
+        <tr><td><code>grade &lt;week&gt; --file</code> · <code>resolve &lt;week&gt; [--file]</code></td><td>one grade line · the forecast items resolved now and still pending</td><td>the week is not frozen; a stale version; evidence from before the freeze</td></tr>
+        <tr><td><code>review [--from] [--to]</code> · <code>verify</code> · <code>show &lt;run&gt;</code></td><td>the Review #2 packet · every frozen run re-hashed and the chain · one run</td><td>the state is not intact; the run is absent</td></tr>
       </tbody>
     </table>
   </div>
@@ -278,6 +278,7 @@
     <table>
       <thead><tr><th>Gate</th><th><code>REJECT</code> when</th><th><code>HOLD</code> when</th></tr></thead>
       <tbody>
+        <tr><td>mechanism · delivery</td><td>the mechanism is <code>REJECT</code></td><td>the mechanism is <code>HOLD</code> · a one-off's base <code>delivery_weeks</code> above <code>max_one_off_delivery_weeks</code></td></tr>
         <tr><td>cash exposure · tranche</td><td>above <code>max_cash_exposure</code> · a stage above <code>max_validation_tranche</code></td><td>an amount unknown</td></tr>
         <tr><td>contribution · payback</td><td>base below <code>min_monthly_contribution</code> · above <code>max_payback_months</code></td><td>the upside reaches the target and a live staged test exists (<code>BELOW_TARGET_WITH_PATH</code>)</td></tr>
         <tr><td>bounds</td><td>owner time, support, payment access or scope <code>UNBOUNDED</code></td><td><code>UNKNOWN</code>, or the owner hours unknown</td></tr>
@@ -481,7 +482,7 @@
     <table>
       <thead><tr><th>Piece</th><th>Rule</th></tr></thead>
       <tbody>
-        <tr><td><code>sandboxes/soe</code></td><td><code>[soe]</code>, <code>soe_architect</code> (Opus) and <code>soe_critic</code> (Sonnet) on <code>claude_code</code> with built-ins off, <code>[feeds.soe_week]</code> Mon 07:00 Paris, deny-all scopes for every side-effect tool; no <code>source_evidence</code> on a stage agent — the stages read their run's packet only</td></tr>
+        <tr><td><code>sandboxes/soe</code></td><td><code>[soe]</code>, <code>soe_architect</code> (Opus) and <code>soe_critic</code> (Sonnet) on <code>claude_code</code> with built-ins off, <code>[feeds.soe_week]</code> Mon 07:00 Paris, deny-all scopes for every side-effect tool; no <code>source_evidence</code> on a stage agent — the stages read their run's packet only. The default agent <code>soe_reader</code> holds <code>source_evidence</code> alone (<a href="source-evidence.html">Source evidence</a>)</td></tr>
         <tr><td>Skills</td><td><code>soe-architect</code>: two mechanisms and <code>HOLD</code>, ranges with evidence ids or <code>UNKNOWN</code>, never a computed field. <code>soe-critic</code>: the seven challenge kinds and their effects</td></tr>
         <tr><td>SOE-G0</td><td><code>lineage/generations/SOE-G0.toml</code> (<code>CANDIDATE</code>): the three stage-tool capabilities and <code>intel.source_evidence</code>, the two models, hash pins of <code>[soe]</code>, the job, the agents, the scopes, the schemas and the skills. Ids and sha256 only — no profile value. The sandbox is bound to it; its lock row waits for the operator's signed profile</td></tr>
         <tr><td>Guards</td><td>no tool reachable from the sandbox can contact, spend, publish or deploy; the opportunity domain never imports the trading domain, the backtest engine or the risk config (layering lint); W1 and its sandboxes load unchanged next to SOE-G0</td></tr>

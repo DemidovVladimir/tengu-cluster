@@ -457,7 +457,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     <li><span><b>Latest moves last.</b> Both dated files are written before <code>latest.md</code>, then <code>latest.json</code>. An older date never replaces a newer one.</span></li>
     <li><span><b>No holdout read.</b> A ranking run has no split, so it never writes <code>holdout-reads.jsonl</code>.</span></li>
     <li><span><b>Cited runs stay.</b> In a sandbox bound to no generation too, retention keeps the <code>[strategy_ranking]</code> registry's cited runs and every run a <code>latest.json</code> names.</span></li>
-    <li><span><b>Same answer on every engine.</b> The tool's conformance case runs it in-process and through the MCP bridge on the same data; an engine-matrix set (<code>xlab_rank</code>) calls it from each engine.</span></li>
+    <li><span><b>Same answer on every engine.</b> The tool's conformance case runs it in-process and through the MCP bridge on the same data; an engine-matrix set (<code>xlab_rank</code>) calls it from each engine. Its offline local leg runs in CI; the live legs have not run yet.</span></li>
     <li><span><b>Tested on the binary.</b> <code>tests/strategy_ranking.rs</code>: a rerun is byte-identical, a restart reruns only the unfinished strategy to the same <code>content_sha256</code>, an INCOMPLETE date keeps <code>latest</code>, an unsealed or edited contract writes nothing.</span></li>
   </ul>
 </section>
@@ -522,7 +522,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>
