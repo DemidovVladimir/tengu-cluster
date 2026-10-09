@@ -90,17 +90,29 @@ fn trim(v: Value) -> Value {
     }
 }
 
+/// The HTTP status of an `http_request` text result (line 1 `HTTP <status>
+/// …`); `None` for any other text. A feed classifies it
+/// (`runtime/feeds.rs`); [`http_ok`] is the pass / fail rule.
+pub(crate) fn http_status(line1: &str) -> Option<u16> {
+    line1
+        .strip_prefix("HTTP ")
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse::<u16>().ok())
+}
+
+/// Whether an `http_request` text result succeeded (2xx); `None` for any
+/// other text. A loop's `ok` ([`parse_tool_output`]) and the trace's
+/// `tool.failed` (`trace_exec`) read it.
+pub(crate) fn http_ok(line1: &str) -> Option<bool> {
+    http_status(line1).map(|s| (200..300).contains(&s))
+}
+
 /// Turn a tool's text output into `(ok, value)`. `http_request` output
 /// (`HTTP <status> <url>\n<body>`) → ok = 2xx, value = body parsed as JSON
 /// when possible. Other text → JSON if it parses, else the string.
 pub(crate) fn parse_tool_output(text: &str) -> (bool, Value) {
     let (first, rest) = text.split_once('\n').unwrap_or((text, ""));
-    if let Some(status) = first
-        .strip_prefix("HTTP ")
-        .and_then(|s| s.split_whitespace().next())
-        .and_then(|s| s.parse::<u16>().ok())
-    {
-        let ok = (200..300).contains(&status);
+    if let Some(ok) = http_ok(first) {
         let body = rest.trim();
         let value = if body.is_empty() {
             Value::String(first.to_string())

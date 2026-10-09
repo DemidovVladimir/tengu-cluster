@@ -2,7 +2,8 @@
 
 Static site, one HTML page per feature, for human users. No build step: open
 `index.html` or serve the folder from any static host. JavaScript lives only
-here (operator rule: JS only inside docs HTML).
+here and in `web/studio/` (the Studio page — the one exception in the
+`CLAUDE.md` "Rust only" box; `tests/language_policy.rs`).
 
 | File | Role |
 |---|---|

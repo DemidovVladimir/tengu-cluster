@@ -37,8 +37,27 @@
 //! never interleave inside it. A step that ran a tool carries its `call_id`
 //! (`{loop}:{session_id}:{t}`), which the exec tools' risk verdicts carry
 //! too (`ledger.db` `risk_decisions`, `<TENGU_HOME>/logs/risk.jsonl`).
+//! Lines of a traced process also name its recording: `runtime_id` (the
+//! `tengu run` lease holder) and `run_id` (`AuditLog::ids`, additive keys).
 //! History is in-process (lost on restart); events for one loop are
 //! serialised by the state mutex so history stays ordered.
+//!
+//! Trace ([`DecisionLoop::with_trace`]; `TENGU_STUDIO_PLAN.md` ST-12): each
+//! step writes, under what caused the event (`trace_exec::cause`:
+//! `loop.started`, a decide `trigger.*`):
+//!
+//! | Event (node) | Status | When / payload |
+//! |---|---|---|
+//! | `observation.read` (`world:<loop>/<alias>`) | `ok` · `stale` · `missing` · `failed` | each `world` alias as `World::reads` classifies it: `key`, `age_ms` |
+//! | `jev.completed` · `jev.failed` (`jev:<loop>`) | `ok` · `failed` | the decisions call: `decision_id`, `model`, `answers`, `usage`, `latency_ms` (= `duration_ms`), `legal` (action → slot → labels: what was offered), `legal_actions` (its action names), `questions`; both pinned (`EventDraft::keep`): the payload bound drops every other field first, then `legal`, then `legal_actions` |
+//! | `action.selected` (`action:<loop>/<a>`) | `running` | a tool action past the gate and the caps, before its call; the call's `tool.*` are its children (`trace_exec::TracedExecutor`) |
+//! | `action.completed` · `action.refused` | `ok` / `failed` (the history entry's `ok`) · `refused` (`[risk]` rule) | after the call: `ok`, `output`, `obs`, `call_id` |
+//! | `action.selected` | `ok` (terminal) · `skipped` (dry-run write) | a terminal action; a write under `dry_run` |
+//! | `action.escalated` (`gate:<loop>/act_at`) | `escalated` | confidence < `act_at`: `confidence`, `act_at`, `escalate` |
+//! | `action.rejected` | `refused` | a label not offered, a missing slot answer, a cap |
+//!
+//! Outcome events carry the `StepOutcome` `apply` computed (`outcome`);
+//! nothing is re-derived for the trace.
 //!
 //! | Time | Source |
 //! |---|---|
@@ -65,19 +84,26 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use crate::application::trace_exec::{self, Cause};
 use crate::config::decision_loop::DecisionLoopConfig;
 use crate::domain::decision::{Decision, HistoryEntry, Question, StepOutcome, Verdict};
 use crate::domain::message::ToolCall;
 use crate::domain::metrics::{MetricsKind, MetricsRecord};
 use crate::domain::observation::{now_ms, Observation};
+use crate::domain::trace::{Component, EventDraft, Status};
+use crate::domain::workflow::node_id;
 use crate::ports::clock::Clock;
 use crate::ports::decision::{DecisionEngine, Escalator};
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
+use crate::ports::trace::TraceSink;
 use slots::Candidate;
-use world::World;
+use world::{Read, World};
 
 const NEXT_ACTION: &str = "next_action";
+/// `jev.*` payload fields the trace drops last (`EventDraft::keep`): the
+/// action names, then the full legal set — what Studio greys nodes by.
+const LEGAL_FIELDS: &[&str] = &["legal_actions", "legal"];
 
 pub(crate) struct DecisionLoop {
     name: String,
@@ -90,7 +116,22 @@ pub(crate) struct DecisionLoop {
     audit: Option<AuditLog>,
     /// Time source ([`DecisionLoop::with_clock`]); `None` = the wall clock.
     clock: Option<Arc<dyn Clock>>,
+    /// Where step events go ([`DecisionLoop::with_trace`]); `None` = nowhere.
+    trace: Option<Arc<dyn TraceSink>>,
     state: Mutex<LoopState>,
+}
+
+/// What one step's trace events hang on.
+#[derive(Debug, Default)]
+struct StepTrace {
+    /// The event that caused this loop event (`loop.started`, `trigger.*`).
+    root: Option<String>,
+    /// This step's `jev.completed`.
+    jev: Option<String>,
+    /// This step's `action.selected` of a tool action (before the call).
+    selected: Option<String>,
+    /// The chosen action's gate confidence (action + slots), once computed.
+    confidence: Option<f64>,
 }
 
 /// Where the decision audit goes (`<TENGU_HOME>/logs/decisions.jsonl`; a
@@ -104,6 +145,11 @@ pub(crate) struct AuditLog {
     /// `trigger` on every line when set (`backtest` for replay); `None` =
     /// no `trigger` key (live lines keep their shape).
     pub trigger: Option<String>,
+    /// The recording the line belongs to (`domain::trace::RunIds`):
+    /// `runtime_id` (the `tengu run` lease holder) and `run_id` (its trace
+    /// file, `tengu trace show --run`) on every line when set — additive
+    /// keys, absent otherwise (replay lines keep their shape).
+    pub ids: crate::domain::trace::RunIds,
 }
 
 #[derive(Default)]
@@ -140,8 +186,16 @@ impl DecisionLoop {
             escalator,
             audit,
             clock: None,
+            trace: None,
             state: Mutex::new(LoopState::default()),
         }
+    }
+
+    /// Write every step's events to `sink` (module doc § Trace): the
+    /// recording of `tengu run` / `tengu decide`. Replay loops record none.
+    pub(crate) fn with_trace(mut self, sink: Arc<dyn TraceSink>) -> Self {
+        self.trace = Some(sink);
+        self
     }
 
     /// Read time from `clock` instead of the wall clock: `world` freshness,
@@ -203,6 +257,9 @@ impl DecisionLoop {
         event: &Value,
         session_id: &str,
     ) -> Result<Vec<(StepOutcome, Decision)>> {
+        // Every step's events hang on what caused this event (`loop.started`,
+        // `trigger.*`); read before the state lock, on the caller's task.
+        let root = trace_exec::cause().and_then(|c| c.parent);
         let mut st = self.state.lock().await;
         st.event_start = st.t;
         st.seq_pos = 0;
@@ -210,7 +267,11 @@ impl DecisionLoop {
         let event = reduce::reduce(event, &self.cfg.event_reduce);
         let mut steps = Vec::new();
         for step in 0..self.cfg.max_steps {
-            let (outcome, decision) = self.step(&mut st, &event, step, session_id).await?;
+            let tr = StepTrace {
+                root: root.clone(),
+                ..Default::default()
+            };
+            let (outcome, decision) = self.step(&mut st, &event, step, session_id, tr).await?;
             let stop = !matches!(
                 outcome,
                 StepOutcome::Executed { .. }
@@ -237,9 +298,11 @@ impl DecisionLoop {
         event: &Value,
         step: u32,
         session_id: &str,
+        mut tr: StepTrace,
     ) -> Result<(StepOutcome, Decision)> {
         // 1. World, legal actions + their slot candidates.
         let world = World::read(self.observations.as_deref(), &self.cfg, self.now_ms()).await;
+        self.trace_world(&world, session_id, &tr, step);
         let mut legal: BTreeMap<&str, BTreeMap<&str, Vec<Candidate>>> = BTreeMap::new();
         for (an, action) in &self.cfg.actions {
             if !world.satisfies(&action.requires) {
@@ -310,6 +373,16 @@ impl DecisionLoop {
         let started = Instant::now();
         let decided = self.engine.decide(&state, &questions).await;
         let latency_ms = started.elapsed().as_millis() as u64;
+        // What Jev was offered: the legal set (a configured action outside it is
+        // drawn grey) — pinned ([`LEGAL_FIELDS`]): it survives the payload bound.
+        let offered = json!({
+            "step": step,
+            "legal": legal_json(&legal),
+            "legal_actions": legal.keys().collect::<Vec<_>>(),
+            "questions": questions.keys().collect::<Vec<_>>(),
+            "latency_ms": latency_ms,
+            "act_at": self.cfg.act_at,
+        });
         let decision = match decided {
             Ok(d) => d,
             Err(e) => {
@@ -317,13 +390,47 @@ impl DecisionLoop {
                     reason: format!("{e:#}"),
                 };
                 self.audit(session_id, st.t, None, &outcome, None, latency_ms);
+                let mut p = offered;
+                merge(
+                    &mut p,
+                    json!({"model": self.engine.model(), "outcome": outcome}),
+                );
+                let d = self
+                    .draft("jev.failed", Component::Jev, Status::Failed, session_id)
+                    .node(node_id::jev(&self.name))
+                    .keep(LEGAL_FIELDS)
+                    .duration(latency_ms)
+                    .payload(p);
+                self.emit(d, tr.root.as_deref());
                 return Err(e);
             }
         };
         self.record_metrics(session_id, &state, &decision, latency_ms);
+        let mut p = offered;
+        merge(
+            &mut p,
+            json!({
+                "decision_id": decision.id,
+                "model": decision.model,
+                "answers": decision.answers,
+                "usage": decision.usage,
+            }),
+        );
+        let mut d = self
+            .draft("jev.completed", Component::Jev, Status::Ok, session_id)
+            .node(node_id::jev(&self.name))
+            .keep(LEGAL_FIELDS)
+            .duration(latency_ms)
+            .payload(p);
+        if let Some(a) = &self.audit {
+            d = d.artifact(a.path.display().to_string(), Some(decision.id.clone()));
+        }
+        tr.jev = self.emit(d, tr.root.as_deref());
 
         let t_before = st.t;
-        let outcome = self.apply(st, &legal, &decision, &state, session_id).await;
+        let outcome = self
+            .apply(st, &legal, &decision, &state, session_id, &mut tr)
+            .await;
         if !self.cfg.sequence.is_empty() {
             Self::sequence_advance(st, &outcome);
         }
@@ -337,6 +444,7 @@ impl DecisionLoop {
             entry,
             latency_ms,
         );
+        self.trace_outcome(&outcome, entry, session_id, st.t, &tr);
         info!(
             decision_loop = %self.name,
             session_id = %session_id,
@@ -354,6 +462,7 @@ impl DecisionLoop {
         decision: &Decision,
         state: &Value,
         session_id: &str,
+        tr: &mut StepTrace,
     ) -> StepOutcome {
         let Some(next) = decision.answers.get(NEXT_ACTION) else {
             return rejected("?", "decision has no next_action answer");
@@ -389,6 +498,7 @@ impl DecisionLoop {
             values.insert(sn.to_string(), chosen.value.clone());
         }
         let args = slots::render_args(&action.args, &values);
+        tr.confidence = Some(confidence);
 
         // Gate.
         if confidence < self.cfg.act_at {
@@ -433,7 +543,7 @@ impl DecisionLoop {
             };
         };
 
-        if self.cfg.dry_run && !action.read_only {
+        if self.cfg.logs_only(action) {
             self.push(
                 st,
                 HistoryEntry {
@@ -455,9 +565,29 @@ impl DecisionLoop {
             name: tool.clone(),
             arguments: args.clone(),
         };
+        // `action.selected` before the call: the tool events are its children.
+        let d = self
+            .draft(
+                "action.selected",
+                Component::Action,
+                Status::Running,
+                session_id,
+            )
+            .node(node_id::action(&self.name, &action_name))
+            .call(call.id.clone())
+            .payload(json!({
+                "action": action_name,
+                "tool": tool,
+                "args": args,
+                "confidence": confidence,
+                "t": t,
+            }));
+        tr.selected = self.emit(d, tr.jev.as_deref());
         let now = self.now_ms();
+        let cause = Cause::new(tr.selected.clone(), session_id);
+        let typed = trace_exec::caused_by(cause, self.tools.execute_typed(&call, &[])).await;
         let mut refused = None;
-        let (ok, result, obs) = match self.tools.execute_typed(&call, &[]).await {
+        let (ok, result, obs) = match typed {
             // Typed: features (or the reducer over `{.., features, data}`);
             // a status-`error` observation is a failure.
             Ok(out) => match out.observation {
@@ -584,6 +714,153 @@ impl DecisionLoop {
         escalator.escalate(session_id.to_string(), message).await;
     }
 
+    /// A step event of this loop's event `session_id` (module doc § Trace).
+    fn draft(
+        &self,
+        kind: &str,
+        component: Component,
+        status: Status,
+        session_id: &str,
+    ) -> EventDraft {
+        EventDraft::new(component, kind, status).session(session_id)
+    }
+
+    /// Write `d` under `parent`; its event id (`None`: no sink, or the
+    /// write failed — fail-soft).
+    fn emit(&self, d: EventDraft, parent: Option<&str>) -> Option<String> {
+        let sink = self.trace.as_ref()?;
+        sink.emit(match parent {
+            Some(p) => d.parent(p),
+            None => d,
+        })
+    }
+
+    /// `observation.read` per `world` alias, as the step reads it
+    /// (`World::reads`: the rule `state.world` renders).
+    fn trace_world(&self, world: &World, session_id: &str, tr: &StepTrace, step: u32) {
+        if self.trace.is_none() {
+            return;
+        }
+        for (alias, read, age_ms) in world.reads() {
+            let status = match read {
+                Read::Fresh => Status::Ok,
+                Read::Stale => Status::Stale,
+                Read::Missing => Status::Missing,
+                Read::Error => Status::Failed,
+            };
+            let d = self
+                .draft(
+                    "observation.read",
+                    Component::Observation,
+                    status,
+                    session_id,
+                )
+                .node(node_id::world(&self.name, alias))
+                .payload(json!({
+                    "alias": alias,
+                    "key": self.cfg.world.get(alias),
+                    "read": read.as_str(),
+                    "age_ms": age_ms,
+                    "max_age_ms": self.cfg.world_max_age_secs.saturating_mul(1000),
+                    "step": step,
+                }));
+            self.emit(d, tr.root.as_deref());
+        }
+    }
+
+    /// The step's outcome event (module doc § Trace): the `StepOutcome`
+    /// `apply` computed, as is — never re-derived here.
+    fn trace_outcome(
+        &self,
+        outcome: &StepOutcome,
+        entry: Option<&HistoryEntry>,
+        session_id: &str,
+        t: u64,
+        tr: &StepTrace,
+    ) {
+        use StepOutcome as O;
+        if self.trace.is_none() {
+            return;
+        }
+        let action = match outcome {
+            O::Executed { action }
+            | O::Refused { action, .. }
+            | O::DryRun { action }
+            | O::Stopped { action }
+            | O::Escalated { action, .. }
+            | O::Rejected { action, .. } => action.as_str(),
+            O::Error { .. } => return,
+        };
+        let action_node = node_id::action(&self.name, action);
+        let ran = matches!(outcome, O::Executed { .. } | O::Refused { .. });
+        let (kind, status, node, parent) = match outcome {
+            O::Executed { .. } => {
+                let ok = entry.and_then(|e| e.ok) == Some(true);
+                let status = if ok { Status::Ok } else { Status::Failed };
+                ("action.completed", status, action_node, &tr.selected)
+            }
+            O::Refused { .. } => ("action.refused", Status::Refused, action_node, &tr.selected),
+            O::DryRun { .. } => ("action.selected", Status::Skipped, action_node, &tr.jev),
+            O::Stopped { .. } => ("action.selected", Status::Ok, action_node, &tr.jev),
+            O::Escalated { .. } => (
+                "action.escalated",
+                Status::Escalated,
+                node_id::gate_act_at(&self.name),
+                &tr.jev,
+            ),
+            O::Rejected { .. } => {
+                let node = if self.cfg.actions.contains_key(action) {
+                    action_node
+                } else {
+                    node_id::jev(&self.name)
+                };
+                ("action.rejected", Status::Refused, node, &tr.jev)
+            }
+            O::Error { .. } => return,
+        };
+        let mut p = json!({
+            "action": action,
+            "outcome": outcome,
+            "confidence": tr.confidence,
+            "t": t,
+        });
+        if let Some(e) = entry {
+            merge(&mut p, json!({"args": e.args}));
+        }
+        if ran {
+            merge(
+                &mut p,
+                json!({
+                    "ok": entry.and_then(|e| e.ok),
+                    "output": entry.map(|e| &e.result),
+                    "obs": entry.and_then(|e| e.obs.as_ref()),
+                }),
+            );
+        }
+        if matches!(outcome, O::Escalated { .. }) {
+            merge(
+                &mut p,
+                json!({
+                    "act_at": self.cfg.act_at,
+                    "escalate": self.cfg.escalate,
+                    "escalator": self.escalator.is_some(),
+                }),
+            );
+        }
+        let mut d = self
+            .draft(kind, Component::Action, status, session_id)
+            .node(node)
+            .payload(p);
+        if ran {
+            let call = self.call_id(session_id, t);
+            if let Some(a) = &self.audit {
+                d = d.artifact(a.path.display().to_string(), Some(call.clone()));
+            }
+            d = d.call(call);
+        }
+        self.emit(d, parent.as_deref());
+    }
+
     fn record_metrics(&self, session_id: &str, state: &Value, d: &Decision, latency_ms: u64) {
         let prompt = state.to_string();
         crate::application::metrics::record(MetricsRecord {
@@ -612,8 +889,10 @@ impl DecisionLoop {
     /// (`outcome = "error"`, no answers). `ts` (unix s) stays for old
     /// readers; `ts_ms`, `latency_ms` (the decisions call), `sandbox` and
     /// `act_at` join it; `call_id` when the step ran a tool (`Executed` /
-    /// `Refused`) — the key its risk verdict carries; `trigger` when the
-    /// `AuditLog` sets one. `ts` / `ts_ms` come from the loop's clock.
+    /// `Refused`) — the key its risk verdict carries; `trigger`,
+    /// `runtime_id` and `run_id` when the `AuditLog` sets them (the trace
+    /// recording of `tengu run` / `tengu decide`, `bootstrap/trace.rs`).
+    /// `ts` / `ts_ms` come from the loop's clock.
     /// Fail-soft: audit errors only warn.
     fn audit(
         &self,
@@ -653,8 +932,16 @@ impl DecisionLoop {
             // Typed result meta (key / status / source / age / slot).
             "obs": entry.and_then(|e| e.obs.as_ref()),
         });
-        if let (Some(trigger), Value::Object(o)) = (&audit.trigger, &mut line) {
-            o.insert("trigger".into(), json!(trigger));
+        if let Value::Object(o) = &mut line {
+            for (k, v) in [
+                ("trigger", &audit.trigger),
+                ("runtime_id", &audit.ids.runtime_id),
+                ("run_id", &audit.ids.run_id),
+            ] {
+                if let Some(v) = v {
+                    o.insert(k.into(), json!(v));
+                }
+            }
         }
         if let Err(e) = append_line(&audit.path, &format!("{line}\n")) {
             warn!(path = %audit.path.display(), error = %e, "decision audit write failed");
@@ -680,6 +967,26 @@ pub(crate) fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
 
 fn slot_key(action: &str, slot: &str) -> String {
     format!("{action}__{slot}")
+}
+
+/// A step's legal set as the trace carries it: action → slot → candidate
+/// labels (`{}` for a slot-less action).
+fn legal_json(legal: &BTreeMap<&str, BTreeMap<&str, Vec<Candidate>>>) -> Value {
+    let actions = legal.iter().map(|(an, slots)| {
+        let slots = slots.iter().map(|(sn, cands)| {
+            let labels: Vec<&str> = cands.iter().map(|c| c.label.as_str()).collect();
+            (sn.to_string(), json!(labels))
+        });
+        (an.to_string(), Value::Object(slots.collect()))
+    });
+    Value::Object(actions.collect())
+}
+
+/// `extra`'s fields into `base` (both objects; otherwise nothing).
+fn merge(base: &mut Value, extra: Value) {
+    if let (Value::Object(b), Value::Object(x)) = (base, extra) {
+        b.extend(x);
+    }
 }
 
 /// Whole seconds of `ms` since the epoch, 0 before it (as
@@ -1697,6 +2004,7 @@ tool = "broken"
                 path: path.to_path_buf(),
                 sandbox: Some("xmarket".into()),
                 trigger: None,
+                ids: Default::default(),
             }),
         )
     }
@@ -1753,6 +2061,48 @@ tool = "broken"
             ts.sort_unstable();
             assert_eq!(ts, (0..500).collect::<Vec<u64>>(), "{name}");
         }
+    }
+
+    /// `runtime_id` / `run_id` join a line only when the `AuditLog` names
+    /// them (additive keys: a line without them keeps its old shape).
+    #[tokio::test]
+    async fn audit_lines_carry_runtime_and_run_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        let runtime_id = "host:4242:0f0e0d0c-0b0a-4908-8706-050403020100";
+        let run_id = "5b0c7d0e-8a4e-4f0a-9d8e-2f1c3b4a5d6e";
+        let mut traced = audited(
+            "t",
+            Arc::new(Scripted::new(vec![pick(&[("next_action", "hold", 0.99)])])),
+            &path,
+        );
+        if let Some(a) = traced.audit.as_mut() {
+            a.ids = crate::domain::trace::RunIds {
+                runtime_id: Some(runtime_id.into()),
+                run_id: Some(run_id.into()),
+            };
+        }
+        traced.handle_event(&json!({}), "tick:1").await.unwrap();
+        let plain = Arc::new(Scripted::new(vec![pick(&[("next_action", "hold", 0.99)])]));
+        audited("t", plain, &path)
+            .handle_event(&json!({}), "s2")
+            .await
+            .unwrap();
+        let lines: Vec<Value> = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines[0]["runtime_id"], json!(runtime_id));
+        assert_eq!(lines[0]["run_id"], json!(run_id));
+        assert_eq!(lines[0]["session_id"], json!("tick:1"));
+        assert!(lines[1].get("runtime_id").is_none() && lines[1].get("run_id").is_none());
+        assert!(render_audit(&lines[0]).is_some());
+        assert_eq!(
+            render_audit(&lines[0]),
+            render_audit(&lines[1]),
+            "the TUI feed renders both alike"
+        );
     }
 
     /// Old keys stay, ms fields join; a failed decisions call leaves one
@@ -1922,6 +2272,7 @@ args = {}
                 path: path.clone(),
                 sandbox: None,
                 trigger: None,
+                ids: Default::default(),
             }),
         );
         let out = l.handle_event(&json!({}), "s").await.unwrap();
@@ -2007,6 +2358,7 @@ args = {}
                 path: path.clone(),
                 sandbox: Some("xmarket".into()),
                 trigger: None,
+                ids: Default::default(),
             }),
         );
         let out = l
@@ -2192,6 +2544,7 @@ args = {}
                 path: path.clone(),
                 sandbox: Some("xlab".into()),
                 trigger: Some("backtest".into()),
+                ids: Default::default(),
             }),
         )
         .with_clock(clock);
@@ -2353,6 +2706,7 @@ description = "Unsure: hand it to the architect"
                 path: path.clone(),
                 sandbox: None,
                 trigger: Some("backtest".into()),
+                ids: Default::default(),
             }),
         )
         .with_clock(Arc::new(SimClock::at(T0)));
@@ -2362,5 +2716,221 @@ description = "Unsure: hand it to the architect"
             serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
         assert_eq!(line["result"]["outcome"], json!("error"));
         assert_eq!(line["ts_ms"], json!(T0));
+    }
+
+    // ── trace (TENGU_STUDIO_PLAN.md ST-12) ──────────────────────────────
+
+    use crate::application::trace_exec::tests::MemTrace;
+
+    /// `(kind, status, node)` of every event, in order.
+    fn shape(sink: &MemTrace) -> Vec<(String, Status, String)> {
+        sink.all()
+            .into_iter()
+            .map(|d| (d.kind, d.status, d.node_id.unwrap_or_default()))
+            .collect()
+    }
+
+    fn ev(kind: &str, status: Status, node: &str) -> (String, Status, String) {
+        (kind.to_string(), status, node.to_string())
+    }
+
+    /// Each `StepOutcome` maps to its event (module doc § Trace) and
+    /// carries the outcome as computed; step events hang on the event's
+    /// cause, the action on its decision, the result on the action.
+    #[tokio::test]
+    async fn trace_covers_every_outcome() {
+        use Status as S;
+        // Executed (ok) → Stopped; one `world` alias (no store: failed).
+        let sink = Arc::new(MemTrace::default());
+        let (mut l, ..) = build(false, fetch_then_hold());
+        l.cfg.world.insert("tick".into(), "feed/1:tick".into());
+        let l = l.with_trace(sink.clone());
+        let cause = Cause::new(Some("root:3".into()), "s1");
+        trace_exec::caused_by(cause, l.handle_event(&json!({}), "s1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            shape(&sink),
+            [
+                ev("observation.read", S::Failed, "world:t/tick"),
+                ev("jev.completed", S::Ok, "jev:t"),
+                ev("action.selected", S::Running, "action:t/fetch"),
+                ev("action.completed", S::Ok, "action:t/fetch"),
+                ev("observation.read", S::Failed, "world:t/tick"),
+                ev("jev.completed", S::Ok, "jev:t"),
+                ev("action.selected", S::Ok, "action:t/hold"),
+            ]
+        );
+        let d = sink.all();
+        let parent = |i: usize| d[i].parent_event_id.clone();
+        assert_eq!(parent(0).as_deref(), Some("root:3"));
+        assert_eq!(parent(1).as_deref(), Some("root:3"));
+        assert_eq!(parent(2), Some(MemTrace::id(1)), "action ← its decision");
+        assert_eq!(parent(3), Some(MemTrace::id(2)), "result ← its action");
+        assert_eq!(parent(6), Some(MemTrace::id(5)));
+        assert!(d.iter().all(|e| e.session_id.as_deref() == Some("s1")));
+        assert_eq!(d[0].payload["key"], json!("feed/1:tick"));
+        assert_eq!(d[0].payload["read"], json!("error"));
+        assert_eq!(d[2].call_id.as_deref(), Some("t:s1:1"));
+        assert_eq!(d[3].call_id.as_deref(), Some("t:s1:1"));
+        assert_eq!(
+            d[3].payload["outcome"],
+            json!({"outcome": "executed", "action": "fetch"})
+        );
+        assert_eq!(d[3].payload["ok"], json!(true));
+        assert_eq!(d[6].payload["confidence"], json!(0.99));
+
+        // DryRun → `action.selected` skipped; Rejected → `action.rejected`.
+        let sink = Arc::new(MemTrace::default());
+        let (l, ..) = build(
+            true,
+            vec![
+                pick(&[("next_action", "fetch", 0.95)]),
+                pick(&[
+                    ("next_action", "open", 0.9),
+                    ("open__pool", "pool_2", 0.9),
+                    ("open__size", "1", 0.9),
+                ]),
+                pick(&[("next_action", "open", 0.9), ("open__pool", "nope", 0.9)]),
+            ],
+        );
+        let l = l.with_trace(sink.clone());
+        l.handle_event(&json!({}), "s2").await.unwrap();
+        let s = shape(&sink);
+        assert_eq!(s[4], ev("action.selected", S::Skipped, "action:t/open"));
+        assert_eq!(s[6], ev("action.rejected", S::Refused, "action:t/open"));
+        let d = sink.all();
+        assert_eq!(d[4].payload["args"], json!({"pool": "B2", "size": 1}));
+        assert!(d[6].payload["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("unknown label `nope`"));
+        assert_eq!(d[0].parent_event_id, None, "no cause: no root");
+
+        // Refused (`[risk]` deny) → `action.refused` under the selection.
+        let sink = Arc::new(MemTrace::default());
+        let l = DecisionLoop::new(
+            "entry",
+            entry_cfg(),
+            Arc::new(Scripted::new(vec![
+                pick(&[("next_action", "enter_small", 0.95)]),
+                pick(&[("next_action", "done", 0.99)]),
+            ])),
+            Arc::new(DenyingTools),
+            None,
+            None,
+            None,
+        )
+        .with_trace(sink.clone());
+        l.handle_event(&json!({}), "s3").await.unwrap();
+        let s = shape(&sink);
+        assert_eq!(
+            s[2],
+            ev("action.refused", S::Refused, "action:entry/enter_small")
+        );
+        let d = sink.all();
+        assert_eq!(d[2].payload["outcome"]["rule"], json!("min_edge"));
+        assert_eq!(d[2].parent_event_id, Some(MemTrace::id(1)));
+
+        // Error → `jev.failed` (the error then propagates).
+        let sink = Arc::new(MemTrace::default());
+        let l = DecisionLoop::new(
+            "t",
+            cfg(false),
+            Arc::new(Failing),
+            Arc::new(FakeTools(StdMutex::new(vec![]))),
+            None,
+            None,
+            None,
+        )
+        .with_trace(sink.clone());
+        assert!(l.handle_event(&json!({}), "s4").await.is_err());
+        assert_eq!(shape(&sink), [ev("jev.failed", S::Failed, "jev:t")]);
+        let d = sink.all();
+        assert_eq!(d[0].payload["model"], json!("~typesafe/jev-latest"));
+        assert_eq!(d[0].payload["outcome"]["outcome"], json!("error"));
+        assert!(d[0].duration_ms.is_some());
+    }
+
+    /// `jev.completed.payload.legal` is exactly what Jev was offered: the
+    /// `next_action` criteria, and per multi-candidate slot its labels.
+    #[tokio::test]
+    async fn trace_legal_set_matches_questions() {
+        let sink = Arc::new(MemTrace::default());
+        let (l, engine, ..) = build(
+            false,
+            vec![
+                pick(&[("next_action", "fetch", 0.95)]),
+                pick(&[("next_action", "hold", 0.99)]),
+            ],
+        );
+        let l = l.with_trace(sink.clone());
+        l.handle_event(&json!({}), "s").await.unwrap();
+        let jev: Vec<EventDraft> = sink
+            .all()
+            .into_iter()
+            .filter(|d| d.kind == "jev.completed")
+            .collect();
+        let seen = engine.seen.lock().unwrap();
+        for (step, d) in jev.iter().enumerate() {
+            let Question::Choice { criteria, .. } = &seen[step][NEXT_ACTION] else {
+                panic!()
+            };
+            let legal = d.payload["legal"].as_object().unwrap();
+            let offered: Vec<&String> = criteria.keys().collect();
+            assert_eq!(legal.keys().collect::<Vec<_>>(), offered, "step {step}");
+            // The names alone too, pinned so they survive the payload bound.
+            assert_eq!(d.payload["legal_actions"], json!(offered), "step {step}");
+            assert_eq!(d.keep, LEGAL_FIELDS);
+            let questions: Vec<String> = seen[step].keys().cloned().collect();
+            assert_eq!(d.payload["questions"], json!(questions));
+            for (key, q) in seen[step].iter().filter(|(k, _)| k.contains("__")) {
+                let (an, sn) = key.split_once("__").unwrap();
+                let Question::Choice { criteria, .. } = q else {
+                    panic!()
+                };
+                let labels: Vec<&String> = criteria.keys().collect();
+                assert_eq!(legal[an][sn], json!(labels), "{key}");
+            }
+        }
+        // Step 1: `open` was not legal (no fetch result yet).
+        assert!(jev[0].payload["legal"].get("open").is_none());
+        // Step 2: legal with every slot's candidates; size capped at 2.
+        assert_eq!(
+            jev[1].payload["legal"]["open"],
+            json!({"pool": ["pool_1", "pool_2"], "size": ["0.5", "1", "2"]})
+        );
+        assert_eq!(jev[1].payload["step"], json!(1));
+    }
+
+    /// Below `act_at`: `action.escalated` on the gate node, with the
+    /// confidence, the threshold and whether it was handed on.
+    #[tokio::test]
+    async fn escalation_event_has_confidence_and_act_at() {
+        let sink = Arc::new(MemTrace::default());
+        let (l, _, tools, esc) = build(false, vec![pick(&[("next_action", "fetch", 0.3)])]);
+        let l = l.with_trace(sink.clone());
+        let out = l.handle_event(&json!({}), "s").await.unwrap();
+        assert!(matches!(out[0], StepOutcome::Escalated { .. }));
+        assert!(tools.0.lock().unwrap().is_empty());
+        assert_eq!(esc.0.lock().unwrap().len(), 1);
+        let d = sink.all();
+        assert_eq!(
+            shape(&sink)[1],
+            ev("action.escalated", Status::Escalated, "gate:t/act_at")
+        );
+        assert_eq!(d[1].parent_event_id, Some(MemTrace::id(0)));
+        let p = &d[1].payload;
+        assert_eq!(p["action"], json!("fetch"));
+        assert_eq!(p["confidence"], json!(0.3));
+        assert_eq!(p["act_at"], json!(0.8));
+        assert_eq!(
+            (p["escalate"].clone(), p["escalator"].clone()),
+            (json!(true), json!(true))
+        );
+        assert_eq!(
+            p["outcome"],
+            json!({"outcome": "escalated", "action": "fetch", "confidence": 0.3})
+        );
     }
 }

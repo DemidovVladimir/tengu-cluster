@@ -82,3 +82,7 @@ openrouter = []
 postgres_memory = ["tokio-postgres"]
 claude_code = []
 webhooks = ["axum", "hmac"]
+# `tengu studio --sandbox <s>`: the local, read-only Studio server (loopback
+# only; HTML/CSS/JS from web/studio/ embedded with include_str!). axum as
+# for webhooks; not a default feature (default build + Docker unchanged).
+studio = ["axum"]

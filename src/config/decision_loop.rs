@@ -250,6 +250,15 @@ pub(crate) enum SlotConfig {
 }
 
 impl DecisionLoopConfig {
+    /// Whether this loop only logs `action` instead of running it: a tool
+    /// action that is not `read_only` while `dry_run` is on. The one rule
+    /// the loop applies (`DecisionLoop::apply`), config validation skips
+    /// (such a tool need not be built yet) and the Studio graph shows
+    /// (`effect = "logged"`).
+    pub(crate) fn logs_only(&self, action: &ActionConfig) -> bool {
+        self.dry_run && action.tool.is_some() && !action.read_only
+    }
+
     /// Structural checks that need no other config section.
     pub(crate) fn validation_errors(&self, name: &str) -> Vec<String> {
         let mut errs = Vec::new();
@@ -489,6 +498,19 @@ caps = { size = 2.0 }
         );
     }
 
+    /// Under `dry_run` only a write tool is logged instead of run; a
+    /// `read_only` tool and a terminal run as configured.
+    #[test]
+    fn logs_only_is_a_dry_run_write() {
+        let mut c = parse(MIN);
+        let only = |c: &DecisionLoopConfig, a: &str| c.logs_only(&c.actions[a]);
+        assert!(only(&c, "open"));
+        assert!(!only(&c, "fetch"), "read_only");
+        assert!(!only(&c, "hold"), "terminal");
+        c.dry_run = false;
+        assert!(!only(&c, "open"));
+    }
+
     #[test]
     fn rejects_missing_terminal_and_bad_refs() {
         let c = parse(
@@ -666,6 +688,124 @@ slots = { both = { from = "fetch", items = "/a/*", value = "x", path = "/b" }, h
         assert!(e.contains("slots.both: set either"), "{e}");
         assert!(e.contains("slots.half: set either"), "{e}");
         assert!(e.contains("slots.ev: `event` is a path"), "{e}");
+    }
+
+    /// `sandboxes/control-loop-lab` (TENGU_STUDIO_PLAN ST-02) stays the safe
+    /// reference run: no money, signer or generation section; private agents
+    /// holding only the three workspace tools, each with its own scope inside
+    /// the lab workspace and no shell, network, env or wallet grant; the one
+    /// write action's path a TOML constant; feeds read-only; every scenario
+    /// event an object with a `scenario`, every scenario map a valid
+    /// narrowing of `demo` (`ExecutionMap::apply`).
+    #[test]
+    fn control_loop_lab_has_no_dangerous_surface() {
+        use crate::config::execution_map::ExecutionMap;
+        use crate::config::paths::expand_tilde;
+        use crate::config::Config;
+        use std::path::{Component, Path};
+
+        const TOOLS: [&str; 3] = ["read_file", "write_file", "list_directory"];
+        const READ_ONLY: [&str; 2] = ["read_file", "list_directory"];
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("sandboxes/control-loop-lab");
+        let cfg = Config::load(&dir.join("config.toml")).unwrap_or_else(|e| panic!("{e:#}"));
+
+        assert!(cfg.risk.is_none() && cfg.paper.is_none() && cfg.xmarket.is_none());
+        assert!(cfg.solana.signer_key_file.is_none(), "no signer");
+        assert!(cfg.generation.is_none(), "unbound: no generation pins");
+        assert!(cfg.mcp_servers.is_empty() && cfg.orchestrator.is_none());
+        assert!(cfg.default_scopes.is_empty(), "scopes per agent only");
+
+        for (name, a) in &cfg.agents {
+            assert!(
+                !a.tools.is_empty(),
+                "{name}: an empty `tools` = every always-on tool, run_command included"
+            );
+            assert!(a.workspace_tools.is_empty(), "{name}: no opt-in tools");
+            for t in &a.tools {
+                assert!(TOOLS.contains(&t.as_str()), "{name}: tool `{t}`");
+                assert!(a.scopes.contains_key(t), "{name}: `{t}` has no own scope");
+            }
+            assert_ne!(
+                a.engine, "claude_code",
+                "{name}: CLI built-ins ignore scopes"
+            );
+            assert!(a.description.is_none() && !a.default, "{name}: private");
+            let ws = expand_tilde(a.workspace.as_deref().expect("a lab workspace"));
+            for (tool, s) in &a.scopes {
+                let grants = (&s.shell_bins, &s.net_hosts, &s.env_reads, &s.wallets);
+                assert!(
+                    s.shell_bins.is_empty()
+                        && s.net_hosts.is_empty()
+                        && s.env_reads.is_empty()
+                        && s.wallets.is_empty(),
+                    "{name}.scopes.{tool}: {grants:?}"
+                );
+                assert!(!s.fs_roots.is_empty(), "{name}.scopes.{tool}: no root");
+                for r in &s.fs_roots {
+                    let inside =
+                        r.starts_with(&ws) && !r.components().any(|c| c == Component::ParentDir);
+                    assert!(
+                        inside,
+                        "{name}.scopes.{tool}: {} outside {}",
+                        r.display(),
+                        ws.display()
+                    );
+                }
+            }
+        }
+
+        for (ln, dl) in &cfg.decision_loops {
+            for (an, a) in &dl.actions {
+                let Some(tool) = a.tool.as_deref() else {
+                    continue;
+                };
+                let at = format!("decision_loops.{ln}.actions.{an}");
+                assert!(TOOLS.contains(&tool), "{at}: tool `{tool}`");
+                if READ_ONLY.contains(&tool) {
+                    continue;
+                }
+                assert!(
+                    !a.read_only,
+                    "{at}: a write flagged read_only runs in dry-run"
+                );
+                let path = a.args.get("path").and_then(Value::as_str).unwrap_or("");
+                let constant = path.starts_with("out/")
+                    && !path.contains('{')
+                    && !Path::new(path)
+                        .components()
+                        .any(|c| c == Component::ParentDir);
+                assert!(
+                    constant,
+                    "{at}: write path `{path}` is not a constant under out/"
+                );
+            }
+        }
+        for (fname, f) in &cfg.feeds {
+            if let Some(t) = f.tool.as_deref() {
+                assert!(READ_ONLY.contains(&t), "feeds.{fname}: scheduled `{t}`");
+            }
+        }
+
+        let demo = &cfg.decision_loops["demo"];
+        let mut maps = BTreeMap::new();
+        for entry in std::fs::read_dir(dir.join("scenarios")).unwrap() {
+            let path = entry.unwrap().path();
+            let file = path.file_name().unwrap().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(&path).unwrap();
+            if let Some(stem) = file.strip_suffix(".map.json") {
+                let map = ExecutionMap::parse(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+                assert_eq!(map.loop_name, "demo", "{file}");
+                let narrowed = map.apply(demo).unwrap_or_else(|e| panic!("{file}: {e:?}"));
+                maps.insert(stem.to_string(), narrowed);
+            } else {
+                let event: Value =
+                    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
+                assert!(event["scenario"].is_string(), "{file}: no `scenario`");
+            }
+        }
+        let knobs = |m: &str| (maps[m].act_at, maps[m].dry_run, maps[m].actions.len());
+        assert_eq!(knobs("uncertain"), (1.0, true, demo.actions.len()));
+        assert_eq!(knobs("act-dry"), (demo.act_at, true, demo.actions.len()));
     }
 
     #[test]

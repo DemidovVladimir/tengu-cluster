@@ -400,6 +400,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
     <li><span><b>Old data is never offered.</b> Slots from earlier steps read only this event's history.</span></li>
     <li><span><b>Tools keep their fences.</b> A loop runs tools as its <code>agent</code>, with that agent's scopes and egress.</span></li>
     <li><span><b>Audit lines never interleave.</b> Each line is one <code>write_all</code> on an append-only file, across loops and processes.</span></li>
+    <li><span><b>Every step is traced.</b> Under <code>tengu run</code> or <code>tengu decide</code> a step writes <code>observation.read</code>, <code>jev.completed</code> with the legal set offered (pinned: the payload bound drops it last), and its <code>action.*</code> event carrying the outcome as computed; the tool call adds <code>tool.*</code> (<a href="studio.html">Studio graph and trace</a>).</span></li>
     <li><span><b>Replay is the same loop.</b> Backtests run it terminal-only on a simulated clock, every answer cached (<a href="backtest.html">Backtests</a>).</span></li>
   </ul>
 </section>
@@ -415,7 +416,11 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 <span class="ln o">{ "outcomes": [ … one per step … ], "history": [ … args + ok + result … ],</span>
 <span class="ln">  "map": { "sha256": <span class="hl">"&lt;64 hex chars&gt;"</span>, "path": "~/.tengu/logs/maps/&lt;sha256&gt;.json" } }</span>
 <span class="ln cmd"><span class="p">$ </span>echo '{"task":"What is the SOL price in USD?"}' | tengu decide --sandbox jev-exec --loop executor --event -</span>
-<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"crypto_price"}, {"outcome":"stopped","action":"done"} ], … }</span></pre>
+<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"crypto_price"}, {"outcome":"stopped","action":"done"} ], … }</span>
+<span class="ln o"># the safe lab (no money, no shell; runbook docs/control-loop-lab-2026-10-08.md) — export TENGU_HOME="$HOME/tengu-lab/home" first</span>
+<span class="ln cmd"><span class="p">$ </span>echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event -</span>
+<span class="ln o">{ "outcomes": [ {"outcome":"executed","action":"write_marker"}, {"outcome":"stopped","action":"hold"} ], "run_id": "&lt;uuid&gt;", "trace": "…/logs/trace/control-loop-lab/&lt;uuid&gt;.jsonl", … }</span>
+<span class="ln o"># stdout is the JSON alone (logs on stderr); every audit line of the run carries that run_id — <a href="studio.html">Studio graph and trace</a></span></pre>
   </div>
 </section>
 
@@ -445,7 +450,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-07.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
 </article>
 </main>
 </div>

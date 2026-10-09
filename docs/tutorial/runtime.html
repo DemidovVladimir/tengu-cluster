@@ -225,7 +225,7 @@
         <li>Each <code>[feeds.&lt;name&gt;]</code> fires on its schedule. <code>kind = "tool"</code> calls its agent's tool, which writes rows; <code>kind = "tick"</code> sends an event to a loop; <code>kind = "job"</code> runs a named application job.</li>
         <li>Webhook endpoints with <code>loop = "&lt;name&gt;"</code> feed the same dispatcher. A loop runs one event at a time, in arrival order; at most 4 run across all loops.</li>
         <li>A loop with 64 events already waiting refuses the next: a webhook gets 429, a tick counts it dropped. A burst cannot pile up tasks.</li>
-        <li>Every 5 s: <code>run-&lt;sandbox&gt;.json</code> plus <code>loop/1</code> and <code>feed/1</code> rows. <code>tengu doctor --live</code> fails on a beat older than 30 s or a required feed down or stale.</li>
+        <li>Every 5 s: <code>run-&lt;sandbox&gt;.json</code> plus <code>loop/1</code> and <code>feed/1</code> rows. <code>tengu doctor --live</code> fails on a beat older than 30 s or a required feed down or stale; Studio's <code>/api/v1/health</code> serves the same verdict (<code>read_live</code>).</li>
         <li>The lease is renewed every 10 s. If another holder took it, or renewal keeps failing until it expires, the run stops as failed and exits non-zero.</li>
         <li>SIGINT or SIGTERM: new events refused (503), queued ones dropped, running ones get up to 20 s, then abort. Leases released. A second signal exits 130.</li>
       </ol>
@@ -369,6 +369,8 @@
     <li><span><b>Readers never see half a heartbeat.</b> It is written to a temp file, then renamed.</span></li>
     <li><span><b>No URLs in health.</b> Heartbeats and <code>loop/1</code> / <code>feed/1</code> rows replace every URL with <code>&lt;url&gt;</code>.</span></li>
     <li><span><b>Shutdown is bounded.</b> <code>shutdown_grace_secs</code> ≤ 3600; a second signal exits 130 at once.</span></li>
+    <li><span><b>Each start is its own recording.</b> A new trace <code>run_id</code> per process; every loop audit line carries it and the lease holder as <code>runtime_id</code>. The run writes <code>runtime.*</code> (starting, running, stopping, stopped with the drain), <code>feed.*</code> per slot (a tool, tick or job run: <code>feed.fired</code> then its outcome) and <code>loop.*</code> per event with the counters (<a href="studio.html">Studio graph and trace</a>).</span></li>
+    <li><span><b>Studio's Play is this same start.</b> <code>tengu studio</code> with control on calls the start <code>tengu run</code> calls (<code>start_session</code>): the same leases, loops, feeds, heartbeat and recording, in the Studio process. Its Stop is the SIGINT path (<code>"studio stop"</code>); while Studio runs it, <code>tengu run</code> is refused by the lease. A hardened sandbox (<code>[risk]</code>, <code>[soe]</code>, a signer) is never Played: its job feed runs under <code>tengu run</code> only (<a href="studio.html">Studio</a>).</span></li>
   </ul>
 </section>
 
@@ -380,7 +382,7 @@
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu run --sandbox xmarket</span>
-<span class="ln o">INFO tengu run started sandbox=xmarket holder=&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt; feeds=["hl_book", "hl_ctx", "risk_day", "xm_exits"]</span>
+<span class="ln o">INFO tengu run started sandbox=xmarket holder=&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt; run_id="&lt;uuid&gt;" feeds=["hl_book", "hl_ctx", "risk_day", "xm_exits"]</span>
 <span class="ln cmd"><span class="p">$ </span>tengu run --sandbox xmarket        <span class="o"># a second terminal</span></span>
 <span class="ln er">Error: sandbox `xmarket` is already running: lease `runtime:xmarket` in ~/.tengu/state/xmarket/runtime.db</span>
 <span class="ln er">is held by `&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt;` for 24 s more. Stop that `tengu run` / `tengu webhooks` first …</span>
@@ -401,8 +403,8 @@
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, stop report</td></tr>
-        <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, feeds, health, shutdown</td></tr>
+        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play</td></tr>
+        <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, feeds, health, shutdown; <code>read_live</code> (the <code>--live</code> verdict, shared with Studio)</td></tr>
         <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, lease keeper</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td><code>LoopDispatch</code>: turn, permits, queue bound, drain</td></tr>
         <tr><td><code>src/application/runtime/feeds.rs</code></td><td>the feed runner: fire, fan-out, backoff, health</td></tr>

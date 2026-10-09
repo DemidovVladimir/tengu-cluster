@@ -30,3 +30,4 @@ pub(crate) mod solana;
 pub(crate) mod sources;
 pub(crate) mod subprocess_runner;
 pub(crate) mod tools;
+pub(crate) mod trace_store;

@@ -4,9 +4,11 @@
 //! | Step | What |
 //! |---|---|
 //! | state dir | `[xmarket]` state dir (`SandboxSections::xm_state_dir`), else the `[sources]` one (the SOE state root, critic C9), else `<TENGU_HOME>/state`; `runtime.db` lives there |
-//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; then — with `[soe]` — `state:<[sources] state dir name>`: one owner per SOE state root (its cycles and logs); taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start; lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
+//! | leases ([`LeasePlan`], [`OwnerLeases`]) | `runtime:<sandbox>` (sandbox = `--sandbox`, else `default`), then — for an `[xmarket]` state dir, the ledger's — `state:<dir name>`: one owner per ledger, whichever sandbox names that `[xmarket] state`; then — with `[soe]` — `state:<[sources] state dir name>`: one owner per SOE state root (its cycles and logs); taken all or none, TTL 30 s, renewed every 10 s; held ⇒ this process refuses to start ([`LeaseHeld`] in the error: Studio attaches read-only); lost ⇒ it stops (failed). `tengu webhooks` takes the same leases (`inbound/webhooks.rs`) |
+//! | trace | [`start`] opens this process's recording (`bootstrap::trace::open_sink`, `RunKind::Run`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, `runtime_id` = the lease holder; every loop's `decisions.jsonl` lines carry both ids ([`Runtime::trace`]) |
 //! | loops | every `[decision_loops.*]` built once (`bootstrap::decision::build_decision_loop`) behind one `LoopDispatch` — the process owns loop state |
 //! | health | `HealthBoard`: `run-<sandbox>.json` + `loop/1:<name>` rows (loop agent's store) every `[runtime] heartbeat_secs`; `stopping` / `stopped` beats on shutdown; feeds register via [`Runtime::health`] |
+//! | live verdict | [`read_live`]: the heartbeat file + the `loop/1` / `feed/1` rows of each agent store that exists → `domain::runtime::live_verdict` — `tengu doctor --live` and Studio's `/api/v1/health` read the same |
 //! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; a job feed runs the named job ([`job_for`]: `soe_cycle` = `bootstrap::soe::soe_cycle_job`); `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's; job `soe_cycle`: the `[soe] architect`'s) |
 //! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router and the feeds |
 //! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → leases released |
@@ -18,30 +20,40 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use serde_json::{json, Value};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::adapters::outbound::clock::SystemClock;
 use crate::adapters::outbound::egress::{AttributedExecutor, CallSession};
-use crate::adapters::outbound::observations::open_observation_store;
+use crate::adapters::outbound::noop::NoopTrace;
+use crate::adapters::outbound::observations::{open_observation_store, SqliteObservationStore};
 use crate::adapters::outbound::rate_limit::jitter01;
-use crate::adapters::outbound::runtime_store::SqliteRuntimeStore;
+use crate::adapters::outbound::runtime_store::{read_heartbeat, SqliteRuntimeStore};
 use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, Rand01};
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
 use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
 use crate::application::runtime::{keep_lease, LeaseTiming, Stop, StopRx, Stopper, Supervisor};
+use crate::application::trace_exec::TracedExecutor;
+use crate::bootstrap::trace::Recording;
 use crate::config::feeds::{FeedConfig, FeedKind, JOBS, JOB_SOE_CYCLE};
 use crate::config::runtime::RuntimeConfig;
 use crate::config::Config;
-use crate::domain::observation::now_ms;
-use crate::domain::runtime::{lease_resource, state_lease_resource, RunState, RunnerLease};
+use crate::domain::observation::{now_ms, Observation, Observed};
+use crate::domain::runtime::{
+    heartbeat_file, lease_resource, live_verdict, state_lease_resource, FeedHealth, HeartbeatRead,
+    LiveKnobs, LiveReport, LoopHealth, RunState, RunnerLease,
+};
 use crate::domain::secrets::SecretRegistry;
+use crate::domain::trace::{Component, EventDraft, Status};
 use crate::domain::tz::Zone;
+use crate::domain::workflow::node_id;
 use crate::ports::clock::Clock;
 use crate::ports::decision::Escalator;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::observation::ObservationStore;
 use crate::ports::runtime::{RuntimeJob, RuntimeStore};
+use crate::ports::trace::TraceSink;
 
 /// Runner name: the `--sandbox` name, else `default`.
 pub(crate) fn runner_name(config: &Config) -> String {
@@ -78,6 +90,81 @@ pub(crate) fn runtime_state_dir(config: &Config) -> PathBuf {
         sources_state_dir(config).as_deref(),
         &crate::config::paths::resolve_tengu_home(),
     )
+}
+
+/// What `tengu doctor --live` and Studio's `/api/v1/health` judge: the
+/// heartbeat file and the `loop/1` / `feed/1` rows, through
+/// `domain::runtime::live_verdict` (no rule here).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LiveHealth {
+    /// Runner name ([`runner_name`]).
+    pub sandbox: String,
+    /// Where `run-<sandbox>.json` was read.
+    pub state_dir: PathBuf,
+    pub heartbeat: HeartbeatRead,
+    pub report: LiveReport,
+}
+
+/// The live verdict of `config`'s runtime, its heartbeat read from
+/// `state_dir` ([`runtime_state_dir`] for this process's `TENGU_HOME`).
+pub(crate) async fn read_live(config: &Config, state_dir: &Path) -> LiveHealth {
+    let sandbox = runner_name(config);
+    let heartbeat = match read_heartbeat(state_dir, &sandbox) {
+        Ok(Some(hb)) => HeartbeatRead::Found(hb),
+        Ok(None) => HeartbeatRead::Missing,
+        Err(e) => HeartbeatRead::Unreadable(format!("{e:#}")),
+    };
+    let rows = health_rows(config, &heartbeat).await;
+    let knobs = LiveKnobs {
+        heartbeat_stale_secs: config.runtime.heartbeat_stale_secs,
+    };
+    let report = live_verdict(&sandbox, &heartbeat, &rows, now_ms(), knobs);
+    LiveHealth {
+        sandbox,
+        state_dir: state_dir.to_path_buf(),
+        heartbeat,
+        report,
+    }
+}
+
+/// `loop/1` rows of every configured loop and `feed/1` rows of every feed
+/// the heartbeat lists, from each agent workspace whose observation store
+/// exists (never created here). Unreadable stores are skipped.
+async fn health_rows(config: &Config, heartbeat: &HeartbeatRead) -> Vec<Observation> {
+    let mut keys: BTreeSet<String> = config
+        .decision_loops
+        .keys()
+        .map(|n| Observation::key_for(LoopHealth::SCHEMA, n))
+        .collect();
+    if let HeartbeatRead::Found(hb) = heartbeat {
+        keys.extend(
+            hb.loops
+                .keys()
+                .map(|n| Observation::key_for(LoopHealth::SCHEMA, n)),
+        );
+        keys.extend(
+            hb.feeds
+                .keys()
+                .map(|n| Observation::key_for(FeedHealth::SCHEMA, n)),
+        );
+    }
+    let keys: Vec<String> = keys.into_iter().collect();
+    let workspaces: BTreeSet<PathBuf> = config
+        .agents
+        .keys()
+        .map(|a| agent_workspace(config, a))
+        .filter(|ws| ws.join(".tengu").join("observations.db").exists())
+        .collect();
+    let mut rows = Vec::new();
+    for ws in workspaces {
+        let Ok(store) = SqliteObservationStore::open(&ws) else {
+            continue;
+        };
+        if let Ok(found) = store.get_many(&keys).await {
+            rows.extend(found.into_iter().flatten());
+        }
+    }
+    rows
 }
 
 /// What a long-running process of a sandbox (`tengu run`, `tengu webhooks`)
@@ -142,21 +229,21 @@ impl LeasePlan {
     }
 
     /// Why `lease` (refused) stops this process from starting — the holder
-    /// in full.
+    /// in full; a [`LeaseHeld`] inside the `anyhow::Error`.
     fn refusal(&self, kind: LeaseKind, db: &str, lease: &RunnerLease, now: i64) -> anyhow::Error {
         let (resource, holder, secs) = (
             &lease.resource,
             &lease.current_holder,
             lease.remaining_secs(now),
         );
-        match kind {
-            LeaseKind::Runner => anyhow!(
+        let message = match kind {
+            LeaseKind::Runner => format!(
                 "sandbox `{}` is already running: lease `{resource}` in {db} is held by \
                  `{holder}` for {secs} s more. Stop that `tengu run` / `tengu webhooks` first \
                  (SIGTERM drains it); if it crashed, retry once the lease expires.",
                 self.sandbox
             ),
-            LeaseKind::State => anyhow!(
+            LeaseKind::State => format!(
                 "state dir {} already has an owner: lease `{resource}` in {db} is held by \
                  `{holder}` for {secs} s more — a `tengu run` or `tengu webhooks` of a sandbox \
                  naming the same [xmarket] state owns its ledger, and a ledger has one owner. \
@@ -164,7 +251,7 @@ impl LeasePlan {
                  [xmarket] state; if it crashed, retry once the lease expires.",
                 self.state_dir.display()
             ),
-            LeaseKind::SoeState => anyhow!(
+            LeaseKind::SoeState => format!(
                 "SOE state root {} already has an owner: lease `{resource}` in {db} is held by \
                  `{holder}` for {secs} s more — a `tengu run` or `tengu webhooks` of a sandbox \
                  with [soe] naming the same [sources] state owns its cycles and logs. Stop that \
@@ -175,9 +262,45 @@ impl LeasePlan {
                     .unwrap_or(&self.state_dir)
                     .display()
             ),
-        }
+        };
+        anyhow::Error::new(LeaseHeld {
+            resource: resource.clone(),
+            holder: holder.clone(),
+            remaining_secs: secs,
+            message,
+        })
     }
 }
+
+/// A lease another process holds — why [`OwnerLeases::take`] (and so
+/// [`start`]) refused. Carried inside the `anyhow::Error` ([`LeaseHeld::of`]):
+/// Studio's Play tells "another process runs this sandbox — attach
+/// read-only" from a start that failed. `Display` = the operator message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeaseHeld {
+    pub resource: String,
+    /// The holder `<host>:<pid>:<uuid>`, in full.
+    pub holder: String,
+    /// Whole seconds until it expires (a crashed holder's lease frees then).
+    pub remaining_secs: u64,
+    message: String,
+}
+
+impl LeaseHeld {
+    /// The refusal inside `e`, if `e` is one (anywhere in its chain).
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
+    pub(crate) fn of(e: &anyhow::Error) -> Option<&LeaseHeld> {
+        e.chain().find_map(|c| c.downcast_ref::<LeaseHeld>())
+    }
+}
+
+impl std::fmt::Display for LeaseHeld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LeaseHeld {}
 
 /// The leases a process holds ([`LeasePlan`]): taken all or none, renewed
 /// by [`OwnerLeases::keep`] on the process's supervisor, freed by
@@ -316,33 +439,34 @@ pub(crate) struct Runtime {
     supervisor: Supervisor,
     loops: Arc<LoopDispatch>,
     health: Arc<HealthBoard>,
+    /// This process's trace recording (`bootstrap::trace::open_sink`);
+    /// `NoopTrace` until [`start`] opens it.
+    trace: Arc<dyn TraceSink>,
 }
 
-/// Take the lease, build every decision loop, start the lease keeper and
-/// the heartbeat. `escalator` comes from the inbound side (the webhook
-/// listener's orchestrator escalator when built with `--features webhooks`).
+/// Take the lease, open the trace recording (`run_id`; `runtime_id` = the
+/// lease holder), build every decision loop (their audit lines carry both
+/// ids), start the lease keeper and the heartbeat. `escalator` comes from
+/// the inbound side (the webhook listener's orchestrator escalator when
+/// built with `--features webhooks`).
 pub(crate) async fn start(
     config: &Config,
     secrets: Arc<SecretRegistry>,
     escalator: Option<Arc<dyn Escalator>>,
 ) -> Result<Runtime> {
-    let mut rt = Runtime::begin(
+    let rt = Runtime::begin(
         LeasePlan::of(config),
         config.runtime.clone(),
         LeaseTiming::default(),
     )
     .await?;
-    let started = build_loops(config, Arc::clone(&secrets), escalator).and_then(|(h, s)| {
-        rt.launch(h, s);
-        start_feeds(config, &mut rt, &secrets, Arc::new(SystemClock))
-    });
-    match started {
-        Ok(()) => Ok(rt),
-        Err(e) => {
-            rt.shutdown().await;
-            Err(e)
-        }
-    }
+    let trace = crate::bootstrap::trace::open_sink(
+        config,
+        Some(rt.holder()),
+        crate::domain::trace::RunKind::Run,
+        &secrets,
+    );
+    rt.start_recorded(config, secrets, escalator, trace).await
 }
 
 /// One agent's tool executor + the tool names it runs.
@@ -387,6 +511,7 @@ pub(crate) fn start_feeds(
             clock: Arc::clone(&clock),
             rand01: Arc::clone(&rand01),
             health,
+            trace: Some(rt.trace()),
         };
         rt.spawn(format!("feed:{name}"), move |stop| {
             run_feed(spec, env, stop)
@@ -433,7 +558,10 @@ fn feed_spec(
                      the log above)"
                 );
             }
-            // Egress records name the feed's agent + `feed:<name>` + the call id.
+            // `tool.*` events per call; egress records name the feed's agent +
+            // `feed:<name>` + the call id.
+            let executor: Arc<dyn ToolExecutor> =
+                Arc::new(TracedExecutor::new(executor, rt.trace(), &agent_name, None));
             let executor = Arc::new(AttributedExecutor::new(
                 executor,
                 &agent_name,
@@ -517,6 +645,7 @@ fn build_loops(
     config: &Config,
     secrets: Arc<SecretRegistry>,
     escalator: Option<Arc<dyn Escalator>>,
+    rec: Recording,
 ) -> Result<BuiltLoops> {
     let (mut handlers, mut stores): BuiltLoops = Default::default();
     let mut names: Vec<&String> = config.decision_loops.keys().collect();
@@ -527,6 +656,7 @@ fn build_loops(
             name,
             escalator.clone(),
             Arc::clone(&secrets),
+            rec.clone(),
         )
         .with_context(|| format!("build [decision_loops.{name}]"))?;
         handlers.insert(name.clone(), dl as Arc<dyn LoopHandler>);
@@ -550,6 +680,44 @@ fn build_loops(
         }
     }
     Ok((handlers, stores))
+}
+
+/// Where `runtime.*` events go: node `runtime:<sandbox>`, artifact = the
+/// heartbeat file (`run-<sandbox>.json`).
+struct Lifecycle {
+    trace: Arc<dyn TraceSink>,
+    node: String,
+    heartbeat: String,
+    /// Parent of the next event (`runtime.stopped` → `runtime.stopping`).
+    parent: Option<String>,
+}
+
+impl Lifecycle {
+    fn emit(
+        &self,
+        kind: &str,
+        status: Status,
+        payload: Value,
+        duration_ms: Option<u64>,
+    ) -> Option<String> {
+        let mut d = EventDraft::new(Component::Runtime, kind, status)
+            .node(self.node.clone())
+            .payload(payload)
+            .artifact(self.heartbeat.clone(), None);
+        d.duration_ms = duration_ms;
+        d.parent_event_id = self.parent.clone();
+        self.trace.emit(d)
+    }
+}
+
+/// Per-loop counters as a trace payload carries them.
+fn loop_stats_json(stats: &BTreeMap<String, LoopStats>) -> Value {
+    Value::Object(
+        stats
+            .iter()
+            .map(|(name, s)| (name.clone(), s.to_json()))
+            .collect(),
+    )
 }
 
 fn holder_id() -> String {
@@ -602,7 +770,85 @@ impl Runtime {
             supervisor,
             loops,
             health,
+            trace: Arc::new(NoopTrace),
         })
+    }
+
+    /// [`start`] after the leases: record into `trace` (`runtime.starting`),
+    /// build the loops, launch them + the heartbeat, start the feeds
+    /// (`runtime.running`); a failure is `runtime.start_failed`, then the
+    /// shutdown (`runtime.stopping` → `runtime.stopped`) and the error.
+    /// Studio's control tests start a runtime on a temp state dir this way.
+    pub(crate) async fn start_recorded(
+        mut self,
+        config: &Config,
+        secrets: Arc<SecretRegistry>,
+        escalator: Option<Arc<dyn Escalator>>,
+        trace: Arc<dyn TraceSink>,
+    ) -> Result<Self> {
+        self.trace = trace;
+        self.lifecycle(
+            "runtime.starting",
+            Status::Pending,
+            json!({
+                "holder": self.holder(),
+                "leases": self.owner.resources(),
+                "state_dir": self.state_dir.display().to_string(),
+                "pid": std::process::id(),
+            }),
+        );
+        let rec = Recording::of(self.trace(), Some(self.holder()));
+        let started =
+            build_loops(config, Arc::clone(&secrets), escalator, rec).and_then(|(h, s)| {
+                self.launch(h, s);
+                start_feeds(config, &mut self, &secrets, Arc::new(SystemClock))
+            });
+        match started {
+            Ok(()) => {
+                self.lifecycle(
+                    "runtime.running",
+                    Status::Running,
+                    json!({
+                        "loops": self.loops.names(),
+                        "feeds": config.feeds.keys().collect::<Vec<_>>(),
+                    }),
+                );
+                Ok(self)
+            }
+            Err(e) => {
+                self.lifecycle(
+                    "runtime.start_failed",
+                    Status::Failed,
+                    json!({"error": format!("{e:#}")}),
+                );
+                self.shutdown().await;
+                Err(e)
+            }
+        }
+    }
+
+    /// This process's trace recording (`NoopTrace` before [`start`] opens
+    /// one, or when the trace dir cannot be written).
+    pub(crate) fn trace(&self) -> Arc<dyn TraceSink> {
+        Arc::clone(&self.trace)
+    }
+
+    fn life(&self) -> Lifecycle {
+        Lifecycle {
+            trace: Arc::clone(&self.trace),
+            node: node_id::runtime(&self.sandbox),
+            heartbeat: self
+                .state_dir
+                .join(heartbeat_file(&self.sandbox))
+                .display()
+                .to_string(),
+            parent: None,
+        }
+    }
+
+    /// A `runtime.*` event (module table).
+    fn lifecycle(&self, kind: &str, status: Status, payload: Value) {
+        self.life().emit(kind, status, payload, None);
     }
 
     /// Install the loop handlers (+ each loop agent's observation store for
@@ -613,11 +859,14 @@ impl Runtime {
         handlers: BTreeMap<String, Arc<dyn LoopHandler>>,
         loop_stores: BTreeMap<String, Arc<dyn ObservationStore>>,
     ) {
-        self.loops = Arc::new(LoopDispatch::new(
-            handlers,
-            self.cfg.max_decisions_in_flight,
-            self.cfg.max_queued_per_loop,
-        ));
+        self.loops = Arc::new(
+            LoopDispatch::new(
+                handlers,
+                self.cfg.max_decisions_in_flight,
+                self.cfg.max_queued_per_loop,
+            )
+            .with_trace(Arc::clone(&self.trace)),
+        );
         self.health = Arc::new(HealthBoard::new(
             &self.sandbox,
             self.owner.holder(),
@@ -680,6 +929,7 @@ impl Runtime {
     /// `shutdown_grace_secs`, then release the leases. The heartbeat says
     /// `stopping` during the drain and `stopped` after it.
     pub(crate) async fn shutdown(self) -> ShutdownReport {
+        let life = self.life();
         let Runtime {
             cfg,
             store,
@@ -695,6 +945,18 @@ impl Runtime {
             reason: "shutdown".into(),
             failed: false,
         });
+        let t0 = Instant::now();
+        let stopping = life.emit(
+            "runtime.stopping",
+            Status::Pending,
+            json!({
+                "reason": stop.reason,
+                "failed": stop.failed,
+                "grace_secs": cfg.shutdown_grace_secs,
+                "stats": loop_stats_json(&loops.stats()),
+            }),
+            None,
+        );
         let beat = |state| {
             let (health, loops, store, reason) = (&health, &loops, &store, &stop.reason);
             async move {
@@ -710,6 +972,27 @@ impl Runtime {
             tokio::join!(loops.drain(deadline), supervisor.shutdown(deadline));
         beat(RunState::Stopped).await;
         let lease_released = owner.release().await;
+        let status = if stop.failed {
+            Status::Failed
+        } else {
+            Status::Ok
+        };
+        let stopped = json!({
+            "reason": stop.reason,
+            "failed": stop.failed,
+            "drain": {
+                "finished": drained.finished,
+                "dropped": drained.dropped,
+                "aborted": drained.aborted,
+            },
+            "aborted_tasks": aborted_tasks,
+            "lease_released": lease_released,
+            "stats": loop_stats_json(&loops.stats()),
+        });
+        let elapsed = Some(t0.elapsed().as_millis() as u64);
+        let mut life = life;
+        life.parent = stopping;
+        life.emit("runtime.stopped", status, stopped, elapsed);
         ShutdownReport {
             stop,
             loops: drained,
@@ -987,16 +1270,94 @@ mod tests {
         second.shutdown().await;
     }
 
+    /// A `kind = "job"` feed starts through `start_recorded` — the start
+    /// `tengu run` and Studio's Play share (`inbound::run::start_session`):
+    /// with no signed profile the `soe_cycle` run fails before it creates
+    /// anything, traced `feed.fired` (`kind = "job"`) → its outcome, a child
+    /// of it, correlated `feed:<name>:<slot ms>`.
+    #[tokio::test]
+    async fn job_feed_starts_and_traces_through_the_shared_start() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let state = format!("soe-runtime-test-{}", uuid::Uuid::new_v4());
+        let agent = |name: &str, tool: &str| {
+            format!(
+                "[agents.{name}]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"d\"\n\
+                 tools = [\"{tool}\"]\nworkspace = \"{}\"\n",
+                ws.path().display()
+            )
+        };
+        let text = format!(
+            "{}{}[sources]\nstate = \"{state}\"\n\
+             [soe]\narchitect = \"soe_architect\"\ncritic = \"soe_critic\"\nmax_proposals = 1\nforecast_max_weeks = 1\n\
+             [feeds.soe_week]\nkind = \"job\"\njob = \"soe_cycle\"\ntz = \"Europe/Paris\"\nat = [\"Mon 07:00\"]\nrun_on_start = true\n",
+            agent("soe_architect", "soe_propose"),
+            agent("soe_critic", "soe_challenge"),
+        );
+        let file = dir.path().join("config.toml");
+        std::fs::write(&file, &text).unwrap();
+        let mut config: Config = toml::from_str(&text).unwrap();
+        config.loaded_from = Some(file);
+        config.fold_default_scopes();
+        let sink = Arc::new(MemTrace::default());
+        let rt = begin_as(plan("soe", &dir.path().join("rt"), false), slow_timing())
+            .await
+            .unwrap()
+            .start_recorded(&config, Arc::new(SecretRegistry::new()), None, sink.clone())
+            .await
+            .unwrap();
+        let feed_events = || {
+            sink.all()
+                .into_iter()
+                .filter(|d| d.kind.starts_with("feed."))
+                .collect::<Vec<_>>()
+        };
+        for _ in 0..400 {
+            if feed_events().len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        rt.shutdown().await;
+        let d = feed_events();
+        assert!(d.len() >= 2, "{:?}", sink.kinds());
+        assert_eq!(d[0].kind, "feed.fired");
+        assert_eq!(d[0].payload["kind"], json!("job"));
+        let slot = d[0].payload["slot_ms"].as_i64().unwrap();
+        assert_eq!(d[0].correlation_id, Some(format!("feed:soe_week:{slot}")));
+        assert!(
+            ["feed.failed", "feed.retrying"].contains(&d[1].kind.as_str()),
+            "{:?}",
+            sink.kinds()
+        );
+        assert!(
+            d[1].payload["error"]
+                .as_str()
+                .is_some_and(|e| e.starts_with("operator_profile_missing")),
+            "{:?}",
+            d[1].payload
+        );
+        let root = crate::config::paths::resolve_tengu_home()
+            .join("state")
+            .join(&state);
+        assert!(!root.exists(), "nothing created in {}", root.display());
+    }
+
     #[tokio::test]
     async fn a_second_instance_is_refused_until_the_first_stops() {
         let dir = tempfile::tempdir().unwrap();
         let first = begin(dir.path(), slow_timing()).await.unwrap();
         let holder = first.holder().to_string();
         assert!(holder.contains(&format!(":{}:", std::process::id())));
-        let err = format!(
-            "{:#}",
-            begin(dir.path(), slow_timing()).await.err().unwrap()
+        let refused = begin(dir.path(), slow_timing()).await.err().unwrap();
+        // Typed: Studio's Play tells a held lease from any other failure.
+        let held = LeaseHeld::of(&refused).expect("a LeaseHeld refusal");
+        assert_eq!(
+            (held.resource.as_str(), held.holder.as_str()),
+            ("runtime:xmarket-weekend", holder.as_str())
         );
+        assert!(held.remaining_secs > 0 && held.remaining_secs <= 60);
+        let err = format!("{refused:#}");
         assert!(
             err.contains("sandbox `xmarket-weekend` is already running"),
             "{err}"
@@ -1266,6 +1627,109 @@ mod tests {
             "{err}"
         );
         rt.shutdown().await;
+    }
+
+    /// Agent `main` in `workspace` + one tool feed of `tool` (no loops: no
+    /// Jev key needed).
+    fn tool_feed_config(workspace: &Path, tool: &str) -> Config {
+        let text = format!(
+            "[agents.main]\ndefault = true\nengine = \"openrouter\"\nmodel = \"m\"\n\
+             workspace = \"{}\"\n\n[feeds.probe]\nkind = \"tool\"\nagent = \"main\"\n\
+             tool = \"{tool}\"\nargs = {{ path = \".\" }}\nevery_secs = 3600\n\
+             run_on_start = true\n",
+            workspace.display()
+        );
+        let mut c: Config = toml::from_str(&text).unwrap();
+        c.validate().unwrap();
+        c.fold_default_scopes();
+        c
+    }
+
+    /// `runtime.starting` → `runtime.running` (the feed's events in between,
+    /// its tool call traced through the agent's executor) → on shutdown
+    /// `runtime.stopping` → `runtime.stopped` (its child, timed, drain +
+    /// lease); a start that fails is `runtime.start_failed`, then the same
+    /// shutdown pair. Node `runtime:<sandbox>`, artifact = the heartbeat.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lifecycle_events_on_start_and_shutdown() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let (dir, ws) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let sink = Arc::new(MemTrace::default());
+        let rt = begin_as(plan("control-loop-lab", dir.path(), false), slow_timing())
+            .await
+            .unwrap();
+        let config = tool_feed_config(ws.path(), "list_directory");
+        let secrets = Arc::new(SecretRegistry::new());
+        let rt = rt
+            .start_recorded(&config, secrets, None, sink.clone())
+            .await
+            .unwrap();
+        for _ in 0..400 {
+            if sink.kinds().iter().any(|k| k == "feed.completed") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let report = rt.shutdown().await;
+        assert!(report.lease_released);
+        let d = sink.all();
+        let kinds = sink.kinds();
+        let at = |k: &str| kinds.iter().position(|x| x == k).unwrap();
+        assert_eq!(kinds[0], "runtime.starting");
+        assert!(at("runtime.running") > 0);
+        assert_eq!(
+            kinds[kinds.len() - 2..],
+            ["runtime.stopping", "runtime.stopped"]
+        );
+        let (fired, started, done) = (at("feed.fired"), at("tool.started"), at("tool.completed"));
+        assert!(fired < started && started < done && done < at("feed.completed"));
+        assert_eq!(d[started].parent_event_id, Some(MemTrace::id(fired)));
+        assert_eq!(
+            d[started].node_id.as_deref(),
+            Some("tool:main/list_directory")
+        );
+        let stopped = d.last().unwrap();
+        assert_eq!(stopped.status, Status::Ok);
+        assert_eq!(stopped.parent_event_id, Some(MemTrace::id(d.len() - 2)));
+        assert!(stopped.duration_ms.is_some());
+        assert_eq!(stopped.payload["lease_released"], json!(true));
+        assert_eq!(stopped.payload["drain"]["aborted"], json!(0));
+        assert_eq!(d[0].node_id.as_deref(), Some("runtime:control-loop-lab"));
+        assert_eq!(d[0].payload["leases"], json!(["runtime:control-loop-lab"]));
+        let hb = dir.path().join("run-control-loop-lab.json");
+        assert_eq!(
+            d[0].artifact.as_ref().unwrap().file,
+            hb.display().to_string()
+        );
+
+        // A start that fails: start_failed, then the shutdown pair.
+        let sink = Arc::new(MemTrace::default());
+        let rt = begin_as(plan("control-loop-lab", dir.path(), false), slow_timing())
+            .await
+            .unwrap();
+        let config = tool_feed_config(ws.path(), "read_fil");
+        let Err(err) = rt
+            .start_recorded(&config, Arc::new(SecretRegistry::new()), None, sink.clone())
+            .await
+        else {
+            panic!("a feed whose agent cannot run its tool must refuse to start");
+        };
+        assert!(format!("{err:#}").contains("cannot run `read_fil`"));
+        assert_eq!(
+            sink.kinds(),
+            [
+                "runtime.starting",
+                "runtime.start_failed",
+                "runtime.stopping",
+                "runtime.stopped"
+            ]
+        );
+        let failed = &sink.all()[1];
+        assert_eq!(failed.status, Status::Failed);
+        assert!(failed.payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot run `read_fil`"));
     }
 
     #[tokio::test]

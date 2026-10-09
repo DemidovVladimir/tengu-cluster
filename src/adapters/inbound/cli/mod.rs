@@ -13,7 +13,9 @@ mod run_agent;
 mod skill;
 mod soe;
 mod sources;
+mod studio;
 mod tool;
+mod trace;
 
 use clap::{Parser, Subcommand};
 
@@ -118,6 +120,31 @@ enum Commands {
         /// the sandbox TOML (`config/execution_map.rs`). Carries its event.
         #[arg(long)]
         map: Option<PathBuf>,
+    },
+    /// Tengu Studio (TENGU_STUDIO_PLAN.md): with no subcommand, the local
+    /// browser UI (`--features studio`): loopback only, prints its URL (with
+    /// a per-process token) on stdout; Play / Stop / send-event only with
+    /// `[studio] control = true` or `--allow-control`. `graph` prints the
+    /// sandbox's workflow graph — validated config + catalog tools as
+    /// nodes and edges, optionally narrowed by an execution map — as JSON.
+    Studio {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(flatten)]
+        serve: studio::ServeArgs,
+        #[command(subcommand)]
+        action: Option<studio::StudioAction>,
+    },
+    /// Read the execution trace `tengu run` / `tengu decide` recorded under
+    /// <TENGU_HOME>/logs/trace/<sandbox>/: `runs`, `show --run <id>
+    /// [--after <seq>] [--follow]`. JSON lines; no config, read-only.
+    Trace {
+        /// Sandbox name (the trace directory; `default` for a -c config).
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: trace::TraceAction,
     },
     /// Read recorded observation history (`[recorder]`): `range` / `asof`,
     /// JSON lines with full keys. Fill and inspect the market-data
@@ -496,6 +523,19 @@ pub(crate) async fn run() -> Result<()> {
         return soe::run_soe(args, cli.config).await;
     }
 
+    if let Some(Commands::Trace { sandbox, action }) = cli.command {
+        // Trace files only — no config, no secrets; stdout carries JSON lines.
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("tengu=info".parse().unwrap()),
+            )
+            .compact()
+            .with_writer(std::io::stderr)
+            .init();
+        return trace::run_trace(sandbox, action).await;
+    }
+
     let tengu_home = resolve_tengu_home();
     // Inherited vault names (`TENGU_SECRETS_LOADED`), else the vault itself,
     // plus the master password — the same registry `tengu mcp-bridge` and
@@ -509,12 +549,18 @@ pub(crate) async fn run() -> Result<()> {
     // In Telegram mode, log to both file and stderr so operators can monitor.
     let is_tui = matches!(cli.command, None | Some(Commands::Chat { .. }));
     let is_telegram = matches!(cli.command, Some(Commands::Telegram { .. }));
-    // Webhook listener and `tengu run` use the same dual-output (file +
+    // Webhook listener, `tengu run` and the Studio server (its Play runs the
+    // `tengu run` runtime in-process) use the same dual-output (file +
     // stderr) pattern as telegram so operators can `tail -f tengu.log` while
-    // also watching the console for HMAC-fail / dispatch events.
+    // also watching the console for HMAC-fail / dispatch events. Never
+    // stdout: the Studio server prints its URL there alone.
     let is_webhooks = matches!(
         cli.command,
-        Some(Commands::Webhooks { .. } | Commands::Run { .. })
+        Some(
+            Commands::Webhooks { .. }
+                | Commands::Run { .. }
+                | Commands::Studio { action: None, .. }
+        )
     );
     if is_tui {
         let log_dir = resolve_tengu_home().join("logs");
@@ -557,17 +603,9 @@ pub(crate) async fn run() -> Result<()> {
             .with(stderr_layer);
         tracing::subscriber::set_global_default(subscriber)
             .expect("Failed to set tracing subscriber");
-    } else if matches!(
-        cli.command,
-        Some(
-            Commands::History { .. }
-                | Commands::Risk { .. }
-                | Commands::Backtest { .. }
-                | Commands::Sources { .. }
-                | Commands::Ranking { .. }
-        )
-    ) {
-        // stdout carries JSON lines / the operator's text; logs go to stderr.
+    } else if stdout_is_data(&cli.command) {
+        // stdout carries JSON (lines) / the operator's report; logs go to
+        // stderr, so `tengu decide … | jq` reads the JSON alone.
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
@@ -687,6 +725,14 @@ pub(crate) async fn run() -> Result<()> {
                 secret_registry,
             )
             .await
+        }
+        Commands::Studio {
+            sandbox,
+            serve,
+            action,
+        } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            studio::run_studio(config, serve, action, secret_registry).await
         }
         Commands::History { sandbox, action } => {
             let config = load_sandbox_or(sandbox, config)?;
@@ -859,6 +905,9 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Evidence { .. } => {
             unreachable!("Commands::Evidence is dispatched earlier in main()")
         }
+        Commands::Trace { .. } => {
+            unreachable!("Commands::Trace is dispatched earlier in run()")
+        }
     }
 }
 
@@ -873,6 +922,7 @@ fn replacing_sandbox(command: &Option<Commands>) -> Option<&str> {
         | Commands::Run { sandbox }
         | Commands::Doctor { sandbox, .. }
         | Commands::Decide { sandbox, .. }
+        | Commands::Studio { sandbox, .. }
         | Commands::History { sandbox, .. }
         | Commands::Backtest { sandbox, .. }
         | Commands::Ranking { sandbox, .. }
@@ -880,6 +930,25 @@ fn replacing_sandbox(command: &Option<Commands>) -> Option<&str> {
         | Commands::Sources { sandbox, .. } => sandbox.as_deref(),
         _ => None,
     }
+}
+
+/// Commands whose stdout is data — JSON (lines) or the doctor's report —
+/// so their log lines go to stderr. (`tool`, `evidence`, `lineage`,
+/// `trace`, `run-agent` and the MCP servers set stderr up earlier.)
+fn stdout_is_data(command: &Option<Commands>) -> bool {
+    matches!(
+        command,
+        Some(
+            Commands::History { .. }
+                | Commands::Risk { .. }
+                | Commands::Backtest { .. }
+                | Commands::Sources { .. }
+                | Commands::Ranking { .. }
+                | Commands::Decide { .. }
+                | Commands::Doctor { .. }
+                | Commands::Studio { .. }
+        )
+    )
 }
 
 /// Whether startup unlocks the secrets vault: every command but `tengu
@@ -924,6 +993,60 @@ mod tests {
         assert_eq!(replacing_sandbox(&command(&["tengu", "chat"])), None);
         assert_eq!(replacing_sandbox(&command(&["tengu", "status"])), None);
         assert_eq!(replacing_sandbox(&command(&["tengu"])), None);
+    }
+
+    /// ST-03 finding: `decide` / `doctor` printed log lines on stdout before
+    /// their JSON / report. Every data command now logs to stderr.
+    #[test]
+    fn data_commands_log_to_stderr() {
+        for args in [
+            &[
+                "tengu",
+                "decide",
+                "--sandbox",
+                "control-loop-lab",
+                "--loop",
+                "demo",
+            ][..],
+            &["tengu", "doctor", "--sandbox", "control-loop-lab", "--live"],
+            &["tengu", "studio", "graph", "--sandbox", "control-loop-lab"],
+            // The server: its URL alone on stdout.
+            &[
+                "tengu",
+                "studio",
+                "--sandbox",
+                "control-loop-lab",
+                "--port",
+                "0",
+            ],
+            &["tengu", "history", "range", "k", "--from", "0", "--to", "1"],
+            &["tengu", "sources", "--sandbox", "soe", "list"],
+            &["tengu", "ranking", "--sandbox", "xlab-w2", "show"],
+        ] {
+            assert!(stdout_is_data(&command(args)), "{args:?}");
+        }
+        assert!(!stdout_is_data(&command(&[
+            "tengu",
+            "run",
+            "--sandbox",
+            "x"
+        ])));
+        assert!(!stdout_is_data(&command(&["tengu", "chat"])));
+        // `trace` sets up stderr logging itself, before any config.
+        assert!(matches!(
+            command(&[
+                "tengu",
+                "trace",
+                "show",
+                "--sandbox",
+                "s",
+                "--run",
+                "r",
+                "--after",
+                "3"
+            ]),
+            Some(Commands::Trace { .. })
+        ));
     }
 
     /// Every `tengu sources` subcommand parses with its documented flags.

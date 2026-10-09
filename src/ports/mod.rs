@@ -22,3 +22,4 @@ pub(crate) mod solana_writes;
 pub(crate) mod source_store;
 pub(crate) mod tool;
 pub(crate) mod tool_activity;
+pub(crate) mod trace;

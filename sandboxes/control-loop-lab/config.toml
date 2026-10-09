@@ -1,0 +1,129 @@
+# Tengu Cluster — "control-loop-lab" sandbox (2026-10-08): the safe reference run
+# of the control loop (TENGU_STUDIO_PLAN.md ST-02). One loop, one tick, one probe:
+#
+#   [feeds.tick]  every 20 s ──► [decision_loops.demo] ──► Jev (~typesafe/jev-latest)
+#   tengu decide  (scenario) ──┘        picks hold · write_marker · read_probe
+#   [feeds.probe] every 30 s ──► read_file in/absent.txt (fails on purpose: feed `down`)
+#
+# Nothing here can touch money, keys, the shell or the network: no [risk], no signer,
+# no [generation], tools = read_file · write_file · list_directory only, every fs root
+# inside the lab workspace, the one write a TOML constant (out/marker.txt). Guard test:
+# config::decision_loop::tests::control_loop_lab_has_no_dangerous_surface.
+#
+# QUICKSTART — from the repo root (`--sandbox` resolves sandboxes/<name>/ from the cwd).
+# ALWAYS an isolated home: the weekend run owns ~/.tengu (decisions.jsonl, state).
+# Export it first: tengu also loads the nearest .env up from the cwd (a worktree
+# under the main checkout reads that .env: TENGU_HOME=~/.tengu); an exported value wins.
+#   export TENGU_HOME="$HOME/tengu-lab/home"        # never ~/.tengu; never `tengu prune`
+#   export OPENROUTER_API_KEY=…                     # Jev
+#   mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
+#   cargo build --release
+#   target/release/tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json
+#   target/release/tengu decide --sandbox control-loop-lab --map sandboxes/control-loop-lab/scenarios/uncertain.map.json
+#   target/release/tengu run --sandbox control-loop-lab          # Ctrl-C = graceful stop
+#   target/release/tengu doctor --sandbox control-loop-lab --live
+# Runbook + acceptance matrix (A0–A15): docs/control-loop-lab-2026-10-08.md.
+# Audit: $TENGU_HOME/logs/decisions.jsonl · heartbeat: $TENGU_HOME/state/run-control-loop-lab.json
+
+runtime_profile = "auto"
+
+# Open: the Jev decisions endpoint (OpenRouter) only — no lab tool makes a network
+# call (no http_request, no net_hosts). Switchable to Tor: network = "tor" + `make tor`.
+[egress]
+network = "open"
+
+[memory]
+enabled = false
+
+# Short beats so a demo shows health moving within seconds; one event at a time.
+[runtime]
+heartbeat_secs = 2
+heartbeat_stale_secs = 10
+shutdown_grace_secs = 10
+max_decisions_in_flight = 1
+max_queued_per_loop = 4
+
+# --- lab: the loop's tool / scope / workspace owner -------------------------------
+# Nothing chats as `lab`: engine + model are required by the schema but unused (no
+# `description` → not routable, not default). Jev is not a chat engine — the loop
+# calls it. `tools` is the allow-list on every surface (keeps run_command out).
+[agents.lab]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4-5"
+workspace = "~/tengu-lab/control-loop-lab"
+tools = ["read_file", "write_file", "list_directory"]
+
+# A loop / feed executor adds the workspace to every configured scope
+# (bootstrap/tools.rs grant_workspace_root), so the out/ root documents intent;
+# the hard limits are the TOML-constant path and write_file's refusals
+# (.tengu/, .claude/, .git/, skills/, CLAUDE.md, AGENTS.md, `..` escapes).
+[agents.lab.scopes]
+read_file = { fs_roots = ["~/tengu-lab/control-loop-lab"] }
+list_directory = { fs_roots = ["~/tengu-lab/control-loop-lab"] }
+write_file = { fs_roots = ["~/tengu-lab/control-loop-lab/out"] }
+
+# --- demo: the loop ------------------------------------------------------------------
+# Scenario = event.scenario (scenarios/*.json, a tick, or an execution map's event).
+# uncertain: scenarios/uncertain.map.json raises act_at to 1.0 → `escalated`.
+[decision_loops.demo]
+model = "~typesafe/jev-latest"
+goal = """Control-loop lab. Act on event.scenario:
+- "normal": nothing to do — pick hold.
+- "act": run write_marker once, then pick hold.
+- "tool-error": run read_probe once (expected to fail; never retry it), then pick hold.
+- "uncertain": the evidence is contradictory and no action is clearly right.
+Never run an action twice for one event. Any other scenario: hold."""
+agent = "lab"
+dry_run = false                       # write_marker really writes out/marker.txt (act-dry.map.json turns dry-run on)
+act_at = 0.8                          # below → `escalated`, the event stops
+escalate = false                      # no orchestrator here: escalation = stop + audit line
+history = 4
+max_steps = 3
+world = { tick = "feed/1:tick" }      # the tick feed's health row (`tengu decide` sees it only while a `tengu run` keeps it ≤ 60 s old)
+world_max_age_secs = 60
+
+[decision_loops.demo.actions.hold]
+description = "Nothing (more) to do for this event — stop"
+
+[decision_loops.demo.actions.write_marker]
+description = "Write the scenario marker file out/marker.txt in the lab workspace"
+tool = "write_file"
+args = { path = "out/marker.txt", content = "scenario={scenario}" }
+slots = { scenario = { event = "/scenario" } }   # bound from the event: no question to Jev
+
+[decision_loops.demo.actions.read_probe]
+description = "Read the probe file in/absent.txt from the lab workspace"
+tool = "read_file"
+read_only = true
+args = { path = "in/{probe}.txt" }
+slots = { probe = ["absent"] }        # one candidate: filled without a question
+
+# --- feeds (tengu run) -------------------------------------------------------------
+# tick: a loop event every 20 s (UTC grid) + one at start; `doctor --live` fails
+# when it is down or stale.
+[feeds.tick]
+kind = "tick"
+target = "demo"
+every_secs = 20
+run_on_start = true
+event = { scenario = "normal", source = "tick" }
+required = true
+stale_after_secs = 60
+
+# probe: a tool feed that always fails (fatal, not retried; next slot tries again):
+# `feed/1:probe` is `down` — visible in `doctor --live`, optional so it never fails it.
+[feeds.probe]
+kind = "tool"
+agent = "lab"
+tool = "read_file"
+args = { path = "in/absent.txt" }
+every_secs = 30
+run_on_start = true
+required = false
+
+# --- Studio (tengu studio --features studio) -------------------------------------
+# Play / Stop / send a scenario event from the Studio page: Play starts this
+# sandbox's runtime in the Studio process (the `tengu run` composition and lease);
+# Stop drains it. Scenario list = scenarios/*.json (not the *.map.json maps).
+[studio]
+control = true

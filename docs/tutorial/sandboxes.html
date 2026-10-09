@@ -66,7 +66,7 @@
   <h1>Sandbox config</h1>
   <p class="lede">One TOML file is the whole team: agents, tools, scopes, network, memory, loops. <code>--sandbox &lt;name&gt;</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code>, and every child process loads that same file again.</p>
   <ul class="facts">
-    <li><b>8</b> sandboxes in the repo</li>
+    <li><b>10</b> sandboxes in the repo</li>
     <li>unknown key = <b>load error</b></li>
     <li>home <b>~/.tengu</b> (<code>TENGU_HOME</code>)</li>
     <li>network <b>tor</b> unless <code>[egress]</code> says open</li>
@@ -232,8 +232,8 @@
       <label for="r-sbx"><code>--sandbox</code>
         <select id="r-sbx">
           <option value="">(not given)</option>
-          <option>jev-exec</option><option selected>lping</option><option>soe</option><option>storage-test</option><option>tor-check</option>
-          <option>unlimited</option><option>xlab</option><option>xmarket</option><option>xmarket-weekend</option>
+          <option>control-loop-lab</option><option>jev-exec</option><option selected>lping</option><option>soe</option><option>storage-test</option><option>tor-check</option>
+          <option>unlimited</option><option>xlab</option><option>xlab-w2</option><option>xmarket</option><option>xmarket-weekend</option>
         </select>
       </label>
       <label for="r-c"><code>-c / --config</code>
@@ -323,7 +323,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 <section class="sec" aria-labelledby="s-shelf">
   <div class="sec-head">
     <span class="kicker">The real sandboxes</span>
-    <h2 id="s-shelf">Eight teams, eight files</h2>
+    <h2 id="s-shelf">Ten teams, ten files</h2>
     <p>Read from <code>sandboxes/*/config.toml</code>. Filter by what each one turns on.</p>
   </div>
   <div class="shelf-filter" role="group" aria-label="Filter sandboxes">
@@ -335,6 +335,12 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <button type="button" class="btn" data-f="feeds" aria-pressed="false">Feeds</button>
   </div>
   <div class="shelf" id="shelf">
+    <div class="sbx" data-tags="open loops feeds">
+      <h3>control-loop-lab</h3>
+      <div class="tags"><span class="chip data">open</span><span class="chip jev">1 loop</span><span class="chip hands">2 feeds</span></div>
+      <p>The safe reference run: a 20 s tick, Jev picks <code>hold</code>, one marker write or a read that fails on purpose. No money, no shell. Its <code>[studio] control = true</code> lets <a href="studio.html">Studio</a> Play and Stop it.</p>
+      <div class="agents">lab</div>
+    </div>
     <div class="sbx" data-tags="open loops">
       <h3>jev-exec</h3>
       <div class="tags"><span class="chip data">open</span><span class="chip jev">1 loop</span></div>
@@ -375,6 +381,12 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
       <h3>xlab</h3>
       <div class="tags"><span class="chip data">open · 2 hosts</span><span class="chip guard">hardened</span><span class="chip jev">1 loop</span><span class="chip data">W1</span></div>
       <p>History first: backfill, backtest, Jev replayed on old bars.</p>
+      <div class="agents">xl_architect · xl_jev</div>
+    </div>
+    <div class="sbx" data-tags="open hard loops">
+      <h3>xlab-w2</h3>
+      <div class="tags"><span class="chip data">open · 4 hosts</span><span class="chip guard">hardened</span><span class="chip jev">1 loop</span></div>
+      <p>W2 research: xlab without the W1 binding, plus SEC EDGAR filings. Shares xlab's state dir.</p>
       <div class="agents">xl_architect · xl_jev</div>
     </div>
     <div class="sbx" data-tags="open hard feeds">
@@ -484,8 +496,8 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 /* page-only: the resolver, the agent-block anatomy, the sandbox filter */
 (function () {
   "use strict";
-  var NET = { "jev-exec": "open", "lping": "open", "soe": "open, allow_hosts: 3", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
-    "unlimited": "open", "xlab": "open, allow_hosts: 2", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
+  var NET = { "control-loop-lab": "open", "jev-exec": "open", "lping": "open", "soe": "open, allow_hosts: 3", "storage-test": "tor (no [egress] section)", "tor-check": "tor",
+    "unlimited": "open", "xlab": "open, allow_hosts: 2", "xlab-w2": "open, allow_hosts: 4", "xmarket": "open, allow_hosts: 1", "xmarket-weekend": "open, allow_hosts: 1" };
   var sbx = document.getElementById("r-sbx"), cf = document.getElementById("r-c"), env = document.getElementById("r-env");
   var ex = document.getElementById("r-exists"), ok = document.getElementById("r-valid");
   var chain = document.getElementById("r-chain"), out = document.getElementById("r-out");

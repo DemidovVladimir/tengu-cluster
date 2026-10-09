@@ -15,6 +15,7 @@
 //! | tick | `LoopDispatch::submit_tracked(target, event + ts_ms = slot, "<feed>:<slot ms>")`; an item per event sent |
 //! | job | `RuntimeJob::run(slot ms, "feed:<name>:<slot ms>")` (`ports/runtime.rs`; a retry: the same slot and id); `Done` = one item, `Failed { class }` = a failed call of that class — the same backoff, at-tick window and health |
 //! | stop | checked before every nap and every call; a call in progress finishes (bounded by `[runtime] shutdown_grace_secs`) |
+//! | trace (`FeedEnv::trace`) | node `feed:<name>`, session `<name>:<slot ms>`; a tool run: `feed.fired` (`Running`: `run` = slot / retry, the call indices) → its calls caused by it (`tool.*` from the agent's `TracedExecutor`; correlation `feed:<name>:<slot ms>`) → `feed.completed` (`Ok`) · `feed.retrying` (`Pending`: class, `retry_in_ms`) · `feed.failed` (`Failed`: class, not retried) (each from the branch that writes the health row) · `feed.skipped` (`shutting_down`: a stop came before every call); a job run: `feed.fired` (`kind = "job"`, `run_id`) → what the job writes while it runs (caused by it; correlation `feed:<name>:<slot ms>`) → `feed.completed` · `feed.retrying` · `feed.failed`, as a tool run; a tick: `feed.fired` → `LoopDispatch` `loop.queued` / `loop.refused` caused by it → `feed.tick_sent` (`Ok`) · `feed.dropped` (`queue_full`) · `feed.failed` (`unknown_loop`) · `feed.skipped` (`shutting_down`); a skipped slot: `feed.dropped` (`late` · `previous_tick_running`) |
 
 use std::sync::Arc;
 
@@ -26,15 +27,20 @@ use tracing::{debug, warn};
 use super::health::FeedWriter;
 use super::loops::{LoopDispatch, Refused};
 use super::{stopped, StopRx};
+use crate::application::decision_loop::reduce::http_status;
+use crate::application::trace_exec::{self, Cause};
 use crate::domain::backoff::{next_delay, BackoffPolicy, Delay};
 use crate::domain::message::ToolCall;
 use crate::domain::observation::{ErrorClass, ObsStatus};
 use crate::domain::runtime::scrub_urls;
 use crate::domain::schedule::{jittered_ms, late_grace_ms, next_fire, Schedule};
+use crate::domain::trace::{Component, EventDraft, Status};
+use crate::domain::workflow::node_id;
 use crate::ports::clock::Clock;
 use crate::ports::engine::ToolExecutor;
 use crate::ports::runtime::{JobOutcome, RuntimeJob};
 use crate::ports::tool::ToolOutput;
+use crate::ports::trace::TraceSink;
 
 /// Longest single sleep: the wall clock is re-read at least this often.
 const MAX_NAP_MS: i64 = 60_000;
@@ -76,11 +82,13 @@ pub(crate) struct FeedSpec {
     pub job: FeedJob,
 }
 
-/// A feed's clock, randomness and health writer.
+/// A feed's clock, randomness, health writer and trace sink.
 pub(crate) struct FeedEnv {
     pub clock: Arc<dyn Clock>,
     pub rand01: Rand01,
     pub health: FeedWriter,
+    /// Where `feed.*` events go (module table); `None` = nowhere.
+    pub trace: Option<Arc<dyn TraceSink>>,
 }
 
 /// Which calls a run makes.
@@ -214,6 +222,13 @@ impl FeedRunner {
                     "feed slot skipped: reached too late (system sleep or a stalled clock)"
                 );
                 self.env.health.dropped(1, now_ms).await;
+                self.emit(
+                    "feed.dropped",
+                    Status::Dropped,
+                    next.slot_ms,
+                    None,
+                    json!({"reason": "late", "late_ms": late_ms}),
+                );
                 return;
             }
         }
@@ -225,7 +240,7 @@ impl FeedRunner {
     }
 
     /// One job run for the slot (module table: job); the outcome settles
-    /// like one call's.
+    /// like one call's, its trace like a tool run's.
     async fn run_job(&mut self, next: &Next, stop: &StopRx) {
         let FeedJob::Job { job } = &self.spec.job else {
             return;
@@ -234,16 +249,29 @@ impl FeedRunner {
         if stopping {
             return;
         }
-        let run_id = format!("feed:{}:{}", self.spec.name, next.slot_ms);
-        let outcome = match job.run(next.slot_ms, &run_id).await {
+        let (name, slot_ms) = (&self.spec.name, next.slot_ms);
+        let run_id = format!("feed:{name}:{slot_ms}");
+        let fired = self.emit(
+            "feed.fired",
+            Status::Running,
+            slot_ms,
+            None,
+            json!({
+                "kind": "job",
+                "run": if next.run == Run::Slot { "slot" } else { "retry" },
+                "run_id": run_id,
+            }),
+        );
+        let cause = Cause::new(fired.clone(), format!("{name}:{slot_ms}")).correlation(&run_id);
+        let outcome = match trace_exec::caused_by(cause, job.run(slot_ms, &run_id)).await {
             JobOutcome::Done { note } => {
-                debug!(feed = %self.spec.name, slot_ms = next.slot_ms, %note, "feed job done");
+                debug!(feed = %self.spec.name, slot_ms, %note, "feed job done");
                 Outcome::Ok
             }
             JobOutcome::Failed { class, message } => failure(class, None, &message),
         };
         let now = self.env.clock.now_ms();
-        self.settle(next.slot_ms, next.at_tick, &[(0, outcome)], now)
+        self.settle(slot_ms, next.at_tick, &[(0, outcome)], now, fired)
             .await;
     }
 
@@ -262,33 +290,83 @@ impl FeedRunner {
             Run::Retry(ix) => ix.clone(),
         };
         let (name, slot_ms) = (&self.spec.name, next.slot_ms);
+        let fired = self.emit(
+            "feed.fired",
+            Status::Running,
+            slot_ms,
+            None,
+            json!({
+                "kind": "tool",
+                "tool": tool,
+                "run": if next.run == Run::Slot { "slot" } else { "retry" },
+                "calls": indices,
+            }),
+        );
+        let cause = Cause::new(fired.clone(), format!("{name}:{slot_ms}"))
+            .correlation(format!("feed:{name}:{slot_ms}"));
         let results: Vec<(usize, Outcome)> = futures::stream::iter(indices)
-            .map(|i| async move {
-                let stopping = stop.borrow().is_some();
-                if stopping {
-                    return (i, Outcome::Skipped);
+            .map(|i| {
+                let cause = cause.clone();
+                async move {
+                    let stopping = stop.borrow().is_some();
+                    if stopping {
+                        return (i, Outcome::Skipped);
+                    }
+                    let call = ToolCall {
+                        id: call_id(name, slot_ms, i),
+                        name: tool.clone(),
+                        arguments: calls.get(i).cloned().unwrap_or_else(|| json!({})),
+                    };
+                    let result =
+                        trace_exec::caused_by(cause, executor.execute_typed(&call, &[])).await;
+                    (i, outcome(result))
                 }
-                let call = ToolCall {
-                    id: call_id(name, slot_ms, i),
-                    name: tool.clone(),
-                    arguments: calls.get(i).cloned().unwrap_or_else(|| json!({})),
-                };
-                (i, outcome(executor.execute_typed(&call, &[]).await))
             })
             .buffered((*concurrency).max(1))
             .collect()
             .await;
         let now = self.env.clock.now_ms();
-        self.settle(slot_ms, next.at_tick, &results, now).await;
+        self.settle(slot_ms, next.at_tick, &results, now, fired)
+            .await;
     }
 
-    /// Backoff + health after a tool run (module table).
+    /// `feed.<what>` of slot `slot_ms` (module table); its event id.
+    fn emit(
+        &self,
+        kind: &str,
+        status: Status,
+        slot_ms: i64,
+        parent: Option<String>,
+        payload: Value,
+    ) -> Option<String> {
+        let sink = self.env.trace.as_ref()?;
+        let name = &self.spec.name;
+        let mut d = EventDraft::new(Component::Feed, kind, status)
+            .session(format!("{name}:{slot_ms}"))
+            .node(node_id::feed(name))
+            .payload(payload);
+        if let Value::Object(p) = &mut d.payload {
+            p.insert("slot_ms".into(), json!(slot_ms));
+        }
+        // A tick's session is its loop event's: one correlation for both.
+        if matches!(self.spec.job, FeedJob::Tool { .. } | FeedJob::Job { .. }) {
+            d = d.correlation(format!("feed:{name}:{slot_ms}"));
+        }
+        if let Some(p) = parent {
+            d = d.parent(p);
+        }
+        sink.emit(d)
+    }
+
+    /// Backoff + health after a tool or job run (module table); its trace event,
+    /// child of the run's `feed.fired`.
     async fn settle(
         &mut self,
         slot_ms: i64,
         at_tick: bool,
         results: &[(usize, Outcome)],
         now_ms: i64,
+        fired: Option<String>,
     ) {
         let ok = results
             .iter()
@@ -357,6 +435,21 @@ impl FeedRunner {
                 .health
                 .error(lead.class, &lead.message, retrying, now_ms)
                 .await;
+            let (kind, status) = if retrying {
+                ("feed.retrying", Status::Pending)
+            } else {
+                ("feed.failed", Status::Failed)
+            };
+            let payload = json!({
+                "class": lead.class.as_str(),
+                "error": lead.message,
+                "retrying": retrying,
+                "retry_in_ms": delay.ms(),
+                "retry_calls": retryable.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+                "failed": failed.len(),
+                "ok": ok,
+            });
+            self.emit(kind, status, slot_ms, fired, payload);
         } else {
             self.failures = 0;
             self.gate_ms = i64::MIN;
@@ -374,6 +467,22 @@ impl FeedRunner {
                     .health
                     .error(lead.class, &lead.message, false, now_ms)
                     .await;
+                let payload = json!({
+                    "class": lead.class.as_str(),
+                    "error": lead.message,
+                    "retrying": false,
+                    "failed": failed.len(),
+                    "ok": ok,
+                });
+                self.emit("feed.failed", Status::Failed, slot_ms, fired, payload);
+            } else if ok > 0 {
+                let payload = json!({"ok": ok});
+                self.emit("feed.completed", Status::Ok, slot_ms, fired, payload);
+            } else {
+                // No call ran (stop requested before each): close the
+                // `feed.fired` so it does not read as running forever.
+                let payload = json!({"reason": "shutting_down", "skipped": results.len()});
+                self.emit("feed.skipped", Status::Skipped, slot_ms, fired, payload);
             }
         }
         for _ in 0..ok {
@@ -394,25 +503,41 @@ impl FeedRunner {
             if done.try_recv() == Err(oneshot::error::TryRecvError::Empty) {
                 debug!(feed = %self.spec.name, decision_loop = %target, slot_ms, "tick skipped: the previous one is still queued or running");
                 self.env.health.dropped(1, now_ms).await;
+                let payload = json!({"reason": "previous_tick_running", "target": target});
+                self.emit("feed.dropped", Status::Dropped, slot_ms, None, payload);
                 return;
             }
         }
         let mut event = event.clone();
         event.insert("ts_ms".into(), json!(slot_ms));
         let session_id = format!("{}:{slot_ms}", self.spec.name);
-        match loops.submit_tracked(target, Value::Object(event), session_id) {
+        let fired = self.emit(
+            "feed.fired",
+            Status::Running,
+            slot_ms,
+            None,
+            json!({"kind": "tick", "target": target, "event": event}),
+        );
+        // `loop.queued` / `loop.refused` are this tick's children.
+        let sent = trace_exec::caused_by_sync(Cause::new(fired.clone(), &session_id), || {
+            loops.submit_tracked(target, Value::Object(event), session_id.clone())
+        });
+        let (kind, status, reason) = match sent {
             Ok(done) => {
                 self.tick_done = Some(done);
                 self.env.health.item(now_ms).await;
+                ("feed.tick_sent", Status::Ok, None)
             }
-            Err(Refused::ShuttingDown) => {
+            Err(e @ Refused::ShuttingDown) => {
                 debug!(feed = %self.spec.name, slot_ms, "tick not sent: shutting down");
+                ("feed.skipped", Status::Skipped, Some(e))
             }
             // Other senders (webhooks) filled the loop's queue; the dispatch
             // warned. This tick is dropped, the next one tries again.
             Err(e @ Refused::QueueFull { .. }) => {
                 debug!(feed = %self.spec.name, decision_loop = %target, slot_ms, "tick not sent: {e}");
                 self.env.health.dropped(1, now_ms).await;
+                ("feed.dropped", Status::Dropped, Some(e))
             }
             Err(e @ Refused::UnknownLoop) => {
                 let message = format!("decision loop `{target}`: {e}");
@@ -421,8 +546,15 @@ impl FeedRunner {
                     .health
                     .error(ErrorClass::Fatal, &message, false, now_ms)
                     .await;
+                ("feed.failed", Status::Failed, Some(e))
             }
-        }
+        };
+        let payload = json!({
+            "target": target,
+            "reason": reason.map(|e| e.as_str()),
+            "error": reason.map(|e| e.to_string()),
+        });
+        self.emit(kind, status, slot_ms, fired, payload);
     }
 }
 
@@ -502,11 +634,7 @@ fn outcome(result: anyhow::Result<ToolOutput>) -> Outcome {
 /// Legacy text: failed only when line 1 is `HTTP <non-2xx>` (`http_request`).
 fn text_outcome(text: &str) -> Outcome {
     let line1 = text.lines().next().unwrap_or("");
-    let Some(status) = line1
-        .strip_prefix("HTTP ")
-        .and_then(|s| s.split_whitespace().next())
-        .and_then(|s| s.parse::<u16>().ok())
-    else {
+    let Some(status) = http_status(line1) else {
         return Outcome::Ok;
     };
     let class = match status {
@@ -774,6 +902,7 @@ mod tests {
                 clock: Arc::clone(&self.clock) as Arc<dyn Clock>,
                 rand01: Arc::new(move || rand01),
                 health: self.board.feed(name, true, 600, None, self.clock.now_ms()),
+                trace: None,
             }
         }
 
@@ -1380,6 +1509,165 @@ mod tests {
         );
     }
 
+    /// A tick: `feed.fired` → the loop's `loop.queued` caused by it (same
+    /// session = one correlation) → `feed.tick_sent`; a tick while the last
+    /// one runs is `feed.dropped` (`previous_tick_running`), as health counts it.
+    #[tokio::test]
+    async fn tick_trace_links_loop_event() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let sink = Arc::new(MemTrace::default());
+        let rig = Rig::at(t0());
+        let handler = Arc::new(TickLoop {
+            gate: Some(tokio::sync::Semaphore::new(0)),
+            ..Default::default()
+        });
+        let loops = Arc::new(
+            LoopDispatch::new(
+                BTreeMap::from([(
+                    "demo".to_string(),
+                    Arc::clone(&handler) as Arc<dyn LoopHandler>,
+                )]),
+                1,
+                4,
+            )
+            .with_trace(sink.clone()),
+        );
+        let spec = tick_spec("tick", every(MIN), &loops, "demo");
+        let env = FeedEnv {
+            trace: Some(sink.clone()),
+            ..rig.env("tick", 0.5)
+        };
+        let mut feed = FeedRunner::new(spec, env);
+        let stop = rig.stopper.subscribe();
+        let t = t0();
+        feed.run(slot(t), t, &stop).await;
+        until("started", || loops.stats()["demo"].in_flight == 1).await;
+        feed.run(slot(t + MIN), t + MIN, &stop).await;
+        handler.gate.as_ref().unwrap().add_permits(1);
+        until("done", || loops.stats()["demo"].completed == 1).await;
+
+        let d = sink.all();
+        let session = format!("tick:{t}");
+        let first: Vec<(usize, &EventDraft)> = d
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.session_id.as_deref() == Some(session.as_str()))
+            .collect();
+        let kinds: Vec<&str> = first.iter().map(|(_, e)| e.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "feed.fired",
+                "loop.queued",
+                "feed.tick_sent",
+                "loop.started",
+                "loop.completed"
+            ]
+        );
+        let fired = MemTrace::id(first[0].0);
+        assert_eq!(first[0].1.node_id.as_deref(), Some("feed:tick"));
+        assert_eq!(first[0].1.payload["event"]["ts_ms"], json!(t));
+        assert_eq!(first[1].1.parent_event_id.as_deref(), Some(fired.as_str()));
+        assert_eq!(first[2].1.parent_event_id.as_deref(), Some(fired.as_str()));
+        assert_eq!(first[2].1.status, Status::Ok);
+        assert!(
+            first.iter().all(|(_, e)| e.correlation_id.is_none()),
+            "session = correlation"
+        );
+        let dropped = d
+            .iter()
+            .find(|e| e.session_id.as_deref() == Some(format!("tick:{}", t + MIN).as_str()))
+            .unwrap();
+        assert_eq!(dropped.kind, "feed.dropped");
+        assert_eq!(dropped.payload["reason"], json!("previous_tick_running"));
+        assert_eq!(rig.health("tick").await.dropped, 1);
+    }
+
+    /// A tool run: `feed.fired` → each call's `tool.*` caused by it
+    /// (correlation `feed:<n>:<slot>`) → `feed.failed` for a fatal executor
+    /// error (`retrying: false`, health `down`), `feed.retrying` with the
+    /// delay for a retryable one, `feed.completed` when every call is ok.
+    #[tokio::test]
+    async fn fatal_tool_failure_traces_failed_not_retrying() {
+        use crate::application::trace_exec::tests::MemTrace;
+        use crate::application::trace_exec::TracedExecutor;
+        let sink = Arc::new(MemTrace::default());
+        let rig = Rig::at(t0());
+        let exec = Arc::new(FakeExec::new(&rig.clock));
+        exec.script(
+            0,
+            Reply::Fail("read in/absent.txt: No such file or directory"),
+        );
+        let traced: Arc<dyn ToolExecutor> =
+            Arc::new(TracedExecutor::new(exec.clone(), sink.clone(), "lab", None));
+        let mut spec = tool_spec("probe", every(MIN), &exec, &["A"]);
+        if let FeedJob::Tool { executor, .. } = &mut spec.job {
+            *executor = traced;
+        }
+        let env = FeedEnv {
+            trace: Some(sink.clone()),
+            ..rig.env("probe", 0.0)
+        };
+        let mut feed = FeedRunner::new(spec, env);
+        let stop = rig.stopper.subscribe();
+        let t = t0();
+        feed.run(slot(t), t, &stop).await;
+        let d = sink.all();
+        assert_eq!(
+            sink.kinds(),
+            ["feed.fired", "tool.started", "tool.failed", "feed.failed"]
+        );
+        let fired = MemTrace::id(0);
+        assert_eq!(d[0].payload["run"], json!("slot"));
+        assert_eq!(d[0].payload["calls"], json!([0]));
+        assert_eq!(d[1].parent_event_id.as_deref(), Some(fired.as_str()));
+        assert_eq!(d[1].call_id, Some(format!("feed:probe:{t}:0")));
+        assert_eq!(d[1].correlation_id, Some(format!("feed:probe:{t}")));
+        assert_eq!(d[1].session_id, Some(format!("probe:{t}")));
+        assert_eq!(d[3].parent_event_id.as_deref(), Some(fired.as_str()));
+        assert_eq!(d[3].status, Status::Failed);
+        assert_eq!(d[3].payload["class"], json!("fatal"));
+        assert_eq!(d[3].payload["retrying"], json!(false));
+        assert_eq!(rig.health("probe").await.state, FeedState::Down);
+
+        // Retryable: `feed.retrying` (Pending) with the delay; then ok.
+        exec.script(0, Reply::ErrorRow(ErrorClass::Timeout, None));
+        feed.run(slot(t + MIN), t + MIN, &stop).await;
+        exec.script.lock().unwrap().remove(&0);
+        let d = sink.all();
+        let last = d.last().unwrap();
+        assert_eq!(
+            (last.kind.as_str(), last.status),
+            ("feed.retrying", Status::Pending)
+        );
+        assert_eq!(last.payload["class"], json!("timeout"));
+        assert!(last.payload["retry_in_ms"].as_u64().unwrap() > 0);
+        let next = feed.next(t + MIN).unwrap();
+        assert_eq!(next.run, Run::Retry(vec![0]));
+        feed.run(next.clone(), next.at_ms, &stop).await;
+        let d = sink.all();
+        let fired = d.iter().rev().find(|e| e.kind == "feed.fired").unwrap();
+        assert_eq!(fired.payload["run"], json!("retry"));
+        assert_eq!(d.last().unwrap().kind, "feed.completed");
+
+        // Stop requested before the calls: nothing runs, the run's
+        // `feed.fired` is closed by `feed.skipped` (no health change).
+        let calls = exec.calls.lock().unwrap().len();
+        rig.stopper.stop("test stop", false);
+        let next = feed.next(t + 2 * MIN).unwrap();
+        feed.run(next.clone(), next.at_ms, &stop).await;
+        assert_eq!(exec.calls.lock().unwrap().len(), calls, "no call ran");
+        let d = sink.all();
+        let (fired, last) = (&d[d.len() - 2], d.last().unwrap());
+        assert_eq!(fired.kind, "feed.fired");
+        assert_eq!(
+            (last.kind.as_str(), last.status),
+            ("feed.skipped", Status::Skipped)
+        );
+        assert_eq!(last.parent_event_id, Some(MemTrace::id(d.len() - 2)));
+        assert_eq!(last.payload["reason"], json!("shutting_down"));
+    }
+
     #[tokio::test]
     async fn at_tick_feed_runs_end_to_end_on_new_york_wall_time() {
         // Friday 20:00 ET before the weekend run; the tick is Sun 18:00 EDT.
@@ -1635,5 +1923,48 @@ mod tests {
         feed.run(next, utc("2026-10-12 05:00"), &stop).await;
         assert_eq!(rig.health("soe_week").await.state, FeedState::Live);
         assert!(feed.retry.is_none() && feed.failures == 0);
+    }
+
+    /// A job run traces like a tool run: `feed.fired` (`kind = "job"`, the
+    /// run id; correlation `feed:<n>:<slot>`) → `feed.failed` for a fatal
+    /// outcome (`retrying: false`, outside an at-tick window) or
+    /// `feed.completed` when done, each a child of its `feed.fired`.
+    #[tokio::test]
+    async fn job_run_traces_fired_then_settled() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let sink = Arc::new(MemTrace::default());
+        let rig = Rig::at(t0());
+        let job = Arc::new(FakeJob::new(&rig.clock));
+        job.failing.store(true, SeqCst);
+        let env = FeedEnv {
+            trace: Some(sink.clone()),
+            ..rig.env("soe_week", 0.0)
+        };
+        let mut feed = FeedRunner::new(job_spec("soe_week", every(MIN), &job), env);
+        let stop = rig.stopper.subscribe();
+        let t = t0();
+        feed.run(slot(t), t, &stop).await;
+        assert_eq!(sink.kinds(), ["feed.fired", "feed.failed"]);
+        let d = sink.all();
+        assert_eq!(d[0].status, Status::Running);
+        assert_eq!(d[0].payload["kind"], json!("job"));
+        assert_eq!(d[0].payload["run"], json!("slot"));
+        assert_eq!(d[0].payload["run_id"], json!(format!("feed:soe_week:{t}")));
+        assert_eq!(d[0].correlation_id, Some(format!("feed:soe_week:{t}")));
+        assert_eq!(d[0].session_id, Some(format!("soe_week:{t}")));
+        assert_eq!(d[1].parent_event_id, Some(MemTrace::id(0)));
+        assert_eq!(d[1].status, Status::Failed);
+        assert_eq!(d[1].payload["class"], json!("fatal"));
+        assert_eq!(d[1].payload["retrying"], json!(false));
+
+        job.failing.store(false, SeqCst);
+        feed.run(slot(t + MIN), t + MIN, &stop).await;
+        let d = sink.all();
+        assert_eq!(
+            (d[3].kind.as_str(), d[3].status),
+            ("feed.completed", Status::Ok)
+        );
+        assert_eq!(d[3].parent_event_id, Some(MemTrace::id(2)));
+        assert_eq!(rig.health("soe_week").await.state, FeedState::Live);
     }
 }

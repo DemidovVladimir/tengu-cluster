@@ -1,13 +1,17 @@
 //! Composition for `[decision_loops.<name>]`: Jev client + the loop agent's
 //! tool executor (same allow-list, scopes and workspace a `run-agent`
 //! subprocess of that agent gets; wrapped in `SanitizedToolExecutor` with the
-//! caller's `SecretRegistry`, then `egress::AttributedExecutor`: egress
-//! records name the loop's agent, the event's session and the call id) + the
-//! agent workspace's observation store
-//! (`open_observation_store`: `<workspace>/.tengu/observations.db`, source of
-//! `state.world`, + the history recorder when `[recorder]` is on; fail-soft)
-//! → `application::decision_loop::DecisionLoop`. [`agent_tool_executor`] also
-//! builds each `[feeds]` tool feed's executor (`bootstrap/runtime.rs`).
+//! caller's `SecretRegistry`, then `trace_exec::TracedExecutor` (`tool.*`
+//! events into the process recording), then `egress::AttributedExecutor`:
+//! egress records name the loop's agent, the event's session and the call
+//! id) + the agent workspace's observation store (`open_observation_store`:
+//! `<workspace>/.tengu/observations.db`, source of `state.world`, + the history
+//! recorder when `[recorder]` is on; fail-soft) →
+//! `application::decision_loop::DecisionLoop` (step events: `with_trace`).
+//! [`agent_tool_executor`] also builds each `[feeds]` tool feed's executor
+//! (`bootstrap/runtime.rs`). Paths: [`audit_path`] / [`audit_file`]
+//! (`<home>/logs/decisions.jsonl`), [`maps_dir`] (`<home>/logs/maps/`, the
+//! maps `tengu decide --map` kept; Studio's `/api/v1/graph?map=`).
 //!
 //! Replay — the backtest gate arm (`docs/xlab-2026-10-01.md` § 7):
 //!
@@ -33,6 +37,8 @@ use crate::adapters::outbound::observations::open_observation_store;
 use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::backtest::gate::{Gate, GateWorker};
 use crate::application::decision_loop::{AuditLog, DecisionLoop};
+use crate::application::trace_exec::TracedExecutor;
+use crate::bootstrap::trace::Recording;
 use crate::config::decision_loop::DecisionLoopConfig;
 use crate::config::{AgentConfig, Config};
 use crate::domain::secrets::SecretRegistry;
@@ -45,9 +51,18 @@ const REPLAY_TRIGGER: &str = "backtest";
 
 /// `<TENGU_HOME>/logs/decisions.jsonl` — one line per decision.
 pub(crate) fn audit_path() -> PathBuf {
-    crate::config::paths::resolve_tengu_home()
-        .join("logs")
-        .join("decisions.jsonl")
+    audit_file(&crate::config::paths::resolve_tengu_home())
+}
+
+/// `<home>/logs/decisions.jsonl`.
+pub(crate) fn audit_file(home: &Path) -> PathBuf {
+    home.join("logs").join("decisions.jsonl")
+}
+
+/// `<home>/logs/maps/` — the execution maps `tengu decide --map` ran, as
+/// `<sha256>.json` (canonical JSON), by the identity their audit lines carry.
+pub(crate) fn maps_dir(home: &Path) -> PathBuf {
+    home.join("logs").join("maps")
 }
 
 /// Tool executor of `agent` for a decision loop or a `[feeds]` feed: the
@@ -84,18 +99,21 @@ pub(crate) fn agent_tool_executor(
 }
 
 /// `secrets` is the process registry: tool text and typed observations are
-/// redacted with it before they reach history, the audit log or Jev.
+/// redacted with it before they reach history, the audit log or Jev. `rec`:
+/// the recording the loop writes its step + tool events to and every audit
+/// line names (`bootstrap::trace::Recording`; default = none).
 pub(crate) fn build_decision_loop(
     config: &Config,
     name: &str,
     escalator: Option<Arc<dyn Escalator>>,
     secrets: Arc<SecretRegistry>,
+    rec: Recording,
 ) -> Result<Arc<DecisionLoop>> {
     let dl = config
         .decision_loops
         .get(name)
         .ok_or_else(|| anyhow!("no [decision_loops.{name}] block in this config"))?;
-    build_loop(config, name, dl.clone(), escalator, secrets, None)
+    build_loop(config, name, dl.clone(), escalator, secrets, None, rec)
 }
 
 /// `[decision_loops.<name>]` narrowed by an execution map
@@ -108,8 +126,9 @@ pub(crate) fn build_mapped_loop(
     dl: DecisionLoopConfig,
     trigger: String,
     secrets: Arc<SecretRegistry>,
+    rec: Recording,
 ) -> Result<Arc<DecisionLoop>> {
-    build_loop(config, name, dl, None, secrets, Some(trigger))
+    build_loop(config, name, dl, None, secrets, Some(trigger), rec)
 }
 
 fn build_loop(
@@ -119,6 +138,7 @@ fn build_loop(
     escalator: Option<Arc<dyn Escalator>>,
     secrets: Arc<SecretRegistry>,
     trigger: Option<String>,
+    rec: Recording,
 ) -> Result<Arc<DecisionLoop>> {
     let dl = &dl;
     let agent = config.agents.get(&dl.agent).ok_or_else(|| {
@@ -139,6 +159,15 @@ fn build_loop(
         .map(|p| crate::config::paths::expand_tilde(p))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let (tools, _) = agent_tool_executor(config, agent, &workspace, &secrets);
+    // `tool.*` events around each (redacted) call; the full record is the
+    // audit line of its call id.
+    let audit = audit_path();
+    let tools: Arc<dyn ToolExecutor> = Arc::new(TracedExecutor::new(
+        tools,
+        Arc::clone(&rec.sink),
+        &dl.agent,
+        Some(audit.display().to_string()),
+    ));
     // Egress records name the loop's agent + the event's session + the call
     // id (every loop runs in one process: the env cannot).
     let tools: Arc<dyn ToolExecutor> = Arc::new(AttributedExecutor::new(
@@ -156,19 +185,23 @@ fn build_loop(
         }
     };
 
-    Ok(Arc::new(DecisionLoop::new(
-        name,
-        dl.clone(),
-        engine,
-        tools,
-        observations,
-        escalator,
-        Some(AuditLog {
-            path: audit_path(),
-            sandbox: config.sandbox_name.clone(),
-            trigger,
-        }),
-    )))
+    Ok(Arc::new(
+        DecisionLoop::new(
+            name,
+            dl.clone(),
+            engine,
+            tools,
+            observations,
+            escalator,
+            Some(AuditLog {
+                path: audit,
+                sandbox: config.sandbox_name.clone(),
+                trigger,
+                ids: rec.ids,
+            }),
+        )
+        .with_trace(rec.sink),
+    ))
 }
 
 /// `[decision_loops.<name>]` for replay: `engine` (normally
@@ -219,6 +252,7 @@ pub(crate) fn build_replay_loop(
         path: audit_path.to_path_buf(),
         sandbox: config.sandbox_name.clone(),
         trigger: Some(REPLAY_TRIGGER.to_string()),
+        ids: Default::default(),
     };
     let tools: Arc<dyn ToolExecutor> = Arc::new(NoopRuntimeToolExecutor);
     Ok(Arc::new(

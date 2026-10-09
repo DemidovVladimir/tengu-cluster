@@ -9,19 +9,24 @@
 //! | ≤ `[runtime] max_queued_per_loop` waiting per loop | one more is refused ([`Refused::QueueFull`]) with a warn, counted dropped, `last_error` set |
 //! | shutdown ([`LoopDispatch::drain`]) | new events refused ([`Refused::ShuttingDown`]), queued ones dropped, running ones get until the deadline, then are aborted |
 //! | stats ([`LoopStats`]) | queued · in flight · accepted · completed · failed · dropped · last event / finish times · last error |
+//! | trace ([`LoopDispatch::with_trace`]) | `loop.queued` (`Pending`, parent = the sender's `trace_exec::cause`: a tick's `feed.fired`) → `loop.started` (`Running`, `waited_ms`) → `loop.completed` (`Ok`) / `loop.failed` (`Failed`, `error`) with `duration_ms`; `loop.dropped` (`Dropped`: queued at shutdown, or aborted at the deadline); `loop.refused` (`Refused`: `unknown_loop` · `shutting_down` · `queue_full`); each the one before's child, node `loop:<name>`, session = the event's; payload `stats` = the counters right after (the same [`LoopStats`] the heartbeat writes). The handler runs caused by `loop.started` |
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::{oneshot, watch, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::warn;
 
 use crate::application::decision_loop::DecisionLoop;
+use crate::application::trace_exec::{self, Cause};
 use crate::domain::observation::now_ms;
+use crate::domain::trace::{Component, EventDraft, Status};
+use crate::domain::workflow::node_id;
+use crate::ports::trace::TraceSink;
 
 /// One loop's event handler: `DecisionLoop`, fakes in tests.
 #[async_trait]
@@ -46,6 +51,17 @@ pub(crate) enum Refused {
     QueueFull {
         max: usize,
     },
+}
+
+impl Refused {
+    /// `loop.refused` payload `reason`.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Refused::UnknownLoop => "unknown_loop",
+            Refused::ShuttingDown => "shutting_down",
+            Refused::QueueFull { .. } => "queue_full",
+        }
+    }
 }
 
 impl std::fmt::Display for Refused {
@@ -82,6 +98,20 @@ pub(crate) struct LoopStats {
     pub last_error: Option<String>,
 }
 
+impl LoopStats {
+    /// The counters as a trace payload carries them.
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "queued": self.queued,
+            "in_flight": self.in_flight,
+            "accepted": self.accepted,
+            "completed": self.completed,
+            "failed": self.failed,
+            "dropped": self.dropped,
+        })
+    }
+}
+
 /// What [`LoopDispatch::drain`] did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DrainReport {
@@ -114,6 +144,8 @@ pub(crate) struct LoopDispatch {
     max_queued: usize,
     closing: watch::Sender<bool>,
     tasks: Mutex<JoinSet<()>>,
+    /// Where `loop.*` events go ([`Self::with_trace`]); `None` = nowhere.
+    trace: Option<Arc<dyn TraceSink>>,
 }
 
 impl LoopDispatch {
@@ -142,7 +174,14 @@ impl LoopDispatch {
             max_queued: max_queued.max(1),
             closing: watch::channel(false).0,
             tasks: Mutex::new(JoinSet::new()),
+            trace: None,
         }
+    }
+
+    /// Write `loop.*` events to `sink` (module table).
+    pub(crate) fn with_trace(mut self, sink: Arc<dyn TraceSink>) -> Self {
+        self.trace = Some(sink);
+        self
     }
 
     pub(crate) fn names(&self) -> Vec<String> {
@@ -164,8 +203,8 @@ impl LoopDispatch {
     /// Queue `event` for `loop_name` and return at once; it runs when the
     /// loop and an in-flight slot are free. Refused after [`Self::drain`]
     /// began, and while `max_queued` events already wait for the loop.
-    /// Callers: webhook loop endpoints.
-    #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+    /// Callers: webhook loop endpoints, Studio's send-event.
+    #[cfg_attr(not(any(feature = "webhooks", feature = "studio")), allow(dead_code))]
     pub(crate) fn submit(
         &self,
         loop_name: &str,
@@ -196,11 +235,21 @@ impl LoopDispatch {
         session_id: String,
         done: Option<oneshot::Sender<()>>,
     ) -> Result<(), Refused> {
-        let slot = Arc::clone(self.slots.get(loop_name).ok_or(Refused::UnknownLoop)?);
+        let parent = trace_exec::cause().and_then(|c| c.parent);
+        let Some(slot) = self.slots.get(loop_name).map(Arc::clone) else {
+            self.refused(loop_name, &session_id, parent, Refused::UnknownLoop, None);
+            return Err(Refused::UnknownLoop);
+        };
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if *self.closing.borrow() {
-            slot.stats().dropped += 1;
-            return Err(Refused::ShuttingDown);
+            let stats = {
+                let mut st = slot.stats();
+                st.dropped += 1;
+                st.clone()
+            };
+            let refused = Refused::ShuttingDown;
+            self.refused(loop_name, &session_id, parent, refused, Some(&stats));
+            return Err(refused);
         }
         // Enqueues serialise on `tasks`, so the count cannot grow between
         // this check and `Ticket::queue`.
@@ -209,16 +258,24 @@ impl LoopDispatch {
             let refused = Refused::QueueFull {
                 max: self.max_queued,
             };
-            {
+            let stats = {
                 let mut st = slot.stats();
                 st.dropped += 1;
                 st.last_error = Some(refused.to_string());
-            }
+                st.clone()
+            };
             warn!(decision_loop = %slot.name, session_id = %session_id, queued, max_queued = self.max_queued, "loop event refused: queue full");
+            self.refused(loop_name, &session_id, parent, refused, Some(&stats));
             return Err(refused);
         }
         while tasks.try_join_next().is_some() {}
-        let ticket = Ticket::queue(Arc::clone(&slot));
+        let trace = self.trace.clone().map(|sink| TicketTrace {
+            sink,
+            session_id: session_id.clone(),
+            last: parent,
+            since: std::time::Instant::now(),
+        });
+        let ticket = Ticket::queue(Arc::clone(&slot), trace);
         let permits = Arc::clone(&self.permits);
         let mut closing = self.closing.subscribe();
         tasks.spawn(async move {
@@ -239,7 +296,9 @@ impl LoopDispatch {
                 return;
             };
             ticket.start();
-            let result = slot.handler.handle(&event, &session_id).await;
+            let cause = Cause::new(ticket.last_event(), session_id.clone());
+            let result =
+                trace_exec::caused_by(cause, slot.handler.handle(&event, &session_id)).await;
             if let Err(e) = &result {
                 let error = format!("{e:#}");
                 warn!(decision_loop = %slot.name, session_id = %session_id, %error, "decision loop event failed");
@@ -247,6 +306,32 @@ impl LoopDispatch {
             ticket.finish(result.map_err(|e| format!("{e:#}")));
         });
         Ok(())
+    }
+
+    /// `loop.refused` (module table): `stats` = the loop's counters after
+    /// the refusal (`None`: no such loop).
+    fn refused(
+        &self,
+        loop_name: &str,
+        session_id: &str,
+        parent: Option<String>,
+        why: Refused,
+        stats: Option<&LoopStats>,
+    ) {
+        let Some(sink) = &self.trace else { return };
+        let mut d = EventDraft::new(Component::Loop, "loop.refused", Status::Refused)
+            .session(session_id)
+            .node(node_id::loop_(loop_name))
+            .payload(json!({
+                "loop": loop_name,
+                "reason": why.as_str(),
+                "error": why.to_string(),
+                "stats": stats.map(LoopStats::to_json),
+            }));
+        if let Some(p) = parent {
+            d = d.parent(p);
+        }
+        sink.emit(d);
     }
 
     /// Refuse new events, drop queued ones, let running ones finish until
@@ -302,42 +387,116 @@ struct Ticket {
     slot: Arc<Slot>,
     running: bool,
     done: bool,
+    trace: Option<TicketTrace>,
+}
+
+/// A ticket's `loop.*` events (module table): each one's parent is the
+/// one before.
+struct TicketTrace {
+    sink: Arc<dyn TraceSink>,
+    session_id: String,
+    /// The last event written (the first's parent: the sender's cause).
+    last: Option<String>,
+    /// Queued, then started: `waited_ms` / `duration_ms`.
+    since: std::time::Instant,
 }
 
 impl Ticket {
-    fn queue(slot: Arc<Slot>) -> Self {
-        {
+    fn queue(slot: Arc<Slot>, trace: Option<TicketTrace>) -> Self {
+        let stats = {
             let mut st = slot.stats();
             st.accepted += 1;
             st.queued += 1;
             st.last_event_at_ms = Some(now_ms());
-        }
-        Self {
+            st.clone()
+        };
+        let mut t = Self {
             slot,
             running: false,
             done: false,
-        }
+            trace,
+        };
+        t.emit("loop.queued", Status::Pending, &stats, json!({}), false);
+        t
     }
 
     fn start(&mut self) {
-        let mut st = self.slot.stats();
-        st.queued = st.queued.saturating_sub(1);
-        st.in_flight += 1;
+        let stats = {
+            let mut st = self.slot.stats();
+            st.queued = st.queued.saturating_sub(1);
+            st.in_flight += 1;
+            st.clone()
+        };
         self.running = true;
+        let waited_ms = self
+            .trace
+            .as_ref()
+            .map(|t| t.since.elapsed().as_millis() as u64);
+        self.emit(
+            "loop.started",
+            Status::Running,
+            &stats,
+            json!({"waited_ms": waited_ms}),
+            false,
+        );
+        if let Some(t) = &mut self.trace {
+            t.since = std::time::Instant::now();
+        }
     }
 
     fn finish(&mut self, result: Result<(), String>) {
-        let mut st = self.slot.stats();
-        st.in_flight = st.in_flight.saturating_sub(1);
-        st.last_done_at_ms = Some(now_ms());
-        match result {
-            Ok(()) => st.completed += 1,
-            Err(e) => {
-                st.failed += 1;
-                st.last_error = Some(e);
-            }
-        }
+        let (stats, error) = {
+            let mut st = self.slot.stats();
+            st.in_flight = st.in_flight.saturating_sub(1);
+            st.last_done_at_ms = Some(now_ms());
+            let error = match result {
+                Ok(()) => {
+                    st.completed += 1;
+                    None
+                }
+                Err(e) => {
+                    st.failed += 1;
+                    st.last_error = Some(e.clone());
+                    Some(e)
+                }
+            };
+            (st.clone(), error)
+        };
         self.done = true;
+        match error {
+            None => self.emit("loop.completed", Status::Ok, &stats, json!({}), true),
+            Some(e) => self.emit(
+                "loop.failed",
+                Status::Failed,
+                &stats,
+                json!({"error": e}),
+                true,
+            ),
+        }
+    }
+
+    /// The last `loop.*` event written: the parent of what the handler does.
+    fn last_event(&self) -> Option<String> {
+        self.trace.as_ref().and_then(|t| t.last.clone())
+    }
+
+    fn emit(&mut self, kind: &str, status: Status, stats: &LoopStats, extra: Value, timed: bool) {
+        let Some(t) = &mut self.trace else { return };
+        let mut payload = json!({"loop": self.slot.name, "stats": stats.to_json()});
+        if let (Value::Object(p), Value::Object(x)) = (&mut payload, extra) {
+            p.extend(x);
+        }
+        let mut d = EventDraft::new(Component::Loop, kind, status)
+            .session(t.session_id.clone())
+            .node(node_id::loop_(&self.slot.name))
+            .payload(payload);
+        if let Some(p) = t.last.take() {
+            d = d.parent(p);
+        }
+        if timed {
+            d = d.duration(t.since.elapsed().as_millis() as u64);
+        }
+        t.last = t.sink.emit(d);
     }
 }
 
@@ -346,14 +505,30 @@ impl Drop for Ticket {
         if self.done {
             return;
         }
-        let mut st = self.slot.stats();
-        st.dropped += 1;
-        if self.running {
-            st.in_flight = st.in_flight.saturating_sub(1);
-            st.last_error = Some("aborted at the shutdown deadline".into());
+        let stats = {
+            let mut st = self.slot.stats();
+            st.dropped += 1;
+            if self.running {
+                st.in_flight = st.in_flight.saturating_sub(1);
+                st.last_error = Some("aborted at the shutdown deadline".into());
+            } else {
+                st.queued = st.queued.saturating_sub(1);
+            }
+            st.clone()
+        };
+        let reason = if self.running {
+            "aborted_at_deadline"
         } else {
-            st.queued = st.queued.saturating_sub(1);
-        }
+            "dropped_at_shutdown"
+        };
+        let running = self.running;
+        self.emit(
+            "loop.dropped",
+            Status::Dropped,
+            &stats,
+            json!({"reason": reason}),
+            running,
+        );
     }
 }
 
@@ -604,5 +779,135 @@ pub(crate) mod tests {
             st.last_error.as_deref(),
             Some("aborted at the shutdown deadline")
         );
+    }
+
+    /// Records the trace cause each event's handler ran under.
+    struct CauseLoop {
+        ms: u64,
+        fail: bool,
+        causes: Mutex<Vec<Option<Cause>>>,
+    }
+
+    #[async_trait]
+    impl LoopHandler for CauseLoop {
+        async fn handle(&self, _event: &Value, _session_id: &str) -> anyhow::Result<()> {
+            self.causes.lock().unwrap().push(trace_exec::cause());
+            tokio::time::sleep(Duration::from_millis(self.ms)).await;
+            if self.fail {
+                anyhow::bail!("jev 503");
+            }
+            Ok(())
+        }
+    }
+
+    /// queued → started → completed / failed, each the one before's child;
+    /// the first's parent = the sender's cause; the handler runs caused by
+    /// `loop.started`; counters ride along; shutdown drops are `loop.dropped`,
+    /// refusals `loop.refused` with their reason.
+    #[tokio::test]
+    async fn trace_events_follow_ticket_lifecycle() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let sink = Arc::new(MemTrace::default());
+        let ok = Arc::new(CauseLoop {
+            ms: 1,
+            fail: false,
+            causes: Mutex::new(vec![]),
+        });
+        let bad = Arc::new(CauseLoop {
+            ms: 1,
+            fail: true,
+            causes: Mutex::new(vec![]),
+        });
+        let slow = Arc::new(CauseLoop {
+            ms: 200,
+            fail: false,
+            causes: Mutex::new(vec![]),
+        });
+        let handlers: BTreeMap<String, Arc<dyn LoopHandler>> = [
+            ("demo".to_string(), ok.clone() as Arc<dyn LoopHandler>),
+            ("bad".to_string(), bad as Arc<dyn LoopHandler>),
+            ("slow".to_string(), slow as Arc<dyn LoopHandler>),
+        ]
+        .into();
+        let d = LoopDispatch::new(handlers, 4, 1).with_trace(sink.clone());
+        let tick = Cause::new(Some("run:5".into()), "tick:1759912340000");
+        trace_exec::caused_by_sync(tick, || {
+            d.submit_tracked(
+                "demo",
+                json!({"scenario": "normal"}),
+                "tick:1759912340000".into(),
+            )
+        })
+        .unwrap();
+        settle(&d, "demo", 1).await;
+        d.submit("bad", Value::Null, "webhook-a".into()).unwrap();
+        settle(&d, "bad", 1).await;
+        assert_eq!(
+            d.submit("nope", Value::Null, "webhook-b".into()),
+            Err(Refused::UnknownLoop)
+        );
+
+        let ev = sink.all();
+        let of = |s: &str| -> Vec<(usize, &EventDraft)> {
+            ev.iter()
+                .enumerate()
+                .filter(|(_, e)| e.session_id.as_deref() == Some(s))
+                .collect()
+        };
+        let demo = of("tick:1759912340000");
+        let kinds: Vec<&str> = demo.iter().map(|(_, e)| e.kind.as_str()).collect();
+        assert_eq!(kinds, ["loop.queued", "loop.started", "loop.completed"]);
+        assert_eq!(demo[0].1.parent_event_id.as_deref(), Some("run:5"));
+        assert_eq!(demo[1].1.parent_event_id, Some(MemTrace::id(demo[0].0)));
+        assert_eq!(demo[2].1.parent_event_id, Some(MemTrace::id(demo[1].0)));
+        assert_eq!(demo[0].1.status, Status::Pending);
+        assert_eq!(demo[2].1.status, Status::Ok);
+        assert_eq!(demo[0].1.node_id.as_deref(), Some("loop:demo"));
+        assert_eq!(demo[0].1.payload["stats"]["queued"], json!(1));
+        assert_eq!(demo[1].1.payload["stats"]["in_flight"], json!(1));
+        assert_eq!(demo[2].1.payload["stats"]["completed"], json!(1));
+        assert!(demo[2].1.duration_ms.is_some());
+        let seen = ok.causes.lock().unwrap()[0].clone().unwrap();
+        assert_eq!(seen.parent, Some(MemTrace::id(demo[1].0)));
+        assert_eq!(seen.session.as_deref(), Some("tick:1759912340000"));
+
+        let bad = of("webhook-a");
+        assert_eq!(bad[0].1.parent_event_id, None, "no cause: no parent");
+        assert_eq!(bad[2].1.kind, "loop.failed");
+        assert_eq!(bad[2].1.payload["error"], json!("jev 503"));
+        let none = of("webhook-b");
+        assert_eq!(none[0].1.kind, "loop.refused");
+        assert_eq!(none[0].1.payload["reason"], json!("unknown_loop"));
+
+        // Queue full, then shutdown: one running, one queued (dropped), one refused.
+        d.submit("slow", Value::Null, "s1".into()).unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        d.submit("slow", Value::Null, "s2".into()).unwrap();
+        assert!(matches!(
+            d.submit("slow", Value::Null, "s3".into()),
+            Err(Refused::QueueFull { max: 1 })
+        ));
+        d.drain(Instant::now() + Duration::from_millis(50)).await;
+        assert_eq!(
+            d.submit("slow", Value::Null, "s4".into()),
+            Err(Refused::ShuttingDown)
+        );
+        let ev = sink.all();
+        let last = |s: &str| {
+            ev.iter()
+                .rfind(|e| e.session_id.as_deref() == Some(s))
+                .cloned()
+                .unwrap()
+        };
+        let s1 = last("s1");
+        assert_eq!(
+            (s1.kind.as_str(), s1.status),
+            ("loop.dropped", Status::Dropped)
+        );
+        assert_eq!(s1.payload["reason"], json!("aborted_at_deadline"));
+        assert_eq!(last("s2").payload["reason"], json!("dropped_at_shutdown"));
+        assert_eq!(last("s3").payload["reason"], json!("queue_full"));
+        assert_eq!(last("s3").status, Status::Refused);
+        assert_eq!(last("s4").payload["reason"], json!("shutting_down"));
     }
 }

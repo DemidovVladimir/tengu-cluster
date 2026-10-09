@@ -33,3 +33,7 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      # Tengu Studio server + API (`--features studio`, not a default feature).
+      - name: Studio tests (feature studio)
+        run: cargo test --features studio --bin tengu studio

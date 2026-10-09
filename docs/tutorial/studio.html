@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Studio graph and trace · Tengu</title>
+<meta name="description" content="The read model Tengu Studio draws: a sandbox's workflow graph built from validated config and the tool catalog, and the versioned, redacted execution trace every run records.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: column strip */
+  .cols { display: grid; gap: 6px; grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .cols div { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--panel); display: grid; gap: 4px; align-content: start; }
+  .cols b { font-family: var(--font-mono); font-size: .78rem; }
+  .cols small { color: var(--muted); font-size: .74rem; line-height: 1.35; overflow-wrap: anywhere; }
+  .cols.in-view div { animation: rise .45s ease both; }
+  .cols.in-view div:nth-child(2) { animation-delay: .08s } .cols.in-view div:nth-child(3) { animation-delay: .16s }
+  .cols.in-view div:nth-child(4) { animation-delay: .24s } .cols.in-view div:nth-child(5) { animation-delay: .32s }
+  .cols.in-view div:nth-child(6) { animation-delay: .40s } .cols.in-view div:nth-child(7) { animation-delay: .48s }
+  .cols.in-view div:nth-child(8) { animation-delay: .56s }
+  @keyframes rise { from { transform: translateY(6px); opacity: .3 } to { transform: none; opacity: 1 } }
+  @media (max-width: 760px) { .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · Studio read model</div>
+  <h1>Studio graph and trace</h1>
+  <p class="lede">Two read models for Studio. The <b>workflow graph</b> is a sandbox drawn from its validated config and tool catalog. The <b>trace</b> is one redacted, ordered event file per run: every runtime, feed, loop, Jev, action and tool step. <code>tengu studio</code> serves both to a browser on this machine, and — only where the sandbox allows it — plays and stops that sandbox's runtime.</p>
+  <ul class="facts">
+    <li>schema <b>v1</b> for both</li>
+    <li>payload ≤ <b>4096</b> bytes</li>
+    <li>graph in <b>8</b> columns</li>
+    <li><b>9</b> event families</li>
+    <li>follow: <b>250 ms</b> poll · <b>256</b> buffered</li>
+    <li>server: <b>loopback</b> · POST = control only, body ≤ <b>1 MiB</b></li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip heart"><span class="k">心</span> heart</span> Architect / map</li>
+    <li><span class="chip hands"><span class="k">手</span> hands</span> tools, catalog</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> narrowing, redaction</li>
+    <li><span class="chip data">data</span> files and JSON</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">Two lanes</span>
+    <h2 id="s-flow">Config becomes a graph; runs become a trace</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 860 430" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">Top lane: the sandbox TOML, the tool catalog and an optional execution map go into build_graph, which outputs the workflow graph printed by tengu studio graph. Bottom lane: tengu run or decide opens a trace recording; the sink stamps, redacts and bounds each event into one JSONL file per run, which tengu trace reads; decisions.jsonl lines carry the same ids.</title>
+        <path class="e" id="p-toml" d="M170 55 C200 55 200 105 230 105" data-at="1-2"/>
+        <path class="e" id="p-cat" d="M170 120 L230 120" data-at="2"/>
+        <path class="e" id="p-map" d="M170 185 C200 185 200 140 230 140" data-at="3"/>
+        <path class="e" id="p-graph" d="M390 120 L450 120" data-at="2-4"/>
+        <path class="e" id="p-gcli" d="M620 120 L680 120" data-at="4"/>
+        <path class="e" id="p-open" d="M170 300 L230 300" data-at="5-6"/>
+        <path class="e" id="p-write" d="M390 300 L450 300" data-at="5-6"/>
+        <path class="e flow" id="p-read" d="M620 300 L680 300" data-at="8"/>
+        <path class="e dash" id="p-audit" d="M95 328 C95 392 300 392 450 392" data-at="7"/>
+
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="30" width="150" height="50" rx="8"/>
+          <text x="95" y="52" text-anchor="middle" class="t-title">Sandbox TOML</text>
+          <text x="95" y="69" text-anchor="middle" class="t-small">validated · hashed</text>
+        </g>
+        <g class="n hands" data-at="2">
+          <rect x="20" y="95" width="150" height="50" rx="8"/>
+          <text x="95" y="117" text-anchor="middle" class="t-title">Tool catalog</text>
+          <text x="95" y="134" text-anchor="middle" class="t-small">per agent</text>
+        </g>
+        <g class="n heart" data-at="3">
+          <rect x="20" y="160" width="150" height="50" rx="8"/>
+          <text x="95" y="182" text-anchor="middle" class="t-title">Execution map</text>
+          <text x="95" y="199" text-anchor="middle" class="t-small">optional</text>
+        </g>
+        <g class="n guard" data-at="2-3">
+          <rect x="230" y="80" width="160" height="80" rx="8"/>
+          <text x="310" y="108" text-anchor="middle" class="t-title t-mono">build_graph</text>
+          <text x="310" y="127" text-anchor="middle" class="t-small">config facts only</text>
+          <text x="310" y="144" text-anchor="middle" class="t-small">a map only narrows</text>
+        </g>
+        <g class="n data" data-at="2-4">
+          <rect x="450" y="80" width="170" height="80" rx="8"/>
+          <text x="535" y="108" text-anchor="middle" class="t-title">Workflow graph</text>
+          <text x="535" y="127" text-anchor="middle" class="t-small">nodes · edges</text>
+          <text x="535" y="144" text-anchor="middle" class="t-small">ids in full</text>
+        </g>
+        <g class="n" data-at="4">
+          <rect x="680" y="95" width="165" height="50" rx="8"/>
+          <text x="762" y="117" text-anchor="middle" class="t-title t-mono">studio graph</text>
+          <text x="762" y="134" text-anchor="middle" class="t-small">JSON · redacted</text>
+        </g>
+
+        <g class="n" data-at="5,7">
+          <rect x="20" y="272" width="150" height="56" rx="8"/>
+          <text x="95" y="295" text-anchor="middle" class="t-title">run · decide</text>
+          <text x="95" y="313" text-anchor="middle" class="t-small">opens a recording</text>
+        </g>
+        <g class="n guard" data-at="5-6">
+          <rect x="230" y="260" width="160" height="80" rx="8"/>
+          <text x="310" y="288" text-anchor="middle" class="t-title">Trace sink</text>
+          <text x="310" y="307" text-anchor="middle" class="t-small">seq · redact · bound</text>
+          <text x="310" y="324" text-anchor="middle" class="t-small">one write per event</text>
+        </g>
+        <g class="n data" data-at="5-6,8">
+          <rect x="450" y="260" width="170" height="80" rx="8"/>
+          <text x="535" y="288" text-anchor="middle" class="t-title t-mono">&lt;run_id&gt;.jsonl</text>
+          <text x="535" y="307" text-anchor="middle" class="t-small">logs/trace/&lt;sandbox&gt;/</text>
+          <text x="535" y="324" text-anchor="middle" class="t-small">run.opened first</text>
+        </g>
+        <g class="n" data-at="8">
+          <rect x="680" y="275" width="165" height="50" rx="8"/>
+          <text x="762" y="297" text-anchor="middle" class="t-title t-mono">tengu trace</text>
+          <text x="762" y="314" text-anchor="middle" class="t-small">runs · show · follow</text>
+        </g>
+        <g class="n data" data-at="7">
+          <rect x="450" y="372" width="170" height="40" rx="8"/>
+          <text x="535" y="390" text-anchor="middle" class="t-title t-mono">decisions.jsonl</text>
+          <text x="535" y="405" text-anchor="middle" class="t-small">+ runtime_id · run_id</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="190" y="18" width="210" height="22" rx="11"/><text x="295" y="33" text-anchor="middle">config_hash = 64 hex</text></g>
+        <g class="pop badge" data-at="3"><rect x="190" y="180" width="200" height="22" rx="11"/><text x="290" y="195" text-anchor="middle">dropped action = grey</text></g>
+        <g class="pop badge" data-at="4"><rect x="640" y="160" width="210" height="22" rx="11"/><text x="745" y="175" text-anchor="middle">secrets, URLs hidden</text></g>
+        <g class="pop badge" data-at="5"><rect x="200" y="226" width="220" height="22" rx="11"/><text x="310" y="241" text-anchor="middle">new run_id per process</text></g>
+        <g class="pop badge" data-at="6"><rect x="200" y="350" width="220" height="22" rx="11"/><text x="310" y="365" text-anchor="middle">URLs → &lt;url&gt; · ≤ 4096 B</text></g>
+        <g class="pop badge" data-at="8"><rect x="640" y="340" width="210" height="22" rx="11"/><text x="745" y="355" text-anchor="middle">resume by seq, no gap</text></g>
+
+        <circle class="tok" r="6" data-path="p-toml" data-at="1-2"/>
+        <circle class="tok hands" r="6" data-path="p-cat" data-at="2" data-delay="300"/>
+        <circle class="tok heart" r="6" data-path="p-map" data-at="3"/>
+        <circle class="tok" r="6" data-path="p-graph" data-at="2-3" data-delay="700"/>
+        <circle class="tok guard" r="6" data-path="p-gcli" data-at="4"/>
+        <circle class="tok" r="6" data-path="p-open" data-at="5"/>
+        <circle class="tok guard" r="6" data-path="p-write" data-at="6"/>
+        <circle class="tok" r="5" data-path="p-audit" data-at="7"/>
+        <circle class="tok" r="6" data-path="p-read" data-at="8"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>Config::load</code> hashes the raw sandbox file: the canonical JSON of the parsed TOML, so comments and layout do not count. That is the <code>config_hash</code> on the graph and on every event.</li>
+        <li><code>build_graph</code> reads the validated config and each agent's catalog tools. It copies facts; it never re-decides what is legal. Nodes go in 8 columns, so a browser only draws.</li>
+        <li>With <code>--map</code>, the loop is narrowed by <code>ExecutionMap::apply</code>, the same check <code>tengu decide --map</code> runs. Dropped actions stay as grey nodes; a wider map is refused with every reason.</li>
+        <li><code>tengu studio graph</code> prints the graph as JSON. Every attr is scrubbed as a trace payload is: secrets become <code>[REDACTED]</code>, then every URL becomes <code>&lt;url&gt;</code> (a <code>${VAR}</code> in a URL may be a key that is not registered).</li>
+        <li><code>tengu run</code> and <code>tengu decide</code> each open a new recording: a fresh <code>run_id</code>, a new file, first event <code>run.opened</code>. A restart never appends to an old run.</li>
+        <li>Each event gets the next <code>seq</code> under one lock. Its payload is redacted (secrets, then URLs), cut to whole fields within 4096 bytes and written in one <code>write_all</code>.</li>
+        <li>The loop's <code>decisions.jsonl</code> lines carry <code>runtime_id</code> (the lease holder of <code>tengu run</code>) and <code>run_id</code>. Both keys are new and optional, so old readers still work.</li>
+        <li><code>tengu trace show</code> prints a run in <code>seq</code> order. <code>--follow</code> tails it into a bounded buffer: a slow reader waits and loses nothing, and <code>--after &lt;seq&gt;</code> resumes.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-cols">
+  <div class="sec-head">
+    <span class="kicker">Node vocabulary</span>
+    <h2 id="s-cols">Eight columns, left to right</h2>
+    <p>Every node id keeps its names whole, for example <code>action:demo/write_marker</code> or <code>trigger:map/&lt;64 hex&gt;</code>. The vocabulary comes from the config structs and the catalog. No list is kept by hand in a browser.</p>
+  </div>
+  <div class="cols" data-inview>
+    <div><b>0 runtime</b><small><code>runtime:&lt;s&gt;</code>: the <code>[runtime]</code> knobs; owns the feeds</small></div>
+    <div><b>1 trigger · feed</b><small><code>trigger:decide</code>, <code>trigger:webhook/&lt;e&gt;</code>, <code>trigger:map/&lt;sha&gt;</code>, <code>feed:&lt;f&gt;</code></small></div>
+    <div><b>2 loop · agent</b><small><code>loop:&lt;l&gt;</code> with its knobs; <code>agent:&lt;a&gt;</code> owns it</small></div>
+    <div><b>3 world</b><small><code>world:&lt;l&gt;/&lt;alias&gt;</code>: an observation the loop reads, never fetches</small></div>
+    <div><b>4 jev · gate</b><small><code>jev:&lt;l&gt;</code> and <code>gate:&lt;l&gt;/act_at</code></small></div>
+    <div><b>5 action</b><small><code>action:&lt;l&gt;/&lt;a&gt;</code> with <code>effect</code> terminal, logged or runs; <code>escalation:&lt;l&gt;</code></small></div>
+    <div><b>6 guards</b><small><code>gate:&lt;l&gt;/&lt;a&gt;/caps</code>, <code>scope:&lt;agent&gt;/&lt;tool&gt;</code> (roots shown as <code>~/…</code>)</small></div>
+    <div><b>7 tool</b><small><code>tool:&lt;agent&gt;/&lt;tool&gt;</code>; <code>in_catalog</code> says whether the agent's catalog has it</small></div>
+  </div>
+  <p class="note">Edges: <code>fires</code>, <code>reads</code>, <code>asks</code>, <code>chooses</code>, <code>calls</code>, <code>binds</code>, <code>next</code>, <code>guards</code>, <code>escalates</code>, <code>owns</code>. A webhook endpoint that runs an agent (not a loop) is not drawn.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-env">
+  <div class="sec-head">
+    <span class="kicker">One shape for every event</span>
+    <h2 id="s-env">The event envelope</h2>
+    <p>Every field is always present, <code>null</code> when unknown. A reader ignores fields it does not know, so an older reader takes newer lines.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td><code>event_id</code> · <code>seq</code></td><td><code>&lt;run_id&gt;:&lt;seq&gt;</code>; seq 1, 2, … in file order, the same live and in replay</td></tr>
+        <tr><td><code>runtime_id</code></td><td>the <code>tengu run</code> lease holder <code>&lt;host&gt;:&lt;pid&gt;:&lt;uuid&gt;</code>; <code>null</code> for <code>tengu decide</code></td></tr>
+        <tr><td><code>run_id</code></td><td>a UUID v4 per recording; names the file</td></tr>
+        <tr><td><code>session_id</code> · <code>call_id</code></td><td>the event's session (<code>tick:&lt;slot ms&gt;</code>, <code>decide-&lt;loop&gt;-&lt;uuid&gt;</code>) · the tool call id</td></tr>
+        <tr><td><code>correlation_id</code></td><td>the caller's, else the session, else the runtime, else the run</td></tr>
+        <tr><td><code>component</code> · <code>kind</code> · <code>status</code></td><td>runtime, feed, loop, observation, jev, action, tool, gate, orchestrator, studio · a dotted name such as <code>run.opened</code> · see below</td></tr>
+        <tr><td><code>node_id</code> · <code>parent_event_id</code></td><td>a graph node id · the event that caused it</td></tr>
+        <tr><td><code>duration_ms</code> · <code>payload</code> · <code>artifact</code></td><td>wall time · a redacted object, at most 4096 bytes · where the full record lives</td></tr>
+        <tr><td><code>sandbox</code> · <code>config_hash</code> · <code>ts_ms</code> · <code>schema_version</code></td><td>runner name · the config file hash · the sink's clock unless the caller gives one · 1</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-status">
+  <div class="sec-head">
+    <span class="kicker">Ten statuses</span>
+    <h2 id="s-status">What an event can say</h2>
+    <p>Each status is written where the rule already ran, from the value it computed. Its colour is decided once, in Rust (<code>Status::tone</code>): green, amber, red, or plain. The page is sent the name and only picks the CSS token.</p>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">green</span><span><b>ok</b>Done as asked: executed, or terminally completed.</span></li>
+    <li><span class="chip bad">red</span><span><b>failed</b>An error: a tool call, a decisions call, a feed run.</span></li>
+    <li><span class="chip bad">red</span><span><b>refused</b>A deterministic gate said no: risk, legality, caps, a full queue.</span></li>
+    <li><span class="chip warn">amber</span><span><b>escalated</b>Below <code>act_at</code>: the event stops.</span></li>
+    <li><span class="chip warn">amber</span><span><b>pending</b> · <b>running</b>Queued, retrying later, or in progress.</span></li>
+    <li><span class="chip warn">amber</span><span><b>stale</b> · <b>missing</b>An observation too old, or absent.</span></li>
+    <li><span class="chip warn">amber</span><span><b>dropped</b>A slot or an event not run: late, busy, a full queue, the stop. The next slot tries again.</span></li>
+    <li><span class="chip data">plain</span><span><b>skipped</b>Logged, not run: a dry-run step, or a run the stop came before. Drawn with a dashed outline.</span></li>
+    <li><span class="chip guard">grey</span><span><b>not legal</b>Never a status: an action outside the step's legal set, or one a map dropped. Grey wins over the node's latest colour.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-fam">
+  <div class="sec-head">
+    <span class="kicker">What a run records</span>
+    <h2 id="s-fam">Nine event families</h2>
+    <p>Each event names its graph node and the event that caused it, so a run reads as a tree: tick → loop → Jev → action → tool. A tool feed's calls hang on its <code>feed.fired</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Family</th><th>Kinds</th><th>Parent</th></tr></thead>
+      <tbody>
+        <tr><td><code>runtime</code></td><td><code>run.opened</code>, <code>runtime.starting</code> · <code>running</code> · <code>start_failed</code> · <code>stopping</code> · <code>stopped</code> (drain, lease released)</td><td><code>stopped</code> ← <code>stopping</code></td></tr>
+        <tr><td><code>feed</code></td><td><code>feed.fired</code> → <code>completed</code> · <code>retrying</code> (class, delay) · <code>failed</code> · <code>tick_sent</code> · <code>dropped</code> · <code>skipped</code></td><td>outcome ← <code>feed.fired</code></td></tr>
+        <tr><td><code>loop</code></td><td><code>loop.queued</code> → <code>started</code> → <code>completed</code> · <code>failed</code>; <code>dropped</code>, <code>refused</code>; each with the loop's counters</td><td><code>queued</code> ← the tick's <code>feed.fired</code></td></tr>
+        <tr><td><code>trigger</code></td><td><code>trigger.decide</code> · <code>trigger.map</code> → <code>trigger.completed</code> · <code>trigger.failed</code></td><td>the root of a <code>tengu decide</code> run</td></tr>
+        <tr><td><code>observation</code></td><td><code>observation.read</code> per <code>world</code> alias per step: ok, stale, missing or failed, with its age</td><td><code>loop.started</code> or the trigger</td></tr>
+        <tr><td><code>jev</code></td><td><code>jev.completed</code> (answers, model, usage, the <b>legal set</b> offered) · <code>jev.failed</code></td><td><code>loop.started</code> or the trigger</td></tr>
+        <tr><td><code>action</code></td><td><code>action.selected</code> → <code>completed</code> · <code>refused</code>; <code>escalated</code>, <code>rejected</code>; payload <code>outcome</code> = the loop's own result</td><td><code>selected</code> ← its <code>jev.completed</code></td></tr>
+        <tr><td><code>tool</code></td><td><code>tool.started</code> → <code>completed</code> · <code>failed</code> (an error, an error row, or an HTTP status that is not 2xx — the loop's own test), with <code>duration_ms</code> and the call id</td><td><code>action.selected</code> or <code>feed.fired</code></td></tr>
+        <tr><td><code>studio</code></td><td>Studio's own run (control on): <code>studio.started</code>; <code>studio.control</code> pending → ok · refused · failed per Play, Stop or event; <code>studio.runtime</code> when the runtime it started ends; <code>studio.stopped</code></td><td>verdict ← its request; <code>studio.runtime</code> ← the Play verdict</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-ui">
+  <div class="sec-head">
+    <span class="kicker">No guessed animation</span>
+    <h2 id="s-ui">What each Studio visual reads</h2>
+    <p>Every colour and highlight the plan asks for points to a persisted event and one of its fields. The full table is in <code>docs/runtime-2026-09-30.md</code> § Trace.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Visual</th><th>Event</th><th>Field</th></tr></thead>
+      <tbody>
+        <tr><td>Highlighted edge</td><td><code>action.selected</code> · <code>escalated</code> · <code>rejected</code></td><td><code>node_id</code> + <code>parent_event_id</code> = that step's <code>jev.completed</code></td></tr>
+        <tr><td>Grey node</td><td><code>jev.completed</code></td><td>an action not in <code>payload.legal</code></td></tr>
+        <tr><td>Amber: waiting</td><td><code>loop.queued</code> · <code>loop.started</code> · <code>action.selected</code> · <code>tool.started</code></td><td><code>status</code> pending / running</td></tr>
+        <tr><td>Amber: stale</td><td><code>observation.read</code></td><td><code>status</code> stale / missing, <code>payload.age_ms</code></td></tr>
+        <tr><td>Amber: retrying</td><td><code>feed.retrying</code></td><td><code>payload.retry_in_ms</code>, <code>payload.class</code></td></tr>
+        <tr><td>Amber: below confidence</td><td><code>action.escalated</code></td><td><code>payload.confidence</code> &lt; <code>payload.act_at</code></td></tr>
+        <tr><td>Red: failed</td><td><code>tool.failed</code> · <code>action.completed</code> · <code>feed.failed</code> · <code>jev.failed</code> · <code>loop.failed</code></td><td><code>status</code> failed, <code>payload.error</code></td></tr>
+        <tr><td>Red: refused</td><td><code>action.refused</code> · <code>action.rejected</code> · <code>loop.refused</code></td><td><code>status</code> refused, the rule or reason</td></tr>
+        <tr><td>Green</td><td><code>tool.completed</code> · <code>action.completed</code> · <code>feed.completed</code> · <code>loop.completed</code> · terminal <code>action.selected</code></td><td><code>status</code> ok</td></tr>
+        <tr><td>Counters move</td><td><code>loop.*</code></td><td><code>payload.stats</code>: queued, in flight, completed</td></tr>
+        <tr><td>Header</td><td>every event · <code>runtime.*</code> · <code>jev.completed</code></td><td>run, runtime, config hash · state + heartbeat <code>artifact</code> · <code>payload.model</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Not traced yet: planner / subagent steps, a typed scope refusal (today a <code>tool.failed</code> with the refusal text), <code>tengu webhooks</code>.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-server">
+  <div class="sec-head">
+    <span class="kicker">Loopback only</span>
+    <h2 id="s-server">The Studio server</h2>
+    <p><code>tengu studio --sandbox &lt;s&gt;</code> (build with <code>--features studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code>.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Route</th><th>Serves</th></tr></thead>
+      <tbody>
+        <tr><td><code>/</code> · <code>/assets/&lt;file&gt;</code></td><td>the page, compiled into the binary (<code>include_str!</code>); nothing loads from the network</td></tr>
+        <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only</code> / <code>control_enabled</code>, evidence paths, the colour legend</td></tr>
+        <tr><td><code>/api/v1/graph[?map=&lt;sha256&gt;]</code></td><td>the graph above; with <code>map</code>, a map <code>tengu decide --map</code> kept, re-hashed and re-applied to this config</td></tr>
+        <tr><td><code>/api/v1/health</code></td><td>the heartbeat and the <code>tengu doctor --live</code> checks (one function, <code>runtime::read_live</code>)</td></tr>
+        <tr><td><code>/api/v1/runs</code></td><td>every recorded run, the heartbeat holder, the live run, each run's state (live, closed, open) and whether its config hash is the current one</td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/events?after=&amp;limit=</code></td><td>a page of events in <code>seq</code> order (limit 1–1000), <code>more</code>, <code>next_after</code>; each event with its <code>view</code>: tone, what it belongs to, the edges it lights</td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/board?upto=&lt;seq&gt;</code></td><td>the run folded over its graph up to <code>seq</code>: every node's colour and why, lit edges, grey legal sets, runtime state, model, loop counters</td></tr>
+        <tr><td><code>/api/v1/nodes/&lt;node_id&gt;</code></td><td>the validated config behind a node (never the TOML text), its edges and the files that hold its facts</td></tr>
+        <tr><td><code>/api/v1/runs/&lt;run_id&gt;/stream</code></td><td>SSE: the run after <code>Last-Event-ID</code> or <code>?after=</code>, then live</td></tr>
+        <tr><td><code>/api/v1/live/stream</code></td><td>SSE: the run of the runtime holding the lease; <code>event: run</code> on attach and on every restart</td></tr>
+        <tr><td><code>/api/v1/control</code></td><td>the control state, its tone, each button's verdict (ok, or why not), the runtime Studio runs, the heartbeat seen, the scenarios and loops, the last verdict</td></tr>
+        <tr><td>POST <code>/api/v1/control/play</code> · <code>stop</code> · <code>event</code></td><td>Play, Stop, send a scenario (next section). Only with control on; otherwise 403 with the reason</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip guard">bind</span><span><b>Loopback only</b><code>127.0.0.1</code> (default) or <code>::1</code>; any other <code>--bind</code> is refused before anything listens. Port 0 = a free one.</span></li>
+    <li><span class="chip guard">key</span><span><b>Token</b>32 random bytes per process. Every <code>/api/</code> GET sends it (<code>X-Studio-Token</code>, or <code>?token=</code> for <code>EventSource</code>); compared in constant time, else 401.</span></li>
+    <li><span class="chip guard">csrf</span><span><b>Any request but GET / HEAD needs three proofs</b>on any path, the page's too: the token in the <code>X-Studio-Token</code> header (never the query), <code>Origin</code> = this server and <code>Sec-Fetch-Site: same-origin</code> — else 403. JSON body only (415 else), at most 1 MiB (413), unknown fields refused, a <code>scenario</code> / <code>loop</code> name of 1–128 bytes (400 else).</span></li>
+    <li><span class="chip guard">host</span><span><b>Host / Origin</b>a <code>Host</code> other than <code>127.0.0.1:&lt;port&gt;</code> / <code>localhost:&lt;port&gt;</code> is 421 (DNS rebinding); a foreign <code>Origin</code> or a cross-site fetch is 403; no CORS header, no preflight answer.</span></li>
+    <li><span class="chip data">sse</span><span><b>Bounded per client</b>the backlog waits for a slow client; a live event that does not fit its 256-item buffer sends <code>event: lagged</code> (id = the last event handed) and closes. The browser reconnects with that id and reads the rest from the file: no gap, no repeat.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-control">
+  <div class="sec-head">
+    <span class="kicker">One runtime, never a copy</span>
+    <h2 id="s-control">Play, Stop, send an event</h2>
+    <p>With control on, Play starts the sandbox's runtime inside the Studio process through the start <code>tengu run</code> uses (<a href="runtime.html">tengu run</a>): the same leases, loops, feeds, heartbeat and recording. Stop is the path SIGINT takes. The page shows the buttons only when <code>GET /api/v1/control</code> says control is on, and greys each one with the reason Rust gives.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Sandbox</th><th>Control</th></tr></thead>
+      <tbody>
+        <tr><td><code>[generation]</code>-bound (W1: a frozen design)</td><td>never — not with <code>--allow-control</code>; <code>[studio] control = true</code> there fails the config load</td></tr>
+        <tr><td>hardened (<code>[risk]</code>, <code>[soe]</code> or a <code>[solana]</code> signer)</td><td>never, the same way</td></tr>
+        <tr><td><code>[studio] control = true</code> (only <code>control-loop-lab</code>)</td><td>on</td></tr>
+        <tr><td>any other, started with <code>--allow-control</code></td><td>on, for that process</td></tr>
+        <tr><td>otherwise (no <code>[studio]</code> = <code>control = false</code>)</td><td>off: every POST is 403 with the reason</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip">idle</span><span><b>idle</b>Studio started nothing and no live heartbeat: Play only.</span></li>
+    <li><span class="chip">attached</span><span><b>attached</b>a fresh heartbeat of another holder (a CLI <code>tengu run</code>): read-only, every button refused, the holder named in full. A Play that races it is refused by the lease itself (409).</span></li>
+    <li><span class="chip warn">starting · stopping</span><span><b>starting, stopping</b>Studio is taking the lease, or draining (≤ <code>shutdown_grace_secs</code>): no button.</span></li>
+    <li><span class="chip ok">running</span><span><b>running</b>Studio's own runtime: Stop and Send event; a second Play is 409.</span></li>
+    <li><span class="chip">stopped · failed</span><span><b>stopped, failed</b>it ended cleanly, or its start or run failed (the error is the last verdict): Play again.</span></li>
+  </ul>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Request</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>POST <code>play</code> <code>{"scenario"?}</code></td><td>200 running (holder, <code>run_id</code>) · 409 attached or not now · 422 unknown scenario · 500 the start failed</td></tr>
+        <tr><td>POST <code>stop</code></td><td>200 once drained (the drain report, <code>lease_released</code>) · 202 still draining after the grace + 5 s · 409 not Studio's runtime</td></tr>
+        <tr><td>POST <code>event</code> <code>{"scenario", "loop"?}</code></td><td>202 queued, session <code>studio-&lt;scenario&gt;-&lt;uuid&gt;</code> · 422 no such scenario or loop · 429 the loop's queue is full · 409 nothing running</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">A scenario is a file <code>sandboxes/&lt;s&gt;/scenarios/&lt;name&gt;.json</code> — what <code>tengu decide --event</code> takes; a <code>*.map.json</code> is a map, never an event. The page sends a name, never an event body. Each request and its verdict (ok, refused, failed) lands in Studio's own recording, kind <code>studio</code>.</p>
+</section>
+
+<section class="sec" aria-labelledby="s-page">
+  <div class="sec-head">
+    <span class="kicker">The page</span>
+    <h2 id="s-page">Graph, inspector, timeline, replay</h2>
+    <p>Open the URL <code>tengu studio</code> prints. The page reads the token from the address, keeps it for the tab and drops it from the address bar. Every colour and highlight below is computed in Rust (<code>application/studio/board.rs</code>) from persisted events.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Region</th><th>Shows</th><th>From</th></tr></thead>
+      <tbody>
+        <tr><td>Header</td><td>sandbox, config hash, runtime state, run id, runtime id, model, Live / Replay, health; a <code>config changed</code> badge for a run of another config</td><td><code>meta</code>, the board's header, <code>health</code></td></tr>
+        <tr><td>Graph</td><td>nodes in the Rust columns and order; each node's colour = its latest event's tone; grey = not in the step's legal set; a lit edge only from an <code>action.*</code> or <code>tool.*</code> event; a thick outline = the latest event</td><td><code>graph</code> + <code>board</code></td></tr>
+        <tr><td>Inspector</td><td>a node: the validated config section, its edges, evidence files and its events. An event: answers with probabilities, args, the redacted result, duration, call id, decision id, the full payload</td><td><code>nodes/&lt;id&gt;</code>, the event list</td></tr>
+        <tr><td>Timeline</td><td>every event in <code>seq</code> order; filters: session, loop, agent, model, tool, status, call id</td><td><code>events</code> (each event's <code>view</code> carries loop, agent, tool, model)</td></tr>
+        <tr><td>Runs + replay</td><td>every run with its state and config badge; pick one, then step or drag through its <code>seq</code></td><td><code>runs</code>, <code>board?upto=</code></td></tr>
+        <tr><td>Evidence</td><td>the trace file, heartbeat, decision audit, kept maps, the selected event's record and observation key</td><td><code>meta</code>, <code>board</code>, the event</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="states">
+    <li><span class="chip data">live</span><span><b>Live</b>follows the run of the runtime that holds the lease. The stream only says "a line landed"; the page then reads the same <code>events</code> pages a replay reads, so live and replay are one list.</span></li>
+    <li><span class="chip data">replay</span><span><b>Replay</b>any recorded run. The slider asks Rust for the board at that <code>seq</code>. Reload keeps the mode, run, position and selection: they ride in the URL fragment.</span></li>
+    <li><span class="chip guard">map</span><span><b>A map run</b>a <code>tengu decide --map</code> run is drawn on its kept map's graph: dropped actions grey, the map trigger lit.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>The graph never widens.</b> A map goes through <code>ExecutionMap::apply</code>; a mapped graph has no node or edge the base graph lacks, except the map trigger.</span></li>
+    <li><span><b>The graph is deterministic.</b> It is normalized: the same config gives the same bytes (golden files for <code>control-loop-lab</code> and <code>lping</code>).</span></li>
+    <li><span><b>Redaction before the write.</b> Registered secrets become <code>[REDACTED]</code> and URLs become <code>&lt;url&gt;</code> in every payload string and object key before the line is written.</span></li>
+    <li><span><b>Bounded, never cut.</b> An oversize payload loses whole fields, largest first, and says which (<code>_dropped</code>, <code>_bytes</code>). Ids and strings are never shortened. <code>jev.*</code> pin the legal set: <code>legal</code> and <code>legal_actions</code> go only after every other field, the names last, so a grey node survives a huge answer.</span></li>
+    <li><span><b>One event, one line, in order.</b> <code>seq</code> is taken under the same lock as the write; a failed write reuses its <code>seq</code>, so there is no gap.</span></li>
+    <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
+    <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
+    <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
+    <li><span><b>Only the control routes change anything.</b> Every other route is GET / HEAD (anything else is 405). Any request but GET / HEAD — on any path, however it is spelled — passes the guard only with the token header, its own <code>Origin</code> and <code>Sec-Fetch-Site: same-origin</code>; a <code>Host</code> that is not this server is 421 first. The page decides nothing: tones, lit edges, grey nodes, run states, the health verdict and which button may act all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
+    <li><span><b>One runtime per sandbox.</b> Play is <code>tengu run</code>'s own start, so the lease refuses a second runner either way: a CLI <code>tengu run</code> while Studio runs one, a Play while the CLI runs one (Studio then attaches read-only). Stop never touches a runtime Studio did not start.</span></li>
+    <li><span><b>No orphan.</b> The runtime lives in the Studio process. SIGINT / SIGTERM drain it first (no new Play, the Stop path, then <code>studio.stopped</code>); a killed Studio takes it along and its lease frees after 30 s.</span></li>
+    <li><span><b>A click never pretends.</b> Every Play, Stop and event is a <code>studio.control</code> request and its verdict in Studio's recording; a failed start is <code>failed</code> with the error, a held lease <code>refused</code> with the holder.</span></li>
+    <li><span><b>No rule twice.</b> An event is written where the rule ran, from its result: the loop's <code>StepOutcome</code>, the queue's refusal, the feed's class and delay, the world read. Shared tests live in one place (<code>ObsStatus::usable</code>, <code>reduce::http_ok</code>, <code>DecisionLoopConfig::logs_only</code>), so the trace and the graph never judge differently from the loop.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Graph, a recorded run, then Play</h2>
+    <p>Use the safe lab and its own home (runbook <code>docs/control-loop-lab-2026-10-08.md</code>). Logs go to stderr (the server: also <code>$TENGU_HOME/logs/tengu.log</code>, as <code>tengu run</code>), so stdout pipes straight into <code>jq</code>. Ids below are examples.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln o"># export TENGU_HOME="$HOME/tengu-lab/home" first — never ~/.tengu</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio graph --sandbox control-loop-lab | jq -c '{n: (.nodes|length), e: (.edges|length)}'</span>
+<span class="ln o">{"n":16,"e":17}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio graph --sandbox control-loop-lab --map sandboxes/control-loop-lab/scenarios/uncertain.map.json</span>
+<span class="ln o">… "map_changes": {"act_at": {"base": 0.8, "map": 1.0}, "dry_run": {"base": false, "map": true}} …</span>
+<span class="ln cmd"><span class="p">$ </span>echo '{"scenario":"act"}' | tengu decide --sandbox control-loop-lab --loop demo --event - | jq -c '{outcomes, run_id}'</span>
+<span class="ln o">{"outcomes":[…],"run_id":"71650e67-fb10-4aac-8a5a-a1c837c1cee8"}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace runs --sandbox control-loop-lab</span>
+<span class="ln o">{"run_id":"71650e67-fb10-4aac-8a5a-a1c837c1cee8","kind":"decide","runtime_id":null,"events":12,"last_kind":"trigger.completed",…}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run 71650e67-fb10-4aac-8a5a-a1c837c1cee8 | jq -r '[.seq, .kind, .status, .node_id] | @tsv'</span>
+<span class="ln o">2  trigger.decide    running  trigger:decide</span>
+<span class="ln o">4  jev.completed     ok       jev:demo</span>
+<span class="ln o">5  action.selected   running  action:demo/write_marker</span>
+<span class="ln o">7  tool.completed    ok       tool:lab/write_file</span>
+<span class="ln o">8  action.completed  ok       action:demo/write_marker</span>
+<span class="ln o">11 action.selected   ok       action:demo/hold</span>
+<span class="ln o"># example run of 2026-10-08 (some rows left out); the full record: docs/studio-trace-evidence-2026-10-08.md</span>
+<span class="ln cmd"><span class="p">$ </span>tengu trace show --sandbox control-loop-lab --run &lt;run_id&gt; --after 0 --follow</span>
+<span class="ln o"># the browser UI: a build with --features studio (without it: an error naming the flag)</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release --features studio</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab</span>
+<span class="ln o">Studio: http://127.0.0.1:&lt;port&gt;/#t=&lt;64 hex token&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu studio --sandbox control-loop-lab --bind 0.0.0.0</span>
+<span class="ln o">Error: --bind 0.0.0.0: refused — tengu studio binds to loopback only (127.0.0.1 or ::1) …</span>
+<span class="ln o"># control (the lab sets [studio] control = true): a POST carries the token header, its Origin, Sec-Fetch-Site</span>
+<span class="ln cmd"><span class="p">$ </span>P() { curl -sS -X POST -H "X-Studio-Token: $TOK" -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' --data "$2" "$BASE$1"; }</span>
+<span class="ln cmd"><span class="p">$ </span>P /api/v1/control/play '{}' | jq -c '{ok, holder, run_id}'</span>
+<span class="ln o">{"ok":true,"holder":"Vladimirs-MacBook-Pro-2.local:31302:64331316-a1f3-4a4f-a2c0-948380f5f8a8","run_id":"93668d55-372f-45a3-9b45-cfec64055960"}</span>
+<span class="ln cmd"><span class="p">$ </span>tengu run --sandbox control-loop-lab</span>
+<span class="ln o">Error: sandbox `control-loop-lab` is already running: lease `runtime:control-loop-lab` … is held by `Vladimirs-MacBook-Pro-2.local:31302:64331316-a1f3-4a4f-a2c0-948380f5f8a8` for 30 s more. …</span>
+<span class="ln cmd"><span class="p">$ </span>P /api/v1/control/event '{"scenario":"act"}' | jq -r .session_id</span>
+<span class="ln o">studio-act-759ba3d9-dc8a-4bc3-8d44-1cb9b00c7898</span>
+<span class="ln cmd"><span class="p">$ </span>P /api/v1/control/stop '' | jq -c '.end | {reason, lease_released}'</span>
+<span class="ln o">{"reason":"studio stop","lease_released":true}</span>
+<span class="ln o"># example run of 2026-10-09; the full record: docs/studio-acceptance-2026-10-08.md</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-editor">
+  <div class="sec-head">
+    <span class="kicker">Not built</span>
+    <h2 id="s-editor">The editor, as designed</h2>
+    <p>A visual editor is a design only (<code>docs/studio-editor-design-2026-10-08.md</code>): no route, no save. Building it waits for the operator's review. These rules are fixed now.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Rule</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>Palette</td><td>served from Rust: node kinds of this graph, each agent's catalog tools with their own schemas, the config structs' fields. No list in the page; no shell or code node.</td></tr>
+        <tr><td>Connections</td><td>the graph's edges, each mapped to the one TOML key it writes: <code>fires</code> → feed <code>target</code> or a webhook <code>loop</code>, <code>reads</code> → <code>world</code>, <code>calls</code> → <code>tool</code>, <code>binds</code> → a slot source, <code>next</code> → <code>sequence</code>, <code>owns</code> → <code>agent</code>.</td></tr>
+        <tr><td>Validate</td><td><code>Config::load</code> on the draft written at its final path; the page only shows the errors.</td></tr>
+        <tr><td>Save</td><td>as a new sandbox only, after a TOML preview and a diff; never in place, never a running sandbox.</td></tr>
+        <tr><td>Frozen and hardened</td><td>a W1-bound or hardened sandbox is view-only; a new design is a new sandbox or generation.</td></tr>
+        <tr><td>Narrowing</td><td>a loop is narrowed only by an execution map, checked by <code>ExecutionMap::apply</code>; the map is never written into TOML.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/workflow.rs</code></td><td>the graph: nodes, edges, columns, node ids, normalize</td></tr>
+        <tr><td><code>src/application/studio/graph.rs</code></td><td><code>build_graph</code>: config + catalog (+ map) → graph</td></tr>
+        <tr><td><code>src/bootstrap/studio.rs</code></td><td>each agent's catalog tools; the redacted graph</td></tr>
+        <tr><td><code>src/domain/trace.rs</code></td><td>the event envelope, statuses, <code>bound_payload</code>, order, run summary</td></tr>
+        <tr><td><code>src/ports/trace.rs</code></td><td><code>TraceSink</code> and <code>TraceReader</code></td></tr>
+        <tr><td><code>src/adapters/outbound/trace_store.rs</code></td><td>the JSONL store: stamp, redact, bound, write; page and follow</td></tr>
+        <tr><td><code>src/bootstrap/trace.rs</code></td><td>which recording a process opens; <code>Recording</code> (sink + run ids) for each loop</td></tr>
+        <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code></td></tr>
+        <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
+        <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
+        <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
+        <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (<code>--features studio</code>): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>
+        <tr><td><code>src/application/studio/stream.rs</code></td><td>live delivery: backlog waits, live overflow = <code>lagged</code>, the lease holder's run across restarts</td></tr>
+        <tr><td><code>src/application/studio/board.rs</code></td><td>the board: a run folded over its graph — tones, lit edges, grey legal set, header facts, each event's view</td></tr>
+        <tr><td><code>src/application/studio/inspect.rs</code></td><td>the validated config section behind a node; the store rows it names</td></tr>
+        <tr><td><code>src/config/studio.rs</code></td><td><code>[studio] control</code> and <code>control_policy</code>: on, off, or never (W1-bound, hardened)</td></tr>
+        <tr><td><code>src/application/studio/control.rs</code></td><td>the control rules: state from Studio's phase + the heartbeat, each action ok or why not, scenario names</td></tr>
+        <tr><td><code>src/adapters/inbound/studio/control.rs</code> · <code>inbound/run.rs</code></td><td>Play / Stop / event on the runtime (<code>start_session</code>, the stopper, the loop dispatch), <code>studio.*</code> events, Studio's shutdown drain</td></tr>
+        <tr><td><code>src/bootstrap/studio.rs</code> · <code>bootstrap/runtime.rs</code></td><td><code>StudioContext</code> (graph, trace reader, kept maps, evidence paths) · <code>read_live</code>, shared with <code>doctor --live</code></td></tr>
+        <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>); the control buttons draw <code>/api/v1/control</code></td></tr>
+        <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Related: <a href="decision-loop.html">Decision loop</a> (what the loop does), <a href="runtime.html">tengu run</a> (leases, heartbeat), <a href="secrets.html">Secrets and redaction</a>, <a href="metrics.html">Metrics and audit trails</a>. Operator doc (quick start, routes, security, troubleshooting): <code>docs/studio-2026-10-08.md</code>.</p>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+</article>
+</main>
+</div>
+</body>
+</html>

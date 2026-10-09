@@ -153,11 +153,14 @@ async fn serve_webhooks(
         if handlers.contains_key(name) {
             continue;
         }
+        // No trace recording on this surface yet: audit lines carry no
+        // runtime / run id (`bootstrap/trace.rs`).
         let dl = crate::bootstrap::decision::build_decision_loop(
             &config,
             name,
             escalator.clone(),
             Arc::clone(&secret_registry),
+            Default::default(),
         )?;
         handlers.insert(name.clone(), dl);
     }
