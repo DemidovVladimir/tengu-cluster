@@ -72,7 +72,10 @@ pub(crate) struct SecretCheck {
     pub backend: String,
     pub state: &'static str,
     pub used_by: Vec<String>,
+    /// The command that stores it (copyable as is).
     pub how: String,
+    /// Where the value then lives.
+    pub note: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,13 +116,22 @@ pub(crate) fn sha256_hex(text: &str) -> String {
         .collect()
 }
 
-fn how(env: &str, backend: &str) -> String {
+/// (command to run, where the value then lives) — the command alone, so
+/// the page can copy it.
+fn how(env: &str, backend: &str) -> (String, &'static str) {
     match backend {
-        "env" => format!("export {env}=…   (or a {env}=… line in .env)"),
-        "cloudflare" => {
-            format!("npx wrangler secret put {env}   (in cloudflare/seal-worker; the Worker keeps it)")
-        }
-        _ => format!("tengu secret set {env} <value>   (encrypted ~/.tengu/secrets.vault)"),
+        "env" => (
+            format!("export {env}=<value>"),
+            "this shell (or a line in .env)",
+        ),
+        "cloudflare" => (
+            format!("npx wrangler secret put {env}"),
+            "a Cloudflare Worker secret (run it in cloudflare/seal-worker)",
+        ),
+        _ => (
+            format!("tengu secret set {env} <value>"),
+            "the encrypted vault ~/.tengu/secrets.vault",
+        ),
     }
 }
 
@@ -227,12 +239,14 @@ impl Builder {
                     "cloudflare" => SecretState::Remote,
                     b => self.store.secret_state(&u.env, b),
                 };
+                let (how, note) = how(&u.env, &u.backend);
                 SecretCheck {
                     env: u.env.clone(),
                     backend: u.backend.clone(),
                     state: state.as_str(),
                     used_by: u.used_by.clone(),
-                    how: how(&u.env, &u.backend),
+                    how,
+                    note,
                 }
             })
             .collect()
@@ -250,11 +264,10 @@ impl Builder {
             out.push(format!("tengu telegram --sandbox {s}"));
         }
         if bp.nodes.iter().any(|n| n.kind == "webhook") {
-            out.push(format!(
-                "tengu webhooks --sandbox {s}   (a build with --features webhooks)"
-            ));
+            // Served by a build with `--features webhooks`.
+            out.push(format!("tengu webhooks --sandbox {s}"));
         }
-        out.push(format!("tengu studio --sandbox {s} --allow-edit   (back to the canvas)"));
+        out.push(format!("tengu studio --sandbox {s} --allow-edit"));
         out
     }
 

@@ -447,10 +447,12 @@ pub(crate) async fn run() -> Result<()> {
         // `new` without --no-open falls through to the Studio server below,
         // which sets up logging itself; the others log to stderr here.
         if !matches!(action, sandbox::SandboxAction::New { no_open: false, .. }) {
+            // Quiet by default (skill discovery logs a line per skill);
+            // RUST_LOG=tengu=info shows every step.
             tracing_subscriber::fmt()
                 .with_env_filter(
-                    tracing_subscriber::EnvFilter::from_default_env()
-                        .add_directive("tengu=info".parse().unwrap()),
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=warn")),
                 )
                 .compact()
                 .with_writer(std::io::stderr)
