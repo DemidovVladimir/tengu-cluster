@@ -631,8 +631,11 @@ mod tests {
         let mut open = base();
         open.agents.get_mut("main").unwrap().engine = "codex".into();
         assert!(validation_errors(&open).is_empty());
+        // `[risk]` stands for every trigger (`[soe]`, a Solana signer): one
+        // predicate, `requires_hardened_claude_code` — and no signer helper,
+        // whose shape changes with the Privy signer (PR #51).
         let risk: Config = toml::from_str(RISK_SANDBOX).expect("parse");
-        for mut cfg in [with_signer("/keys/signer.json"), risk] {
+        for mut cfg in [risk] {
             let agent = cfg.agents.values_mut().next().unwrap();
             agent.engine = "codex".into();
             agent.codex = Some(crate::config::AgentCodexConfig::default());
