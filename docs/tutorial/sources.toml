@@ -171,6 +171,20 @@ sources = [
   "src/bootstrap/orchestrator.rs",
 ]
 
+[pages.a2a]
+sources = [
+  "src/domain/a2a/",
+  "src/config/a2a.rs",
+  "src/ports/a2a.rs",
+  "src/application/a2a/",
+  "src/bootstrap/a2a.rs",
+  "src/adapters/outbound/a2a/",
+  "src/adapters/outbound/tools/a2a/",
+  "src/adapters/inbound/a2a.rs",
+  "src/adapters/inbound/cli/a2a.rs",
+  "src/adapters/outbound/egress.rs",
+]
+
 # ── Memory ────────────────────────────────────────────────────────────────
 
 [pages.memory]

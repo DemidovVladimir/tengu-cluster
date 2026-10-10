@@ -878,3 +878,28 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # command = ["npx", "-y", "@modelcontextprotocol/server-github"]
 # env = { GITHUB_TOKEN = "$GITHUB_TOKEN" }  # $VAR resolved from the environment
 # # auth = { type = "bearer", token = "$MCP_TOKEN" }   # http transport only
+
+# --- A2A: talk to other agent harnesses (docs/a2a-2026-10-10.md) -------------
+# Client: the opt-in `a2a` tool reaches only these remotes (JSON-RPC 1.0 / 0.3,
+# HTTP+JSON 1.0); a card naming another host is refused. List `a2a` in an
+# agent's `tools` and scope it. Server: `tengu a2a serve --sandbox <s>` serves
+# the planner (/a2a) and the listed agents (/a2a/agents/<name>, each with a
+# `description`) to other harnesses.
+# [a2a.remotes.research]
+# url = "https://agents.example.com/research"  # base URL or the card's URL (.json)
+# bearer_env = "RESEARCH_A2A_TOKEN"            # or header = "X-API-Key" + header_env
+# description = "The research team's harness."
+# # endpoint_url = "https://…"                 # call here instead of the card's URL
+# # timeout_secs = 120                         # max_result_chars = 12000
+#
+# [default_scopes.a2a]
+# net_hosts = ["agents.example.com"]
+# env_reads = ["RESEARCH_A2A_TOKEN"]
+#
+# [a2a.server]
+# token_env = "TENGU_A2A_TOKEN"                # clients send Authorization: Bearer <it>
+# orchestrator = true                          # needs [orchestrator]
+# agents = ["researcher"]
+# # bind = "127.0.0.1"  port = 8710  public_url = "https://tengu.example.com"
+# # max_tasks = 500  max_running = 4  run_timeout_secs = 900  context_turns = 8
+# # allow_unauthenticated = true               # loopback bind only, never hardened

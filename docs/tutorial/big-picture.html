@@ -343,6 +343,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
       <thead><tr><th>Command</th><th>Sandbox</th><th>What runs</th><th>Page</th></tr></thead>
       <tbody>
         <tr><td><code>tengu run</code></td><td><code>xmarket</code></td><td>feeds and decision loops in one long-running process, under a lease</td><td><a href="runtime.html">tengu run</a></td></tr>
+        <tr><td><code>tengu a2a</code></td><td><code>a2a-lab</code></td><td><code>serve</code> the planner and chosen agents to other agent harnesses; <code>send</code> / <code>card</code> to a remote harness, as the <code>a2a</code> tool does</td><td><a href="a2a.html">A2A</a></td></tr>
         <tr><td><code>tengu decide</code></td><td><code>lping</code>, <code>jev-exec</code></td><td>one event through a decision loop: Jev picks, tools act</td><td><a href="decision-loop.html">Decision loop</a></td></tr>
         <tr><td><code>tengu risk</code></td><td><code>xmarket</code></td><td>the paper ledger's risk state; every order tool runs the gate itself</td><td><a href="paper-desk.html">Paper desk</a></td></tr>
         <tr><td><code>tengu history</code> · <code>tengu backtest</code></td><td><code>xlab</code></td><td>backfill public history into <code>market.db</code>, replay a strategy on it</td><td><a href="history.html">Market history</a> · <a href="backtest.html">Backtests</a></td></tr>
@@ -429,7 +430,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
 </article>
 </main>
 </div>

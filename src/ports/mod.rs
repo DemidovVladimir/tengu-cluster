@@ -1,6 +1,9 @@
 //! Ports — traits the application layer depends on; adapters implement them.
 //! Imports only `domain` and `config` (see `tests/layering_lint.rs`).
 
+// The server half is used only with the `a2a` feature (`tengu a2a serve`).
+#[cfg_attr(not(feature = "a2a"), allow(dead_code))]
+pub(crate) mod a2a;
 pub(crate) mod book;
 pub(crate) mod clock;
 pub(crate) mod decision;

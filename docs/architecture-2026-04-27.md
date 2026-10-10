@@ -1,4 +1,4 @@
-# Tengu-Cluster — Architecture Walkthrough (2026-04-27; layout 2026-09-23; synced 2026-10-09)
+# Tengu-Cluster — Architecture Walkthrough (2026-04-27; layout 2026-09-23; synced 2026-10-10)
 
 > Companions: `docs/architecture-2026-04-27.svg` (the picture), `docs/architecture-2026-04-27.html` (the explorer: walk a turn, the other flows, subsystem cards, searchable file map). Five minutes: the TL;DR, §1 (the chat turn), §1b (the `tengu run`, `tengu backtest` and `tengu ranking` flows). An hour: §2's file tables. Any single file: `docs/code-map.md`. One animated page per feature: `docs/tutorial/`.
 
@@ -22,6 +22,7 @@ That is the chat turn. Since 2026-09-24 the same binary also runs work with no c
 | `tengu sources` + `source_evidence` | SEC EDGAR / EU TED facts → append-only `sources.db`; the as-of evidence packet (no lookahead); agents never fetch | §2.16 |
 | `tengu soe` + `soe_*` tools | Software Opportunity Engine: offline gates, economics, ranking over a signed private profile (O1); the weekly cycle — Architect + Critic stage agents write drafts through tools, the pure domain decides, the run dir is frozen — plus replay, grades, the Review #2 packet (O3 / O4); a `kind = "job"` feed of `tengu run` | §2.17 |
 | `tengu trace` + `tengu studio` | every `tengu run` / `tengu decide` writes a correlated JSONL execution trace; Studio (a loopback browser page, default build) draws the validated workflow graph and the trace, Play / Stop only where `[studio] control` allows | §2.18 |
+| `tengu a2a serve` + the `a2a` tool | A2A (Agent2Agent 1.0.1): other agent harnesses call the planner (`/a2a`) or chosen agents (`/a2a/agents/<n>`) over JSON-RPC 1.0 / 0.3; agents call configured remote harnesses with the opt-in `a2a` tool | §2.19 |
 
 **Code layout (2026-09-23):** hexagonal — `src/domain/` (data) ← `src/ports/` (traits) ← `src/application/` (use cases) ← `src/adapters/{inbound,outbound}/`, wired by `src/bootstrap/`; enforced by `tests/layering_lint.rs`. Every file, extension recipe and dependency: `docs/code-map.md` / `docs/code-map.html`.
 
@@ -494,6 +495,20 @@ The trace is what Studio reads; the page draws what Rust computed (graph, colour
 | send-event | one scenario into the owned runtime's loop (429 when its queue is full) |
 | Where | `sandboxes/control-loop-lab` (`[studio] control = true`) or `--allow-control`; the editor (ST-40) is design only until Operator Review #3 (`docs/studio-editor-design-2026-10-08.md`) |
 
+### 2.19 A2A — agents talk to other agent harnesses (2026-10-10)
+
+Doc `docs/a2a-2026-10-10.md`; page `docs/tutorial/a2a.html`; example `sandboxes/a2a-lab`.
+
+| File | What it owns |
+|---|---|
+| `domain/a2a/` | `model.rs` (v1.0 JSON types; `AgentCard::endpoint` picks JSON-RPC 1.x / 0.3 or HTTP+JSON 1.x) · `rpc.rs` (methods of both dialects, errors −32001…−32009, `A2A-Version` negotiation) · `v03.rs` (0.3 ↔ v1.0) · `card.rs` (tengu's cards) · `render.rs` (text, ids whole) — pure |
+| `config/a2a.rs` | `[a2a.remotes.<name>]` (url / card URL, `endpoint_url`, `bearer_env` or `header` + `header_env`, limits) · `[a2a.server]` (bearer `token_env`, loopback-only `allow_unauthenticated`, `orchestrator`, `agents` with a `description`, limits) → `SandboxSections::a2a` |
+| `adapters/outbound/a2a/mod.rs` | the client: card → interface → host pin (only the remote's hosts) → JSON-RPC / HTTP+JSON call → `GetTask` polling; egress `peer_client` (proxied, loopback direct) + scope per request; audit `tool = "a2a"` |
+| `adapters/outbound/tools/a2a/` | opt-in tool `a2a`: `list` · `card` · `send` · `get` · `cancel` |
+| `ports/a2a.rs` · `application/a2a/` | `A2aRunner` · `A2aService` (every method; task per message, `max_running`, `run_timeout`, cancel aborts) + `tasks.rs` (in-memory store, context memory, `ListTasks` pages) |
+| `bootstrap/a2a.rs` | cards; `TurnRunner`: planner = one-shot orchestrator turn (session `a2a-<contextId>`), agent = one in-process turn with its tools; answers redacted |
+| `adapters/inbound/a2a.rs` · `cli/a2a.rs` | `tengu a2a serve` (axum, feature `a2a`, default): cards (v1 / 0.3), JSON-RPC, SSE, bearer auth · `tengu a2a cards\|remotes\|card\|send\|get\|cancel` |
+
 ---
 
 ## §3 — Stores: Open Brain, wiki, planner files, runtime + research state
@@ -626,6 +641,10 @@ The SOE stage agents never return a draft as text: `soe_propose` / `soe_challeng
 
 Studio's page owns no workflow, risk, scope or colour rule: the graph (`domain/workflow.rs`, layout included), each status's tone (`Status::tone`), a run's board at a `seq` and every control verdict come from Rust over the trace each run writes once. Play / Stop never reach a `[generation]`-bound or hardened sandbox.
 
+### T. A2A peers are named, pinned and served fail-closed (2026-10-10)
+
+An agent reaches another harness only through a remote the sandbox names, and only at that remote's own hosts — a card cannot send the request or the credential elsewhere. The server runs no turn without the bearer token (an open server only on loopback, never in a hardened sandbox) and never serves a private agent.
+
 **Workflow:**
 
 | To add | Edit | Rust? |
@@ -640,6 +659,7 @@ Studio's page owns no workflow, risk, scope or colour rule: the graph (`domain/w
 | Ranking | `lineage/rankings/<id>.toml` + `tengu lineage seal ranking:<id>` + `[strategy_ranking] contracts` (+ a `[feeds.*]` calling `strategy_ranking`) | no |
 | Source | a `[sources.registry.<id>]` row (`kind` = `sec_edgar` \| `ted_search`); a new kind is Rust | no |
 | Tool | `tools/<name>/mod.rs` + one `ToolEntry` row in `catalog()` (+ `WORKSPACE_TOOLS` if opt-in) + conformance case + matrix set | yes |
+| Another harness (A2A) | an `[a2a.remotes.<n>]` block + `a2a` in an agent's `tools` (+ `[default_scopes.a2a]`); to be called: `[a2a.server]` + `tengu a2a serve` | no |
 
 ---
 

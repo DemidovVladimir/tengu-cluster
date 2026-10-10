@@ -76,7 +76,7 @@ hmac = { version = "0.12", optional = true }
 curve25519-dalek = { version = "~4.1", default-features = false }
 
 [features]
-default = ["openrouter", "telegram", "studio"]
+default = ["openrouter", "telegram", "studio", "a2a"]
 telegram = ["teloxide", "dptree", "reqwest011"]
 openrouter = []
 postgres_memory = ["tokio-postgres"]
@@ -88,3 +88,8 @@ webhooks = ["axum", "hmac"]
 # image carry it); `--no-default-features` without `studio` leaves the server
 # out and `tengu studio --sandbox` says which flag to add.
 studio = ["axum"]
+# `tengu a2a serve --sandbox <s>`: the A2A server (`[a2a.server]`,
+# `adapters/inbound/a2a.rs`) — this sandbox's planner / agents served to
+# other agent harnesses. axum as for webhooks. On by default; the A2A client
+# (the `a2a` tool, `tengu a2a send`) needs no feature.
+a2a = ["axum"]

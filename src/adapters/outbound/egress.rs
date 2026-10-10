@@ -21,6 +21,7 @@
 //! | SEC EDGAR filings (`backfill/sec.rs`, `tengu history events`) | tool client + `check_url` + scope `net_hosts` (`www.sec.gov`, `data.sec.gov`) per request + `[rate_limits.sec]` + audit (`sec_edgar`); `User-Agent` = `$SEC_USER_AGENT` | enforced |
 //! | Source fetches (`outbound/sources/`, `tengu sources fetch`, O2) | SEC through `SecClient` (the row's hosts, budget, User-Agent variable); EU TED through `sources/ted.rs::TedClient` (anonymous `POST /v3/notices/search`): tool client + `check_url` + scope `net_hosts` = the row's `hosts` per request + the row's `[rate_limits.<name>]` + audit (`ted_search`) | enforced |
 //! | MCP `http` servers | proxy, loopback exempt | enforced |
+//! | A2A remotes (`outbound/a2a/`: the `a2a` tool, `tengu a2a card\|send\|get\|cancel`) | `peer_client` (proxy, loopback exempt — another harness on this host — no redirects) + `check_url` + the tool's scope `net_hosts` per request + only the configured remote's hosts (a card naming another is refused) + audit (`tool = "a2a"`) | enforced |
 //! | Telegram Bot API (`tengu telegram`) | teloxide client (reqwest 0.11) via HTTP CONNECT on the proxy port (`http_connect_proxy`), 30s/60s timeouts | enforced |
 //! | LLM API (OpenRouter chat, embeddings, wiki compiler) | proxy iff `route_llm_api` (default: on under Tor) | enforced |
 //! | `run_command` / shell skills | `guard_shell` URL check + audit; proxy env vars (loopback exempt); `shell_network = "isolated"` runs `sh` under macOS `sandbox-exec` — only the proxy port is reachable | isolated: kernel-enforced; `proxy_env`: advisory |
@@ -457,6 +458,18 @@ impl EgressPolicy {
             builder
         };
         builder.build().context("egress: build LLM API http client")
+    }
+
+    /// Client for operator-configured agent peers (A2A remotes,
+    /// `outbound/a2a/`): proxied, loopback exempt (another harness on this
+    /// host stays reachable under Tor), redirects NOT followed.
+    pub(crate) fn peer_client(&self, timeout: Duration) -> Result<reqwest::Client> {
+        let builder = reqwest::Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none());
+        self.apply_proxy(builder, true)?
+            .build()
+            .context("egress: build A2A peer http client")
     }
 
     /// Client for operator-configured MCP `http` servers. Proxied; loopback

@@ -2,6 +2,9 @@
 //! dispatch). Depends on `domain`, `ports`, `config`; never on `adapters` or
 //! `bootstrap` (see `tests/layering_lint.rs`).
 
+// The server half is used only with the `a2a` feature (`tengu a2a serve`).
+#[cfg_attr(not(feature = "a2a"), allow(dead_code))]
+pub(crate) mod a2a;
 pub(crate) mod backtest;
 pub(crate) mod chat;
 pub(crate) mod decision_loop;

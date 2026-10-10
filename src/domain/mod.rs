@@ -2,6 +2,9 @@
 //! crate except `domain` itself, and no IO crates (see
 //! `tests/layering_lint.rs`).
 
+// The server half is used only with the `a2a` feature (`tengu a2a serve`).
+#[cfg_attr(not(feature = "a2a"), allow(dead_code))]
+pub(crate) mod a2a;
 pub(crate) mod backoff;
 pub(crate) mod backtest;
 pub(crate) mod book;

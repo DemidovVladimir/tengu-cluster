@@ -33,6 +33,7 @@
 //! | `solana_decide` | `lp_swap_plan` + `lp_snapshot` → `hedge_decide` → `lp_decide` (all knobs, `commit` off: the decisions store nothing) | reserve-aware swap plan is callable; `lp_snapshot` stored a row; the answer quotes the snapshot's oracle price (`hedge_decide` `price_usd`, `lp_decide` `cycle_price`) |
 //! | `solana_write` | `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position` (a live position of `LP_OWNER`, else the stale fixture one), `jup_perps_order` — `mode = simulate` only: no signer, no wallet grant | every call ran (`ok`), the answer quotes `simulated`. Nothing is ever signed or sent |
 //! | `agentic_memory` | `agentic_memory` `capture` → `recall` — needs `--features postgres_memory` + `TENGU_MEMORY_DATABASE_URL`, else skipped | the answer holds the captured token |
+//! | `a2a` | `a2a` `list` → `card` → `send` to the remote `matrix` (`[a2a.remotes.matrix]` = `$TENGU_MATRIX_A2A_URL`, a loopback A2A agent: its card, then a `COMPLETED` task whose artifact holds a token) | the answer holds the remote's token; the mock served the card and a `SendMessage` |
 //!
 //! Every leg: exit 0, `status = ok`, every tool of the set in the `tools`
 //! activity and no run of it failed (but the `privy_off` refusals, which
@@ -52,7 +53,7 @@
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
-//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole), `offline_local_xlab_rank` (the ranking run and `latest`, each whole, rows weakest first), `offline_local_sources` (`source_evidence` before / after the change notice: the original stands, then `superseded … (correction)`; each text whole under the 16k cap, the buyer's name fenced), `offline_local_soe` (the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent) (no network; not ignored) | nothing |
+//! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole), `offline_local_xlab_rank` (the ranking run and `latest`, each whole, rows weakest first), `offline_local_sources` (`source_evidence` before / after the change notice: the original stands, then `superseded … (correction)`; each text whole under the 16k cap, the buyer's name fenced), `offline_local_soe` (the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent), `offline_local_a2a` (the card and the remote's answer reach the model whole) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
@@ -282,10 +283,11 @@ enum Set {
     SolanaDecide,
     SolanaWrite,
     AgenticMemory,
+    A2a,
 }
 
 impl Set {
-    const ALL: [Set; 18] = [
+    const ALL: [Set; 19] = [
         Set::Workspace,
         Set::Hyperliquid,
         Set::Xm,
@@ -304,6 +306,7 @@ impl Set {
         Set::SolanaDecide,
         Set::SolanaWrite,
         Set::AgenticMemory,
+        Set::A2a,
     ];
 
     fn name(self) -> &'static str {
@@ -326,6 +329,7 @@ impl Set {
             Set::SolanaDecide => "solana_decide",
             Set::SolanaWrite => "solana_write",
             Set::AgenticMemory => "agentic_memory",
+            Set::A2a => "a2a",
         }
     }
 
@@ -407,6 +411,7 @@ impl Set {
                 "jup_perps_order",
             ],
             Set::AgenticMemory => &["agentic_memory"],
+            Set::A2a => &["a2a"],
         }
     }
 
@@ -764,6 +769,19 @@ impl Set {
                 "the agentic token recall returned",
                 "",
             ),
+            Set::A2a => (
+                vec![
+                    call("a2a", json!({"action": "list"})),
+                    call("a2a", json!({"action": "card", "remote": "matrix"})),
+                    call(
+                        "a2a",
+                        json!({"action": "send", "remote": "matrix",
+                               "message": "Please send me the engine-matrix A2A token."}),
+                    ),
+                ],
+                "the token the remote agent answered with",
+                "",
+            ),
         };
         let steps: Vec<String> = steps
             .iter()
@@ -810,6 +828,7 @@ live_legs! {
     openrouter_gemini_solana_decide => GEMINI, Set::SolanaDecide;
     openrouter_gemini_solana_write => GEMINI, Set::SolanaWrite;
     openrouter_gemini_agentic_memory => GEMINI, Set::AgenticMemory;
+    openrouter_gemini_a2a => GEMINI, Set::A2a;
     openrouter_haiku_workspace => HAIKU, Set::Workspace;
     openrouter_haiku_hyperliquid => HAIKU, Set::Hyperliquid;
     openrouter_haiku_xm => HAIKU, Set::Xm;
@@ -828,6 +847,7 @@ live_legs! {
     openrouter_haiku_solana_decide => HAIKU, Set::SolanaDecide;
     openrouter_haiku_solana_write => HAIKU, Set::SolanaWrite;
     openrouter_haiku_agentic_memory => HAIKU, Set::AgenticMemory;
+    openrouter_haiku_a2a => HAIKU, Set::A2a;
     claude_code_workspace => CLAUDE, Set::Workspace;
     claude_code_hyperliquid => CLAUDE, Set::Hyperliquid;
     claude_code_xm => CLAUDE, Set::Xm;
@@ -846,6 +866,7 @@ live_legs! {
     claude_code_solana_decide => CLAUDE, Set::SolanaDecide;
     claude_code_solana_write => CLAUDE, Set::SolanaWrite;
     claude_code_agentic_memory => CLAUDE, Set::AgenticMemory;
+    claude_code_a2a => CLAUDE, Set::A2a;
     local_workspace => GEMMA, Set::Workspace;
     local_hyperliquid => GEMMA, Set::Hyperliquid;
     local_xm => GEMMA, Set::Xm;
@@ -864,6 +885,7 @@ live_legs! {
     local_solana_decide => GEMMA, Set::SolanaDecide;
     local_solana_write => GEMMA, Set::SolanaWrite;
     local_agentic_memory => GEMMA, Set::AgenticMemory;
+    local_a2a => GEMMA, Set::A2a;
 }
 
 fn live_leg(target: Target, set: Set) {
@@ -977,6 +999,7 @@ struct Workspace {
     resource_token: String,
     cache_token: String,
     http_token: String,
+    a2a_token: String,
 }
 
 fn workspace() -> Workspace {
@@ -1007,6 +1030,7 @@ fn workspace() -> Workspace {
         resource_token: token("resource"),
         cache_token: token("cache"),
         http_token: token("http"),
+        a2a_token: token("a2a"),
     }
 }
 
@@ -1061,10 +1085,76 @@ fn http_mock(token: &str) -> HttpMock {
     HttpMock { url, hits, stop }
 }
 
+/// The a2a set's remote: a loopback A2A agent. `GET` = its card (JSON-RPC
+/// 1.0 at its own URL), `POST` `SendMessage` / `GetTask` = a `COMPLETED`
+/// task whose artifact holds `token`; counts its requests.
+fn a2a_mock(token: &str) -> HttpMock {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let (hits, stop) = (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let (h, s) = (Arc::clone(&hits), Arc::clone(&stop));
+    let card = json!({
+        "name": "Engine-matrix peer", "description": "Answers with the engine-matrix A2A token.",
+        "version": "1.0.0",
+        "supportedInterfaces": [{"url": url.clone(), "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+        "capabilities": {}, "defaultInputModes": ["text/plain"], "defaultOutputModes": ["text/plain"],
+        "skills": [{"id": "token", "name": "Token", "description": "Answers with a token.", "tags": []}]
+    })
+    .to_string();
+    let task = json!({"id": "task-matrix-a2a", "contextId": "ctx-matrix-a2a",
+        "status": {"state": "TASK_STATE_COMPLETED"},
+        "artifacts": [{"artifactId": "art-matrix-a2a", "name": "answer",
+                       "parts": [{"text": format!("The engine-matrix A2A token is {token}.")}]}]});
+    std::thread::spawn(move || {
+        while !s.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut sock, _)) => {
+                    sock.set_nonblocking(false).ok();
+                    sock.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                    let mut head = [0u8; 4];
+                    let is_get = sock.peek(&mut head).is_ok_and(|n| &head[..n] == b"GET ");
+                    let body = if is_get {
+                        let mut buf = [0u8; 8_192];
+                        let _ = sock.read(&mut buf);
+                        card.clone()
+                    } else {
+                        let req: Value = serde_json::from_str(&read_request_body(&mut sock))
+                            .unwrap_or(Value::Null);
+                        let result = if req["method"] == "SendMessage" {
+                            json!({"task": task})
+                        } else {
+                            task.clone()
+                        };
+                        json!({"jsonrpc": "2.0", "id": req["id"], "result": result}).to_string()
+                    };
+                    h.fetch_add(1, Ordering::SeqCst);
+                    let _ = write!(
+                        sock,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    });
+    HttpMock { url, hits, stop }
+}
+
+/// `$TENGU_MATRIX_A2A_URL` of a leg without the a2a set's remote: the open
+/// fixtures' `[a2a.remotes.matrix]` needs a URL to load.
+const A2A_URL_UNUSED: &str = "http://127.0.0.1:9";
+
 /// What a set's leg needs besides the workspace tokens.
 struct Prep {
     /// The util set's endpoint.
     http: Option<HttpMock>,
+    /// The a2a set's remote (`TENGU_MATRIX_A2A_URL`).
+    a2a: Option<HttpMock>,
     /// The util set's hex input and its decimal value.
     hex: String,
     decimal: String,
@@ -1084,6 +1174,10 @@ impl Prep {
     fn http_url(&self) -> &str {
         self.http.as_ref().map_or("", |h| h.url.as_str())
     }
+
+    fn a2a_url(&self) -> &str {
+        self.a2a.as_ref().map_or(A2A_URL_UNUSED, |h| h.url.as_str())
+    }
 }
 
 /// The files, endpoint and live ids `set` needs (module table).
@@ -1091,6 +1185,7 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
     let n = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) >> 9;
     let mut prep = Prep {
         http: None,
+        a2a: None,
         hex: format!("{n:#x}"),
         decimal: n.to_string(),
         position: STALE_POSITION.to_string(),
@@ -1150,6 +1245,7 @@ fn prepare(target: Target, set: Set, ws: &Workspace, envs: &[(&str, String)]) ->
             );
         }
         Set::Util => prep.http = Some(http_mock(&ws.http_token)),
+        Set::A2a => prep.a2a = Some(a2a_mock(&ws.a2a_token)),
         Set::Privy => {
             prep.address = env_or_dotenv("PRIVY_WALLET_ADDRESS");
             prep.secrets.extend(
@@ -1290,6 +1386,7 @@ fn leg_command(target: Target, ws: &Workspace, envs: &[(&str, String)], args: &[
         .env("TENGU_MATRIX_WORKSPACE", &ws.path)
         .env("TENGU_MATRIX_FIXTURES", FIXTURES)
         .env("TENGU_MATRIX_MCP_VALUE", &ws.mcp_token)
+        .env("TENGU_MATRIX_A2A_URL", A2A_URL_UNUSED)
         .env("TENGU_SECRETS_LOADED", SECRET_VAR)
         .env(SECRET_VAR, &ws.secret)
         .env_remove("TENGU_EGRESS")
@@ -1325,7 +1422,9 @@ fn run_leg(
         .config
         .clone()
         .unwrap_or_else(|| fixture(set.fixture(target)));
-    cmd.env("TENGU_AGENT_IPC", "1").env("TENGU_CONFIG", config);
+    cmd.env("TENGU_AGENT_IPC", "1")
+        .env("TENGU_CONFIG", config)
+        .env("TENGU_MATRIX_A2A_URL", prep.a2a_url());
     let input = json!({
         "goal": set.goal(ws, prep),
         "agent_name": target.agent,
@@ -1360,12 +1459,9 @@ fn run_turn_leg(
         "--goal",
         &goal,
     ];
-    drive(
-        leg_command(target, ws, envs, &args),
-        None,
-        timeout,
-        target.label,
-    )
+    let mut cmd = leg_command(target, ws, envs, &args);
+    cmd.env("TENGU_MATRIX_A2A_URL", prep.a2a_url());
+    drive(cmd, None, timeout, target.label)
 }
 
 /// Spawn `cmd`, write `input` to its stdin, wait with a watchdog.
@@ -2032,6 +2128,17 @@ fn assert_leg(target: Target, set: Set, leg: &Leg, ws: &Workspace, prep: &Prep) 
             assert!(hits >= 1, "{label}: the loopback endpoint was never hit");
         }
         Set::PrivyOff => quotes("the refusal", "wallet"),
+        Set::A2a => {
+            quotes("the remote's token", &ws.a2a_token);
+            let hits = prep
+                .a2a
+                .as_ref()
+                .map_or(0, |h| h.hits.load(Ordering::SeqCst));
+            assert!(
+                hits >= 2,
+                "{label}: the A2A remote served {hits} requests (card + send expected)"
+            );
+        }
         Set::Privy => match &prep.address {
             Some(addr) => assert!(
                 answer.to_lowercase().contains(&addr.to_lowercase()),
@@ -3099,6 +3206,7 @@ fn fixtures_load_and_agree() {
                 .env("TENGU_MATRIX_WORKSPACE", &ws.path)
                 .env("TENGU_MATRIX_FIXTURES", FIXTURES)
                 .env("TENGU_MATRIX_MCP_VALUE", &ws.mcp_token)
+                .env("TENGU_MATRIX_A2A_URL", A2A_URL_UNUSED)
                 .env_remove("TENGU_CONFIG")
                 .env_remove("TENGU_EGRESS")
                 .env_remove("TENGU_SECRETS_LOADED")
@@ -3114,6 +3222,48 @@ fn fixtures_load_and_agree() {
             );
         }
     }
+}
+
+/// The a2a set on the local engine, scripted: the open fixture's
+/// `[a2a.remotes.matrix]` (the loopback A2A agent) and `[default_scopes.a2a]`
+/// load in the run-agent child; the card and the remote's answer (its
+/// token, the task and context ids whole) reach the model.
+#[test]
+fn offline_local_a2a() {
+    let ws = workspace();
+    let prep = prepare(MOCK, Set::A2a, &ws, &[]);
+    let (leg, bodies) = offline_leg(
+        Set::A2a,
+        &ws,
+        &prep,
+        vec![
+            tool_call_reply("c1", "a2a", &json!({"action": "list"})),
+            tool_call_reply("c2", "a2a", &json!({"action": "card", "remote": "matrix"})),
+            tool_call_reply(
+                "c3",
+                "a2a",
+                &json!({"action": "send", "remote": "matrix", "message": "token please"}),
+            ),
+            text_reply(&ws.a2a_token),
+        ],
+    );
+    assert_leg(MOCK, Set::A2a, &leg, &ws, &prep);
+    assert_eq!(bodies.len(), 4, "{}", leg.context());
+    let results = tool_messages(&bodies[3]);
+    assert!(
+        results[0].contains("- matrix  http://127.0.0.1:"),
+        "{results:?}"
+    );
+    assert!(
+        results[1].contains("a2a matrix: Engine-matrix peer v1.0.0"),
+        "{results:?}"
+    );
+    assert!(
+        results[2].contains(
+            "a2a matrix: task task-matrix-a2a TASK_STATE_COMPLETED context ctx-matrix-a2a"
+        ) && results[2].contains(&ws.a2a_token),
+        "{results:?}"
+    );
 }
 
 /// `x-engine-parity-audit`: every catalog tool (`tengu tool list`, this
