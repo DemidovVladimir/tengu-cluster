@@ -118,6 +118,20 @@ pub(super) async fn run_doctor(
                 ));
             }
         }
+        // Same for `codex` (`[agents.<a>.codex] cli_path`); the login is
+        // checked by a live turn (`--engines`).
+        if ac.engine == "codex" {
+            let cli = ac
+                .codex
+                .as_ref()
+                .map_or_else(|| "codex".to_string(), |c| c.cli_path.clone());
+            if find_executable(&cli, std::env::var_os("PATH")).is_none() {
+                println!("    {id}: Codex CLI `{cli}` not found");
+                failures.push(format!(
+                    "{id}: Codex CLI `{cli}` not found — install it (npm i -g @openai/codex), run `codex login`, or set [agents.{id}.codex] cli_path"
+                ));
+            }
+        }
     }
 
     doctor_egress(tor_check, &mut failures).await;

@@ -107,20 +107,8 @@ pub(crate) struct ClaudeCodeEngine {
     step: StepBridge,
 }
 
-/// A `run-agent` step's bridge options, written into the `--mcp-config` env
-/// (`adapters/outbound/bridge_env.rs`). Explicit, never inherited from the
-/// process env.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct StepBridge {
-    /// `TENGU_BRIDGE_GRANT_WORKSPACE=1`: every configured scope also gets
-    /// the workspace as an fs root — what the step's own executor does
-    /// (`bootstrap::tools::grant_workspace_root`).
-    pub grant_workspace: bool,
-    /// `TENGU_BRIDGE_SUMMARY_FILE`: the bridge serves `compress_and_store`
-    /// by writing the summary here; the step reads it back as its IPC
-    /// summary. `None` = the bridge refuses the call with the reason.
-    pub summary_file: Option<PathBuf>,
-}
+/// A `run-agent` step's bridge options (`adapters/outbound/bridge_env.rs`).
+pub(crate) use crate::adapters::outbound::bridge_env::StepBridge;
 
 impl ClaudeCodeEngine {
     pub fn new(
@@ -174,32 +162,7 @@ impl ClaudeCodeEngine {
     /// that one as `--system-prompt` (`run-agent`, `tengu tool turn`, the
     /// doctor and webhooks send it both ways).
     fn format_prompt(messages: &[Message], system_prompt: Option<&str>) -> String {
-        let mut parts = Vec::new();
-        let system_prompt = system_prompt.filter(|s| !s.trim().is_empty());
-
-        for msg in messages {
-            if matches!(msg.role, Role::System) && Some(msg.content.as_str()) == system_prompt {
-                continue;
-            }
-            match msg.role {
-                Role::User => {
-                    parts.push(format!("User: {}", msg.content));
-                }
-                Role::Assistant => {
-                    parts.push(format!("Assistant: {}", msg.content));
-                }
-                Role::Tool => {
-                    if let Some(ref id) = msg.tool_call_id {
-                        parts.push(format!("[Tool result for {}]: {}", id, msg.content));
-                    }
-                }
-                Role::System => {
-                    parts.push(msg.content.clone());
-                }
-            }
-        }
-
-        parts.join("\n\n")
+        super::cli_run::format_prompt(messages, system_prompt)
     }
 
     /// Build MCP config JSON for the tengu-tools bridge server. `transcript`:
@@ -213,89 +176,27 @@ impl ClaudeCodeEngine {
         mcp_servers: &[crate::config::McpServerConfig],
         transcript: Option<&Path>,
     ) -> serde_json::Value {
-        let tools_json = serde_json::to_string(bridge_tools).unwrap_or_else(|_| "[]".into());
-        // Per-tool scopes cross the process boundary as JSON — the bridge's
-        // fallback when it cannot resolve `bridge_agent` from the config.
-        let scopes_json = serde_json::to_string(&self.scopes).unwrap_or_else(|_| "{}".into());
-        let mut env = serde_json::json!({
-            "TENGU_BRIDGE_WORKSPACE": workspace.to_string_lossy(),
-            "TENGU_BRIDGE_TOOLS": tools_json,
-            "TENGU_BRIDGE_MAX_RESULT_CHARS": max_mcp_result_chars.to_string()
-        });
-        env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_SCOPES_ENV] =
-            serde_json::Value::String(scopes_json);
-        // Agent + config file: the bridge builds its tools from that
-        // `[agents.<id>]` block (sandbox sections, scopes, `no_shell`).
-        if let Some((agent, config)) = &self.bridge_agent {
-            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_AGENT_ENV] =
-                serde_json::Value::String(agent.clone());
-            env[crate::config::paths::TENGU_CONFIG_ENV] =
-                serde_json::Value::String(config.to_string_lossy().into_owned());
-        }
-        if self.step.grant_workspace {
-            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_GRANT_WORKSPACE_ENV] =
-                serde_json::Value::String("1".into());
-        }
-        if let Some(file) = &self.step.summary_file {
-            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_SUMMARY_FILE_ENV] =
-                serde_json::Value::String(file.to_string_lossy().into_owned());
-        }
-        if let Some(file) = transcript {
-            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_TRANSCRIPT_FILE_ENV] =
-                serde_json::Value::String(file.to_string_lossy().into_owned());
-        }
-        // The CLI merges this `env` over its own inherited env (verified with
-        // CLI 2.1.285, `docs/mcp-bridge.md` § Env), so the bridge inherits
-        // this process's env — vault secrets, `OPENROUTER_API_KEY` and the
-        // vars `[[mcp_servers]]` `$VAR` references name. No secret value is
-        // written into this file (it sits on disk for the whole run).
-        //
-        // External `[[mcp_servers]]` with a `{server}__{tool}` entry in
-        // `bridge_tools`: their NAMES only — the bridge takes each server
-        // from the config it loads (`TENGU_CONFIG`, `Config::load`: `${VAR}`
-        // expanded there, from the same inherited env), reconnects and
-        // proxies the calls under its egress policy, resolving `$VAR`
-        // references from that env. A `${VAR}` value `Config::load` already
-        // expanded here never reaches the file.
-        use crate::adapters::outbound::mcp_client::is_server_tool;
-        let servers: Vec<&str> = mcp_servers
-            .iter()
-            .filter(|s| {
-                bridge_tools
-                    .iter()
-                    .any(|t| is_server_tool(&s.name, &t.name))
-            })
-            .map(|s| s.name.as_str())
-            .collect();
-        if !servers.is_empty() {
-            env[crate::adapters::outbound::bridge_env::TENGU_BRIDGE_MCP_SERVERS_ENV] =
-                serde_json::Value::String(
-                    serde_json::to_string(&servers).unwrap_or_else(|_| "[]".into()),
-                );
-        }
-        // The bridge runs the tools — it must apply the parent's egress policy.
-        env[crate::adapters::outbound::egress::EGRESS_ENV] =
-            serde_json::Value::String(crate::adapters::outbound::egress::policy().child_env());
-        // Forward persistent store chunk config if set in the parent process.
-        if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_SIZE") {
-            env["TENGU_PERSISTENT_STORE_CHUNK_SIZE"] = serde_json::Value::String(v);
-        }
-        if let Ok(v) = std::env::var("TENGU_PERSISTENT_STORE_CHUNK_OVERLAP") {
-            env["TENGU_PERSISTENT_STORE_CHUNK_OVERLAP"] = serde_json::Value::String(v);
-        }
-        // Phase 7.6 — session id, so `agentic_memory` `capture` in the
-        // bridge stamps `session_id` on Open Brain writes when the LLM omits it.
-        if let Ok(v) = std::env::var("TENGU_SESSION_ID") {
-            env["TENGU_SESSION_ID"] = serde_json::Value::String(v);
-        }
-        // The names of the vault vars (names only): the bridge registers
-        // their values for redaction, and a `tengu` run by a bridge tool
-        // (`run_command`) does not re-prompt for the vault password on the
-        // terminal the TUI owns.
-        let loaded = crate::adapters::outbound::secrets::SECRETS_LOADED_ENV;
-        if let Ok(v) = std::env::var(loaded) {
-            env[loaded] = serde_json::Value::String(v);
-        }
+        // No secret value is written into this file (it sits on disk for
+        // the whole run): the CLI merges this `env` over its own inherited
+        // env (verified with CLI 2.1.285, `docs/mcp-bridge.md` § Env), so the
+        // bridge inherits this process's env — vault secrets,
+        // `OPENROUTER_API_KEY` and the vars `[[mcp_servers]]` `$VAR`
+        // references name (`bridge_env::bridge_env`).
+        let env = crate::adapters::outbound::bridge_env::bridge_env(
+            &crate::adapters::outbound::bridge_env::BridgeRun {
+                workspace,
+                tools: bridge_tools,
+                max_result_chars: max_mcp_result_chars,
+                scopes: &self.scopes,
+                agent: self
+                    .bridge_agent
+                    .as_ref()
+                    .map(|(agent, config)| (agent.as_str(), config.as_path())),
+                step: &self.step,
+                transcript,
+                mcp_servers,
+            },
+        );
         serde_json::json!({
             "mcpServers": {
                 "tengu-tools": {
@@ -326,27 +227,6 @@ const KEPT_CLAUDE_CODE_ENV: &[&str] = &[
 /// | Removed | Kept |
 /// |---|---|
 /// | `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, every `CLAUDE_CODE_*` | [`KEPT_CLAUDE_CODE_ENV`], `CLAUDE_CODE_USE_*` / `CLAUDE_CODE_SKIP_*_AUTH` (provider), `PATH`, `HOME`, `CLAUDE_CONFIG_DIR`, the egress proxy env; `ANTHROPIC_API_KEY` is removed separately (subscription) |
-/// The CLI's working directory for one run: the configured workspace (`~`
-/// expanded), else — when Tengu bridge tools are offered — a temp dir for
-/// this run (returned so the caller keeps it alive), as a `run-agent` step
-/// without a workspace gets one. Without either the bridge is not written,
-/// so a chat agent with no `workspace` had no Tengu tools.
-fn run_workspace(
-    configured: Option<&std::path::Path>,
-    has_bridge: bool,
-) -> std::io::Result<(Option<PathBuf>, Option<tempfile::TempDir>)> {
-    if let Some(ws) = configured {
-        return Ok((Some(crate::config::paths::expand_tilde(ws)), None));
-    }
-    if !has_bridge {
-        return Ok((None, None));
-    }
-    let dir = tempfile::Builder::new().prefix("tengu-claude-").tempdir()?;
-    // Canonical: scope checks compare resolved paths (macOS /var → /private/var).
-    let path = std::fs::canonicalize(dir.path())?;
-    Ok((Some(path), Some(dir)))
-}
-
 fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
     names
         .into_iter()
@@ -435,57 +315,13 @@ fn tengu_tool_name(cli_name: &str) -> &str {
         .unwrap_or(cli_name)
 }
 
-/// The conversation a bridged tool sees (`ToolCtx.conversation` — what
-/// `skill_distill` seeds fixtures from), kept for the bridge in a temp file
-/// (`TENGU_BRIDGE_TRANSCRIPT_FILE`; mode 0600, removed when the run ends):
-/// the messages this run was given — what an in-process engine's tools see —
-/// then each streamed assistant message (text, `tool_use` → `tool_calls`
-/// under the tengu name) and `tool_result` (→ a tool message). Rewritten
-/// after every line that changes it, atomically (a sibling file renamed
-/// over it): the bridge reads it per call and never sees half a write.
-struct Transcript {
-    path: tempfile::TempPath,
-    messages: Vec<Message>,
-    /// Index of the first streamed message: a streamed assistant line
-    /// merges into a streamed assistant message only.
-    streamed_from: usize,
-}
+use super::cli_run::Transcript;
 
 impl Transcript {
-    fn create(messages: &[Message]) -> Result<Self> {
-        let path = tempfile::Builder::new()
-            .prefix("tengu-transcript-")
-            .tempfile()?
-            .into_temp_path();
-        let transcript = Self {
-            path,
-            messages: messages.to_vec(),
-            streamed_from: messages.len(),
-        };
-        transcript.write()?;
-        Ok(transcript)
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// One NDJSON line of the run; rewrites the file when it changed the
-    /// conversation. A failed write leaves the last one (warned).
+    /// One NDJSON line of the run ([`absorb_ndjson`]); rewrites the
+    /// bridge's file when it changed the conversation.
     fn absorb(&mut self, line: &str) {
-        if absorb_ndjson(&mut self.messages, self.streamed_from, line) {
-            if let Err(e) = self.write() {
-                warn!(error = %e, file = %self.path.display(), "Claude Code: transcript for the bridge not updated");
-            }
-        }
-    }
-
-    fn write(&self) -> Result<()> {
-        let dir = self.path.parent().unwrap_or_else(|| Path::new("."));
-        let mut next = tempfile::NamedTempFile::new_in(dir)?;
-        serde_json::to_writer(&mut next, &self.messages)?;
-        next.persist(&*self.path)?;
-        Ok(())
+        self.update(|messages, streamed_from| absorb_ndjson(messages, streamed_from, line));
     }
 }
 
@@ -949,11 +785,15 @@ impl Engine for ClaudeCodeEngine {
         }
 
         let has_bridge = context.bridge_tools.as_ref().is_some_and(|t| !t.is_empty());
-        let (workspace, temp_workspace) =
-            run_workspace(context.workspace.as_deref(), has_bridge).unwrap_or_else(|e| {
-                warn!(error = %e, "Claude Code: no temp workspace — Tengu tools unavailable this run");
-                (None, None)
-            });
+        let (workspace, temp_workspace) = super::cli_run::run_workspace(
+            context.workspace.as_deref(),
+            has_bridge,
+            "tengu-claude-",
+        )
+        .unwrap_or_else(|e| {
+            warn!(error = %e, "Claude Code: no temp workspace — Tengu tools unavailable this run");
+            (None, None)
+        });
 
         // Build subprocess command (arguments: `cli_args`, after the bridge
         // config is written)
@@ -1211,11 +1051,21 @@ mod tests {
     /// dir for the run when the bridge has tools, nothing otherwise.
     #[test]
     fn run_workspace_falls_back_to_a_temp_dir_for_the_bridge() {
-        let (ws, keep) = run_workspace(Some(std::path::Path::new("/srv/ws")), true).unwrap();
+        let (ws, keep) = super::super::cli_run::run_workspace(
+            Some(std::path::Path::new("/srv/ws")),
+            true,
+            "tengu-claude-",
+        )
+        .unwrap();
         assert_eq!(ws, Some(PathBuf::from("/srv/ws")));
         assert!(keep.is_none());
-        assert_eq!(run_workspace(None, false).unwrap().0, None);
-        let (ws, keep) = run_workspace(None, true).unwrap();
+        assert_eq!(
+            super::super::cli_run::run_workspace(None, false, "tengu-claude-")
+                .unwrap()
+                .0,
+            None
+        );
+        let (ws, keep) = super::super::cli_run::run_workspace(None, true, "tengu-claude-").unwrap();
         let ws = ws.expect("temp workspace");
         assert!(ws.is_dir());
         drop(keep);

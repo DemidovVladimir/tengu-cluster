@@ -815,6 +815,24 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.editor.limits]
 # max_tokens_per_flow = 5_000_000
 
+# --- Codex Backend (OpenAI, ChatGPT subscription) ---
+# Run agents on your ChatGPT subscription through the OpenAI Codex CLI
+# (feature `codex`, on by default). Requires: `npm i -g @openai/codex` and
+# `codex login` (ChatGPT). Tengu tools reach Codex through `tengu mcp-bridge`;
+# your ~/.codex/config.toml (MCP servers, profiles, hooks) is not loaded, and
+# Codex's web search, apps, plugins and browser / computer use are off.
+# Refused in a hardened sandbox ([risk], [soe], a Solana signer).
+# See docs/engine-backends.md § Codex.
+#
+# [agents.coder]
+# engine = "codex"
+# model = "gpt-5.5"                         # bare OpenAI model id the CLI accepts
+# workspace = "~/projects/my-app"
+#
+# [agents.coder.codex]
+# sandbox = "read-only"                     # read-only | workspace-write (Codex's own shell / patch tool; never network)
+# cli_path = "codex"                        # default: `codex` on PATH
+
 # --- Network egress (Tor by default, host allowlist, audit) ---
 # Code-enforced policy for every request tengu makes. docs/egress-2026-09-16.md
 # Tor proxy:  make tor   (Arti + lyrebird-rs over obfs4/snowflake bridges, 127.0.0.1:9050)

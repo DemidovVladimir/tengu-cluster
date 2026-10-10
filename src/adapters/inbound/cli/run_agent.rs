@@ -279,10 +279,10 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
     crate::bootstrap::tools::grant_workspace_root(&mut agent_cfg_for_engine.scopes, &workspace);
-    // A Claude Code step's bridge serves `compress_and_store` into this file
-    // (the loop below intercepts it for the other engines); read back after
-    // the turn. Removed when this process ends.
-    let summary_file = if spec.engine == "claude_code" {
+    // A CLI step's bridge (Claude Code, Codex) serves `compress_and_store`
+    // into this file (the loop below intercepts it for the other engines);
+    // read back after the turn. Removed when this process ends.
+    let summary_file = if crate::adapters::outbound::engines::bridges_tools(&spec.engine) {
         Some(tempfile::NamedTempFile::new().context("run-agent: step summary file")?)
     } else {
         None
@@ -424,8 +424,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // OpenRouter path leaves bridge_tools = None (the ToolDef list is
     // registered through the OpenAI-compatible function-calling API
     // instead, handled by `tools` passed to run_single_engine_turn).
+    // Codex reaches them the same way (`engines::bridges_tools`).
     let bridge_tools_for_ctx: Option<Vec<crate::domain::message::ToolDef>> =
-        if spec.engine == "claude_code" {
+        if crate::adapters::outbound::engines::bridges_tools(&spec.engine) {
             Some(tools.clone())
         } else {
             None

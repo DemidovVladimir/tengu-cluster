@@ -3,6 +3,10 @@
 
 #[cfg(feature = "claude_code")]
 pub(crate) mod claude_code;
+#[cfg(any(feature = "claude_code", feature = "codex"))]
+pub(crate) mod cli_run;
+#[cfg(feature = "codex")]
+pub(crate) mod codex;
 pub(crate) mod local;
 pub(crate) mod openrouter;
 
@@ -16,6 +20,14 @@ use openrouter::OpenRouterEngine;
 // ---------------------------------------------------------------------------
 // Factory — build engines from config
 // ---------------------------------------------------------------------------
+
+/// Engines whose CLI runs its own tool loop and reaches tengu tools through
+/// `tengu mcp-bridge` (`claude_code`, `codex`): a `run-agent` step hands
+/// them its tools as `EngineContext.bridge_tools` and a summary file the
+/// bridge serves `compress_and_store` into.
+pub(crate) fn bridges_tools(engine: &str) -> bool {
+    matches!(engine.trim(), "claude_code" | "codex")
+}
 
 /// Build a lightweight engine for the planner/classifier from explicit engine + model strings.
 #[allow(dead_code)]
@@ -66,12 +78,12 @@ pub(crate) fn build_planner_engine(
     }
 }
 
-/// What a caller asks of a Claude Code engine's bridge beyond the defaults:
-/// a `run-agent` step's workspace grant and `compress_and_store` summary
-/// file (`claude_code::StepBridge`), and the config file the bridge loads.
-/// Ignored by the other engines.
+/// What a caller asks of a CLI engine's bridge (Claude Code, Codex) beyond
+/// the defaults: a `run-agent` step's workspace grant and
+/// `compress_and_store` summary file (`bridge_env::StepBridge`), and the
+/// config file the bridge loads. Ignored by the other engines.
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(not(feature = "claude_code"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "claude_code", feature = "codex")), allow(dead_code))]
 pub(crate) struct StepOpts {
     pub grant_workspace: bool,
     pub summary_file: Option<std::path::PathBuf>,
@@ -151,7 +163,7 @@ pub(crate) fn build_step_engine(
                     .with_scopes(agent_config.scopes.clone())
                     .with_bridge_agent(agent_id, &config_file)
                     .with_step_bridge(
-                        crate::adapters::outbound::engines::claude_code::StepBridge {
+                        crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,
                             summary_file: step.summary_file,
                         },
@@ -162,6 +174,45 @@ pub(crate) fn build_step_engine(
             {
                 let _ = (agent_id, claude_code_config, step);
                 anyhow::bail!("claude_code engine requires --features claude_code")
+            }
+        }
+        "codex" => {
+            #[cfg(feature = "codex")]
+            {
+                use crate::adapters::outbound::engines::codex::{CodexEngine, CodexSandbox};
+                let cx = agent_config.codex.clone().unwrap_or_default();
+                let sandbox = CodexSandbox::parse(&cx.sandbox).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "agents.{agent_id}.codex.sandbox: unknown value '{}' (read-only | workspace-write)",
+                        cx.sandbox
+                    )
+                })?;
+                // The bridge loads `[agents.<agent_id>]` of this file, as
+                // for Claude Code.
+                let config_file = step
+                    .config_file
+                    .unwrap_or_else(crate::config::paths::default_config_path);
+                Ok(Box::new(
+                    CodexEngine::new(
+                        std::path::PathBuf::from(&cx.cli_path),
+                        sandbox,
+                        agent_config.model.clone(),
+                        agent_config.limits.stream_event_timeout_secs,
+                    )
+                    .with_scopes(agent_config.scopes.clone())
+                    .with_bridge_agent(agent_id, &config_file)
+                    .with_step_bridge(
+                        crate::adapters::outbound::bridge_env::StepBridge {
+                            grant_workspace: step.grant_workspace,
+                            summary_file: step.summary_file,
+                        },
+                    ),
+                ))
+            }
+            #[cfg(not(feature = "codex"))]
+            {
+                let _ = (agent_id, step);
+                anyhow::bail!("codex engine requires --features codex")
             }
         }
         "local" => Ok(Box::new(LocalEngine::new(

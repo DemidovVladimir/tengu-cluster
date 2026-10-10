@@ -1,6 +1,6 @@
 # Engine Backends
 
-Tengu supports three engine backends (`openrouter`, `local`, `claude_code`). Each `[agents.<name>]` block selects its backend via `engine = "..."` in [[configuration]]; the planner runs on the `[orchestrator] agent`'s engine, subagents on their own block's engine (`run-agent` reads the same block). Backends are plug-and-play — switching an agent between backends requires only a config change. All LLM traffic follows `[egress]` (`docs/egress-2026-09-16.md`): Tor by default, `network = "open"` for direct.
+Tengu supports four engine backends (`openrouter`, `local`, `claude_code`, `codex`). Each `[agents.<name>]` block selects its backend via `engine = "..."` in [[configuration]]; the planner runs on the `[orchestrator] agent`'s engine, subagents on their own block's engine (`run-agent` reads the same block). Backends are plug-and-play — switching an agent between backends requires only a config change. All LLM traffic follows `[egress]` (`docs/egress-2026-09-16.md`): Tor by default, `network = "open"` for direct.
 
 ## OpenRouter (`engine = "openrouter"`)
 
@@ -173,9 +173,44 @@ Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, w
 
 See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skills) are exposed to Claude.
 
+## Codex (`engine = "codex"`)
+
+**Transport:** the OpenAI Codex CLI as a subprocess, `codex exec --json` (JSONL events on stdout, the prompt on stdin)
+**Billing:** the operator's ChatGPT subscription (`codex login` → "Logged in using ChatGPT"); the engine removes `OPENAI_API_KEY` / `CODEX_API_KEY` from the CLI's env so an API key never bills instead
+**Feature flag:** `codex` (on by default)
+**File:** `src/adapters/outbound/engines/codex.rs` (shared with Claude Code: `engines/cli_run.rs`, `outbound/bridge_env.rs`)
+
+| Setup | |
+|---|---|
+| Install + log in | `npm i -g @openai/codex` · `codex login` (ChatGPT) · `codex login status` |
+| Model | bare OpenAI id the CLI accepts — `gpt-5.5`, `gpt-5.6-sol`, `gpt-6-sol`, `gpt-6.1-sol` (the CLI's list: `~/.codex/models_cache.json`) |
+| Agent block | `engine = "codex"`, `model = "gpt-5.5"`; optional `[agents.<a>.codex] sandbox = "read-only"` (default) \| `"workspace-write"`, `cli_path = "codex"` |
+| Check | `tengu doctor` (CLI on `PATH`), `tengu doctor --engines` (a live smoke turn), `tengu tool turn --sandbox <s> --agent <a> --goal "…"` |
+
+### How it works
+
+| `codex exec` arg | Why |
+|---|---|
+| `--json` | events: `item.started` / `item.completed` (`agent_message` → text, `reasoning` → thinking, `mcp_tool_call` / `command_execution` / `file_change` → `ToolRan`), `turn.completed` (usage), `turn.failed` (error) |
+| `--ignore-user-config` `--ignore-rules` `--ephemeral` `--skip-git-repo-check` | no `~/.codex/config.toml` (your MCP servers, profiles, hooks, notify) and no execpolicy rules; no session files; any workspace — the ChatGPT login still works |
+| `-s <sandbox>` `-c approval_policy="never"` | Codex's own shell / patch tool: read-only (default) or workspace-write, never network, never asks |
+| `-c web_search="disabled"` + `-c features.<f>=false` (apps, plugins, browser / computer use, image generation, multi-agent, goals, memories, hooks, …) | Codex integrations that run outside tengu scopes and egress are off; a `features.*` name the installed CLI lacks is ignored |
+| `-c developer_instructions=…` | the system prompt, once |
+| `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec=30,tool_timeout_sec=600}` | tengu tools through `tengu mcp-bridge` — the same env contract as Claude Code ([[mcp-bridge]]); Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES of the run's env (no value on the command line); bridged calls are pre-approved (tengu scopes gate them in the bridge) |
+
+| Run | Handling |
+|---|---|
+| `run-agent` step | `bridge_tools` + workspace grant + the summary file the bridge serves `compress_and_store` into (`engines::bridges_tools`); a stored summary ends the CLI run |
+| `max_tool_rounds` | counts tool calls (MCP + built-in) of the run |
+| failure | `turn.failed`, or a non-zero exit with no answer → an error naming the CLI's reason (last `error` event, else stderr) |
+| `[egress]` | the CLI's own API traffic gets `HTTPS_PROXY` (HTTP CONNECT on the proxy port) when `route_llm_api`; its shell has no network in either sandbox mode |
+| Hardened sandbox (`[risk]`, `[soe]`, a Solana signer) | refused at load (`config/hardening.rs`): the built-in shell cannot be switched off for good and ignores tengu scopes — use `claude_code` with `builtin_tools_profile = "none"`, `openrouter` or `local` there |
+
+Verified live 2026-10-10 (codex-cli 0.153.4, `gpt-5.5`): `tengu tool turn` on a `read-only` codex agent called `list_directory` then `read_file` through the bridge and answered with the token (`status = ok`, 30 125 prompt / 128 completion tokens).
+
 ## Engine matrix (`x-engine-matrix-smoke`)
 
-One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Every catalog tool, a shell skill and an `[[mcp_servers]]` proxy sit in a set — `every_catalog_tool_has_a_live_leg` fails CI for a catalog tool in no set. Two fixture families, each `{openrouter,claude_code,local}.toml` with identical sections but `[agents.*]`: `tests/fixtures/engine_matrix/` (hardened: `[risk]` + `[xmarket]` + `[paper]` + `[backtest]` + `[sources]`) and `tests/fixtures/engine_matrix/open/` (memory on, a shell, the `matrix` `[[mcp_servers]]` server `token_mcp_server.sh`, no signer). Sets run through `tengu run-agent` on the routable agent of each engine × model (the set via IPC `compose`, the shell skill via `compose.skills`); configured scopes exclude the workspace, so calls also prove the `run-agent` workspace grant (the bridge's for Claude Code). The xm set holds exec tools, which only a private agent may hold (no `description`) and `run-agent` never runs — it runs through the hidden `tengu tool turn` (one in-process engine turn as any agent, the `@<agent>` chat path, `chat:` call ids; Claude Code through its bridge) on the private `xm_*` agent, with scopes naming the workspace. A leg passes when every tool of the set ran without error (`tools` activity; `privy_off` must be refused), no `compress_and_store` failed, no registered secret reached the output, and the results reached the answer.
+One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Every catalog tool, a shell skill and an `[[mcp_servers]]` proxy sit in a set — `every_catalog_tool_has_a_live_leg` fails CI for a catalog tool in no set. Two fixture families, each `{openrouter,claude_code,local}.toml` (the open one also `codex.toml`: codex has no hardened fixture — refused there) with identical sections but `[agents.*]`: `tests/fixtures/engine_matrix/` (hardened: `[risk]` + `[xmarket]` + `[paper]` + `[backtest]` + `[sources]`) and `tests/fixtures/engine_matrix/open/` (memory on, a shell, the `matrix` `[[mcp_servers]]` server `token_mcp_server.sh`, no signer). Sets run through `tengu run-agent` on the routable agent of each engine × model (the set via IPC `compose`, the shell skill via `compose.skills`); configured scopes exclude the workspace, so calls also prove the `run-agent` workspace grant (the bridge's for Claude Code). The xm set holds exec tools, which only a private agent may hold (no `description`) and `run-agent` never runs — it runs through the hidden `tengu tool turn` (one in-process engine turn as any agent, the `@<agent>` chat path, `chat:` call ids; Claude Code through its bridge) on the private `xm_*` agent, with scopes naming the workspace. A leg passes when every tool of the set ran without error (`tools` activity; `privy_off` must be refused), no `compress_and_store` failed, no registered secret reached the output, and the results reached the answer.
 
 | Tool set (fixture) | Calls | Result read = |
 |---|---|---|
@@ -250,11 +285,11 @@ Local leg — the operator's Windows PC over the LAN:
 To add a new engine backend:
 
 1. Create `src/adapters/outbound/engines/<name>.rs` implementing the `Engine` trait (`src/ports/engine.rs`)
-2. Optional: a feature flag in `Cargo.toml` (as `claude_code`)
+2. Optional: a feature flag in `Cargo.toml` (as `claude_code`, `codex`)
 3. Declare the module in `src/adapters/outbound/engines/mod.rs`; gate its construction with `#[cfg(feature = …)]` if 2
 4. Add a match arm in `engines/mod.rs` `build_step_engine()` — `build_engine()` delegates to it (the planner uses the `[orchestrator] agent`'s engine; `build_planner_engine()` is dead code)
-5. Add the engine name to config validation in `src/config/mod.rs` `validate_agent()`
-6. If the engine manages its own workspace, set `manages_own_workspace() = true` and use `bridge_tools` from `EngineContext`
+5. Add the engine name to `config::ENGINES` in `src/config/mod.rs` (validation reads it)
+6. If the engine manages its own workspace, set `manages_own_workspace() = true` and use `bridge_tools` from `EngineContext`; a CLI that runs its own loop through the bridge also joins `engines::bridges_tools` (run-agent hands it the tools + summary file) and reuses `bridge_env::bridge_env` / `engines/cli_run.rs`
 7. Build its HTTP client with `egress::policy().llm_api_client` (or pass `claude_cli_env()` to a subprocess) — a bare `reqwest::Client` bypasses `[egress]`
 8. Engine matrix: a fixture under `tests/fixtures/engine_matrix/` + its legs in `tests/engine_matrix.rs` (§ Engine matrix); an engine that runs tools itself emits `StreamEvent::ToolRan` per call
 
