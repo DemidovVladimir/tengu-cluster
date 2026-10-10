@@ -422,6 +422,10 @@ fn default_debounce_ms() -> u64 {
     300
 }
 
+/// Every `[agents.<a>] engine` value (`engines::build_engine` builds each;
+/// the Studio builder palette describes each, `config/builder.rs`).
+pub(crate) const ENGINES: &[&str] = &["openrouter", "claude_code", "local"];
+
 /// Per-agent runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// One block = one agent: in-process (planner, `@role:` chat) and, when it
@@ -1503,7 +1507,7 @@ impl Config {
         errors.require_one_of(
             &format!("agents.{agent_id}.engine"),
             &agent.engine,
-            &["openrouter", "claude_code", "local"],
+            ENGINES,
         );
         errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
         // Read trimmed everywhere (`BuiltinToolsProfile::parse`, the
