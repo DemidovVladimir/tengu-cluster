@@ -2108,6 +2108,7 @@
       if (s.how) {
         how.appendChild(el("code", s.how));
         how.appendChild(copyBtn(s.how));
+        if (s.note) how.appendChild(el("div", `stored in ${s.note}`, "muted"));
       }
       tr.appendChild(how);
       tb.appendChild(tr);
@@ -2411,7 +2412,10 @@
     } else setSaveInd("saved");
     drawPalette();
     drawAll();
-    const hadView = Boolean(d.blueprint && d.blueprint.view);
+    // Rust always sends a view; the untouched default (0, 0, 100 %) means
+    // "never placed" — fit the cards instead.
+    const v0 = d.blueprint && d.blueprint.view;
+    const hadView = Boolean(v0 && !(v0.x === 0 && v0.y === 0 && v0.zoom === 1));
     requestAnimationFrame(() => {
       if (hadView) applyView();
       else fit();

@@ -68,8 +68,8 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
                 node(
                     "n-agent-assistant",
                     "agent",
-                    380.0,
-                    200.0,
+                    420.0,
+                    160.0,
                     agent("assistant", true, "You are a helpful assistant. Answer briefly."),
                 ),
             ],
@@ -80,19 +80,19 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
             (
                 vec![
                     sb,
-                    node("n-orchestrator", "orchestrator", 60.0, 300.0, json!({})),
+                    node("n-orchestrator", "orchestrator", 40.0, 260.0, json!({})),
                     node(
                         "n-agent-planner",
                         "agent",
-                        360.0,
-                        300.0,
+                        400.0,
+                        260.0,
                         agent("planner", true, "Plan the work and hand each step to the best agent."),
                     ),
                     node(
                         "n-agent-researcher",
                         "agent",
-                        700.0,
-                        180.0,
+                        780.0,
+                        100.0,
                         {
                             let mut a = agent("researcher", false, "Find facts on the web and cite them.");
                             a["description"] = json!("Looks things up on the web (http_request) and reports facts with sources. Not for writing files.");
@@ -102,7 +102,7 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
                     node(
                         "n-agent-writer",
                         "agent",
-                        700.0,
+                        780.0,
                         440.0,
                         {
                             let mut a = agent("writer", false, "Write clear documents into the workspace.");
@@ -113,22 +113,22 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
                     node(
                         "n-tool-http",
                         "tool",
-                        1040.0,
-                        140.0,
+                        1160.0,
+                        100.0,
                         json!({ "tool": "http_request", "restrict": false }),
                     ),
                     node(
                         "n-workspace",
                         "workspace",
-                        1040.0,
-                        460.0,
+                        1160.0,
+                        440.0,
                         json!({ "path": ws, "confine": true }),
                     ),
                     node(
                         "n-secret-openrouter",
                         "secret",
-                        60.0,
-                        520.0,
+                        40.0,
+                        500.0,
                         json!({ "env": "OPENROUTER_API_KEY", "backend": "vault" }),
                     ),
                 ],
@@ -145,26 +145,26 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
         "telegram" => (
             vec![
                 sb,
-                node("n-telegram", "telegram", 60.0, 260.0, json!({ "allowed_users": [] })),
+                node("n-telegram", "telegram", 40.0, 260.0, json!({ "allowed_users": [] })),
                 node(
                     "n-agent-assistant",
                     "agent",
-                    400.0,
-                    260.0,
+                    420.0,
+                    320.0,
                     agent("assistant", false, "You are a helpful assistant on Telegram. Answer briefly."),
                 ),
                 node(
                     "n-secret-bot",
                     "secret",
-                    60.0,
-                    460.0,
+                    40.0,
+                    440.0,
                     json!({ "env": "TELEGRAM_BOT_TOKEN", "backend": "vault" }),
                 ),
                 node(
                     "n-secret-openrouter",
                     "secret",
-                    60.0,
-                    600.0,
+                    40.0,
+                    620.0,
                     json!({ "env": "OPENROUTER_API_KEY", "backend": "vault" }),
                 ),
             ],

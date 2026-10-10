@@ -335,7 +335,6 @@ pub(crate) fn engines() -> Vec<EngineSpec> {
             label: "OpenRouter API",
             models: vec![
                 "anthropic/claude-sonnet-4-6",
-                "anthropic/claude-opus-4-1",
                 "openai/gpt-5",
                 "google/gemini-2.5-flash-lite",
             ],
@@ -369,7 +368,7 @@ pub(crate) fn engines() -> Vec<EngineSpec> {
         all.push(EngineSpec {
             id: "codex",
             label: "OpenAI (ChatGPT subscription · Codex CLI)",
-            models: vec!["gpt-5-codex", "gpt-5"],
+            models: vec!["gpt-5.5", "gpt-5.6-sol", "gpt-6-sol", "gpt-6.1-sol"],
             key_env: None,
             note: "Runs the `codex` CLI signed in with your ChatGPT plan (`codex login`); tengu tools \
                    reach it through `tengu mcp-bridge`. Never the planner.",
