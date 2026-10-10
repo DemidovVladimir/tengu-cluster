@@ -3,6 +3,7 @@
 //! `tests/layering_lint.rs`).
 
 pub(crate) mod backtest;
+pub(crate) mod builder;
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
 pub(crate) mod execution_map;

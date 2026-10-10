@@ -10,6 +10,7 @@ mod lineage;
 mod ranking;
 mod risk;
 mod run_agent;
+mod sandbox;
 mod skill;
 mod soe;
 mod sources;
@@ -136,6 +137,14 @@ enum Commands {
         serve: studio::ServeArgs,
         #[command(subcommand)]
         action: Option<studio::StudioAction>,
+    },
+    /// Make and compose sandboxes with the Studio builder: `new` asks a name,
+    /// writes sandboxes/<name>/ from a template and opens the drag-and-drop
+    /// builder; `compile` / `finalise` / `palette` run the same steps without a
+    /// browser (docs/studio-builder-2026-10-10.md).
+    Sandbox {
+        #[command(subcommand)]
+        action: sandbox::SandboxAction,
     },
     /// Read the execution trace `tengu run` / `tengu decide` recorded under
     /// <TENGU_HOME>/logs/trace/<sandbox>/: `runs`, `show --run <id>
@@ -429,7 +438,35 @@ pub(crate) async fn run() -> Result<()> {
     // Load .env first (highest priority after shell env), then parse CLI so we can
     // special-case subprocess modes that must keep stdout protocol-clean.
     dotenvy::dotenv().ok();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+
+    if let Some(Commands::Sandbox { .. }) = cli.command {
+        let Some(Commands::Sandbox { action }) = cli.command.take() else {
+            unreachable!()
+        };
+        // `new` without --no-open falls through to the Studio server below,
+        // which sets up logging itself; the others log to stderr here.
+        if !matches!(action, sandbox::SandboxAction::New { no_open: false, .. }) {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::from_default_env()
+                        .add_directive("tengu=info".parse().unwrap()),
+                )
+                .compact()
+                .with_writer(std::io::stderr)
+                .init();
+        }
+        match tokio::task::block_in_place(|| sandbox::run_sandbox(action))? {
+            Some(open) => {
+                cli.command = Some(Commands::Studio {
+                    sandbox: Some(open.name),
+                    serve: studio::ServeArgs::builder(open.port),
+                    action: None,
+                })
+            }
+            None => return Ok(()),
+        }
+    }
 
     if matches!(cli.command, Some(Commands::McpBridge)) {
         tracing_subscriber::fmt()
@@ -908,6 +945,9 @@ pub(crate) async fn run() -> Result<()> {
         }
         Commands::Trace { .. } => {
             unreachable!("Commands::Trace is dispatched earlier in run()")
+        }
+        Commands::Sandbox { .. } => {
+            unreachable!("Commands::Sandbox is dispatched earlier in run()")
         }
     }
 }

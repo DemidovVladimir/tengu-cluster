@@ -291,6 +291,8 @@ async fn refuses_non_loopback_bind() {
         bind: "0.0.0.0".into(),
         port: 0,
         allow_control: false,
+        allow_edit: false,
+        open: false,
     };
     let err = run_studio(lab(), Arc::new(SecretRegistry::new()), opts)
         .await

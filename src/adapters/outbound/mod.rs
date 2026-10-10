@@ -3,6 +3,7 @@
 
 pub(crate) mod backfill;
 pub(crate) mod bridge_env;
+pub(crate) mod builder_store;
 pub(crate) mod clock;
 pub(crate) mod decision_cache;
 pub(crate) mod decisions;
