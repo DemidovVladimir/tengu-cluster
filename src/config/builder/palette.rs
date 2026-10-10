@@ -900,10 +900,21 @@ fn items(facts: &Facts) -> Vec<Item> {
     out
 }
 
-/// (item id, label, env var, `[keys.env]` lines, `strip`, description) — the
+/// One secret card preset: (item id, label, env var, `[keys.env]` lines,
+/// `strip`, description).
+type SecretPreset = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+    &'static str,
+);
+
+/// The secret card presets — the
 /// shipped seal-proxy routes (`docs/sealed-keys-2026-10-09.md` § Worker)
 /// and plain keys. Data only: the compiler treats every secret alike.
-const SECRET_PRESETS: &[(&str, &str, &str, &[&str], &[&str], &str)] = &[
+const SECRET_PRESETS: &[SecretPreset] = &[
     (
         "openrouter",
         "OpenRouter API key",

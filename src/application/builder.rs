@@ -144,6 +144,7 @@ impl Builder {
         }
     }
 
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
     pub(crate) fn sandbox(&self) -> &str {
         &self.sandbox
     }
@@ -221,6 +222,7 @@ impl Builder {
         })
     }
 
+    #[cfg_attr(not(feature = "studio"), allow(dead_code))]
     pub(crate) fn save(&self, bp: &Blueprint) -> Result<Status, BuilderError> {
         self.own(bp)?;
         self.require_editable()?;
