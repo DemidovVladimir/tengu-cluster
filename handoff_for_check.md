@@ -1,5 +1,20 @@
 # Handoff for check — 2026-10-08 → 2026-10-09 session
 
+## Addendum 2026-10-10 — A2A (PR #53, open on purpose until the weekend #2 stop)
+
+| Field | Value |
+|---|---|
+| Ask (operator, 2026-10-10) | check for A2A; if missing, implement it till finished so agents (when the sandbox config says so) talk to other agent harnesses; keep the weekend validation running; separate branch + PR; a separate binary if needed |
+| Found | no A2A anywhere (main, origin/main, every feature branch) |
+| Branch · worktree | `feature/a2a` · `~/development/tengu-a2a` (base `origin/main` `91b2a2198bf29403aaa81c5d63760a71e3f6cf40`) |
+| Commits | `08bb144fcdb6b647b8b4fa643872b9b504eb0523` (feature) + the evidence / handoff commit after it (`git log origin/main..origin/feature/a2a`) |
+| PR | #53 `A2A: agents talk to other agent harnesses (a2a tool + tengu a2a serve)` — not merged: main checkout frozen until Mon 2026-10-12; merge after #52 (operator order), rebase first (docs + additive config conflicts with #50 / #51 / #52) |
+| Binary | `~/.cache/tengu-xm.noindex/a2a/tengu-a2a-08bb144` sha256 `83d2a7bb5208e1db75001c32ee2ab4ca5de6ea16da50717d97354975d71bd35b`; build cache `~/.cache/tengu-xm.noindex/agents/a2a` |
+| Weekend run | untouched: pid 11624 `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` (sha256 `fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445`) kept running; main checkout not touched |
+| Doc · tutorial · example | `docs/a2a-2026-10-10.md` · `docs/tutorial/a2a.html` · `sandboxes/a2a-lab` |
+| Evidence | `docs/a2a-2026-10-10.md` § 4 and `docs/SESSION_HANDOFF.md` top section: unit, `tests/a2a_e2e.rs`, bridge conformance, engine matrix live (openrouter gemini + haiku, claude_code), `a2a-sdk` 1.2.2 interop 52/52, live `a2a-lab` chain, `cargo test --workspace` 2264 passed / 0 failed |
+| Check | `cargo test --bin tengu a2a && cargo test --test a2a_e2e && TENGU_CONFORMANCE_ONLY=a2a cargo test --test bridge_conformance && cargo test --test engine_matrix -- offline_local_a2a` |
+
 > For the operator's architecture agent. Everything below is verifiable from git, GitHub and the commands at the end. Ids and hashes are full.
 
 ## 1. What was asked → what was delivered

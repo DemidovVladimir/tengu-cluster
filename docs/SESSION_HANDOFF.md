@@ -26,6 +26,7 @@ Doc `docs/a2a-2026-10-10.md`; tutorial `docs/tutorial/a2a.html`; example `sandbo
 | `tests/bridge_conformance.rs` (`a2a`, `a2a:list`, `a2a:pinned_host`) | pass: in-process = MCP bridge |
 | `tests/engine_matrix.rs` set `a2a` | live pass: openrouter gemini-2.5-flash-lite (4.6 s), openrouter claude-haiku-4.5 (5.3 s), claude_code claude-haiku-4-5 (10.4 s); `offline_local_a2a` pass |
 | Interop vs the official `a2a-sdk` 1.2.2 (Python, outside the repo, scratch dir) | 52/52 both ways: SDK client → `tengu a2a serve` (card, send, stream, get, list, cancel, subscribe, errors, 0.3 compat); tengu client → SDK server (JSON-RPC 1.0, HTTP+JSON 1.0, 0.3, bearer) |
+| live `sandboxes/a2a-lab` (release binary, OpenRouter claude-haiku-4.5) | `tengu a2a send --remote self` → helper: `4`; inbound `SendMessage` to `/a2a` → planner → `liaison` (`run-agent`) → tool `a2a` → helper over A2A → `COMPLETED` "the capital of France is Paris"; 10 `egress.jsonl` lines `tool = "a2a"`, the liaison's with `agent = liaison`, `session = a2a-<contextId>` |
 
 | Open | Note |
 |---|---|
