@@ -44,6 +44,7 @@
     --soe: #FDBA74;
     --trc: #67E8F9;
     --std: #C4B5FD;
+    --a2a: #93C5FD;
     --ok: #16A34A;
     --warn: #CA8A04;
     --info: #0891B2;
@@ -197,6 +198,7 @@
   .sys-card.soe { border-top-color: var(--soe); }
   .sys-card.trace { border-top-color: var(--trc); }
   .sys-card.studio { border-top-color: var(--std); }
+  .sys-card.a2a { border-top-color: var(--a2a); }
   .sys-card .title {
     font-size: 14px; font-weight: 700; margin-bottom: 4px;
   }
@@ -1032,6 +1034,7 @@ const SUBSYSTEM_GROUPS = [
   { title: "Beyond the chat turn (2026-09-24 → 2026-10-01)", keys: ["runtime", "decision", "observations", "tools", "xmarket", "xlab", "parity"] },
   { title: "Research lineage, rankings, sources, SOE (2026-10-06 → 2026-10-09)", keys: ["lineage", "ranking", "sources", "soe"] },
   { title: "Execution trace + Tengu Studio (2026-10-09)", keys: ["trace", "studio"] },
+  { title: "Other agent harnesses (2026-10-10)", keys: ["a2a"] },
 ];
 
 const SUBSYSTEMS = [
@@ -1342,6 +1345,21 @@ const SUBSYSTEMS = [
     ],
     deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The editor (ST-40) is design only until Operator Review #3. Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
   },
+  {
+    key: "a2a", title: "A2A — other agent harnesses (2026-10-10)",
+    subtitle: "the opt-in a2a tool calls configured remote harnesses; tengu a2a serve serves the planner and chosen agents (A2A 1.0.1, JSON-RPC 1.0 + 0.3).",
+    files: [
+      ["domain/a2a/", "model.rs (v1.0 types, AgentCard::endpoint) · rpc.rs (methods, errors, A2A-Version negotiation) · v03.rs (0.3 dialect) · card.rs · render.rs — pure"],
+      ["config/a2a.rs", "[a2a.remotes.<name>] (url, endpoint_url, bearer_env / header + header_env, timeout_secs) · [a2a.server] (token_env, loopback-only allow_unauthenticated, orchestrator, agents with a description, limits)"],
+      ["adapters/outbound/a2a/mod.rs", "the client: card → interface → host pin → JSON-RPC 1.0 / 0.3 or HTTP+JSON 1.0 → GetTask polling; egress peer_client (loopback direct) + scope per request; audit tool = a2a"],
+      ["adapters/outbound/tools/a2a/", "the a2a tool: list · card · send · get · cancel (opt-in)"],
+      ["ports/a2a.rs · application/a2a/", "A2aRunner · A2aService: every method, a task per message, max_running, run_timeout, cancel aborts; in-memory task store, context memory, ListTasks pages"],
+      ["bootstrap/a2a.rs", "cards; TurnRunner: planner = one-shot orchestrator turn (session a2a-<contextId>), agent = one in-process turn with its tools; answers redacted"],
+      ["adapters/inbound/a2a.rs", "tengu a2a serve (feature a2a, default): cards v1 / 0.3, JSON-RPC at /a2a and /a2a/agents/<n>, SSE, bearer auth (401)"],
+      ["adapters/inbound/cli/a2a.rs", "tengu a2a serve | cards | remotes | card | send | get | cancel (--remote <name> or --url)"],
+    ],
+    deep: "A remote is a name in the sandbox config, never a URL the model picks; the client calls only that remote's own hosts, so a card cannot redirect a request or the credential. The server refuses to load without a bearer token unless it binds loopback (never in a hardened sandbox), never serves a private agent, and keeps tasks in memory. Interop checked against the official a2a-sdk 1.2.2 both ways. Doc: docs/a2a-2026-10-10.md.",
+  },
 ];
 
 const FILE_MAP = [
@@ -1370,6 +1388,17 @@ const FILE_MAP = [
   ["src/adapters/inbound/cli/sources.rs", "sources", "tengu sources list | fetch | import | asof | purge | terms | disable | enable"],
   ["src/adapters/inbound/cli/soe.rs", "soe", "tengu soe init | check | portfolio | sensitivity | eval — offline, on the signed private profile (O1)"],
   ["src/adapters/inbound/cli/soe/weekly.rs", "soe", "tengu soe cycle | replay | grade | resolve | review | verify | show — the weekly cycle (O3) and its O4 measures over the private SOE state; --sandbox or -c"],
+  ["src/adapters/inbound/cli/a2a.rs", "a2a", "tengu a2a serve | cards | remotes | card | send | get | cancel"],
+  ["src/adapters/inbound/a2a.rs", "a2a", "tengu a2a serve: axum routes — cards (v1 / 0.3), JSON-RPC, SSE, bearer auth"],
+  ["src/adapters/outbound/a2a/mod.rs", "a2a", "A2A client: card, interface choice, host pin, JSON-RPC 1.0 / 0.3 + HTTP+JSON 1.0, polling, audit"],
+  ["src/adapters/outbound/tools/a2a/mod.rs", "a2a", "the a2a tool (opt-in): list · card · send · get · cancel"],
+  ["src/application/a2a/", "a2a", "A2aService (every method, tasks, SSE feed) + tasks.rs (in-memory store, pages)"],
+  ["src/bootstrap/a2a.rs", "a2a", "cards + TurnRunner (planner or agent turn), build_service"],
+  ["src/config/a2a.rs", "a2a", "[a2a.remotes.<name>] + [a2a.server], load rules"],
+  ["src/domain/a2a/", "a2a", "A2A protocol (pure): types, JSON-RPC, 0.3 dialect, cards, text"],
+  ["src/ports/a2a.rs", "a2a", "A2aRunner, A2aTarget, A2aTurn"],
+  ["sandboxes/a2a-lab/config.toml", "a2a", "A2A both ways on one machine: server (planner + helper) + remote self + liaison agent"],
+  ["tests/a2a_e2e.rs", "tests", "two tengu processes over A2A: v1 + 0.3, planner, tool, 401"],
   ["src/adapters/inbound/cli/studio.rs", "studio", "tengu studio --sandbox <s> [--port --bind --allow-control] (the server, default build) · tengu studio graph [--map] (every build)"],
   ["src/adapters/inbound/cli/trace.rs", "trace", "tengu trace runs | show --run <id> [--after <seq>] [--follow] — JSON lines, no config, read-only"],
   ["src/adapters/inbound/cli/risk.rs", "xmarket", "tengu risk status / halt / resume — ledger risk state; halt and resume only at a terminal"],

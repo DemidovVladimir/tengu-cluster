@@ -2,6 +2,7 @@
 //! validation, and path resolution. Imports only `domain` (see
 //! `tests/layering_lint.rs`).
 
+pub(crate) mod a2a;
 pub(crate) mod backtest;
 pub(crate) mod decision_loop;
 pub(crate) mod egress;
@@ -261,6 +262,13 @@ pub struct Config {
     /// root is the `[sources]` state dir. Absent = no SOE cycle.
     #[serde(default)]
     pub soe: Option<soe::SoeConfig>,
+
+    /// `[a2a]` — A2A (Agent2Agent, `config/a2a.rs`): remote agents the opt-in
+    /// `a2a` tool may call (`[a2a.remotes.<name>]`) and `[a2a.server]`
+    /// (`tengu a2a serve`) exposing this sandbox's agents to other harnesses.
+    /// Absent = no A2A.
+    #[serde(default)]
+    pub a2a: Option<a2a::A2aConfig>,
 
     /// Skill-lifecycle subsystem configuration (eval runner, distill pipeline).
     /// Absent by default — the subsystem is fully opt-in.
@@ -1291,6 +1299,7 @@ impl Config {
             sources_state_dir: self.sources.as_ref().map(|s| s.state_dir(&home)),
             soe: self.soe.clone().map(std::sync::Arc::new),
             ranking: self.ranking_section.clone(),
+            a2a: self.a2a.clone().map(std::sync::Arc::new),
         }
     }
 
@@ -1364,6 +1373,7 @@ impl Config {
             }
         }
         out.extend(self.telegram.approvals_warning());
+        out.extend(a2a::validation_warnings(self));
         out.sort();
         out
     }
@@ -1450,6 +1460,9 @@ impl Config {
             errors.push(issue);
         }
         for issue in soe::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in a2a::validation_errors(self) {
             errors.push(issue);
         }
 
@@ -1759,6 +1772,7 @@ impl Default for Config {
             studio: Default::default(),
             sources: None,
             soe: None,
+            a2a: None,
             skill_lifecycle: None,
             generation: None,
             generation_scope: None,

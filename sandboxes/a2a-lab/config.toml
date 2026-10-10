@@ -1,0 +1,70 @@
+# Tengu Cluster — "a2a-lab" sandbox (2026-10-10)
+# A2A both ways in one sandbox (docs/a2a-2026-10-10.md): it serves its planner
+# and its `helper` agent to other agent harnesses, and its `liaison` agent
+# calls remote harnesses with the `a2a` tool — here its own `helper`, so the
+# loop runs on one machine:
+#
+#   export TENGU_A2A_LAB_TOKEN=$(openssl rand -hex 24)
+#   tengu a2a serve --sandbox a2a-lab                      # terminal 1
+#   tengu a2a card --sandbox a2a-lab --remote self         # terminal 2
+#   tengu a2a send --sandbox a2a-lab --remote self "What is 2 + 2?"
+#   tengu chat --sandbox a2a-lab   →  "ask the helper over A2A what 2 + 2 is"
+#
+# Another harness: point its A2A client at
+# http://127.0.0.1:8710/.well-known/agent-card.json (the planner) or
+# /a2a/agents/helper/.well-known/agent-card.json, with
+# `Authorization: Bearer $TENGU_A2A_LAB_TOKEN`. To call a real remote, add an
+# [a2a.remotes.<name>] block and its host to [default_scopes.a2a].
+# OPENROUTER_API_KEY comes from the env.
+
+runtime_profile = "auto"
+
+# Open: the self-call is loopback (a loopback A2A peer goes direct under Tor
+# too; OpenRouter often blocks Tor exits). Flip to "tor" for real remotes.
+[egress]
+network = "open"
+
+[orchestrator]
+agent = "planner"
+engine = "rag"
+
+[agents.planner]
+default = true
+engine = "openrouter"
+model = "anthropic/claude-haiku-4.5"
+
+[agents.helper]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4.5"
+description = "Answers short factual and arithmetic questions directly, in one sentence."
+example_queries = ["What is 2 + 2?", "What is the capital of France?"]
+tools = ["read_file"]
+
+[agents.liaison]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4.5"
+description = """
+Talks to other agent harnesses over A2A with the a2a tool: lists the remotes,
+reads a remote's card, sends it the question and reports its answer. Use when
+the user asks to ask, consult or delegate to another agent, harness or the
+helper "over A2A"."""
+tools = ["a2a"]
+
+# The remote harnesses `a2a` may call. `self` = this sandbox's own helper,
+# served by `tengu a2a serve --sandbox a2a-lab`.
+[a2a.remotes.self]
+url = "http://127.0.0.1:8710/a2a/agents/helper"
+description = "This sandbox's helper agent, over A2A (start tengu a2a serve first)."
+bearer_env = "TENGU_A2A_LAB_TOKEN"
+timeout_secs = 120
+
+[default_scopes.a2a]
+net_hosts = ["127.0.0.1"]
+env_reads = ["TENGU_A2A_LAB_TOKEN"]
+
+[a2a.server]
+port = 8710
+token_env = "TENGU_A2A_LAB_TOKEN"
+name = "tengu a2a-lab"
+orchestrator = true
+agents = ["helper"]

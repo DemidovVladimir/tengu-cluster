@@ -1,6 +1,7 @@
 //! `tengu` CLI — clap definitions and command dispatch. `main.rs` only calls
 //! [`run`]. Subcommands with real bodies live beside this file.
 
+mod a2a;
 mod backtest;
 mod decide;
 mod doctor;
@@ -91,6 +92,18 @@ enum Commands {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
         sandbox: Option<String>,
+    },
+    /// A2A (Agent2Agent, docs/a2a-2026-10-10.md): `serve` this sandbox's
+    /// planner / agents to other agent harnesses (`[a2a.server]`, feature
+    /// `a2a`, on by default), `cards` it would publish, `remotes`; talk to a
+    /// remote as the `a2a` tool does: `card`, `send`, `get`, `cancel`
+    /// (`--remote <name>` of `[a2a.remotes]`, or `--url`).
+    A2a {
+        /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
+        #[arg(long, global = true)]
+        sandbox: Option<String>,
+        #[command(subcommand)]
+        action: a2a::A2aAction,
     },
     /// Run the sandbox's long-running process: every `[decision_loops.*]`
     /// built once, the webhook routes (with `--features webhooks` and
@@ -561,6 +574,10 @@ pub(crate) async fn run() -> Result<()> {
             Commands::Webhooks { .. }
                 | Commands::Run { .. }
                 | Commands::Studio { action: None, .. }
+                | Commands::A2a {
+                    action: a2a::A2aAction::Serve,
+                    ..
+                }
         )
     );
     if is_tui {
@@ -710,6 +727,10 @@ pub(crate) async fn run() -> Result<()> {
         Commands::Run { sandbox } => {
             let config = load_sandbox_or(sandbox, config)?;
             crate::adapters::inbound::run::run_runtime(config, secret_registry).await
+        }
+        Commands::A2a { sandbox, action } => {
+            let config = load_sandbox_or(sandbox, config)?;
+            a2a::run_a2a(config, action, secret_registry).await
         }
         Commands::Decide {
             sandbox,
@@ -921,6 +942,7 @@ fn replacing_sandbox(command: &Option<Commands>) -> Option<&str> {
         | Commands::Telegram { sandbox }
         | Commands::Webhooks { sandbox }
         | Commands::Run { sandbox }
+        | Commands::A2a { sandbox, .. }
         | Commands::Doctor { sandbox, .. }
         | Commands::Decide { sandbox, .. }
         | Commands::Studio { sandbox, .. }
@@ -948,6 +970,7 @@ fn stdout_is_data(command: &Option<Commands>) -> bool {
                 | Commands::Decide { .. }
                 | Commands::Doctor { .. }
                 | Commands::Studio { .. }
+                | Commands::A2a { .. }
         )
     )
 }

@@ -29,6 +29,7 @@ window.TUTORIAL = {
     { slug: "skills", chapter: "team", title: "Skills", blurb: "Markdown know-how and shell tools, found in three tiers." },
     { slug: "skill-lifecycle", chapter: "team", title: "Skill evals and evolution", blurb: "Score a skill, rewrite it, keep the better version." },
     { slug: "channels", chapter: "team", title: "Chat surfaces", blurb: "Terminal UI, Telegram and webhooks feed the same runtime." },
+    { slug: "a2a", chapter: "team", title: "A2A: other harnesses", blurb: "Agents call other agent harnesses, and other harnesses call Tengu's agents, over the A2A protocol." },
 
     { slug: "memory", chapter: "memory", title: "Open Brain and LLM Wiki", blurb: "Postgres memory with recall lanes, compiled into a reviewed wiki." },
     { slug: "local-memory", chapter: "memory", title: "Workspace memory", blurb: "Profile files, vector recall and small stores per workspace." },

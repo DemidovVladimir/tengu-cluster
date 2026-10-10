@@ -1,6 +1,7 @@
 //! Outbound (driven) adapters — implementations of `crate::ports` and the
 //! other side-effecting clients the application uses.
 
+pub(crate) mod a2a;
 pub(crate) mod backfill;
 pub(crate) mod bridge_env;
 pub(crate) mod clock;

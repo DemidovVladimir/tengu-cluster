@@ -38,10 +38,11 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 
 | Concern | File(s) |
 |---|---|
-| CLI subcommands (`chat status doctor telegram webhooks run decide studio trace history backtest ranking evidence lineage soe sources risk eval secret prune mcp-bridge agentic-memory-server skill` + hidden `run-agent`, `tool`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor,decide,studio,trace,history,backtest,ranking,evidence,lineage,soe,sources,risk,tool}.rs` + `cli/soe/weekly.rs` (the weekly `soe` commands); channel / server bodies `inbound/{tui/,telegram.rs,webhooks.rs,run.rs,eval.rs,evolve.rs,mcp_bridge.rs,studio/}`; `decide` / `doctor` / `studio` / `history` / `risk` / `backtest` / `sources` / `ranking` log to stderr (`stdout_is_data`) |
+| CLI subcommands (`chat status doctor telegram webhooks run a2a decide studio trace history backtest ranking evidence lineage soe sources risk eval secret prune mcp-bridge agentic-memory-server skill` + hidden `run-agent`, `tool`) | `src/adapters/inbound/cli/mod.rs` (`Commands` + `run`), bodies in `cli/{run_agent,skill,doctor,a2a,decide,studio,trace,history,backtest,ranking,evidence,lineage,soe,sources,risk,tool}.rs` + `cli/soe/weekly.rs` (the weekly `soe` commands); channel / server bodies `inbound/{tui/,telegram.rs,webhooks.rs,run.rs,a2a.rs,eval.rs,evolve.rs,mcp_bridge.rs,studio/}`; `a2a` / `decide` / `doctor` / `studio` / `history` / `risk` / `backtest` / `sources` / `ranking` log to stderr (`stdout_is_data`) |
 | Hidden test commands `tengu tool list` (catalog names) · `tengu tool call` (one or a `--batch` of calls through the executor a `run-agent` child builds, `--transcript` = the conversation: bridge conformance) · `tengu tool turn` (one engine turn as any agent, private exec agents included — the `@<agent>` chat path; Claude Code tools through the real bridge: engine-matrix xm legs) | `src/adapters/inbound/cli/tool.rs` |
 | Config schema, defaults, validation, loading | `src/config/mod.rs` (`Config`, `AgentConfig`, `impl Default for Config`, `default_*` fns, `validation_errors`, `validate_agent`, `Config::load`) |
 | `[egress]` schema / runtime policy | `src/config/egress.rs` / `src/adapters/outbound/egress.rs` |
+| A2A — agents talk to other agent harnesses (`docs/a2a-2026-10-10.md`) | protocol (pure: v1.0 types, JSON-RPC, 0.3 dialect, card, text) `src/domain/a2a/` · `[a2a]` `src/config/a2a.rs` · client `src/adapters/outbound/a2a/mod.rs` (egress `peer_client`) + tool `src/adapters/outbound/tools/a2a/mod.rs` · server: port `src/ports/a2a.rs`, use case `src/application/a2a/` (methods, task store), runner + cards `src/bootstrap/a2a.rs`, HTTP `src/adapters/inbound/a2a.rs` (feature `a2a`) · CLI `src/adapters/inbound/cli/a2a.rs` · tests `tests/a2a_e2e.rs` |
 | Config file resolution + `TENGU_HOME` | `src/config/paths.rs`, `src/bootstrap/sandbox.rs`, `cli/mod.rs::run` |
 | Tool trait, contexts | `src/ports/tool.rs` (`Tool`, `ToolPlugin`, `ToolCtx`, `PluginCtx`, `ToolDirectory`) |
 | Tool catalog (every built-in tool) | `src/adapters/outbound/tools/mod.rs` (`catalog`, `register_catalog`, `advertised_defs`) |
@@ -119,6 +120,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[risk]` / `[paper]` | `RiskConfig` / `PaperConfig` (`config/risk.rs`) | `AgentConfig::sandbox` → the exec tools' gate and fill engine | **error** |
 | `[rate_limits.<name>]` | `RateLimitConfig` (`config/rate_limits.rs`) | `outbound/rate_limit.rs` (feeds, `hl-info-client`, `info-fetch`, backfill: `hyperliquid`, `geckoterminal`, `sec`; `[sources]` rows: `sec`, `ted`) | **error** |
 | `[backtest]` | `BacktestConfig` (`config/backtest.rs`) | `AgentConfig::sandbox` → `application/backtest/` (`tengu backtest`, tools `backtest` / `market_history`, a strategy ranking) | **error** |
+| `[a2a]` (`remotes.<name>`, `server`) | `A2aConfig` (`config/a2a.rs`) | `AgentConfig::sandbox` (`a2a`) → `tools/a2a/`; `bootstrap/a2a.rs` (`tengu a2a serve`), `cli/a2a.rs` | **error** |
 | `[generation]` | `GenerationBinding` (`config/lineage.rs`) | `Config::load` (`binding_errors`: tools, strategy kinds, pins) → `AgentConfig::sandbox` (`generation`) → `bootstrap/tools.rs`, `application/backtest/`; Studio control refused (`config/studio.rs`) | **error** |
 | `[strategy_ranking]` | `StrategyRankingConfig` → `RankingSection` (`config/strategy_ranking.rs`) | `Config::load` (`section_errors`) → `AgentConfig::sandbox` (`ranking`) → `application/ranking/` (`tengu ranking`, tool `strategy_ranking`), run-dir retention (`application/backtest/mod.rs::cited_runs`) | **error** |
 | `[runtime]` | `RuntimeConfig` (`config/runtime.rs`) | `bootstrap/runtime.rs`, `inbound/run.rs` | **error** |
@@ -247,12 +249,13 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `tests/tutorial_map.rs` | the visual tutorial `docs/tutorial/`: every `src/` file is explained by a page in `sources.toml` (or `[glue]`), no dead paths, `nav.js` = `sources.toml`, pages well-formed (`docs/tutorial/AUTHORING.md`) |
 | `tests/language_policy.rs` | non-Rust source only where `CLAUDE.md` allows it: web files under `docs/` + `web/studio/` (the Studio page), `.sh` under `deploy/` + `tests/fixtures/`, no `.py` / TypeScript; `web/studio/` loads nothing remote |
 | `tests/run_agent_ipc.rs` | `tengu run-agent` IPC boundary |
+| `tests/a2a_e2e.rs` | A2A end to end: `tengu a2a serve` + a second `tengu` over loopback (local engine → a scripted mock): v1.0 + 0.3 sends, context follow-up, the planner front door, the `a2a` tool, a wrong token (401), no token (refused) |
 | `tests/lineage_cli.rs` | `tengu lineage` on the fixture registry + the repo `lineage/`: `verify` (`frozen_manifest_changed`, `seal_mismatch`, `ranking_unsealed`), `seal`, `report rule_w`, `trace`, `verify --pins` |
 | `tests/strategy_ranking.rs` | `tengu ranking` end to end on the fixture contract `rank.test.v1`: a published rerun is a no-op, a crash resumes one strategy, INCOMPLETE keeps `latest`, no holdout read, an unsealed / changed contract refused |
 | `tests/soe_cli.rs` | `tengu soe` on the synthetic fixtures: `eval`, `check`, `init`, `portfolio`, `sensitivity`, an offline `cycle` → `verify` / `show`, `grade` / `resolve` / `review`, `replay` (holdout counted) |
 | `tests/mcp_bridge_external.rs` | bridge proxies `[[mcp_servers]]` (fixture `tests/fixtures/fake_mcp_server.sh`) |
 | `tests/bridge_conformance.rs` | every catalog tool gives the same text + store rows in-process (`tengu tool call`) and through a real `tengu mcp-bridge`; fails for a catalog tool without a case (convention 20); also a shell skill (+ none under `[risk]`), `[[mcp_servers]]` tools in / out of `tools`, the Privy egress gate; two bridge sessions never replay each other's paper order |
-| `tests/engine_matrix.rs` | `#[ignore]` live: one scripted turn per engine × model × tool set (18 sets: workspace, hyperliquid, xlab, xlab_holdout, xlab_rank, sources, soe, shell, memory, skills, util, privy_off, privy, solana_read / decide / write, agentic_memory via `tengu run-agent`; xm — exec tools — via `tengu tool turn` on a private agent) on `tests/fixtures/engine_matrix/` + `open/` — OpenRouter, the Claude CLI, local over the LAN (`TENGU_MATRIX_LOCAL_BASE_URL`); not ignored: the local path against a scripted mock server (workspace, shell, xm, xlab, xlab_holdout, xlab_rank, sources, soe), fixture checks, every catalog tool in a set (`x-engine-matrix-smoke`, `x-engine-parity-audit`) |
+| `tests/engine_matrix.rs` | `#[ignore]` live: one scripted turn per engine × model × tool set (19 sets: workspace, hyperliquid, xlab, xlab_holdout, xlab_rank, sources, soe, shell, memory, skills, util, privy_off, privy, solana_read / decide / write, agentic_memory, a2a via `tengu run-agent`; xm — exec tools — via `tengu tool turn` on a private agent) on `tests/fixtures/engine_matrix/` + `open/` — OpenRouter, the Claude CLI, local over the LAN (`TENGU_MATRIX_LOCAL_BASE_URL`); not ignored: the local path against a scripted mock server (workspace, shell, xm, xlab, xlab_holdout, xlab_rank, sources, soe, a2a), fixture checks, every catalog tool in a set (`x-engine-matrix-smoke`, `x-engine-parity-audit`) |
 
 ## 7. Every source file
 
@@ -263,10 +266,16 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/mod.rs` | 11 | Adapters — everything that talks to the outside world. |
 | `src/main.rs` | 14 | Tengu binary entry point. Layers: `domain` ← `ports` ← `application` ← |
 
-### domain — data + pure policy (121 files)
+### domain — data + pure policy (127 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/domain/a2a/mod.rs` | 47 | A2A (Agent2Agent spec 1.0.1) — pure: module table; `iso_ms` / `parse_iso_ms` (the spec's UTC millisecond timestamps). |
+| `src/domain/a2a/model.rs` | 842 | A2A v1.0 JSON types (`Task`, `Message`, `Part` one-of, `Artifact`, stream events, requests, `AgentCard` + its 0.3 fields); lenient read (0.3 states / roles), v1 write; `AgentCard::endpoint` (first JSON-RPC 1.x / 0.3 or HTTP+JSON 1.x interface), `required_schemes`; `parts_text`. |
+| `src/domain/a2a/rpc.rs` | 499 | A2A JSON-RPC: v1.0 + 0.3 method names (`Method`), error codes −32700…−32009 with `google.rpc.ErrorInfo` details (`RpcError`), envelopes, `parse_request` / `parse_response`, `A2A-Version` negotiation (`negotiate`). |
+| `src/domain/a2a/v03.rs` | 554 | A2A 0.3 dialect ↔ v1.0 on JSON values: parts (`kind`), roles, states, send params (`blocking`), results, stream events (`final`), the 0.3 card (OpenAPI security schemes). |
+| `src/domain/a2a/card.rs` | 159 | tengu's own Agent Card per served endpoint: JSON-RPC 1.0 + 0.3 interfaces, streaming on, push off, a `bearer` scheme when the server has a token, one skill per agent; `etag`. |
+| `src/domain/a2a/render.rs` | 191 | A2A text for a model / the operator: card, task (state, artifacts, `next:` hint), message — ids whole, content capped with the cut count. |
 | `src/domain/memory.rs` | 61 | Shared types for memory retrieval results. |
 | `src/domain/backoff.rs` | 399 | Backoff per `ErrorClass` (`next_delay`: retry / park / stop, full jitter, Retry-After), `TokenBucket` (weights, exec reserve), `CircuitBreaker` — pure, time injected. |
 | `src/domain/backtest/mod.rs` | 39 | Backtests (xlab) — pure: spec → `candidates` → arms → report (→ a strategy ranking); module table. |
@@ -389,10 +398,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/domain/xm/weekend_fade.rs` | 1980 | Weekend-fade rule W (pure): the Sat + Sun window (`fade_window`, DST-safe, a mid-week holiday skipped), `mkt_ctx/1` mid-else-mark prices, signal / fade side / eligibility, `select_capped`, the order ids, the 5 m candle `replay` (golden in `tests/fixtures/xmarket/`; test module `golden` shared with the weekend sandbox test), rows `xm_weekend/1:<anchor date>` (phases, snapshot, P&L once flat with funding booked) and `xm_weekend_signal/1:<anchor date>:<id>`. |
 | `src/domain/xm/risk_state.rs` | 671 | Account risk state (pure): halts (`daily_loss` clears 00:00 UTC; `total_loss` / `operator` / `file` only by resume), UTC day roll + day-start equity, `valuation_trips`, `RiskStatus` → `risk_state/1:<account>`. |
 
-### ports — traits (23 files)
+### ports — traits (24 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/ports/a2a.rs` | 43 | A2A server port: `A2aTarget` (planner / an agent), `A2aTurn` (text + the context's earlier turns), `A2aRunner` (runs a turn; answers redacted). |
 | `src/ports/engine.rs` | 148 | Engine port — the AI backend powering an agent (OpenRouter, Claude Code, local); `ToolExecutor` (+ default `execute_typed`) |
 | `src/ports/evidence.rs` | 164 | Evidence IO ports (sync, read-only readers): `RunDirSource` (a gated backtest run dir → `RunFiles`), `Vault` (the one write path — create once, copy + hash, `MANIFEST.json`, seal), `LedgerSource`, `RecordedHistory` (recorder day files), `BackfillSource` (`market.db`); impls `outbound/evidence/`. |
 | `src/ports/history.rs` | 73 | `HistoryStore` — append-only observation history (`append`, `range`, `asof`); impl `outbound/history_sqlite.rs`. |
@@ -417,10 +427,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/ports/tool_activity.rs` | 8 | Output port for publishing tool activity events to the UI/log layer. |
 | `src/ports/trace.rs` | 38 | Execution-trace ports: `TraceSink` (stamp, redact, bound, write once; fail-soft) and `TraceReader` (runs, page after a `seq`, newest `seq`, bounded follow). |
 
-### config — TOML schema (22 files)
+### config — TOML schema (23 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/config/a2a.rs` | 555 | `[a2a]` — `[a2a.remotes.<name>]` (url / card URL, `endpoint_url`, `bearer_env` or `header` + `header_env`, `timeout_secs`, `max_result_chars`) and `[a2a.server]` (bind, port, `public_url`, `token_env` or loopback `allow_unauthenticated`, `orchestrator`, `agents` with a `description`, limits); load errors + the "tool without remotes" warning; `card_urls`, `credential`, `base_url`. |
 | `src/config/backtest.rs` | 772 | `[backtest]` — history-first research knobs (xlab): `notional_usd`, `bootstrap`, `seed`, `costs."<prefix>"`, `universes`, `strategies` (raw specs), `splits."<id>"` (share splits `{at, ratio}` → `stock_splits()`), `gate`, `max_candidates` (50 000: a run past it stops before any arm or file), `keep_runs` (100: run-dir retention, 0 = all); needs `[xmarket]`. Load rules: every strategy parses (`StrategySpec::from_value`), its `@universe` exists, its calendar is an exchange `[xmarket.calendars]` row, every id it trades has a costs prefix (or the spec's costs) — errors start `backtest.strategies.<name>:`; splits: full id, RFC 3339, ratio > 0 ≠ 1, sorted — `backtest.splits."<id>"`; `max_candidates` 1–1 000 000, `keep_runs` 0 or ≥ 10; `strategy(name)`, `spec_instruments`. |
 | `src/config/egress.rs` | 203 | `[egress]` — network policy schema and validation. The runtime policy |
 | `src/config/decision_loop.rs` | 828 | `[decision_loops.<name>]` — Jev control loop: goal, agent, actions, `sequence` (`SeqStep`), slots (static / history / observation / event; list or one bound value — `SlotMode`), caps, reducers, `dry_run`, `world`, `requires`. Tests guard `sandboxes/control-loop-lab` (`control_loop_lab_has_no_dangerous_surface`). |
@@ -444,10 +455,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/config/studio.rs` | 150 | `[studio]` — `control` (default false) + `control_policy`: on (`control = true` or `tengu studio --allow-control`), off, never for a `[generation]`-bound or hardened sandbox (`control = true` there is a load error). |
 | `src/config/xmarket.rs` | 1812 | `[xmarket]` — state dir `<TENGU_HOME>/state/<state>` and its layout (`ledger_db`, `runtime_db`, `history_dir`, reserved store names) + session calendars `[xmarket.calendars.<id>]` (built into `SandboxSections.calendars`) + `[xmarket.weekend_fade]` (`WeekendFadeConfig`, its load rules against `[risk]`, `[recorder]` and the agents); xmarket load rules: `[risk]` needs `[xmarket]`, one shared workspace for feed / loop / xmarket-tool agents (`XM_TOOLS`), with `[risk]` a workspace on every agent, the state dir outside every fs root and workspace. |
 
-### application — use cases (78 files)
+### application — use cases (80 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/application/a2a/mod.rs` | 701 | A2A server use case (`A2aService`): one JSON-RPC request → parse, negotiate the dialect, dispatch every method (send / stream / get / list / cancel / subscribe; push + extended card refused); each message a task run by the `A2aRunner` (`max_running` at once, `run_timeout`), cancel aborts it; SSE feed of a task (`stream`). |
+| `src/application/a2a/tasks.rs` | 479 | A2A task store (in memory): ownership per endpoint, capacity (`max_tasks`, oldest settled evicted), context memory (`context_turns`), `ListTasks` filters + `o<n>` pages, `historyLength`, parts → turn text, accepted output modes. |
 | `src/application/backtest/gate.rs` | 1132 | The Jev gate arm on history: `run_gate` (the first `--max-decisions` candidates by seq, the rest counted as cut; K workers, each a replay loop + `SimClock`, on one queue; results by seq, identical for any K; failed calls = class error), `gate_arms` (rules vs jev arms, research + capped, calibration, paired diff → `GateSummary`), `GateArms::add_to_report` / `add_to_run` (one source of truth for the arms), `GateAudit` (temp audit, removed on drop, lines by seq → `decisions.jsonl`), `evaluate_gated` (`tengu backtest --gate`'s step 3). |
 | `src/application/backtest/mod.rs` | 2018 | Backtest use case (xlab): `resolve` (spec from `[backtest.strategies]` or JSON — `spec_of`: every problem, the `backtest` tool's spec check —, universe, instruments minus `exclude`, `spec_sha256`) → `prepare` (default from = earliest stored bar / to = now, series over `data_window`, `[backtest.splits]` applied + noted, a labelled spec's `InfoData` loaded (`load_info`: events, event coverage, earliest bar, splits; cut by `--data-through`) + an uncovered-instruments note, `RunParams` (+ `max_candidates`: past it the run stops here), `engine::candidates`, `RiskCaps`, run id proposed) → [the Jev gate arm: `run_gate` + `gate::evaluate_gated`] → `evaluate` (research, capped with `[risk]` + `[paper]`, extra arms over a candidate subset compared with their base arm) → `write_run_dir` (then `keep_runs` retention, never a cited run: `cited_runs` = the `[generation]` and `[strategy_ranking]` registries' + every `run:` a `<state dir>/strategy-rankings/*/latest.json` names); the cohort identity (`RunIdentity`: generation, `instruments_sha256`, `costs_sha256`) recorded in the report; IO injected (`BacktestEnv`: store, sections, run-dir root, now); `capability_refusal` (`[generation]`: a kind outside it → `capability_unavailable`). |
 | `src/application/lineage/mod.rs` | 15 | Lineage use cases: module table (`verify`, `attempts`). |
@@ -528,10 +541,11 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/tools/mod.rs` | 4 | Tool dispatch — `ToolRegistry` + `PluginToolExecutor` (the `ToolExecutor` |
 | `src/application/tools/registry.rs` | 333 | Tool registry + `PluginToolExecutor` — dispatches a model's tool call to |
 
-### bootstrap — composition root (10 files)
+### bootstrap — composition root (11 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/bootstrap/a2a.rs` | 450 | A2A server composition: `cards` (planner front door: a skill per routable agent; each exposed agent), `build_service`, the `TurnRunner` (planner = one-shot orchestrator turn on session `a2a-<contextId>`, earlier turns leading the message; agent = `agent_turn`: one in-process turn with its tools / engine), answers redacted. |
 | `src/bootstrap/memory.rs` | 123 | Memory wiring — builds the `MemoryManager` (builtin provider + disk vector |
 | `src/bootstrap/decision.rs` | 557 | Decision-loop wiring — `JevClient` + the loop agent's tool executor (`agent_tool_executor`: `SanitizedToolExecutor`, caller's `SecretRegistry`; also each tool feed's; then `TracedExecutor`, then `AttributedExecutor`) + observation store → `DecisionLoop` (`with_trace`: the process `Recording`); paths `audit_path` / `audit_file` (`<home>/logs/decisions.jsonl`), `maps_dir` (`<home>/logs/maps/`). Replay: `build_replay_loop` (terminal-only, no history, caller's clock, run-dir audit, no tools / store / escalator), `cached_decision_engine` (`<state dir>/backtests/decision-cache.db` over `JevClient`, or offline), `build_gate` (the gate arm: cached engine + K replay loops, each on its own `SimClock`). |
 | `src/bootstrap/mod.rs` | 14 | Bootstrap — the composition root. Builds concrete adapters and hands them |
@@ -543,10 +557,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/bootstrap/tools.rs` | 1208 | Tool wiring — builds the `PluginToolExecutor` an agent runs with (catalog, shell skills, `[[mcp_servers]]`, scopes); `within_generation`: no tool outside a bound `[generation]` is registered or advertised (warned). |
 | `src/bootstrap/trace.rs` | 137 | Trace wiring — `open_sink` (a new recording under `<TENGU_HOME>/logs/trace/`, `NoopTrace` when unwritable), `open_orchestration` + `close` (chat / telegram / eval with `[orchestrator]`, `run.closed`), `run_ids` for audit lines, `Recording` (sink + ids handed to each decision loop; default = none), the sandbox's reader. |
 
-### adapters/outbound — driven adapters (142 files)
+### adapters/outbound — driven adapters (144 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/adapters/outbound/a2a/mod.rs` | 813 | A2A client (`A2aClient`): card (`agent-card.json`, then 0.3 `agent.json`), interface choice + host pin (a card naming another host is refused), JSON-RPC 1.0 / 0.3 and HTTP+JSON 1.0 calls, `send_and_wait` / `get_and_wait` (poll until settled), credential header, egress `peer_client` + scope per request, one audit line per request (`tool = "a2a"`). |
+| `src/adapters/outbound/tools/a2a/mod.rs` | 482 | `a2a` tool (opt-in): `list` / `card` / `send` / `get` / `cancel` on a `[a2a.remotes.<name>]` remote; strict args, `messageId` = the call id, cards cached 5 min, text via `domain/a2a/render.rs`. |
 | `src/adapters/outbound/backfill/mod.rs` | 578 | Backfill into `market.db` (xlab): module table (SEC, HL, Gecko, archive, JSON), `Retry` (`next_delay`, Retry-After; `BACKFILL` for operators, `TOOL` for `market_history`), `ReportRow` (`fail`: text + class per error) / `BackfillReport` (full ids, rendered table), `missing_ranges` (resume: head + tail), `text_table`. |
 | `src/adapters/outbound/backfill/hl.rs` | 488 | HL `candleSnapshot` (newest 5 000 bars: start clamped + noted; open bar dropped) and `fundingHistory` (paged by `last.time + 1`) through `HlInfo` (egress, `[rate_limits.hyperliquid]`, audit); `operator_hl` for the CLI. |
 | `src/adapters/outbound/backfill/gecko.rs` | 641 | `GeckoClient` — GeckoTerminal pool OHLCV over the egress tool client (`check_url`, scope, audit `gecko_ohlcv`), `[rate_limits.geckoterminal]`, `http_class` errors; paged backwards; `source = gecko:<network>:<pool>`; `$GECKO_API_URL` override (a tool's only through its scope's `env_reads`: `api_url`). |
@@ -690,10 +706,12 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/adapters/outbound/tools/workspace/write_file.rs` | 195 | `write_file` tool — write content to a file in the workspace. |
 | `src/adapters/outbound/trace_store.rs` | 675 | JSONL trace store — `JsonlTraceSink` (new `run_id` + file per recording, `run.opened` first; `seq` under one lock, redact secrets + URLs in strings and keys (`scrub_value`), bound payload, one `write_all`) and `JsonlTraceReader` (runs, page, `last_seq`, follow 250 ms into a bounded channel; ids checked before any path). |
 
-### adapters/inbound — driving adapters (36 files)
+### adapters/inbound — driving adapters (38 files)
 
 | File | Lines | What it is |
 |---|---:|---|
+| `src/adapters/inbound/a2a.rs` | 526 | `tengu a2a serve` (feature `a2a`, on by default): axum routes — cards (v1 / 0.3, `ETag`, 304), JSON-RPC at `/a2a` and `/a2a/agents/<name>`, SSE for streams; bearer auth (constant time, 401); SIGINT / SIGTERM fail every unfinished task. |
+| `src/adapters/inbound/cli/a2a.rs` | 234 | `tengu a2a serve \| cards \| remotes \| card \| send \| get \| cancel` — the operator's A2A client (`--remote <name>` or `--url`, `--json`) and the server. |
 | `src/adapters/inbound/activity.rs` | 96 | Human-readable tool-activity lines shown by the TUI and Telegram. |
 | `src/adapters/inbound/channel.rs` | 231 | Helpers shared by the chat channels (TUI, Telegram): loop-state factory, |
 | `src/adapters/inbound/cli/doctor.rs` | 614 | `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live` runner health, `--engines` smoke turn per agent: `list_directory` + `read_file` on its own engine + model; a loopback `local` agent on macOS is skipped, never contacted). |

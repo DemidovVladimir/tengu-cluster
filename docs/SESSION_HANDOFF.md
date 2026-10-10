@@ -6,6 +6,33 @@
 
 ---
 
+## 2026-10-10: A2A — agents talk to other agent harnesses — branch `feature/a2a`
+
+Doc `docs/a2a-2026-10-10.md`; tutorial `docs/tutorial/a2a.html`; example `sandboxes/a2a-lab`. Spec: A2A 1.0.1 (`a2aproject/A2A`, released 2026-05-28).
+
+| Landed | Where |
+|---|---|
+| Protocol (pure): v1.0 JSON types, JSON-RPC methods + errors (−32001…−32009), `A2A-Version` negotiation, 0.3 dialect both ways, cards, text | `src/domain/a2a/` |
+| `[a2a]`: `remotes.<name>` (client) + `server` (fail-closed bearer, loopback-only open mode, never open in a hardened sandbox, private agents never served) | `src/config/a2a.rs` → `SandboxSections::a2a` |
+| Client: card discovery (+ 0.3 `agent.json`), JSON-RPC 1.0 / 0.3 + HTTP+JSON 1.0, host pin, `send_and_wait` polling, audit `tool = "a2a"`; egress `peer_client` (proxied, loopback direct) | `src/adapters/outbound/a2a/`, `egress.rs` |
+| Opt-in tool `a2a` (`list` / `card` / `send` / `get` / `cancel`) | `src/adapters/outbound/tools/a2a/`, `domain/tools.rs::A2A` |
+| Server: `tengu a2a serve` (feature `a2a`, default build): planner `/a2a`, agents `/a2a/agents/<n>`, every method (push / extended card refused per the card), SSE, in-memory task store, cancel kills the run | `src/application/a2a/`, `src/ports/a2a.rs`, `src/bootstrap/a2a.rs`, `src/adapters/inbound/a2a.rs` |
+| CLI `tengu a2a serve\|cards\|remotes\|card\|send\|get\|cancel` | `src/adapters/inbound/cli/a2a.rs` |
+
+| Evidence (2026-10-10) | Result |
+|---|---|
+| `cargo test --bin tengu a2a` | 65+ unit tests pass |
+| `tests/a2a_e2e.rs` (two tengu processes, loopback, local-engine mock) | 5/5 pass: v1, 0.3, planner, tool, 401, no-token refusal |
+| `tests/bridge_conformance.rs` (`a2a`, `a2a:list`, `a2a:pinned_host`) | pass: in-process = MCP bridge |
+| `tests/engine_matrix.rs` set `a2a` | live pass: openrouter gemini-2.5-flash-lite (4.6 s), openrouter claude-haiku-4.5 (5.3 s), claude_code claude-haiku-4-5 (10.4 s); `offline_local_a2a` pass |
+| Interop vs the official `a2a-sdk` 1.2.2 (Python, outside the repo, scratch dir) | 52/52 both ways: SDK client → `tengu a2a serve` (card, send, stream, get, list, cancel, subscribe, errors, 0.3 compat); tengu client → SDK server (JSON-RPC 1.0, HTTP+JSON 1.0, 0.3, bearer) |
+
+| Open | Note |
+|---|---|
+| Live `local` leg of the `a2a` set | the operator's PC (rule: no local models on this Mac) |
+| Not built | push notifications (card says `false`), gRPC, persistent task store (restart forgets tasks), A2A events in the Studio trace, signed cards |
+| Merge | PR left open on purpose: the main checkout stays frozen until the weekend #2 stop (Mon 2026-10-12) |
+
 ## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
 
 | Finding | Fixed | Test |

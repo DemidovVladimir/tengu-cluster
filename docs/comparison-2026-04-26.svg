@@ -1,6 +1,6 @@
-<svg viewBox="0 0 980 1284" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+<svg viewBox="0 0 980 1348" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
   <title id="title">Tengu-Cluster vs Hermes Agent vs PI/Cowork — architecture comparison, April 2026</title>
-  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, routing, five trading-runtime axes added 2026-10-02 (typed results + decision loops, long-running runtime, money safety, research on history, engine parity), and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18, 2026-10-02, 2026-10-08 (lineage + forward evidence, sealed strategy rankings, source evidence, counts, skill scanner) and 2026-10-09 (Tengu Studio surface, tool count); Hermes and PI cells on the new axes state only what the snapshot establishes, else "not covered by this snapshot"; the "landed today" boxes are historical.</desc>
+  <desc id="desc">Three-column comparison across architecture stack, memory model, skills (incl. self-adjustment), tools, routing, five trading-runtime axes added 2026-10-02, A2A interop added 2026-10-10 (typed results + decision loops, long-running runtime, money safety, research on history, engine parity), and four deltas landed on 2026-04-26 (per-example vectors, TUI debug panel, durable user-message persistence, registry recall). Tengu facts refreshed 2026-09-18, 2026-10-02, 2026-10-08 (lineage + forward evidence, sealed strategy rankings, source evidence, counts, skill scanner) and 2026-10-09 (Tengu Studio surface, tool count); Hermes and PI cells on the new axes state only what the snapshot establishes, else "not covered by this snapshot"; the "landed today" boxes are historical.</desc>
   <style>
     .h1 { font-size: 16px; font-weight: 700; fill: #0f172a; }
     .h2 { font-size: 12px; font-weight: 700; fill: #0f172a; letter-spacing: .4px; text-transform: uppercase; }
@@ -286,7 +286,7 @@
     <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="172" cy="14" r="4" class="added" /><text x="182" y="18" class="body">openrouter · local · claude_code</text>
     <circle cx="172" cy="32" r="4" class="added" /><text x="182" y="36" class="body">lint + bridge conformance + live matrix</text>
-    <text x="172" y="52" class="small">via tengu mcp-bridge · 18 tool sets</text>
+    <text x="172" y="52" class="small">via tengu mcp-bridge · 19 tool sets</text>
     <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
     <circle cx="439" cy="14" r="4" class="ok" /><text x="449" y="18" class="body">200+ providers · 6 terminal backends</text>
     <circle cx="439" cy="32" r="4" class="unk" /><text x="449" y="36" class="body">per-tool parity checks: not covered</text>
@@ -295,11 +295,26 @@
     <text x="716" y="52" class="small">parity across engines: not applicable</text>
   </g>
 
-  <line x1="20" y1="1074" x2="960" y2="1074" stroke="#e2e8f0" />
-  <text x="20" y="1094" class="h2">What landed on 2026-04-26 (historical — src/adapters/rag/ removed 2026-05-14)</text>
-  <text x="20" y="1110" class="mono">extends c3fe7fd2be0f91fe7f4ffb2b41088622c536d2ee · e248d82ead03d7e99eae098137f09405aa61cd6b · 7d1fa552b2d9e8bb52590d3aaf4ffaa79674b7c4</text>
+  <g transform="translate(20, 1062)">
+    <rect x="0" y="0" width="160" height="60" rx="4" class="row" />
+    <text x="10" y="18" class="h3">A2A interop</text>
+    <text x="10" y="34" class="small">talk to other agent</text>
+    <text x="10" y="50" class="small">harnesses (A2A 1.0.1)</text>
+    <rect x="162" y="0" width="265" height="60" rx="4" class="row" />
+    <circle cx="172" cy="14" r="4" class="added" /><text x="182" y="18" class="body">tool a2a → named remotes, host-pinned</text>
+    <circle cx="172" cy="32" r="4" class="added" /><text x="182" y="36" class="body">tengu a2a serve: JSON-RPC 1.0 + 0.3</text>
+    <text x="172" y="52" class="small">a2a-sdk interop both ways · 2026-10-10</text>
+    <rect x="429" y="0" width="265" height="60" rx="4" class="row" />
+    <circle cx="439" cy="14" r="4" class="unk" /><text x="449" y="18" class="body">not covered by this snapshot</text>
+    <rect x="696" y="0" width="244" height="60" rx="4" class="row" />
+    <circle cx="706" cy="14" r="4" class="unk" /><text x="716" y="18" class="body">not covered by this snapshot</text>
+  </g>
 
-  <g transform="translate(20, 1118)">
+  <line x1="20" y1="1138" x2="960" y2="1138" stroke="#e2e8f0" />
+  <text x="20" y="1158" class="h2">What landed on 2026-04-26 (historical — src/adapters/rag/ removed 2026-05-14)</text>
+  <text x="20" y="1174" class="mono">extends c3fe7fd2be0f91fe7f4ffb2b41088622c536d2ee · e248d82ead03d7e99eae098137f09405aa61cd6b · 7d1fa552b2d9e8bb52590d3aaf4ffaa79674b7c4</text>
+
+  <g transform="translate(20, 1182)">
     <rect x="0" y="0" width="225" height="86" rx="4" class="col-tengu" />
     <circle cx="14" cy="14" r="4" class="new" />
     <text x="24" y="18" class="h3">Per-example vectors</text>
@@ -330,7 +345,7 @@
     <text x="721" y="72" class="small">open: skill auto-trigger · cron</text>
   </g>
 
-  <g transform="translate(20, 1216)">
+  <g transform="translate(20, 1280)">
     <rect x="0" y="0" width="940" height="54" rx="4" class="row-alt" />
     <text x="10" y="17" class="small"><tspan font-weight="700" fill="#7c3aed">Tengu</tspan> is doctrinally sharp (LLM=heart · Open Brain / Karpathy LLM Wiki=brain · tools=hands) but light on agent-layer features —</text>
     <text x="10" y="31" class="small"><tspan font-weight="700" fill="#0284c7">Hermes</tspan> wins on breadth (platforms, scheduler, self-improving skills, multi-tenant); <tspan font-weight="700" fill="#059669">PI/Cowork</tspan> wins on UX (artifacts, computer-use, MCP marketplace).</text>

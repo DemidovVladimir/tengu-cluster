@@ -1,6 +1,6 @@
-<svg viewBox="0 0 1200 3976" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
-  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio and their files (2026-04-27, synced 2026-10-09)</title>
-  <desc id="desc">Eight stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control).</desc>
+<svg viewBox="0 0 1200 4228" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio, A2A and their files (2026-04-27, synced 2026-10-10)</title>
+  <desc id="desc">Nine stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control).</desc>
   <style>
     .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
     .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
@@ -38,6 +38,7 @@
     .pill-soe  { fill: #9a3412; }
     .pill-trc  { fill: #0e7490; }
     .pill-std  { fill: #6d28d9; }
+    .pill-a2a  { fill: #1d4ed8; }
     .panel { fill: #ffffff; stroke: #e2e8f0; }
     .arrow { stroke: #475569; stroke-width: 1.6; fill: none; }
     .arrow-fat { stroke: #1e293b; stroke-width: 2.4; fill: none; }
@@ -1082,7 +1083,71 @@
     <text x="10" y="244" class="small" font-style="italic">runbook: docs/control-loop-lab-2026-10-08.md</text>
   </g>
 
-  <g transform="translate(20, 3848)">
+  <!-- ===================== SECTION 9 — A2A: other agent harnesses ===================== -->
+  <text x="20" y="3864" class="h2">section 9 - A2A: other agent harnesses - 2026-10-10</text>
+  <line x1="20" y1="3870" x2="1180" y2="3870" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 3884)">
+    <rect width="282" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-a2a" />
+    <text x="10" y="15" class="pt">protocol (pure)</text>
+    <text x="10" y="40" class="file">domain/a2a/</text>
+    <text x="10" y="52" class="small">model.rs: v1.0 types · AgentCard::endpoint</text>
+    <text x="10" y="64" class="small">rpc.rs: methods, errors, A2A-Version</text>
+    <text x="10" y="76" class="small">v03.rs: the 0.3 dialect both ways</text>
+    <text x="10" y="88" class="small">card.rs · render.rs (ids whole)</text>
+    <text x="10" y="108" class="file">config/a2a.rs</text>
+    <text x="10" y="120" class="small">[a2a.remotes.&lt;name&gt;] · [a2a.server]</text>
+    <text x="10" y="132" class="small">→ SandboxSections::a2a</text>
+    <text x="10" y="188" class="small" font-style="italic">spec 1.0.1 · JSON-RPC 1.0 + 0.3</text>
+  </g>
+
+  <g transform="translate(312, 3884)">
+    <rect width="282" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-a2a" />
+    <text x="10" y="15" class="pt">client: tool a2a</text>
+    <text x="10" y="40" class="file">outbound/tools/a2a/ · outbound/a2a/</text>
+    <text x="10" y="52" class="small">list · card · send · get · cancel (opt-in)</text>
+    <text x="10" y="64" class="small">card → interface → host pin → call →</text>
+    <text x="10" y="76" class="small">GetTask polling until settled</text>
+    <text x="10" y="96" class="file">egress.rs::peer_client</text>
+    <text x="10" y="108" class="small">proxied, loopback direct, no redirects;</text>
+    <text x="10" y="120" class="small">+ scope net_hosts per request · audit a2a</text>
+    <text x="10" y="188" class="small" font-style="italic">only named remotes, only their hosts</text>
+  </g>
+
+  <g transform="translate(604, 3884)">
+    <rect width="282" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-a2a" />
+    <text x="10" y="15" class="pt">server: tengu a2a serve</text>
+    <text x="10" y="40" class="file">inbound/a2a.rs (feature a2a, default)</text>
+    <text x="10" y="52" class="small">cards v1 / 0.3 · POST /a2a, /a2a/agents/&lt;n&gt;</text>
+    <text x="10" y="64" class="small">JSON-RPC + SSE · bearer token (401)</text>
+    <text x="10" y="84" class="file">application/a2a/ · ports/a2a.rs</text>
+    <text x="10" y="96" class="small">a task per message · max_running · cancel</text>
+    <text x="10" y="108" class="small">in-memory store · ListTasks pages</text>
+    <text x="10" y="128" class="file">bootstrap/a2a.rs</text>
+    <text x="10" y="140" class="small">planner = orchestrator turn · agent = turn</text>
+    <text x="10" y="152" class="small">with its tools · answers redacted</text>
+    <text x="10" y="188" class="small" font-style="italic">fail-closed; private agents never served</text>
+  </g>
+
+  <g transform="translate(896, 3884)">
+    <rect width="284" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="284" height="22" rx="6" class="pill-a2a" />
+    <text x="10" y="15" class="pt">operator + proof</text>
+    <text x="10" y="40" class="file">cli/a2a.rs</text>
+    <text x="10" y="52" class="small">tengu a2a serve | cards | remotes |</text>
+    <text x="10" y="64" class="small">card | send | get | cancel</text>
+    <text x="10" y="84" class="file">sandboxes/a2a-lab</text>
+    <text x="10" y="96" class="small">server + remote self + liaison agent</text>
+    <text x="10" y="116" class="file">tests/a2a_e2e.rs · conformance · matrix</text>
+    <text x="10" y="128" class="small">two tengu processes; every engine;</text>
+    <text x="10" y="140" class="small">official a2a-sdk interop both ways</text>
+    <text x="10" y="188" class="small" font-style="italic">doc: docs/a2a-2026-10-10.md</text>
+  </g>
+
+  <g transform="translate(20, 4100)">
     <rect width="1160" height="110" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>
