@@ -426,7 +426,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                 .collect();
             issues.push(
                 Issue::error(format!(
-                    "a {from_label} cannot wire to a {to_label}{}",
+                    "no wire from {from_label} to {to_label}{}",
                     if hint.is_empty() {
                         String::new()
                     } else {

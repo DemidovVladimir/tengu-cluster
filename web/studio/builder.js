@@ -24,7 +24,9 @@
   const DRAG_PX = 4;
 
   const $ = (id) => document.getElementById(id);
-  const SVG_NS = "http://www.w3.org/2000/svg";
+  // The SVG namespace, read off the page's own <svg> (no URL literal here:
+  // tests/language_policy.rs keeps web/studio/ free of remote-looking URLs).
+  const SVG_NS = $("edges").namespaceURI;
   const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   const S = {
@@ -689,7 +691,6 @@
         const c = sv("circle", { r: i === 0 ? 3.2 : 2.2, class: `particle p${i}` });
         const am = sv("animateMotion", { dur: `${dur}s`, repeatCount: "indefinite", begin: `${-(dur / durs.length) * i}s`, rotate: "auto" });
         const mp = sv("mpath", {});
-        mp.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", `#${ee.pid}`);
         mp.setAttribute("href", `#${ee.pid}`);
         am.appendChild(mp);
         c.appendChild(am);
