@@ -26,7 +26,7 @@
 //! | `run_command` / shell skills | `guard_shell` URL check + audit; proxy env vars (loopback exempt); `shell_network = "isolated"` runs `sh` under macOS `sandbox-exec` — only the proxy port is reachable | isolated: kernel-enforced; `proxy_env`: advisory |
 //! | MCP `stdio` servers | proxy env vars (loopback exempt, like MCP `http`) | advisory |
 //! | Claude Code builtin `Bash` | stripped from the profile while a proxy is set (`claude_code_profile`) | enforced |
-//! | Claude Code's own API traffic | `HTTPS_PROXY` = HTTP CONNECT on the proxy port (Arti serves CONNECT on 9050) when `route_llm_api` (`claude_cli_env`) | advisory (the CLI honours the env) |
+//! | Claude Code's / Codex's own API traffic | `HTTPS_PROXY` = HTTP CONNECT on the proxy port (Arti serves CONNECT on 9050) when `route_llm_api` (`claude_cli_env`, both CLI engines) | advisory (the CLI honours the env) |
 //!
 //! Every `http_request` hop and every network-looking shell command is
 //! appended to the JSONL audit log (`audit_log`, default
@@ -346,7 +346,7 @@ impl EgressPolicy {
     /// through the proxy via `HTTPS_PROXY` when `route_llm_api` is set.
     /// Empty otherwise (the CLI then connects directly, like OpenRouter does
     /// when `route_llm_api = false`).
-    #[cfg_attr(not(feature = "claude_code"), allow(dead_code))]
+    #[cfg_attr(not(any(feature = "claude_code", feature = "codex")), allow(dead_code))]
     pub(crate) fn claude_cli_env(&self) -> Vec<(&'static str, String)> {
         if !self.route_llm_api() {
             return Vec::new();

@@ -449,20 +449,20 @@
 
 <section class="sec" aria-labelledby="s-editor">
   <div class="sec-head">
-    <span class="kicker">Not built</span>
-    <h2 id="s-editor">The editor, as designed</h2>
-    <p>A visual editor is a design only (<code>docs/studio-editor-design-2026-10-08.md</code>): no route, no save. Building it waits for Operator Review #3. These rules are fixed now.</p>
+    <span class="kicker">Built 2026-10-10</span>
+    <h2 id="s-editor">The editor: the sandbox builder</h2>
+    <p><code>tengu studio --sandbox &lt;s&gt; --allow-edit</code> also serves a drag-and-drop builder at <code>/builder</code> (<code>tengu sandbox new</code> opens it on a new sandbox). Without the flag every builder route is 404. The design rules (<code>docs/studio-editor-design-2026-10-08.md</code>) hold, with one change: the builder rewrites the sandboxes it made, never a hand-written one. Full page: <a href="builder.html">Sandbox builder</a>.</p>
   </div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Rule</th><th>How</th></tr></thead>
       <tbody>
-        <tr><td>Palette</td><td>served from Rust: node kinds of this graph, each agent's catalog tools with their own schemas, the config structs' fields. No list in the page; no shell or code node.</td></tr>
-        <tr><td>Connections</td><td>the graph's edges, each mapped to the one TOML key it writes: <code>fires</code> → feed <code>target</code> or a webhook <code>loop</code>, <code>reads</code> → <code>world</code>, <code>calls</code> → <code>tool</code>, <code>binds</code> → a slot source, <code>next</code> → <code>sequence</code>, <code>owns</code> → <code>agent</code>.</td></tr>
-        <tr><td>Validate</td><td><code>Config::load</code> on the draft written at its final path; the page only shows the errors.</td></tr>
-        <tr><td>Save</td><td>as a new sandbox only, after a TOML preview and a diff; never in place, never a running sandbox.</td></tr>
+        <tr><td>Palette</td><td>served from Rust (<code>GET /api/v1/builder</code>): 10 card kinds with their fields, the catalog tools with their own schemas, skills, engines, secret stores. No list in the page; no shell or code node.</td></tr>
+        <tr><td>Connections</td><td>12 wires (<code>CONNECTIONS</code>), each mapped to the TOML key it writes; Rust colours each one live, warn or error.</td></tr>
+        <tr><td>Validate</td><td><code>Config::load</code> on a temp copy at <code>sandboxes/&lt;s&gt;/config.toml</code>; the page only shows the errors.</td></tr>
+        <tr><td>Save</td><td>Finalise, after a TOML preview and a diff: only a sandbox with <code>builder.json</code> (made by <code>tengu sandbox new</code>), never one whose runtime is running; the old file is kept as <code>config.toml.prev</code>.</td></tr>
         <tr><td>Frozen and hardened</td><td>a W1-bound or hardened sandbox is view-only; a new design is a new sandbox or generation.</td></tr>
-        <tr><td>Narrowing</td><td>a loop is narrowed only by an execution map, checked by <code>ExecutionMap::apply</code>; the map is never written into TOML.</td></tr>
+        <tr><td>Narrowing</td><td>decision loops and feeds are not on the canvas: a builder sandbox keeps any it has as hand-written sections, and a loop is narrowed only by an execution map (<code>ExecutionMap::apply</code>).</td></tr>
       </tbody>
     </table>
   </div>
@@ -499,6 +499,7 @@
         <tr><td><code>src/adapters/inbound/studio/control.rs</code> · <code>inbound/run.rs</code></td><td>Play / Stop / event on the runtime (<code>start_session</code>, the stopper, the loop dispatch), <code>studio.*</code> events, Studio's shutdown drain</td></tr>
         <tr><td><code>src/bootstrap/studio.rs</code> · <code>bootstrap/runtime.rs</code></td><td><code>StudioContext</code> (graph, trace reader, kept maps, evidence paths) · <code>read_live</code>, shared with <code>doctor --live</code></td></tr>
         <tr><td><code>web/studio/</code></td><td>the page: HTML, CSS, vanilla JS (the one exception to "Rust only"; <code>tests/language_policy.rs</code>); the control buttons draw <code>/api/v1/control</code></td></tr>
+        <tr><td><code>src/adapters/inbound/studio/builder.rs</code> · <code>web/studio/builder.*</code></td><td>the builder routes and page (<code>--allow-edit</code>; <a href="builder.html">Sandbox builder</a>)</td></tr>
         <tr><td><code>tests/fixtures/studio/</code></td><td>golden graphs of <code>control-loop-lab</code> and <code>lping</code> (with its planner)</td></tr>
       </tbody>
     </table>
@@ -507,7 +508,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
 </article>
 </main>
 </div>

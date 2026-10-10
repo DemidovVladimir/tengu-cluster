@@ -2284,7 +2284,11 @@ fn side_effects(side: &Side) -> Result<Vec<String>, String> {
             Err(e) => out.push(format!("{rel}: {} bytes", e.as_bytes().len())),
         }
     }
-    Ok(out.iter().map(|l| normalize(l, &side.roots)).collect())
+    // Sorted again after normalising: a run dir is named by its start time,
+    // so two sides that straddle a second sort differently before `<TIME>`.
+    let mut out: Vec<String> = out.iter().map(|l| normalize(l, &side.roots)).collect();
+    out.sort();
+    Ok(out)
 }
 
 fn db_rows(path: &Path, rel: &str) -> Result<Vec<String>, String> {

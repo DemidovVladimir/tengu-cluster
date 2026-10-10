@@ -11,7 +11,7 @@
 //! | Fixture family | Files | Sandbox | Sets |
 //! |---|---|---|---|
 //! | hardened | `tests/fixtures/engine_matrix/{openrouter,claude_code,local}.toml` | `[risk]` + `[xmarket]` + `[paper]` + `[sources]` (one enabled `ted_search` row, synthetic terms; its state dir `engine-matrix` is also the SOE state root, no `[soe]`): no shell, no `[[mcp_servers]]`, Privy signing off | `workspace`, `hyperliquid`, `xm`, `xlab`, `xlab_holdout`, `xlab_rank` (a copy at `<tmp>/sandboxes/rank-test/config.toml` + `[strategy_ranking]`: a ranking contract names its sandbox), `sources`, `soe` |
-//! | open | `tests/fixtures/engine_matrix/open/{openrouter,claude_code,local}.toml` | `[memory]` on, a shell, the `matrix` `[[mcp_servers]]` (`token_mcp_server.sh`), no signer | every other set |
+//! | open | `tests/fixtures/engine_matrix/open/{openrouter,claude_code,local,codex}.toml` | `[memory]` on, a shell, the `matrix` `[[mcp_servers]]` (`token_mcp_server.sh`), no signer | every other set |
 //!
 //! | Tool set | Scripted calls | The leg also asserts |
 //! |---|---|---|
@@ -51,6 +51,7 @@
 //! | openrouter · `google/gemini-2.5-flash-lite` | `gemini`, `xm_gemini` · `gemini` | `openrouter_gemini_*` | `OPENROUTER_API_KEY` (env or the repo's `.env`) |
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
 //! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
+//! | codex · `gpt-5.5`, `sandbox = "read-only"` | — · `codex` (open sets only: `engine = "codex"` is refused in a hardened sandbox, so every hardened set's `codex_*` leg is absent) | `codex_*` | feature `codex` (default), `codex` logged in with ChatGPT (`codex login`); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
 //! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole), `offline_local_xlab_rank` (the ranking run and `latest`, each whole, rows weakest first), `offline_local_sources` (`source_evidence` before / after the change notice: the original stands, then `superseded … (correction)`; each text whole under the 16k cap, the buyer's name fenced), `offline_local_soe` (the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
@@ -210,6 +211,7 @@ enum Kind {
     OpenRouter,
     ClaudeCode,
     Local,
+    Codex,
 }
 
 /// One engine × model: its fixtures, its routable agent (the same name in
@@ -255,6 +257,16 @@ const GEMMA: Target = Target {
     agent: "gemma",
     xm_agent: "xm_gemma",
     label: "local gemma4:latest",
+};
+/// Open sets only: `engine = "codex"` is refused in the hardened family
+/// (`config/hardening.rs`), so `fixture` / `xm_agent` are never used.
+const CODEX: Target = Target {
+    kind: Kind::Codex,
+    fixture: "open/codex.toml",
+    open_fixture: "open/codex.toml",
+    agent: "codex",
+    xm_agent: "codex",
+    label: "codex gpt-5.5",
 };
 /// `GEMMA` against the offline mock server.
 const MOCK: Target = Target {
@@ -864,6 +876,16 @@ live_legs! {
     local_solana_decide => GEMMA, Set::SolanaDecide;
     local_solana_write => GEMMA, Set::SolanaWrite;
     local_agentic_memory => GEMMA, Set::AgenticMemory;
+    codex_shell => CODEX, Set::Shell;
+    codex_memory => CODEX, Set::Memory;
+    codex_skills => CODEX, Set::Skills;
+    codex_util => CODEX, Set::Util;
+    codex_privy_off => CODEX, Set::PrivyOff;
+    codex_privy => CODEX, Set::Privy;
+    codex_solana_read => CODEX, Set::SolanaRead;
+    codex_solana_decide => CODEX, Set::SolanaDecide;
+    codex_solana_write => CODEX, Set::SolanaWrite;
+    codex_agentic_memory => CODEX, Set::AgenticMemory;
 }
 
 fn live_leg(target: Target, set: Set) {
@@ -888,6 +910,17 @@ fn live_leg(target: Target, set: Set) {
             Ok(url) => (vec![("TENGU_MATRIX_LOCAL_BASE_URL", url)], 1_200),
             Err(why) => return skip(why),
         },
+        Kind::Codex => {
+            if set.hardened() || set == Set::Xm {
+                return skip("refused: engine = \"codex\" is not allowed in a hardened sandbox");
+            }
+            assert!(
+                cfg!(feature = "codex"),
+                "build with --features codex (the tengu binary runs the engine)"
+            );
+            let log = "tengu::adapters::outbound::engines::codex=debug";
+            (vec![("RUST_LOG", log.to_string())], 600)
+        }
     };
     match set.needs() {
         Ok(extra) => envs.extend(extra),
@@ -3019,7 +3052,12 @@ fn fixtures_load_and_agree() {
             .filter(|s| s.hardened() == hardened && *s != Set::Xm)
             .collect();
         let mut shared: Option<toml::Table> = None;
-        for target in [GEMINI, CLAUDE, GEMMA] {
+        let targets: &[Target] = if hardened {
+            &[GEMINI, CLAUDE, GEMMA]
+        } else {
+            &[GEMINI, CLAUDE, GEMMA, CODEX]
+        };
+        for &target in targets {
             let file = if hardened {
                 target.fixture
             } else {
@@ -3070,8 +3108,8 @@ fn fixtures_load_and_agree() {
             }
         }
     }
-    for target in [GEMINI, HAIKU, CLAUDE, GEMMA] {
-        for (file, agent, tool, args, want) in [
+    for target in [GEMINI, HAIKU, CLAUDE, GEMMA, CODEX] {
+        let checks = [
             (
                 target.fixture,
                 target.xm_agent,
@@ -3086,7 +3124,12 @@ fn fixtures_load_and_agree() {
                 r#"{"hex": "0xff"}"#,
                 "255".to_string(),
             ),
-        ] {
+        ];
+        // Codex: the open family only (no hardened fixture).
+        let checks = checks
+            .into_iter()
+            .filter(|(_, _, tool, ..)| target.kind != Kind::Codex || *tool != "risk_status");
+        for (file, agent, tool, args, want) in checks {
             let ws = workspace();
             let out = Command::new(env!("CARGO_BIN_EXE_tengu"))
                 .args([

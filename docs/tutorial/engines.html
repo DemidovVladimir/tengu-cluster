@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Engines · Tengu</title>
-<meta name="description" content="The Engine port and its three adapters: OpenRouter over HTTPS, any OpenAI-compatible local server, and the Claude Code CLI with the MCP bridge.">
+<meta name="description" content="The Engine port and its four adapters: OpenRouter over HTTPS, any OpenAI-compatible local server, and two subscription CLIs (Claude Code and OpenAI Codex) that reach Tengu tools through the MCP bridge.">
 <script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,10 +58,10 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · Engines</div>
   <h1>Engines</h1>
-  <p class="lede">Each agent names one engine. OpenRouter and local servers answer over HTTP and Tengu runs the tools; Claude Code runs as a CLI subprocess and reaches Tengu's tools through the MCP bridge.</p>
+  <p class="lede">Each agent names one engine. OpenRouter and local servers answer over HTTP and Tengu runs the tools; Claude Code and Codex run as CLI subprocesses on your Claude or ChatGPT subscription and reach Tengu's tools through the MCP bridge.</p>
   <ul class="facts">
-    <li><b>engine</b> = openrouter · local · claude_code</li>
-    <li>window <b>1 000 000</b> by default; claude_code <b>200 000</b></li>
+    <li><b>engine</b> = openrouter · local · claude_code · codex</li>
+    <li>window <b>1 000 000</b> by default; claude_code, codex <b>200 000</b></li>
     <li>local result ≤ <b>1/8</b> of the window</li>
     <li>HTTP call <b>600 s</b> · CLI idle <b>120 s</b></li>
   </ul>
@@ -75,13 +75,13 @@
 
 <section class="sec" aria-labelledby="s-flow">
   <div class="sec-head">
-    <span class="kicker">One port, three adapters</span>
+    <span class="kicker">One port, four adapters</span>
     <h2 id="s-flow">From config to model</h2>
   </div>
   <figure class="stage" data-stage data-interval="3600">
     <div class="stage-canvas">
       <svg viewBox="0 0 860 515" role="img" aria-labelledby="eng-t">
-        <title id="eng-t">An agent block names an engine; the factory builds OpenRouter, local or Claude Code. OpenRouter posts to openrouter.ai through egress, local posts to a server on this host, Claude Code spawns the CLI which reaches Tengu tools through the MCP bridge. All three feed the same tool loop.</title>
+        <title id="eng-t">An agent block names an engine; the factory builds OpenRouter, local, Claude Code or Codex. OpenRouter posts to openrouter.ai through egress, local posts to a server on this host, Claude Code or Codex spawns its CLI, which reaches Tengu tools through the MCP bridge. All four feed the same tool loop.</title>
         <!-- edges -->
         <path class="e" id="p-toml-build" d="M95 120 L95 213" data-at="1"/>
         <path class="e" id="p-build-or" d="M170 236 C230 236 230 80 288 80" data-at="2-3"/>
@@ -127,9 +127,9 @@
         </g>
         <g class="n heart" data-at="2,7-9">
           <rect x="290" y="370" width="180" height="80" rx="10"/>
-          <text x="380" y="398" text-anchor="middle" class="t-title t-mono">claude_code</text>
-          <text x="380" y="418" text-anchor="middle" class="t-small">CLI subprocess</text>
-          <text x="380" y="435" text-anchor="middle" class="t-small">stream-json NDJSON</text>
+          <text x="380" y="398" text-anchor="middle" class="t-title">CLI engines</text>
+          <text x="380" y="418" text-anchor="middle" class="t-small t-mono">claude_code · codex</text>
+          <text x="380" y="435" text-anchor="middle" class="t-small">your subscription</text>
         </g>
         <g class="n data" data-at="3-4">
           <rect x="600" y="40" width="240" height="80" rx="8"/>
@@ -145,7 +145,7 @@
         </g>
         <g class="n" data-at="7-8">
           <rect x="600" y="340" width="240" height="62" rx="8"/>
-          <text x="720" y="366" text-anchor="middle" class="t-title t-mono">claude -p</text>
+          <text x="720" y="366" text-anchor="middle" class="t-title t-mono">claude · codex</text>
           <text x="720" y="386" text-anchor="middle" class="t-small">cwd = agent workspace</text>
         </g>
         <g class="n hands" data-at="8">
@@ -155,7 +155,7 @@
         </g>
 
         <!-- per-step badges -->
-        <g class="pop badge" data-at="1"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">openrouter | local | claude_code</text></g>
+        <g class="pop badge" data-at="1"><rect x="250" y="478" width="260" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">openrouter | local | claude_code | codex</text></g>
         <g class="pop badge" data-at="2"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">StepOpts: grant · summary file</text></g>
         <g class="pop badge" data-at="3"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">max_tokens only when set</text></g>
         <g class="pop badge" data-at="4"><rect x="270" y="478" width="220" height="22" rx="11"/><text x="380" y="493" text-anchor="middle">failed turn → one retry</text></g>
@@ -184,14 +184,14 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>An agent block names its <code>engine</code> and <code>model</code>. Config load refuses any engine but <code>openrouter</code>, <code>local</code>, <code>claude_code</code>, and refuses an empty model.</li>
+        <li>An agent block names its <code>engine</code> and <code>model</code>. Config load refuses any engine but <code>openrouter</code>, <code>local</code>, <code>claude_code</code>, <code>codex</code> (<code>config::ENGINES</code>), and refuses an empty model.</li>
         <li><code>build_engine</code> matches on the name. <code>run-agent</code> steps and the doctor call <code>build_step_engine</code> with options: workspace grant, summary file.</li>
         <li>openrouter: one non-streaming POST per round to <code>{OPENROUTER_BASE_URL}/v1/chat/completions</code> with <code>OPENROUTER_API_KEY</code>, through the egress client.</li>
         <li>A turn with no tool call and no text, or an error finish, is retried once. Cut-off or filtered output is never retried.</li>
         <li>local: the same API shape to <code>base_url</code> on this machine, never through the proxy. A trailing <code>/v1</code> is dropped; the model id is sent verbatim.</li>
         <li>Small windows: each tool result is capped at window ÷ 8 × 4 chars, and a system message equal to the prompt is sent once.</li>
-        <li>claude_code: spawns <code>claude -p --output-format stream-json</code> with <code>--strict-mcp-config</code>. Parent-session env and <code>ANTHROPIC_API_KEY</code> are stripped.</li>
-        <li>The CLI runs its own loop. Tengu tools go through <code>tengu mcp-bridge</code> and return as <code>ToolRan</code>, never re-run. Past <code>max_tool_rounds</code> calls the CLI is killed.</li>
+        <li>claude_code: spawns <code>claude -p --output-format stream-json</code> with <code>--strict-mcp-config</code>. Parent-session env and <code>ANTHROPIC_API_KEY</code> are stripped. codex: spawns <code>codex exec --json</code> with <code>--ignore-user-config</code>; <code>OPENAI_API_KEY</code> is stripped, so the ChatGPT subscription pays.</li>
+        <li>Each CLI runs its own loop. Tengu tools go through <code>tengu mcp-bridge</code> (Codex: <code>-c mcp_servers.tengu-tools.*</code>) and return as <code>ToolRan</code>, never re-run. Past <code>max_tool_rounds</code> calls the CLI is killed.</li>
         <li>Every engine yields the same <code>StreamEvent</code>s: text, tool calls, tool runs, usage. One tool loop consumes them, so history and metrics look alike.</li>
       </ol>
     </div>
@@ -206,17 +206,17 @@
   </div>
   <div class="table-wrap">
     <table class="cmp">
-      <thead><tr><th></th><th>openrouter</th><th>local</th><th>claude_code</th></tr></thead>
+      <thead><tr><th></th><th>openrouter</th><th>local</th><th>claude_code</th><th>codex</th></tr></thead>
       <tbody>
-        <tr><td>Talks to</td><td class="wrap"><code>https://openrouter.ai/api</code> (<code>OPENROUTER_BASE_URL</code>)</td><td class="wrap"><code>base_url</code>, default <code>http://127.0.0.1:8888</code></td><td class="wrap"><code>[claude_code] cli_path</code>, default <code>claude</code></td></tr>
-        <tr><td>Auth</td><td class="wrap"><code>OPENROUTER_API_KEY</code>, required</td><td class="wrap"><code>$UNSLOTH_API_KEY</code> if set (<code>api_key_env</code>)</td><td>the CLI's own login</td></tr>
-        <tr><td>Network</td><td>egress client: Tor unless open</td><td>direct, no proxy</td><td class="wrap">CLI gets <code>HTTPS_PROXY</code> under Tor</td></tr>
-        <tr><td>Window</td><td class="wrap"><code>limits.context_window</code></td><td class="wrap">same: set the real one</td><td>fixed 200 000</td></tr>
-        <tr><td>Runs the tools</td><td>Tengu tool loop</td><td>Tengu tool loop</td><td>the CLI, via the bridge</td></tr>
-        <tr><td><code>max_tool_rounds</code></td><td>engine rounds</td><td>engine rounds</td><td>tool calls; CLI killed past it</td></tr>
-        <tr><td>Result cap</td><td>300 000 chars</td><td>min(window ÷ 8 × 4, 300 000)</td><td>50 000 chars per bridge result</td></tr>
-        <tr><td>Retry</td><td>failed turn, once</td><td>none</td><td>none</td></tr>
-        <tr><td>Model slug</td><td class="wrap"><code>anthropic/claude-haiku-4-5</code></td><td class="wrap"><code>unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></td><td class="wrap"><code>claude-opus-5-5</code> (bare)</td></tr>
+        <tr><td>Talks to</td><td class="wrap"><code>https://openrouter.ai/api</code> (<code>OPENROUTER_BASE_URL</code>)</td><td class="wrap"><code>base_url</code>, default <code>http://127.0.0.1:8888</code></td><td class="wrap"><code>[claude_code] cli_path</code>, default <code>claude</code></td><td class="wrap"><code>[agents.&lt;a&gt;.codex] cli_path</code>, default <code>codex</code></td></tr>
+        <tr><td>Auth</td><td class="wrap"><code>OPENROUTER_API_KEY</code>, required</td><td class="wrap"><code>$UNSLOTH_API_KEY</code> if set (<code>api_key_env</code>)</td><td>the CLI's own login</td><td class="wrap">ChatGPT login (<code>codex login</code>); <code>OPENAI_API_KEY</code> stripped</td></tr>
+        <tr><td>Network</td><td>egress client: Tor unless open</td><td>direct, no proxy</td><td class="wrap">CLI gets <code>HTTPS_PROXY</code> under Tor</td><td class="wrap">same; its own shell has no network</td></tr>
+        <tr><td>Window</td><td class="wrap"><code>limits.context_window</code></td><td class="wrap">same: set the real one</td><td>fixed 200 000</td><td>fixed 200 000</td></tr>
+        <tr><td>Runs the tools</td><td>Tengu tool loop</td><td>Tengu tool loop</td><td>the CLI, via the bridge</td><td>the CLI, via the bridge</td></tr>
+        <tr><td><code>max_tool_rounds</code></td><td>engine rounds</td><td>engine rounds</td><td>tool calls; CLI killed past it</td><td>tool calls (MCP + built-in); CLI killed past it</td></tr>
+        <tr><td>Result cap</td><td>300 000 chars</td><td>min(window ÷ 8 × 4, 300 000)</td><td>50 000 chars per bridge result</td><td>50 000 chars per bridge result</td></tr>
+        <tr><td>Retry</td><td>failed turn, once</td><td>none</td><td>none</td><td>none</td></tr>
+        <tr><td>Model slug</td><td class="wrap"><code>anthropic/claude-haiku-4-5</code></td><td class="wrap"><code>unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></td><td class="wrap"><code>claude-opus-5-5</code> (bare)</td><td class="wrap"><code>gpt-5.5</code> (bare)</td></tr>
       </tbody>
     </table>
   </div>
@@ -247,6 +247,27 @@
     <div class="env-row"><b>removed</b><div class="envs rm"><code>ANTHROPIC_API_KEY</code><code>CLAUDECODE</code><code>CLAUDE_PID</code><code>CLAUDE_EFFORT</code><code>CLAUDE_CODE_*</code></div></div>
     <div class="env-row"><b>kept</b><div class="envs keep"><code>CLAUDE_CODE_OAUTH_TOKEN</code><code>CLAUDE_CODE_USE_*</code><code>CLAUDE_CODE_SKIP_*_AUTH</code><code>CLAUDE_CODE_CLIENT_CERT</code><code>CLAUDE_CODE_CLIENT_KEY</code><code>CLAUDE_CODE_CLIENT_KEY_PASSPHRASE</code><code>CLAUDE_CODE_API_KEY_HELPER_TTL_MS</code></div></div>
     <div class="env-row"><b>added</b><div class="envs add" id="env-add"><code>HTTPS_PROXY=http://127.0.0.1:9050</code><code>HTTP_PROXY=http://127.0.0.1:9050</code><code>NO_PROXY=localhost,127.0.0.1,::1</code></div></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-codex">
+  <div class="sec-head">
+    <span class="kicker">The ChatGPT subscription</span>
+    <h2 id="s-codex">The Codex command line</h2>
+    <p>Built by <code>cli_args</code> in <code>codex.rs</code> for <code>codex exec</code>. The prompt goes in on stdin; one JSONL event per line comes back. Verified live 2026-10-10 with codex-cli 0.153.4 and <code>gpt-5.5</code> (<code>list_directory</code> then <code>read_file</code> through the bridge).</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Argument</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td class="wrap"><code>--json</code></td><td><code>item.completed</code> (<code>agent_message</code>, <code>mcp_tool_call</code>, <code>command_execution</code>, <code>file_change</code>), <code>turn.completed</code> (usage), <code>turn.failed</code></td></tr>
+        <tr><td class="wrap"><code>--ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check</code></td><td>none of your <code>~/.codex</code> MCP servers, profiles, hooks or rules; no session files; any workspace. The login still works.</td></tr>
+        <tr><td class="wrap"><code>-s read-only</code> | <code>workspace-write</code> · <code>-c approval_policy="never"</code></td><td>Codex's own shell and patch tool: no network either way, never asks</td></tr>
+        <tr><td class="wrap"><code>-c web_search="disabled"</code> · <code>-c features.&lt;f&gt;=false</code></td><td>apps, plugins, browser and computer use, image generation, sub-agents, memories, hooks: off (they run outside Tengu scopes and egress)</td></tr>
+        <tr><td class="wrap"><code>-c mcp_servers.tengu-tools.*</code></td><td>the bridge: <code>env_vars</code> forwards env NAMES only (no value on the command line); calls pre-approved, scopes gate them in the bridge (<a href="mcp-bridge.html">MCP bridge</a>)</td></tr>
+        <tr><td class="wrap"><code>-m</code> · <code>-C</code> · <code>-c developer_instructions=…</code></td><td>the model, the agent workspace, the system prompt once</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -291,6 +312,7 @@
       <button type="button" aria-controls="tab-or" aria-selected="true">openrouter</button>
       <button type="button" aria-controls="tab-lo">local</button>
       <button type="button" aria-controls="tab-cc">claude_code</button>
+      <button type="button" aria-controls="tab-cx">codex</button>
     </div>
     <div class="tabpanel" id="tab-or"><pre><span class="c"># sandboxes/jev-exec/config.toml</span>
 <span class="k">[agents.executor]</span>
@@ -324,6 +346,15 @@ step_timeout_secs = <span class="n">600</span>
 
 <span class="k">[agents.xm_architect.claude_code]</span>
 builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># required in a [risk] sandbox</span></pre></div>
+    <div class="tabpanel" id="tab-cx" hidden><pre><span class="c"># config.example.toml (commented out there)</span>
+<span class="k">[agents.coder]</span>
+engine    = <span class="s">"codex"</span>
+model     = <span class="s">"gpt-5.5"</span>                 <span class="c"># bare OpenAI model id the CLI accepts</span>
+workspace = <span class="s">"~/projects/my-app"</span>
+
+<span class="k">[agents.coder.codex]</span>
+sandbox  = <span class="s">"read-only"</span>             <span class="c"># read-only | workspace-write: Codex's own shell, never network</span>
+cli_path = <span class="s">"codex"</span>                 <span class="c"># default: codex on PATH; refused in a hardened sandbox</span></pre></div>
   </div>
 </section>
 
@@ -337,7 +368,7 @@ builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># requir
     <li><span class="chip bad">http</span><span><b>status error</b><code>OpenRouter error 429: …</code> or <code>Local LLM error …</code>: the body is shown.</span></li>
     <li><span class="chip bad">down</span><span><b>unreachable</b><code>Local LLM at … unreachable (is the server running?)</code></span></li>
     <li><span class="chip warn">empty</span><span><b>empty twice</b>OpenRouter retried once and still got nothing: chat shows nothing, a <code>run-agent</code> step fails.</span></li>
-    <li><span class="chip bad">idle</span><span><b>CLI idle</b>No CLI output for 120 s: <code>Claude CLI idle timeout</code>, process killed.</span></li>
+    <li><span class="chip bad">idle</span><span><b>CLI idle</b>No CLI output for 120 s (<code>stream_event_timeout_secs</code>): <code>Claude CLI idle timeout</code> or <code>Codex CLI idle timeout</code>, process killed.</span></li>
     <li><span class="chip guard">cap</span><span><b>tool cap</b><code>Max tool rounds exceeded (71 calls, limit 70)</code>, process killed.</span></li>
     <li><span class="chip data">done</span><span><b>step stored</b><code>compress_and_store</code> succeeded in a step: the CLI is stopped on purpose, usage kept.</span></li>
   </ul>
@@ -349,8 +380,10 @@ builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># requir
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>No silent default engine.</b> <code>engine</code> must be one of three; an empty <code>model</code> or unknown <code>builtin_tools_profile</code> fails the load.</span></li>
+    <li><span><b>No silent default engine.</b> <code>engine</code> must be one of four (<code>config::ENGINES</code>); an empty <code>model</code> or unknown <code>builtin_tools_profile</code> fails the load.</span></li>
     <li><span><b>Hardened sandboxes run Claude Code bare.</b> With <code>[risk]</code> or a Solana signer, every claude_code agent needs <code>builtin_tools_profile = "none"</code>, or load fails.</span></li>
+    <li><span><b>No Codex in a hardened sandbox.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, an <code>engine = "codex"</code> agent fails the load: its built-in shell ignores Tengu scopes.</span></li>
+    <li><span><b>Codex bills the subscription.</b> <code>OPENAI_API_KEY</code> and every <code>CODEX_*</code> but <code>CODEX_HOME</code> / <code>CODEX_CA_CERTIFICATE</code> are removed from the CLI's env; <code>~/.codex/config.toml</code> is not loaded.</span></li>
     <li><span><b>The CLI sees only the Tengu bridge.</b> <code>--strict-mcp-config</code> on every run: the operator's own MCP servers never load.</span></li>
     <li><span><b>Built-in Bash never bypasses the proxy.</b> Under an egress proxy, <code>editor_shell</code> launches as <code>editor</code>.</span></li>
     <li><span><b>No secret in the temp MCP config.</b> It holds names and paths; the bridge inherits values from the env.</span></li>
@@ -393,8 +426,10 @@ builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># requir
         <tr><td><code>src/adapters/outbound/engines/openrouter.rs</code></td><td>HTTP JSON, retry once, truncation marker</td></tr>
         <tr><td><code>src/adapters/outbound/engines/local.rs</code></td><td>OpenAI-compatible server, no proxy, result cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI args, env strip, NDJSON, transcript, tool cap</td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, validation</td></tr>
-        <tr><td><code>src/config/hardening.rs</code></td><td>profile <code>none</code> in hardened sandboxes</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td><code>codex exec</code> args, env strip, JSONL events, tool cap</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/cli_run.rs</code></td><td>what the two CLI engines share: run dir, stdin prompt, transcript</td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>ENGINES</code>, <code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, <code>AgentCodexConfig</code>, validation</td></tr>
+        <tr><td><code>src/config/hardening.rs</code></td><td>profile <code>none</code> in hardened sandboxes; no <code>codex</code> there</td></tr>
         <tr><td><code>src/domain/engine_smoke.rs</code></td><td>smoke prompt and verdict</td></tr>
         <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor --engines</code></td></tr>
       </tbody>
@@ -403,7 +438,7 @@ builtin_tools_profile = <span class="s">"none"</span>   <span class="c"># requir
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
 </article>
 </main>
 </div>

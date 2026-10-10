@@ -412,11 +412,12 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
   </div>
   <ul class="states">
     <li><span class="chip bad">parse</span><span><b>unknown field</b>A misspelled section such as <code>[rsik]</code>, or an old key like <code>max_turns</code> in an agent block.</span></li>
-    <li><span class="chip bad">engine</span><span><b>must be one of openrouter|claude_code|local</b><code>agents.&lt;id&gt;.engine</code>, with the value it got.</span></li>
+    <li><span class="chip bad">engine</span><span><b>must be one of openrouter|claude_code|local|codex</b><code>agents.&lt;id&gt;.engine</code>, with the value it got.</span></li>
     <li><span class="chip bad">default</span><span><b>only one agent can have default=true</b>Two agents claim the chat.</span></li>
     <li><span class="chip bad">opt-in</span><span><b>workspace_tools: unknown tool</b>Only the opt-in catalog names pass; the message lists them.</span></li>
     <li><span class="chip bad">empty</span><span><b>at least one agent must be configured</b>A file with no <code>[agents.*]</code> block.</span></li>
     <li><span class="chip guard">hardened</span><span><b>builtin_tools_profile = "none"</b>A <code>claude_code</code> agent in a <code>[risk]</code>, <code>[soe]</code> or signer sandbox without it.</span></li>
+    <li><span class="chip guard">hardened</span><span><b>engine = "codex" is not allowed in a hardened sandbox</b>Codex's built-in shell runs outside Tengu scopes.</span></li>
     <li><span class="chip guard">hardened</span><span><b>[[mcp_servers]] are not allowed</b>Also: any scope granting <code>shell_bins</code>.</span></li>
     <li><span class="chip bad">loop</span><span><b>decision_loops.&lt;n&gt;.agent: no [agents.&lt;a&gt;] block</b>A loop names an agent that does not exist.</span></li>
     <li><span class="chip guard">studio</span><span><b>studio.control = true: refused: …</b>A <code>[generation]</code>-bound or hardened sandbox: <a href="studio.html">Studio</a> never plays or stops it.</span></li>
@@ -446,7 +447,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Load a sandbox</h2>
-    <p>Run from the repo root: <code>--sandbox</code> resolves <code>sandboxes/&lt;name&gt;/</code> from the current directory.</p>
+    <p>Run from the repo root: <code>--sandbox</code> resolves <code>sandboxes/&lt;name&gt;/</code> from the current directory. To draw a new team instead of typing it: <code>tengu sandbox new</code> (<a href="builder.html">Sandbox builder</a>).</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox tor-check --tor</span>
@@ -458,7 +459,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 <span class="ln o"> </span>
 <span class="ln o">Caused by:</span>
 <span class="ln">    Config validation failed (1 issue):</span>
-<span class="ln">    - <span class="hl">agents.main.engine must be one of openrouter|claude_code|local (got 'openruter')</span></span></pre>
+<span class="ln">    - <span class="hl">agents.main.engine must be one of openrouter|claude_code|local|codex (got 'openruter')</span></span></pre>
   </div>
 </section>
 
@@ -482,6 +483,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
         <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td><code>-c</code>, the base load, every subcommand's <code>--sandbox</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child reloading the parent's config</td></tr>
         <tr><td><code>src/adapters/outbound/scaffold.rs</code></td><td><code>[scaffold]</code>: folders and seed files, never overwritten (run by <code>tengu telegram</code>)</td></tr>
+        <tr><td><code>src/config/builder/</code></td><td>the canvas → TOML compiler <code>tengu sandbox new</code> and Studio's builder use (<a href="builder.html">Sandbox builder</a>)</td></tr>
         <tr><td class="wrap"><code>sandboxes/*/config.toml</code>, <code>config.example.toml</code></td><td>the real teams and a commented template</td></tr>
       </tbody>
     </table>
@@ -489,7 +491,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
 </article>
 </main>
 </div>
@@ -556,7 +558,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
   var A = {
     hdr: ["One block = one agent", ["deny_unknown_fields"], "The same block serves in-process chat, plan steps, decision loops, feeds and the Claude Code bridge. A misspelled key fails the load.", "src/config/mod.rs · AgentConfig"],
     "default": ["default = true", ["at most one"], "tengu chat talks to this agent (without one: whichever comes first in the agent map). Telegram sends plain messages to it. Two defaults fail validation.", "src/adapters/inbound/tui/mod.rs · run_tui"],
-    engine: ["engine", ["required"], "openrouter, claude_code or local. Anything else fails validation. Picks the adapter that thinks for this agent.", "src/config/mod.rs · validate_agent"],
+    engine: ["engine", ["required"], "openrouter, claude_code, local or codex (config::ENGINES). Anything else fails validation. Picks the adapter that thinks for this agent.", "src/config/mod.rs · validate_agent"],
     model: ["model", ["required", "non-empty"], "Format follows the engine: claude_code takes a bare slug like this one, OpenRouter wants anthropic/claude-sonnet-4-6, local sends the server's own id.", "src/config/mod.rs · validate_agent"],
     workspace: ["workspace", ["default: none"], "Chat surfaces give tools only to an agent with a workspace. A plan step without one runs in a temp dir that is removed after the step.", "src/bootstrap/tools.rs · workspace_or_temp"],
     tools: ["tools", ["empty = every default tool"], "The allow-list on every surface. A non-empty list keeps only these names (plus workspace_tools). An opt-in name here is switched on too. A name that is no catalog tool, no &lt;server&gt;__&lt;tool&gt; and no loaded shell skill tool is dropped, with a load warning.", "src/bootstrap/tools.rs · agent_base_tools"],

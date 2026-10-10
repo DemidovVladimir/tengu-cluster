@@ -48,6 +48,7 @@ messages into a TUI / Telegram chat. The harness:
 |---|---|---|
 | `tengu run --sandbox <s>` | long-running: `[feeds.*]`, `[decision_loops.*]` (Jev picks the action, tools execute), lease, heartbeat, `doctor --live` | `docs/runtime-2026-09-30.md` |
 | `tengu studio --sandbox <s>` · `sandboxes/control-loop-lab` | local browser UI (default build, loopback only): the validated graph, live + replayed runs, health; Play / Stop only where `[studio] control` allows it (the lab; never `[generation]`-bound / hardened). The lab = a safe Jev loop to watch | `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` |
+| `tengu sandbox new` · `tengu studio --sandbox <s> --allow-edit` | drag-and-drop sandbox builder (n8n-style): asks a name, writes `sandboxes/<name>/` from a template, opens a canvas of agents / tools / skills / workspaces / secrets / channels; Rust compiles the wires (green = live), Finalise writes `config.toml` after `Config::load` accepts it; `tengu sandbox compile\|finalise\|palette` without a browser | `docs/studio-builder-2026-10-10.md` |
 | `tengu trace runs\|show --sandbox <s>` | the execution trace `tengu run` / `tengu decide` / `tengu webhooks` / Studio record (+ chat / telegram / eval plans with `[orchestrator]`): `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, read-only, every build | `docs/runtime-2026-09-30.md` § Trace |
 | `sandboxes/xmarket` | paper trading desk: every order tool runs the `[risk]` gate inside it ($100 budget) | `docs/xmarket-tracker-2026-09-29.md` § 0 |
 | `sandboxes/xlab` | research on backfilled history: `tengu history`, `tengu backtest`, Jev replayed | `docs/xlab-2026-10-01.md` |
@@ -200,13 +201,20 @@ config, channels) — it is the index into everything below.
 15. **`docs/studio-2026-10-08.md`** + **`TENGU_STUDIO_PLAN.md`** (delivery contract,
     tracker § 8) — Tengu Studio: workflow graph, execution trace (envelope +
     coverage: `docs/runtime-2026-09-30.md` § Trace), routes, security model,
-    Play / Stop; lab runbook `docs/control-loop-lab-2026-10-08.md`; editor = design
-    only (`docs/studio-editor-design-2026-10-08.md`). Read BEFORE touching
+    Play / Stop; lab runbook `docs/control-loop-lab-2026-10-08.md`; editor designed in
+    `docs/studio-editor-design-2026-10-08.md`, built as the builder (16 below). Read BEFORE touching
     `adapters/inbound/studio/`, `application/{studio/,trace_exec.rs}`,
     `domain/{trace,workflow}.rs`, `ports/trace.rs`, `adapters/outbound/trace_store.rs`,
     `bootstrap/{studio,trace}.rs`, `config/studio.rs`,
     `adapters/inbound/cli/{studio,trace}.rs`, `adapters/inbound/run.rs::start_session`,
     `web/studio/` or `sandboxes/control-loop-lab`.
+16. **`docs/studio-builder-2026-10-10.md`** — the Studio builder (drag-and-drop
+    sandboxes): card kinds → TOML, wires, secret stores (vault / env / Cloudflare seal
+    proxy, probed), view-only rules, kept sections, debugging. Read BEFORE touching
+    `domain/blueprint.rs`, `config/builder/`, `application/builder.rs`,
+    `ports/builder.rs`, `adapters/outbound/builder_store.rs`, `bootstrap/builder.rs`,
+    `adapters/inbound/{studio/builder.rs,cli/sandbox.rs}` or `web/studio/builder.*`
+    — and when adding an engine or a config field the builder should offer.
 
 ---
 
@@ -253,6 +261,7 @@ flow, audit these for staleness **before declaring done**:
 | `src/domain/metrics.rs` doc-comments | If you changed `MetricsRecord` shape, added a new `MetricsKind`, or moved the global sink semantics. The header doctrine block sells the design — keep it accurate. |
 | `docs/studio-2026-10-08.md` + `TENGU_STUDIO_PLAN.md` § 8 | If you changed `tengu studio` (routes, guard, control, `[studio]`, the page in `web/studio/`), `control-loop-lab` or the trace envelope / coverage (`docs/runtime-2026-09-30.md` § Trace): keep the operator doc true and tick the § 8 row (status, evidence, commit). |
 | `docs/studio-evidence/` | Screenshots of the Studio page on the lab (idle · running · replay, lab `TENGU_HOME`): retake when `web/studio/` or a served view changes what the page shows. |
+| `docs/studio-builder-2026-10-10.md` + `config/builder/palette.rs` | If you changed a config field or section the builder writes (`compile::OWNED`), added an engine (`palette::engines`), a tool family it should group (`tool_group`) or a wire (`CONNECTIONS`). |
 | `docs/strategy-ranking-automation-2026-10-08.md` | If you changed the ranker, the coordinator / publisher, the ranking contract shape, `[strategy_ranking]`, cited-run retention, `tengu ranking`, the `strategy_ranking` tool or the `xlab-w2` ranking feeds: keep its as-built tables and SR states current. Never edit a sealed contract (`seal_mismatch`). |
 | `docs/soe-2026-10-08.md` + `docs/source-evidence-2026-10-08.md` | If you changed SOE records, economics, gates, ranking, `[soe]` load rules, the cycle / `soe_cycle` job, replay / grading / review, the stage tools or SOE-G0 (a pinned change updates its pin until the lock row — `tengu lineage generation SOE-G0`); or `[sources]`, `source_record/1`, `sources.db`, the as-of view, a fetcher, `tengu sources` or `source_evidence`. Profile field names only, never a value. |
 
@@ -293,7 +302,7 @@ global metrics sink so the TUI sees a unified stream.
 1. `src/adapters/outbound/tools/<name>/mod.rs`: `impl Tool` (`ports::tool`), a `ToolPlugin`, `tool_defs()`. `execute` calls `ctx.scope.check_*` within its first 30 lines, or says `// scope: pure-compute` (`tests/scope_lint.rs`).
 2. One `ToolEntry` row in `catalog()` (`src/adapters/outbound/tools/mod.rs`) — drives in-process registration, the MCP bridge, and the advertised tool list.
 3. Opt-in only: also add the name to `src/domain/tools.rs::WORKSPACE_TOOLS` (config validation; `catalog_tests` fail if you forget).
-4. **Works under every engine — `openrouter`, `local`, `claude_code` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint (`tools/schema_lint.rs`, runs over every catalog row), bridge conformance case and live engine-matrix smoke pass (a tool set in `tests/engine_matrix.rs` — `every_catalog_tool_has_a_live_leg` fails CI without one; milestone E0 in `docs/xmarket-tracker-2026-09-29.md`, open items in the gotcha below).
+4. **Works under every engine — `openrouter`, `local`, `claude_code`, `codex` — no exceptions (operator rule, 2026-09-30).** OpenRouter and local run tools in-process; Claude Code reaches them through `tengu mcp-bridge`, which must behave the same: everything the tool reads (sandbox config sections, stores under the workspace or `<TENGU_HOME>/state`, secrets, scopes, the call id) must reach the bridge. Keep the input schema in the subset all three accept and the result within a local model's context window. A tool is done when its schema lint (`tools/schema_lint.rs`, runs over every catalog row), bridge conformance case and live engine-matrix smoke pass (a tool set in `tests/engine_matrix.rs` — `every_catalog_tool_has_a_live_leg` fails CI without one; milestone E0 in `docs/xmarket-tracker-2026-09-29.md`, open items in the gotcha below).
 
 No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (`[[mcp_servers]]`). Full recipe + agent config: `docs/tools.md`, `docs/code-map.md`. `SkillPlugin` / `McpPlugin` stay outside the catalog (registered in `bootstrap/tools.rs::build_tool_executor`).
 
@@ -301,7 +310,7 @@ No Rust needed for HTTP APIs (skill + `http_request`) or existing tool servers (
 
 | Task | Where | Recipe |
 |---|---|---|
-| New engine (e.g. another provider) | `src/adapters/outbound/engines/<name>.rs` + `build_engine` match in `engines/mod.rs` | `docs/code-map.md` § Add an engine |
+| New engine (e.g. another provider) | `src/adapters/outbound/engines/<name>.rs` + `build_engine` match in `engines/mod.rs` + the name in `config::ENGINES` + its card in `config/builder/palette.rs::engines` (a test keeps them equal) | `docs/code-map.md` § Add an engine |
 | New config field / section | `src/config/mod.rs` (struct + `#[serde(default)]` + `Default`) → validation in `validation_errors` | `docs/code-map.md` § Extend config |
 | Built-in defaults | `impl Default for Config` + `default_*` fns in `src/config/mod.rs`; commented example `config.example.toml` | — |
 
@@ -599,12 +608,17 @@ These are not preferences. They're load-bearing.
   (this session)` block from Postgres `agentic_memory` filtered by the shared
   `session_id`. Recommended `3–5`.
 - **`[agents.<name>].engine` selects the subagent engine (Phase 7.3)** —
-  `"openrouter"`, `"local"` or `"claude_code"` (required field, no default);
+  `"openrouter"`, `"local"`, `"claude_code"` or `"codex"` (required field, no default; the list is `config::ENGINES`);
   the same block serves in-process chat and `run-agent` steps.
   `model` slug format depends on engine: OpenRouter wants
   `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`
-  (building with `--features claude_code` is required); `local` sends the
-  server's own id verbatim.
+  (building with `--features claude_code` is required); Codex (2026-10-10,
+  OpenAI ChatGPT subscription via `codex exec`, `codex login` first, feature
+  `codex` on by default) wants a bare OpenAI id (`gpt-5.5`), takes
+  `[agents.<a>.codex] sandbox = "read-only" | "workspace-write"`, gets tengu
+  tools through the bridge (`-c mcp_servers.tengu-tools.*`, env names
+  forwarded, never values) and is refused in a hardened sandbox
+  (`docs/engine-backends.md` § Codex); `local` sends the server's own id verbatim.
 - **`engine = "local"` = any OpenAI-compatible server on this host
   (2026-09-23)** — Unsloth (`unsloth run`, default `http://127.0.0.1:8888`,
   key in `$UNSLOTH_API_KEY`), Ollama, llama.cpp, vLLM. Optional
@@ -709,7 +723,7 @@ These are not preferences. They're load-bearing.
   that say "check that tool X is in your tool list" should look for both
   forms or just attempt the call and read the error.
 - **Every tool must work under every engine — `openrouter`, `local`,
-  `claude_code` (operator rule 2026-09-30, no exceptions)** — step 4 of "How
+  `claude_code`, `codex` (operator rule 2026-09-30, no exceptions)** — step 4 of "How
   to add a new tool". E0 is closed (`x-engine-parity-audit`, 2026-10-01):
   every catalog tool, shell skills and `[[mcp_servers]]` proxies pass the
   schema lint, a bridge conformance case and a live engine-matrix leg
@@ -749,7 +763,8 @@ These are not preferences. They're load-bearing.
   (`strategy_ranking`), `sources` (`source_evidence`) and `soe` (`soe_view`,
   `soe_propose`, `soe_challenge`) — not run yet.
 - **Hardened sandboxes (2026-09-30, `config/hardening.rs`)** — a `[solana]`
-  signer, a `[risk]` or an `[soe]` section: every `claude_code` agent must set
+  signer, a `[risk]` or an `[soe]` section: no `engine = "codex"` agent (its
+  own shell ignores tengu scopes — load error); every `claude_code` agent must set
   `[agents.<a>.claude_code] builtin_tools_profile = "none"` (no block =
   `editor_shell` = load error; the value is read trimmed, an unknown one is a
   load error), and `fold_default_scopes` sets `no_shell_fallback` on every
@@ -940,6 +955,23 @@ These are not preferences. They're load-bearing.
   older `lp_snapshot` rows `stale_input`) — it cannot see the TS bot, so
   never sign with a wallet the bot runs. Doc:
   `docs/typed-observations-2026-09-24.md` § Write tools.
+- **Studio builder (2026-10-10, `docs/studio-builder-2026-10-10.md`)** —
+  `tengu sandbox new` writes `sandboxes/<name>/{builder.json,config.toml}`;
+  `builder.json` (the canvas) is the source the builder edits, `config.toml` is
+  what it compiles to on Finalise (only after `Config::load` on a temp copy
+  accepts it; old file → `config.toml.prev`). It owns `[egress]`, `[memory]`,
+  `[studio]`, `[keys]`, `[orchestrator]`, `[telegram]`, `[webhooks]`,
+  `[agents.*]` (`compile::OWNED`) and keeps every other top-level key as it is.
+  View-only: a sandbox without `builder.json`, `[generation]`-bound or
+  hardened; Finalise is refused (409) while the sandbox's `tengu run`
+  heartbeat is fresh. A wire = one `CONNECTIONS` row; `delegates` (planner →
+  agent) is what writes a `description` (routable). Keys never enter TOML: a
+  secret card names an env var + its store; the Cloudflare store (`[keys.env]`)
+  is offered only when the build knows `[keys]` (`keys_supported` probe — PR
+  #50). The palette is Rust (`config/builder/palette.rs`): a new engine needs a
+  card there (test `engines_match_config_engines`); a misspelled TOML key in
+  the compiler fails `every_field_round_trips_through_the_config_structs`.
+  Debug without a browser: `tengu sandbox compile|finalise|palette`.
 
 ---
 
@@ -996,7 +1028,7 @@ and rewrote the run docs (README, Makefile, Dockerfile, compose, installer).
 
 ---
 
-*Last updated 2026-10-09 (orchestration and webhooks in the execution trace: `tengu webhooks` records (`kind = "webhooks"`), every webhook request is a `trigger.webhook` root, `OrchestratorEvent` → `plan.*` / `step.*` / `metrics.recorded` on every surface that builds an orchestrator, a step's `run-agent` tool calls over `AgentIpcOutput.trace`, the Studio graph draws `planner` → routable agents — gotcha "Execution trace"; before that Studio in the default build: `studio` is a default feature, the Docker image copies `web/`, CI tests the build without it — gotcha "Tengu Studio"; before that docs sweep B against origin/main #39–#44: "Beyond chat" rows `tengu trace`, `xlab-w2` + `tengu ranking`, `soe` + `tengu soe` / `tengu sources`; layout table; required reading renumbered 12–15 (ranking, SOE + source evidence, Studio); REQUIRED updates rows (ranking, SOE / source docs, `docs/studio-evidence/`); gotchas SOE profile, source layer, feed kind `job`, execution trace, worktree `.env`, weekend no-pull, `[soe]` hardened, sections; the stale `TENGU_PLAN.md` gotcha folded into the IPC one; open items = gate table; before that 2026-10-09 Tengu Studio: `tengu studio` — graph, trace, live + replay, Play / Stop for the lab; operator doc `docs/studio-2026-10-08.md`, editor design only — "Beyond chat" row, REQUIRED updates row, gotcha; before that 2026-10-08 Operator Review #1 = APPROVE → Phase 6; before that 2026-10-07 visual tutorial `docs/tutorial/` — one animated page per feature, built from the code — and the rule that every code change updates its pages: REQUIRED updates + `tests/tutorial_map.rs` + `.claude/settings.json` hook; before that 2026-10-06 TENGU_ROADMAP P0–P5: `tengu evidence` vault + grade + regrade, the `lineage/` registry + `tengu lineage`, W1 frozen and `[generation]`-bound — gotcha above, required reading 12; before that 2026-10-02 docs refresh: "What this project is" names `tengu run`, the xmarket paper desk and xlab; the layer table lists the new ports / stores; "stuck" starts at `docs/index.html` + the HTML explorers; open items = operator decisions → W2; before that 2026-10-01 xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
+*Last updated 2026-10-10 (Studio builder: `tengu sandbox new` + the drag-and-drop canvas → `config.toml`, `docs/studio-builder-2026-10-10.md`, required reading 16; `engine = "codex"` — the OpenAI ChatGPT subscription through `codex exec` — gotchas above; before that 2026-10-09 (orchestration and webhooks in the execution trace: `tengu webhooks` records (`kind = "webhooks"`), every webhook request is a `trigger.webhook` root, `OrchestratorEvent` → `plan.*` / `step.*` / `metrics.recorded` on every surface that builds an orchestrator, a step's `run-agent` tool calls over `AgentIpcOutput.trace`, the Studio graph draws `planner` → routable agents — gotcha "Execution trace"; before that Studio in the default build: `studio` is a default feature, the Docker image copies `web/`, CI tests the build without it — gotcha "Tengu Studio"; before that docs sweep B against origin/main #39–#44: "Beyond chat" rows `tengu trace`, `xlab-w2` + `tengu ranking`, `soe` + `tengu soe` / `tengu sources`; layout table; required reading renumbered 12–15 (ranking, SOE + source evidence, Studio); REQUIRED updates rows (ranking, SOE / source docs, `docs/studio-evidence/`); gotchas SOE profile, source layer, feed kind `job`, execution trace, worktree `.env`, weekend no-pull, `[soe]` hardened, sections; the stale `TENGU_PLAN.md` gotcha folded into the IPC one; open items = gate table; before that 2026-10-09 Tengu Studio: `tengu studio` — graph, trace, live + replay, Play / Stop for the lab; operator doc `docs/studio-2026-10-08.md`, editor design only — "Beyond chat" row, REQUIRED updates row, gotcha; before that 2026-10-08 Operator Review #1 = APPROVE → Phase 6; before that 2026-10-07 visual tutorial `docs/tutorial/` — one animated page per feature, built from the code — and the rule that every code change updates its pages: REQUIRED updates + `tests/tutorial_map.rs` + `.claude/settings.json` hook; before that 2026-10-06 TENGU_ROADMAP P0–P5: `tengu evidence` vault + grade + regrade, the `lineage/` registry + `tengu lineage`, W1 frozen and `[generation]`-bound — gotcha above, required reading 12; before that 2026-10-02 docs refresh: "What this project is" names `tengu run`, the xmarket paper desk and xlab; the layer table lists the new ports / stores; "stuck" starts at `docs/index.html` + the HTML explorers; open items = operator decisions → W2; before that 2026-10-01 xlab: history-first sandbox for the operator's PRD v0.5 — market.db + backfill (HL, GeckoTerminal, HL S3 archive), strategy specs, the pure backtest engine with time-integrity checks, Jev replayed on history with a decision cache, tools `market_history` / `backtest`, operator rule "history first" — gotcha above; before that W1 gate passed — weekend-path, money-safety and engine-parity reviews fixed: ledger fixes (exit backoff, shadow paper-only, replay fingerprints), batch 2 (step temp workspace + bridge transcript, local rows whole under the cap, eval bridge + redaction, kept venue facts + funding owed, opportunity side/strategy, state-dir lease + ledger owners, Telegram approval keys warn); before that W1-gate safety fixes, access: a deny-all scope stays a deny in `run-agent`, hardened `compose` only narrows, writers refuse `.tengu/` / `.claude/` / `CLAUDE.md` / `AGENTS.md` and resolve `..`, Telegram fails closed without an allow-list, a `none` claude_code agent runs without settings / hooks / plugins — gotchas above; before that `x-engine-parity-audit`: E0 closed — every catalog tool, shell skills and `[[mcp_servers]]` proxies on every engine; chat honours `tools`; the bridge serves shell skills and a run-agent step's `compress_and_store`; tool errors redacted on every surface — gotchas above; before that 2026-09-30 xmarket W1 wave A landed: bridge parity + hardened sandboxes + schema lint + local-model fit, `AgentConfig::sandbox` sections, `[risk]` / `[paper]` / `[rate_limits]` / `[recorder]` / `[runtime]` / `[xmarket]`, `Config` `deny_unknown_fields`, `tengu run` + `doctor --live`, history recorder — gotchas above; before that the operator rules: every tool must work under every engine — `openrouter`, `local`, `claude_code` — no exceptions; build plan `docs/xmarket-build-plan-2026-09-30.md` — "How to add a new tool" step 4 + gotcha; previously 2026-09-29 Solana write tools + local key signer + signing-sandbox rules — `docs/typed-observations-2026-09-24.md` § Write tools; previously 2026-09-24 typed observations + observation cache + Solana LP read tools; previously 2026-09-23 hexagonal layout — `src/{domain,ports,config,application,adapters/{inbound,outbound},bootstrap}`, one tool catalog, `docs/code-map.{md,html}`; previously 2026-09-18 Tor-by-default egress, single sandbox config — `agents/` removed, deploy/tor = Arti + lyrebird-rs; previously 2026-09-12 audit pass, 2026-05-14 agentic-memory MVP — Open Brain Postgres + pgvector
 behind `postgres_memory`; planner registry moved to file-backed
 `TENGU_PLANNER_REGISTRY.md`; doctrine is now "Open Brain + Karpathy LLM Wiki =
 brain"). If you're reading this in the future and the companion doc filenames

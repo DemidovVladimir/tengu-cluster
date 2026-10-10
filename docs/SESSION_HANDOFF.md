@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-10-10: Studio builder + `engine = "codex"` — branch `feature/sandbox-builder` (separate PR)
+
+| What | Where | Proof |
+|---|---|---|
+| `tengu sandbox new` (asks name + template) → `sandboxes/<n>/{builder.json,config.toml}` → builder opens | `cli/sandbox.rs`, `application/builder.rs::create` | `application::builder::tests`, live CLI run |
+| Drag-and-drop canvas `/builder` (`tengu studio --allow-edit`): 10 card kinds, 12 wires, autosave, Validate (compile + `Config::load` on a temp copy + diff), Finalise (`.prev` backup), green current on live wires | `domain/blueprint.rs`, `config/builder/`, `inbound/studio/builder.rs`, `web/studio/builder.*` | `config::builder::tests` (round-trip of every field, templates load), headless Chrome on the real server (load → connect → red wire → fix → validate → finalise) |
+| `engine = "codex"` (ChatGPT subscription, `codex exec`, tools via the bridge; refused in hardened sandboxes) | `engines/{codex,cli_run}.rs`, `config/hardening.rs` | 9 codex tests; live `tool turn` ok |
+| Secrets: vault / env / Cloudflare seal proxy (probed: on once PR #50 merges) | `config/builder/palette.rs`, `compile.rs` | test-merge on #50 + #51: clean, 86 tests, `[keys]` loads |
+| Live engines on one canvas-built sandbox (list_directory + read_file) | `tengu tool turn` | openrouter ✅ claude_code ✅ codex ✅ local — operator's PC |
+
+Open: decision-loop / feed / `[[mcp_servers]]` cards (kept as TOML today) · import a hand-written sandbox onto the canvas · local engine live leg · 10 codex engine-matrix legs not run live.
+
 ## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
 
 | Finding | Fixed | Test |

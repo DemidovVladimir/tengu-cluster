@@ -1,5 +1,7 @@
 # Studio editor — design only (ST-40, 2026-10-09)
 
+> **Built 2026-10-10 as the Studio builder** — `docs/studio-builder-2026-10-10.md` (deviations listed in `TENGU_STUDIO_PLAN.md` § 7). This page stays as the design record.
+
 `TENGU_STUDIO_PLAN.md` § 7. **No code, route or save exists** (on main with #44, `f7ac9a5636e2493e3839e896cba9951a2d41aefb`, as this design only): production edit/save waits for Operator Review #3. No throwaway branch — the spike = the seams below, which already run in the read-only Studio. Gate 4 was waived, so the vocabulary is the read model's, not observed use.
 
 ## Palette — from Rust, never a JS list

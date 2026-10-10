@@ -76,11 +76,15 @@ hmac = { version = "0.12", optional = true }
 curve25519-dalek = { version = "~4.1", default-features = false }
 
 [features]
-default = ["openrouter", "telegram", "studio"]
+default = ["openrouter", "telegram", "studio", "codex"]
 telegram = ["teloxide", "dptree", "reqwest011"]
 openrouter = []
 postgres_memory = ["tokio-postgres"]
 claude_code = []
+# `engine = "codex"`: the OpenAI Codex CLI on the ChatGPT subscription
+# (`engines/codex.rs`). A default feature: the binary only spawns `codex`
+# when an agent names the engine.
+codex = []
 webhooks = ["axum", "hmac"]
 # `tengu studio --sandbox <s>`: the local Studio server (loopback only;
 # HTML/CSS/JS from web/studio/ embedded with include_str!). axum as for

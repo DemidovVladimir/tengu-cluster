@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Tengu Builder</title>
+<link rel="stylesheet" href="/assets/builder.css">
+<script src="/assets/builder.js" defer></script>
+</head>
+<body>
+<!-- Tengu Studio Builder: a drag-and-drop canvas over one sandbox's
+     blueprint (`sandboxes/<name>/builder.json`). Every kind, field, tool,
+     connection, edge colour, card title, issue, TOML line, diff and load
+     verdict comes from the Rust API (/api/v1/builder...). This page draws
+     and edits the blueprint; it decides nothing. Finalise writes
+     `sandboxes/<name>/config.toml` only after Rust compiled and loaded it. -->
+<header class="bar">
+  <button type="button" id="btn-palette" class="icon-btn narrow-only" aria-controls="palette" aria-expanded="false" title="Palette">
+    <span class="burger" aria-hidden="true"></span><span class="sr">Palette</span>
+  </button>
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <h1>Tengu Builder</h1>
+    <span id="sandbox-name" class="sandbox id">…</span>
+  </div>
+  <span id="status-pill" class="pill p-pending" title="What Rust says about this blueprint">checking…</span>
+  <span id="save-ind" class="save-ind">…</span>
+  <span class="spacer"></span>
+  <div class="actions" role="group" aria-label="Builder actions">
+    <button type="button" id="btn-undo" title="Undo (Ctrl/Cmd+Z)" disabled>Undo</button>
+    <button type="button" id="btn-redo" title="Redo (Shift+Ctrl/Cmd+Z)" disabled>Redo</button>
+    <button type="button" id="btn-validate" title="Compile + load in Rust, show TOML and diff (Ctrl/Cmd+Enter)">Validate</button>
+    <button type="button" id="btn-finalise" class="primary" title="Preview, then write config.toml">Finalise</button>
+    <button type="button" id="btn-debug" aria-pressed="false" title="What the page sent and what Rust answered">Debug</button>
+    <button type="button" id="btn-theme" title="Light / dark">Theme</button>
+    <a id="link-studio" class="btn-link" href="/">Studio view</a>
+  </div>
+</header>
+<div id="banner" class="banner" role="status" hidden></div>
+<main class="layout">
+  <aside id="palette" class="palette" aria-label="Palette">
+    <div class="pal-head">
+      <input id="pal-search" type="search" placeholder="Search agents, tools, skills…" autocomplete="off" spellcheck="false">
+    </div>
+    <div id="pal-groups" class="pal-groups"></div>
+    <p class="pal-foot muted">Drag onto the canvas, or click to drop in the middle.</p>
+  </aside>
+  <section id="stage" class="stage" aria-label="Canvas">
+    <div id="world" class="world">
+      <svg id="edges" class="edges" aria-hidden="true">
+        <defs>
+          <filter id="glow-live" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3.2" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="glow-spark" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="1.6" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <g transform="translate(5000 5000)">
+          <g id="edge-layer"></g>
+          <path id="drag-edge" class="drag-edge" d=""/>
+        </g>
+      </svg>
+      <div id="labels" class="labels"></div>
+      <div id="cards" class="cards"></div>
+      <div id="fx" class="fx"></div>
+    </div>
+    <div id="empty-hint" class="empty-hint" hidden>
+      <span class="hint-glyph" aria-hidden="true"></span>
+      <strong>Drag an agent from the left</strong>
+      <span class="muted">then connect it to tools, skills, a workspace and secrets</span>
+    </div>
+    <div class="zoom-ctl" role="group" aria-label="Zoom">
+      <button type="button" id="z-out" title="Zoom out">−</button>
+      <span id="z-level" class="z-level">100%</span>
+      <button type="button" id="z-in" title="Zoom in">+</button>
+      <button type="button" id="z-fit" title="Fit (F)">Fit</button>
+    </div>
+    <svg id="minimap" class="minimap" aria-label="Minimap"></svg>
+  </section>
+  <aside id="inspector" class="inspector" aria-label="Inspector"></aside>
+</main>
+<section id="debug" class="debug" aria-label="Debug" hidden>
+  <div class="debug-tabs" role="tablist">
+    <button type="button" role="tab" data-tab="issues" aria-selected="true">Issues</button>
+    <button type="button" role="tab" data-tab="blueprint" aria-selected="false">Blueprint JSON</button>
+    <button type="button" role="tab" data-tab="response" aria-selected="false">Last response</button>
+    <button type="button" role="tab" data-tab="log" aria-selected="false">Request log</button>
+    <span class="spacer"></span>
+    <button type="button" id="debug-copy" title="Copy this tab">Copy</button>
+    <button type="button" id="debug-close" title="Close">×</button>
+  </div>
+  <div id="debug-body" class="debug-body"></div>
+</section>
+<div id="modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-head">
+      <h2 id="modal-title">Preview</h2>
+      <span id="modal-verdict" class="pill p-pending">…</span>
+      <span class="spacer"></span>
+      <button type="button" id="modal-close" title="Close (Esc)">×</button>
+    </div>
+    <div class="modal-tabs" role="tablist">
+      <button type="button" role="tab" data-mtab="toml" aria-selected="true">config.toml</button>
+      <button type="button" role="tab" data-mtab="diff" aria-selected="false">Diff</button>
+      <button type="button" role="tab" data-mtab="checks" aria-selected="false">Checks</button>
+      <button type="button" role="tab" data-mtab="secrets" aria-selected="false">Secrets</button>
+    </div>
+    <div id="modal-body" class="modal-body"></div>
+    <div class="modal-foot">
+      <span id="modal-note" class="muted"></span>
+      <span class="spacer"></span>
+      <button type="button" id="modal-recheck">Re-check</button>
+      <button type="button" id="modal-finalise" class="primary" disabled>Write config.toml</button>
+    </div>
+  </div>
+</div>
+<div id="burst" class="burst" aria-hidden="true"></div>
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<div id="ghost" class="ghost" aria-hidden="true" hidden></div>
+</body>
+</html>
