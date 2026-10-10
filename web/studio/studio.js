@@ -182,6 +182,12 @@
     const m = await api("/api/v1/meta");
     S.meta = m;
     document.title = `Tengu Studio · ${m.sandbox}`;
+    if (m.builder) {
+      // `--allow-edit`: the drag-and-drop builder of this sandbox (token in the fragment).
+      const b = $("link-builder");
+      b.href = `/builder#t=${encodeURIComponent(S.token || "")}`;
+      b.hidden = false;
+    }
     $("f-sandbox").textContent = m.sandbox;
     $("f-config").textContent = m.config_hash || "none (no config file)";
     const legend = $("legend");

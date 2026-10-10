@@ -810,7 +810,8 @@
       for (const bd of it.badges) bs.appendChild(el("span", bd, "badge-mini"));
       b.appendChild(bs);
     }
-    b.title = it.description || it.label;
+    b.title = it.disabled ? `Not in this build: ${it.disabled}` : it.description || it.label;
+    if (it.disabled) b.dataset.disabled = "1";
     b.addEventListener("pointerdown", (e) => startPaletteDrag(e, it));
     b.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -827,7 +828,7 @@
 
   function drawPaletteState() {
     for (const b of document.querySelectorAll(".pal-item")) {
-      const off = !S.editable || singletonTaken(b.dataset.kind);
+      const off = !S.editable || singletonTaken(b.dataset.kind) || b.dataset.disabled === "1";
       b.classList.toggle("off", off);
       b.setAttribute("aria-disabled", String(off));
     }
@@ -835,6 +836,11 @@
 
   function startPaletteDrag(e, it) {
     if (e.button !== 0) return;
+    // Rust says why this card cannot be used in this build (`Item.disabled`).
+    if (it.disabled) {
+      toast(`${it.label}: ${it.disabled}`, "warn");
+      return;
+    }
     if (!S.editable || singletonTaken(it.kind)) {
       if (singletonTaken(it.kind)) toast(`Only one ${kindOf(it.kind).label} per sandbox.`, "warn");
       return;
@@ -890,6 +896,10 @@
 
   function dropItemCentre(it) {
     if (!S.editable) return;
+    if (it.disabled) {
+      toast(`${it.label}: ${it.disabled}`, "warn");
+      return;
+    }
     if (singletonTaken(it.kind)) {
       toast(`Only one ${kindOf(it.kind).label} per sandbox.`, "warn");
       return;

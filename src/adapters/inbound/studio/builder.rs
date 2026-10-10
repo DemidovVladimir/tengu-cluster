@@ -39,31 +39,31 @@ struct FinaliseBody {
     sha256: String,
 }
 
-fn builder(st: &AppState) -> Result<Arc<Builder>, Response> {
-    st.builder.clone().ok_or_else(|| {
-        error(
-            StatusCode::NOT_FOUND,
-            "the builder is off: start `tengu studio --sandbox <name> --allow-edit` (or `tengu sandbox new`)",
-        )
-    })
+/// 404 when this Studio runs without `--allow-edit`.
+fn off() -> Response {
+    error(
+        StatusCode::NOT_FOUND,
+        "the builder is off: start `tengu studio --sandbox <name> --allow-edit` (or `tengu sandbox new`)",
+    )
 }
 
+/// The request body as `T`: JSON only (415), unknown fields refused (400).
 fn json_body<T: serde::de::DeserializeOwned>(
     headers: &HeaderMap,
     body: &Bytes,
-) -> Result<T, Response> {
+) -> Result<T, (StatusCode, String)> {
     let json = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(';').next())
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"));
     if !json {
-        return Err(error(
+        return Err((
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "a builder body is JSON: Content-Type: application/json",
+            "a builder body is JSON: Content-Type: application/json".into(),
         ));
     }
-    serde_json::from_slice(body).map_err(|e| error(StatusCode::BAD_REQUEST, format!("body: {e}")))
+    serde_json::from_slice(body).map_err(|e| (StatusCode::BAD_REQUEST, format!("body: {e}")))
 }
 
 fn refusal(e: BuilderError) -> Response {
@@ -103,58 +103,54 @@ where
 
 /// GET `/builder`.
 pub(super) async fn page(State(st): St) -> Response {
-    match builder(&st) {
-        Ok(_) => super::assets::builder_page(),
-        Err(r) => r,
+    match st.builder {
+        Some(_) => super::assets::builder_page(),
+        None => off(),
     }
 }
 
 /// GET `/api/v1/builder`.
 pub(super) async fn state(State(st): St) -> Response {
-    match builder(&st) {
-        Ok(b) => run("state", b, |b| b.state()).await,
-        Err(r) => r,
-    }
+    let Some(b) = st.builder.clone() else {
+        return off();
+    };
+    run("state", b, |b| b.state()).await
 }
 
 /// PUT `/api/v1/builder/blueprint`.
 pub(super) async fn save(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
-    let b = match builder(&st) {
-        Ok(b) => b,
-        Err(r) => return r,
+    let Some(b) = st.builder.clone() else {
+        return off();
     };
-    let bp: Blueprint = match json_body(&headers, &body) {
-        Ok(bp) => bp,
-        Err(r) => return r,
-    };
-    run("save", b, move |b| b.save(&bp)).await
+    match json_body::<Blueprint>(&headers, &body) {
+        Ok(bp) => run("save", b, move |b| b.save(&bp)).await,
+        Err((code, why)) => error(code, why),
+    }
 }
 
 /// POST `/api/v1/builder/preview`.
 pub(super) async fn preview(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
-    let b = match builder(&st) {
-        Ok(b) => b,
-        Err(r) => return r,
+    let Some(b) = st.builder.clone() else {
+        return off();
     };
-    let bp: Blueprint = match json_body(&headers, &body) {
-        Ok(bp) => bp,
-        Err(r) => return r,
-    };
-    run("preview", b, move |b| b.preview(&bp)).await
+    match json_body::<Blueprint>(&headers, &body) {
+        Ok(bp) => run("preview", b, move |b| b.preview(&bp)).await,
+        Err((code, why)) => error(code, why),
+    }
 }
 
 /// POST `/api/v1/builder/finalise`.
 pub(super) async fn finalise(State(st): St, headers: HeaderMap, body: Bytes) -> Response {
-    let b = match builder(&st) {
-        Ok(b) => b,
-        Err(r) => return r,
+    let Some(b) = st.builder.clone() else {
+        return off();
     };
-    let fb: FinaliseBody = match json_body(&headers, &body) {
-        Ok(fb) => fb,
-        Err(r) => return r,
-    };
-    run("finalise", b, move |b| {
-        b.finalise(&fb.blueprint, &fb.sha256)
-    })
-    .await
+    match json_body::<FinaliseBody>(&headers, &body) {
+        Ok(fb) => {
+            run("finalise", b, move |b| {
+                b.finalise(&fb.blueprint, &fb.sha256)
+            })
+            .await
+        }
+        Err((code, why)) => error(code, why),
+    }
 }
