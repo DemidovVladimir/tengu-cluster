@@ -365,7 +365,12 @@ fn with_load_errors(bp: &Blueprint, status: Status, load: &LoadReport) -> Status
     let kinds: BTreeMap<String, (String, String, String)> = status
         .edges
         .iter()
-        .map(|(id, e)| (id.clone(), (e.edge.clone(), e.label.clone(), e.writes.clone())))
+        .map(|(id, e)| {
+            (
+                id.clone(),
+                (e.edge.clone(), e.label.clone(), e.writes.clone()),
+            )
+        })
         .collect();
     let mut issues = status.issues;
     for err in &load.errors {
@@ -418,9 +423,9 @@ pub(crate) fn create(
         )));
     }
     let json = serde_json::to_string_pretty(&bp).map_err(|e| internal(e.into()))?;
-    store.create(name, &json, &compiled.toml).map_err(|e| {
-        BuilderError::Conflict(format!("{e:#}"))
-    })
+    store
+        .create(name, &json, &compiled.toml)
+        .map_err(|e| BuilderError::Conflict(format!("{e:#}")))
 }
 
 #[cfg(test)]
@@ -437,7 +442,11 @@ mod tests {
 
     impl Mem {
         fn get(&self, s: &str, f: &str) -> Option<String> {
-            self.files.lock().unwrap().get(&(s.into(), f.into())).cloned()
+            self.files
+                .lock()
+                .unwrap()
+                .get(&(s.into(), f.into()))
+                .cloned()
         }
         fn put(&self, s: &str, f: &str, v: &str) {
             self.files
@@ -527,7 +536,11 @@ mod tests {
         let p = b.preview(&bp).unwrap();
         assert!(p.load.ok && p.status.ok, "{:?}", p.status.issues);
         assert!(p.diff.contains("+model = \"openai/gpt-5\""), "{}", p.diff);
-        let or = p.secrets.iter().find(|s| s.env == "OPENROUTER_API_KEY").unwrap();
+        let or = p
+            .secrets
+            .iter()
+            .find(|s| s.env == "OPENROUTER_API_KEY")
+            .unwrap();
         assert_eq!(or.state, "present");
         let f = b.finalise(&bp, &p.sha256).unwrap();
         assert_eq!(f.sha256, p.sha256);
@@ -550,7 +563,11 @@ mod tests {
     #[test]
     fn hand_written_and_frozen_sandboxes_are_view_only() {
         let mem = Arc::new(Mem::default());
-        mem.put("hand", "config.toml", "[agents.a]\nengine = \"openrouter\"\nmodel = \"m\"\n");
+        mem.put(
+            "hand",
+            "config.toml",
+            "[agents.a]\nengine = \"openrouter\"\nmodel = \"m\"\n",
+        );
         let b = Builder::new("hand", Facts::default(), mem.clone());
         let st = b.state().unwrap();
         assert!(!st.editable && st.why_not.unwrap().contains("hand-written"));

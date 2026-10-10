@@ -239,7 +239,8 @@ pub(crate) const CONNECTIONS: &[Connection] = &[
         edge: "delegates",
         label: "delegates to",
         writes: "agents.<to>.description",
-        help: "The planner may hand plan steps to this agent: it becomes routable (its description \
+        help:
+            "The planner may hand plan steps to this agent: it becomes routable (its description \
                is written into TENGU_PLANNER_REGISTRY.md). Only the planner agent delegates.",
     },
     Connection {
@@ -265,7 +266,8 @@ pub(crate) const CONNECTIONS: &[Connection] = &[
         edge: "grants",
         label: "readable by",
         writes: "agents.<agent>.scopes.<tool>.env_reads",
-        help: "The tool may read this env var (scoped tools only — an unrestricted tool reads any).",
+        help:
+            "The tool may read this env var (scoped tools only — an unrestricted tool reads any).",
     },
     Connection {
         from: "secret",
@@ -800,7 +802,10 @@ fn items(facts: &Facts) -> Vec<Item> {
         );
         it.preset = preset(&[
             ("engine", json!(e.id)),
-            ("model", json!(e.models.first().copied().unwrap_or_default())),
+            (
+                "model",
+                json!(e.models.first().copied().unwrap_or_default()),
+            ),
         ]);
         out.push(it);
     }
@@ -830,7 +835,13 @@ fn items(facts: &Facts) -> Vec<Item> {
         out.push(it);
     }
     for (name, description) in &facts.skills {
-        let mut it = item(&format!("skill.{name}"), "skill", name, "Skills", description);
+        let mut it = item(
+            &format!("skill.{name}"),
+            "skill",
+            name,
+            "Skills",
+            description,
+        );
         it.preset = preset(&[("skill", json!(name))]);
         out.push(it);
     }
@@ -963,9 +974,7 @@ pub(crate) fn palette(facts: &Facts) -> Palette {
 /// The tools a builder offers: every catalog tool but the ones that need
 /// hand-written, hardened config (module doc of `config/builder`).
 pub(crate) fn offered(tool: &OfferedTool) -> bool {
-    use crate::domain::tools::{
-        PRIVY_SIGNING_TOOLS, SOLANA_WRITE_TOOLS, XM_EXEC_TOOLS,
-    };
+    use crate::domain::tools::{PRIVY_SIGNING_TOOLS, SOLANA_WRITE_TOOLS, XM_EXEC_TOOLS};
     let name = tool.name.as_str();
     !(name == "run_command"
         || name == "compress_and_store"

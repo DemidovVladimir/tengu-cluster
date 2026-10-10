@@ -39,7 +39,11 @@ pub(super) async fn index() -> Response {
 }
 
 pub(super) fn builder_page() -> Response {
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], BUILDER).into_response()
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        BUILDER,
+    )
+        .into_response()
 }
 
 /// No icon: 204, so a browser's automatic request logs no error.

@@ -45,7 +45,8 @@ fn sandbox_node() -> Value {
 }
 
 fn agent_node(id: &str, name: &str, extra: Value) -> Value {
-    let mut fields = json!({"name": name, "engine": "openrouter", "model": "anthropic/claude-sonnet-4-6"});
+    let mut fields =
+        json!({"name": name, "engine": "openrouter", "model": "anthropic/claude-sonnet-4-6"});
     if let Value::Object(m) = extra {
         for (k, v) in m {
             fields[k] = v;
@@ -90,12 +91,7 @@ fn every_template_compiles_clean_and_loads() {
     for (name, _) in TEMPLATES {
         let b = template(name, "t").unwrap();
         let c = compile(&b, &facts(), None);
-        assert!(
-            c.status.ok,
-            "{name}: {:?}\n{}",
-            c.status.issues,
-            c.toml
-        );
+        assert!(c.status.ok, "{name}: {:?}\n{}", c.status.issues, c.toml);
         let r = loads(&c.toml);
         assert!(r.ok, "{name}: {:?}\n{}", r.errors, c.toml);
     }
@@ -130,14 +126,19 @@ fn every_field_round_trips_through_the_config_structs() {
             edges.push(json!({"id": format!("d{i}"), "from":"n0","to": format!("n{i}")}));
         }
     }
-    nodes.push(json!({"id":"tl","kind":"tool","fields":{"tool":"http_request","restrict":true,
-        "fs_roots":["/tmp"],"net_hosts":["api.example.com"],"env_reads":["X_KEY"]}}));
+    nodes.push(
+        json!({"id":"tl","kind":"tool","fields":{"tool":"http_request","restrict":true,
+        "fs_roots":["/tmp"],"net_hosts":["api.example.com"],"env_reads":["X_KEY"]}}),
+    );
     nodes.push(json!({"id":"sk","kind":"skill","fields":{"skill":"git"}}));
     nodes.push(json!({"id":"ws","kind":"workspace","fields":{"path":"/tmp/tengu-builder-test","confine":true}}));
     nodes.push(json!({"id":"sec","kind":"secret","fields":{"env":"X_KEY","backend":"env"}}));
     nodes.push(json!({"id":"tg","kind":"telegram","fields":{"allowed_users":["123"]}}));
-    nodes.push(json!({"id":"wh","kind":"webhook","fields":{"name":"github","goal_template":"Go."}}));
-    nodes.push(json!({"id":"whs","kind":"secret","fields":{"env":"WEBHOOK_SECRET","backend":"vault"}}));
+    nodes
+        .push(json!({"id":"wh","kind":"webhook","fields":{"name":"github","goal_template":"Go."}}));
+    nodes.push(
+        json!({"id":"whs","kind":"secret","fields":{"env":"WEBHOOK_SECRET","backend":"vault"}}),
+    );
     edges.extend([
         json!({"id":"u1","from":"n1","to":"tl"}),
         json!({"id":"l1","from":"n1","to":"sk"}),
@@ -164,7 +165,10 @@ fn every_field_round_trips_through_the_config_structs() {
     assert_eq!(a1.skill_packages, vec!["git"]);
     assert_eq!(a1.limits.max_tool_rounds, 7);
     assert!(a1.description.is_some(), "delegated ⇒ routable");
-    assert!(cfg.agents["a0"].description.is_none(), "the planner is not routable");
+    assert!(
+        cfg.agents["a0"].description.is_none(),
+        "the planner is not routable"
+    );
     assert!(cfg.agents["a0"].default, "the bot's agent is the default");
     let scope = &a1.scopes["http_request"];
     assert_eq!(scope.env_reads, vec!["X_KEY"]);
@@ -174,7 +178,10 @@ fn every_field_round_trips_through_the_config_structs() {
         "no read_file scope: the agent's tools do not list it"
     );
     assert_eq!(cfg.orchestrator.as_ref().unwrap().agent, "a0");
-    assert_eq!(cfg.webhooks.endpoints["github"].secret_env.as_deref(), Some("WEBHOOK_SECRET"));
+    assert_eq!(
+        cfg.webhooks.endpoints["github"].secret_env.as_deref(),
+        Some("WEBHOOK_SECRET")
+    );
     assert!(cfg.telegram.enabled && cfg.memory.enabled && cfg.studio.control);
     assert_eq!(cfg.egress.allow_hosts, vec!["openrouter.ai"]);
 }
@@ -199,7 +206,9 @@ fn wires_turn_live_or_red_with_a_reason() {
     assert_eq!(c.status.edges["ok"].state, State::Live);
     assert_eq!(c.status.edges["ok"].writes, "agents.alpha.tools");
     assert_eq!(c.status.edges["bad"].state, State::Error);
-    assert!(c.status.edges["bad"].issues[0].message.contains("cannot wire"));
+    assert!(c.status.edges["bad"].issues[0]
+        .message
+        .contains("cannot wire"));
     assert_eq!(c.status.edges["warn"].state, State::Warn);
     assert_eq!(c.status.nodes["a"].title, "alpha");
 }
@@ -221,7 +230,9 @@ fn delegation_needs_the_planner_and_a_description() {
     let c = compile(&b, &facts(), None);
     // No orchestrator: nobody is the planner.
     assert_eq!(c.status.edges["d1"].state, State::Error);
-    assert!(c.status.edges["d2"].issues[0].message.contains("only the planner"));
+    assert!(c.status.edges["d2"].issues[0]
+        .message
+        .contains("only the planner"));
 
     let b = bp(
         json!([
@@ -262,7 +273,10 @@ fn cloudflare_store_needs_a_build_with_keys_and_the_proxy_card() {
         .map(|i| i.message.as_str())
         .collect();
     assert!(msgs.iter().any(|m| m.contains("no [keys]")), "{msgs:?}");
-    assert!(msgs.iter().any(|m| m.contains("seal proxy card")), "{msgs:?}");
+    assert!(
+        msgs.iter().any(|m| m.contains("seal proxy card")),
+        "{msgs:?}"
+    );
     // With a build that knows [keys]: the proxy card + routes are emitted.
     let mut f = facts();
     f.keys_supported = true;
@@ -279,9 +293,13 @@ fn cloudflare_store_needs_a_build_with_keys_and_the_proxy_card() {
     );
     let c = compile(&b, &f, None);
     assert!(c.status.ok, "{:?}", c.status.issues);
-    assert!(c.toml.contains("[keys]\nproxy = \"https://tengu-seal.example.workers.dev\""));
+    assert!(c
+        .toml
+        .contains("[keys]\nproxy = \"https://tengu-seal.example.workers.dev\""));
     assert!(c.toml.contains("strip = [\"TELEGRAM_BOT_TOKEN\"]"));
-    assert!(c.toml.contains("[keys.env]\nOPENROUTER_API_KEY = \"@session\"\nOPENROUTER_BASE_URL = \"openrouter\""));
+    assert!(c.toml.contains(
+        "[keys.env]\nOPENROUTER_API_KEY = \"@session\"\nOPENROUTER_BASE_URL = \"openrouter\""
+    ));
     assert!(!c.toml.contains("sk-"), "never a key value");
 }
 

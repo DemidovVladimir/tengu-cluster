@@ -70,7 +70,11 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
                     "agent",
                     420.0,
                     160.0,
-                    agent("assistant", true, "You are a helpful assistant. Answer briefly."),
+                    agent(
+                        "assistant",
+                        true,
+                        "You are a helpful assistant. Answer briefly.",
+                    ),
                 ),
             ],
             vec![],
@@ -86,30 +90,24 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
                         "agent",
                         400.0,
                         260.0,
-                        agent("planner", true, "Plan the work and hand each step to the best agent."),
+                        agent(
+                            "planner",
+                            true,
+                            "Plan the work and hand each step to the best agent.",
+                        ),
                     ),
-                    node(
-                        "n-agent-researcher",
-                        "agent",
-                        780.0,
-                        100.0,
-                        {
-                            let mut a = agent("researcher", false, "Find facts on the web and cite them.");
-                            a["description"] = json!("Looks things up on the web (http_request) and reports facts with sources. Not for writing files.");
-                            a
-                        },
-                    ),
-                    node(
-                        "n-agent-writer",
-                        "agent",
-                        780.0,
-                        440.0,
-                        {
-                            let mut a = agent("writer", false, "Write clear documents into the workspace.");
-                            a["description"] = json!("Writes and edits documents in the team workspace. Not for web research.");
-                            a
-                        },
-                    ),
+                    node("n-agent-researcher", "agent", 780.0, 100.0, {
+                        let mut a =
+                            agent("researcher", false, "Find facts on the web and cite them.");
+                        a["description"] = json!("Looks things up on the web (http_request) and reports facts with sources. Not for writing files.");
+                        a
+                    }),
+                    node("n-agent-writer", "agent", 780.0, 440.0, {
+                        let mut a =
+                            agent("writer", false, "Write clear documents into the workspace.");
+                        a["description"] = json!("Writes and edits documents in the team workspace. Not for web research.");
+                        a
+                    }),
                     node(
                         "n-tool-http",
                         "tool",
@@ -145,13 +143,23 @@ pub(crate) fn template(name: &str, sandbox: &str) -> Option<Blueprint> {
         "telegram" => (
             vec![
                 sb,
-                node("n-telegram", "telegram", 40.0, 260.0, json!({ "allowed_users": [] })),
+                node(
+                    "n-telegram",
+                    "telegram",
+                    40.0,
+                    260.0,
+                    json!({ "allowed_users": [] }),
+                ),
                 node(
                     "n-agent-assistant",
                     "agent",
                     420.0,
                     320.0,
-                    agent("assistant", false, "You are a helpful assistant on Telegram. Answer briefly."),
+                    agent(
+                        "assistant",
+                        false,
+                        "You are a helpful assistant on Telegram. Answer briefly.",
+                    ),
                 ),
                 node(
                     "n-secret-bot",
