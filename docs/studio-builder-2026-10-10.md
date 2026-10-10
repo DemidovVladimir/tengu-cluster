@@ -43,6 +43,8 @@ Wire colours: **green current** = Rust compiled it · amber = compiles, read the
 
 Live check 2026-10-10 (one canvas-built sandbox, `tengu tool turn`, list_directory + read_file through tengu): openrouter ✅ · claude_code ✅ · codex ✅ · local: not run here (operator's PC).
 
+Browser check 2026-10-10 (headless Chrome on the real server — the Chrome extension was not connected): `docs/studio-evidence/builder-01-canvas.png` (template, all wires live) · `02-red-wire.png` (planner → new Codex agent without a description: red, the inspector says why) · `03-live.png` (description typed: green) · `04-diff.png` (Validate: loads clean, diff) · `05-finalise.png` (written, `.prev` kept) · `06-debug.png` (Debug drawer).
+
 ## Secrets
 
 | Store | Where the value lives | Command (Secrets tab, copy button) |
