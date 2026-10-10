@@ -424,7 +424,7 @@ fn default_debounce_ms() -> u64 {
 
 /// Every `[agents.<a>] engine` value (`engines::build_engine` builds each;
 /// the Studio builder palette describes each, `config/builder.rs`).
-pub(crate) const ENGINES: &[&str] = &["openrouter", "claude_code", "local"];
+pub(crate) const ENGINES: &[&str] = &["openrouter", "claude_code", "local", "codex"];
 
 /// Per-agent runtime configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,6 +491,11 @@ pub struct AgentConfig {
     /// Absent = defaults (Unsloth on `http://127.0.0.1:8888`).
     #[serde(default)]
     pub local: Option<AgentLocalConfig>,
+    /// OpenAI Codex CLI on the ChatGPT subscription (only used when engine =
+    /// "codex", `engines/codex.rs`). Absent = defaults (`sandbox =
+    /// "read-only"`, `cli_path = "codex"`).
+    #[serde(default)]
+    pub codex: Option<AgentCodexConfig>,
     /// Runtime (never in TOML): set by `Config::fold_default_scopes` on every
     /// agent of a hardened sandbox (`config/hardening.rs`: a `[solana]`
     /// signer, a `[risk]` or an `[soe]` section) — tools without a configured scope then
@@ -964,6 +969,49 @@ impl Default for AgentLocalConfig {
             api_key_env: default_local_api_key_env(),
         }
     }
+}
+
+/// `[agents.<a>.codex] sandbox` values: the Codex CLI's `-s` policy for
+/// its own built-in shell and file edits (`engines/codex.rs`).
+pub(crate) const CODEX_SANDBOXES: &[&str] = &["read-only", "workspace-write"];
+
+/// Per-agent OpenAI Codex CLI (`engine = "codex"`, `engines/codex.rs`): the
+/// operator's ChatGPT subscription (`codex login`), never an API key — the
+/// engine removes `OPENAI_API_KEY` / `CODEX_API_KEY` from the CLI's env.
+/// `model` = a bare OpenAI model id the CLI accepts (`gpt-5.5`, `gpt-6-sol`;
+/// `codex` lists them in `~/.codex/models_cache.json`). Tengu tools reach
+/// the CLI through `tengu mcp-bridge`, as for Claude Code. Refused in a
+/// hardened sandbox (`config/hardening.rs`): the CLI's built-in shell
+/// ignores tengu scopes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCodexConfig {
+    /// Codex's own sandbox for its built-in shell and patch tool (`codex
+    /// exec -s`): `read-only` (default: it may read files, write nothing,
+    /// no network) or `workspace-write` (writes under the agent workspace,
+    /// still no network). Tengu tools are not affected — scopes gate them.
+    #[serde(default = "default_codex_sandbox")]
+    pub sandbox: String,
+    /// The `codex` executable (`PATH` lookup unless absolute).
+    #[serde(default = "default_codex_cli_path")]
+    pub cli_path: String,
+}
+
+impl Default for AgentCodexConfig {
+    fn default() -> Self {
+        Self {
+            sandbox: default_codex_sandbox(),
+            cli_path: default_codex_cli_path(),
+        }
+    }
+}
+
+fn default_codex_sandbox() -> String {
+    "read-only".to_string()
+}
+
+fn default_codex_cli_path() -> String {
+    "codex".to_string()
 }
 
 fn default_local_base_url() -> String {
@@ -1504,11 +1552,7 @@ impl Config {
     fn validate_agent(agent_id: &str, agent: &AgentConfig, errors: &mut ValidationErrors) {
         errors.require(!agent_id.trim().is_empty(), "agent id cannot be empty");
         errors.require_nonempty(&format!("agents.{agent_id}.engine"), &agent.engine);
-        errors.require_one_of(
-            &format!("agents.{agent_id}.engine"),
-            &agent.engine,
-            ENGINES,
-        );
+        errors.require_one_of(&format!("agents.{agent_id}.engine"), &agent.engine, ENGINES);
         errors.require_nonempty(&format!("agents.{agent_id}.model"), &agent.model);
         // Read trimmed everywhere (`BuiltinToolsProfile::parse`, the
         // hardening rule); an unknown value is a load error on any block.
@@ -1518,6 +1562,14 @@ impl Config {
                 &cc.builtin_tools_profile,
                 &["none", "read_only", "editor", "editor_shell"],
             );
+        }
+        if let Some(ref cx) = agent.codex {
+            errors.require_one_of(
+                &format!("agents.{agent_id}.codex.sandbox"),
+                cx.sandbox.trim(),
+                CODEX_SANDBOXES,
+            );
+            errors.require_nonempty(&format!("agents.{agent_id}.codex.cli_path"), &cx.cli_path);
         }
         errors.require_one_of(
             &format!("agents.{agent_id}.default_lens"),
@@ -1731,6 +1783,7 @@ impl Default for Config {
                 scopes: HashMap::new(),
                 claude_code: None,
                 local: None,
+                codex: None,
                 no_shell_fallback: false,
                 signer_key_file: None,
                 sandbox: Default::default(),
@@ -2061,6 +2114,38 @@ ttl_days = 7
                 "{err}"
             );
         }
+    }
+
+    /// `engine = "codex"` with its optional block: defaults when absent, a
+    /// known `sandbox` (trimmed), unknown keys refused at parse.
+    #[test]
+    fn codex_agent_block_parses_and_validates() {
+        let parse = |block: &str| {
+            toml::from_str::<Config>(&format!(
+                "[agents.cx]\ndefault = true\nengine = \"codex\"\nmodel = \"gpt-5.5\"\n{block}"
+            ))
+        };
+        let plain = parse("").expect("no block");
+        assert!(plain.agents["cx"].codex.is_none());
+        assert!(plain.validate().is_ok(), "codex is a known engine");
+        let set =
+            parse("[agents.cx.codex]\nsandbox = \" workspace-write\"\ncli_path = \"/opt/codex\"")
+                .expect("block");
+        let cx = set.agents["cx"].codex.clone().unwrap();
+        assert_eq!(cx.cli_path, "/opt/codex");
+        assert!(set.validate().is_ok());
+        let defaults = parse("[agents.cx.codex]").expect("empty block");
+        assert_eq!(
+            defaults.agents["cx"].codex.as_ref().unwrap().sandbox,
+            "read-only"
+        );
+        let bad = parse("[agents.cx.codex]\nsandbox = \"danger-full-access\"").expect("parses");
+        let err = bad.validate().expect_err("unknown sandbox").to_string();
+        assert!(
+            err.contains("agents.cx.codex.sandbox must be one of"),
+            "{err}"
+        );
+        assert!(parse("[agents.cx.codex]\nsandbox_mode = \"read-only\"").is_err());
     }
 
     #[test]

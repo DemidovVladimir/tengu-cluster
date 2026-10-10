@@ -1,6 +1,6 @@
 # MCP Bridge
 
-The MCP bridge is a stdio subprocess that exposes Tengu-native tools to engines that manage their own workspace (currently [[engine-backends#Claude Code|Claude Code]]). It implements the [Model Context Protocol](https://modelcontextprotocol.io) (JSON-RPC 2.0 over stdin/stdout).
+The MCP bridge is a stdio subprocess that exposes Tengu-native tools to engines that manage their own workspace ([[engine-backends#Claude Code|Claude Code]] and [[engine-backends#Codex|Codex]]). It implements the [Model Context Protocol](https://modelcontextprotocol.io) (JSON-RPC 2.0 over stdin/stdout).
 
 **File:** `src/adapters/inbound/mcp_bridge.rs`
 **Subcommand:** `tengu mcp-bridge`
@@ -62,7 +62,7 @@ Every call gets the run's conversation as `ToolCtx.conversation` (`call_conversa
 
 ## Configuration
 
-Environment set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_json`; names in `adapters/outbound/bridge_env.rs`):
+Environment set by the CLI engines — built once by `bridge_env::bridge_env` (`adapters/outbound/bridge_env.rs`, which also names the vars): Claude Code writes it into the temp `--mcp-config`; Codex passes each var as `-c mcp_servers.tengu-tools.env.<NAME>=…` and forwards the NAMES of its own env with `env_vars` (Codex starts MCP servers with a minimal env; no value on the command line):
 
 | Variable | Description |
 |----------|-------------|
