@@ -22,6 +22,7 @@ That is the chat turn. Since 2026-09-24 the same binary also runs work with no c
 | `tengu sources` + `source_evidence` | SEC EDGAR / EU TED facts → append-only `sources.db`; the as-of evidence packet (no lookahead); agents never fetch | §2.16 |
 | `tengu soe` + `soe_*` tools | Software Opportunity Engine: offline gates, economics, ranking over a signed private profile (O1); the weekly cycle — Architect + Critic stage agents write drafts through tools, the pure domain decides, the run dir is frozen — plus replay, grades, the Review #2 packet (O3 / O4); a `kind = "job"` feed of `tengu run` | §2.17 |
 | `tengu trace` + `tengu studio` | every `tengu run` / `tengu decide` writes a correlated JSONL execution trace; Studio (a loopback browser page, default build) draws the validated workflow graph and the trace, Play / Stop only where `[studio] control` allows | §2.18 |
+| `tengu sandbox new` + the builder | compose a sandbox on a canvas (agents, tools, skills, workspaces, secrets, channels); Rust compiles each wire and writes `config.toml` only after `Config::load` accepts it | §2.19 |
 
 **Code layout (2026-09-23):** hexagonal — `src/domain/` (data) ← `src/ports/` (traits) ← `src/application/` (use cases) ← `src/adapters/{inbound,outbound}/`, wired by `src/bootstrap/`; enforced by `tests/layering_lint.rs`. Every file, extension recipe and dependency: `docs/code-map.md` / `docs/code-map.html`.
 
@@ -176,7 +177,7 @@ No user message starts these. Same tools, scopes and egress as a chat turn; no p
 
 ## §2 — The subsystems (file-by-file)
 
-Paths below are relative to `src/`. §2.1–2.6 serve the chat turn; §2.7–2.13 landed 2026-09-24 → 2026-10-01; §2.14–2.17 (lineage + evidence, strategy ranking, source evidence, SOE) 2026-10-06 → 2026-10-09; §2.18 (execution trace + Tengu Studio) 2026-10-09.
+Paths below are relative to `src/`. §2.1–2.6 serve the chat turn; §2.7–2.13 landed 2026-09-24 → 2026-10-01; §2.14–2.17 (lineage + evidence, strategy ranking, source evidence, SOE) 2026-10-06 → 2026-10-09; §2.18 (execution trace + Tengu Studio) 2026-10-09; §2.19 (Studio builder, `engine = "codex"`) 2026-10-10.
 
 ### 2.1 Memory — `application/memory/` + ports + outbound stores
 
@@ -204,7 +205,7 @@ No `agents/` directory, no separate spec type. A subagent is an `[agents.<name>]
 | Schema | `config/mod.rs::AgentConfig` (`deny_unknown_fields`) — one struct for in-process agents, subagents, loop / feed agents |
 | Routable ⇔ `description` set | `orchestrator/shared_files.rs::routable_agents` renders those blocks (+ `example_queries`) into `TENGU_PLANNER_REGISTRY.md` |
 | Private ⇔ no `description`, not `default` | the only agents that may hold an exec tool (xmarket) or a Solana `send` grant (and not a webhook endpoint's `agent`); never `@<id>:`-routable on Telegram |
-| Fields | `engine` (`openrouter` \| `local` \| `claude_code`), `model`, `description`, `example_queries`, `tools` (allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias), `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap per step), `limits.step_timeout_secs` (default 600), `identity`, `claude_code` |
+| Fields | `engine` (`openrouter` \| `local` \| `claude_code` \| `codex`), `model`, `description`, `example_queries`, `tools` (allow-list; workspace-tool names opt in), `skill_packages` (`skills` alias), `workspace`, `workspace_tools`, `scopes`, `limits.max_tool_rounds` (turn cap per step), `limits.step_timeout_secs` (default 600), `identity`, `claude_code` |
 | Sandbox sections | `AgentConfig::sandbox` (`config/sections.rs`) — `[xmarket]`, `[risk]`, `[paper]`, calendars, `[rate_limits]`, `[recorder]`, `[backtest]`, `[generation]` (resolved `GenerationScope`), `[sources]` (+ its state dir), `[soe]`, `[strategy_ranking]` reach tools on every surface |
 | Child lookup | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` loads the parent config first, then `config.agents.get(name)` (`compose.base_agent` when composed) |
 | Examples | `sandboxes/lping` (`lping` planner · `crypto_researcher` routable · `lp_executor` private), `sandboxes/xmarket` (no planner · `xm_architect` default + routable · `xm_executor` private), `sandboxes/xlab` (`xl_architect` routable · `xl_jev` private), `sandboxes/xlab-w2` (+ `xl_ranker` private, the ranking feeds' agent), `sandboxes/soe` (`soe_reader` default, `source_evidence` only · `soe_architect` · `soe_critic` stage agents), `sandboxes/control-loop-lab` (`lab` private: the loop's and feeds' tools) |
@@ -379,7 +380,7 @@ Sandbox `sandboxes/xlab` (bound to W1): `xl_architect` (default, routable; `mark
 
 ### 2.13 Engine parity (E0) + hardening (2026-09-30 / 2026-10-01)
 
-Every tool works under `openrouter`, `local` and `claude_code` (operator rule, no exceptions).
+Every tool works under `openrouter`, `local`, `claude_code` and `codex` (operator rule, no exceptions; `codex` = the OpenAI ChatGPT subscription through `codex exec`, tools over the same MCP bridge — `engines/codex.rs`).
 
 | Piece | Where |
 |---|---|
@@ -485,6 +486,18 @@ The trace is what Studio reads; the page draws what Rust computed (graph, colour
 | `config/studio.rs` | `[studio] control` (default `false`); `control_policy`: never in a `[generation]`-bound or hardened (`[risk]`, `[soe]`, signer) sandbox — `--allow-control` included |
 | `adapters/inbound/studio/` | axum server (feature `studio`, default): `GET /api/v1/` `meta`, `graph`, `health`, `runs`, `runs/:run_id/{events,board,stream}`, `nodes/:node_id`, `live/stream`, `control`; `POST /api/v1/control/{play,stop,event}`. `guard.rs`: loopback bind only, a per-process token in the URL fragment, Host / Origin / `Sec-Fetch-Site` checks, CSRF on every change request, CSP, no CORS |
 | `web/studio/` (repo root) | `index.html`, `studio.css`, `studio.js` — embedded (`assets.rs`, `include_str!`); draws only |
+
+### 2.19 Studio builder (2026-10-10)
+
+Drag-and-drop sandboxes: `tengu sandbox new` → `sandboxes/<n>/{builder.json,config.toml}` → `/builder` (`tengu studio --allow-edit`) → Finalise. Doc `docs/studio-builder-2026-10-10.md`; page `docs/tutorial/builder.html`.
+
+| File | Owns |
+|---|---|
+| `domain/blueprint.rs` | the canvas document + `Status` fold (per card / wire: ok · live · warn · error) |
+| `config/builder/` | palette (card kinds, fields, `CONNECTIONS`, engines, secret stores), compiler blueprint → TOML (owned sections; others kept), templates, `load_report` (`Config::load`) |
+| `application/builder.rs` + `ports/builder.rs` | state / save / preview / finalise / create; `SandboxDrafts` |
+| `adapters/outbound/builder_store.rs` · `bootstrap/builder.rs` | files under `./sandboxes/` (atomic, `.prev`), the temp-copy load check; catalog tools + skills as palette facts, busy = fresh `tengu run` heartbeat |
+| `adapters/inbound/studio/builder.rs` · `cli/sandbox.rs` · `web/studio/builder.*` | routes under the Studio guard; `tengu sandbox new\|compile\|finalise\|palette`; the canvas (draws only) |
 | `cli/studio.rs` | `tengu studio --sandbox <s> [--port --bind --allow-control]` (the server; without the feature an error naming it) · `tengu studio graph [--map]` (every build) |
 
 | Control | Rule |
