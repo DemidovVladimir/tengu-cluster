@@ -1109,6 +1109,11 @@ schemas = ["mkt_ctx/1"]
 }
 
 /// A skill in the project tier (`<cwd>/skills/demo`).
+/// `a2a` cases: the remote `peer` is the mock (card at its root, JSON-RPC
+/// at `/rpc`).
+const A2A_REMOTE: &str = "[a2a.remotes.peer]\nurl = \"{mock}\"\nendpoint_url = \"{mock}/rpc\"\n\n[default_scopes.a2a]\nnet_hosts = [\"127.0.0.1\"]\n";
+const A2A_CARD: &str = r#"{"name":"Peer","description":"The conformance peer.","version":"1.0.0","supportedInterfaces":[{"url":"http://127.0.0.1/rpc","protocolBinding":"JSONRPC","protocolVersion":"1.0"}],"capabilities":{},"defaultInputModes":["text/plain"],"defaultOutputModes":["text/plain"],"skills":[]}"#;
+const A2A_TASK: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"task":{"id":"task-conf-1","contextId":"ctx-conf-1","status":{"state":"TASK_STATE_COMPLETED"},"artifacts":[{"artifactId":"a-1","name":"response","parts":[{"text":"pong from the remote"}]}]}}}"#;
 const DEMO_SKILL: &str = "---\nname: demo\ndescription: Conformance demo skill.\neditable_by_learner: true\n---\n\n# demo\n\nBody.\n";
 
 /// One case per catalog tool (a few with variants), plus extras.
@@ -1245,6 +1250,29 @@ fn cases() -> Vec<Case> {
         )
         .named("egress_denied")
         .err("not in allow_hosts"),
+        // ── a2a (another agent harness: the mock is the remote) ────────
+        case("a2a", json!({"action": "send", "remote": "peer", "message": "ping"}))
+            .toml(A2A_REMOTE)
+            .route(get("/.well-known/agent-card.json").json(A2A_CARD))
+            .route(
+                post("/rpc")
+                    .has("\"method\":\"SendMessage\"")
+                    .has("\"text\":\"ping\"")
+                    .json(A2A_TASK),
+            )
+            .ok("artifact response a-1:\npong from the remote"),
+        case("a2a", json!({"action": "list"}))
+            .named("list")
+            .toml(A2A_REMOTE)
+            .ok("- peer  http://127.0.0.1:"),
+        // A card naming another host is refused before any call to it.
+        case("a2a", json!({"action": "card", "remote": "peer"}))
+            .named("pinned_host")
+            .toml("[a2a.remotes.peer]\nurl = \"{mock}\"\n\n[default_scopes.a2a]\nnet_hosts = [\"127.0.0.1\"]\n")
+            .route(get("/.well-known/agent-card.json").json(
+                &A2A_CARD.replace("http://127.0.0.1/rpc", "https://elsewhere.example.com/rpc"),
+            ))
+            .err("tengu calls only the configured hosts"),
         // ── crypto (Privy is not configured in tests) ──────────────────
         case("sign_and_send_transaction", json!({"to": WALLET, "value": "1"}))
             .err("PRIVY_APP_ID"),

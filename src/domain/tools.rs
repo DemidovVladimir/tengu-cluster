@@ -66,6 +66,11 @@ pub(crate) const SOE_VIEW: &str = "soe_view";
 pub(crate) const SOE_PROPOSE: &str = "soe_propose";
 pub(crate) const SOE_CHALLENGE: &str = "soe_challenge";
 
+/// A2A client (`adapters/outbound/tools/a2a/`): talk to another agent
+/// harness over A2A — a remote of `[a2a.remotes.<name>]` only (`config/a2a.rs`);
+/// sends what the model writes out of the sandbox, so opt-in.
+pub(crate) const A2A: &str = "a2a";
+
 /// Exec tools: each places orders through the `[risk]` gate inside the tool
 /// (`tools/xm/exec_common.rs`: gate + fill + ledger write in one
 /// transaction). Only a private agent may hold one — no `description`, not
@@ -158,6 +163,7 @@ pub(crate) const WORKSPACE_TOOLS: &[&str] = &[
     SOE_VIEW,
     SOE_PROPOSE,
     SOE_CHALLENGE,
+    A2A,
 ];
 
 // Solana write tools (phase 6b, `adapters/outbound/tools/solana/write_*`):
