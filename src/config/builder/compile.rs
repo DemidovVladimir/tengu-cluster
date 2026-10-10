@@ -167,9 +167,7 @@ fn check_fields(card: &Card<'_>, issues: &mut Vec<Issue>) {
         let ok = match f.ty {
             FieldType::String | FieldType::Text | FieldType::Select => value.is_string(),
             FieldType::Bool => value.is_boolean(),
-            FieldType::Int => {
-                value.is_i64() || value.as_str().is_some_and(|s| s.trim().is_empty())
-            }
+            FieldType::Int => value.is_i64() || value.as_str().is_some_and(|s| s.trim().is_empty()),
             FieldType::List => value
                 .as_array()
                 .is_some_and(|a| a.iter().all(Value::is_string)),
@@ -227,10 +225,7 @@ fn check_fields(card: &Card<'_>, issues: &mut Vec<Issue>) {
 fn title_of(card: &Card<'_>, bp: &Blueprint) -> (String, String) {
     let s = |k: &str| card.s(k).unwrap_or_default();
     match card.spec.kind {
-        "sandbox" => (
-            bp.sandbox.clone(),
-            format!("network: {}", s("network")),
-        ),
+        "sandbox" => (bp.sandbox.clone(), format!("network: {}", s("network"))),
         "agent" => (
             card.s("name").unwrap_or_else(|| "(unnamed agent)".into()),
             format!("{} · {}", s("engine"), s("model")),
@@ -351,9 +346,11 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
         if let Some(s) = c.s("skill") {
             if !facts.skills.iter().any(|(n, _)| *n == s) {
                 issues.push(
-                    Issue::warn(format!("no skill '{s}' found on this machine (skills/, ~/.tengu/skills/)"))
-                        .node(c.id())
-                        .field("skill"),
+                    Issue::warn(format!(
+                        "no skill '{s}' found on this machine (skills/, ~/.tengu/skills/)"
+                    ))
+                    .node(c.id())
+                    .field("skill"),
                 );
             }
         }
@@ -449,8 +446,11 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                 let a = agents.entry(f.id()).or_default();
                 if a.tools.contains(&tool) {
                     issues.push(
-                        Issue::error(format!("{} already uses {tool} (another card)", name_of(f.id())))
-                            .edge(&e.id),
+                        Issue::error(format!(
+                            "{} already uses {tool} (another card)",
+                            name_of(f.id())
+                        ))
+                        .edge(&e.id),
                     );
                 } else {
                     a.tools.push(tool.clone());
@@ -466,10 +466,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                     );
                 }
                 tool_users.entry(t.id()).or_default().push(f.id());
-                let needs_memory = facts
-                    .tools
-                    .iter()
-                    .any(|o| o.name == tool && o.needs_memory);
+                let needs_memory = facts.tools.iter().any(|o| o.name == tool && o.needs_memory);
                 if needs_memory && !sandbox.is_some_and(|s| s.b("memory")) {
                     issues.push(
                         Issue::warn(format!(
@@ -534,7 +531,10 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
             "authenticates" => {
                 let env = f.s("env").unwrap_or_default();
                 let engine = t.s("engine").unwrap_or_default();
-                secret_users.entry(f.id()).or_default().push(name_of(t.id()));
+                secret_users
+                    .entry(f.id())
+                    .or_default()
+                    .push(name_of(t.id()));
                 match engine.as_str() {
                     "openrouter" => {
                         if env != "OPENROUTER_API_KEY" {
@@ -564,7 +564,10 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
             }
             "grants" => {
                 // Resolved once every `uses` wire is known (below).
-                writes = format!("agents.<each user>.scopes.{}.env_reads", t.s("tool").unwrap_or_default());
+                writes = format!(
+                    "agents.<each user>.scopes.{}.env_reads",
+                    t.s("tool").unwrap_or_default()
+                );
             }
             "served_by" => {
                 served.insert(f.id());
@@ -574,15 +577,20 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                     .push("seal proxy".into());
                 if f.s("backend").as_deref() != Some("cloudflare") {
                     issues.push(
-                        Issue::error("set Stored in = Cloudflare seal proxy to serve it from the Worker")
-                            .edge(&e.id),
+                        Issue::error(
+                            "set Stored in = Cloudflare seal proxy to serve it from the Worker",
+                        )
+                        .edge(&e.id),
                     );
                 }
                 writes = "keys.env · keys.strip".into();
             }
             "bot_token" => {
                 let env = f.s("env").unwrap_or_default();
-                secret_users.entry(f.id()).or_default().push("telegram".into());
+                secret_users
+                    .entry(f.id())
+                    .or_default()
+                    .push("telegram".into());
                 if env != "TELEGRAM_BOT_TOKEN" {
                     issues.push(
                         Issue::warn(format!("the bot reads TELEGRAM_BOT_TOKEN, not {env}"))
@@ -605,7 +613,9 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
             }
             "chats" => {
                 if bot_agent.is_some() {
-                    issues.push(Issue::error("the bot chats with one agent (the default)").edge(&e.id));
+                    issues.push(
+                        Issue::error("the bot chats with one agent (the default)").edge(&e.id),
+                    );
                 } else {
                     bot_agent = Some(t.id());
                     agents.entry(t.id()).or_default().chats = true;
@@ -682,8 +692,11 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
         let unused = !used.contains(c.id());
         match c.spec.kind {
             "tool" | "skill" | "workspace" if unused => issues.push(
-                Issue::warn(format!("no agent is wired to this {}", c.spec.label.to_lowercase()))
-                    .node(c.id()),
+                Issue::warn(format!(
+                    "no agent is wired to this {}",
+                    c.spec.label.to_lowercase()
+                ))
+                .node(c.id()),
             ),
             "secret" => {
                 if unused {
@@ -695,15 +708,16 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                 if c.s("backend").as_deref() == Some("cloudflare") {
                     if !facts.keys_supported {
                         issues.push(
-                            Issue::error("this build has no [keys] section (the seal proxy, PR #50)")
-                                .node(c.id())
-                                .field("backend"),
+                            Issue::error(
+                                "this build has no [keys] section (the seal proxy, PR #50)",
+                            )
+                            .node(c.id())
+                            .field("backend"),
                         );
                     }
                     if !served.contains(c.id()) {
                         issues.push(
-                            Issue::error("wire it to the Cloudflare seal proxy card")
-                                .node(c.id()),
+                            Issue::error("wire it to the Cloudflare seal proxy card").node(c.id()),
                         );
                     }
                     let lines = c.list("keys_env");
@@ -736,9 +750,8 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                     issues.push(Issue::warn("no secret is served by the proxy").node(c.id()));
                 }
             }
-            "orchestrator" if planner.is_none() => issues.push(
-                Issue::error("wire the Orchestrator to the agent that plans").node(c.id()),
-            ),
+            "orchestrator" if planner.is_none() => issues
+                .push(Issue::error("wire the Orchestrator to the agent that plans").node(c.id())),
             "telegram" => {
                 if bot_agent.is_none() {
                     issues.push(Issue::error("wire it to the agent it chats with").node(c.id()));
@@ -803,7 +816,9 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
     if of_kind("agent").is_empty() {
         issues.push(Issue::error("add at least one agent"));
     } else if defaults.is_empty() {
-        issues.push(Issue::warn("no default agent: tick Default agent on the one chat starts with"));
+        issues.push(Issue::warn(
+            "no default agent: tick Default agent on the one chat starts with",
+        ));
     }
 
     // ── secrets checklist ──
@@ -931,7 +946,11 @@ fn emit(
                     }
                 }
                 if !scalars.is_empty() {
-                    let _ = writeln!(o, "\n{}", toml::to_string(&scalars).unwrap_or_default().trim_end());
+                    let _ = writeln!(
+                        o,
+                        "\n{}",
+                        toml::to_string(&scalars).unwrap_or_default().trim_end()
+                    );
                 }
             }
             Err(e) => issues.push(Issue::warn(format!(
@@ -941,7 +960,11 @@ fn emit(
     }
 
     if let Some(s) = of("sandbox").first() {
-        let _ = writeln!(o, "\n[egress]\nnetwork = {}", q(&s.s("network").unwrap_or_else(|| "tor".into())));
+        let _ = writeln!(
+            o,
+            "\n[egress]\nnetwork = {}",
+            q(&s.s("network").unwrap_or_else(|| "tor".into()))
+        );
         let hosts = s.list("allow_hosts");
         if !hosts.is_empty() {
             let _ = writeln!(o, "allow_hosts = {}", arr(&hosts));
@@ -1110,7 +1133,11 @@ fn emit(
             }
             "claude_code" => {
                 let p = s("claude_tools").unwrap_or_else(|| "read_only".into());
-                let _ = writeln!(o, "\n[agents.{name}.claude_code]\nbuiltin_tools_profile = {}", q(&p));
+                let _ = writeln!(
+                    o,
+                    "\n[agents.{name}.claude_code]\nbuiltin_tools_profile = {}",
+                    q(&p)
+                );
             }
             "codex" => {
                 let m = s("codex_sandbox").unwrap_or_else(|| "read-only".into());

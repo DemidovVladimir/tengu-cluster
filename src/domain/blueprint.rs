@@ -409,7 +409,13 @@ mod tests {
         ];
         let s = Status::fold(&b, issues, &BTreeMap::new(), &BTreeMap::new());
         assert!(!s.ok);
-        assert_eq!(s.counts, Counts { errors: 2, warnings: 1 });
+        assert_eq!(
+            s.counts,
+            Counts {
+                errors: 2,
+                warnings: 1
+            }
+        );
         assert_eq!(s.nodes["a"].state, State::Warn);
         assert_eq!(s.nodes["b"].state, State::Ok);
         assert_eq!(s.edges["e1"].state, State::Live);

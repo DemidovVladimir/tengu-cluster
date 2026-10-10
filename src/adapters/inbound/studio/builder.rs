@@ -48,7 +48,10 @@ fn builder(st: &AppState) -> Result<Arc<Builder>, Response> {
     })
 }
 
-fn json_body<T: serde::de::DeserializeOwned>(headers: &HeaderMap, body: &Bytes) -> Result<T, Response> {
+fn json_body<T: serde::de::DeserializeOwned>(
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<T, Response> {
     let json = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -150,5 +153,8 @@ pub(super) async fn finalise(State(st): St, headers: HeaderMap, body: Bytes) -> 
         Ok(fb) => fb,
         Err(r) => return r,
     };
-    run("finalise", b, move |b| b.finalise(&fb.blueprint, &fb.sha256)).await
+    run("finalise", b, move |b| {
+        b.finalise(&fb.blueprint, &fb.sha256)
+    })
+    .await
 }

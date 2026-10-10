@@ -103,8 +103,7 @@ impl SandboxDrafts for FsDrafts {
         let path = self.config_path(sandbox);
         let backup = if path.is_file() {
             let prev = self.dir(sandbox).join("config.toml.prev");
-            std::fs::copy(&path, &prev)
-                .with_context(|| format!("back up {}", path.display()))?;
+            std::fs::copy(&path, &prev).with_context(|| format!("back up {}", path.display()))?;
             Some(prev)
         } else {
             None
@@ -181,8 +180,16 @@ mod tests {
         assert!(ok.ok, "{:?}", ok.errors);
         let bad = s.check_config("demo", "[agents.a]\nengine = \"nope\"\nmodel = \"m\"\n");
         assert!(!bad.ok);
-        assert!(bad.errors.iter().any(|e| e.contains("agents.a.engine")), "{:?}", bad.errors);
+        assert!(
+            bad.errors.iter().any(|e| e.contains("agents.a.engine")),
+            "{:?}",
+            bad.errors
+        );
         let typo = s.check_config("demo", "[rsik]\n");
-        assert!(!typo.ok && typo.errors[0].contains("rsik"), "{:?}", typo.errors);
+        assert!(
+            !typo.ok && typo.errors[0].contains("rsik"),
+            "{:?}",
+            typo.errors
+        );
     }
 }

@@ -118,7 +118,14 @@ async fn serve_studio(
     serve: ServeArgs,
     _secrets: Arc<SecretRegistry>,
 ) -> Result<()> {
-    let _ = (serve.port, serve.bind, serve.allow_control, serve.allow_edit, serve.open, DEFAULT_BIND);
+    let _ = (
+        serve.port,
+        serve.bind,
+        serve.allow_control,
+        serve.allow_edit,
+        serve.open,
+        DEFAULT_BIND,
+    );
     bail!(
         "the Studio server requires: cargo build --features studio \
          (`tengu studio graph` works in every build)"

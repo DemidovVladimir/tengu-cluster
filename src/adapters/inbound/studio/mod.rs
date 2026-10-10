@@ -146,7 +146,10 @@ impl AppState {
         self
     }
 
-    pub(crate) fn with_builder(mut self, builder: Arc<crate::application::builder::Builder>) -> Self {
+    pub(crate) fn with_builder(
+        mut self,
+        builder: Arc<crate::application::builder::Builder>,
+    ) -> Self {
         self.builder = Some(builder);
         self
     }
@@ -191,7 +194,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router {
         .route("/builder", get(builder::page))
         .route("/favicon.ico", get(assets::favicon))
         .route("/api/v1/builder", get(builder::state))
-        .route("/api/v1/builder/blueprint", axum::routing::put(builder::save))
+        .route(
+            "/api/v1/builder/blueprint",
+            axum::routing::put(builder::save),
+        )
         .route("/api/v1/builder/preview", post(builder::preview))
         .route("/api/v1/builder/finalise", post(builder::finalise))
         .fallback(api::not_found)
