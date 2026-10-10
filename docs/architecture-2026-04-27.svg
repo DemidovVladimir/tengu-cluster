@@ -1,6 +1,6 @@
-<svg viewBox="0 0 1200 3976" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
-  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio and their files (2026-04-27, synced 2026-10-09)</title>
-  <desc id="desc">Eight stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control).</desc>
+<svg viewBox="0 0 1200 4284" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio, the Studio builder and their files (2026-04-27, synced 2026-10-10)</title>
+  <desc id="desc">Nine stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control); and the Studio builder with the Codex engine (2026-10-10: tengu sandbox new, the canvas, compile and load check, Finalise, secret stores).</desc>
   <style>
     .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
     .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
@@ -58,7 +58,7 @@
   <rect x="0" y="0" width="1200" height="3976" fill="#ffffff" />
 
   <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response, and what runs without one</text>
-  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-09 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer) · section 7: lineage, rankings, sources, SOE · section 8: trace + Studio</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-10 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer) · section 7: lineage, rankings, sources, SOE · section 8: trace + Studio · section 9: builder</text>
 
   <g transform="translate(20, 56)">
     <rect width="1160" height="50" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
@@ -1077,12 +1077,81 @@
     <text x="10" y="152" class="small">[studio] control = true · loop demo (Jev),</text>
     <text x="10" y="164" class="small">feeds tick + probe, agent lab: read_file,</text>
     <text x="10" y="176" class="small">write_file, list_directory · scenarios/*.json</text>
-    <text x="10" y="196" class="small">editor (ST-40): design only until</text>
-    <text x="10" y="208" class="small">Operator Review #3</text>
+    <text x="10" y="196" class="small">editor (ST-40): built 2026-10-10 as the</text>
+    <text x="10" y="208" class="small">Studio builder (section 9)</text>
     <text x="10" y="244" class="small" font-style="italic">runbook: docs/control-loop-lab-2026-10-08.md</text>
   </g>
 
-  <g transform="translate(20, 3848)">
+  <!-- ===================== SECTION 9 — Studio builder + Codex engine ===================== -->
+  <text x="20" y="3866" class="h2">section 9 - Studio builder (drag-and-drop sandboxes) + Codex engine - 2026-10-10</text>
+  <line x1="20" y1="3872" x2="1180" y2="3872" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 3886)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">canvas + palette</text>
+    <text x="10" y="40" class="file">cli/sandbox.rs</text>
+    <text x="10" y="52" class="small">tengu sandbox new: asks the name + template,</text>
+    <text x="10" y="64" class="small">writes sandboxes/&lt;n&gt;/builder.json + config.toml</text>
+    <text x="10" y="84" class="file">domain/blueprint.rs</text>
+    <text x="10" y="96" class="small">nodes, edges, view; Status per card + wire:</text>
+    <text x="10" y="108" class="small">ok · live · warn · error (pure)</text>
+    <text x="10" y="128" class="file">config/builder/palette.rs</text>
+    <text x="10" y="140" class="small">10 card kinds + fields, 12 CONNECTIONS,</text>
+    <text x="10" y="152" class="small">engines (= config::ENGINES), secret stores;</text>
+    <text x="10" y="164" class="small">never run_command, signing, sends</text>
+    <text x="10" y="244" class="small" font-style="italic">the palette is Rust; the page renders it</text>
+  </g>
+
+  <g transform="translate(312, 3886)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">compile + load check</text>
+    <text x="10" y="40" class="file">config/builder/compile.rs</text>
+    <text x="10" y="52" class="small">blueprint → TOML: owned sections (egress,</text>
+    <text x="10" y="64" class="small">memory, studio, keys, orchestrator, telegram,</text>
+    <text x="10" y="76" class="small">webhooks, agents); every other key kept</text>
+    <text x="10" y="96" class="file">application/builder.rs</text>
+    <text x="10" y="108" class="small">preview = compile + Config::load on a temp</text>
+    <text x="10" y="120" class="small">copy + diff + secrets checklist + sha256</text>
+    <text x="10" y="132" class="small">finalise: 409 stale / running, 422 refused</text>
+    <text x="10" y="152" class="file">outbound/builder_store.rs</text>
+    <text x="10" y="164" class="small">atomic writes, config.toml.prev backup</text>
+    <text x="10" y="244" class="small" font-style="italic">keys never enter TOML or builder.json</text>
+  </g>
+
+  <g transform="translate(604, 3886)">
+    <rect width="282" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">builder page (--allow-edit)</text>
+    <text x="10" y="40" class="file">inbound/studio/builder.rs</text>
+    <text x="10" y="52" class="small">GET /builder · GET /api/v1/builder · PUT</text>
+    <text x="10" y="64" class="small">blueprint (autosave) · POST preview | finalise</text>
+    <text x="10" y="76" class="small">under the Studio guard (token, CSRF, loopback)</text>
+    <text x="10" y="96" class="file">web/studio/builder.*</text>
+    <text x="10" y="108" class="small">drag cards, wire ports; live wires carry</text>
+    <text x="10" y="120" class="small">green current; red = Rust says why</text>
+    <text x="10" y="140" class="small">view-only: no builder.json, [generation],</text>
+    <text x="10" y="152" class="small">hardened</text>
+    <text x="10" y="244" class="small" font-style="italic">debug: tengu sandbox compile | finalise</text>
+  </g>
+
+  <g transform="translate(896, 3886)">
+    <rect width="284" height="256" rx="6" class="panel" />
+    <rect x="0" y="0" width="284" height="22" rx="6" class="pill-std" />
+    <text x="10" y="15" class="pt">engines + secret stores</text>
+    <text x="10" y="40" class="file">engines/codex.rs · cli_run.rs</text>
+    <text x="10" y="52" class="small">engine = codex: ChatGPT subscription via</text>
+    <text x="10" y="64" class="small">codex exec; tools over the MCP bridge;</text>
+    <text x="10" y="76" class="small">refused in hardened sandboxes</text>
+    <text x="10" y="96" class="small">cards: OpenRouter API · Claude (subscription)</text>
+    <text x="10" y="108" class="small">· OpenAI (subscription) · local model</text>
+    <text x="10" y="128" class="small">secrets: vault · env · Cloudflare seal</text>
+    <text x="10" y="140" class="small">proxy ([keys], probed: on with PR #50)</text>
+    <text x="10" y="244" class="small" font-style="italic">doc: docs/studio-builder-2026-10-10.md</text>
+  </g>
+
+  <g transform="translate(20, 4156)">
     <rect width="1160" height="110" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>

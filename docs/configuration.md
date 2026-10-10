@@ -63,7 +63,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 
 ```toml
 [agents.main]
-engine = "openrouter"              # "openrouter" | "local" | "claude_code"
+engine = "openrouter"              # "openrouter" | "local" | "claude_code" | "codex"
 model = "anthropic/claude-sonnet-4-6"   # claude_code wants the bare slug: "claude-sonnet-4-6"; local: the server's id
 default = true                     # at most one default agent
 workspace = "~/projects/my-app"
@@ -76,7 +76,7 @@ example_queries = ["what is the BTC price?"]
 
 | Field | Default | Notes |
 |---|---|---|
-| `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI + `--features claude_code`) — `docs/engine-backends.md` |
+| `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI + `--features claude_code`), `codex` (`codex` CLI signed in with ChatGPT, default feature; `[agents.<a>.codex] sandbox`; refused in hardened sandboxes) — `docs/engine-backends.md`; the Studio builder (`tengu sandbox new`) writes these blocks from a canvas — `docs/studio-builder-2026-10-10.md` |
 | `model` | required | non-empty; slug format per engine |
 | `default` | `false` | at most one agent |
 | `description` | none | present ⇒ in `TENGU_PLANNER_REGISTRY.md`, runnable as a plan step (`tengu run-agent`); absent ⇒ in-process only (planner role, `@role:` chat). No `description` and not `default` = a **private** agent: never reachable from Telegram, the only kind that may hold exec tools or a Solana wallet grant. Non-empty when set |
