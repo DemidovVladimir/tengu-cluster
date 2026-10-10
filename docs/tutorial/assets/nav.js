@@ -21,8 +21,8 @@ window.TUTORIAL = {
     { slug: "planner", chapter: "core", title: "Planner", blurb: "The LLM whose only job is to emit plan JSON." },
     { slug: "subagents", chapter: "core", title: "Subagent steps", blurb: "Each plan step runs as its own child process with its own tools." },
     { slug: "tool-loop", chapter: "core", title: "Chat turn and tool loop", blurb: "How an agent thinks, calls tools and stays inside its context window." },
-    { slug: "engines", chapter: "core", title: "Engines", blurb: "OpenRouter, local models and Claude Code behind one port." },
-    { slug: "mcp-bridge", chapter: "core", title: "MCP bridge", blurb: "How Claude Code reaches Tengu's tools with the same rules." },
+    { slug: "engines", chapter: "core", title: "Engines", blurb: "OpenRouter, local models, Claude Code and Codex behind one port." },
+    { slug: "mcp-bridge", chapter: "core", title: "MCP bridge", blurb: "How Claude Code and Codex reach Tengu's tools with the same rules." },
 
     { slug: "sandboxes", chapter: "team", title: "Sandbox config", blurb: "One TOML file defines the whole team." },
     { slug: "tools", chapter: "team", title: "Tool catalog", blurb: "One catalog row per tool family; defaults on, extras opted in." },
@@ -43,6 +43,7 @@ window.TUTORIAL = {
     { slug: "metrics", chapter: "runtime", title: "Metrics and audit trails", blurb: "Every model call leaves a record; every risky action leaves a line." },
     { slug: "trace", chapter: "runtime", title: "Execution trace", blurb: "One ordered, redacted event file per run; every event names its cause; read back with tengu trace or in Studio." },
     { slug: "studio", chapter: "runtime", title: "Studio graph and trace", blurb: "A sandbox as a graph from its config; every run as an ordered, redacted event file; a local browser UI." },
+    { slug: "builder", chapter: "runtime", title: "Sandbox builder", blurb: "tengu sandbox new: drag agents, tools and secrets onto a canvas; Rust checks every wire; Finalise writes config.toml." },
 
     { slug: "solana", chapter: "desk", title: "Solana LP tools", blurb: "Read pools and positions; simulate or send writes behind a lease." },
     { slug: "paper-desk", chapter: "desk", title: "Paper desk and risk gate", blurb: "Every order passes the risk gate inside the tool, then fills on paper." },

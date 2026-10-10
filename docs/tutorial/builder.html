@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sandbox builder · Tengu</title>
+<meta name="description" content="tengu sandbox new asks a name and opens a drag-and-drop canvas. Cards and wires come from Rust; Rust colours every wire, runs the real config loader, and Finalise writes sandboxes/&lt;name&gt;/config.toml.">
+<script>try{var t=localStorage.getItem("tengu-tutorial-theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/nav.js" defer></script>
+<script src="assets/site.js" defer></script>
+<style>
+  /* page-only: live wires ("current"), card-kind grid, wire checker, stores, owned / kept */
+  svg .e.live { stroke: var(--ok); }
+  svg .e.ghost.is-off { opacity: 0; }
+  svg .e.live.is-on { stroke: var(--ok); stroke-width: 3.2; stroke-dasharray: 14 5; animation: dash 0.55s linear infinite; filter: drop-shadow(0 0 4px var(--ok)); }
+  svg .e.warn { stroke: var(--warn); stroke-dasharray: 4 5; }
+  svg .e.bad.is-on { stroke-dasharray: 6 5; animation: jolt 0.35s steps(2) infinite; }
+  svg .tok.ok { fill: var(--ok); filter: drop-shadow(0 0 5px var(--ok)); }
+  svg .port { fill: var(--panel); stroke: var(--faint); stroke-width: 1.5; }
+  svg .is-on .port, svg .port.is-on { stroke: var(--ok); }
+  @keyframes jolt { 0% { transform: translateX(0) } 50% { transform: translateX(1.5px) } }
+  .kinds { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); }
+  .kind { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 6px; background: var(--panel); border-top: 3px solid var(--kc, var(--line)); }
+  .kind b { font-family: var(--font-mono); font-size: .9rem; }
+  .kind .one { font-family: var(--font-mono); font-size: .7rem; color: var(--faint); text-transform: uppercase; letter-spacing: .06em; }
+  .kind code { font-size: .76rem; overflow-wrap: anywhere; }
+  .kind small { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+  .kinds.in-view .kind { animation: rise .45s ease both; }
+  .kinds.in-view .kind:nth-child(2n) { animation-delay: .08s } .kinds.in-view .kind:nth-child(3n) { animation-delay: .16s }
+  @keyframes rise { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
+  .wire-ctrls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  .wire-ctrls select { font: inherit; font-family: var(--font-mono); font-size: .85rem; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); }
+  .wire-demo { display: grid; grid-template-columns: minmax(0, 1fr) 2fr minmax(0, 1fr); align-items: center; gap: 8px; }
+  .wire-demo .end { border: 1px solid var(--line); border-radius: 8px; padding: 8px; text-align: center; font-family: var(--font-mono); font-size: .82rem; background: var(--panel); }
+  .wire-demo .line { height: 4px; border-radius: 2px; background: var(--line); }
+  .wire-demo.live .line { background: repeating-linear-gradient(90deg, var(--ok) 0 16px, transparent 16px 22px); box-shadow: 0 0 8px var(--ok); animation: current .5s linear infinite; }
+  .wire-demo.bad .line { background: repeating-linear-gradient(90deg, var(--bad) 0 7px, transparent 7px 13px); }
+  @keyframes current { to { background-position: 22px 0; } }
+  #w-table td:nth-child(1) code, #w-table td:nth-child(3) code { white-space: nowrap; overflow-wrap: normal; }
+  .wire-out { font-family: var(--font-mono); font-size: .8rem; overflow-wrap: anywhere; }
+  .stores { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .store { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 6px; background: var(--panel); }
+  .store code.cmd { display: block; background: var(--sunk); border-radius: 6px; padding: 6px 8px; font-size: .78rem; overflow-wrap: anywhere; }
+  .store.off { border-style: dashed; opacity: .7; }
+  .store .st { font-family: var(--font-mono); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+  .own { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+  .own .card .cand { display: flex; flex-wrap: wrap; gap: 6px; }
+  .own .cand span { font-family: var(--font-mono); font-size: .78rem; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: var(--sunk); }
+  .own .cand span.mine { border-color: var(--hands); color: var(--hands); }
+  @media (prefers-reduced-motion: reduce) {
+    svg .e.live.is-on, svg .e.bad.is-on, .wire-demo.live .line { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail" id="rail"><noscript><a href="index.html">All features</a></noscript></aside>
+<main id="main">
+<article class="page">
+
+<header class="hero">
+  <div class="eyebrow"><span class="stamp" aria-hidden="true">動</span> Runtime · Studio builder</div>
+  <h1>Sandbox builder</h1>
+  <p class="lede"><code>tengu sandbox new</code> asks a name and opens a canvas in the browser. Drag agents, tools, skills, secrets and channels; wire them. Rust decides every colour, runs the real config loader, and <b>Finalise</b> writes <code>sandboxes/&lt;name&gt;/config.toml</code>.</p>
+  <ul class="facts">
+    <li><b>10</b> card kinds · <b>12</b> wires</li>
+    <li><b>3</b> templates: blank · team · telegram</li>
+    <li><b>4</b> engines: openrouter · claude_code · local · codex</li>
+    <li>autosave <b>400 ms</b> after an edit</li>
+  </ul>
+  <ul class="legend" aria-label="Colour key">
+    <li><span class="chip ok">live</span> wire Rust compiled: current flows</li>
+    <li><span class="chip warn">warn</span> compiles, read the note</li>
+    <li><span class="chip bad">error</span> Rust refuses it as drawn</li>
+    <li><span class="chip guard"><span class="k">守</span> guard</span> checks</li>
+    <li><span class="chip data">data</span> files</li>
+  </ul>
+</header>
+
+<section class="sec" aria-labelledby="s-flow">
+  <div class="sec-head">
+    <span class="kicker">From a name to a running team</span>
+    <h2 id="s-flow">One sandbox, start to finish</h2>
+  </div>
+  <figure class="stage" data-stage data-interval="3600">
+    <div class="stage-canvas">
+      <svg viewBox="0 0 880 500" role="img" aria-labelledby="flow-t">
+        <title id="flow-t">tengu sandbox new asks a name, writes a template checked by the config loader, and starts Studio with the builder. The browser draws the Rust palette; each edit is saved and compiled, and Rust colours each wire green, amber or red. Validate runs the real loader on a temp copy; Finalise writes config.toml, which tengu chat loads.</title>
+        <rect class="zone" x="240" y="118" width="410" height="290" rx="12"/>
+        <text x="256" y="138" class="zone-label">browser · /builder</text>
+
+        <path class="e" id="p-new-tpl" d="M105 92 L105 128" data-at="1-2"/>
+        <path class="e" id="p-tpl-load" d="M105 192 L105 228" data-at="2"/>
+        <path class="e" id="p-load-files" d="M105 292 L105 328" data-at="2"/>
+        <path class="e" id="p-new-srv" d="M190 61 L248 61" data-at="3"/>
+        <path class="e" id="p-srv-canvas" d="M350 92 L350 118" data-at="4"/>
+        <path class="e dash ghost" id="p-w1-pend" d="M400 198 C445 198 445 188 490 188" data-at="5" data-no-arrow/>
+        <path class="e live ghost" id="p-w1" d="M400 198 C445 198 445 188 490 188" data-at="6-10" data-no-arrow/>
+        <path class="e live ghost" id="p-w2" d="M335 300 L335 226" data-at="6-10" data-no-arrow/>
+        <path class="e bad ghost" id="p-w3" d="M555 216 L555 300" data-at="7" data-no-arrow/>
+        <path class="e live ghost" id="p-w4" d="M400 212 C445 212 445 328 490 328" data-at="8-10" data-no-arrow/>
+        <path class="e" id="p-canvas-compile" d="M650 200 C670 200 668 181 688 181" data-at="6-7"/>
+        <path class="e" id="p-canvas-load" d="M650 300 C670 300 668 281 688 281" data-at="8"/>
+        <path class="e" id="p-load-cfg" d="M775 312 L775 348" data-at="9"/>
+        <path class="e flow" id="p-cfg-chat" d="M760 412 C760 482 300 482 192 470" data-at="10"/>
+
+        <g class="n" data-at="1,3">
+          <rect x="20" y="30" width="170" height="62" rx="8"/>
+          <text x="105" y="55" text-anchor="middle" class="t-title t-mono">tengu sandbox new</text>
+          <text x="105" y="75" text-anchor="middle" class="t-small">asks a name + template</text>
+        </g>
+        <g class="n data" data-at="1-2">
+          <rect x="20" y="130" width="170" height="62" rx="8"/>
+          <text x="105" y="155" text-anchor="middle" class="t-title">Template</text>
+          <text x="105" y="175" text-anchor="middle" class="t-small t-mono">blank · team · telegram</text>
+        </g>
+        <g class="n guard" data-at="2">
+          <rect x="20" y="230" width="170" height="62" rx="8"/>
+          <text x="105" y="255" text-anchor="middle" class="t-title t-mono">Config::load</text>
+          <text x="105" y="275" text-anchor="middle" class="t-small">the template must load</text>
+        </g>
+        <g class="n data" data-at="2,9">
+          <rect x="20" y="330" width="170" height="72" rx="8"/>
+          <text x="105" y="352" text-anchor="middle" class="t-title t-mono">sandboxes/&lt;n&gt;/</text>
+          <text x="105" y="372" text-anchor="middle" class="t-small t-mono">builder.json</text>
+          <text x="105" y="389" text-anchor="middle" class="t-small t-mono">config.toml</text>
+        </g>
+        <g class="n heart" data-at="10">
+          <rect x="20" y="430" width="170" height="54" rx="8"/>
+          <text x="105" y="453" text-anchor="middle" class="t-title t-mono">tengu chat</text>
+          <text x="105" y="472" text-anchor="middle" class="t-small t-mono">--sandbox &lt;n&gt;</text>
+        </g>
+        <g class="n hands" data-at="3-4">
+          <rect x="250" y="30" width="200" height="62" rx="8"/>
+          <text x="350" y="55" text-anchor="middle" class="t-title t-mono">tengu studio</text>
+          <text x="350" y="75" text-anchor="middle" class="t-small t-mono">--allow-edit --open</text>
+        </g>
+
+        <g class="n heart" data-at="4-10">
+          <rect x="270" y="170" width="130" height="56" rx="8"/>
+          <text x="335" y="193" text-anchor="middle" class="t-title">Agent</text>
+          <text x="335" y="212" text-anchor="middle" class="t-small t-mono">researcher</text>
+          <circle class="port" cx="400" cy="198" r="4"/>
+        </g>
+        <g class="n hands" data-at="5-10">
+          <rect x="490" y="160" width="130" height="56" rx="8"/>
+          <text x="555" y="183" text-anchor="middle" class="t-title">Tool</text>
+          <text x="555" y="202" text-anchor="middle" class="t-small t-mono">http_request</text>
+          <circle class="port" cx="490" cy="188" r="4"/>
+        </g>
+        <g class="n guard" data-at="6-10">
+          <rect x="260" y="300" width="150" height="56" rx="8"/>
+          <text x="335" y="323" text-anchor="middle" class="t-title">Secret · vault</text>
+          <text x="335" y="342" text-anchor="middle" class="t-small t-mono">OPENROUTER_API_KEY</text>
+        </g>
+        <g class="n data" data-at="7-10">
+          <rect x="490" y="300" width="130" height="56" rx="8"/>
+          <text x="555" y="323" text-anchor="middle" class="t-title">Workspace</text>
+          <text x="555" y="342" text-anchor="middle" class="t-small t-mono">~/tengu-work</text>
+        </g>
+
+        <g class="n guard" data-at="6-8">
+          <rect x="690" y="150" width="170" height="62" rx="8"/>
+          <text x="775" y="175" text-anchor="middle" class="t-title">compile</text>
+          <text x="775" y="195" text-anchor="middle" class="t-small">a state per card + wire</text>
+        </g>
+        <g class="n guard" data-at="8-9">
+          <rect x="690" y="250" width="170" height="62" rx="8"/>
+          <text x="775" y="275" text-anchor="middle" class="t-title t-mono">Config::load</text>
+          <text x="775" y="295" text-anchor="middle" class="t-small">temp copy · diff</text>
+        </g>
+        <g class="n data" data-at="9-10">
+          <rect x="690" y="350" width="170" height="62" rx="8"/>
+          <text x="775" y="375" text-anchor="middle" class="t-title t-mono">config.toml</text>
+          <text x="775" y="395" text-anchor="middle" class="t-small">old file → .prev</text>
+        </g>
+
+        <g class="pop badge" data-at="1"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">Sandbox name (a-z 0-9 - _):</text></g>
+        <g class="pop badge" data-at="2"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">an existing dir is refused</text></g>
+        <g class="pop badge" data-at="3"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">Builder: http://127.0.0.1:&lt;port&gt;/builder#t=&lt;token&gt;</text></g>
+        <g class="pop badge" data-at="4"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">GET /api/v1/builder: palette + blueprint + status</text></g>
+        <g class="pop badge" data-at="5"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">agent → tool: one of 12 wires</text></g>
+        <g class="pop badge" data-at="6"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">PUT /api/v1/builder/blueprint → live</text></g>
+        <g class="pop badge" data-at="7"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">no wire from Tool to Workspace</text></g>
+        <g class="pop badge" data-at="8"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">POST …/preview: TOML · diff · loader · sha256</text></g>
+        <g class="pop badge" data-at="9"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">409 if it changed since the preview</text></g>
+        <g class="pop badge" data-at="10"><rect x="280" y="420" width="320" height="22" rx="11"/><text x="440" y="435" text-anchor="middle">the same file every tengu command loads</text></g>
+
+        <circle class="tok" r="6" data-path="p-new-tpl" data-at="1"/>
+        <circle class="tok" r="6" data-path="p-tpl-load" data-at="2"/>
+        <circle class="tok guard" r="6" data-path="p-load-files" data-at="2" data-delay="700"/>
+        <circle class="tok hands" r="6" data-path="p-new-srv" data-at="3" data-dur="900"/>
+        <circle class="tok hands" r="6" data-path="p-srv-canvas" data-at="4" data-dur="700"/>
+        <circle class="tok hands" r="6" data-path="p-canvas-compile" data-at="6-7" data-dur="900"/>
+        <circle class="tok guard" r="5" data-path="p-canvas-compile" data-at="6-7" data-dur="900" data-delay="900" data-reverse/>
+        <circle class="tok ok" r="4" data-path="p-w1" data-at="6-10" data-dur="700"/>
+        <circle class="tok ok" r="3" data-path="p-w1" data-at="6-10" data-dur="700" data-delay="350"/>
+        <circle class="tok ok" r="4" data-path="p-w2" data-at="6-10" data-dur="600" data-delay="150"/>
+        <circle class="tok ok" r="3" data-path="p-w2" data-at="6-10" data-dur="600" data-delay="450"/>
+        <circle class="tok bad" r="5" data-path="p-w3" data-at="7" data-dur="500"/>
+        <circle class="tok ok" r="4" data-path="p-w4" data-at="8-10" data-dur="800"/>
+        <circle class="tok ok" r="3" data-path="p-w4" data-at="8-10" data-dur="800" data-delay="400"/>
+        <circle class="tok guard" r="6" data-path="p-canvas-load" data-at="8"/>
+        <circle class="tok" r="6" data-path="p-load-cfg" data-at="9" data-dur="800"/>
+        <circle class="tok heart" r="6" data-path="p-cfg-chat" data-at="10"/>
+      </svg>
+    </div>
+    <div class="stage-side">
+      <ol class="captions">
+        <li><code>tengu sandbox new</code> asks <b>Sandbox name</b> (three tries) and, on a terminal, a template. Names are <code>[a-z0-9][a-z0-9_-]</code>, at most 40; <code>--name</code> / <code>--template</code> skip the questions.</li>
+        <li>The template compiles to TOML, and <code>Config::load</code> must accept it first. Then <code>sandboxes/&lt;n&gt;/</code> is created with <code>builder.json</code> (the canvas) and <code>config.toml</code>. An existing dir is refused.</li>
+        <li>The same process starts Studio as <code>tengu studio --sandbox &lt;n&gt; --allow-edit --open</code>: loopback only, a new token, and the builder URL handed to the browser.</li>
+        <li>The page asks <code>GET /api/v1/builder</code> for the palette, the blueprint and its status. Every card kind, field, tool, skill, engine and store comes from Rust; the page lists none.</li>
+        <li>Drag a card in, then drag from an agent's right port to a card. While you drag, cards the palette's wire table allows light up; others dim.</li>
+        <li>Every change is saved: <code>PUT …/blueprint</code> writes <code>builder.json</code> and compiles. Rust answers a state per card and wire; a <b>live</b> wire carries current.</li>
+        <li>A wire no kind pair allows, a missing field or a bad name comes back red, pinned to the card, the field or the wire, with the reason. Warnings are amber.</li>
+        <li><b>Validate</b>: <code>POST …/preview</code> compiles, runs <code>Config::load</code> on a temp copy at <code>sandboxes/&lt;n&gt;/config.toml</code>, diffs it against the file on disk and lists the keys the team needs. Nothing is written.</li>
+        <li><b>Finalise</b> sends the blueprint and the preview's sha256. A changed config or a running runtime is 409; errors are 422. Else <code>config.toml</code> is written atomically, the old one kept as <code>config.toml.prev</code>.</li>
+        <li>The result is a plain sandbox: <code>tengu chat --sandbox &lt;n&gt;</code>, <code>tengu telegram</code> and <code>tengu run</code> load it like any other. Back to the canvas: <code>tengu studio --sandbox &lt;n&gt; --allow-edit</code>.</li>
+      </ol>
+    </div>
+  </figure>
+</section>
+
+<section class="sec" aria-labelledby="s-kinds">
+  <div class="sec-head">
+    <span class="kicker">The palette</span>
+    <h2 id="s-kinds">Ten card kinds, and what each writes</h2>
+    <p>From <code>config/builder/palette.rs</code>. Tools come from the tool catalog, skills from the skill folders, engines from <code>config::ENGINES</code>. Keys never enter the TOML: a secret card holds a name.</p>
+  </div>
+  <div class="kinds" data-inview>
+    <div class="kind" style="--kc: var(--faint)"><span class="one">always one</span><b>sandbox</b><code>[egress] network · allow_hosts</code><code>[memory] enabled · [studio] control</code><small>Network defaults to <code>tor</code>; cannot be deleted.</small></div>
+    <div class="kind" style="--kc: var(--heart)"><span class="one">many</span><b>agent</b><code>[agents.&lt;name&gt;]</code><small>engine, model, default, identity, limits; <code>local</code> / <code>claude_code</code> / <code>codex</code> blocks shown only for their engine.</small></div>
+    <div class="kind" style="--kc: var(--heart)"><span class="one">one</span><b>orchestrator</b><code>[orchestrator] agent</code><small><code>max_attempts_per_step</code> 3, <code>max_replans</code> 2. Wire it to the planner agent.</small></div>
+    <div class="kind" style="--kc: var(--hands)"><span class="one">many</span><b>tool</b><code>agents.&lt;a&gt;.tools</code><code>[agents.&lt;a&gt;.scopes.&lt;tool&gt;]</code><small>Restrict on: folders, hosts, env vars, deny by default per field.</small></div>
+    <div class="kind" style="--kc: var(--brain)"><span class="one">many</span><b>skill</b><code>agents.&lt;a&gt;.skill_packages</code><small>Any <code>SKILL.md</code> found from the working folder.</small></div>
+    <div class="kind" style="--kc: var(--data)"><span class="one">many</span><b>workspace</b><code>agents.&lt;a&gt;.workspace</code><small>Confine (on by default) scopes <code>read_file</code>, <code>write_file</code>, <code>list_directory</code> to the folder.</small></div>
+    <div class="kind" style="--kc: var(--guard)"><span class="one">many</span><b>secret</b><code>(a name, never a value)</code><small>Stored in the vault, the env, or the Cloudflare Worker (<code>[keys.env]</code> + <code>strip</code>).</small></div>
+    <div class="kind" style="--kc: var(--guard)"><span class="one">one</span><b>seal_proxy</b><code>[keys] proxy · client · agent_socket</code><small>Only in a build that knows <code>[keys]</code>.</small></div>
+    <div class="kind" style="--kc: var(--jev)"><span class="one">one</span><b>telegram</b><code>[telegram] enabled · allowed_users</code><small>Its agent becomes the default agent.</small></div>
+    <div class="kind" style="--kc: var(--jev)"><span class="one">many</span><b>webhook</b><code>[webhooks.endpoints.&lt;name&gt;]</code><small>Agent, <code>secret_env</code> from a wired secret, goal template.</small></div>
+  </div>
+  <p class="note">Never in the palette: <code>run_command</code>, <code>compress_and_store</code>, the wallet-signing tools, the Solana send tools and the exec tools. They need hand-written, hardened TOML (<code>palette::offered</code>).</p>
+</section>
+
+<section class="sec" aria-labelledby="s-wires">
+  <div class="sec-head">
+    <span class="kicker">Try it: wire two cards</span>
+    <h2 id="s-wires">Twelve wires, each one TOML key</h2>
+    <p>A wire's kind comes from its two card kinds (<code>CONNECTIONS</code>). Pick two; the verdict and the message are the code's.</p>
+  </div>
+  <div class="widget">
+    <div class="wire-ctrls">
+      <label for="w-from">from <select id="w-from"></select></label>
+      <label for="w-to">to <select id="w-to"></select></label>
+    </div>
+    <div class="wire-demo" id="w-demo">
+      <div class="end" id="w-a">agent</div>
+      <div class="line" aria-hidden="true"></div>
+      <div class="end" id="w-b">tool</div>
+    </div>
+    <div class="wire-out" id="w-out" aria-live="polite"></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>From → to</th><th>Wire</th><th>Writes</th><th>Rule</th></tr></thead>
+      <tbody id="w-table"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-stores">
+  <div class="sec-head">
+    <span class="kicker">Keys by name</span>
+    <h2 id="s-stores">Three places a secret can live</h2>
+    <p>A secret card names an env var and a store. Validate lists every key the team needs, the card's or the engine's own (an OpenRouter agent needs <code>OPENROUTER_API_KEY</code>), with its state and the command that stores it.</p>
+  </div>
+  <div class="stores">
+    <div class="store"><span class="st" style="color: var(--ok)">present / missing</span><b>Local encrypted vault</b><code class="cmd">tengu secret set NAME &lt;value&gt;</code><small>Stored in <code>~/.tengu/secrets.vault</code>, AES-256-GCM. Loaded into the env at start (<a href="secrets.html">Secrets</a>).</small></div>
+    <div class="store"><span class="st" style="color: var(--ok)">present / missing</span><b>Environment / .env</b><code class="cmd">export NAME=&lt;value&gt;</code><small>This shell, or a line in <code>.env</code>. "Present" = set and non-empty in the builder's process.</small></div>
+    <div class="store" id="st-cf"><span class="st" style="color: var(--data)">remote</span><b>Cloudflare seal proxy</b><code class="cmd">npx wrangler secret put NAME</code><small>The key is a Worker secret; tengu gets a route (<code>[keys.env]</code>) and a session, never the key. On only when this build's <code>Config</code> accepts <code>[keys]</code>: probed at start (<code>keys_supported</code>), not compiled in.</small></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-own">
+  <div class="sec-head">
+    <span class="kicker">What Finalise rewrites</span>
+    <h2 id="s-own">Owned sections, kept sections</h2>
+    <p>The builder rewrites the sections it owns, in a fixed order. Every other top-level key of the file on disk is carried over as it is: scalars first, tables at the end under a comment. Agents not on the canvas are dropped.</p>
+  </div>
+  <div class="own">
+    <div class="card hands"><h3>Owned (<code>compile::OWNED</code>)</h3><div class="cand"><span class="mine">egress</span><span class="mine">memory</span><span class="mine">studio</span><span class="mine">keys</span><span class="mine">orchestrator</span><span class="mine">telegram</span><span class="mine">webhooks</span><span class="mine">agents</span></div></div>
+    <div class="card data"><h3>Kept, for example</h3><div class="cand"><span>runtime_profile</span><span>[hub]</span><span>[decision_loops.*]</span><span>[feeds.*]</span><span>[[mcp_servers]]</span><span>[runtime]</span></div><p>Comments in kept sections are lost; the diff shows it.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-ro">
+  <div class="sec-head">
+    <span class="kicker">When the builder says no</span>
+    <h2 id="s-ro">View-only sandboxes and refusals</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Case</th><th>Result</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>config.toml</code> but no <code>builder.json</code></td><td>view-only (save 403)</td><td>hand-written: the builder edits sandboxes made by <code>tengu sandbox new</code></td></tr>
+        <tr><td><code>[generation]</code></td><td>view-only</td><td>a frozen design; build a new sandbox instead</td></tr>
+        <tr><td><code>[risk]</code>, <code>[paper]</code>, <code>[soe]</code>, <code>[xmarket]</code>, a Solana signer</td><td>view-only</td><td>a hardened sandbox: its TOML stays hand-edited</td></tr>
+        <tr><td>runtime running</td><td>Finalise 409</td><td>a fresh <code>tengu run</code> heartbeat (under 3 heartbeats old, not stopped)</td></tr>
+        <tr><td>blueprint changed since the preview</td><td>Finalise 409</td><td>the sha256 of the TOML differs: Validate again</td></tr>
+        <tr><td>an error on the canvas, or the loader refuses</td><td>Finalise 422</td><td>nothing is written</td></tr>
+        <tr><td>no <code>--allow-edit</code></td><td>every builder route 404</td><td>Studio stays read-only</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-debug">
+  <div class="sec-head">
+    <span class="kicker">Explore a problem by hand</span>
+    <h2 id="s-debug">Debugging</h2>
+  </div>
+  <div class="grid">
+    <div class="card hands"><h3>No browser</h3><p><code>tengu sandbox compile --sandbox &lt;n&gt;</code> prints the TOML on stdout and every issue on stderr (<code>[card &lt;id&gt; · &lt;field&gt;]</code>, <code>[wire &lt;id&gt;]</code>), then the loader's verdict and sha256; exit 1 on an error. <code>finalise</code> writes it; <code>palette</code> prints the palette JSON.</p></div>
+    <div class="card guard"><h3>Debug drawer</h3><p>On the page: <b>Issues</b>, <b>Blueprint JSON</b>, <b>Last response</b> and a <b>Request log</b> (the last 100: method, path, status, ms). Each request is also a <code>console.debug("[builder]", …)</code> line.</p></div>
+    <div class="card data"><h3>One log line per request</h3><p>The server logs <code>builder: ok</code> or <code>builder: refused</code> with the route, the sandbox and the ms; Finalise adds <code>config.toml finalised</code> with the sha256. <code>RUST_LOG=tengu=info</code> shows the CLI's steps too.</p></div>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-out">
+  <div class="sec-head">
+    <span class="kicker">States</span>
+    <h2 id="s-out">What a card, a wire or a request can be</h2>
+  </div>
+  <ul class="states">
+    <li><span class="chip ok">live</span><span><b>wire live</b>The kind pair is allowed and its rules hold: current flows.</span></li>
+    <li><span class="chip warn">warn</span><span><b>warn</b>It compiles, with a note: an unwired tool, an unsigned webhook, a wrong key name for the engine.</span></li>
+    <li><span class="chip bad">err</span><span><b>error</b>Rust refuses it as drawn; Finalise stays off.</span></li>
+    <li><span class="chip hands">200</span><span><b>saved · checked</b>The blueprint is in <code>builder.json</code>; the status is fresh.</span></li>
+    <li><span class="chip guard">403</span><span><b>view-only</b>Hand-written, frozen or hardened.</span></li>
+    <li><span class="chip guard">409</span><span><b>conflict</b>Changed since the preview, or the runtime is running.</span></li>
+    <li><span class="chip bad">422</span><span><b>refused</b>Canvas errors, or the config loader said no.</span></li>
+    <li><span class="chip bad">400</span><span><b>bad body</b>An unknown field, another sandbox's blueprint, a non-JSON body (415).</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-rules">
+  <div class="sec-head">
+    <span class="kicker">Enforced in code</span>
+    <h2 id="s-rules">Guarantees</h2>
+  </div>
+  <ul class="checks">
+    <li><span><b>The real loader decides.</b> Validate and Finalise run <code>Config::load</code> on a temp copy, the same parse, validation and hardening as every <code>tengu</code> command.</span></li>
+    <li><span><b>No key in the TOML.</b> A secret card writes a name, or a Cloudflare route; never a value.</span></li>
+    <li><span><b>Nothing is overwritten by surprise.</b> <code>new</code> refuses an existing dir; Finalise writes atomically after the preview you saw and keeps <code>config.toml.prev</code>.</span></li>
+    <li><span><b>The page decides nothing.</b> Kinds, fields, wires, colours and verdicts all come from <code>/api/v1/builder</code>; the wire table is only a drag hint.</span></li>
+    <li><span><b>Bounded input.</b> A blueprint is strict JSON (unknown fields refused), at most 400 cards and 1 600 wires, ids of 1–64 <code>A-Z a-z 0-9 _ -</code>, a body of at most 1 MiB.</span></li>
+    <li><span><b>Studio's fences hold.</b> Loopback only, a per-process token, and Origin + <code>Sec-Fetch-Site</code> + token header on every PUT and POST (<a href="studio.html">Studio</a>).</span></li>
+    <li><span><b>Templates load.</b> A test compiles every template and runs the loader on it; another sets every field of every kind and parses it through the real structs.</span></li>
+  </ul>
+</section>
+
+<section class="sec" aria-labelledby="s-try">
+  <div class="sec-head">
+    <span class="kicker">Try it</span>
+    <h2 id="s-try">Make a team</h2>
+    <p>Run from the repo root: <code>sandboxes/</code> is resolved from the current folder, like <code>--sandbox</code>.</p>
+  </div>
+  <div class="term-wrap">
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu sandbox new</span>
+<span class="ln o">Sandbox name (a-z 0-9 - _): <span class="hl">my-team</span></span>
+<span class="ln o">Start from:</span>
+<span class="ln o">  1. blank     one agent — start from scratch</span>
+<span class="ln o">  2. team      planner + researcher + writer (orchestrated plan steps)</span>
+<span class="ln o">  3. telegram  a Telegram bot that chats with one agent</span>
+<span class="ln o">Template [1]: <span class="hl">2</span></span>
+<span class="ln">Created sandboxes/my-team/ (template team):</span>
+<span class="ln">  sandboxes/my-team/builder.json   the canvas</span>
+<span class="ln">  sandboxes/my-team/config.toml    what tengu loads (Finalise rewrites it)</span>
+<span class="ln o">Starting the builder (Ctrl-C stops it) …</span>
+<span class="ln">Studio: http://127.0.0.1:&lt;port&gt;/#t=&lt;64-hex token&gt;</span>
+<span class="ln">Builder: http://127.0.0.1:&lt;port&gt;/builder#t=&lt;64-hex token&gt;</span>
+<span class="ln o"># edit, Validate, Finalise in the browser; or without one:</span>
+<span class="ln cmd"><span class="p">$ </span>tengu sandbox compile --sandbox my-team &gt; /dev/null</span>
+<span class="ln">loader: ok · 0 error(s), 0 warning(s) · sha256 &lt;64 hex&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu sandbox finalise --sandbox my-team</span>
+<span class="ln cmd"><span class="p">$ </span>tengu secret set OPENROUTER_API_KEY &lt;value&gt;</span>
+<span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox my-team</span></pre>
+  </div>
+</section>
+
+<section class="sec" aria-labelledby="s-where">
+  <div class="sec-head">
+    <span class="kicker">Source</span>
+    <h2 id="s-where">Where it lives</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>File</th><th>Owns</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/domain/blueprint.rs</code></td><td>the canvas document, shape checks, issues, the status fold</td></tr>
+        <tr><td><code>src/config/builder/palette.rs</code></td><td>card kinds and fields, <code>CONNECTIONS</code>, engines, secret stores, offered tools</td></tr>
+        <tr><td><code>src/config/builder/compile.rs</code></td><td>blueprint → TOML, per-card / per-wire status, secrets checklist, <code>OWNED</code></td></tr>
+        <tr><td><code>src/config/builder/template.rs</code></td><td><code>blank</code>, <code>team</code>, <code>telegram</code></td></tr>
+        <tr><td><code>src/config/builder/mod.rs</code> · <code>tests.rs</code></td><td><code>keys_supported</code>, <code>editable</code>, <code>load_report</code>; the round-trip tests</td></tr>
+        <tr><td><code>src/application/builder.rs</code></td><td>state, save, preview, finalise, <code>create</code></td></tr>
+        <tr><td><code>src/ports/builder.rs</code></td><td><code>SandboxDrafts</code>: the sandbox files</td></tr>
+        <tr><td><code>src/adapters/outbound/builder_store.rs</code></td><td>files under <code>sandboxes/</code>: atomic writes, <code>.prev</code>, the loader on a temp copy</td></tr>
+        <tr><td><code>src/bootstrap/builder.rs</code></td><td>palette facts from the catalog and skills; the running-runtime probe</td></tr>
+        <tr><td><code>src/adapters/inbound/studio/builder.rs</code></td><td>the HTTP routes and their status codes</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/sandbox.rs</code></td><td><code>tengu sandbox new | compile | finalise | palette</code></td></tr>
+        <tr><td><code>web/studio/builder.*</code></td><td>the page: canvas, inspector, preview modal, Debug drawer</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Related: <a href="studio.html">Studio graph and trace</a> (the server and its guard), <a href="sandboxes.html">Sandbox config</a> (what the file means), <a href="engines.html">Engines</a> (the four an agent can name), <a href="secrets.html">Secrets and redaction</a>, <a href="tools.html">Tool catalog</a>. Operator doc: <code>docs/studio-builder-2026-10-10.md</code>.</p>
+</section>
+
+<nav class="pager" id="pager" aria-label="Previous and next page"></nav>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+</article>
+</main>
+</div>
+<script>
+(function () {
+  /* --- wire checker: CONNECTIONS + the refusal message from config/builder/compile.rs --- */
+  var LABEL = { sandbox: "Sandbox", agent: "Agent", orchestrator: "Orchestrator", tool: "Tool", skill: "Skill", workspace: "Workspace", secret: "Secret", seal_proxy: "Cloudflare seal proxy", telegram: "Telegram", webhook: "Webhook" };
+  var W = [
+    ["agent", "tool", "uses", "agents.<agent>.tools", "no wires = every default tool; wires = exactly those"],
+    ["agent", "skill", "loads", "agents.<agent>.skill_packages", "a skill loaded twice warns"],
+    ["agent", "workspace", "works in", "agents.<agent>.workspace", "one workspace per agent"],
+    ["agent", "agent", "delegates to", "agents.<to>.description", "only the planner delegates; the target needs a description"],
+    ["orchestrator", "agent", "plans with", "orchestrator.agent", "one planner; a CLI engine there warns"],
+    ["secret", "agent", "key for", "the engine's key (local: local.api_key_env)", "OpenRouter reads OPENROUTER_API_KEY; Claude / Codex use their CLI login"],
+    ["secret", "tool", "readable by", "agents.<agent>.scopes.<tool>.env_reads", "only a restricted tool; else a warning"],
+    ["secret", "seal_proxy", "served by", "keys.env · keys.strip", "the secret must be stored in Cloudflare"],
+    ["secret", "telegram", "bot token", "TELEGRAM_BOT_TOKEN", "another name warns"],
+    ["secret", "webhook", "signs", "webhooks.endpoints.<name>.secret_env", "one signing secret per webhook"],
+    ["telegram", "agent", "chats with", "agents.<agent>.default = true", "one agent per bot"],
+    ["webhook", "agent", "triggers", "webhooks.endpoints.<name>.agent", "one agent per webhook"]
+  ];
+  var from = document.getElementById("w-from"), to = document.getElementById("w-to");
+  var demo = document.getElementById("w-demo"), out = document.getElementById("w-out");
+  Object.keys(LABEL).forEach(function (k) {
+    [from, to].forEach(function (s) { var o = document.createElement("option"); o.value = k; o.textContent = k; s.appendChild(o); });
+  });
+  from.value = "agent"; to.value = "tool";
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function check() {
+    var f = from.value, t = to.value;
+    document.getElementById("w-a").textContent = f;
+    document.getElementById("w-b").textContent = t;
+    var hit = W.filter(function (w) { return w[0] === f && w[1] === t; })[0];
+    if (hit) {
+      demo.className = "wire-demo live";
+      out.innerHTML = '<span class="chip ok">live</span> <b>' + esc(hit[2]) + "</b> → writes <code>" + esc(hit[3]) + "</code> · " + esc(hit[4]);
+    } else {
+      var targets = W.filter(function (w) { return w[0] === f; }).map(function (w) { return w[1]; });
+      var msg = "no wire from " + LABEL[f] + " to " + LABEL[t] + (targets.length ? " (it wires to: " + targets.join(", ") + ")" : "");
+      demo.className = "wire-demo bad";
+      out.innerHTML = '<span class="chip bad">error</span> <code>' + esc(msg) + "</code>";
+    }
+  }
+  from.addEventListener("change", check); to.addEventListener("change", check);
+  check();
+  var tb = document.getElementById("w-table");
+  W.forEach(function (w) {
+    var tr = document.createElement("tr");
+    tr.innerHTML = "<td><code>" + w[0] + "</code> → <code>" + w[1] + "</code></td><td>" + esc(w[2]) + "</td><td><code>" + esc(w[3]) + "</code></td><td>" + esc(w[4]) + "</td>";
+    tb.appendChild(tr);
+  });
+})();
+</script>
+</body>
+</html>

@@ -208,7 +208,7 @@ fn wires_turn_live_or_red_with_a_reason() {
     assert_eq!(c.status.edges["bad"].state, State::Error);
     assert!(c.status.edges["bad"].issues[0]
         .message
-        .contains("cannot wire"));
+        .contains("no wire from Tool to Skill"));
     assert_eq!(c.status.edges["warn"].state, State::Warn);
     assert_eq!(c.status.nodes["a"].title, "alpha");
 }
