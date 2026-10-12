@@ -864,16 +864,11 @@ These are not preferences. They're load-bearing.
   first (lab: `$HOME/tengu-lab/home`). `--sandbox <name>` is cwd-relative
   (`sandboxes/<name>/config.toml`, `bootstrap/sandbox.rs`): run from the repo /
   worktree root.
-- **Weekend no-pull rule (until Mon 2026-10-12, G-WKND)** — weekend #2 runs
-  the frozen binary `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` (sha256
-  `fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445`) on the
-  main checkout's `lineage/`; origin/main's `lineage/rankings/` fails its W1 load
-  (`not a registry entry`). Never `git pull` / switch branches in the main
-  checkout until the run is stopped, vaulted and graded
-  (`docs/forward-evidence-runbook-2026-10-08.md`) — work in a worktree. After the
-  stop: delete the untracked local copies of
-  `docs/strategy-ranking-automation-2026-10-08.md` and `TENGU_STUDIO_PLAN.md`
-  (tracked upstream), then pull.
+- **Weekend no-pull rule — lifted 2026-10-12 (G-WKND done)** — weekend #2 was
+  stopped, vaulted (`w1-2026-10-12`, `w1-2026-10-12-bars`) and graded
+  (`fwd.rule_w.2026-10-09.graded`), then the main checkout was pulled. The lesson
+  stays: a frozen weekend binary reads the checkout's `lineage/` — never pull or
+  switch branches in the checkout it runs from while it runs (work in a worktree).
 - **Decision loops (2026-09-24)** — `[decision_loops.<name>]`
   (`config/decision_loop.rs`) runs a System One model (`~typesafe/jev-latest`
   via OpenRouter `/api/alpha/decisions`, `outbound/decisions.rs`) that picks
@@ -951,7 +946,7 @@ State 2026-10-09 (origin/main = #39–#44: xlab-w2 retention, strategy ranking, 
 
 | Open | Whose | Next |
 |---|---|---|
-| G-WKND | operator | weekend #2 (2026-10-09 → 10-12): stop Mon 2026-10-12, vault, grade; then pull the main checkout (no-pull gotcha) |
+| ~~G-WKND~~ | done 2026-10-12 | weekend #2 graded: capped +204.0 bps (n 4), shadow +108.3 (n 75); M3 tally 2 / 12 (`docs/SESSION_HANDOFF.md` top) |
 | G-SR1 | operator | seal `rank.xlab-w2.daily.v1` and `rank.xlab-w2.weekend.v1` (`tengu lineage seal ranking:<id>`) or change them first; every ranking is refused until then |
 | G-O0 → SOE Review #2 | operator | sign the SOE profile, approve each source row's terms + enable it, append SOE-G0's `[[frozen]]` row → 4 frozen weekly cycles → G-R2 (`docs/soe-2026-10-08.md` § 15) |
 | Studio | operator | ST-90 clean room passed 2026-10-09 (`docs/studio-clean-room-2026-10-09.md`) → Operator Review #3 decides on the editor (ST-40 = design only) |

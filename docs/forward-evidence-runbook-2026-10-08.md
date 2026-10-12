@@ -26,3 +26,13 @@ Binary: `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` = main `acdef66fc45252
 | 4 Bars + filings | `tengu history backfill --sandbox xlab-w2 --instruments @xyz_stocks --interval 1h --from 2026-10-05 --funding` · `--interval 1m --from 2026-10-09T19:00:00Z` · `tengu history events --sandbox xlab-w2 --instruments @xyz_stocks --from 2026-10-05` |
 | 5 Secondary | `tengu backtest --sandbox xlab-w2 --strategy <s> --from 2026-10-10 --to 2026-10-12` for each of `weekend_fade_top4`, `weekend_fade_top4_stop500`, `weekend_fade_top4_noise_only`, `weekend_fade_top4_net_of_cost` |
 | 6 Record | a new record `fwd.rule_w.2026-10-09.graded` (results, verdict, evidence `record:experiment/fwd.rule_w.2026-10-09`): the sealed prereg stays byte-identical (any edit is `seal_mismatch`); M3 tally 2 / 12 |
+
+## Done 2026-10-12 (appended after the grade; the steps above are unchanged)
+
+| Item | Result |
+|---|---|
+| Grade | `lineage/experiments/fwd.rule_w.2026-10-09.graded.toml`: capped +203.98 bps (n 4), shadow +108.34 (n 75), verdict PENDING, M3 tally 2 / 12 |
+| Vaults | `w1-2026-10-12` (step 1) · `w1-2026-10-12-bars` (step 4's `market.db` + the pmset log) |
+| Step 3 as run | the command above reads every `mkt_ctx/1` name (134) and the sleep-gap funding hour is MISSING; add `--fill-book next --market-db <bars vault>/xlab/market.db --instruments <the 75 universe ids>` (as in `docs/w1-p0-weekend-2026-10-06.md`) |
+| Not run | the Jev gate run (`tengu evidence evaluate`) |
+| Next weekend | AC power + lid open checked before the entry, or a VPS (`inc.2026-10-10.host-on-battery`, `inc.2026-10-12.host-sleep`) |

@@ -1,0 +1,151 @@
+id = "w1-2026-10-12"
+title = "W1 weekend forward paper run #2 2026-10-09 → 2026-10-12 (rule W, capped $100 + shadow): raw evidence"
+notes = "Snapshot of everything the grade of fwd.rule_w.2026-10-09 rests on (docs/forward-evidence-runbook-2026-10-08.md § Monday grading). Run: binary tengu-acdef66 (sandbox xmarket-weekend, runner pid 11624 in tmux xmw under caffeinate -i -s, 1 start 2026-10-09T14:54:10Z → SIGINT 2026-10-12T14:50:41Z, finished=0 dropped=0 aborted=0 lease_released=true). Operational incidents (from Claude's 15-min doctor --live checks, times bounded by the check cadence): the Mac ran on battery 2026-10-10 ~18:41Z → 2026-10-11 ~08:56Z (down to 4 %, no downtime, every feed live), again ~11:41Z → ~11:56Z and ~13:56Z → ~15:26Z on 2026-10-11 (no downtime); on 2026-10-12 the Mac slept (lid closed): last feed item 07:40:05Z, tengu.log 'feed slot skipped: reached too late (system sleep or a stalled clock)' for xm_exits / xm_weekend_fade / hl_ctx / hl_book, every feed live again 08:15:19Z (~35 min gap, positions open, no entry or exit due). Not included: the tmux pane (session ended with the run, no pane.log this weekend); run-logs/ (weekend #1 supervisor scripts, unchanged since 2026-10-03, already in vault w1-2026-10-06); history day files before 20261009 (already in vault w1-2026-10-06)."
+vault = "w1-2026-10-12"
+captured_at = "2026-10-12T14:59:16Z"
+manifest_sha256 = "81a8d136086e90f1e696c528ddd27b3e85c3796c3531fef61b8fc656249636a1"
+experiment = "fwd.rule_w.2026-10-09"
+
+[[items]]
+path = "xmarket-weekend/ledger.db"
+source = "~/.tengu/state/xmarket-weekend/ledger.db"
+kind = "FILE"
+sha256 = "16605c39c2627be950632b1c93a93afbbfabe19766e684cb786706d0e8e5454d"
+files = 1
+bytes = 3649536
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "ledger"
+note = "Paper ledger of binary acdef66: capped xmarket-weekend ($100 initial, carried weekend #1) + shadow xmarket-weekend-shadow ($10,000 initial); weekend #2 entries 2026-10-11T22:00:00Z–22:00:13Z (4 capped + 75 shadow), exits 2026-10-12T13:00:00Z–13:00:10Z. No -wal at copy time."
+
+[[items]]
+path = "xmarket-weekend/history/20261009.db"
+source = "~/.tengu/state/xmarket-weekend/history/20261009.db"
+kind = "FILE"
+sha256 = "69e313ed162fa3badb75367f7630c4d62e4b0c5479cb087c4ad611d412e5dd47"
+files = 1
+bytes = 161640448
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "recorder"
+note = "Recorder day file 2026-10-09 (UTC) from the start 14:54:10Z; holds the pre-anchor recording."
+
+[[items]]
+path = "xmarket-weekend/history/20261010.db"
+source = "~/.tengu/state/xmarket-weekend/history/20261010.db"
+kind = "FILE"
+sha256 = "17be0185bf8f84ac15e007a4a56a964fae2ab131a203e378adec3c1c5f6a5022"
+files = 1
+bytes = 422776832
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "recorder"
+note = "Recorder day file 2026-10-10 (UTC): the anchor 00:00:00Z (Fri 20:00 New York)."
+
+[[items]]
+path = "xmarket-weekend/history/20261011.db"
+source = "~/.tengu/state/xmarket-weekend/history/20261011.db"
+kind = "FILE"
+sha256 = "be4a28f42650f16efecfa9768e231ae5419f40ff0ae6b687a04c009de8d479d1"
+files = 1
+bytes = 457711616
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "recorder"
+note = "Recorder day file 2026-10-11 (UTC): the entry 22:00:00Z (Sun 18:00 New York)."
+
+[[items]]
+path = "xmarket-weekend/history/20261012.db"
+source = "~/.tengu/state/xmarket-weekend/history/20261012.db"
+kind = "FILE"
+sha256 = "3e165353c21a53cd749b8355654ef900a18762e49561c5095002f23adf8af6d3"
+files = 1
+bytes = 308457472
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "recorder"
+note = "Recorder day file 2026-10-12 (UTC) to the stop 14:50:41Z: the exit 13:00:00Z (Mon 09:00 New York); gap 07:40:05Z → 08:15:19Z (system sleep)."
+
+[[items]]
+path = "xmarket-weekend/run-xmarket-weekend.json"
+source = "~/.tengu/state/xmarket-weekend/run-xmarket-weekend.json"
+kind = "FILE"
+sha256 = "ccec8a3e231eb4f87b292f3b3a723bc92f409773e74a908389ee60deba008031"
+files = 1
+bytes = 2277
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "heartbeat"
+note = "Final heartbeat: state stopped, SIGINT, feed counters."
+
+[[items]]
+path = "xmarket-weekend/runtime.db"
+source = "~/.tengu/state/xmarket-weekend/runtime.db"
+kind = "FILE"
+sha256 = "2d1fde1aa3f4be1d7774a69f47e7e3ada73b87dd02d537ed46be6b3c1733d835"
+files = 1
+bytes = 12288
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "runtime"
+note = "Leases after the clean stop (lease_released=true)."
+
+[[items]]
+path = "tengu-logs/egress.jsonl"
+source = "~/.tengu/logs/egress.jsonl"
+kind = "FILE"
+sha256 = "9906ad9e0a8bc922f26605014e124f70a82c7189ddc4c2f40ade6f1918a702ae"
+files = 1
+bytes = 57278184
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "Egress audit to 2026-10-12T14:50:41Z: the run's traffic (pid 11624) plus earlier sessions (weekend #1 included)."
+
+[[items]]
+path = "tengu-logs/tengu.log"
+source = "~/.tengu/logs/tengu.log"
+kind = "FILE"
+sha256 = "3b103767e3fd8fd28f2eb5035fb0663a13dfa94436b79e5119975f61f5530e53"
+files = 1
+bytes = 74377218
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "Runner log to the stop (+ earlier sessions); holds the 2026-10-12 sleep slot-skip warnings and the shutdown line."
+
+[[items]]
+path = "tengu-logs/risk.jsonl"
+source = "~/.tengu/logs/risk.jsonl"
+kind = "FILE"
+sha256 = "f9e04fd4ba5b31a8948549a33c50ea7a16b30084d51cea63c37da19b973894b0"
+files = 1
+bytes = 2260100
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "Risk verdict mirror (canonical: the ledger), weekend #1 and #2 lines."
+
+[[items]]
+path = "ext/xmarket-weekend-ws/observations.db"
+source = "~/xmarket-weekend-ws/.tengu/observations.db"
+kind = "FILE"
+sha256 = "0b8e8345758ffaa6fee5fc7bd428f308c636a66a6728c888ab11f650ecb2ba20"
+files = 1
+bytes = 1212416
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "observation-cache"
+note = "Weekend workspace observation cache: the xm_weekend_signal/1 rows + the final xm_weekend/1:2026-10-09 row (phase closed). Its 7-day retention purge would delete that row after ~2026-10-19."
+
+[[items]]
+path = "ext/binaries/tengu-acdef66"
+source = "~/.cache/tengu-xm.noindex/weekend/tengu-acdef66"
+kind = "FILE"
+sha256 = "fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445"
+files = 1
+bytes = 36562736
+provenance = "NOT_APPLICABLE"
+class = "NONE"
+role = "binary"
+note = "The frozen weekend binary, commit acdef66fc45252cba181a351cbc237ed6886ad57; expected sha256 fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445 (prereg notes)."

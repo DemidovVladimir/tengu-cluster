@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-10-12: forward weekend #2 graded (rule W, W1) — `fwd.rule_w.2026-10-09.graded`
+
+Run: `tengu-acdef66`, one start 2026-10-09T14:54:10Z → operator SIGINT 2026-10-12T14:50:41Z (clean: `finished=0 dropped=0 aborted=0 lease_released=true`). Graded per `docs/forward-evidence-runbook-2026-10-08.md` § Monday grading; verdict PENDING, M3 tally **2 / 12**.
+
+| Arm | n | mean net bps | net USD | Source |
+|---|---|---|---|---|
+| capped (top 4, all short) | 4 | **+203.98** (3 / 4 > 0) | +2.0597 | ledger; regrade +204.07 (same names, same fill prices) |
+| shadow (every eligible name) | 75 | **+108.34** (59 / 75 > 0) | +80.74 | ledger; regrade +108.91 (sides 75 / 75) |
+| secondaries (1h bar backtests, `xlab-w2`) | 4 each | top4 +148.62 · stop500 +32.39 · noise_only +212.84 · net_of_cost +148.62 | — | `run:xlab/20261012T15263*Z-*` |
+
+| Item | State |
+|---|---|
+| Vaults | `w1-2026-10-12` (ledger, day files 20261009–20261012, logs, observation cache, binary: 12 / 12 MATCH) · `w1-2026-10-12-bars` (post-stop backfill `market.db` + the pmset power log) |
+| `tengu evidence grade` | 12 / 12 checks PASS, both accounts |
+| Incidents | `inc.2026-10-10.host-on-battery` (3 spells, down to 4 %, no downtime) · `inc.2026-10-12.host-sleep` (lid closed 07:40:27 → 08:11:38Z, positions open, exits blind ~32 min, DEGRADED) · `inc.2026-10-12.funding-booked-late` (08:00Z hour booked 795–840 s late; capped −$0.000905) |
+| Not run | the prereg's Jev gate run (`tengu evidence evaluate`); `net_of_cost` used modelled costs, not the recorded books |
+| Main checkout | pulled to `91b2a21` (#49) after the snapshot; the 3 stale untracked copies moved (not deleted) to `~/.cache/tengu-xm.noindex/weekend/post-stop-backup-2026-10-12/` |
+| Lesson | on battery `caffeinate -s` does not hold; a lid close sleeps the Mac — next weekend: VPS, or AC + lid open checked before the entry |
+
 ## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
 
 | Finding | Fixed | Test |
@@ -31,7 +50,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 
 | Gate | The operator | Blocks | Doc |
 |---|---|---|---|
-| G-WKND | stops weekend #2 Mon 2026-10-12; snapshot `lineage/evidence/w1-2026-10-12.toml`, grade, regrade | the main-checkout pull (rule below) | `docs/forward-evidence-runbook-2026-10-08.md` |
+| ~~G-WKND~~ | ✅ 2026-10-12: stopped, snapshotted, graded (top section) | — | `docs/forward-evidence-runbook-2026-10-08.md` |
 | G-SR1 | seals both ranking contracts as drafted (`tengu lineage seal ranking:<id>`) or changes them first | every ranking — refused while unsealed (`tengu lineage verify` warns `ranking_unsealed`) | `docs/strategy-ranking-automation-2026-10-08.md` § Operator decisions |
 | G-O0 | signs the private SOE profile (`tengu soe init` writes the UNSIGNED template `<TENGU_HOME>/state/soe/operator.toml`: four money values `REQUIRED`, add `[[capabilities]]`, sign); approves each source row's terms + hash and enables it; approves committing sanitized planning docs | a source `enabled = true`; the first live cycle | `docs/soe-2026-10-08.md` § 1, § 15.1 |
 | SOE-G0 lock | after G-O0 + G-WKND: appends SOE-G0's `[[frozen]]` row to `lineage/locks.toml` | nothing in code (a CANDIDATE runs) | same, § 15.1 #8 |
@@ -39,7 +58,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | Live engine-matrix legs | sets `xlab_rank` (`strategy_ranking`), `sources` (`source_evidence`), `soe` (`soe_view` · `soe_propose` · `soe_challenge`): only the offline local legs ran; openrouter + claude_code live legs not run, local on the operator's PC; also `tengu run --sandbox xlab-w2` live | each tool's definition of done (CLAUDE.md "How to add a new tool" step 4) | `tests/engine_matrix.rs` module table |
 | Operator Review #3 | decides on building the Studio editor (ST-40 = design only) | any edit / save code or route | `docs/studio-editor-design-2026-10-08.md` |
 
-### Weekend no-pull rule (main checkout)
+### Weekend no-pull rule (main checkout) — ✅ lifted 2026-10-12: stopped, vaulted, graded, pulled (top section; the two `rm` rows were done as moves to `~/.cache/tengu-xm.noindex/weekend/post-stop-backup-2026-10-12/`)
 
 | When | Do |
 |---|---|

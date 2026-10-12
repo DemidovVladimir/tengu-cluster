@@ -1,0 +1,31 @@
+id = "inc.2026-10-12.funding-booked-late"
+title = "Funding hour 2026-10-12 08:00Z booked 795–840 s late, after the host sleep, at the rate seen then"
+class = "EXECUTION"
+started_at = "2026-10-12T08:00:00Z"
+ended_at = "2026-10-12T08:14:00Z"
+detected_by = "Monday grading 2026-10-12: ledger funding rows of hour 1791792000000 have ts_ms − hour_ms = 795 s (capped, 08:13:15.002Z) and up to 840 s (shadow); the book-replay regrade first reported the hour MISSING (no recorded mkt_ctx/1 rate within 120 s) until given the backfilled HL rate"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-09"
+strategy_impact = "NONE"
+strategy_impact_note = "Accounting only, same rule as inc.2026-10-05.funding-booked-late (defect D11): the 08:00Z hour was settled after the sleep (inc.2026-10-12.host-sleep) with the mkt_ctx/1 rate observed at booking, not HL's realized rate. Received at the booked rates: capped $0.002453, shadow $0.034672; at HL's realized rates (fundingHistory, backfilled): capped $0.003358, shadow $0.111184 — the ledger under-credits capped by $0.000905 and shadow by $0.076513 (e.g. hyperliquid:xyz:MINIMAX booked 0.00000625 vs realized 0.0000523067). Every reconciliation check PASSES."
+
+[[data_impact]]
+stream = "ledger funding rows, hour 2026-10-12T08:00Z (both accounts)"
+from = "2026-10-12T08:00:00Z"
+to = "2026-10-12T08:14:00Z"
+after = "LIVE_RECORDED"
+note = "79 rows stored (4 capped + 75 shadow); their rate is the post-sleep observation, not the realized rate."
+
+[[evidence]]
+ref = "vault:w1-2026-10-12/xmarket-weekend/ledger.db"
+role = "funding rows"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "16605c39c2627be950632b1c93a93afbbfabe19766e684cb786706d0e8e5454d"
+
+[[evidence]]
+ref = "vault:w1-2026-10-12-bars/xlab/market.db"
+role = "HL realized funding (fundingHistory, backfilled 2026-10-12T15:05–15:14Z)"
+class = "FORWARD_PAPER"
+provenance = "BACKFILLED"
+sha256 = "a8f83338606027bf90f20389fe17895dd9f875d60dceba238f333548945e347c"
