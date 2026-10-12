@@ -1,0 +1,31 @@
+id = "w1-2026-10-12-bars"
+title = "W1 weekend forward paper run #2 2026-10-09 → 2026-10-12: post-stop backfill (bars, funding, filings) + the host power log"
+notes = """Second snapshot of the weekend #2 grade (the first, w1-2026-10-12, holds the live recording). Taken after the runbook's step 4 on main 91b2a21 (binary built 2026-10-12T15:05Z): `tengu history backfill --sandbox xlab-w2 --instruments @xyz_stocks --interval 1h --from 2026-10-05 --funding` (25425 rows, 0 errors, 15:05–15:14Z), `… --interval 1m --from 2026-10-09T19:00:00Z` (306961 rows, 0 errors, 15:14–15:25Z), `tengu history events --sandbox xlab-w2 --instruments @xyz_stocks --from 2026-10-05` (11 rows, 0 errors, 15:25Z). market.db is the shared xlab state dir's warehouse (xlab-w2 sets [xmarket] state = "xlab"): every row BACKFILLED, the weekend-window rows fetched after the stop (2026-10-12T14:50:41Z). The pmset log was copied from `pmset -g log` at 2026-10-12T15:00Z (lines 2026-10-09 16:54 → 2026-10-12 16:52 +0200)."""
+vault = "w1-2026-10-12-bars"
+captured_at = "2026-10-12T15:25:50Z"
+manifest_sha256 = "5165b80725af6557193109d9a2403911844d4f7de063922cc8875d6aaf93d31a"
+experiment = "fwd.rule_w.2026-10-09"
+
+[[items]]
+path = "xlab/market.db"
+source = "~/.tengu/state/xlab/market.db"
+kind = "FILE"
+sha256 = "a8f83338606027bf90f20389fe17895dd9f875d60dceba238f333548945e347c"
+files = 1
+bytes = 129302528
+provenance = "BACKFILLED"
+class = "FORWARD_PAPER"
+role = "warehouse"
+note = "History warehouse (bars 1h + 1m, funding, ctx, SEC events) after the post-stop backfill; no -wal at copy time."
+
+[[items]]
+path = "xmarket-weekend/research/weekend-2026-10-09/pmset-log-2026-10-09_2026-10-12.txt"
+source = "~/.tengu/state/xmarket-weekend/research/weekend-2026-10-09/pmset-log-2026-10-09_2026-10-12.txt"
+kind = "FILE"
+sha256 = "f0542781a6f53ea6425b578442f6af115b59903e402d9d27a4eadfca436e3e7c"
+files = 1
+bytes = 1785324
+provenance = "LIVE_RECORDED"
+class = "FORWARD_PAPER"
+role = "log"
+note = "macOS power-management log of the run window (sleep / dark wake / wake, power source, assertions): evidence for inc.2026-10-10.host-on-battery and inc.2026-10-12.host-sleep."

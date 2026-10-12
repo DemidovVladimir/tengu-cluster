@@ -1,0 +1,61 @@
+id = "inc.2026-10-12.host-sleep"
+title = "Host sleep (lid closed) 2026-10-12 07:40:27 → 08:11:38Z with positions open: recorder and exits silent ~32 min"
+class = "HOST"
+started_at = "2026-10-12T07:40:27Z"
+ended_at = "2026-10-12T08:13:15Z"
+detected_by = "Claude's doctor --live check at 08:12:01Z: hl_book / hl_ctx / xm_exits / xm_weekend_fade `stale: stalled`, `=> NOT live` (heartbeat fresh); tengu.log WARN `feed slot skipped: reached too late (system sleep or a stalled clock)` at 07:59:01Z (xm_exits, late_ms 1096220, a dark wake), 08:09:09–08:09:11Z (xm_exits, xm_weekend_fade, hl_ctx) and 08:11:39Z (hl_book); macOS pmset log: `Clamshell Sleep` 09:40:27 +0200, dark wakes 09:42:55 / 09:59:00 / 10:09:00 +0200, lid-open `Wake` 10:11:38 +0200 (on battery)"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-09"
+strategy_impact = "DEGRADED"
+strategy_impact_note = "Positions were open (4 capped, 75 shadow). xm_exits did not run 07:40:30 → 08:12:06Z (partial until 08:13:02, ok from 08:13:15Z): its take-profit / stop-loss could not fire — whether one would have fired is UNKNOWN. P&L of the planned exit unaffected: no exit was due before the 13:00Z deadline and the exit instant (13:00:00–13:00:10Z) was clean. The 08:00Z funding hour was booked late (inc.2026-10-12.funding-booked-late)."
+notes = "The operator closed the lid to commute (on battery from 07:40:30Z). The runner process survived the sleep (pid 11624, heartbeat fresh at 08:12:01Z) and recovered on its own, no restart. Every feed `=> live` again in doctor at 08:15:19Z. The first requests after wake timed out / were reset (egress 08:11:49–08:12:06Z), then 200s."
+
+[[data_impact]]
+stream = "mkt_ctx/1 (weekend recorder)"
+from = "2026-10-12T07:40:04Z"
+to = "2026-10-12T08:13:03Z"
+after = "BACKFILLED"
+backfill = "vault:w1-2026-10-12-bars/xlab/market.db"
+note = "Last sweep before 07:40:04.273Z, first after 08:13:03.654Z: 32 minutes without contexts. 1m bars backfilled 2026-10-12 after the stop stand in for prices only (no mid, OI); HL realized funding from fundingHistory."
+
+[[data_impact]]
+stream = "hl_book/1 (weekend recorder)"
+from = "2026-10-12T07:40:05Z"
+to = "2026-10-12T08:12:15Z"
+after = "MISSING"
+note = "Last ok book 07:40:05.293Z; 4 error rows 08:11:38–08:12:02Z; first ok 08:12:15Z. Books cannot be backfilled."
+
+[[data_impact]]
+stream = "xm_exits/1 ticks (weekend runner)"
+from = "2026-10-12T07:40:30Z"
+to = "2026-10-12T08:13:15Z"
+after = "MISSING"
+note = "Last tick 07:40:30.007Z; partial 08:12:06–08:13:02Z; ok from 08:13:15Z."
+
+[[data_impact]]
+stream = "xm_weekend/1 fade ticks (weekend runner)"
+from = "2026-10-12T07:40:00Z"
+to = "2026-10-12T08:13:00Z"
+after = "MISSING"
+note = "Last tick 07:40:00.016Z, next 08:13:00.019Z; no decision was due (phase entered, waiting for the 13:00Z exit)."
+
+[[evidence]]
+ref = "vault:w1-2026-10-12/xmarket-weekend/history/20261012.db"
+role = "recorder rows around the gap"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "3e165353c21a53cd749b8355654ef900a18762e49561c5095002f23adf8af6d3"
+
+[[evidence]]
+ref = "vault:w1-2026-10-12/tengu-logs/tengu.log"
+role = "slot-skip warnings and the post-wake errors"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "3b103767e3fd8fd28f2eb5035fb0663a13dfa94436b79e5119975f61f5530e53"
+
+[[evidence]]
+ref = "vault:w1-2026-10-12-bars/xmarket-weekend/research/weekend-2026-10-09/pmset-log-2026-10-09_2026-10-12.txt"
+role = "macOS power log of the run window: clamshell sleep, dark wakes, lid-open wake, power source"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "f0542781a6f53ea6425b578442f6af115b59903e402d9d27a4eadfca436e3e7c"

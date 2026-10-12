@@ -1,0 +1,25 @@
+id = "inc.2026-10-10.host-on-battery"
+title = "Host on battery three times 2026-10-10 18:33Z → 2026-10-11 15:25Z (down to 4 %), no downtime"
+class = "HOST"
+started_at = "2026-10-10T18:33:19Z"
+ended_at = "2026-10-11T15:24:37Z"
+detected_by = "Claude's 15-min checks (pmset -g batt: `Now drawing from 'Battery Power'` first at 18:41Z); macOS pmset log `Summary- … Using Batt` at 20:33:19, 13:29:12, 15:52:42 +0200 and back on AC at 10:42:53, 13:42:28, 17:24:37 +0200"
+generation = "W1"
+experiment = "fwd.rule_w.2026-10-09"
+strategy_impact = "NONE"
+strategy_impact_note = "Before the entry (2026-10-11T22:00Z), no position open. Every doctor --live check during the three spells was live (heartbeat fresh, every required feed live); the pmset log shows no sleep in the run window before 2026-10-12. Risk: on battery caffeinate -s (PreventSystemSleep) does not hold, only -i (idle sleep); the first spell lasted ~14 h and reached 4 % at 08:41Z — the Mac would have slept or shut down within ~25 min had AC not returned."
+notes = "Spells (UTC): 2026-10-10 18:33:19 → 2026-10-11 08:42:53; 2026-10-11 11:29:12 → 11:42:28; 13:52:42 → 15:24:37. The operator was alerted by desktop notification (battery at 100 %, 25 %, 11 %). Times from the pmset log are the first logged event in each power state."
+
+[[data_impact]]
+stream = "every recorder stream (weekend runner)"
+from = "2026-10-10T18:33:19Z"
+to = "2026-10-11T15:24:37Z"
+after = "LIVE_RECORDED"
+note = "No gap: recorded live throughout."
+
+[[evidence]]
+ref = "vault:w1-2026-10-12-bars/xmarket-weekend/research/weekend-2026-10-09/pmset-log-2026-10-09_2026-10-12.txt"
+role = "macOS power log of the run window: power source transitions"
+class = "FORWARD_PAPER"
+provenance = "LIVE_RECORDED"
+sha256 = "f0542781a6f53ea6425b578442f6af115b59903e402d9d27a4eadfca436e3e7c"
