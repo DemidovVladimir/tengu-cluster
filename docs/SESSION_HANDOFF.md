@@ -35,7 +35,7 @@ Run: `tengu-acdef66`, one start 2026-10-09T14:54:10Z → operator SIGINT 2026-10
 | Secrets: vault / env / Cloudflare seal proxy (probed: on once PR #50 merges) | `config/builder/palette.rs`, `compile.rs` | test-merge on #50 + #51: clean, 86 tests, `[keys]` loads |
 | Live engines on one canvas-built sandbox (list_directory + read_file) | `tengu tool turn` | openrouter ✅ claude_code ✅ codex ✅ local — operator's PC |
 
-Open: decision-loop / feed / `[[mcp_servers]]` cards (kept as TOML today) · import a hand-written sandbox onto the canvas · local engine live leg · 10 codex engine-matrix legs not run live.
+Open: decision-loop / feed / `[[mcp_servers]]` cards (kept as TOML today) · import a hand-written sandbox onto the canvas · local engine live leg · 11 codex engine-matrix legs not run live (incl. `codex_a2a`, added when #53 was rebased on #52).
 
 ## 2026-10-10: A2A — agents talk to other agent harnesses — branch `feature/a2a`
 
