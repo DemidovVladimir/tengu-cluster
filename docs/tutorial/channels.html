@@ -319,7 +319,9 @@
     <div><b>webhook, planner</b><code>webhook-&lt;name&gt;-&lt;uuid&gt;</code><span>new for every request</span></div>
     <div><b>webhook, loop</b><code>webhook-&lt;name&gt;-&lt;uuid&gt;</code><span>the loop's event id; tool call ids become <code>{loop}:{session}:{t}</code></span></div>
     <div><b>tengu decide</b><code>decide-&lt;loop&gt;-&lt;uuid&gt;</code><span>one per run</span></div>
+    <div><b>tengu a2a serve, planner</b><code>a2a-&lt;contextId&gt;</code><span>one per A2A context; its earlier turns lead the message</span></div>
   </div>
+  <p class="note">Another harness is a fourth door: <code>tengu a2a serve</code> answers A2A messages with the planner (<code>/a2a</code>) or one agent (<code>/a2a/agents/&lt;name&gt;</code>), behind a bearer token (open only on a loopback bind; <a href="a2a.html">A2A</a>).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-cmd">
@@ -360,7 +362,7 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Open each door</h2>
-    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code> and <code>studio</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
+    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code>, <code>studio</code>, <code>codex</code> and <code>a2a</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
@@ -402,7 +404,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

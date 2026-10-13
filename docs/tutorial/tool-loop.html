@@ -279,7 +279,7 @@
       <button type="button" aria-controls="tab-t">Knobs (defaults)</button>
       <button type="button" aria-controls="tab-c">/context and /engine</button>
     </div>
-    <div class="tabpanel" id="tab-f"><pre><span class="c"># prompt_budget.rs — window = limits.context_window (engine's own for claude_code)</span>
+    <div class="tabpanel" id="tab-f"><pre><span class="c"># prompt_budget.rs — window = limits.context_window (the engine's own 200 000 for claude_code and codex)</span>
 output_cap   = max_output_tokens_per_turn               <span class="c"># when set</span>
              | clamp(window / 8, <span class="n">256</span>, <span class="n">16 384</span>)          <span class="c"># else</span>
 reserved     = max(output_cap + max(output_cap / 4, <span class="n">64</span>),
@@ -294,7 +294,7 @@ output_cap <span class="n">16 384</span> · reserved <span class="n">20 480</spa
 max_tokens_per_flow       = <span class="n">100_000</span>    <span class="c"># notice at 80 %, blocks at 100 % until /reset</span>
 context_window            = <span class="n">1_000_000</span>  <span class="c"># set the real window for local models</span>
 <span class="c"># max_output_tokens_per_turn = 4096 # unset: the request omits max_tokens</span>
-max_tool_rounds           = <span class="n">70</span>         <span class="c"># rounds here; tool calls on claude_code</span>
+max_tool_rounds           = <span class="n">70</span>         <span class="c"># rounds here; tool calls on claude_code, codex</span>
 max_tool_result_chars     = <span class="n">300_000</span>    <span class="c"># per result, every engine</span>
 compact_result_limit      = <span class="n">200</span>        <span class="c"># line 1 of older rounds</span>
 stream_event_timeout_secs = <span class="n">120</span>        <span class="c"># idle stream → error</span>
@@ -466,7 +466,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

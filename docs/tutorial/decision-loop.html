@@ -409,7 +409,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Run a map, or one event</h2>
-    <p>Needs <code>OPENROUTER_API_KEY</code>. Long-running triggers: a webhook endpoint with <code>loop = "&lt;name&gt;"</code>, or a <code>[feeds.*]</code> tick under <a href="runtime.html"><code>tengu run</code></a>.</p>
+    <p>Needs <code>OPENROUTER_API_KEY</code>; in a sandbox with <code>[keys]</code> (<code>sealed-check</code>) Jev gets a seal-proxy session instead and posts to the Worker (<a href="sealed-keys.html">Sealed keys</a>). Long-running triggers: a webhook endpoint with <code>loop = "&lt;name&gt;"</code>, or a <code>[feeds.*]</code> tick under <a href="runtime.html"><code>tengu run</code></a>.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"loop":"lp_exec","event":{"target_sol":0.5,"target_usdc":40}}' | tengu decide --sandbox lping --map -</span>
@@ -450,7 +450,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

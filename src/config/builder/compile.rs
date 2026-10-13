@@ -8,7 +8,7 @@
 //! |---|---|
 //! | cards | kind known, singletons once, field types / options / ranges, required fields, name rules |
 //! | wires | the kind pair is in `CONNECTIONS`; then what each writes (palette module table) and its rules |
-//! | after | unused cards warn; the Cloudflare store needs the proxy card and a build with `[keys]`; one planner, one bot agent, one default |
+//! | after | unused cards warn; a Cloudflare-stored secret needs the proxy card and a `[keys.env]` line; one planner, one bot agent, one default |
 //! | emit | owned sections in a fixed order (`OWNED`); every other top-level key of the current `config.toml` kept as it is |
 //!
 //! Keys never enter the TOML: a secret card names an env var and where it
@@ -272,7 +272,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
     let mut cards: BTreeMap<&str, Card<'_>> = BTreeMap::new();
     let mut seen_kind: BTreeMap<&str, usize> = BTreeMap::new();
     for n in &bp.nodes {
-        let Some(spec) = kind_spec(facts, &n.kind) else {
+        let Some(spec) = kind_spec(&n.kind) else {
             issues.push(Issue::error(format!("unknown card kind '{}'", n.kind)).node(&n.id));
             continue;
         };
@@ -706,15 +706,6 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                     );
                 }
                 if c.s("backend").as_deref() == Some("cloudflare") {
-                    if !facts.keys_supported {
-                        issues.push(
-                            Issue::error(
-                                "this build has no [keys] section (the seal proxy, PR #50)",
-                            )
-                            .node(c.id())
-                            .field("backend"),
-                        );
-                    }
                     if !served.contains(c.id()) {
                         issues.push(
                             Issue::error("wire it to the Cloudflare seal proxy card").node(c.id()),
@@ -740,12 +731,6 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                 }
             }
             "seal_proxy" => {
-                if !facts.keys_supported {
-                    issues.push(
-                        Issue::error("this build has no [keys] section (the seal proxy, PR #50)")
-                            .node(c.id()),
-                    );
-                }
                 if served.is_empty() {
                     issues.push(Issue::warn("no secret is served by the proxy").node(c.id()));
                 }

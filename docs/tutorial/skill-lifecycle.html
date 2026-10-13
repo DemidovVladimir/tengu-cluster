@@ -396,6 +396,7 @@ tengu skill remove my-notes --tier project
     <li><span><b>Cycles are isolated.</b> Proposals are applied and scored in a git worktree <code>.tengu/worktrees/evolve-&lt;skill&gt;-&lt;ts&gt;</code> (outside git: a copy in <code>.tengu/scratch/</code>); worktrees older than 24 h are swept at the next start.</span></li>
     <li><span><b>Locked skills stay locked.</b> <code>editable_by_learner: false</code> stops evolve's apply, <code>apply_improver_proposal</code> and <code>manage_skill</code> edits.</span></li>
     <li><span><b>Evals stay contained.</b> Each row gets a fresh temp folder; tool output is redacted; stubs never reach a <code>claude_code</code> agent's bridge (that row is refused).</span></li>
+    <li><span><b>Evals use the sandbox's sealed keys.</b> With <code>--sandbox &lt;s&gt;</code> and <code>[keys]</code>, its egress and a seal-proxy session are installed before any engine, the judge included (<a href="sealed-keys.html">Sealed keys</a>).</span></li>
     <li><span><b>A timeout is a fail.</b> A row past its <code>timeout_secs</code> fails without a judge call; malformed judge output fails with a preview.</span></li>
     <li><span><b>Installs are checked first.</b> Symlink escapes are rejected; <code>--strict</code> refuses a caution or dangerous verdict; an existing target is never overwritten.</span></li>
     <li><span><b>Busy skills can't vanish.</b> <code>remove</code> and <code>manage_skill delete</code> refuse while an evolve worktree for that skill exists.</span></li>
@@ -451,7 +452,7 @@ tengu skill remove my-notes --tier project
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

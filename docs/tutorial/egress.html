@@ -229,10 +229,10 @@
         <li><code>[egress]</code> sits in the sandbox TOML. No section means <code>network = "tor"</code>: proxy <code>TENGU_TOR_PROXY</code>, else <code>socks5h://127.0.0.1:9050</code>, and <code>route_llm_api = true</code>.</li>
         <li><code>install</code> validates and sets one policy per process. A bad <code>[egress]</code> fails the load. A dead proxy port only warns; requests then fail.</li>
         <li><code>run-agent</code> children and the MCP bridge get the resolved policy as <code>TENGU_EGRESS</code> JSON. It wins over their own config, so parent and child cannot drift.</li>
-        <li>Tool traffic (<code>http_request</code>, Hyperliquid, Solana RPC, GeckoTerminal, SEC EDGAR, EU TED) uses <code>tool_client</code> with redirects off. <code>http_request</code> follows up to 10 redirects itself.</li>
+        <li>Tool traffic (<code>http_request</code>, Privy, Hyperliquid, Solana RPC, GeckoTerminal, SEC EDGAR, EU TED) uses <code>tool_client</code>, redirects off; A2A remotes use <code>peer_client</code>. <code>http_request</code> follows up to 10 redirects itself.</li>
         <li>Every hop is gated before it is sent: scheme (<code>https_only</code>), <code>deny_hosts</code> first, the <code>allow_hosts</code> ceiling, then the tool's own <code>net_hosts</code>.</li>
         <li>Shell commands: each <code>http(s)://</code> literal passes the same URL gate. Built or encoded URLs slip by; on macOS <code>shell_network = "isolated"</code> is the hard stop.</li>
-        <li>LLM calls (OpenRouter, embeddings, Jev) use the proxy only with <code>route_llm_api</code>. The Claude CLI gets <code>HTTPS_PROXY</code>; MCP and Telegram follow the proxy. No host check here.</li>
+        <li>LLM calls (OpenRouter, embeddings, Jev) use the proxy only with <code>route_llm_api</code>. The Claude and Codex CLIs get <code>HTTPS_PROXY</code>; MCP and Telegram follow the proxy. No host check here.</li>
         <li>With a proxy, traffic goes to Arti on <code>:9050</code>, then lyrebird-rs, an obfs4 or snowflake bridge, and Tor. No direct fallback: proxy down, request fails.</li>
         <li><code>network = "open"</code> goes direct. Either way, every tool hop and every network shell command appends one JSONL line to <code>egress.jsonl</code>.</li>
       </ol>
@@ -301,6 +301,7 @@
               <option value="shell">shell: run_command</option>
               <option value="llm">LLM API (OpenRouter, embeddings, Jev)</option>
               <option value="claude">Claude Code CLI</option>
+              <option value="codex">Codex CLI</option>
               <option value="mcp_http">MCP server over http</option>
               <option value="mcp_stdio">MCP server over stdio</option>
               <option value="telegram">Telegram bot</option>
@@ -349,6 +350,7 @@
     <div class="sbx open"><h3>lping</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
     <div class="sbx open"><h3>jev-exec</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
     <div class="sbx open"><h3>unlimited</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
+    <div class="sbx open"><h3>a2a-lab</h3><span class="chip warn">open</span><small>No host ceiling; the <code>a2a</code> tool reaches only <code>127.0.0.1</code> (its scope's <code>net_hosts</code>), a loopback self-call.</small></div>
     <div class="sbx open"><h3>control-loop-lab</h3><span class="chip warn">open</span><small>No host ceiling; only Jev's endpoint is called, no lab tool reaches the network.</small></div>
   </div>
 </section>
@@ -449,7 +451,7 @@
     <li><span><b>Isolated shells are kernel-fenced.</b> With <code>shell_network = "isolated"</code> (macOS <code>sandbox-exec</code>) every outbound connection but the proxy port is refused, DNS included.</span></li>
     <li><span><b>Audit lines keep secrets out.</b> The URL is logged as the model wrote it (<code>$VAR</code> unexpanded), headers by name only, body and reason redacted.</span></li>
   </ul>
-  <p class="note warn"><b>Advisory paths.</b> <code>proxy_env</code> shells and MCP stdio servers only get proxy env vars. LLM, Claude CLI, MCP and Telegram traffic is proxied but not host-checked. A <code>local</code> engine always connects directly. The shell URL check misses built or encoded URLs.</p>
+  <p class="note warn"><b>Advisory paths.</b> <code>proxy_env</code> shells and MCP stdio servers only get proxy env vars. LLM, Claude and Codex CLI, MCP and Telegram traffic is proxied but not host-checked. A <code>local</code> engine always connects directly. The shell URL check misses built or encoded URLs.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
@@ -492,7 +494,7 @@
         <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing</td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td>installs the sandbox's policy, warns on a dead proxy</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>hands <code>TENGU_EGRESS</code> to <code>run-agent</code></td></tr>
-        <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI <code>HTTPS_PROXY</code>, bridge <code>TENGU_EGRESS</code></td></tr>
+        <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI <code>HTTPS_PROXY</code>, bridge <code>TENGU_EGRESS</code> (<code>engines/codex.rs</code> the same for Codex)</td></tr>
         <tr><td><code>src/adapters/inbound/telegram.rs</code></td><td>the bot's proxied client, 30 s / 60 s timeouts</td></tr>
         <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor</code> egress block and <code>--tor</code></td></tr>
         <tr><td><code>deploy/tor/</code></td><td>Arti + lyrebird-rs image, <code>arti.toml</code>, standalone compose</td></tr>
@@ -504,7 +506,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>
@@ -678,14 +680,15 @@
       hops.push(["llm_api_client", "heart"]);
       hops = hops.concat(r.route_llm_api && r.proxy ? viaHops(r) : [["direct", "warn"]]); hops.push(["openrouter.ai", ""]);
       why.push("Proxied only when <code>route_llm_api</code> is true (now " + r.route_llm_api + "). No host check, no audit line.");
-    } else if (k === "claude") {
-      hops.push(["claude CLI", "heart"]);
+    } else if (k === "claude" || k === "codex") {
+      hops.push([k === "codex" ? "codex CLI" : "claude CLI", "heart"]);
       if (r.route_llm_api && r.proxy) {
         var cf = connectForm(r.proxy);
         hops = hops.concat([["HTTPS_PROXY " + cf, "guard"]]).concat(viaHops(r).slice(1));
         why.push("<code>HTTPS_PROXY</code> = <code>HTTP_PROXY</code> = <code>" + esc(cf) + "</code> (HTTP CONNECT on the same port), <code>NO_PROXY</code> = <code>localhost,127.0.0.1,::1</code>. Advisory: the CLI honours the env.");
       } else hops.push(["direct", "warn"]);
-      if (r.proxy) why.push("While a proxy is set, profile <code>editor_shell</code> launches as <code>editor</code>: the built-in Bash is dropped.");
+      if (r.proxy && k === "claude") why.push("While a proxy is set, profile <code>editor_shell</code> launches as <code>editor</code>: the built-in Bash is dropped.");
+      if (k === "codex") why.push("Codex's own shell and patch tool run under <code>-s read-only</code> or <code>workspace-write</code>: no network either way.");
     } else if (k === "mcp_http") {
       hops.push(["mcp_client", "hands"]);
       var mu = parseUrl(v), loop = mu && LOOP.indexOf(mu.hostname) >= 0;

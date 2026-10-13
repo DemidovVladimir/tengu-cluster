@@ -71,7 +71,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">守</span> Safety · Scopes</div>
   <h1>Scopes and hardening</h1>
-  <p class="lede">Before a tool touches a file, host, env var, binary or wallet, it checks its <b>scope</b>. A configured scope grants only what it lists. A <code>[risk]</code> section or a Solana signer hardens the whole sandbox.</p>
+  <p class="lede">Before a tool touches a file, host, env var, binary or wallet, it checks its <b>scope</b>. A configured scope grants only what it lists. A <code>[risk]</code> or <code>[soe]</code> section or a Solana signer hardens the whole sandbox.</p>
   <ul class="facts">
     <li><b>5</b> fields per scope</li>
     <li>empty field = <b>deny</b></li>
@@ -124,7 +124,7 @@
         <g class="n guard" data-at="2">
           <rect x="225" y="40" width="170" height="58" rx="8"/>
           <text x="310" y="64" text-anchor="middle" class="t-title">Hardened rules</text>
-          <text x="310" y="83" text-anchor="middle" class="t-small">[risk] or Solana signer</text>
+          <text x="310" y="83" text-anchor="middle" class="t-small">signer · [risk] · [soe]</text>
         </g>
         <g class="n bad" data-at="2">
           <rect x="235" y="140" width="150" height="46" rx="8"/>
@@ -210,13 +210,13 @@
     <div class="stage-side">
       <ol class="captions">
         <li>The sandbox TOML grants each tool what it may touch: <code>[default_scopes.&lt;tool&gt;]</code> for every agent, <code>[agents.&lt;a&gt;.scopes.&lt;tool&gt;]</code> for one. An empty field grants nothing.</li>
-        <li>A <code>[risk]</code> section or a Solana signer hardens the sandbox: Claude Code built-ins off, no <code>[[mcp_servers]]</code>, no <code>shell_bins</code>, state and config out of reach. Any break fails the load.</li>
+        <li>A <code>[risk]</code> or <code>[soe]</code> section or a Solana signer hardens the sandbox: Claude Code built-ins off, no Codex agent, no <code>[[mcp_servers]]</code>, no <code>shell_bins</code>, state and config out of reach. Any break fails the load.</li>
         <li><code>fold_default_scopes</code> copies each default into every agent with no entry for that tool. An agent's own entry wins whole, never field-merged. <code>~</code> in <code>fs_roots</code> expands.</li>
-        <li>A <code>run-agent</code> step, and its Claude Code bridge, adds the step workspace to every configured scope. A deny-all scope (every field empty) stays a deny.</li>
+        <li>A <code>run-agent</code> step, and its CLI bridge (Claude Code, Codex), adds the step workspace to every configured scope. A deny-all scope (every field empty) stays a deny.</li>
         <li>Each tool gets its configured scope. A tool with none gets the fallback: the workspace, any host, env var and binary, the <code>default</code> wallet. Hardened: no shell.</li>
         <li>A writer resolves the path first: symlinks followed, <code>..</code> applied. It must stay in the workspace; <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>AGENTS.md</code> are refused.</li>
         <li>Then the tool calls <code>ctx.scope.check_*</code>: path under <code>fs_roots</code>, host in <code>net_hosts</code>, var in <code>env_reads</code>, first word in <code>shell_bins</code>, label in <code>wallets</code>.</li>
-        <li>Allowed: the tool runs. The MCP bridge builds the same scope map, so Claude Code agents meet the same fences.</li>
+        <li>Allowed: the tool runs. The MCP bridge builds the same scope map, so Claude Code and Codex agents meet the same fences.</li>
         <li>Refused: the reason becomes the tool's error. It goes back to the model, redacted, and nothing ran.</li>
       </ol>
     </div>
@@ -320,6 +320,7 @@
           <option value="~/.tengu/state/xmarket">["~/.tengu/state/xmarket"]</option>
         </select>
       </label>
+      <label class="tick" for="h-cx"><input type="checkbox" id="h-cx"> <span>agent <code>coder</code> with <code>engine = "codex"</code></span></label>
       <label class="tick" for="h-mcp"><input type="checkbox" id="h-mcp"> <span>one <code>[[mcp_servers]]</code> entry</span></label>
       <label class="tick" for="h-sh"><input type="checkbox" id="h-sh"> <span><code>[default_scopes.run_command] shell_bins = ["ls"]</code></span></label>
     </div>
@@ -356,7 +357,7 @@
     <li><span><b>Paths are resolved first.</b> File tools follow symlinks and apply <code>..</code> before comparing, so <code>new/../../x</code> cannot land outside; a dangling symlink is refused.</span></li>
     <li><span><b>Agent state is off-limits to writers.</b> <code>.tengu/</code>, <code>.claude/</code>, <code>.git/</code>, <code>skills/</code>, <code>CLAUDE.md</code>, <code>CLAUDE.local.md</code>, <code>AGENTS.md</code>, <code>.mcp.json</code>: any depth, any case. Hardened: also <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code>, <code>CONTEXT.md</code>.</span></li>
     <li><span><b>A deny stays a deny.</b> The <code>run-agent</code> workspace grant skips deny-all scopes.</span></li>
-    <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file. With a Solana signer, no scope's <code>env_reads</code> may name the seal-proxy session (<code>TENGU_KEYS_SESSION_TOKEN</code>, an <code>@session</code> var) or <code>"*"</code>.</span></li>
+    <li><span><b>Hardened sandboxes refuse to load</b> with a <code>claude_code</code> agent not on profile <code>"none"</code>, any <code>codex</code> agent, any <code>[[mcp_servers]]</code>, any <code>shell_bins</code>, or a root or workspace that reaches <code>&lt;TENGU_HOME&gt;/state</code>, the kill-switch file or the config file. With a Solana signer, no scope's <code>env_reads</code> may name the seal-proxy session (<code>TENGU_KEYS_SESSION_TOKEN</code>, an <code>@session</code> var) or <code>"*"</code>.</span></li>
     <li><span><b>Hardened fallback has no shell.</b> Tools without a scope get no <code>shell_bins</code>, and no shell skill loads.</span></li>
     <li><span><b>Inside the generation.</b> A sandbox bound with <code>[generation]</code> never registers a tool its generation refuses: in-process and in the bridge, even if the agent lists it (<a href="lineage.html">Lineage</a>).</span></li>
   </ul>
@@ -393,7 +394,7 @@
         <tr><td><code>src/config/mod.rs</code></td><td><code>default_scopes</code>, <code>fold_default_scopes</code>, <code>AgentConfig::hardened</code></td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>hardened-sandbox load rules and path reach checks</td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td><code>resolve_tool_scopes</code>, <code>permissive_scope</code>, <code>grant_workspace_root</code>, <code>compose_agent</code>, <code>within_generation</code></td></tr>
-        <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>the same scope map for Claude Code agents</td></tr>
+        <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>the same scope map for Claude Code and Codex agents</td></tr>
         <tr><td><code>src/adapters/outbound/tools/workspace/</code></td><td><code>read_file</code>, <code>write_file</code>, <code>list_directory</code>, <code>run_command</code>: the checks in use</td></tr>
         <tr><td><code>tests/scope_lint.rs</code></td><td>fails a tool whose <code>execute</code> skips the scope check</td></tr>
       </tbody>
@@ -402,7 +403,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>
@@ -677,7 +678,7 @@
   fold();
 
   /* ---------- hardening load check ---------- */
-  var H = { risk: document.getElementById("h-risk"), sign: document.getElementById("h-sign"), prof: document.getElementById("h-prof"), root: document.getElementById("h-root"), mcp: document.getElementById("h-mcp"), sh: document.getElementById("h-sh") };
+  var H = { risk: document.getElementById("h-risk"), sign: document.getElementById("h-sign"), prof: document.getElementById("h-prof"), root: document.getElementById("h-root"), cx: document.getElementById("h-cx"), mcp: document.getElementById("h-mcp"), sh: document.getElementById("h-sh") };
   var WHY = "hardened sandbox: Solana signer, [risk] or [soe]";
   function hardCheck() {
     var out = document.getElementById("h-out"), head = document.getElementById("h-head");
@@ -693,6 +694,7 @@
       var got = prof ? 'builtin_tools_profile = "' + prof + '"' : 'no [agents.exec.claude_code] block (= "editor_shell")';
       errs.push('agents.exec: engine = "claude_code" in a hardened sandbox (Solana signer, [risk] or [soe]) needs [agents.exec.claude_code] builtin_tools_profile = "none" — got ' + got + "; built-in tools run outside tengu scopes");
     }
+    if (H.cx.checked) errs.push('agents.coder: engine = "codex" is not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): the Codex CLI\'s built-in shell runs outside tengu scopes — use claude_code with builtin_tools_profile = "none", openrouter or local');
     if (H.mcp.checked) errs.push("[[mcp_servers]] are not allowed in a hardened sandbox (Solana signer, [risk] or [soe]): foreign processes with this filesystem");
     if (H.sh.checked) errs.push("default_scopes.run_command.shell_bins grants a shell — a hardened sandbox (Solana signer, [risk] or [soe]) runs no shell");
     var prot = [];

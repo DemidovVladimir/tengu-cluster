@@ -17,7 +17,7 @@ use crate::adapters::outbound::tools::catalog;
 use crate::application::builder::Builder;
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::builder::palette::{offered, tool_group};
-use crate::config::builder::{keys_supported, Facts, OfferedTool};
+use crate::config::builder::{Facts, OfferedTool};
 use crate::config::Config;
 use crate::domain::observation::now_ms;
 use crate::domain::runtime::RunState;
@@ -51,11 +51,7 @@ pub(crate) fn facts(cwd: &Path) -> Facts {
         .map(|(name, e)| (name.clone(), e.definition.description.clone()))
         .collect();
     skills.sort();
-    Facts {
-        tools,
-        skills,
-        keys_supported: keys_supported(),
-    }
+    Facts { tools, skills }
 }
 
 /// Why `sandbox`'s runtime blocks a rewrite: its `tengu run` heartbeat is

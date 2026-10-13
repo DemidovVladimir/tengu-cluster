@@ -1,6 +1,6 @@
-<svg viewBox="0 0 1200 4536" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
-  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio, the Studio builder, A2A and their files (2026-04-27, synced 2026-10-10)</title>
-  <desc id="desc">Ten stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control); and the Studio builder with the Codex engine (2026-10-10: tengu sandbox new, the canvas, compile and load check, Finalise, secret stores); and A2A (2026-10-10: agents call other agent harnesses with the a2a tool, other harnesses call tengu a2a serve).</desc>
+<svg viewBox="0 0 1200 4786" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc" font-family="ui-sans-serif, system-ui, sans-serif">
+  <title id="title">tengu-cluster architecture — the chat turn, tengu run, tengu backtest, tengu ranking run, Tengu Studio, the Studio builder, A2A, the seal proxy and their files (2026-04-27, synced 2026-10-13)</title>
+  <desc id="desc">Eleven stacked sections: the seven-step per-turn flow; the five chat-turn subsystems; the stores (Open Brain, LLM Wiki, planner files, runtime state); key mechanics; the two flows without a user message (tengu run: feed to tool to store to loop to exec tool to gate to ledger, and tengu backtest: market.db to resolve and prepare to candidates to the optional Jev gate to evaluate to the run dir); the subsystems that landed 2026-09-24 to 2026-10-01 (runtime, decision loops and replay, typed observations and the recorder, tool families, xmarket risk and paper, xlab, engine parity, sandboxes); research lineage, rankings, sources and SOE (2026-10-06 to 2026-10-09: the tengu ranking run flow from a sealed contract to a published ranking, then lineage and evidence, strategy ranking, source evidence and the Software Opportunity Engine with its weekly cycle); and the execution trace and Tengu Studio (2026-10-09: the trace store, the workflow graph, the Studio server and its control); and the Studio builder with the Codex engine (2026-10-10: tengu sandbox new, the canvas, compile and load check, Finalise, secret stores); and A2A (2026-10-10: agents call other agent harnesses with the a2a tool, other harnesses call tengu a2a serve); and the seal proxy with Privy Solana signing (2026-10-09 to 2026-10-13: provider keys live only as secrets of the tengu-seal Cloudflare Worker, tengu holds an SSH-agent-signed session, the Solana write tools sign with a Privy wallet through the same proxy).</desc>
   <style>
     .h1 { font-size: 17px; font-weight: 800; fill: #0f172a; }
     .h2 { font-size: 13px; font-weight: 700; fill: #0f172a; letter-spacing: .3px; text-transform: uppercase; }
@@ -39,6 +39,7 @@
     .pill-trc  { fill: #0e7490; }
     .pill-std  { fill: #6d28d9; }
     .pill-a2a  { fill: #1d4ed8; }
+    .pill-key  { fill: #b45309; }
     .panel { fill: #ffffff; stroke: #e2e8f0; }
     .arrow { stroke: #475569; stroke-width: 1.6; fill: none; }
     .arrow-fat { stroke: #1e293b; stroke-width: 2.4; fill: none; }
@@ -56,10 +57,10 @@
     </marker>
   </defs>
 
-  <rect x="0" y="0" width="1200" height="3976" fill="#ffffff" />
+  <rect x="0" y="0" width="1200" height="4786" fill="#ffffff" />
 
   <text x="20" y="26" class="h1">tengu-cluster — how a user message becomes a response, and what runs without one</text>
-  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-10 · companion to docs/architecture-2026-04-27.md (the line-by-line read) and .html (the explorer) · section 7: lineage, rankings, sources, SOE · section 8: trace + Studio · section 9: builder</text>
+  <text x="20" y="44" class="small">Single-page architecture walkthrough · 2026-04-27 · synced 2026-10-13 · companion to docs/architecture-2026-04-27.md and .html · section 7: lineage, rankings, sources, SOE · 8: trace + Studio · 9: builder + Codex · 10: A2A · 11: seal proxy</text>
 
   <g transform="translate(20, 56)">
     <rect width="1160" height="50" rx="4" fill="#f8fafc" stroke="#e2e8f0" />
@@ -145,7 +146,7 @@
     <text x="10" y="18" class="h3">6. Subagent tool loop (LLM and tools)</text>
     <text x="10" y="34" class="body">load [agents.&lt;name&gt;] from the sandbox config, build PluginToolExecutor</text>
     <text x="10" y="48" class="file">bootstrap/tools.rs::build_subprocess_tool_executor</text>
-    <text x="10" y="62" class="file">outbound/tools/ catalog + outbound/mcp_client/ · claude_code: tengu mcp-bridge</text>
+    <text x="10" y="62" class="file">outbound/tools/ catalog + mcp_client/ · claude_code, codex: tengu mcp-bridge</text>
     <text x="10" y="76" class="small">runs until the model calls compress_and_store OR max_turns (= limits.max_tool_rounds)</text>
     <text x="10" y="90" class="file">outbound/egress.rs - Tor proxy, host allowlist, shell sandbox, audit</text>
   </g>
@@ -250,10 +251,11 @@
     <text x="10" y="178" class="small">run_agent_subprocess loads the config,</text>
     <text x="10" y="190" class="small">then agents.get(name)</text>
     <text x="10" y="214" class="h3">Each block has:</text>
-    <text x="10" y="230" class="small">engine: openrouter · local · claude_code</text>
-    <text x="10" y="244" class="small">model, description, example_queries</text>
-    <text x="10" y="258" class="small">tools, skills, workspace, scopes</text>
-    <text x="10" y="272" class="small">limits.max_tool_rounds / step_timeout</text>
+    <text x="10" y="228" class="small">engine: openrouter · local · claude_code</text>
+    <text x="10" y="240" class="small">· codex (ChatGPT subscription)</text>
+    <text x="10" y="252" class="small">model, description, example_queries</text>
+    <text x="10" y="264" class="small">tools, skills, workspace, scopes</text>
+    <text x="10" y="276" class="small">limits.max_tool_rounds / step_timeout</text>
     <text x="10" y="294" class="small" font-style="italic">edit a block + restart chat: registry</text>
     <text x="10" y="308" class="small" font-style="italic">regenerated, no rebuild (no agents/ dir)</text>
   </g>
@@ -726,7 +728,7 @@
     <text x="10" y="110" class="h3">Solana write (5): simulate by default</text>
     <text x="10" y="124" class="small">solana_close_token_accounts, jupiter_swap,</text>
     <text x="10" y="136" class="small">dlmm_open_position, dlmm_close_position,</text>
-    <text x="10" y="148" class="small">jup_perps_order · send = signer + wallet grant</text>
+    <text x="10" y="148" class="small">jup_perps_order · send = Privy wallet + grant</text>
     <text x="10" y="166" class="h3">Hyperliquid (2)</text>
     <text x="10" y="180" class="small">hl_ctx → mkt_ctx/1, hl_book → hl_book/1</text>
     <text x="10" y="192" class="file">outbound/hyperliquid/info.rs (HlInfo)</text>
@@ -735,9 +737,9 @@
     <text x="10" y="236" class="small">paper_close, xm_exits, xm_weekend_fade</text>
     <text x="10" y="248" class="small">market_history, backtest, strategy_ranking</text>
     <text x="10" y="260" class="small">source_evidence (read-only, never fetches)</text>
-    <text x="10" y="272" class="small">soe_view, soe_propose, soe_challenge</text>
+    <text x="10" y="272" class="small">soe_view, soe_propose, soe_challenge · a2a (1)</text>
     <text x="10" y="288" class="file">domain/tools.rs · rate_limit · http_class</text>
-    <text x="10" y="304" class="small" font-style="italic">tengu tool list: 50 names (default build)</text>
+    <text x="10" y="304" class="small" font-style="italic">tengu tool list: 51 names (default build)</text>
   </g>
 
   <g transform="translate(20, 2744)">
@@ -792,9 +794,9 @@
     <rect width="282" height="310" rx="6" class="panel" />
     <rect x="0" y="0" width="282" height="22" rx="6" class="pill-par" />
     <text x="10" y="15" class="pt">engine parity (E0) + hardening</text>
-    <text x="10" y="40" class="small">every tool under openrouter, local, claude_code</text>
+    <text x="10" y="40" class="small">every tool: openrouter, local, claude_code, codex</text>
     <text x="10" y="62" class="file">tools/schema_lint.rs</text>
-    <text x="10" y="74" class="small">schemas in the subset all three accept;</text>
+    <text x="10" y="74" class="small">schemas in the subset every engine accepts;</text>
     <text x="10" y="86" class="small">mcp_client::linted_tool drops the rest</text>
     <text x="10" y="108" class="file">tests/bridge_conformance.rs</text>
     <text x="10" y="120" class="small">same text + rows in-process and through a</text>
@@ -832,17 +834,19 @@
     <text x="108" y="136" class="small">sources O2 + weekly cycle O3</text>
     <text x="10" y="152" class="file">control-loop-lab</text>
     <text x="108" y="152" class="small">Studio lab: one Jev loop, Play</text>
-    <text x="10" y="168" class="file">tor-check</text>
-    <text x="108" y="168" class="small">Tor egress check</text>
-    <text x="10" y="184" class="file">storage-test</text>
-    <text x="108" y="184" class="small">persistent_store test</text>
+    <text x="10" y="168" class="file">sealed-check</text>
+    <text x="108" y="168" class="small">Jev via the seal proxy</text>
+    <text x="10" y="184" class="file">a2a-lab</text>
+    <text x="108" y="184" class="small">A2A both ways, one machine</text>
     <text x="10" y="200" class="file">unlimited</text>
     <text x="108" y="200" class="small">one agent over Telegram</text>
-    <text x="10" y="222" class="small">network open: all but tor-check and</text>
-    <text x="10" y="234" class="small">storage-test; allow_hosts ceilings: xmarket*,</text>
-    <text x="10" y="246" class="small">xlab*, soe (HL, Gecko, SEC, TED)</text>
-    <text x="10" y="266" class="small">[risk] / [soe] sandboxes: hardened (no shell,</text>
-    <text x="10" y="278" class="small">no foreign MCP, claude_code built-ins off)</text>
+    <text x="10" y="216" class="file">tor-check · storage-test</text>
+    <text x="160" y="216" class="small">Tor · persistent_store</text>
+    <text x="10" y="234" class="small">network open: all but tor-check and</text>
+    <text x="10" y="246" class="small">storage-test; allow_hosts ceilings: xmarket*,</text>
+    <text x="10" y="258" class="small">xlab*, soe (HL, Gecko, SEC, TED), sealed-check</text>
+    <text x="10" y="274" class="small">[risk] / [soe] / signer: hardened (no shell,</text>
+    <text x="10" y="286" class="small">no MCP servers, no codex, Claude built-ins off)</text>
     <text x="10" y="302" class="small" font-style="italic">one config per sandbox: sandboxes/&lt;n&gt;/config.toml</text>
   </g>
 
@@ -1148,7 +1152,7 @@
     <text x="10" y="96" class="small">cards: OpenRouter API · Claude (subscription)</text>
     <text x="10" y="108" class="small">· OpenAI (subscription) · local model</text>
     <text x="10" y="128" class="small">secrets: vault · env · Cloudflare seal</text>
-    <text x="10" y="140" class="small">proxy ([keys], probed: on with PR #50)</text>
+    <text x="10" y="140" class="small">proxy (writes [keys] + [keys.env]; section 11)</text>
     <text x="10" y="244" class="small" font-style="italic">doc: docs/studio-builder-2026-10-10.md</text>
   </g>
 
@@ -1212,12 +1216,78 @@
     <text x="10" y="84" class="file">sandboxes/a2a-lab</text>
     <text x="10" y="96" class="small">server + remote self + liaison agent</text>
     <text x="10" y="116" class="file">tests/a2a_e2e.rs · conformance · matrix</text>
-    <text x="10" y="128" class="small">two tengu processes; every engine;</text>
+    <text x="10" y="128" class="small">two tengu processes; every engine leg;</text>
     <text x="10" y="140" class="small">official a2a-sdk interop both ways</text>
     <text x="10" y="188" class="small" font-style="italic">doc: docs/a2a-2026-10-10.md</text>
   </g>
 
-  <g transform="translate(20, 4408)">
+  <!-- ===================== SECTION 11 — seal proxy + Privy Solana signing ===================== -->
+  <text x="20" y="4422" class="h2">section 11 - seal proxy (no provider key here) + Privy Solana signing - 2026-10-09 → 2026-10-13</text>
+  <line x1="20" y1="4428" x2="1180" y2="4428" stroke="#cbd5e1" />
+
+  <g transform="translate(20, 4442)">
+    <rect width="282" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-key" />
+    <text x="10" y="15" class="pt">Worker: tengu-seal (Cloudflare)</text>
+    <text x="10" y="40" class="file">cloudflare/seal-worker/ · wrangler.toml</text>
+    <text x="10" y="52" class="small">provider keys = Worker secrets; ROUTES:</text>
+    <text x="10" y="64" class="small">route → upstream + ONE key spot (header |</text>
+    <text x="10" y="76" class="small">path | query) + allow prefixes; CLIENTS:</text>
+    <text x="10" y="88" class="small">SSH fingerprint → label, hours, routes</text>
+    <text x="10" y="108" class="file">crates/tengu-seal/</text>
+    <text x="10" y="120" class="small">session tss1 (HMAC), routes, target checks,</text>
+    <text x="10" y="132" class="small">SSH signature format (shared with tengu)</text>
+    <text x="10" y="152" class="small">replies: the key masked out (≤ 2 MiB)</text>
+    <text x="10" y="188" class="small" font-style="italic">a session can USE a key, never READ it</text>
+  </g>
+
+  <g transform="translate(312, 4442)">
+    <rect width="282" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-key" />
+    <text x="10" y="15" class="pt">tengu side: [keys]</text>
+    <text x="10" y="40" class="file">config/keys.rs</text>
+    <text x="10" y="52" class="small">proxy · client · agent_socket · strip ·</text>
+    <text x="10" y="64" class="small">[keys.env] VAR = route | @session</text>
+    <text x="10" y="84" class="file">outbound/keys/ (mod.rs, agent.rs)</text>
+    <text x="10" y="96" class="small">install: ssh-agent signs (Secretive, Touch</text>
+    <text x="10" y="108" class="small">ID) → session in RAM → [keys.env] exports;</text>
+    <text x="10" y="120" class="small">failure unsets every routed var; run-agent</text>
+    <text x="10" y="132" class="small">and mcp-bridge reuse the parent's session</text>
+    <text x="10" y="152" class="small">auth_header_for · header_mode (Telegram)</text>
+    <text x="10" y="188" class="small" font-style="italic">clients unchanged: &lt;proxy&gt;/&lt;route&gt;</text>
+  </g>
+
+  <g transform="translate(604, 4442)">
+    <rect width="282" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="282" height="22" rx="6" class="pill-key" />
+    <text x="10" y="15" class="pt">Privy Solana signing</text>
+    <text x="10" y="40" class="file">config/solana.rs · hardening.rs</text>
+    <text x="10" y="52" class="small">[solana] privy_wallet_id (not a secret);</text>
+    <text x="10" y="64" class="small">needs [keys.env] PRIVY_API_URL = "privy";</text>
+    <text x="10" y="76" class="small">no scope env_reads the session; hardened</text>
+    <text x="10" y="96" class="file">outbound/solana/privy.rs (PrivySigner)</text>
+    <text x="10" y="108" class="small">signTransaction via &lt;proxy&gt;/privy/v1/</text>
+    <text x="10" y="120" class="small">wallets/&lt;id&gt;/rpc; message must come back</text>
+    <text x="10" y="132" class="small">unchanged, the slot ed25519-verified</text>
+    <text x="10" y="152" class="small">no local key file (signer_key_file removed)</text>
+    <text x="10" y="188" class="small" font-style="italic">simulate by default; send = private agent</text>
+  </g>
+
+  <g transform="translate(896, 4442)">
+    <rect width="284" height="200" rx="6" class="panel" />
+    <rect x="0" y="0" width="284" height="22" rx="6" class="pill-key" />
+    <text x="10" y="15" class="pt">operator + proof</text>
+    <text x="10" y="40" class="file">cli/keys.rs</text>
+    <text x="10" y="52" class="small">tengu keys setup | status | check &lt;route&gt;</text>
+    <text x="10" y="72" class="file">sandboxes/sealed-check</text>
+    <text x="10" y="84" class="small">Jev, loop check, tengu run, Studio reach</text>
+    <text x="10" y="96" class="small">OpenRouter only through the Worker</text>
+    <text x="10" y="116" class="file">docs/cloudflare-secrets-setup.html</text>
+    <text x="10" y="128" class="small">account, deploy, CLIENTS, secrets, revoke</text>
+    <text x="10" y="188" class="small" font-style="italic">doc: docs/sealed-keys-2026-10-09.md</text>
+  </g>
+
+  <g transform="translate(20, 4658)">
     <rect width="1160" height="110" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>

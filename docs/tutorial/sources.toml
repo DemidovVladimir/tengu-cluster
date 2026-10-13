@@ -48,6 +48,7 @@ sources = [
   "src/application/orchestrator/wiring.rs",
   "src/application/orchestrator/mod.rs",
   "src/bootstrap/orchestrator.rs",
+  "src/bootstrap/a2a.rs",
   "src/ports/orchestration.rs",
   "src/domain/plan.rs",
   "src/config/mod.rs",
@@ -96,6 +97,7 @@ sources = [
   "src/adapters/outbound/mcp_client/",
   "src/adapters/outbound/tools/schema_lint.rs",
   "src/adapters/outbound/engines/claude_code.rs",
+  "src/adapters/outbound/engines/codex.rs",
   "src/adapters/inbound/cli/tool.rs",
   "tests/bridge_conformance.rs",
 ]
@@ -183,6 +185,8 @@ sources = [
   "src/adapters/inbound/a2a.rs",
   "src/adapters/inbound/cli/a2a.rs",
   "src/adapters/outbound/egress.rs",
+  "sandboxes/a2a-lab/config.toml",
+  "tests/a2a_e2e.rs",
 ]
 
 # ── Memory ────────────────────────────────────────────────────────────────
@@ -265,6 +269,9 @@ sources = [
   "src/adapters/outbound/solana/privy.rs",
   "src/config/solana.rs",
   "src/adapters/outbound/tools/crypto/helpers.rs",
+  "crates/tengu-seal/",
+  "cloudflare/seal-worker/",
+  "sandboxes/sealed-check/",
 ]
 
 [pages.evidence]
@@ -394,6 +401,7 @@ sources = [
   "src/adapters/inbound/cli/run_agent.rs",
   "src/adapters/inbound/studio/control.rs",
   "src/adapters/inbound/cli/trace.rs",
+  "src/bootstrap/a2a.rs",
   "sandboxes/control-loop-lab/config.toml",
 ]
 

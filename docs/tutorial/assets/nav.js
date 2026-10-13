@@ -47,7 +47,7 @@ window.TUTORIAL = {
     { slug: "studio", chapter: "runtime", title: "Studio graph and trace", blurb: "A sandbox as a graph from its config; every run as an ordered, redacted event file; a local browser UI." },
     { slug: "builder", chapter: "runtime", title: "Sandbox builder", blurb: "tengu sandbox new: drag agents, tools and secrets onto a canvas; Rust checks every wire; Finalise writes config.toml." },
 
-    { slug: "solana", chapter: "desk", title: "Solana LP tools", blurb: "Read pools and positions; simulate or send writes behind a lease." },
+    { slug: "solana", chapter: "desk", title: "Solana LP tools", blurb: "Read pools and positions; simulate writes, or send them signed by a Privy wallet through the seal proxy, behind a lease." },
     { slug: "paper-desk", chapter: "desk", title: "Paper desk and risk gate", blurb: "Every order passes the risk gate inside the tool, then fills on paper." },
 
     { slug: "history", chapter: "research", title: "Market history", blurb: "Backfill public history into one warehouse before asking anything." },

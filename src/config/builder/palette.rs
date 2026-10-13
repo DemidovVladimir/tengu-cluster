@@ -388,7 +388,7 @@ pub(crate) struct SecretBackend {
     pub note: String,
 }
 
-pub(crate) fn secret_backends(facts: &Facts) -> Vec<SecretBackend> {
+pub(crate) fn secret_backends() -> Vec<SecretBackend> {
     vec![
         SecretBackend {
             id: "vault",
@@ -407,21 +407,16 @@ pub(crate) fn secret_backends(facts: &Facts) -> Vec<SecretBackend> {
         SecretBackend {
             id: "cloudflare",
             label: "Cloudflare seal proxy",
-            available: facts.keys_supported,
-            note: if facts.keys_supported {
+            available: true,
+            note:
                 "The key is a Worker secret (`npx wrangler secret put NAME`); tengu gets a route \
                  and a session, never the key ([keys], docs/sealed-keys-2026-10-09.md)."
-                    .into()
-            } else {
-                "This build has no [keys] section yet (the seal proxy, PR #50). Merge it and this \
-                 store turns on by itself."
-                    .into()
-            },
+                    .into(),
         },
     ]
 }
 
-fn kinds(facts: &Facts) -> Vec<KindSpec> {
+fn kinds() -> Vec<KindSpec> {
     use FieldType::*;
     let engines = engines();
     let engine_options: Vec<(&str, &str)> = engines.iter().map(|e| (e.id, e.label)).collect();
@@ -434,13 +429,11 @@ fn kinds(facts: &Facts) -> Vec<KindSpec> {
             )
         })
         .collect();
-    let mut backends: Vec<(&str, &str)> = vec![
+    let backends: Vec<(&str, &str)> = vec![
         ("vault", "Local encrypted vault"),
         ("env", "Environment / .env"),
+        ("cloudflare", "Cloudflare seal proxy"),
     ];
-    if facts.keys_supported {
-        backends.push(("cloudflare", "Cloudflare seal proxy"));
-    }
     let restrict = || vec![json!(true)];
     vec![
         KindSpec {
@@ -768,8 +761,8 @@ fn kinds(facts: &Facts) -> Vec<KindSpec> {
 }
 
 /// The kind spec named `kind`.
-pub(crate) fn kind_spec(facts: &Facts, kind: &str) -> Option<KindSpec> {
-    kinds(facts).into_iter().find(|k| k.kind == kind)
+pub(crate) fn kind_spec(kind: &str) -> Option<KindSpec> {
+    kinds().into_iter().find(|k| k.kind == kind)
 }
 
 fn preset(pairs: &[(&str, Value)]) -> serde_json::Map<String, Value> {
@@ -870,19 +863,13 @@ fn items(facts: &Facts) -> Vec<Item> {
         ]);
         out.push(it);
     }
-    let mut proxy = item(
+    out.push(item(
         "seal_proxy",
         "seal_proxy",
         "Cloudflare seal proxy",
         "Workspace & secrets",
         "Keys stay in a Cloudflare Worker; wire secrets stored there to it.",
-    );
-    if !facts.keys_supported {
-        proxy.disabled = Some(
-            "this build has no [keys] section (the seal proxy, PR #50) — merge it first".into(),
-        );
-    }
-    out.push(proxy);
+    ));
     out.push(item(
         "telegram",
         "telegram",
@@ -974,11 +961,11 @@ pub(crate) struct Palette {
 pub(crate) fn palette(facts: &Facts) -> Palette {
     Palette {
         schema_version: PALETTE_SCHEMA_VERSION,
-        kinds: kinds(facts),
+        kinds: kinds(),
         items: items(facts),
         connections: CONNECTIONS,
         engines: engines(),
-        secret_backends: secret_backends(facts),
+        secret_backends: secret_backends(),
     }
 }
 

@@ -209,7 +209,7 @@
       <thead><tr><th></th><th>openrouter</th><th>local</th><th>claude_code</th><th>codex</th></tr></thead>
       <tbody>
         <tr><td>Talks to</td><td class="wrap"><code>https://openrouter.ai/api</code> (<code>OPENROUTER_BASE_URL</code>)</td><td class="wrap"><code>base_url</code>, default <code>http://127.0.0.1:8888</code></td><td class="wrap"><code>[claude_code] cli_path</code>, default <code>claude</code></td><td class="wrap"><code>[agents.&lt;a&gt;.codex] cli_path</code>, default <code>codex</code></td></tr>
-        <tr><td>Auth</td><td class="wrap"><code>OPENROUTER_API_KEY</code>, required</td><td class="wrap"><code>$UNSLOTH_API_KEY</code> if set (<code>api_key_env</code>)</td><td>the CLI's own login</td><td class="wrap">ChatGPT login (<code>codex login</code>); <code>OPENAI_API_KEY</code> stripped</td></tr>
+        <tr><td>Auth</td><td class="wrap"><code>OPENROUTER_API_KEY</code>, required; with <code>[keys]</code> a seal-proxy session and <code>&lt;proxy&gt;/openrouter</code> (<a href="sealed-keys.html">Sealed keys</a>)</td><td class="wrap"><code>$UNSLOTH_API_KEY</code> if set (<code>api_key_env</code>)</td><td>the CLI's own login</td><td class="wrap">ChatGPT login (<code>codex login</code>); <code>OPENAI_API_KEY</code> stripped</td></tr>
         <tr><td>Network</td><td>egress client: Tor unless open</td><td>direct, no proxy</td><td class="wrap">CLI gets <code>HTTPS_PROXY</code> under Tor</td><td class="wrap">same; its own shell has no network</td></tr>
         <tr><td>Window</td><td class="wrap"><code>limits.context_window</code></td><td class="wrap">same: set the real one</td><td>fixed 200 000</td><td>fixed 200 000</td></tr>
         <tr><td>Runs the tools</td><td>Tengu tool loop</td><td>Tengu tool loop</td><td>the CLI, via the bridge</td><td>the CLI, via the bridge</td></tr>
@@ -381,7 +381,7 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
   </div>
   <ul class="checks">
     <li><span><b>No silent default engine.</b> <code>engine</code> must be one of four (<code>config::ENGINES</code>); an empty <code>model</code> or unknown <code>builtin_tools_profile</code> fails the load.</span></li>
-    <li><span><b>Hardened sandboxes run Claude Code bare.</b> With <code>[risk]</code> or a Solana signer, every claude_code agent needs <code>builtin_tools_profile = "none"</code>, or load fails.</span></li>
+    <li><span><b>Hardened sandboxes run Claude Code bare.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer (<code>[solana] privy_wallet_id</code>), every claude_code agent needs <code>builtin_tools_profile = "none"</code>, or load fails.</span></li>
     <li><span><b>No Codex in a hardened sandbox.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, an <code>engine = "codex"</code> agent fails the load: its built-in shell ignores Tengu scopes.</span></li>
     <li><span><b>Codex bills the subscription.</b> <code>OPENAI_API_KEY</code> and every <code>CODEX_*</code> but <code>CODEX_HOME</code> / <code>CODEX_CA_CERTIFICATE</code> are removed from the CLI's env; <code>~/.codex/config.toml</code> is not loaded.</span></li>
     <li><span><b>The CLI sees only the Tengu bridge.</b> <code>--strict-mcp-config</code> on every run: the operator's own MCP servers never load.</span></li>
@@ -438,7 +438,7 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

@@ -53,13 +53,15 @@ model = "nvidia/nemotron-3-super-120b-a12b:free"
 default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
 # workspace_tools = ["shared_cache", "skill_distill"]  # opt-in tools: only names in src/domain/tools.rs::WORKSPACE_TOOLS (memory, skill lifecycle — and the families below)
-#   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, hedge_decide, lp_decide
+#   + Solana LP (typed, cached): sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide
 #   (docs/typed-observations-2026-09-24.md; each needs a [default_scopes.<tool>] — see sandboxes/lping/config.toml)
 #   + Solana writes (simulate by default): solana_close_token_accounts, jupiter_swap, dlmm_open_position, dlmm_close_position, jup_perps_order — "Solana signing" below
 #   + Hyperliquid (typed, cached): hl_ctx, hl_book — scope examples under "Request budgets" below
 #   + xmarket risk (typed): risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade (private agent only) — needs [xmarket] + [risk] + [paper]; scope examples under "Risk + paper trading" below
-#   + xlab (typed, ttl 0): market_history, backtest — need [xmarket] (backtest also [backtest]); scope examples under "Backtests" below
+#   + xlab (typed, ttl 0): market_history, backtest, strategy_ranking — need [xmarket] (backtest also [backtest], strategy_ranking also [strategy_ranking]); scope examples under "Backtests" below
 #   + sources (typed, ttl 0, read-only): source_evidence — needs [sources]; scope example under "Source registry" below
+#   + SOE stage tools: soe_view, soe_propose, soe_challenge — need [sources] (docs/soe-2026-10-08.md)
+#   + a2a: talk to another agent harness — needs [a2a.remotes.<name>]; see "A2A" below
 #   `tengu tool list` (hidden) prints every catalog name.
 
 # OpenRouter model examples (just change the model line):
@@ -205,7 +207,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- Solana signing (write tools, phase 6b) ---
 # `mode = "simulate"` (default) needs no key. `mode = "send"` signs with a
 # Privy Solana wallet through the seal proxy (no key on this machine; [keys]
-# above + docs/cloudflare-secrets-setup.html), only for an agent whose scope
+# under "Sealed keys" below + docs/cloudflare-secrets-setup.html), only for an agent whose scope
 # for the tool lists the wallet:
 #   [agents.lp_executor.scopes.dlmm_open_position]
 #   wallets = ["<full wallet pubkey>"]      # never in [default_scopes]
@@ -213,7 +215,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 #   net_hosts = ["<rpc host>", "tengu-seal.<subdomain>.workers.dev"]
 # With a signer the sandbox is hardened: claude_code agents only with
 # [agents.<name>.claude_code] builtin_tools_profile = "none", no
-# [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
+# engine = "codex" agent, no [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
 # no-shell fallback), and no env_reads of the session (TENGU_KEYS_SESSION_TOKEN,
 # an "@session" var, "*"). The signing agent has no `description`, is not
 # `default`, and is no webhook endpoint's `agent`. Rules: src/config/solana.rs,
@@ -812,7 +814,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer or [risk]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md)
+# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"

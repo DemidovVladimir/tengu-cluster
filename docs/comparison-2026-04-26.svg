@@ -87,9 +87,9 @@
 
     <rect x="0" y="112" width="305" height="56" rx="4" class="col-tengu" />
     <text x="10" y="128" class="h3">Model + tools</text>
-    <text x="10" y="142" class="body">OpenRouter · local · Claude Code engines</text>
+    <text x="10" y="142" class="body">OpenRouter · local · Claude Code · Codex engines</text>
     <circle cx="296" cy="138" r="3" class="added" />
-    <text x="10" y="154" class="mono">PluginToolExecutor · 50 tools · MCP</text>
+    <text x="10" y="154" class="mono">PluginToolExecutor · 51 tools · MCP · A2A</text>
     <text x="10" y="165" class="small">every tool on every engine · Tor-by-default egress</text>
     <rect x="317" y="112" width="305" height="56" rx="4" class="col-hermes" />
     <text x="327" y="128" class="h3">Model + tools</text>

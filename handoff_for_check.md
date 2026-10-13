@@ -2,6 +2,70 @@
 
 > For the operator's architecture agent. Newest session first; earlier sessions below, unchanged. Ids and hashes are full. Everything is verifiable from git, GitHub and the commands in each session's last section.
 
+# Session 2026-10-12 → 2026-10-13: weekend #2 stop + grade, PRs #50–#54 merged, cleanup, docs sweep
+
+## T1. What was asked → what was delivered
+
+| Ask (operator) | Delivered | Where |
+|---|---|---|
+| Watch the weekend #2 run every 15 min | `doctor --live` every 15 min Fri → Mon; operator stopped it (SIGINT 2026-10-12T14:50:41Z, clean) | incidents below |
+| "go" (grade weekend #2) | vaults, grade, regrade, backfill, secondaries, graded record, 3 incidents | PR #54 |
+| Merge every PR and branch into main; rebase; fix conflicts | #52 → #53 → #50 → #51 rebased in that order and squash-merged on green CI; 0 open PRs; only `main` | § T2 |
+| Remove `~/.cache/tengu-xm.noindex/agents/` if weekend research is unaffected; clean up; keep weekend research | `agents/` (90 GB), `seed/`, `a2a/`, `weekend/post-stop-backup-2026-10-12/` deleted; weekend binaries, vaults, `xmarket-weekend` / `xlab` state kept | § T3 |
+| Update all docs / tutorial to the code | docs sweep PR (this handoff's PR) | § T4 |
+
+## T2. Merges (squash, `rust-quality` green on each final head)
+
+| PR | Merge commit on `main` | Final head (rebased) | CI run | Original tip → tag |
+|---|---|---|---|---|
+| #54 weekend #2 graded | `43ce6384745b126d4478b083ea0491a25fbfb929` | `59c5fa19cbff9075858e9d621739e6cb9b007ac5` | 38271122120 | `archive/fwd/grade-weekend-2-2026-10-12` = `59c5fa19cbff9075858e9d621739e6cb9b007ac5` |
+| #52 Studio builder + codex | `23a586d1d85cd8a037e23fa3c57ab1c9b949f7ea` | `fb190f76431e2e8822d479b2ef5ff22e62e07c0a` | 38381272786 | `archive/feature/sandbox-builder` = `7d420d0be5743c4365e7ae238952505906c36a17` |
+| #53 A2A | `3e16a8694535859a20d97ab52687532b1cc3571b` | `9c1ce529b5dd51e13639539026d5c7b7eec8f1ab` | 38382655012 | `archive/feature/a2a` = `917ead814baeaf2b2368c76deffe11bdf2388bf1` |
+| #50 seal proxy | `0316f4698699d5c636d13cd5bf7e73d038fbeb33` | `6275ca74535392d708b2120742c893ff370f8915` | 38384097897 | `archive/feature/sealed-keys` = `71b7338201b8683baa6bd232282d697bf42023cd` |
+| #51 Privy Solana signer | `099ceb6fdf1e217293b614b6d232d74ab29d123c` | `309650dffbd5c901037c0040cfe9b8342c377b27` | 38385329953 | `archive/feature/privy-solana-signer` = `b4c1c17a7a66ecfbcc36ae9fbfb312cf03abf081` |
+
+| Conflict | Resolution |
+|---|---|
+| #53 on #52: `Cargo.toml` default features, `src/bootstrap/mod.rs` modules, `tests/engine_matrix.rs` legs | union: `default = ["openrouter", "telegram", "studio", "codex", "a2a"]`; both modules; both leg lists |
+| #53 on #52: codex had no A2A leg | added `codex_a2a => CODEX, Set::A2a` + the `[a2a.remotes.matrix]` / `[default_scopes.a2a]` block and `"a2a"` tool in `tests/fixtures/engine_matrix/open/codex.toml` (`fixtures_load_and_agree`) — commit `9c1ce529b5dd51e13639539026d5c7b7eec8f1ab` |
+| #53 on #52: architecture svg (both drew "section 9") | builder = section 9, A2A = section 10 (+308 px), footer → y 4408, viewBox 4536 |
+| #50: 4 commits incl. a superseded first design + a merge | squashed to one commit on its merge base (tree identical to `71b7338201b8683baa6bd232282d697bf42023cd`), then rebased |
+| #50 / #51 on #53: footers of CLAUDE.md / AGENTS.md, handoff, docs hub, tutorial sandboxes page, code map rows; `src/config/{mod,sections}.rs` (`a2a` vs `privy_wallet_id` fields) | additive, both kept; code map regenerated (`TENGU_REGEN_CODE_MAP=1`) |
+| `handoff_for_check.md` session for #50 / #51 (was uncommitted in the sealed worktree) | committed in #51 |
+
+Local checks before each push: `cargo fmt --check`; `cargo test --test code_map --test tutorial_map --test layering_lint --test scope_lint --test engine_matrix` (offline legs); `cargo test --bin tengu -- builder hardening solana keys codex a2a` on the #51 tree (335 passed).
+
+Deleted: branches `feature/{sandbox-builder,a2a,sealed-keys,privy-solana-signer}`, `fwd/grade-weekend-2-2026-10-12` (origin + local); worktrees `~/development/{tengu-builder,tengu-a2a,tengu-sealed}`, `.claude/worktrees/studio-view`. Not touched: the `mol` remote (Molecule org) and its branches.
+
+## T3. Local cleanup (operator 2026-10-13)
+
+| Removed | Size | Why allowed |
+|---|---|---|
+| `~/.cache/tengu-xm.noindex/agents/` (a2a, builder, grading, grading-test, seal-worker, sealed-crate, sealed-tengu, studio-view) | 90 GB | operator ask; build caches only (no process open; nothing cites them) |
+| `~/.cache/tengu-xm.noindex/seed/` | 6.1 GB | handoff row E4 "any time" |
+| `~/.cache/tengu-xm.noindex/a2a/` (pre-merge `tengu-a2a-08bb144`) | 46 MB | #53 merged |
+| `~/.cache/tengu-xm.noindex/weekend/post-stop-backup-2026-10-12/` | 112 KB | stale copies of files tracked upstream |
+| stale worktree entries (`git worktree prune`) | — | their dirs were gone |
+
+Kept (weekend research, operator rule): `~/.cache/tengu-xm.noindex/weekend/{tengu-6fcb455,tengu-acdef66,tengu-desk-2026-10-02}`, `~/.cache/tengu-xm.noindex/tengu-xlab-f554db0`, `~/.tengu/state/{evidence,xmarket-weekend,xlab,xmarket,research}`, logs. Not ours: `~/development/muliagent-tengu-cluster` (repo `moleculeprotocol/multiagent-tengu-cluster`, 17 GB `target/`); `/private/tmp/tengu-review-target` (8.2 GB, the reviewer's cargo cache).
+
+## T4. Docs sweep + record fix (this handoff's PR)
+
+| Item | Note |
+|---|---|
+| `fwd.rule_w.2026-10-09.graded` | review P1 "fails its declared verifier": the `ledger:` source is cumulative — the weekend-only rows lose `extract`; new rows `capped_cumulative` (n 8, 172.89980107619598 bps, $3.429751754824897) and `shadow_cumulative` (n 149, 58.72003458464617, $86.9575096438379) carry it. `tengu lineage verify --evidence`: 0 errors |
+| Docs | agent guides, handoff, hub, code map, feature docs, architecture, tutorial pages swept against `main` @ `099ceb6fdf1e217293b614b6d232d74ab29d123c` |
+
+## T5. Open (from `handoff_review.md` 2026-10-13T11:06:01Z — not fixed in this session)
+
+| Finding | Area |
+|---|---|
+| P1 seal proxy returns oversized / SSE / binary bodies unmasked | `cloudflare/seal-worker/src/lib.rs`, `crates/tengu-seal/src/target.rs` |
+| P1 codex inherits vault secrets + the seal-proxy session env | `src/adapters/outbound/engines/codex.rs` |
+| P1 `tengu sandbox compile` / `finalise` path traversal | `src/adapters/inbound/cli/sandbox.rs`, `src/adapters/outbound/builder_store.rs` |
+| P1 webhook trace closure races a detached planner turn | `src/adapters/inbound/webhooks.rs` |
+| P2 malformed TOML fails open in builder finalise; eval trace metrics barrier | `src/config/builder/`, eval |
+
 # Session 2026-10-09 (afternoon → night): seal proxy + Privy signers — PRs #50, #51
 
 ## S1. What was asked → what was delivered

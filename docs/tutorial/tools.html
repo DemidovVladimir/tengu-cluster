@@ -55,7 +55,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">組</span> Build a team · hands</div>
   <h1>Tool catalog</h1>
-  <p class="lede">Every built-in tool is one row in <code>catalog()</code>. Default rows are on for every agent; opt-in rows need their name in <code>tools</code> or <code>workspace_tools</code>. The same rows feed chat, plan steps, loops and the Claude Code bridge.</p>
+  <p class="lede">Every built-in tool is one row in <code>catalog()</code>. Default rows are on for every agent; opt-in rows need their name in <code>tools</code> or <code>workspace_tools</code>. The same rows feed chat, plan steps, loops and the MCP bridge that Claude Code and Codex agents call.</p>
   <ul class="facts">
     <li><b>12</b> default tools, <b>+2</b> with <code>[memory]</code></li>
     <li><b>38</b> opt-in names</li>
@@ -342,7 +342,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
   <ul class="checks">
     <li><span><b>One row, every surface.</b> Chat, plan steps, loops, <code>tengu tool</code> and the MCP bridge all register through <code>register_catalog</code>.</span></li>
     <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
-    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 37 fails the config.</span></li>
+    <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 38 fails the config.</span></li>
     <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
     <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
@@ -392,7 +392,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

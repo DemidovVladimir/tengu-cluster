@@ -9,9 +9,9 @@ One TOML file per sandbox holds the channel settings, `[egress]`, the planner an
 | 1 | `.env` from the cwd or its nearest parent; variables already in the shell win | `cli/mod.rs::run` (`dotenvy`) |
 | 2 | Vault `<TENGU_HOME>/secrets.vault` → env (`TENGU_MASTER_PASSWORD` or a prompt on `/dev/tty`: Enter skips it, `</dev/null` does not; a process with no controlling terminal skips it with a warning). An inherited `TENGU_SECRETS_LOADED` means an ancestor `tengu` opened it — no prompt. `mcp-bridge`, `run-agent`, `agentic-memory-server` never prompt | `outbound/secrets.rs` |
 | 3 | Base config: `-c/--config` > `$TENGU_CONFIG` > `<TENGU_HOME>/config.toml` (`TENGU_HOME` defaults to `~/.tengu`); a missing file = `Config::default()` (one `main` agent, `openrouter`, `anthropic/claude-sonnet-4.6`); `TENGU_CONFIG` pinned to that path | `cli/mod.rs::run`, `config/paths.rs` |
-| 4 | `--sandbox <s>`: `sandboxes/<s>/config.toml` **relative to the cwd** replaces the base config wholesale (the base still loads first — an invalid base fails the command); `TENGU_CONFIG` re-pinned to the absolute sandbox file; its `[egress]` installed | `bootstrap/sandbox.rs::load_sandbox_or` |
-| 5 | `Config::load`: read → `${VAR}` substitution (`${UPPER_CASE}` only; an unset var stays literal, with a warn) → TOML parse → validation, all errors at once (+ a hardened sandbox's config-file reach rule, the `[generation]` binding, `[strategy_ranking]`) → warnings logged → `fold_default_scopes` (default scopes into every agent, `~` in `fs_roots`, hardened flag, signer path, the sandbox sections tools read) | `config/mod.rs` |
-| 6 | Children: `run-agent` gets the sandbox name over IPC and the resolved policy as `TENGU_EGRESS`; `tengu mcp-bridge` loads `TENGU_CONFIG` and runs tools as `[agents.<TENGU_BRIDGE_AGENT>]` | `outbound/subprocess_runner.rs`, `inbound/mcp_bridge.rs` |
+| 4 | `--sandbox <s>`: `sandboxes/<s>/config.toml` **relative to the cwd** replaces the base config wholesale (the base still loads first — an invalid base fails the command); `TENGU_CONFIG` re-pinned to the absolute sandbox file; its `[egress]` installed; then the effective config's `[keys]` seal-proxy session (`outbound/keys::install`: `strip`, session, `[keys.env]` exports; without `--sandbox` the base config's) | `bootstrap/sandbox.rs::load_sandbox_or` |
+| 5 | `Config::load`: read → `${VAR}` substitution (`${UPPER_CASE}` only; an unset var stays literal, with a warn) → TOML parse → validation, all errors at once (+ a hardened sandbox's config-file reach rule, the `[generation]` binding, `[strategy_ranking]`) → warnings logged → `fold_default_scopes` (default scopes into every agent, `~` in `fs_roots`, hardened flag, the sandbox sections tools read — `[a2a]`, `[solana] privy_wallet_id` included) | `config/mod.rs` |
+| 6 | Children: `run-agent` gets the sandbox name over IPC and the resolved policy as `TENGU_EGRESS`; `tengu mcp-bridge` loads `TENGU_CONFIG` and runs tools as `[agents.<TENGU_BRIDGE_AGENT>]`; both re-run `keys::install`, reusing the parent's session (same proxy, > 5 min left) | `outbound/subprocess_runner.rs`, `inbound/mcp_bridge.rs`, `cli/run_agent.rs` |
 
 The sandbox name of a config file = `<name>` of `…/sandboxes/<name>/config.toml` however it was loaded (`-c` and `TENGU_CONFIG` included), else `default` — the paper ledger's account owner (`config/sections.rs`).
 
@@ -34,7 +34,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 |---|---|---|---|
 | `runtime_profile` | `Config` (`mod.rs`) | `"auto"` | — |
 | `[hub]` | `HubConfig` | defaults | ignored |
-| `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`); ignored in `.limits`, `.flow`, `.identity`, `.lens`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
+| `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.lens`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
 | `[orchestrator]` | `OrchestratorConfig` | single-agent dispatch | ignored |
 | `[memory]` | `MemoryConfig` | `enabled = false` | ignored |
 | `[telegram]` · `[webhooks]` | `TelegramConfig` · `WebhookConfig` | off | ignored |
@@ -58,6 +58,8 @@ tengu chat                                     # or: tengu chat --sandbox lping
 | `[soe]` | `SoeConfig` (`soe.rs`) | not an SOE sandbox (`tengu soe cycle` / `replay` refuse: `soe_config_missing`) | **error** |
 | `[generation]` | `GenerationBinding` (`lineage.rs`) | unbound (no capability / pin check) | **error** |
 | `[studio]` | `StudioConfig` (`studio.rs`) | `control = false` (read-only Studio) | **error** |
+| `[keys]` · `[keys.env]` | `KeysConfig` (`keys.rs`) | seal proxy off (provider keys from env / vault) | **error** |
+| `[a2a]` | `A2aConfig` (`a2a.rs`) | no A2A (the `a2a` tool refuses every call: no remotes; `tengu a2a serve` needs `[a2a.server]`) | **error** (remotes, `server` too) |
 
 ## Agents — `[agents.<id>]`
 
@@ -90,6 +92,7 @@ example_queries = ["what is the BTC price?"]
 | `scopes.<tool>` | `{}` | `ToolScope` — § Scopes |
 | `claude_code.builtin_tools_profile` | `"editor_shell"` | `none` \| `read_only` \| `editor` \| `editor_shell` (read trimmed; unknown = error); `none` required in a hardened sandbox |
 | `local.base_url` · `local.api_key_env` | `http://127.0.0.1:8888` · `UNSLOTH_API_KEY` | `engine = "local"` only; a trailing `/v1` is dropped; unset / empty env = no `Authorization` header |
+| `codex.sandbox` · `codex.cli_path` | `"read-only"` · `"codex"` | `engine = "codex"` only; `sandbox` = the Codex CLI's own shell / patch policy: `read-only` \| `workspace-write` (read trimmed; anything else = error; never network); `cli_path` non-empty (`PATH` lookup unless absolute). `model` = a bare OpenAI id (`gpt-5.5`); billing = the `codex login` ChatGPT subscription — the engine removes `OPENAI_API_KEY` and `CODEX_*` but `CODEX_HOME` / `CODEX_CA_CERTIFICATE` from the CLI's env |
 
 | Sub-table | Fields (default) | Rules |
 |---|---|---|
@@ -234,6 +237,47 @@ Tor by default. Full reference: `docs/egress-2026-09-16.md`.
 
 Write-tool send rules: `docs/typed-observations-2026-09-24.md` § Write tools.
 
+## Seal proxy — `[keys]`, `[keys.env]`
+
+Provider keys live only as secrets of the `tengu-seal` Cloudflare Worker; tengu gets a session (SSH-agent signature) and calls `<proxy>/<route>`. Doc: `docs/sealed-keys-2026-10-09.md`; set-up: `docs/cloudflare-secrets-setup.html`; CLI: `tengu keys setup | status | check <route>`.
+
+| Field | Default | Rules (`config/keys.rs`) |
+|---|---|---|
+| `proxy` | none = off | the Worker origin: `https://host` (no path, query, fragment, user / password); `http://127.0.0.1` / `localhost` only for `wrangler dev`; its host inside `[egress] allow_hosts` when set; every other field needs it |
+| `client` | the agent's only key | SSH-agent key comment or full `SHA256:` fingerprint |
+| `agent_socket` | `$SSH_AUTH_SOCK` | `~` expanded |
+| `strip` | `[]` | env var names (`[A-Z0-9_]`) removed at load and in every child — local copies of Worker keys; never a name `[keys.env]` sets |
+| `[keys.env]` `VAR = "<route>[/path][?query]"` | `{}` | exported as `<proxy>/<value>` (overrides any inherited value); the session asks for exactly these routes |
+| `[keys.env]` `VAR = "@session"` | — | the session token; only `OPENROUTER_API_KEY`, and only next to `OPENROUTER_BASE_URL = "<route>"` |
+
+| Load rule | |
+|---|---|
+| `PRIVY_API_URL` in `[keys.env]` needs `PRIVY_APP_SECRET` in `strip` (`FALLBACK_KEYS`: no session never falls back to a local secret) | `config/keys.rs` |
+| a failed session at startup unsets every `[keys.env]` var and the session vars (warn); `tengu telegram` with `TELEGRAM_API_URL` routed and no session refuses to start | `outbound/keys`, `inbound/telegram.rs` |
+
+## A2A — `[a2a]`
+
+Remotes this sandbox's agents may call with the opt-in `a2a` tool, and the server `tengu a2a serve` runs. Doc: `docs/a2a-2026-10-10.md`.
+
+| `[a2a.remotes.<name>]` (name `[a-z0-9][a-z0-9_-]*`) | Default | Rules (`config/a2a.rs`) |
+|---|---|---|
+| `url` | required | `http(s)://` with a host: the base URL (card at `/.well-known/agent-card.json`, then `agent.json`) or the card URL (`.json`) |
+| `endpoint_url` | none | call here instead of the card's interface URL |
+| `description` | none | shown by `a2a` `list` |
+| `bearer_env` · `header` + `header_env` | none | one credential: `Authorization: Bearer $<bearer_env>` or `<header>: $<header_env>` (both go together); read through the scope's `env_reads`; sent only to the `url` / `endpoint_url` hosts |
+| `timeout_secs` · `max_result_chars` | 120 · 12 000 | 1–3600 · ≥ 200 |
+
+| `[a2a.server]` | Default | Rules |
+|---|---|---|
+| `bind` · `port` | `127.0.0.1` · 8710 | an IP address · > 0 |
+| `public_url` | `http://<bind>:<port>` | `http(s)://` with a host; what the cards advertise |
+| `token_env` · `allow_unauthenticated` | none · `false` | exactly one: a bearer token var, or no auth on a loopback `bind` only — never in a hardened sandbox |
+| `orchestrator` · `agents` | `false` · `[]` | at least one; `orchestrator = true` needs `[orchestrator]`; each agent once, an `[agents.*]` block with a `description` |
+| `name` · `description` | `tengu <sandbox>` · the planner's / agent's | the root card |
+| `max_tasks` · `max_running` · `run_timeout_secs` · `context_turns` | 500 · 4 · 900 · 8 | > 0 · > 0 · 1–86 400 · — |
+
+An agent holding `a2a` with no `[a2a.remotes.*]` warns at load (every call is refused). Example: `sandboxes/a2a-lab`.
+
 ## xmarket — `[xmarket]`
 
 | Field | Default | Notes |
@@ -313,8 +357,10 @@ Every field required (no defaults); `[risk]` and `[paper]` come together. Exampl
 | Rule | Enforced |
 |---|---|
 | every `claude_code` agent sets `builtin_tools_profile = "none"` (the CLI then runs without settings files, hooks, plugins, skills, CLAUDE.md discovery, auto-memory) | load + `engines/claude_code.rs` |
+| no `engine = "codex"` agent (its built-in shell ignores tengu scopes) | load |
 | no `[[mcp_servers]]`; no scope grants `shell_bins`; tools without a scope run no shell; no shell skill loads | load + runtime |
-| the signer key, `<TENGU_HOME>/state`, `kill_switch_file` and the config file outside every `fs_roots` and `workspace` | load |
+| `<TENGU_HOME>/state`, `kill_switch_file` and the config file outside every `fs_roots` and `workspace` (there is no signer key file: Privy signs through the seal proxy) | load |
+| `[a2a.server] allow_unauthenticated` refused (set `token_env`) | load (`config/a2a.rs`) |
 | a plan step's `compose` only narrows its base agent's tools / skills | `run-agent` |
 | `write_file` also refuses the system-prompt files (`MEMORY.md`, `USER.md`, `IDENTITY.md`, `PROFILE.md`, `CONTEXT.md`) | runtime (`AgentConfig::hardened`) |
 | `[studio] control = true` refused; Studio never starts or stops a hardened runtime | load + `tengu studio` |
@@ -492,10 +538,11 @@ Set only in `control-loop-lab`. Server: the default build (feature `studio`), lo
 
 ## Sandboxes
 
-`sandboxes/<name>/config.toml`, run from the repo root. Twelve today: `control-loop-lab`, `jev-exec`, `lping`, `sealed-check`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes.
+`sandboxes/<name>/config.toml`, run from the repo root. Thirteen in the repo today: `a2a-lab`, `control-loop-lab`, `jev-exec`, `lping`, `sealed-check`, `soe`, `storage-test`, `tor-check`, `unlimited`, `xmarket`, `xmarket-weekend`, `xlab`, `xlab-w2` — purposes and networks in the README § Sandboxes. `tengu sandbox new` adds more (with a `builder.json`: `docs/studio-builder-2026-10-10.md`).
 
 | Sandbox | What its config shows |
 |---|---|
+| `a2a-lab` | A2A both ways on one machine: `[a2a.server]` (planner + `helper`), the remote `self` (this sandbox's own server) and the routable `liaison` agent holding `a2a`; `network = "open"` (`docs/a2a-2026-10-10.md`) |
 | `control-loop-lab` | the safe control-loop reference run: one Jev loop, two feeds, `[studio] control = true`; nothing touches money, keys, the shell or the network (`docs/control-loop-lab-2026-10-08.md`) |
 | `sealed-check` | proves the seal proxy: Jev, loop `check`, `tengu run`, Studio reach OpenRouter only through the `tengu-seal` Worker (`[keys]`); one pure-compute tool, own root `~/tengu-sealed-check` (`docs/sealed-check-2026-10-09.md`) |
 | `soe` | the SOE weekly cycle: `[sources]` (rows off), `[soe]` with `soe_architect` / `soe_critic` (`claude_code`, built-ins off), the read-only `soe_reader`, `[feeds.soe_week]` (`kind = "job"`), bound to `SOE-G0` (`docs/soe-2026-10-08.md`) |
@@ -538,15 +585,18 @@ tengu sources --sandbox soe list                          # the source registry;
 | `SOLANA_RPC_URL` | `outbound/solana/rpc.rs` | `https://api.mainnet-beta.solana.com` | Solana RPC; through `env_reads` only (else the public RPC, silently) |
 | `TENGU_RISK_RESUME_SECRET_FILE` | `cli/risk.rs` | unset = no guard | `tengu risk resume` also asks for this file's content; refused when the file is missing, not 0600, over 4 KiB, empty, or inside an agent's `fs_roots` / `workspace` |
 | `CHAIN_ID` · `EVM_RPC_URL` | `tools/crypto/helpers.rs` | `1` · `https://ethereum-rpc.publicnode.com` | Privy tools: chain id when a call omits it · JSON-RPC for receipts |
-| `PRIVY_APP_ID` · `PRIVY_APP_SECRET` · `PRIVY_WALLET_ID` | `tools/crypto/helpers.rs` | — | Privy agentic wallet (through `env_reads`) |
-| `PRIVY_API_URL` | `tools/crypto/helpers.rs` | `https://api.privy.io` | Privy base URL; `[keys.env] PRIVY_API_URL = "privy"` = the seal proxy (session, no `PRIVY_APP_SECRET`; `strip` it — required). Scope-checked only when set |
-| `TENGU_BRIDGE_*` (`AGENT`, `TOOLS`, `WORKSPACE`, `GRANT_WORKSPACE`, `SCOPES`, `MCP_SERVERS`, `SUMMARY_FILE`, `TRANSCRIPT_FILE`, `MAX_RESULT_CHARS`) | `inbound/mcp_bridge.rs` (names: `outbound/bridge_env.rs`) | set by the Claude Code engine | engine → bridge contract — `docs/mcp-bridge.md` |
+| `PRIVY_APP_ID` · `PRIVY_APP_SECRET` · `PRIVY_WALLET_ID` | `tools/crypto/helpers.rs`; `PRIVY_APP_ID` also `outbound/solana/privy.rs` | — | Privy agentic wallet (through `env_reads`); the Solana write tools' wallet is `[solana] privy_wallet_id`, not `PRIVY_WALLET_ID` |
+| `PRIVY_API_URL` | `tools/crypto/helpers.rs`, `outbound/solana/privy.rs` | `https://api.privy.io` (crypto tools) | Privy base URL; `[keys.env] PRIVY_API_URL = "privy"` = the seal proxy (session, no `PRIVY_APP_SECRET`; `strip` it — required). Crypto tools: scope-checked only when set. Solana write tools: required, through `env_reads`, and must be the seal proxy with a session |
+| `TENGU_KEYS_PROXY` · `TENGU_KEYS_SESSION_TOKEN` · `TENGU_KEYS_SESSION_EXP_MS` | set by `outbound/keys::install`; read by its children, `keys::auth_header_for` / `header_mode` | unset (no `[keys]`) | seal-proxy origin, session token (redacted: ends in `_TOKEN`), expiry; a child reuses a session with > 5 min left |
+| `SSH_AUTH_SOCK` | `outbound/keys/mod.rs` | — | the SSH agent that signs the session request (`[keys] agent_socket` overrides) |
+| `TENGU_BRIDGE_*` (`AGENT`, `TOOLS`, `WORKSPACE`, `GRANT_WORKSPACE`, `SCOPES`, `MCP_SERVERS`, `SUMMARY_FILE`, `TRANSCRIPT_FILE`, `MAX_RESULT_CHARS`) | `inbound/mcp_bridge.rs` (names: `outbound/bridge_env.rs`) | set by the Claude Code and Codex engines | engine → bridge contract — `docs/mcp-bridge.md` |
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE` · `_OVERLAP` | forwarded by `engines/claude_code.rs` | unset | read by nothing — the bridge takes `[memory]` from its config |
 | `TENGU_TUI_METRICS` · `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | metrics line · planner recall hits as System bubbles |
 | `TENGU_GPU_HINT` · `CUDA_VISIBLE_DEVICES` | `config/mod.rs::detect_gpu` | auto-detect | `none\|cpu\|off\|false` or `gpu\|cuda\|metal\|mps\|on\|true` for `runtime_profile = "auto"` |
 | `NO_COLOR` | `inbound/eval.rs` | unset | plain eval table |
 | `RUST_LOG` | `cli/mod.rs` (`tracing_subscriber::EnvFilter`) | `tengu=info` | log filter; one `metrics` line per LLM call at info |
 | Claude CLI child env | `engines/claude_code.rs` | — | strips a parent Claude Code session's vars (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_*` but auth / provider) and `ANTHROPIC_API_KEY` |
+| Codex CLI child env | `engines/codex.rs::stripped_env` | — | strips `OPENAI_API_KEY` and every `CODEX_*` but `CODEX_HOME` / `CODEX_CA_CERTIFICATE` (the ChatGPT login bills, never an API key); adds `[egress]` `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when the LLM API is proxied |
 | `LYREBIRD_RS_DIR` · `NETWORK` · `SANDBOX` | `Makefile` | `../lyrebird-rs` · the config's `[egress] network` · none | Tor image source · compose network · sandbox config to mount |
 | `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `openrouter,telegram` · 7080 | image features · host port |
 | Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_REGEN_SOURCE_EVAL` (the source eval set), `TENGU_REGEN_GOLDEN` (Studio graph goldens), `TENGU_REGEN_SOE_STATE` (the SOE fixture state root), `SOE_CASE` (one synthetic SOE cycle case), `TENGU_CAPTURE_FIXTURES` |
@@ -557,10 +607,12 @@ tengu sources --sandbox soe list                          # the source registry;
 |---|---|---|
 | `openrouter` | on | marker only — no code is gated on it; OpenRouter and `local` engines are always built |
 | `telegram` | on | Telegram bot channel |
+| `studio` | on | the `tengu studio` local server (loopback; `web/studio/` embedded) incl. the builder (`--allow-edit`); `tengu studio graph` and `tengu sandbox compile` work without it |
+| `codex` | on | `engine = "codex"` (the Codex CLI is spawned only when an agent names the engine) |
+| `a2a` | on | the `tengu a2a serve` server; the `a2a` tool and `tengu a2a send` need no feature |
 | `claude_code` | off | Claude Code CLI backend |
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `tengu agentic-memory-server` |
 | `webhooks` | off | `tengu webhooks`, webhook routes under `tengu run` |
-| `studio` | off | the `tengu studio` local server (loopback; `web/studio/` embedded); `tengu studio graph` works without it |
 
 ## Validation summary
 
@@ -569,7 +621,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
 | no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
 | `workspace_tools` outside `WORKSPACE_TOOLS` | `[telegram] tool_approvals` / `approve_only` set (not implemented) |
-| `[egress]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[generation]`, `[strategy_ranking]`, `[sources]`, `[soe]`, `[studio]`, `[feeds]`, `[decision_loops]` rules (sections above) | an unset `${VAR}` (stays literal) |
+| `[egress]`, `[keys]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[generation]`, `[strategy_ranking]`, `[sources]`, `[soe]`, `[studio]`, `[a2a]`, `[feeds]`, `[decision_loops]` rules (sections above) | an unset `${VAR}` (stays literal) · an agent holding `a2a` with no `[a2a.remotes.*]` |
 
 ## Reset
 
@@ -591,3 +643,4 @@ tengu prune --sandbox <name> --hard      # empties each workspace root (every ch
 - `docs/engine-backends.md` · `docs/skills.md` · `docs/tools.md` · `docs/webhooks-2026-05-11.md`
 - `docs/runtime-2026-09-30.md` · `docs/xmarket-risk-paper-2026-09-30.md` · `docs/xlab-2026-10-01.md` · `docs/source-evidence-2026-10-08.md`
 - `docs/lineage-2026-10-06.md` · `docs/strategy-ranking-automation-2026-10-08.md` · `docs/soe-2026-10-08.md` · `docs/studio-2026-10-08.md`
+- `docs/sealed-keys-2026-10-09.md` · `docs/a2a-2026-10-10.md` · `docs/studio-builder-2026-10-10.md`

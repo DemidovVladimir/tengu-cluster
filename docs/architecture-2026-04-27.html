@@ -45,6 +45,7 @@
     --trc: #67E8F9;
     --std: #C4B5FD;
     --a2a: #93C5FD;
+    --keys: #FCA5A5;
     --ok: #16A34A;
     --warn: #CA8A04;
     --info: #0891B2;
@@ -198,7 +199,9 @@
   .sys-card.soe { border-top-color: var(--soe); }
   .sys-card.trace { border-top-color: var(--trc); }
   .sys-card.studio { border-top-color: var(--std); }
+  .sys-card.builder { border-top-color: var(--std); }
   .sys-card.a2a { border-top-color: var(--a2a); }
+  .sys-card.keys { border-top-color: var(--keys); }
   .sys-card .title {
     font-size: 14px; font-weight: 700; margin-bottom: 4px;
   }
@@ -309,7 +312,7 @@
 
 <div class="header">
   <h1>Tengu-Cluster · Architecture Explorer</h1>
-  <div class="sub">2026-04-27 · synced 2026-10-10 · walk the chat turn and the three other flows, expand subsystem cards (incl. SOE O3 / O4, execution trace, Tengu Studio), search the file map · companion to architecture-2026-04-27.{md,svg}</div>
+  <div class="sub">2026-04-27 · synced 2026-10-13 · walk the chat turn and the three other flows, expand subsystem cards (incl. SOE O3 / O4, execution trace, Tengu Studio, the builder + Codex, A2A, the seal proxy + Privy Solana signing), search the file map · companion to architecture-2026-04-27.{md,svg}</div>
 </div>
 
 <div class="tabs">
@@ -545,6 +548,21 @@
         <td><code>tengu studio</code> (<code>/api/v1/graph?map=&lt;sha256&gt;</code>, re-hashed, re-applied)</td>
         <td><code>tengu prune</code> deletes <code>logs/</code></td>
       </tr>
+      <tr><td class="grp" colspan="5">Builder + seal proxy (2026-10-10 → 2026-10-13)</td></tr>
+      <tr>
+        <td>sandboxes/&lt;n&gt;/builder.json · config.toml.prev</td>
+        <td>the builder's canvas (<code>deny_unknown_fields</code>) · the config Finalise replaced</td>
+        <td>the builder (<code>adapters/outbound/builder_store.rs</code>, atomic writes)</td>
+        <td>the builder, <code>tengu sandbox compile</code></td>
+        <td>none</td>
+      </tr>
+      <tr>
+        <td>process env only: TENGU_KEYS_SESSION_TOKEN (+ _PROXY, _SESSION_EXP_MS)</td>
+        <td>the seal-proxy session (24 h default, ≤ 168 h); no provider key anywhere on disk</td>
+        <td><code>outbound/keys::install</code></td>
+        <td>every routed client; <code>run-agent</code> / <code>mcp-bridge</code> children reuse it</td>
+        <td>its <code>exp_ms</code> (not refreshed in-process)</td>
+      </tr>
     </tbody>
   </table>
   </div>
@@ -580,7 +598,7 @@
     <div class="mech-card">
       <div class="label">Implicit contract</div>
       <h3>D. compress_and_store is implicit, not declared</h3>
-      <p>Never list compress_and_store in [agents.*].tools — the runner appends it to every subagent automatically. Used to mark "I'm done." Middle-ground protocol: only Failed when no text emitted AND no compress_and_store called. Otherwise OK with a tracing warn. A Claude Code step's bridge writes the summary to <code>TENGU_BRIDGE_SUMMARY_FILE</code>, then the engine ends the CLI run.</p>
+      <p>Never list compress_and_store in [agents.*].tools — the runner appends it to every subagent automatically. Used to mark "I'm done." Middle-ground protocol: only Failed when no text emitted AND no compress_and_store called. Otherwise OK with a tracing warn. A Claude Code or Codex step's bridge writes the summary to <code>TENGU_BRIDGE_SUMMARY_FILE</code>, then the engine ends the CLI run.</p>
       <div class="ref">adapters/inbound/cli/run_agent.rs::run_agent_subprocess (Phase 5c)</div>
     </div>
     <div class="mech-card">
@@ -592,22 +610,22 @@
     <div class="mech-card">
       <div class="label">Multi-turn UX</div>
       <h3>F. C → B fallback — composed agents, two turns</h3>
-      <p>Turn 1 (C): planner emits Direct asking the user to confirm closest match. Turn 2 (B): on confirmation, planner emits Plan with Step.compose set. Child loads the base agent's [agents.*] block, OVERRIDES skill_packages+tools for this run only. No persistence — config on disk unchanged. In a hardened sandbox (<code>[risk]</code> / Solana signer) compose may only narrow the base.</p>
+      <p>Turn 1 (C): planner emits Direct asking the user to confirm closest match. Turn 2 (B): on confirmation, planner emits Plan with Step.compose set. Child loads the base agent's [agents.*] block, OVERRIDES skill_packages+tools for this run only. No persistence — config on disk unchanged. In a hardened sandbox (<code>[risk]</code> / <code>[soe]</code> / Solana signer) compose may only narrow the base.</p>
       <div class="ref">domain/plan.rs::AgentCompose · bootstrap::tools::compose_agent</div>
     </div>
 
     <div class="mech-card">
-      <div class="label">Phase 7.3 · local 2026-09-23</div>
-      <h3>G. [agents.*].engine — three backends</h3>
-      <p>Each <code>[agents.&lt;name&gt;]</code> block declares <code>engine = "openrouter"</code>, <code>"local"</code> (any OpenAI-compatible server on the host, direct, never via the proxy) or <code>"claude_code"</code> (same field as in-process agents). Model slug format depends on engine: OpenRouter wants <code>anthropic/claude-sonnet-4-6</code>; Claude Code wants bare <code>claude-sonnet-4-6</code>; local sends the server's own id. Mixed-mode (planner = OpenRouter, subagents = Claude Code) is the verified pattern — Claude Code as planner bypasses orchestration because its MCP tool access is set at engine-construction time.</p>
-      <div class="ref">[agents.&lt;name&gt;].engine — engines::build_engine · build_step_engine</div>
+      <div class="label">Phase 7.3 · local 2026-09-23 · codex 2026-10-10</div>
+      <h3>G. [agents.*].engine — four backends</h3>
+      <p>Each <code>[agents.&lt;name&gt;]</code> block declares <code>engine = "openrouter"</code>, <code>"local"</code> (any OpenAI-compatible server on the host, direct, never via the proxy), <code>"claude_code"</code> or <code>"codex"</code> (the OpenAI Codex CLI on the ChatGPT subscription; refused in a hardened sandbox) — the same field as in-process agents. Model slug format depends on engine: OpenRouter wants <code>anthropic/claude-sonnet-4-6</code>; Claude Code wants bare <code>claude-sonnet-4-6</code>; Codex a bare OpenAI id (<code>gpt-5.5</code>); local sends the server's own id. Mixed-mode (planner = OpenRouter, subagents = Claude Code) is the verified pattern — Claude Code as planner bypasses orchestration because its MCP tool access is set at engine-construction time; Codex keeps its own built-in shell even on a tool-less planner turn — keep the planner on OpenRouter.</p>
+      <div class="ref">[agents.&lt;name&gt;].engine — config::ENGINES · engines::build_engine · build_step_engine</div>
     </div>
 
     <div class="mech-card">
       <div class="label">Phase 7.4 · parity 2026-09-30</div>
-      <h3>H. Claude Code agents see tengu's tools via MCP</h3>
-      <p>run_agent_subprocess sets <code>EngineContext.bridge_tools = Some(tools)</code> when the agent's <code>engine == "claude_code"</code>. Claude Code spawns <code>tengu mcp-bridge</code>, which advertises tengu's tools as <code>mcp__tengu-tools__&lt;name&gt;</code> and runs them as the calling agent (<code>TENGU_CONFIG</code> + <code>TENGU_BRIDGE_AGENT</code>: its scopes, sandbox sections, redaction). The CLI merges the MCP config's <code>env</code> over its own env, so secrets such as <code>OPENROUTER_API_KEY</code> arrive by inheritance — never written into the <code>--mcp-config</code> file; only non-secret values are (<code>TENGU_BRIDGE_*</code>, <code>TENGU_EGRESS</code>, <code>TENGU_SESSION_ID</code>, <code>TENGU_SECRETS_LOADED</code> key names).</p>
-      <div class="ref">engines/claude_code.rs::build_mcp_config_json — inbound/mcp_bridge.rs::build_bridge_executor — outbound/bridge_env.rs</div>
+      <h3>H. Claude Code and Codex agents see tengu's tools via MCP</h3>
+      <p>run_agent_subprocess sets <code>EngineContext.bridge_tools = Some(tools)</code> when the agent's engine bridges tools (<code>engines::bridges_tools</code>: <code>claude_code</code>, <code>codex</code>). Claude Code spawns <code>tengu mcp-bridge</code> from <code>--mcp-config</code>, Codex from <code>-c mcp_servers.tengu-tools.*</code> (one env contract, <code>bridge_env::bridge_env</code>); the bridge serves tengu's tools (Claude sees <code>mcp__tengu-tools__&lt;name&gt;</code>) and runs them as the calling agent (<code>TENGU_CONFIG</code> + <code>TENGU_BRIDGE_AGENT</code>: its scopes, sandbox sections, redaction). The CLI merges the MCP config's <code>env</code> over its own env, so secrets such as <code>OPENROUTER_API_KEY</code> arrive by inheritance — never written into the <code>--mcp-config</code> file; only non-secret values are (<code>TENGU_BRIDGE_*</code>, <code>TENGU_EGRESS</code>, <code>TENGU_SESSION_ID</code>, <code>TENGU_SECRETS_LOADED</code> key names).</p>
+      <div class="ref">engines/claude_code.rs::build_mcp_config_json · engines/codex.rs — inbound/mcp_bridge.rs::build_bridge_executor — outbound/bridge_env.rs</div>
     </div>
 
     <div class="mech-card">
@@ -627,15 +645,15 @@
     <div class="mech-card">
       <div class="label">Phase 7.7</div>
       <h3>K. WORKSPACE_TOOLS — single constant</h3>
-      <p>Opt-in tools — <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, <code>manage_skill</code>, the Solana, Hyperliquid, xmarket, xlab (incl. <code>strategy_ranking</code>) and sources families — are one <code>pub(crate) const WORKSPACE_TOOLS</code> in <code>domain/tools.rs</code> (beside <code>XM_TOOLS</code>, <code>XM_EXEC_TOOLS</code>, <code>SOLANA_WRITE_TOOLS</code>). Config validation checks against it; <code>bootstrap::tools::subagent_config</code> merges the names in <code>tools</code> that match it into <code>workspace_tools</code>; the bridge filters against it.</p>
+      <p>Opt-in tools — <code>agentic_memory</code>, <code>shared_cache</code>, <code>persistent_store</code>, <code>skill_distill</code>, <code>apply_improver_proposal</code>, <code>manage_skill</code>, the Solana, Hyperliquid, xmarket, xlab (incl. <code>strategy_ranking</code>), sources, SOE families and <code>a2a</code> (38 names) — are one <code>pub(crate) const WORKSPACE_TOOLS</code> in <code>domain/tools.rs</code> (beside <code>XM_TOOLS</code>, <code>XM_EXEC_TOOLS</code>, <code>SOLANA_WRITE_TOOLS</code>). Config validation checks against it; <code>bootstrap::tools::subagent_config</code> merges the names in <code>tools</code> that match it into <code>workspace_tools</code>; the bridge filters against it.</p>
       <div class="ref">domain::tools::WORKSPACE_TOOLS</div>
     </div>
 
     <div class="mech-card">
       <div class="label">2026-09-16</div>
       <h3>L. Every LLM network path goes through egress.rs</h3>
-      <p><code>[egress] network = "tor"</code> is the default: proxy <code>socks5h://127.0.0.1:9050</code> (<code>TENGU_TOR_PROXY</code> overrides — the <code>deploy/tor/</code> Arti + lyrebird-rs container), <code>route_llm_api</code> on; <code>network = "open"</code> is plain internet (xmarket / xlab add an <code>allow_hosts</code> ceiling). The <em>resolved</em> config is handed to <code>run-agent</code> / <code>mcp-bridge</code> children as <code>TENGU_EGRESS</code>. <code>http_request</code>, crypto, Hyperliquid, GeckoTerminal, SEC EDGAR, EU TED and Solana RPC use the proxied tool client; OpenRouter, embeddings and Jev the LLM client; the Claude Code CLI gets <code>HTTPS_PROXY</code> (HTTP CONNECT on the SOCKS port); Telegram a proxied reqwest 0.11 client. Feed and loop calls carry their own agent / session / call id on the JSONL audit (<code>AttributedExecutor</code>).</p>
-      <div class="ref">egress::install · resolved · tool_client · llm_api_client · check_url · shell_command · guard_shell · claude_cli_env · AttributedExecutor · docs/egress-2026-09-16.md</div>
+      <p><code>[egress] network = "tor"</code> is the default: proxy <code>socks5h://127.0.0.1:9050</code> (<code>TENGU_TOR_PROXY</code> overrides — the <code>deploy/tor/</code> Arti + lyrebird-rs container), <code>route_llm_api</code> on; <code>network = "open"</code> is plain internet (xmarket / xlab add an <code>allow_hosts</code> ceiling). The <em>resolved</em> config is handed to <code>run-agent</code> / <code>mcp-bridge</code> children as <code>TENGU_EGRESS</code>. <code>http_request</code>, crypto, Hyperliquid, GeckoTerminal, SEC EDGAR, EU TED, Solana RPC and the Privy Solana signer use the proxied tool client; OpenRouter, embeddings, Jev and the seal proxy's <code>/session</code> the LLM client; A2A remotes the peer client (loopback direct); the Claude Code and Codex CLIs get <code>HTTPS_PROXY</code> (HTTP CONNECT on the SOCKS port); Telegram a proxied reqwest 0.11 client. Feed and loop calls carry their own agent / session / call id on the JSONL audit (<code>AttributedExecutor</code>).</p>
+      <div class="ref">egress::install · resolved · tool_client · llm_api_client · peer_client · check_url · shell_command · guard_shell · claude_cli_env · AttributedExecutor · docs/egress-2026-09-16.md</div>
     </div>
 
     <div class="mech-card">
@@ -685,6 +703,20 @@
       <h3>S. The browser draws; Rust decides (Studio)</h3>
       <p>Studio's page owns no workflow, risk, scope or colour rule: the graph (layout included), each status's tone, a run's board at a <code>seq</code> and every control verdict come from Rust over the trace each run writes once. Play / Stop never reach a <code>[generation]</code>-bound or hardened sandbox.</p>
       <div class="ref">domain/workflow.rs · domain/trace.rs::Status::tone · application/studio/{board,control}.rs · config/studio.rs::control_policy</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">2026-10-10</div>
+      <h3>T. A2A peers are named, pinned and served fail-closed</h3>
+      <p>An agent reaches another harness only through a remote the sandbox names (<code>[a2a.remotes.&lt;name&gt;]</code>), and only at that remote's own hosts — a card cannot send the request or the credential elsewhere. <code>tengu a2a serve</code> runs no turn without the bearer token (an open server only on loopback, never in a hardened sandbox) and never serves a private agent.</p>
+      <div class="ref">config/a2a.rs · adapters/outbound/a2a/mod.rs · adapters/inbound/a2a.rs · bootstrap/a2a.rs</div>
+    </div>
+
+    <div class="mech-card">
+      <div class="label">2026-10-09 → 2026-10-13</div>
+      <h3>U. No provider key on this machine (seal proxy)</h3>
+      <p>Provider keys are secrets of the <code>tengu-seal</code> Cloudflare Worker; tengu holds only a session signed by an SSH-agent key (Touch ID for the attended key) and calls <code>&lt;proxy&gt;/&lt;route&gt;</code> — existing clients unchanged (<code>[keys.env]</code> exports). Each route takes its key at exactly one spot, so a session can use a key but never copy it out; a failed session unsets the routed vars and <code>strip</code> removes local copies, so nothing falls back to a local key. The Solana write tools sign with a Privy wallet (<code>[solana] privy_wallet_id</code>) on the same route; every returned signature is checked before sending.</p>
+      <div class="ref">config/keys.rs · adapters/outbound/keys/ · crates/tengu-seal · cloudflare/seal-worker · adapters/outbound/solana/privy.rs</div>
     </div>
   </div>
 </div>
@@ -772,7 +804,7 @@ const STEPS = [
       { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "the orchestrating function" },
       { path: "src/bootstrap/tools.rs::build_subprocess_tool_executor", desc: "(base tools ∩ agent.tools) ∪ {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools (∩ tools); subagent_config merges workspace-tool opt-ins from tools" },
       { path: "src/bootstrap/tools.rs::workspace_or_temp · compose_agent", desc: "the step's workspace; composed agents (hardened: narrow only)" },
-      { path: "src/adapters/outbound/engines/mod.rs::build_step_engine", desc: "a Claude Code step's bridge gets the workspace grant + a summary file for compress_and_store" },
+      { path: "src/adapters/outbound/engines/mod.rs::build_step_engine", desc: "a Claude Code or Codex step's bridge gets the workspace grant + a summary file for compress_and_store (engines::bridges_tools)" },
       { path: "src/adapters/outbound/egress.rs", desc: "tool_client (proxy, redirects off) / llm_api_client / shell_command — the network policy every tool call goes through" },
       { path: "src/adapters/outbound/tools/ + src/adapters/outbound/mcp_client/", desc: "the actual tools (catalog) + [[mcp_servers]] proxies" },
       { path: "src/application/chat/tool_loop.rs::run_single_engine_turn", desc: "one LLM turn; tool_result_content caps results" },
@@ -781,7 +813,7 @@ const STEPS = [
   },
   {
     num: 7, title: "compress_and_store → durable summary", lane: "mem",
-    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it (a Claude Code step's bridge writes it to TENGU_BRIDGE_SUMMARY_FILE), writes the LLM-summarised output to durable memory, and exits cleanly with the summary in the IPC output JSON. postgres_memory builds write Postgres agentic_memory (try_persist_agentic_step_summary) with embeddings when available; without the feature the summary only travels back over IPC.",
+    what: "Out-of-band detection in the child process: when the model emits a compress_and_store tool call, the runner intercepts it (a Claude Code or Codex step's bridge writes it to TENGU_BRIDGE_SUMMARY_FILE), writes the LLM-summarised output to durable memory, and exits cleanly with the summary in the IPC output JSON. postgres_memory builds write Postgres agentic_memory (try_persist_agentic_step_summary) with embeddings when available; without the feature the summary only travels back over IPC.",
     files: [
       { path: "src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs", desc: "the tool definition only (implicit on every subagent)" },
       { path: "src/adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary", desc: "the durable write (postgres_memory)" },
@@ -1036,6 +1068,7 @@ const SUBSYSTEM_GROUPS = [
   { title: "Execution trace + Tengu Studio (2026-10-09)", keys: ["trace", "studio"] },
   { title: "Studio builder + Codex engine (2026-10-10)", keys: ["builder"] },
   { title: "Other agent harnesses (2026-10-10)", keys: ["a2a"] },
+  { title: "Seal proxy + Privy Solana signing (2026-10-09 → 2026-10-13)", keys: ["keys"] },
 ];
 
 const SUBSYSTEMS = [
@@ -1071,9 +1104,9 @@ const SUBSYSTEMS = [
     key: "agents", title: "[agents.*] — agents in the sandbox config",
     subtitle: "no agents/ directory, no separate spec — the same AgentConfig, routable when description is set, private when not (and not default). Edit a block, restart chat, registry regenerated.",
     files: [
-      ["config/mod.rs::AgentConfig", "one struct (deny_unknown_fields) for in-process agents, subagents and loop / feed agents — engine, model, description, example_queries, tools, skill_packages (skills alias), workspace, scopes, limits.max_tool_rounds / step_timeout_secs, identity, claude_code"],
-      ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest], [generation], [sources] (+ its state dir), [soe], [strategy_ranking] on every surface"],
-      ["sandboxes/<name>/config.toml", "one config per sandbox: control-loop-lab, lping, jev-exec, xmarket, xmarket-weekend, xlab, xlab-w2, soe, tor-check, storage-test, unlimited"],
+      ["config/mod.rs::AgentConfig", "one struct (deny_unknown_fields) for in-process agents, subagents and loop / feed agents — engine, model, description, example_queries, tools, skill_packages (skills alias), workspace, scopes, limits.max_tool_rounds / step_timeout_secs, identity, claude_code, local, codex (sandbox, cli_path)"],
+      ["config/sections.rs::SandboxSections", "AgentConfig::sandbox — [xmarket], [risk], [paper], calendars, [rate_limits], [recorder], [backtest], [generation], [sources] (+ its state dir), [soe], [strategy_ranking], [a2a], [solana] privy_wallet_id on every surface"],
+      ["sandboxes/<name>/config.toml", "one config per sandbox: a2a-lab, control-loop-lab, lping, jev-exec, sealed-check, xmarket, xmarket-weekend, xlab, xlab-w2, soe, tor-check, storage-test, unlimited; tengu sandbox new adds more (the builder)"],
       ["application/orchestrator/shared_files.rs::routable_agents", "blocks with a description → TENGU_PLANNER_REGISTRY.md"],
       ["bootstrap/tools.rs::subagent_config", "merges workspace-tool names listed in tools into workspace_tools"],
       ["adapters/inbound/cli/run_agent.rs::run_agent_subprocess", "loads the parent config first, then config.agents.get(name)"],
@@ -1139,13 +1172,13 @@ const SUBSYSTEMS = [
       ["config/egress.rs::EgressConfig", "network tor|open (default tor), proxy (socks5h only), route_llm_api, allow_hosts / deny_hosts, https_only, shell_network proxy_env|isolated, audit / audit_log"],
       ["resolved()", "fills proxy (TENGU_TOR_PROXY or socks5h://127.0.0.1:9050 — the deploy/tor/ Arti + lyrebird-rs container) and route_llm_api from network; children get this resolved config as TENGU_EGRESS"],
       ["install / policy", "process-wide, once — main, load_sandbox_or, run-agent, mcp-bridge"],
-      ["tool_client / llm_api_client / mcp_client", "the only HTTP clients on LLM paths; tool client has redirects off so http_request re-checks every hop"],
+      ["tool_client / llm_api_client / mcp_client / peer_client", "the only HTTP clients on LLM paths; tool client has redirects off so http_request re-checks every hop; peer_client = A2A remotes (loopback direct); the seal proxy rides llm_api_client"],
       ["check_url / guard_shell / shell_command", "host ceiling per hop; URL audit for shells; sandbox-exec under isolated"],
-      ["claude_cli_env / http_connect_proxy / claude_code_profile", "HTTPS_PROXY (HTTP CONNECT on the SOCKS port) for the Claude Code CLI; builtin Bash dropped while proxied"],
+      ["claude_cli_env / http_connect_proxy / claude_code_profile", "HTTPS_PROXY (HTTP CONNECT on the SOCKS port) for the Claude Code and Codex CLIs; Claude's builtin Bash dropped while proxied (Codex's shell has no network)"],
       ["AttributedExecutor / CallScope", "a tengu run feed's or loop's calls carry their own agent / session / call id on the audit"],
       ["warn_if_proxy_unreachable", "one startup warning from the parent CLI; tengu doctor prints the resolved network"],
     ],
-    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: control-loop-lab (Jev only), lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab, xlab-w2, soe (the last five under an allow_hosts ceiling). Operator doc: docs/egress-2026-09-16.md.",
+    deep: "Every http_request hop and network-looking shell command lands in <TENGU_HOME>/logs/egress.jsonl. TelegramPipe::build_bot builds a proxied reqwest 0.11 client from the same policy (30s connect / 60s timeout). build_tool_executor takes no HTTP client argument, so nothing can hand in an unproxied one. Open-network sandboxes: control-loop-lab (Jev only), a2a-lab (loopback self-call), lping, jev-exec, unlimited, xmarket, xmarket-weekend, xlab, xlab-w2, soe, sealed-check (the last six under an allow_hosts ceiling; sealed-check: 127.0.0.1 + *.workers.dev). Operator doc: docs/egress-2026-09-16.md.",
   },
   {
     key: "runtime", title: "tengu run — runtime supervisor (2026-09-30)",
@@ -1195,20 +1228,21 @@ const SUBSYSTEMS = [
   },
   {
     key: "tools", title: "tool families (opt-in, WORKSPACE_TOOLS)",
-    subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research + ranking, sources, SOE stages — each a plugin, one catalog row per tool.",
+    subtitle: "Solana LP read + write, Hyperliquid, xmarket risk / paper, xlab research + ranking, sources, SOE stages, A2A — each a plugin, one catalog row per tool.",
     files: [
-      ["adapters/outbound/tools/solana/", "11 observe/plan tools (sol_price … lp_decide) + 5 write tools (simulate default; send = signer + a wallet grant on a private agent)"],
-      ["adapters/outbound/solana/", "SolanaRpc, cache-through account reads, JSON fetch, read planning, send pipeline, signer, writes store"],
+      ["adapters/outbound/tools/solana/", "11 observe/plan tools (sol_price … lp_decide) + 5 write tools (simulate default; send = [solana] privy_wallet_id — Privy through the seal proxy — + a wallet grant on a private agent)"],
+      ["adapters/outbound/solana/", "SolanaRpc, cache-through account reads, JSON fetch, read planning, send pipeline, PrivySigner (privy.rs) + the one-shot LocalKeypair (signer.rs), writes store"],
       ["adapters/outbound/tools/hyperliquid/", "hl_ctx (dex sweep or ≤ 64 coins → mkt_ctx/1 + mkt_instrument/1), hl_book (hl_book/1)"],
       ["adapters/outbound/hyperliquid/info.rs", "HlInfo — POST /info over the scoped egress client, [rate_limits.hyperliquid] weights"],
       ["adapters/outbound/tools/xm/", "risk_status, paper_positions; exec tools paper_order, paper_close, xm_exits, xm_weekend_fade"],
       ["adapters/outbound/tools/xlab/", "market_history, backtest (read-only), strategy_ranking (run | latest)"],
       ["adapters/outbound/tools/sources/", "source_evidence — source_asof/1, read-only (agents never fetch)"],
       ["adapters/outbound/tools/soe/", "soe_view (read-only), soe_propose, soe_challenge — the weekly cycle's stage tools, writes through application::soe::submit"],
-      ["domain/tools.rs", "WORKSPACE_TOOLS (37), DEFAULT_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS, SOE_ALLOWED, SIDE_EFFECT_TOOLS"],
+      ["adapters/outbound/tools/a2a/", "a2a — list · card · send · get · cancel on [a2a.remotes.<name>] only (A2A card)"],
+      ["domain/tools.rs", "WORKSPACE_TOOLS (38), DEFAULT_TOOLS, XM_TOOLS, XM_EXEC_TOOLS, SOLANA_WRITE_TOOLS, PRIVY_SIGNING_TOOLS, SOE_ALLOWED, SIDE_EFFECT_TOOLS"],
       ["adapters/outbound/rate_limit.rs · http_class.rs · domain/backoff.rs", "named budgets per process · HTTP → ErrorClass + URL scrubber · backoff, token bucket, breaker"],
     ],
-    deep: "The hidden tengu tool list prints every catalog name: 50 in a build without postgres_memory (14 default + 36 opt-in; agentic_memory joins with it). In a [generation]-bound sandbox the executor and the bridge drop a tool the generation refuses (bootstrap::tools::within_generation). Every tool works under openrouter, local and claude_code — see engine parity.",
+    deep: "The hidden tengu tool list prints every catalog name: 51 in a build without postgres_memory (14 default + 37 opt-in; agentic_memory joins with it). In a [generation]-bound sandbox the executor and the bridge drop a tool the generation refuses (bootstrap::tools::within_generation). Every tool works under openrouter, local, claude_code and codex — see engine parity.",
   },
   {
     key: "xmarket", title: "xmarket — risk gate, paper ledger, fill engine, kill switch, exits, weekend fade",
@@ -1247,9 +1281,9 @@ const SUBSYSTEMS = [
   },
   {
     key: "parity", title: "engine parity (E0) + hardening (2026-09-30 / 2026-10-01)",
-    subtitle: "every tool works under openrouter, local and claude_code — operator rule, no exceptions.",
+    subtitle: "every tool works under openrouter, local, claude_code and codex — operator rule, no exceptions.",
     files: [
-      ["adapters/outbound/tools/schema_lint.rs", "every engine-facing schema in the subset all three accept; mcp_client::linted_tool drops the rest at discovery"],
+      ["adapters/outbound/tools/schema_lint.rs", "every engine-facing schema in the subset every engine accepts; mcp_client::linted_tool drops the rest at discovery"],
       ["tests/bridge_conformance.rs", "same text + rows in-process (tengu tool call) and through a real tengu mcp-bridge"],
       ["tests/engine_matrix.rs", "live legs per engine × model × tool set; every_catalog_tool_has_a_live_leg"],
       ["adapters/inbound/cli/tool.rs", "hidden tengu tool list / call / turn"],
@@ -1257,8 +1291,9 @@ const SUBSYSTEMS = [
       ["adapters/inbound/mcp_bridge.rs · adapters/outbound/bridge_env.rs", "the bridge runs tools as the agent (TENGU_CONFIG + TENGU_BRIDGE_AGENT), call id mcp:<nonce>:<id>"],
       ["adapters/outbound/engines/claude_code.rs::cli_args", "--strict-mcp-config always; builtin_tools_profile none ⇒ no settings, hooks, plugins, skills, CLAUDE.md"],
       ["adapters/outbound/engines/local.rs", "Engine::tool_result_char_cap — tool results fit the local window"],
+      ["adapters/outbound/engines/codex.rs", "codex exec --json, --ignore-user-config --ignore-rules --ephemeral, -s read-only | workspace-write, integrations off, the bridge via -c mcp_servers.tengu-tools.*"],
     ],
-    deep: "Hardened sandboxes ([risk] or a Solana signer, config/hardening.rs): claude_code only with builtin_tools_profile = \"none\", no [[mcp_servers]], no shell scope, no shell skills; a plan step's compose may only narrow. Docs: docs/engine-backends.md § Engine matrix, docs/mcp-bridge.md.",
+    deep: "Hardened sandboxes ([risk], [soe] or a Solana signer — [solana] privy_wallet_id —, config/hardening.rs): claude_code only with builtin_tools_profile = \"none\", no codex agent, no [[mcp_servers]], no shell scope, no shell skills, no unauthenticated [a2a.server]; a plan step's compose may only narrow. The engine matrix's 11 codex_* legs (open sets) are not run live yet. Docs: docs/engine-backends.md § Engine matrix, docs/mcp-bridge.md.",
   },
   {
     key: "lineage", title: "research lineage + evidence (2026-10-06; Phase 6 2026-10-08)",
@@ -1342,9 +1377,9 @@ const SUBSYSTEMS = [
       ["config/studio.rs", "[studio] control (default false); control_policy: never [generation]-bound or hardened ([risk], [soe], signer), --allow-control included"],
       ["adapters/inbound/studio/", "axum server (feature studio, default): GET /api/v1/ meta, graph, health, runs, runs/:run_id/{events,board,stream}, nodes/:node_id, live/stream, control; POST /api/v1/control/{play,stop,event}; guard.rs: loopback only, per-process token, Host / Origin / CSRF, CSP"],
       ["web/studio/", "index.html, studio.css, studio.js — embedded with include_str!; draws only"],
-      ["adapters/inbound/cli/studio.rs", "tengu studio --sandbox <s> [--port --bind --allow-control] · tengu studio graph [--map] (every build)"],
+      ["adapters/inbound/cli/studio.rs", "tengu studio --sandbox <s> [--port --bind --allow-control --allow-edit --open] (--allow-edit: the builder at /builder) · tengu studio graph [--map] (every build)"],
     ],
-    deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The editor (ST-40) is design only until Operator Review #3. Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
+    deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The ST-40 editor design is built as the Studio builder (see that card; --allow-edit). Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
   },
   {
     key: "builder", title: "Studio builder (2026-10-10)",
@@ -1359,7 +1394,7 @@ const SUBSYSTEMS = [
       ["adapters/outbound/engines/codex.rs", "engine = codex: the OpenAI ChatGPT subscription through codex exec; tengu tools over the MCP bridge; refused in hardened sandboxes"],
       ["web/studio/builder.*", "the canvas — draws only; wire colours from Rust; green current on live wires"],
     ],
-    deep: "View-only: a sandbox without builder.json, [generation]-bound or hardened. The Cloudflare seal-proxy store is probed (keys_supported) and lights up once the build knows [keys] (PR #50). Debug: tengu sandbox compile prints the TOML + every issue pinned to a card or wire.",
+    deep: "View-only: a sandbox without builder.json, [generation]-bound or hardened. The Cloudflare seal-proxy store and the seal_proxy card are always offered: a Cloudflare secret writes [keys.env] + strip and must be wired to the seal_proxy card, which writes [keys] (see the seal proxy card). Debug: tengu sandbox compile prints the TOML + every issue pinned to a card or wire.",
   },
   {
     key: "a2a", title: "A2A — other agent harnesses (2026-10-10)",
@@ -1375,6 +1410,21 @@ const SUBSYSTEMS = [
       ["adapters/inbound/cli/a2a.rs", "tengu a2a serve | cards | remotes | card | send | get | cancel (--remote <name> or --url)"],
     ],
     deep: "A remote is a name in the sandbox config, never a URL the model picks; the client calls only that remote's own hosts, so a card cannot redirect a request or the credential. The server refuses to load without a bearer token unless it binds loopback (never in a hardened sandbox), never serves a private agent, and keeps tasks in memory. Interop checked against the official a2a-sdk 1.2.2 both ways. Doc: docs/a2a-2026-10-10.md.",
+  },
+  {
+    key: "keys", title: "Seal proxy + Privy Solana signing (2026-10-09 → 2026-10-13)",
+    subtitle: "provider keys live only as Cloudflare Worker secrets; tengu signs a session with an SSH-agent key and calls <proxy>/<route>; Solana sends are signed by a Privy wallet on the same proxy.",
+    files: [
+      ["cloudflare/seal-worker/ (repo root)", "the tengu-seal Worker: ROUTES (route → upstream + one key spot: header | path | query, allow prefixes) and CLIENTS (SSH fingerprint → label, session_hours, routes) in wrangler.toml; /healthz, /session, /whoami, /<route>/…; the key masked out of replies"],
+      ["crates/tengu-seal/", "shared with the Worker: session token tss1.<claims>.<hmac>, route parsing, target + key-position checks, SSH signature format"],
+      ["config/keys.rs", "[keys] proxy · client · agent_socket · strip · [keys.env] (VAR = <route>[/path][?query] | @session); proxy inside [egress] allow_hosts; PRIVY_API_URL routed ⇒ PRIVY_APP_SECRET in strip"],
+      ["adapters/outbound/keys/", "install (load_sandbox_or, again in run-agent / mcp-bridge reusing the parent's session): strip, SSH-agent signature (agent.rs), /session, export [keys.env] + TENGU_KEYS_*; failure unsets every routed var · auth_header_for / header_mode"],
+      ["adapters/inbound/cli/keys.rs", "tengu keys setup | status | check <route> [--path] — never prints a key or the token"],
+      ["config/solana.rs · config/hardening.rs", "[solana] privy_wallet_id (needs [keys.env] PRIVY_API_URL routed; no scope may env_reads the session or \"*\"; wallet grants only on a private agent) — a signer makes the sandbox hardened"],
+      ["adapters/outbound/solana/privy.rs · ports/solana_signer.rs", "PrivySigner: POST <proxy>/privy/v1/wallets/<id>/rpc signTransaction; the message must come back byte for byte, only the wallet's slot taken, ed25519-verified — else nothing is sent · SolanaSigner (LocalKeypair only for a new DLMM position's one-shot key)"],
+      ["sandboxes/sealed-check/config.toml", "the proof: Jev, loop check, tengu run, Studio reach OpenRouter only through the Worker; one pure-compute tool"],
+    ],
+    deep: "A route takes its key at exactly one spot (403 for TENGU_SECRET anywhere else), so a session can use a key but never copy it out; revoking a machine = deleting its CLIENTS line. Sessions are not refreshed in-process (restart a long run before session_hours). Residual: an agent with a shell can USE the session or the agent socket, never READ a provider key. Not moved: Postgres, the Claude Code and Codex logins, A2A credentials, webhook HMAC secrets. Docs: docs/sealed-keys-2026-10-09.md, docs/cloudflare-secrets-setup.html, docs/sealed-check-2026-10-09.md.",
   },
 ];
 
@@ -1472,15 +1522,24 @@ const FILE_MAP = [
   ["src/config/recorder.rs", "observations", "[recorder] — observation history: schemas, keep_data, change_only + heartbeat, min_interval, retention"],
   ["src/config/risk.rs", "xmarket", "[risk] + [paper] + [risk.exits] — every field required; the paper fill engine's knobs; load rules"],
   ["src/config/xmarket.rs", "xmarket", "[xmarket] state dir + layout (ledger_db, runtime_db, history_dir, market_db, backtests_dir), calendars, [xmarket.weekend_fade], xmarket load rules"],
-  ["src/config/hardening.rs", "parity", "hardened sandboxes ([solana] signer or [risk]): claude_code only with profile none, no [[mcp_servers]], no shell scope, stores outside every fs root; compose only narrows"],
+  ["src/config/hardening.rs", "parity", "hardened sandboxes ([solana] privy_wallet_id, [risk] or [soe]): claude_code only with profile none, no codex agent, no [[mcp_servers]], no shell scope, stores outside every fs root; compose only narrows"],
   ["src/config/solana.rs", "tools", "[solana] privy_wallet_id + signing-sandbox rules"],
+  ["src/config/keys.rs", "keys", "[keys] + [keys.env] schema, load rules (proxy origin in allow_hosts, @session only for OPENROUTER_API_KEY, FALLBACK_KEYS strip rule)"],
+  ["src/adapters/outbound/keys/", "keys", "install (strip, SSH-agent signature, /session, [keys.env] exports, children reuse), auth_header_for, header_mode; agent.rs = the ssh-agent client"],
+  ["src/adapters/inbound/cli/keys.rs", "keys", "tengu keys setup | status | check <route> [--path]"],
+  ["crates/tengu-seal/", "keys", "session token, routes, target + key-position checks, SSH signature format — shared with the Worker"],
+  ["cloudflare/seal-worker/", "keys", "the tengu-seal Worker (Rust → wasm): lib.rs + wrangler.toml (ROUTES, CLIENTS); keys are its secrets"],
+  ["src/adapters/outbound/solana/privy.rs", "keys", "PrivySigner — the Solana write tools' send signs with [solana] privy_wallet_id through the seal proxy's privy route; reply verified before sending"],
+  ["src/ports/solana_signer.rs", "keys", "SolanaSigner port: PrivySigner (the wallet) · LocalKeypair (a new DLMM position's one-shot key)"],
+  ["sandboxes/sealed-check/config.toml", "keys", "seal-proxy proof: Jev + loop check + tengu run + Studio, OpenRouter only through the Worker; one pure-compute tool"],
+
   ["src/config/backtest.rs", "xlab", "[backtest] — notional, bootstrap, seed, costs, universes, strategies, splits, gate, max_candidates, keep_runs; load rules"],
   ["src/config/lineage.rs", "lineage", "load_registry (lineage/ dirs, one TOML per record) + [generation] binding rules (tools, kinds, FROZEN pins) → GenerationScope"],
   ["src/config/strategy_ranking.rs", "ranking", "[strategy_ranking] registry, contracts — load rules → RankingSection (cited runs)"],
   ["src/config/sources.rs", "sources", "[sources] state + [sources.registry.<id>] rows: kind, class, trust, revision, hosts, terms, retention; shipped enabled = false"],
   ["src/config/soe.rs", "soe", "the signed private operator profile, opportunity / record-dir / replay-set / --cited loaders; [soe] (architect, critic, max_proposals, forecast_max_weeks, token_prices) + closed-world load rules"],
   ["src/config/studio.rs", "studio", "[studio] control (default false); control_policy — never [generation]-bound or hardened"],
-  ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest] / [generation] / [strategy_ranking] / [sources] / [soe] / [studio]"],
+  ["sandboxes/<name>/config.toml", "agents", "one config per sandbox: [egress], [orchestrator], [agents.*], [default_scopes], MCP servers, and per sandbox [decision_loops] / [feeds] / [risk] / [xmarket] / [backtest] / [generation] / [strategy_ranking] / [sources] / [soe] / [studio] / [keys] / [a2a] / [solana]"],
   ["sandboxes/control-loop-lab/config.toml", "studio", "the safe control-loop lab — loop demo (Jev), feeds tick + probe, private agent lab (read_file / write_file / list_directory in its workspace), [studio] control = true; scenarios/*.json + *.map.json"],
   ["sandboxes/xmarket/config.toml", "xmarket", "paper desk stage M0 — runbook at the top; xm_architect (default, routable, Opus), xm_executor (private, Sonnet), no planner; feeds hl_ctx, hl_book, xm_exits, risk_day"],
   ["sandboxes/xmarket-weekend/config.toml", "xmarket", "rule W on paper — runbook + timeline at the top; xm_weekend (private); five required tool feeds; recorder; [generation] W1"],
@@ -1495,16 +1554,16 @@ const FILE_MAP = [
   ["src/adapters/inbound/telegram.rs", "telegram", "Telegram polling + per-chat dispatch; allow-list (fails closed); build_bot() builds a proxied reqwest 0.11 client (30s/60s timeouts)"],
   ["src/adapters/inbound/webhooks.rs", "channel", "tengu webhooks — HMAC / header auth, one-shot orchestrator turns or loop events; takes the tengu run leases"],
   // ── engines + bridge ──
-  ["src/adapters/outbound/engines/mod.rs", "engine", "build_engine (openrouter / local / claude_code), build_step_engine (a run-agent step's engine), build_planner_engine"],
+  ["src/adapters/outbound/engines/mod.rs", "engine", "build_engine (openrouter / local / claude_code / codex), build_step_engine (a run-agent step's engine), bridges_tools (claude_code, codex), build_planner_engine"],
   ["src/adapters/outbound/engines/openrouter.rs", "engine", "OpenRouterEngine — OpenAI-compatible streaming + tool calls"],
   ["src/adapters/outbound/engines/local.rs", "engine", "LocalEngine — Unsloth / Ollama / llama.cpp / vLLM over /v1/chat/completions, direct; tool results fit the window"],
   ["src/adapters/outbound/engines/claude_code.rs", "engine", "ClaudeCodeEngine — Claude CLI subprocess; cli_args (--strict-mcp-config, profile none isolation), build_mcp_config_json (no secret values), HTTPS_PROXY from egress::claude_cli_env"],
-  ["src/adapters/inbound/mcp_bridge.rs", "mcp", "MCP bridge server — exposes tengu tools + passed [[mcp_servers]] to the Claude Code CLI, as the calling agent"],
+  ["src/adapters/inbound/mcp_bridge.rs", "mcp", "MCP bridge server — exposes tengu tools + passed [[mcp_servers]] to the Claude Code and Codex CLIs, as the calling agent"],
   ["src/adapters/outbound/bridge_env.rs", "mcp", "the engine → bridge env contract: TENGU_BRIDGE_SCOPES / AGENT / MCP_SERVERS (names) / GRANT_WORKSPACE / SUMMARY_FILE / TRANSCRIPT_FILE"],
   ["src/adapters/outbound/mcp_client/mod.rs", "tools", "MCP client — [[mcp_servers]] tools as {server}__{tool}; linted_tool drops schemas outside the subset"],
   ["src/adapters/outbound/mcp_client/client.rs", "tools", "McpClient + McpCaller trait, stdio + http transports"],
   // ── egress + shared outbound ──
-  ["src/adapters/outbound/egress.rs", "egress", "[egress] policy: install/policy, tool_client / llm_api_client / mcp_client, check_url, shell_command, guard_shell, claude_cli_env, claude_code_profile, warn_if_proxy_unreachable, JSONL audit, AttributedExecutor / CallScope"],
+  ["src/adapters/outbound/egress.rs", "egress", "[egress] policy: install/policy, tool_client / llm_api_client / mcp_client / peer_client, check_url, shell_command, guard_shell, claude_cli_env, claude_code_profile, warn_if_proxy_unreachable, JSONL audit, AttributedExecutor / CallScope"],
   ["src/adapters/outbound/secrets.rs", "tools", "vault + SanitizedToolExecutor (text, observations and errors redacted); process_secret_registry"],
   ["src/adapters/outbound/rate_limit.rs", "tools", "process-wide named budgets from [rate_limits.<name>] (weighted acquire, 429 penalize)"],
   ["src/adapters/outbound/http_class.rs", "tools", "HTTP status / transport error → ErrorClass, credential Scrubber, display_url"],
@@ -1521,7 +1580,7 @@ const FILE_MAP = [
   ["src/adapters/outbound/tools/skill_lifecycle/mod.rs", "tools", "skill_lifecycle plugin — skill_distill, apply_improver_proposal, compress_and_store (definition)"],
   ["src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs", "tools", "the implicit-on-every-subagent compress_and_store tool"],
   ["src/adapters/outbound/tools/solana/", "tools", "Solana LP family: 11 observe/plan tools + 5 live-capable write tools (defs.rs = interfaces)"],
-  ["src/adapters/outbound/solana/", "tools", "SolanaRpc (error classes), fetch_accounts (acct/1 cache-through), fetch_json, read planning, send pipeline, LocalKeypair signer, writes store"],
+  ["src/adapters/outbound/solana/", "tools", "SolanaRpc (error classes), fetch_accounts (acct/1 cache-through), fetch_json, read planning, send pipeline, PrivySigner (privy.rs) + one-shot LocalKeypair, writes store"],
   ["src/domain/lp/", "domain", "pure DLMM / Jupiter decoders + math, hedge controller port, LP gates, snapshot + decisions"],
   ["src/domain/solana.rs · solana_tx.rs · solana_write.rs", "domain", "base58 + PDAs · transaction wire format · write results + send policy"],
   ["src/adapters/outbound/tools/hyperliquid/ctx.rs", "tools", "hl_ctx — a perp dex sweep or ≤ 64 coins: mkt_ctx/1 + mkt_instrument/1, hl_sweep/1"],
@@ -1645,10 +1704,10 @@ const FILE_MAP = [
   ["src/application/builder.rs", "builder", "builder use cases: state, save, preview, finalise, create"],
   ["src/ports/builder.rs", "builder", "SandboxDrafts port"],
   ["src/adapters/outbound/builder_store.rs", "builder", "FsDrafts: sandboxes/<n>/ files, temp-copy load check"],
-  ["src/bootstrap/builder.rs", "builder", "palette facts (catalog tools, skills, [keys] probe), busy probe"],
+  ["src/bootstrap/builder.rs", "builder", "palette facts (catalog tools, skills), busy probe (a fresh tengu run heartbeat)"],
   ["src/adapters/inbound/studio/builder.rs", "builder", "builder routes (--allow-edit)"],
   ["src/adapters/inbound/cli/sandbox.rs", "builder", "tengu sandbox new / compile / finalise / palette"],
-  ["src/adapters/outbound/engines/codex.rs", "builder", "engine = codex (ChatGPT subscription via codex exec)"],
+  ["src/adapters/outbound/engines/codex.rs", "engine", "engine = codex (ChatGPT subscription via codex exec; tools over the MCP bridge; refused in hardened sandboxes)"],
   ["web/studio/builder.html", "builder", "builder.html, builder.css, builder.js — the canvas; draws only"],
   // ── skills ──
   ["skills/orchestrator/SKILL.md", "skills", "planner system prompt"],

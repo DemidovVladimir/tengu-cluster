@@ -240,11 +240,11 @@
     <div class="kind" style="--kc: var(--brain)"><span class="one">many</span><b>skill</b><code>agents.&lt;a&gt;.skill_packages</code><small>Any <code>SKILL.md</code> found from the working folder.</small></div>
     <div class="kind" style="--kc: var(--data)"><span class="one">many</span><b>workspace</b><code>agents.&lt;a&gt;.workspace</code><small>Confine (on by default) scopes <code>read_file</code>, <code>write_file</code>, <code>list_directory</code> to the folder.</small></div>
     <div class="kind" style="--kc: var(--guard)"><span class="one">many</span><b>secret</b><code>(a name, never a value)</code><small>Stored in the vault, the env, or the Cloudflare Worker (<code>[keys.env]</code> + <code>strip</code>).</small></div>
-    <div class="kind" style="--kc: var(--guard)"><span class="one">one</span><b>seal_proxy</b><code>[keys] proxy · client · agent_socket</code><small>Only in a build that knows <code>[keys]</code>.</small></div>
+    <div class="kind" style="--kc: var(--guard)"><span class="one">one</span><b>seal_proxy</b><code>[keys] proxy · client · agent_socket</code><small>The <a href="sealed-keys.html">seal proxy</a>: provider keys stay Worker secrets; tengu signs a session with an ssh-agent key.</small></div>
     <div class="kind" style="--kc: var(--jev)"><span class="one">one</span><b>telegram</b><code>[telegram] enabled · allowed_users</code><small>Its agent becomes the default agent.</small></div>
     <div class="kind" style="--kc: var(--jev)"><span class="one">many</span><b>webhook</b><code>[webhooks.endpoints.&lt;name&gt;]</code><small>Agent, <code>secret_env</code> from a wired secret, goal template.</small></div>
   </div>
-  <p class="note">Never in the palette: <code>run_command</code>, <code>compress_and_store</code>, the wallet-signing tools, the Solana send tools and the exec tools. They need hand-written, hardened TOML (<code>palette::offered</code>).</p>
+  <p class="note">Never in the palette: <code>run_command</code>, <code>compress_and_store</code>, the wallet-signing tools, the Solana send tools and the exec tools. They need hand-written, hardened TOML (<code>palette::offered</code>). The <code>a2a</code> tool is offered, but its <code>[a2a]</code> remotes are not a card: write them by hand (Finalise keeps the section), else the loader warns that every call is refused (<a href="a2a.html">A2A</a>).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-wires">
@@ -282,7 +282,7 @@
   <div class="stores">
     <div class="store"><span class="st" style="color: var(--ok)">present / missing</span><b>Local encrypted vault</b><code class="cmd">tengu secret set NAME &lt;value&gt;</code><small>Stored in <code>~/.tengu/secrets.vault</code>, AES-256-GCM. Loaded into the env at start (<a href="secrets.html">Secrets</a>).</small></div>
     <div class="store"><span class="st" style="color: var(--ok)">present / missing</span><b>Environment / .env</b><code class="cmd">export NAME=&lt;value&gt;</code><small>This shell, or a line in <code>.env</code>. "Present" = set and non-empty in the builder's process.</small></div>
-    <div class="store" id="st-cf"><span class="st" style="color: var(--data)">remote</span><b>Cloudflare seal proxy</b><code class="cmd">npx wrangler secret put NAME</code><small>The key is a Worker secret; tengu gets a route (<code>[keys.env]</code>) and a session, never the key. On only when this build's <code>Config</code> accepts <code>[keys]</code>: probed at start (<code>keys_supported</code>), not compiled in.</small></div>
+    <div class="store" id="st-cf"><span class="st" style="color: var(--data)">remote</span><b>Cloudflare seal proxy</b><code class="cmd">npx wrangler secret put NAME</code><small>The key is a Worker secret; tengu gets a route (<code>[keys.env]</code>) and a session, never the key (<a href="sealed-keys.html">Sealed keys</a>). Always offered, like the seal-proxy card.</small></div>
   </div>
 </section>
 
@@ -294,7 +294,7 @@
   </div>
   <div class="own">
     <div class="card hands"><h3>Owned (<code>compile::OWNED</code>)</h3><div class="cand"><span class="mine">egress</span><span class="mine">memory</span><span class="mine">studio</span><span class="mine">keys</span><span class="mine">orchestrator</span><span class="mine">telegram</span><span class="mine">webhooks</span><span class="mine">agents</span></div></div>
-    <div class="card data"><h3>Kept, for example</h3><div class="cand"><span>runtime_profile</span><span>[hub]</span><span>[decision_loops.*]</span><span>[feeds.*]</span><span>[[mcp_servers]]</span><span>[runtime]</span></div><p>Comments in kept sections are lost; the diff shows it.</p></div>
+    <div class="card data"><h3>Kept, for example</h3><div class="cand"><span>runtime_profile</span><span>[hub]</span><span>[decision_loops.*]</span><span>[feeds.*]</span><span>[[mcp_servers]]</span><span>[runtime]</span><span>[a2a]</span></div><p>Comments in kept sections are lost; the diff shows it.</p></div>
   </div>
 </section>
 
@@ -309,7 +309,7 @@
       <tbody>
         <tr><td><code>config.toml</code> but no <code>builder.json</code></td><td>view-only (save 403)</td><td>hand-written: the builder edits sandboxes made by <code>tengu sandbox new</code></td></tr>
         <tr><td><code>[generation]</code></td><td>view-only</td><td>a frozen design; build a new sandbox instead</td></tr>
-        <tr><td><code>[risk]</code>, <code>[paper]</code>, <code>[soe]</code>, <code>[xmarket]</code>, a Solana signer</td><td>view-only</td><td>a hardened sandbox: its TOML stays hand-edited</td></tr>
+        <tr><td><code>[risk]</code>, <code>[paper]</code>, <code>[soe]</code>, <code>[xmarket]</code>, a Solana signer (<code>[solana] privy_wallet_id</code>)</td><td>view-only</td><td>a hardened sandbox: its TOML stays hand-edited</td></tr>
         <tr><td>runtime running</td><td>Finalise 409</td><td>a fresh <code>tengu run</code> heartbeat (under 3 heartbeats old, not stopped)</td></tr>
         <tr><td>blueprint changed since the preview</td><td>Finalise 409</td><td>the sha256 of the TOML differs: Validate again</td></tr>
         <tr><td>an error on the canvas, or the loader refuses</td><td>Finalise 422</td><td>nothing is written</td></tr>
@@ -406,7 +406,7 @@
         <tr><td><code>src/config/builder/palette.rs</code></td><td>card kinds and fields, <code>CONNECTIONS</code>, engines, secret stores, offered tools</td></tr>
         <tr><td><code>src/config/builder/compile.rs</code></td><td>blueprint → TOML, per-card / per-wire status, secrets checklist, <code>OWNED</code></td></tr>
         <tr><td><code>src/config/builder/template.rs</code></td><td><code>blank</code>, <code>team</code>, <code>telegram</code></td></tr>
-        <tr><td><code>src/config/builder/mod.rs</code> · <code>tests.rs</code></td><td><code>keys_supported</code>, <code>editable</code>, <code>load_report</code>; the round-trip tests</td></tr>
+        <tr><td><code>src/config/builder/mod.rs</code> · <code>tests.rs</code></td><td><code>Facts</code>, <code>editable</code> (view-only: <code>[generation]</code>, hardened, <code>[solana] privy_wallet_id</code>), <code>load_report</code>; the round-trip tests</td></tr>
         <tr><td><code>src/application/builder.rs</code></td><td>state, save, preview, finalise, <code>create</code></td></tr>
         <tr><td><code>src/ports/builder.rs</code></td><td><code>SandboxDrafts</code>: the sandbox files</td></tr>
         <tr><td><code>src/adapters/outbound/builder_store.rs</code></td><td>files under <code>sandboxes/</code>: atomic writes, <code>.prev</code>, the loader on a temp copy</td></tr>
@@ -421,7 +421,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

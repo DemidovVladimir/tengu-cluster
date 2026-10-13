@@ -231,7 +231,7 @@
       <circle cx="28" cy="28" r="14" fill="#A78BFA"/>
       <text x="28" y="33" text-anchor="middle" class="badge">17</text>
       <text x="52" y="32" class="mech">max_tool_rounds hard stop</text>
-      <text x="20" y="56" class="small mono">tool_loop.rs:93 · config/mod.rs:579</text>
+      <text x="20" y="56" class="small mono">tool_loop.rs:93 · config/mod.rs:622</text>
       <text x="20" y="76" class="small">Default 70 rounds.</text>
       <text x="20" y="92" class="small">After exhaust: forces tools=[] turn</text>
       <text x="20" y="108" class="small">at L231 to extract closing message.</text>
@@ -263,8 +263,8 @@
 
   <!-- ============== LAYER 4 — MCP BRIDGE ============== -->
   <text x="40" y="1200" class="layer-n" fill="#F59E0B">4</text>
-  <text x="100" y="1190" class="layer-t">MCP bridge (Claude Code path)</text>
-  <text x="100" y="1210" class="layer-s mono">engines/claude_code.rs (sets) · inbound/mcp_bridge.rs (cuts)   ·   only governor on bridge-routed tools</text>
+  <text x="100" y="1190" class="layer-t">MCP bridge (Claude Code / Codex path)</text>
+  <text x="100" y="1210" class="layer-s mono">engines/{claude_code,codex}.rs (set) · inbound/mcp_bridge.rs (cuts)   ·   only governor on bridge-routed tools</text>
 
   <g transform="translate(40,1230)">
     <rect class="layer L4" width="1520" height="120"/>
@@ -279,8 +279,8 @@
     <g transform="translate(785,20)">
       <rect class="panel2" width="715" height="80"/>
       <text x="20" y="32" class="mech" fill="#F87171">Why this matters:</text>
-      <text x="20" y="56" class="small">Claude Code engine has NO in-loop compaction (Layer 3 #14, #15 only fire on OpenRouter / local).</text>
-      <text x="20" y="72" class="small">If a Claude subagent fans out tool calls, this is the only governor on its context.</text>
+      <text x="20" y="56" class="small">Claude Code and Codex engines have NO in-loop compaction (Layer 3 #14, #15 only fire on OpenRouter / local).</text>
+      <text x="20" y="72" class="small">If a CLI subagent fans out tool calls, this is the only governor on its context.</text>
     </g>
   </g>
 
@@ -313,7 +313,7 @@
       <text x="20" y="56" class="small mono">outbound/tools/skill_lifecycle/compress_and_store.rs</text>
       <text x="20" y="76" class="small">Implicitly appended to every subagent's tools.</text>
       <text x="20" y="92" class="small">Three paths, one durable write:</text>
-      <text x="20" y="108" class="small">A — out-of-band (OpenRouter, local: run_agent.rs:497)</text>
+      <text x="20" y="108" class="small">A — out-of-band (OpenRouter, local: run_agent.rs:534)</text>
       <text x="20" y="124" class="small">B — bridge file · C — backstop (final_text)</text>
       <text x="20" y="148" class="tiny">writes Open Brain Postgres with postgres_memory</text>
     </g>
@@ -323,7 +323,7 @@
       <circle cx="28" cy="28" r="14" fill="#4ADE80"/>
       <text x="28" y="33" text-anchor="middle" class="badge">22</text>
       <text x="52" y="32" class="mech">Phase 5c protocol</text>
-      <text x="20" y="56" class="small mono">cli/run_agent.rs:642</text>
+      <text x="20" y="56" class="small mono">cli/run_agent.rs:678</text>
       <text x="20" y="76" class="small">✓ called → Ok</text>
       <text x="20" y="92" class="small">✗ but text → Ok+warn</text>
       <text x="20" y="108" class="small">✗ no text → Failed</text>
