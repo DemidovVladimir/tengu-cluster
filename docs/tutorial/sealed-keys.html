@@ -40,7 +40,7 @@
     <li>session <b>24 h</b> (1–168 per key)</li>
     <li><code>SESSION_KEY</code> <b>≥ 32</b> chars</li>
     <li>signature clock <b>±60 s</b></li>
-    <li>reply masked <b>≤ 2 MiB</b></li>
+    <li>reply masked <b>every byte</b>, any size</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip guard"><span class="k">守</span> guard</span> Secure Enclave, Worker checks</li>
@@ -146,7 +146,7 @@
         <li><code>[keys] strip</code> removes local key copies. <code>[keys.env]</code> is exported: a route value becomes <code>&lt;proxy&gt;/&lt;route&gt;[/path][?query]</code>, <code>@session</code> the token. Children reuse the session and strip again.</li>
         <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/openrouter/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. RPC, Privy and Telegram clients add that header themselves, to the proxy only.</li>
         <li>The Worker checks the route is in the session and still in <code>CLIENTS</code>, puts the key only at its header, path or query spot, checks <code>allow</code>, forwards with <code>redirect: manual</code>.</li>
-        <li>Reply: the key becomes <code>[REDACTED]</code> in every header and in text or JSON bodies up to 2 MiB; larger ones stream on. One JSON log line, never a key.</li>
+        <li>Reply: the key becomes <code>[REDACTED]</code> in every header and every body byte as it streams: text, JSON, event streams, binary, any size. One JSON log line, never a key.</li>
         <li>Revoke a machine: delete its <code>CLIENTS</code> line and <code>npx wrangler deploy</code>; its next request gets 401. Rotating <code>SESSION_KEY</code> ends every session at once.</li>
       </ol>
     </div>
@@ -179,8 +179,8 @@
     <li><span class="chip warn">400</span><span><b>malformed</b>An unknown route, a session request with no route or an unknown one, a bad session request.</span></li>
     <li><span class="chip bad">401</span><span><b>no session</b>Missing, forged or expired; <code>SESSION_KEY</code> rotated; the key not (or no longer) in <code>CLIENTS</code>; the clock more than 60 s off.</span></li>
     <li><span class="chip bad">403</span><span><b>refused</b>No asked route allowed for this key; a route not in the session or gone from <code>CLIENTS</code>; <code>TENGU_SECRET</code> off its spot; a path outside <code>allow</code> or the upstream.</span></li>
-    <li><span class="chip bad">500</span><span><b>misconfigured</b>A route's Worker secret or <code>SESSION_KEY</code> missing or short; <code>ROUTES</code> / <code>CLIENTS</code> do not parse; a <code>CLIENTS</code> route not in <code>ROUTES</code>.</span></li>
-    <li><span class="chip bad">502</span><span><b>upstream unreachable</b>The message never carries the upstream URL, which may hold the key.</span></li>
+    <li><span class="chip bad">500</span><span><b>misconfigured</b>A route's Worker secret (under 8 chars: it could not be masked) or <code>SESSION_KEY</code> missing or short; <code>ROUTES</code> / <code>CLIENTS</code> do not parse; a <code>CLIENTS</code> route not in <code>ROUTES</code>.</span></li>
+    <li><span class="chip bad">502</span><span><b>upstream unreachable</b>Or its reply body cannot be read. The message never carries the upstream URL, which may hold the key.</span></li>
   </ul>
 </section>
 
@@ -200,9 +200,9 @@
     <li><span><b>Fail closed.</b> If no session can be had, every <code>[keys.env]</code> var and the session vars are unset, so a stray local key cannot bypass the proxy. <code>tengu telegram</code> routed through the proxy refuses to start. The Privy wallet tools on route <code>privy</code> need <code>PRIVY_APP_SECRET</code> in <code>strip</code> (a load error otherwise), so without a session they fail rather than use a local secret. The Solana signer (<code>[solana] privy_wallet_id</code>) refuses with <code>signer_unavailable</code> unless <code>PRIVY_API_URL</code> is the proxy with a session.</span></li>
     <li><span><b>Local copies stripped.</b> <code>[keys] strip</code> names are removed at load, success or not, and again in every child. <code>@session</code> only for <code>OPENROUTER_API_KEY</code> next to an <code>OPENROUTER_BASE_URL</code> route.</span></li>
     <li><span><b>Never on disk.</b> The session lives in process env; its name ends in <code>_TOKEN</code>. The redaction registry is extended after the export, so old <code>.env</code> / vault values stay masked.</span></li>
-    <li><span><b>Replies are masked.</b> Every header value; text, JSON and XML bodies up to 2 MiB, on bytes. A bigger body streams on unmasked past 2 MiB; event streams and binary pass through.</span></li>
+    <li><span><b>Replies are masked, fail closed.</b> Every header value (a header named after the key is dropped) and every body byte, on bytes as it streams: text, JSON, event streams, binary, any size. Raw, percent-encoded and JSON-escaped copies, in any letter case, all become <code>[REDACTED]</code>. Only a chunk tail that could still start the key is held, so a key split across chunks is masked too. A body cut by an upstream error ends short, never with unmasked bytes.</span></li>
     <li><span><b>No redirect follow.</b> The Worker fetches with <code>redirect: manual</code>.</span></li>
-    <li><span><b>Quiet logs.</b> One JSON line per request: client label, route, upstream host, status, masked count, ms.</span></li>
+    <li><span><b>Quiet logs.</b> One JSON line per request: client label, route, upstream host, status, masked count (headers + body, written when the body ends), ms.</span></li>
   </ul>
   <p class="note warn"><b>Not a sandbox.</b> While tengu runs, an agent with a shell on the same machine can use the session or the agent socket too, and a session can use a route's key (any Telegram Bot API method, as the bot). What it cannot do is read a provider key: there is none here. Sessions are not refreshed: restart a long run before <code>session_hours</code> ends.</p>
 </section>
@@ -244,8 +244,9 @@
         <tr><td><code>crates/tengu-seal/src/route.rs</code></td><td><code>ROUTES</code> / <code>CLIENTS</code> tables, key positions, <code>allow</code>, <code>TENGU_SECRET</code>, reserved names, session hours; the shipped-<code>wrangler.toml</code> test</td></tr>
         <tr><td><code>crates/tengu-seal/src/session.rs</code></td><td><code>tss1</code> tokens: HMAC-SHA256 under <code>SESSION_KEY</code></td></tr>
         <tr><td><code>crates/tengu-seal/src/ssh.rs</code></td><td>SSH key parse, fingerprint, signature check, <code>session_message</code></td></tr>
-        <tr><td><code>crates/tengu-seal/src/target.rs</code></td><td>upstream target from a route, key-position and <code>allow</code> checks, path checks, <code>split_path</code>, header filter, <code>mask</code> / <code>mask_bytes</code> / <code>maskable</code></td></tr>
-        <tr><td><code>cloudflare/seal-worker/src/lib.rs</code></td><td>the Worker endpoints, forward, reply masking, the log line</td></tr>
+        <tr><td><code>crates/tengu-seal/src/target.rs</code></td><td>upstream target from a route, key-position and <code>allow</code> checks, path checks, <code>split_path</code>, header filter, <code>null_body</code></td></tr>
+        <tr><td><code>crates/tengu-seal/src/mask.rs</code></td><td><code>Masker</code>: the key's forms (raw, percent-encoded, JSON-escaped), streamed body masking with a held tail, <code>reply_headers</code>; a key under 8 chars refused</td></tr>
+        <tr><td><code>cloudflare/seal-worker/src/lib.rs</code></td><td>the Worker endpoints, forward, <code>mask_reply</code> (every reply body through the <code>Masker</code>), the log line</td></tr>
         <tr><td><code>cloudflare/seal-worker/wrangler.toml</code></td><td><code>ROUTES</code>, <code>CLIENTS</code>, build, Workers Logs</td></tr>
         <tr><td><code>src/config/keys.rs</code></td><td><code>[keys]</code>: proxy, client, agent socket, <code>strip</code>, <code>[keys.env]</code> (<code>@session</code> rule; <code>FALLBACK_KEYS</code>: <code>PRIVY_API_URL</code> needs <code>PRIVY_APP_SECRET</code> stripped), <code>routes()</code>; guard test of <code>sandboxes/sealed-check</code></td></tr>
         <tr><td><code>src/adapters/outbound/keys/mod.rs</code></td><td>session for the routes asked, <code>install</code> (strip, env export at sandbox load and in children, fail closed), canonical proxy origin, <code>auth_header_for</code>, <code>header_mode</code></td></tr>

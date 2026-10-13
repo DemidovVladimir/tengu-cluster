@@ -1237,7 +1237,7 @@
     <text x="10" y="108" class="file">crates/tengu-seal/</text>
     <text x="10" y="120" class="small">session tss1 (HMAC), routes, target checks,</text>
     <text x="10" y="132" class="small">SSH signature format (shared with tengu)</text>
-    <text x="10" y="152" class="small">replies: the key masked out (≤ 2 MiB)</text>
+    <text x="10" y="152" class="small">replies: the key masked out (every byte)</text>
     <text x="10" y="188" class="small" font-style="italic">a session can USE a key, never READ it</text>
   </g>
 
