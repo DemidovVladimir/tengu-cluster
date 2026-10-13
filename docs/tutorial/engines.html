@@ -264,7 +264,7 @@
         <tr><td class="wrap"><code>--ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check</code></td><td>none of your <code>~/.codex</code> MCP servers, profiles, hooks or rules; no session files; any workspace. The login still works.</td></tr>
         <tr><td class="wrap"><code>-s read-only</code> | <code>workspace-write</code> · <code>-c approval_policy="never"</code></td><td>Codex's own shell and patch tool: no network either way, never asks</td></tr>
         <tr><td class="wrap"><code>-c web_search="disabled"</code> · <code>-c features.&lt;f&gt;=false</code></td><td>apps, plugins, browser and computer use, image generation, sub-agents, memories, hooks: off (they run outside Tengu scopes and egress)</td></tr>
-        <tr><td class="wrap"><code>-c mcp_servers.tengu-tools.*</code></td><td>the bridge: <code>env_vars</code> forwards env NAMES only (no value on the command line); calls pre-approved, scopes gate them in the bridge (<a href="mcp-bridge.html">MCP bridge</a>)</td></tr>
+        <tr><td class="wrap"><code>-c mcp_servers.tengu-tools.*</code></td><td>the bridge: <code>env_vars</code> forwards env NAMES only (the base set + <code>forward_env</code>; no value on the command line); calls pre-approved, scopes gate them in the bridge (<a href="mcp-bridge.html">MCP bridge</a>)</td></tr>
         <tr><td class="wrap"><code>-m</code> · <code>-C</code> · <code>-c developer_instructions=…</code></td><td>the model, the agent workspace, the system prompt once</td></tr>
       </tbody>
     </table>
@@ -383,10 +383,11 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
     <li><span><b>No silent default engine.</b> <code>engine</code> must be one of four (<code>config::ENGINES</code>); an empty <code>model</code> or unknown <code>builtin_tools_profile</code> fails the load.</span></li>
     <li><span><b>Hardened sandboxes run Claude Code bare.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer (<code>[solana] privy_wallet_id</code>), every claude_code agent needs <code>builtin_tools_profile = "none"</code>, or load fails.</span></li>
     <li><span><b>No Codex in a hardened sandbox.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, an <code>engine = "codex"</code> agent fails the load: its built-in shell ignores Tengu scopes.</span></li>
-    <li><span><b>Codex bills the subscription.</b> <code>OPENAI_API_KEY</code> and every <code>CODEX_*</code> but <code>CODEX_HOME</code> / <code>CODEX_CA_CERTIFICATE</code> are removed from the CLI's env; <code>~/.codex/config.toml</code> is not loaded.</span></li>
+    <li><span><b>Codex bills the subscription.</b> No <code>OPENAI_API_KEY</code> / <code>CODEX_API_KEY</code> ever reaches the CLI; <code>~/.codex/config.toml</code> is not loaded.</span></li>
+    <li><span><b>Codex starts from an empty env.</b> Only the base set (<code>PATH</code>, <code>HOME</code>, locale, temp, <code>CODEX_HOME</code>, non-secret <code>TENGU_*</code>) and the names in <code>[agents.&lt;a&gt;.codex] forward_env</code>: no vault secret, <code>.env</code> key, master password or seal-proxy session reaches its built-in shell (<code>engines/codex.rs::child_env</code>). A forwarded name is readable by that shell — list only what the bridged tools need; the master password, <code>TENGU_KEYS_*</code> and <code>[keys.env]</code> names are refused at load.</span></li>
     <li><span><b>The CLI sees only the Tengu bridge.</b> <code>--strict-mcp-config</code> on every run: the operator's own MCP servers never load.</span></li>
     <li><span><b>Built-in Bash never bypasses the proxy.</b> Under an egress proxy, <code>editor_shell</code> launches as <code>editor</code>.</span></li>
-    <li><span><b>No secret in the temp MCP config.</b> It holds names and paths; the bridge inherits values from the env.</span></li>
+    <li><span><b>No secret in the temp MCP config.</b> It holds names and paths; the bridge inherits values from the CLI's env (under Codex: only the base set + <code>forward_env</code>).</span></li>
     <li><span><b>Local stays local.</b> The local client ignores every proxy, env ones included.</span></li>
     <li><span><b>Claude Code's tool count is capped.</b> One call past <code>max_tool_rounds</code> kills the CLI with an error.</span></li>
   </ul>

@@ -1819,6 +1819,52 @@ async fn guard_holds_for_odd_path_spellings() {
     );
 }
 
+/// The builder routes edit the server's own sandbox (`--allow-edit`, name
+/// rule checked by `Builder::new`): a blueprint naming another sandbox — a
+/// traversal path or an absolute one too — is 400 on save, preview and
+/// finalise, and nothing is written anywhere.
+#[tokio::test(flavor = "multi_thread")]
+async fn builder_routes_refuse_a_blueprint_for_another_path() {
+    use crate::adapters::outbound::builder_store::FsDrafts;
+    use crate::application::builder::{create, Builder};
+    use crate::config::builder::Facts;
+
+    let root = tempfile::tempdir().unwrap();
+    let sandboxes = root.path().join("sandboxes");
+    let store = Arc::new(FsDrafts::new(&sandboxes, Box::new(|_| None)));
+    let dir = create(store.as_ref(), &Facts::default(), "demo", "blank").unwrap();
+    let b = Arc::new(Builder::new("demo", Facts::default(), store).unwrap());
+    let s = Studio::with(move |st| st.builder = Some(b)).await;
+    let (code, state) = s.json("/api/v1/builder").await;
+    assert_eq!(code, 200, "{state}");
+    let files = || ["builder.json", "config.toml"].map(|f| std::fs::read(dir.join(f)).unwrap());
+    let before = files();
+    let abs = root.path().join("abs").display().to_string();
+    for bad in ["../escape", "demo/../../escape", abs.as_str(), "other"] {
+        let mut bp = state["blueprint"].clone();
+        bp["sandbox"] = json!(bad);
+        let r = s
+            .change("PUT", "/api/v1/builder/blueprint")
+            .body(bp.to_string())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "PUT {bad}");
+        let (code, body) = s.post("/api/v1/builder/preview", &bp.to_string()).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "preview {bad}: {body}");
+        let fin = json!({"blueprint": bp, "sha256": "0"}).to_string();
+        let (code, body) = s.post("/api/v1/builder/finalise", &fin).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "finalise {bad}: {body}");
+    }
+    assert_eq!(files(), before, "the sandbox's files are untouched");
+    let top: Vec<String> = std::fs::read_dir(root.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(top, vec!["sandboxes"], "nothing written outside sandboxes/");
+    let _ = s.stop.send(true);
+}
+
 /// Review (plan § 5 "web assets: rendering only"): the page never turns a
 /// status into a colour or a verdict itself — no comparison of a value with
 /// a `Status` or `Tone` name (`Status::ALL`, `Tone::ALL`) anywhere in

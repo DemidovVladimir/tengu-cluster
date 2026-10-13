@@ -11,7 +11,7 @@
 //! |---|---|
 //! | [`start_session`] → [`RunSession`] | the runtime started: leases, recording, loops, feeds, heartbeat, the webhook routes — `tengu run` and Studio's Play (`studio/control.rs`) start it the same way, so there is one runtime, never a mini copy |
 //! | [`RunSession::stopper`] | requests the graceful stop: the first SIGINT / SIGTERM here, Studio's Stop (`"studio stop"`) — the same `Stopper::stop` |
-//! | [`RunSession::wait_and_shutdown`] | waits for the stop, drains (≤ `[runtime] shutdown_grace_secs`), releases the leases, logs the totals |
+//! | [`RunSession::wait_and_shutdown`] | waits for the stop, drains loop events and orchestrator turns — the webhook agent endpoints' and escalations', owned by `Runtime::turns` (≤ `[runtime] shutdown_grace_secs`, then aborted), releases the leases, writes `runtime.stopped`, logs the totals |
 //! | [`run_runtime`] | `tengu run`: signals + a session + its exit code |
 
 use std::sync::Arc;
@@ -60,21 +60,16 @@ pub(crate) async fn start_session(
 ) -> Result<RunSession> {
     #[cfg(feature = "webhooks")]
     let webhook_memory = Arc::new(crate::application::memory::manager::MemoryManager::new());
-    // The escalator records into the runtime's run, opened by `start`.
+    // The escalator records into the runtime's run and its turns are the
+    // runtime's (drained on shutdown); `start` hands both before any loop runs.
     #[cfg(feature = "webhooks")]
-    let escalation_trace = super::webhooks::TraceSlot::default();
-    #[cfg(feature = "webhooks")]
-    let escalator = super::webhooks::orchestrator_escalator(
-        config,
-        &webhook_memory,
-        Arc::clone(&escalation_trace),
-    );
+    let escalator: runtime::MakeEscalator<'_> = Box::new(|trace, turns| {
+        super::webhooks::orchestrator_escalator(config, &webhook_memory, trace, turns)
+    });
     #[cfg(not(feature = "webhooks"))]
-    let escalator = None;
+    let escalator: runtime::MakeEscalator<'_> = Box::new(|_, _| None);
 
     let mut rt = runtime::start(config, Arc::clone(&secrets), escalator).await?;
-    #[cfg(feature = "webhooks")]
-    let _ = escalation_trace.set(rt.trace());
     #[cfg(feature = "webhooks")]
     let mounted = mount_webhooks(config, &mut rt, secrets, webhook_memory).await;
     #[cfg(not(feature = "webhooks"))]
@@ -152,6 +147,8 @@ impl RunSession {
             finished = report.loops.finished,
             dropped = report.loops.dropped,
             aborted = report.loops.aborted,
+            turns_finished = report.loops.turns_finished,
+            turns_aborted = report.loops.turns_aborted,
             aborted_tasks = ?report.aborted_tasks,
             lease_released = report.lease_released,
             "tengu run stopped"

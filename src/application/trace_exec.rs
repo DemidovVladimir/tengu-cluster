@@ -7,6 +7,7 @@
 //! |---|---|
 //! | [`Cause`] · [`caused_by`] · [`cause`] | the event that caused what this task does now (its `parent_event_id`) + the session / correlation it belongs to; set around a loop event (`LoopDispatch`: `loop.started`), a decide run (`trigger.*`), a loop's tool call (`action.selected`), a feed's calls and tick (`feed.fired`). Read where the next event is written: `LoopDispatch::enqueue`, `DecisionLoop::run_event`, [`TracedExecutor`]. A task it spawns does not inherit it |
 //! | [`TracedExecutor`] | wraps one agent's executor (inside `egress::AttributedExecutor`, outside `SanitizedToolExecutor`: it sees redacted results): `tool.started` (`Running`, `{tool, args}`) → `tool.completed` (`Ok`) or `tool.failed` (`Failed`: the executor's error, a typed result whose status is not usable, or an `http_request` text whose status line is not 2xx — `reduce::http_ok`, the rule a loop's `ok` uses) with `duration_ms`; `node_id` `tool:<agent>/<tool>`, `call_id` = `ToolCall.id`, parent / session / correlation = the [`cause`]; the result as a summary (`line1` of the text, a typed result's `key` / `status` / `headline`), never the whole text |
+//! | [`GatedTrace`] · [`close_after`] | one piece of work's view of a recording, closed when the work ends — finished, or dropped unfinished (aborted at the shutdown deadline: the work is dropped first, so its own drop record lands): a write in flight finishes first, a later one is dropped, so nothing the work left behind (a step task being aborted, a metrics forwarder mid-send) lands after it or after the run's closing event. A webhook / escalation turn (`inbound/webhooks.rs`), an eval row |
 //! | [`DraftBuffer`] · [`replay_child`] | a `run-agent` child's sink (`AgentIpcInput.trace` set): keeps its `tool.*` drafts (child clock, parent = the step's `step.started` for a root, ids `ipc:<n>`, redacted + bounded, ≤ [`MAX_CHILD_EVENTS`]) for `AgentIpcOutput.trace` · the parent writes them into its own recording in order, each `ipc:<n>` parent mapped to the id its sink gave, the session = the step's, anything but `tool.*` dropped — one writer per run file |
 //!
 //! The decorator reports what the executor returned, judged by the shared
@@ -287,6 +288,67 @@ impl TraceSink for DraftBuffer {
     /// The child writes into the parent's run, not one of its own.
     fn run_id(&self) -> Option<&str> {
         None
+    }
+}
+
+/// One piece of work's view of a recording (module table): open until
+/// [`Self::close`]. A write in flight when it closes finishes first (one lock
+/// over the check and the write); a later one is dropped.
+pub(crate) struct GatedTrace {
+    inner: Arc<dyn TraceSink>,
+    open: Mutex<bool>,
+}
+
+impl GatedTrace {
+    pub(crate) fn new(inner: Arc<dyn TraceSink>) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            open: Mutex::new(true),
+        })
+    }
+
+    /// Nothing written through this gate after this returns.
+    pub(crate) fn close(&self) {
+        *self.open.lock().unwrap_or_else(|p| p.into_inner()) = false;
+    }
+}
+
+impl TraceSink for GatedTrace {
+    fn emit(&self, draft: EventDraft) -> Option<String> {
+        let open = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        if !*open {
+            tracing::debug!(kind = %draft.kind, "trace event after its work ended — not written");
+            return None;
+        }
+        self.inner.emit(draft)
+    }
+
+    fn run_id(&self) -> Option<&str> {
+        self.inner.run_id()
+    }
+}
+
+/// `work`, then `gate` closed (module table) — also when `work` is dropped
+/// unfinished (a turn aborted at the shutdown deadline): `work` is dropped
+/// first, so what its drop writes (`plan.completed`, dropped) still lands.
+#[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+pub(crate) async fn close_after<F: Future<Output = ()>>(gate: Arc<GatedTrace>, work: F) {
+    struct CloseOnDrop<F> {
+        work: Option<std::pin::Pin<Box<F>>>,
+        gate: Arc<GatedTrace>,
+    }
+    impl<F> Drop for CloseOnDrop<F> {
+        fn drop(&mut self) {
+            self.work = None;
+            self.gate.close();
+        }
+    }
+    let mut guard = CloseOnDrop {
+        work: Some(Box::pin(work)),
+        gate,
+    };
+    if let Some(w) = guard.work.as_mut() {
+        w.await;
     }
 }
 
@@ -589,5 +651,55 @@ pub(crate) mod tests {
             sink.all()[1].payload["line1"],
             json!("HTTP 503 https://api.example/x")
         );
+    }
+
+    /// Writes `kind` through `sink` when dropped.
+    struct DropWrite(Arc<dyn TraceSink>, &'static str);
+
+    impl Drop for DropWrite {
+        fn drop(&mut self) {
+            self.0.emit(EventDraft::new(
+                Component::Orchestrator,
+                self.1,
+                Status::Dropped,
+            ));
+        }
+    }
+
+    /// The gate closes when the work ends, finished or dropped unfinished
+    /// (aborted): what the work's drop writes lands, a straggler after it
+    /// does not.
+    #[tokio::test]
+    async fn close_after_shuts_the_gate_when_the_work_ends_or_is_dropped() {
+        let sink = Arc::new(MemTrace::default());
+        // Finished.
+        let gate = GatedTrace::new(sink.clone());
+        let via: Arc<dyn TraceSink> = gate.clone();
+        close_after(Arc::clone(&gate), async move {
+            via.emit(EventDraft::new(
+                Component::Orchestrator,
+                "work.done",
+                Status::Ok,
+            ));
+        })
+        .await;
+        let late = EventDraft::new(Component::Orchestrator, "straggler", Status::Ok);
+        assert_eq!(gate.emit(late), None);
+        assert_eq!(gate.run_id(), Some("mem"));
+        // Dropped unfinished (a JoinSet abort): the work goes first.
+        let gate = GatedTrace::new(sink.clone());
+        let via: Arc<dyn TraceSink> = gate.clone();
+        let (started, running) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(close_after(Arc::clone(&gate), async move {
+            let _record = DropWrite(via, "work.cancelled");
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        }));
+        running.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        let late = EventDraft::new(Component::Orchestrator, "straggler", Status::Ok);
+        assert_eq!(gate.emit(late), None);
+        assert_eq!(sink.kinds(), ["work.done", "work.cancelled"]);
     }
 }

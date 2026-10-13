@@ -11,7 +11,7 @@ n8n-style canvas inside Tengu Studio: drag agents, tools, skills, workspaces, se
 | 3. Validate | **Validate** = compile + `Config::load` on a temp copy + diff vs `config.toml` + secrets checklist |
 | 4. Finalise | **Write config.toml** (only when the loader accepts it; old file → `config.toml.prev`) |
 | 5. Run | `tengu chat --sandbox <name>` (· `tengu telegram` · `tengu webhooks` · `tengu studio`) |
-| Re-open | `tengu studio --sandbox <name> --allow-edit [--open]` → prints `Builder: http://127.0.0.1:<port>/builder#t=<token>` |
+| Re-open | `tengu studio --sandbox <name> --allow-edit [--open]` → prints `Builder: http://127.0.0.1:<port>/builder#t=<token>` (a name outside the rule is refused before the server starts) |
 
 Flags: `tengu sandbox new --name <n> --template <t> [--no-open] [--port <p>]` (no prompts).
 
@@ -61,6 +61,10 @@ The Cloudflare store and the seal-proxy card are always offered. A secret card o
 |---|---|
 | Only sandboxes made by `tengu sandbox new` (with `builder.json`) are editable; hand-written ones are view-only | `application/builder.rs::why_not` |
 | `[generation]`-bound (W1) or hardened (`[risk]`, `[paper]`, `[soe]`, `[xmarket]`, a Solana signer = `[solana] privy_wallet_id`) = view-only | `config/builder::editable` |
+| A current `config.toml` that does not parse = view-only (save / Finalise 403) + a canvas error: never replaced; fix it by hand (or restore `config.toml.prev`) | `config/builder::editable`, `compile::emit` |
+| Sandbox name `[a-z0-9][a-z0-9_-]`, ≤ 40 (no `/`, `.`, `..`, absolute path) at every entry: `sandbox new` / `compile` / `finalise`, `tengu studio --allow-edit`, `Builder::new` | `config/builder::sandbox_name_error` |
+| The store re-checks the name and proves containment before every read / write: an existing dir must resolve inside `sandboxes/`, an existing file inside `sandboxes/<n>/` (canonicalized; a symlink out = refused); writes are temp + rename (a link at the path is replaced, not followed) | `outbound/builder_store.rs::FsDrafts` |
+| A blueprint whose `sandbox` is not the builder's own (byte-equal) = 400 on save / preview / Finalise | `Builder::own` |
 | Finalise refused while the sandbox's `tengu run` heartbeat is fresh (409) or the preview is stale (409, sha256) | `Builder::finalise` |
 | Owned sections rewritten; every other top-level key of `config.toml` kept as it is | `compile::OWNED` |
 | Never offered: `run_command`, wallet signing, Solana sends, exec tools | `palette::offered` |
@@ -72,7 +76,7 @@ The Cloudflare store and the seal-proxy card are always offered. A secret card o
 | Need | How |
 |---|---|
 | What would Finalise write? | `tengu sandbox compile --sandbox <n>` — TOML on stdout, every issue (`[card <id> · <field>]`, `[wire <id>]`) + loader verdict on stderr, exit 1 on an error |
-| Finalise without a browser | `tengu sandbox finalise --sandbox <n>` |
+| Finalise without a browser | `tengu sandbox finalise --sandbox <n>` — stderr: every issue, loader warnings, the diff vs `config.toml` (or `view-only: <why>`), then the write. No prompt; run `compile` first to look without writing |
 | The palette | `tengu sandbox palette` (JSON) |
 | What the page sent / Rust answered | **Debug** drawer: issues, blueprint JSON, last response, request log |
 | Server side | one `builder:` line per request (route, sandbox, ms, refusal) in stderr + `<TENGU_HOME>/logs/tengu.log` |

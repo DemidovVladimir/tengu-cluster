@@ -8,6 +8,7 @@
 //! | ≤ `[runtime] max_decisions_in_flight` running across loops | one FIFO `Semaphore` |
 //! | ≤ `[runtime] max_queued_per_loop` waiting per loop | one more is refused ([`Refused::QueueFull`]) with a warn, counted dropped, `last_error` set |
 //! | shutdown ([`LoopDispatch::drain`]) | new events refused ([`Refused::ShuttingDown`]), queued ones dropped, running ones get until the deadline, then are aborted |
+//! | orchestrator turns ([`Turns`], [`LoopDispatch::spawn_turn`]) | a webhook agent endpoint's turn, a loop escalation: run at once (no queue, no cap), owned by the dispatch; the drain waits for them with the events until the same deadline, then aborts them (the turn's drop records it: `plan.completed`, dropped); refused once it began. `DrainReport.turns_*` |
 //! | stats ([`LoopStats`]) | queued · in flight · accepted · completed · failed · dropped · last event / finish times · last error |
 //! | trace ([`LoopDispatch::with_trace`]) | `loop.queued` (`Pending`, parent = the sender's `trace_exec::cause`: a tick's `feed.fired`) → `loop.started` (`Running`, `waited_ms`) → `loop.completed` (`Ok`) / `loop.failed` (`Failed`, `error`) with `duration_ms`; `loop.dropped` (`Dropped`: queued at shutdown, or aborted at the deadline); `loop.refused` (`Refused`: `unknown_loop` · `shutting_down` · `queue_full`); each the one before's child, node `loop:<name>`, session = the event's; payload `stats` = the counters right after (the same [`LoopStats`] the heartbeat writes). The handler runs caused by `loop.started` |
 
@@ -121,6 +122,105 @@ pub(crate) struct DrainReport {
     pub dropped: u64,
     /// Running events aborted at the deadline.
     pub aborted: u64,
+    /// Orchestrator turns ([`Turns`]) that finished inside the grace period.
+    pub turns_finished: u64,
+    /// Orchestrator turns aborted at the deadline.
+    pub turns_aborted: u64,
+}
+
+impl DrainReport {
+    /// The report as a closing event carries it (`runtime.stopped` `drain`,
+    /// `run.closed` `drained`, `studio.runtime`).
+    pub(crate) fn to_json(self) -> Value {
+        json!({
+            "finished": self.finished,
+            "dropped": self.dropped,
+            "aborted": self.aborted,
+            "turns": {
+                "finished": self.turns_finished,
+                "aborted": self.turns_aborted,
+            },
+        })
+    }
+}
+
+/// The orchestrator turns a process accepted outside the loop queues — a
+/// webhook agent endpoint's turn, a loop escalation (`inbound/webhooks.rs`):
+/// they run at once (no queue, no in-flight cap), owned so the shutdown
+/// waits for them. The [`LoopDispatch`] that holds them drains them with its
+/// loop events, until the same deadline, then aborts what still runs (the
+/// turn's drop records it: `plan.completed`, dropped). Refused once the
+/// drain began ([`Refused::ShuttingDown`]).
+pub(crate) struct Turns {
+    /// `None` once [`Self::drain`] began.
+    set: Mutex<Option<JoinSet<()>>>,
+}
+
+impl Default for Turns {
+    fn default() -> Self {
+        Self {
+            set: Mutex::new(Some(JoinSet::new())),
+        }
+    }
+}
+
+impl Turns {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Run `turn` now, owned (type docs).
+    #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+    pub(crate) fn spawn(
+        &self,
+        turn: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), Refused> {
+        let mut set = self.set.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(set) = set.as_mut() else {
+            return Err(Refused::ShuttingDown);
+        };
+        while set.try_join_next().is_some() {}
+        set.spawn(turn);
+        Ok(())
+    }
+
+    /// Refuse new turns, wait for the running ones until `deadline`, abort
+    /// the rest: `(finished, aborted)`. A turn's abort is done when this
+    /// returns (its future, and what its drop writes, are gone).
+    async fn drain(&self, deadline: Instant) -> (u64, u64) {
+        let taken = self
+            .set
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let Some(mut set) = taken else {
+            return (0, 0);
+        };
+        let (mut finished, mut aborted) = (0, 0);
+        loop {
+            match tokio::time::timeout_at(deadline, set.join_next()).await {
+                Ok(Some(_)) => finished += 1,
+                Ok(None) => break,
+                Err(_) => {
+                    set.abort_all();
+                    while let Some(r) = set.join_next().await {
+                        match r {
+                            Err(e) if e.is_cancelled() => aborted += 1,
+                            _ => finished += 1,
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        if aborted > 0 {
+            warn!(
+                aborted,
+                "orchestrator turns still running at the shutdown deadline — aborted"
+            );
+        }
+        (finished, aborted)
+    }
 }
 
 struct Slot {
@@ -146,6 +246,9 @@ pub(crate) struct LoopDispatch {
     tasks: Mutex<JoinSet<()>>,
     /// Where `loop.*` events go ([`Self::with_trace`]); `None` = nowhere.
     trace: Option<Arc<dyn TraceSink>>,
+    /// The process's orchestrator turns, drained with the loop events
+    /// ([`Self::with_turns`]).
+    turns: Arc<Turns>,
 }
 
 impl LoopDispatch {
@@ -175,6 +278,7 @@ impl LoopDispatch {
             closing: watch::channel(false).0,
             tasks: Mutex::new(JoinSet::new()),
             trace: None,
+            turns: Turns::new(),
         }
     }
 
@@ -182,6 +286,23 @@ impl LoopDispatch {
     pub(crate) fn with_trace(mut self, sink: Arc<dyn TraceSink>) -> Self {
         self.trace = Some(sink);
         self
+    }
+
+    /// Own `turns` (made before this dispatch: an escalator built with the
+    /// loops holds them too) instead of a set of its own.
+    pub(crate) fn with_turns(mut self, turns: Arc<Turns>) -> Self {
+        self.turns = turns;
+        self
+    }
+
+    /// Run an orchestrator turn owned by this dispatch ([`Turns`]):
+    /// [`Self::drain`] waits for it. Refused once the drain began.
+    #[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+    pub(crate) fn spawn_turn(
+        &self,
+        turn: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), Refused> {
+        self.turns.spawn(turn)
     }
 
     pub(crate) fn names(&self) -> Vec<String> {
@@ -334,8 +455,10 @@ impl LoopDispatch {
         sink.emit(d);
     }
 
-    /// Refuse new events, drop queued ones, let running ones finish until
-    /// `deadline`, then abort them.
+    /// Refuse new events and turns, drop queued events, let running events
+    /// and turns ([`Turns`]) finish until `deadline`, then abort them. Both
+    /// shutdowns (`tengu run`, `tengu webhooks`) await it before their
+    /// closing trace event and the lease release.
     pub(crate) async fn drain(&self, deadline: Instant) -> DrainReport {
         // Counters before the queue can react to `closing`; `submit` waits on
         // the same lock, so nothing new is accepted in between.
@@ -345,27 +468,34 @@ impl LoopDispatch {
             self.closing.send_replace(true);
             (std::mem::take(&mut *tasks), before)
         };
-        let mut aborted = 0;
-        loop {
-            match tokio::time::timeout_at(deadline, set.join_next()).await {
-                Ok(Some(_)) => {}
-                Ok(None) => break,
-                Err(_) => {
-                    set.abort_all();
-                    while let Some(r) = set.join_next().await {
-                        if matches!(&r, Err(e) if e.is_cancelled()) {
-                            aborted += 1;
+        let events = async {
+            let mut aborted = 0;
+            loop {
+                match tokio::time::timeout_at(deadline, set.join_next()).await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(_) => {
+                        set.abort_all();
+                        while let Some(r) = set.join_next().await {
+                            if matches!(&r, Err(e) if e.is_cancelled()) {
+                                aborted += 1;
+                            }
                         }
+                        break;
                     }
-                    break;
                 }
             }
-        }
+            aborted
+        };
+        let (aborted, (turns_finished, turns_aborted)) =
+            tokio::join!(events, self.turns.drain(deadline));
         let after = self.totals();
         DrainReport {
             finished: after.finished - before.finished,
             dropped: (after.dropped - before.dropped).saturating_sub(aborted),
             aborted,
+            turns_finished,
+            turns_aborted,
         }
     }
 
@@ -375,7 +505,7 @@ impl LoopDispatch {
             DrainReport {
                 finished: acc.finished + st.completed + st.failed,
                 dropped: acc.dropped + st.dropped,
-                aborted: 0,
+                ..DrainReport::default()
             }
         })
     }
@@ -711,7 +841,8 @@ pub(crate) mod tests {
             DrainReport {
                 finished: 1,
                 dropped: 1,
-                aborted: 0
+                aborted: 0,
+                ..DrainReport::default()
             }
         );
         assert_eq!(*a.seen.lock().unwrap(), ["running"]);
@@ -756,6 +887,50 @@ pub(crate) mod tests {
         );
     }
 
+    /// Pushes `what` onto the log when dropped.
+    struct OnDrop(Arc<Mutex<Vec<&'static str>>>, &'static str);
+
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().push(self.1);
+        }
+    }
+
+    /// Owned turns: the drain waits for a running one, aborts one past the
+    /// deadline — its drop has run when the drain returns, so what it
+    /// records precedes the caller's closing event — and refuses new ones;
+    /// a turn shared with an escalator (`with_turns`) is the same set.
+    #[tokio::test]
+    async fn drain_waits_for_turns_then_aborts_the_rest() {
+        let turns = Turns::new();
+        let d = dispatch(&[], 4).with_turns(Arc::clone(&turns));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let l = Arc::clone(&log);
+        turns
+            .spawn(async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                l.lock().unwrap().push("finished");
+            })
+            .unwrap();
+        let l = Arc::clone(&log);
+        d.spawn_turn(async move {
+            let _record = OnDrop(l, "aborted");
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        })
+        .unwrap();
+        let t0 = std::time::Instant::now();
+        let report = d.drain(Instant::now() + Duration::from_millis(300)).await;
+        assert!(t0.elapsed() < Duration::from_secs(5));
+        assert_eq!((report.turns_finished, report.turns_aborted), (1, 1));
+        assert_eq!(*log.lock().unwrap(), ["finished", "aborted"]);
+        assert_eq!(d.spawn_turn(async {}), Err(Refused::ShuttingDown));
+        assert_eq!(turns.spawn(async {}), Err(Refused::ShuttingDown));
+        assert_eq!(
+            report.to_json()["turns"],
+            json!({"finished": 1, "aborted": 1})
+        );
+    }
+
     #[tokio::test]
     async fn drain_aborts_what_outlives_the_deadline() {
         let a = SlowLoop::new(60_000);
@@ -770,7 +945,8 @@ pub(crate) mod tests {
             DrainReport {
                 finished: 0,
                 dropped: 0,
-                aborted: 1
+                aborted: 1,
+                ..DrainReport::default()
             }
         );
         let st = &d.stats()["a"];

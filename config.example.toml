@@ -450,7 +450,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
 # once + the [webhooks] routes (build with --features webhooks). All optional.
 # [runtime]
-# shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events get this long, then abort
+# shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events + planner turns (webhook, escalation) get this long, then abort
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
 # max_queued_per_loop = 64                  # events one loop holds waiting; one more is refused (warn, webhook 429)
 # heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
@@ -840,6 +840,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.coder.codex]
 # sandbox = "read-only"                     # read-only | workspace-write (Codex's own shell / patch tool; never network)
 # cli_path = "codex"                        # default: `codex` on PATH
+# forward_env = ["OPENROUTER_API_KEY"]      # default []: the CLI starts from an EMPTY
+#                                           # env (no vault secret, .env key or seal-proxy
+#                                           # session); names listed here reach it and its
+#                                           # bridge — readable by its built-in shell
 
 # --- Network egress (Tor by default, host allowlist, audit) ---
 # Code-enforced policy for every request tengu makes. docs/egress-2026-09-16.md

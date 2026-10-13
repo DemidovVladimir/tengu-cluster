@@ -237,7 +237,9 @@ pub(crate) async fn run_studio(
     let mut app_state = AppState::new(ctx, guard::Token::generate()?, addr, stop_rx.clone())
         .with_control(Arc::new(control));
     if opts.allow_edit {
-        let b = crate::bootstrap::builder::builder(&app_state.ctx.sandbox);
+        // A name the builder's rule refuses never gets a builder.
+        let b = crate::bootstrap::builder::builder(&app_state.ctx.sandbox)
+            .map_err(|e| anyhow::anyhow!("--allow-edit: {e}"))?;
         app_state = app_state.with_builder(Arc::new(b));
     }
     let state = Arc::new(app_state);

@@ -5,8 +5,8 @@
 //! | Helper | Builds |
 //! |---|---|
 //! | [`facts`] | every catalog tool `config::builder::palette::offered` keeps (name, description, JSON schema, opt-in, needs memory) · every skill found from the working directory (`skills/`, `~/.tengu/skills/`) · whether this build knows `[keys]` |
-//! | [`drafts`] | `FsDrafts` over `./sandboxes`, busy = a fresh `tengu run` heartbeat (`run-<sandbox>.json` in the sandbox's runtime state dir) |
-//! | [`builder`] | the `Builder` of one sandbox |
+//! | [`drafts`] | `FsDrafts` over `./sandboxes` (name rule + containment on every op), busy = a fresh `tengu run` heartbeat (`run-<sandbox>.json` in the sandbox's runtime state dir) |
+//! | [`builder`] | the `Builder` of one sandbox (a bad name: 400, nothing read) |
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::adapters::outbound::builder_store::FsDrafts;
 use crate::adapters::outbound::runtime_store::read_heartbeat;
 use crate::adapters::outbound::tools::catalog;
-use crate::application::builder::Builder;
+use crate::application::builder::{check_name, Builder, BuilderError};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::builder::palette::{offered, tool_group};
 use crate::config::builder::{Facts, OfferedTool};
@@ -80,8 +80,11 @@ pub(crate) fn drafts(root: impl Into<PathBuf>) -> Arc<FsDrafts> {
     ))
 }
 
-/// The builder of `sandbox` over `./sandboxes`.
-pub(crate) fn builder(sandbox: &str) -> Builder {
+/// The builder of `sandbox` over `./sandboxes`; a name the rule refuses
+/// (`config::builder::sandbox_name_error`) is refused before anything is
+/// read.
+pub(crate) fn builder(sandbox: &str) -> Result<Builder, BuilderError> {
+    check_name(sandbox)?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     Builder::new(sandbox, facts(&cwd), drafts(SANDBOXES_DIR))
 }

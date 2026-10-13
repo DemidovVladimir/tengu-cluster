@@ -201,6 +201,7 @@ pub(crate) fn build_step_engine(
                     )
                     .with_scopes(agent_config.scopes.clone())
                     .with_bridge_agent(agent_id, &config_file)
+                    .with_forward_env(cx.forward_env.clone())
                     .with_step_bridge(
                         crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,

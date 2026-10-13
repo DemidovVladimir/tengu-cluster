@@ -21,6 +21,15 @@
 //! - Every `record()` ALSO emits a structured `tracing::info!` line — this is
 //!   the always-on baseline visible via `RUST_LOG=tengu=info`. The bus is
 //!   only used by in-process subscribers (the TUI bottom-bar).
+//! - Each orchestrator owns one forwarder from the sink onto its event bus
+//!   (`application::metrics::forward_sink`, built by `build_orchestrator`;
+//!   it ends with the orchestrator). The trace writes a record
+//!   (`metrics.recorded`) when the forwarder hands it on — later than the
+//!   call that made it — so the forwarder has a barrier:
+//!   `Orchestrator::flush_metrics` resolves once every record put on the
+//!   sink before it is on the bus. An eval row and a webhook / escalation
+//!   turn await it before their trace closes (no timed sleep): a record
+//!   never follows `run.closed`. `record()` itself still never waits.
 //! - A `MetricsAggregator` listens on the bus and rolls up totals per
 //!   session / per agent / per kind. The TUI uses one to render a compact
 //!   status line. Aggregator is opt-in — the bus works without it.

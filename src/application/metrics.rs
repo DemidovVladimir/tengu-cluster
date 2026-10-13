@@ -1,9 +1,11 @@
 //! Metrics sink — the process-global broadcast bus every LLM / embedding
-//! call reports to (`record`). Record types live in `domain::metrics`; the
-//! doctrine and design notes are there too.
+//! call reports to (`record`), and the forwarder that hands it on with a
+//! barrier ([`forward_sink`] → [`MetricsBarrier`]). Record types live in
+//! `domain::metrics`; the doctrine and design notes are there too.
 
 use std::sync::OnceLock;
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::domain::metrics::MetricsRecord;
 
@@ -98,10 +100,97 @@ pub fn forward(rec: MetricsRecord) {
     }
 }
 
+/// The barrier of one [`forward_sink`] forwarder. Dropping it ends the
+/// forwarder.
+pub(crate) struct MetricsBarrier(mpsc::UnboundedSender<oneshot::Sender<()>>);
+
+impl MetricsBarrier {
+    /// Resolves once the forwarder has handed on every record put on the
+    /// global sink before this call (at once when the forwarder has ended).
+    /// What a surface awaits before it closes its trace: a record still in
+    /// the sink would land after the closing event.
+    pub(crate) async fn flush(&self) {
+        let (ack, acked) = oneshot::channel();
+        if self.0.send(ack).is_ok() {
+            let _ = acked.await;
+        }
+    }
+}
+
+/// Subscribe to the global sink now (installing it), then hand each record
+/// to `on_record` in order, on a task of its own, until `on_record` returns
+/// `false` or the returned barrier is dropped. A flush drains what the sink
+/// already holds before it answers: a record sent before the flush was sent
+/// is handed on before it resolves.
+pub(crate) fn forward_sink(
+    mut on_record: impl FnMut(MetricsRecord) -> bool + Send + 'static,
+) -> MetricsBarrier {
+    let mut records = install_global_sink().subscribe();
+    let (tx, mut flushes) = mpsc::unbounded_channel::<oneshot::Sender<()>>();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                got = records.recv() => match got {
+                    Ok(rec) => {
+                        if !on_record(rec) {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!(dropped = n, "metrics sink subscriber lagged");
+                    }
+                    Err(RecvError::Closed) => break,
+                },
+                flush = flushes.recv() => {
+                    // The barrier is gone: so is whoever reads what we hand on.
+                    let Some(ack) = flush else { break };
+                    loop {
+                        match records.try_recv() {
+                            Ok(rec) => {
+                                if !on_record(rec) {
+                                    let _ = ack.send(());
+                                    return;
+                                }
+                            }
+                            Err(TryRecvError::Lagged(n)) => {
+                                tracing::warn!(dropped = n, "metrics sink subscriber lagged");
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let _ = ack.send(());
+                }
+            }
+        }
+    });
+    MetricsBarrier(tx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::metrics::MetricsKind;
+    use std::sync::{Arc, Mutex};
+
+    fn rec(session: &str, total_tokens: u32) -> MetricsRecord {
+        MetricsRecord {
+            ts_unix: 0,
+            session_id: session.into(),
+            kind: MetricsKind::Subagent,
+            agent: "researcher".into(),
+            model: "m".into(),
+            prompt_tokens: 1,
+            completion_tokens: 2,
+            total_tokens,
+            prompt_chars: 0,
+            prompt_bytes: 0,
+            response_chars: 0,
+            latency_ms: 0,
+            layers: Vec::new(),
+            step_id: None,
+        }
+    }
 
     /// `forward` puts a child's record on the sink (the TUI panel and the
     /// event bridge still see it) without logging it a second time.
@@ -109,24 +198,38 @@ mod tests {
     fn forward_reaches_the_sink() {
         let mut rx = install_global_sink().subscribe();
         let session = format!("fwd-{}", uuid::Uuid::new_v4());
-        forward(MetricsRecord {
-            ts_unix: 0,
-            session_id: session.clone(),
-            kind: MetricsKind::Subagent,
-            agent: "researcher".into(),
-            model: "m".into(),
-            prompt_tokens: 1,
-            completion_tokens: 2,
-            total_tokens: 3,
-            prompt_chars: 0,
-            prompt_bytes: 0,
-            response_chars: 0,
-            latency_ms: 0,
-            layers: Vec::new(),
-            step_id: None,
-        });
+        forward(rec(&session, 3));
         // Other tests share the process-global sink: skip their records.
         let got = std::iter::from_fn(|| rx.try_recv().ok()).find(|r| r.session_id == session);
         assert_eq!(got.map(|r| r.total_tokens), Some(3));
+    }
+
+    /// The barrier: a record sent just before `flush` has been handed on
+    /// when it resolves — on a current-thread runtime the forwarder has not
+    /// run once before the flush, so nothing but the barrier orders them.
+    /// Dropping the barrier ends the forwarder (a later flush of a clone
+    /// would resolve at once; there is none).
+    #[tokio::test]
+    async fn flush_resolves_after_every_record_sent_before_it() {
+        let session = format!("barrier-{}", uuid::Uuid::new_v4());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = Arc::clone(&seen);
+        let mine = session.clone();
+        let barrier = forward_sink(move |r| {
+            if r.session_id == mine {
+                s.lock().unwrap().push(r.total_tokens);
+            }
+            true
+        });
+        record(rec(&session, 1));
+        forward(rec(&session, 2));
+        assert!(seen.lock().unwrap().is_empty(), "the forwarder has not run");
+        barrier.flush().await;
+        assert_eq!(*seen.lock().unwrap(), [1, 2]);
+        // A forwarder whose consumer is gone ends; its flush returns at once.
+        let stop = forward_sink(|_| false);
+        record(rec(&session, 3));
+        stop.flush().await;
+        stop.flush().await;
     }
 }

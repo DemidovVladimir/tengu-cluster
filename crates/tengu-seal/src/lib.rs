@@ -11,11 +11,13 @@
 //! | Client list `SHA256:<fp> → {label, session_hours, routes}` | Worker `CLIENTS` var (fingerprints are public) | [`route`] |
 //! | Client identity: an SSH key held by an agent (Secure Enclave via Secretive, Touch ID) | the operator's Mac | [`ssh`] |
 //! | Session token `tss1.<claims>.<hmac>`, key = Worker secret `SESSION_KEY` | tengu RAM only, 24 h default | [`session`] |
-//! | Upstream request (target URL + injected header) and reply masking | built in the Worker | [`target`] |
+//! | Upstream request (target URL + injected header) | built in the Worker | [`target`] |
+//! | Reply masking: every header and body byte, streamed, any type or size (fail closed) | the Worker | [`mask`] |
 //!
 //! Everything here is pure Rust (no I/O, no clock, no RNG), so it builds
 //! natively and for `wasm32-unknown-unknown`.
 
+pub mod mask;
 pub mod route;
 pub mod session;
 pub mod ssh;

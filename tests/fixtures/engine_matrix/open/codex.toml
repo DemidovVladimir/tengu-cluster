@@ -148,6 +148,12 @@ workspace = "${TENGU_MATRIX_WORKSPACE}"
 # switched off — why codex is refused in the hardened family).
 [agents.codex.codex]
 sandbox = "read-only"
+# The CLI starts from an empty env (engines/codex.rs): the names its bridge
+# needs for the open sets — the fixture paths and the matrix MCP value the
+# config expands, the memory set's embeddings key, the privy set's app,
+# the Solana RPC override — are forwarded explicitly (readable by the CLI's
+# shell, which is why it is an opt-in list).
+forward_env = ["TENGU_MATRIX_WORKSPACE", "TENGU_MATRIX_FIXTURES", "TENGU_MATRIX_MCP_VALUE", "TENGU_MATRIX_A2A_URL", "OPENROUTER_API_KEY", "PRIVY_APP_ID", "PRIVY_APP_SECRET", "PRIVY_WALLET_ID", "SOLANA_RPC_URL"]
 
 [agents.codex.limits]
 max_tool_rounds = 14

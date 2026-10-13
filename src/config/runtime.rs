@@ -22,7 +22,8 @@ const MAX_SECS: u64 = 3600;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
-    /// Seconds running loop events and runtime tasks get after SIGINT /
+    /// Seconds running loop events, orchestrator turns (webhook planner
+    /// endpoints, loop escalations) and runtime tasks get after SIGINT /
     /// SIGTERM before they are aborted. Queued events are dropped at once.
     #[serde(default = "default_shutdown_grace_secs")]
     pub shutdown_grace_secs: u64,

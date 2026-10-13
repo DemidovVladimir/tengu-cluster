@@ -177,7 +177,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 ## Codex (`engine = "codex"`)
 
 **Transport:** the OpenAI Codex CLI as a subprocess, `codex exec --json` (JSONL events on stdout, the prompt on stdin)
-**Billing:** the operator's ChatGPT subscription (`codex login` → "Logged in using ChatGPT"); the engine removes `OPENAI_API_KEY` and every `CODEX_*` var but `CODEX_HOME` / `CODEX_CA_CERTIFICATE` from the CLI's env (`codex.rs::stripped_env`), so an API key never bills instead and a parent Codex session's vars never leak in
+**Billing:** the operator's ChatGPT subscription (`codex login` → "Logged in using ChatGPT"); the CLI starts from an EMPTY env + the base set (`codex.rs::BASE_ENV`: `PATH`, `HOME`, locale, temp, TLS certs, `CODEX_HOME` / `CODEX_CA_CERTIFICATE`, non-secret `TENGU_*`) + `[agents.<a>.codex] forward_env` (`codex.rs::child_env`), so no API key bills instead, no parent Codex session's vars leak in, and no vault secret, `.env` key, master password or seal-proxy session reaches the built-in shell (it ignores tengu scopes). A bridged tool under codex reads only those names: forward what it needs (e.g. `OPENROUTER_API_KEY` for memory embeddings) — the shell can read them too
 **Feature flag:** `codex` (on by default)
 **File:** `src/adapters/outbound/engines/codex.rs` (shared with Claude Code: `engines/cli_run.rs`, `outbound/bridge_env.rs`)
 
@@ -197,7 +197,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 | `-s <sandbox>` `-c approval_policy="never"` | Codex's own shell / patch tool: read-only (default) or workspace-write, never network, never asks |
 | `-c web_search="disabled"` + `-c features.<f>=false` (apps, plugins, browser / computer use, image generation, multi-agent, goals, memories, hooks, …) | Codex integrations that run outside tengu scopes and egress are off; a `features.*` name the installed CLI lacks is ignored |
 | `-c developer_instructions=…` | the system prompt, once |
-| `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec=30,tool_timeout_sec=600}` | tengu tools through `tengu mcp-bridge` — the same env contract as Claude Code ([[mcp-bridge]]); Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES of the run's env (no value on the command line); bridged calls are pre-approved (tengu scopes gate them in the bridge) |
+| `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec=30,tool_timeout_sec=600}` | tengu tools through `tengu mcp-bridge` — the same env contract as Claude Code ([[mcp-bridge]]); Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES the CLI holds (the base set + `forward_env`; no value on the command line); bridged calls are pre-approved (tengu scopes gate them in the bridge) |
 
 | Run | Handling |
 |---|---|

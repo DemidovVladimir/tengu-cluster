@@ -391,37 +391,27 @@ pub(crate) fn build_orchestrator(
     // onto the orchestrator event bus so a single subscriber can render
     // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
     // subsequent `build_orchestrator` calls reuse the already-installed
-    // sink. The forwarder holds a weak bus handle: it ends at the first
-    // record after the orchestrator is gone (a webhook turn's orchestrator
-    // used to keep its forwarder, and the bus, alive forever).
-    let metrics_tx = crate::application::metrics::install_global_sink();
-    {
-        let mut metrics_rx = metrics_tx.subscribe();
+    // sink. The forwarder holds a weak bus handle and ends with the
+    // orchestrator (it owns the barrier; a webhook turn's orchestrator used
+    // to keep its forwarder, and the bus, alive forever).
+    // `Orchestrator::flush_metrics` is the barrier a surface awaits before
+    // it closes its trace (an eval row, a webhook turn).
+    let metrics = {
         let weak_bus = bus.downgrade();
-        tokio::spawn(async move {
-            use tokio::sync::broadcast::error::RecvError;
-            loop {
-                match metrics_rx.recv().await {
-                    Ok(record) => {
-                        let Some(bus_tx) = weak_bus.upgrade() else {
-                            break;
-                        };
-                        // `bus.send` returns Err only when zero
-                        // subscribers — fine, drop and keep listening.
-                        let _ = bus_tx.send(
-                            crate::application::orchestrator::events::OrchestratorEvent::MetricsRecorded {
-                                record,
-                            },
-                        );
-                    }
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::warn!(dropped = n, "metrics sink subscriber lagged");
-                    }
-                    Err(RecvError::Closed) => break,
-                }
-            }
-        });
-    }
+        crate::application::metrics::forward_sink(move |record| {
+            let Some(bus_tx) = weak_bus.upgrade() else {
+                return false;
+            };
+            // `bus.send` returns Err only when zero subscribers — fine,
+            // the trace bridge has recorded it; keep listening.
+            let _ = bus_tx.send(
+                crate::application::orchestrator::events::OrchestratorEvent::MetricsRecorded {
+                    record,
+                },
+            );
+            true
+        })
+    };
 
     // Fix B (2026-05-09) — session_id is resolved by the caller and
     // passed in. Single value shared between RagPlanner (recall reads)
@@ -456,14 +446,10 @@ pub(crate) fn build_orchestrator(
     ));
 
     let policy = RetryPolicy::new(cfg.max_attempts_per_step);
-    Some(Orchestrator::new(
-        planner,
-        worker,
-        policy,
-        cfg.max_replans,
-        memory,
-        bus,
-    ))
+    Some(
+        Orchestrator::new(planner, worker, policy, cfg.max_replans, memory, bus)
+            .with_metrics(metrics),
+    )
 }
 
 /// Build a minimal `ChatServiceFactory` suitable for CLI commands that need to
