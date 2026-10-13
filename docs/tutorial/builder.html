@@ -211,7 +211,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li><code>tengu sandbox new</code> asks <b>Sandbox name</b> (three tries) and, on a terminal, a template. Names are <code>[a-z0-9][a-z0-9_-]</code>, at most 40; <code>--name</code> / <code>--template</code> skip the questions.</li>
+        <li><code>tengu sandbox new</code> asks <b>Sandbox name</b> (three tries) and, on a terminal, a template. Names are <code>[a-z0-9][a-z0-9_-]</code>, at most 40; <code>--name</code> / <code>--template</code> skip the questions. <code>compile</code>, <code>finalise</code> and <code>tengu studio --allow-edit</code> check the same rule, so a name never holds <code>/</code>, <code>..</code> or an absolute path.</li>
         <li>The template compiles to TOML, and <code>Config::load</code> must accept it first. Then <code>sandboxes/&lt;n&gt;/</code> is created with <code>builder.json</code> (the canvas) and <code>config.toml</code>. An existing dir is refused.</li>
         <li>The same process starts Studio as <code>tengu studio --sandbox &lt;n&gt; --allow-edit --open</code>: loopback only, a new token, and the builder URL handed to the browser.</li>
         <li>The page asks <code>GET /api/v1/builder</code> for the palette, the blueprint and its status. Every card kind, field, tool, skill, engine and store comes from Rust; the page lists none.</li>
@@ -310,6 +310,10 @@
         <tr><td><code>config.toml</code> but no <code>builder.json</code></td><td>view-only (save 403)</td><td>hand-written: the builder edits sandboxes made by <code>tengu sandbox new</code></td></tr>
         <tr><td><code>[generation]</code></td><td>view-only</td><td>a frozen design; build a new sandbox instead</td></tr>
         <tr><td><code>[risk]</code>, <code>[paper]</code>, <code>[soe]</code>, <code>[xmarket]</code>, a Solana signer (<code>[solana] privy_wallet_id</code>)</td><td>view-only</td><td>a hardened sandbox: its TOML stays hand-edited</td></tr>
+        <tr><td><code>config.toml</code> does not parse</td><td>view-only (save / Finalise 403); a canvas error on the sandbox card</td><td>the builder never replaces a file it cannot read: fix it by hand (or restore <code>config.toml.prev</code>)</td></tr>
+        <tr><td>a name outside <code>[a-z0-9][a-z0-9_-]</code>, ≤ 40 (<code>../x</code>, <code>a/b</code>, <code>/abs</code>)</td><td>refused before any file is read</td><td>the CLI, <code>tengu studio --allow-edit</code> and <code>Builder::new</code> check it; the store checks it again</td></tr>
+        <tr><td>a sandbox dir or file that resolves outside <code>sandboxes/</code> (a symlink out)</td><td>refused by the store</td><td>every read and write proves the canonical path stays inside first</td></tr>
+        <tr><td>a blueprint whose <code>sandbox</code> is not this builder's</td><td>save / preview / Finalise 400</td><td>byte-equal names only; nothing is written</td></tr>
         <tr><td>runtime running</td><td>Finalise 409</td><td>a fresh <code>tengu run</code> heartbeat (under 3 heartbeats old, not stopped)</td></tr>
         <tr><td>blueprint changed since the preview</td><td>Finalise 409</td><td>the sha256 of the TOML differs: Validate again</td></tr>
         <tr><td>an error on the canvas, or the loader refuses</td><td>Finalise 422</td><td>nothing is written</td></tr>
@@ -325,7 +329,7 @@
     <h2 id="s-debug">Debugging</h2>
   </div>
   <div class="grid">
-    <div class="card hands"><h3>No browser</h3><p><code>tengu sandbox compile --sandbox &lt;n&gt;</code> prints the TOML on stdout and every issue on stderr (<code>[card &lt;id&gt; · &lt;field&gt;]</code>, <code>[wire &lt;id&gt;]</code>), then the loader's verdict and sha256; exit 1 on an error. <code>finalise</code> writes it; <code>palette</code> prints the palette JSON.</p></div>
+    <div class="card hands"><h3>No browser</h3><p><code>tengu sandbox compile --sandbox &lt;n&gt;</code> prints the TOML on stdout and every issue on stderr (<code>[card &lt;id&gt; · &lt;field&gt;]</code>, <code>[wire &lt;id&gt;]</code>), then the loader's verdict and sha256; exit 1 on an error. <code>finalise</code> prints the same issues and warnings, then the diff against the file on disk, then writes (no prompt); <code>palette</code> prints the palette JSON.</p></div>
     <div class="card guard"><h3>Debug drawer</h3><p>On the page: <b>Issues</b>, <b>Blueprint JSON</b>, <b>Last response</b> and a <b>Request log</b> (the last 100: method, path, status, ms). Each request is also a <code>console.debug("[builder]", …)</code> line.</p></div>
     <div class="card data"><h3>One log line per request</h3><p>The server logs <code>builder: ok</code> or <code>builder: refused</code> with the route, the sandbox and the ms; Finalise adds <code>config.toml finalised</code> with the sha256. <code>RUST_LOG=tengu=info</code> shows the CLI's steps too.</p></div>
   </div>
@@ -341,7 +345,7 @@
     <li><span class="chip warn">warn</span><span><b>warn</b>It compiles, with a note: an unwired tool, an unsigned webhook, a wrong key name for the engine.</span></li>
     <li><span class="chip bad">err</span><span><b>error</b>Rust refuses it as drawn; Finalise stays off.</span></li>
     <li><span class="chip hands">200</span><span><b>saved · checked</b>The blueprint is in <code>builder.json</code>; the status is fresh.</span></li>
-    <li><span class="chip guard">403</span><span><b>view-only</b>Hand-written, frozen or hardened.</span></li>
+    <li><span class="chip guard">403</span><span><b>view-only</b>Hand-written, frozen, hardened, or a <code>config.toml</code> that does not parse.</span></li>
     <li><span class="chip guard">409</span><span><b>conflict</b>Changed since the preview, or the runtime is running.</span></li>
     <li><span class="chip bad">422</span><span><b>refused</b>Canvas errors, or the config loader said no.</span></li>
     <li><span class="chip bad">400</span><span><b>bad body</b>An unknown field, another sandbox's blueprint, a non-JSON body (415).</span></li>
@@ -356,7 +360,8 @@
   <ul class="checks">
     <li><span><b>The real loader decides.</b> Validate and Finalise run <code>Config::load</code> on a temp copy, the same parse, validation and hardening as every <code>tengu</code> command.</span></li>
     <li><span><b>No key in the TOML.</b> A secret card writes a name, or a Cloudflare route; never a value.</span></li>
-    <li><span><b>Nothing is overwritten by surprise.</b> <code>new</code> refuses an existing dir; Finalise writes atomically after the preview you saw and keeps <code>config.toml.prev</code>.</span></li>
+    <li><span><b>Nothing is overwritten by surprise.</b> <code>new</code> refuses an existing dir; Finalise writes atomically after the preview you saw and keeps <code>config.toml.prev</code>; a <code>config.toml</code> that does not parse is never replaced.</span></li>
+    <li><span><b>Writes stay in <code>sandboxes/&lt;name&gt;/</code>.</b> Every boundary checks the name rule, and the store (<code>FsDrafts</code>) checks it again and canonicalizes each existing dir and file before it reads or writes. A symlink out of the root is refused; a symlink at a written path is replaced, never followed. Tests try <code>../x</code>, <code>a/../../b</code>, absolute paths and a linked dir.</span></li>
     <li><span><b>The page decides nothing.</b> Kinds, fields, wires, colours and verdicts all come from <code>/api/v1/builder</code>; the wire table is only a drag hint.</span></li>
     <li><span><b>Bounded input.</b> A blueprint is strict JSON (unknown fields refused), at most 400 cards and 1 600 wires, ids of 1–64 <code>A-Z a-z 0-9 _ -</code>, a body of at most 1 MiB.</span></li>
     <li><span><b>Studio's fences hold.</b> Loopback only, a per-process token, and Origin + <code>Sec-Fetch-Site</code> + token header on every PUT and POST (<a href="studio.html">Studio</a>).</span></li>
@@ -388,6 +393,9 @@
 <span class="ln cmd"><span class="p">$ </span>tengu sandbox compile --sandbox my-team &gt; /dev/null</span>
 <span class="ln">loader: ok · 0 error(s), 0 warning(s) · sha256 &lt;64 hex&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu sandbox finalise --sandbox my-team</span>
+<span class="ln">loader: ok · 0 error(s), 0 warning(s) · sha256 &lt;64 hex&gt;</span>
+<span class="ln o">diff: no change to config.toml   <span class="hl"># else the unified diff, before the write</span></span>
+<span class="ln">Wrote sandboxes/my-team/config.toml (sha256 &lt;64 hex&gt;)</span>
 <span class="ln cmd"><span class="p">$ </span>tengu secret set OPENROUTER_API_KEY &lt;value&gt;</span>
 <span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox my-team</span></pre>
   </div>
@@ -406,11 +414,11 @@
         <tr><td><code>src/config/builder/palette.rs</code></td><td>card kinds and fields, <code>CONNECTIONS</code>, engines, secret stores, offered tools</td></tr>
         <tr><td><code>src/config/builder/compile.rs</code></td><td>blueprint → TOML, per-card / per-wire status, secrets checklist, <code>OWNED</code></td></tr>
         <tr><td><code>src/config/builder/template.rs</code></td><td><code>blank</code>, <code>team</code>, <code>telegram</code></td></tr>
-        <tr><td><code>src/config/builder/mod.rs</code> · <code>tests.rs</code></td><td><code>Facts</code>, <code>editable</code> (view-only: <code>[generation]</code>, hardened, <code>[solana] privy_wallet_id</code>), <code>load_report</code>; the round-trip tests</td></tr>
-        <tr><td><code>src/application/builder.rs</code></td><td>state, save, preview, finalise, <code>create</code></td></tr>
+        <tr><td><code>src/config/builder/mod.rs</code> · <code>tests.rs</code></td><td><code>Facts</code>, <code>sandbox_name_error</code> (the name rule), <code>editable</code> (view-only: <code>[generation]</code>, hardened, <code>[solana] privy_wallet_id</code>, a file that does not parse), <code>load_report</code>; the round-trip tests</td></tr>
+        <tr><td><code>src/application/builder.rs</code></td><td><code>Builder::new</code> (name rule), state, save, preview, finalise, <code>create</code></td></tr>
         <tr><td><code>src/ports/builder.rs</code></td><td><code>SandboxDrafts</code>: the sandbox files</td></tr>
-        <tr><td><code>src/adapters/outbound/builder_store.rs</code></td><td>files under <code>sandboxes/</code>: atomic writes, <code>.prev</code>, the loader on a temp copy</td></tr>
-        <tr><td><code>src/bootstrap/builder.rs</code></td><td>palette facts from the catalog and skills; the running-runtime probe</td></tr>
+        <tr><td><code>src/adapters/outbound/builder_store.rs</code></td><td>files under <code>sandboxes/</code>: name rule + containment on every op, atomic writes, <code>.prev</code>, the loader on a temp copy</td></tr>
+        <tr><td><code>src/bootstrap/builder.rs</code></td><td>palette facts from the catalog and skills; the running-runtime probe; <code>builder</code> (a bad name: 400)</td></tr>
         <tr><td><code>src/adapters/inbound/studio/builder.rs</code></td><td>the HTTP routes and their status codes</td></tr>
         <tr><td><code>src/adapters/inbound/cli/sandbox.rs</code></td><td><code>tengu sandbox new | compile | finalise | palette</code></td></tr>
         <tr><td><code>web/studio/builder.*</code></td><td>the page: canvas, inspector, preview modal, Debug drawer</td></tr>

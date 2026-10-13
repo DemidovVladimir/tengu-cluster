@@ -5,15 +5,17 @@
 //!
 //! | Use case | Does | Refused |
 //! |---|---|---|
+//! | [`Builder::new`] | the builder of one sandbox | a name `config::builder::sandbox_name_error` refuses (400: `/`, `.`, `..`, absolute) |
 //! | [`Builder::state`] | blueprint (`builder.json`) + palette + its status | — |
 //! | [`Builder::save`] | writes `builder.json`, returns the status | view-only (403), another sandbox's blueprint (400) |
-//! | [`Builder::preview`] | TOML, diff vs `config.toml`, the real loader's verdict (`Config::load` on a temp copy), secrets checklist, sha256 | — (writes nothing) |
+//! | [`Builder::preview`] | TOML, diff vs `config.toml`, the real loader's verdict (`Config::load` on a temp copy), secrets checklist, sha256 | another sandbox's blueprint (400; writes nothing) |
 //! | [`Builder::finalise`] | the previewed TOML → `config.toml` (old one → `config.toml.prev`) + `builder.json` | view-only (403) · changed since the preview or runtime running (409) · loader refuses (422) |
 //! | [`create`] | `sandboxes/<name>/` from a template | bad name, unknown template, the dir exists |
 //!
 //! View-only: a sandbox with a `config.toml` but no `builder.json` (hand
 //! written), or one `config::builder::editable` refuses (`[generation]`,
-//! hardened).
+//! hardened, a `config.toml` that does not parse). The store
+//! (`SandboxDrafts`) checks the name and the path again.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -135,13 +137,27 @@ fn how(env: &str, backend: &str) -> (String, &'static str) {
     }
 }
 
+/// The name rule (`config::builder::sandbox_name_error`) as a 400.
+pub(crate) fn check_name(sandbox: &str) -> Result<(), BuilderError> {
+    match sandbox_name_error(sandbox) {
+        None => Ok(()),
+        Some(why) => Err(BuilderError::BadRequest(format!("sandbox name {why}"))),
+    }
+}
+
 impl Builder {
-    pub(crate) fn new(sandbox: &str, facts: Facts, store: Arc<dyn SandboxDrafts>) -> Self {
-        Self {
+    /// Refused (400) unless `sandbox` passes the name rule.
+    pub(crate) fn new(
+        sandbox: &str,
+        facts: Facts,
+        store: Arc<dyn SandboxDrafts>,
+    ) -> Result<Self, BuilderError> {
+        check_name(sandbox)?;
+        Ok(Self {
             sandbox: sandbox.to_string(),
             facts,
             store,
-        }
+        })
     }
 
     #[cfg_attr(not(feature = "studio"), allow(dead_code))]
@@ -190,7 +206,10 @@ impl Builder {
         self.store.read_config(&self.sandbox).map_err(internal)
     }
 
+    /// `bp` is this sandbox's blueprint (byte-equal names; `self.sandbox`
+    /// passed the name rule in [`Builder::new`]).
     fn own(&self, bp: &Blueprint) -> Result<(), BuilderError> {
+        check_name(&bp.sandbox)?;
         if bp.sandbox != self.sandbox {
             return Err(BuilderError::BadRequest(format!(
                 "this is the builder of '{}', not '{}'",
@@ -328,6 +347,7 @@ impl Builder {
                 load.errors.join("\n- ")
             )));
         }
+        let path = self.store.config_path(&self.sandbox).map_err(internal)?;
         let json = serde_json::to_string_pretty(bp).map_err(|e| internal(e.into()))?;
         self.store
             .write_blueprint(&self.sandbox, &json)
@@ -339,12 +359,12 @@ impl Builder {
         tracing::info!(
             sandbox = %self.sandbox,
             sha256 = %sha,
-            path = %self.store.config_path(&self.sandbox).display(),
+            path = %path.display(),
             "builder: config.toml finalised"
         );
         let secrets = self.secrets(&compiled.secrets);
         Ok(Finalised {
-            written: self.store.config_path(&self.sandbox).display().to_string(),
+            written: path.display().to_string(),
             sha256: sha,
             backup: backup.map(|p| p.display().to_string()),
             next: self.next(bp, &secrets),
@@ -403,9 +423,7 @@ pub(crate) fn create(
     name: &str,
     tpl: &str,
 ) -> Result<PathBuf, BuilderError> {
-    if let Some(why) = sandbox_name_error(name) {
-        return Err(BuilderError::BadRequest(why));
-    }
+    check_name(name)?;
     let bp = template(tpl, name).ok_or_else(|| {
         BuilderError::BadRequest(format!(
             "no template '{tpl}' (one of: {})",
@@ -459,8 +477,8 @@ mod tests {
     }
 
     impl SandboxDrafts for Mem {
-        fn config_path(&self, s: &str) -> PathBuf {
-            PathBuf::from(format!("sandboxes/{s}/config.toml"))
+        fn config_path(&self, s: &str) -> anyhow::Result<PathBuf> {
+            Ok(PathBuf::from(format!("sandboxes/{s}/config.toml")))
         }
         fn read_blueprint(&self, s: &str) -> anyhow::Result<Option<String>> {
             Ok(self.get(s, "builder.json"))
@@ -517,7 +535,7 @@ mod tests {
         let mem = Arc::new(Mem::default());
         let facts = Facts::default();
         create(mem.as_ref(), &facts, "demo", "blank").unwrap();
-        let b = Builder::new("demo", facts, mem.clone());
+        let b = Builder::new("demo", facts, mem.clone()).unwrap();
         (mem, b)
     }
 
@@ -570,7 +588,7 @@ mod tests {
             "config.toml",
             "[agents.a]\nengine = \"openrouter\"\nmodel = \"m\"\n",
         );
-        let b = Builder::new("hand", Facts::default(), mem.clone());
+        let b = Builder::new("hand", Facts::default(), mem.clone()).unwrap();
         let st = b.state().unwrap();
         assert!(!st.editable && st.why_not.unwrap().contains("hand-written"));
         let err = b.save(&st.blueprint).unwrap_err();
@@ -578,7 +596,7 @@ mod tests {
 
         mem.put("w1", "config.toml", "[generation]\nid = \"W1\"\n");
         mem.put("w1", "builder.json", "{}");
-        let b = Builder::new("w1", Facts::default(), mem);
+        let b = Builder::new("w1", Facts::default(), mem).unwrap();
         assert!(b.why_not().unwrap().unwrap().contains("frozen"));
     }
 
@@ -603,9 +621,68 @@ mod tests {
 
     #[test]
     fn a_blueprint_for_another_sandbox_is_refused() {
-        let (_mem, b) = setup();
+        let (mem, b) = setup();
         let mut bp = b.state().unwrap().blueprint;
-        bp.sandbox = "other".into();
-        assert!(matches!(b.save(&bp), Err(BuilderError::BadRequest(_))));
+        let p = b.preview(&bp).unwrap();
+        let before = mem.files.lock().unwrap().clone();
+        for other in ["other", "../demo", "demo/../demo", "/abs/demo", "../../x"] {
+            bp.sandbox = other.into();
+            assert!(matches!(b.save(&bp), Err(BuilderError::BadRequest(_))));
+            assert!(matches!(b.preview(&bp), Err(BuilderError::BadRequest(_))));
+            assert!(matches!(
+                b.finalise(&bp, &p.sha256),
+                Err(BuilderError::BadRequest(_))
+            ));
+        }
+        assert_eq!(*mem.files.lock().unwrap(), before, "nothing written");
+    }
+
+    #[test]
+    fn traversal_names_never_make_a_builder() {
+        let mem: Arc<dyn SandboxDrafts> = Arc::new(Mem::default());
+        for bad in [
+            "../x",
+            "a/../../b",
+            "a/b",
+            "/etc",
+            "/tmp/x",
+            "..",
+            "",
+            "Demo",
+        ] {
+            let err = Builder::new(bad, Facts::default(), mem.clone())
+                .err()
+                .unwrap_or_else(|| panic!("{bad} accepted"));
+            assert!(
+                matches!(&err, BuilderError::BadRequest(m) if m.contains("sandbox name")),
+                "{bad}: {err}"
+            );
+            assert!(matches!(
+                create(mem.as_ref(), &Facts::default(), bad, "blank"),
+                Err(BuilderError::BadRequest(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_current_config_that_does_not_parse_is_never_overwritten() {
+        let (mem, b) = setup();
+        let bp = b.state().unwrap().blueprint;
+        let broken = "[agents.assistant\nengine = \"openrouter\"\n# hand notes\n";
+        mem.put("demo", "config.toml", broken);
+        let why = b.why_not().unwrap().expect("view-only");
+        assert!(why.contains("does not parse") && why.contains("fix it by hand"));
+        let st = b.state().unwrap();
+        assert!(!st.editable && !st.status.ok, "{:?}", st.status.issues);
+        let p = b.preview(&bp).unwrap();
+        assert!(!p.editable && !p.status.ok);
+        let err = b.finalise(&bp, &p.sha256).unwrap_err();
+        assert!(
+            matches!(&err, BuilderError::Forbidden(m) if m.contains("does not parse")),
+            "{err}"
+        );
+        assert!(matches!(b.save(&bp), Err(BuilderError::Forbidden(_))));
+        assert_eq!(mem.get("demo", "config.toml").unwrap(), broken);
+        assert_eq!(mem.get("demo", "config.toml.prev"), None);
     }
 }

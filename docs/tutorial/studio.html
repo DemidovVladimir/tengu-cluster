@@ -463,7 +463,8 @@
         <tr><td>Connections</td><td>12 wires (<code>CONNECTIONS</code>), each mapped to the TOML key it writes; Rust colours each one live, warn or error.</td></tr>
         <tr><td>Validate</td><td><code>Config::load</code> on a temp copy at <code>sandboxes/&lt;s&gt;/config.toml</code>; the page only shows the errors.</td></tr>
         <tr><td>Save</td><td>Finalise, after a TOML preview and a diff: only a sandbox with <code>builder.json</code> (made by <code>tengu sandbox new</code>), never one whose runtime is running; the old file is kept as <code>config.toml.prev</code>.</td></tr>
-        <tr><td>Frozen and hardened</td><td>a W1-bound or hardened sandbox is view-only; a new design is a new sandbox or generation.</td></tr>
+        <tr><td>Frozen and hardened</td><td>a W1-bound or hardened sandbox is view-only, and so is one whose <code>config.toml</code> does not parse (fix it by hand); a new design is a new sandbox or generation.</td></tr>
+        <tr><td>Containment</td><td><code>--allow-edit</code> refuses a <code>--sandbox</code> name outside <code>[a-z0-9][a-z0-9_-]</code> (≤ 40) before the server starts; a blueprint for another sandbox is 400; the store keeps every read and write inside <code>sandboxes/&lt;s&gt;/</code> (a symlink out is refused).</td></tr>
         <tr><td>Narrowing</td><td>decision loops and feeds are not on the canvas: a builder sandbox keeps any it has as hand-written sections, and a loop is narrowed only by an execution map (<code>ExecutionMap::apply</code>).</td></tr>
       </tbody>
     </table>

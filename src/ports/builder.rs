@@ -1,6 +1,7 @@
 //! `SandboxDrafts` — where the Studio builder reads and writes a sandbox
 //! (`application/builder.rs`; adapter `adapters/outbound/builder_store.rs`:
-//! `sandboxes/<name>/` under the working directory, like `--sandbox`).
+//! `sandboxes/<name>/` under the working directory, like `--sandbox`; it
+//! refuses a bad name or a path that leaves `sandboxes/`).
 
 use std::path::PathBuf;
 
@@ -28,9 +29,13 @@ impl SecretState {
     }
 }
 
+/// The file adapter (`FsDrafts`) refuses, in every method, a `sandbox` that
+/// fails `config::builder::sandbox_name_error` and a path that resolves
+/// outside `sandboxes/` — before it reads or writes, whatever the caller
+/// checked.
 pub(crate) trait SandboxDrafts: Send + Sync {
     /// `sandboxes/<sandbox>/config.toml` (shown, never read through).
-    fn config_path(&self, sandbox: &str) -> PathBuf;
+    fn config_path(&self, sandbox: &str) -> Result<PathBuf>;
     /// `builder.json`, if the builder made this sandbox.
     fn read_blueprint(&self, sandbox: &str) -> Result<Option<String>>;
     /// Atomic: a temp file renamed over `builder.json`.

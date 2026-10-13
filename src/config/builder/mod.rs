@@ -15,7 +15,8 @@
 //! | Owned sections (`egress`, `memory`, `studio`, `keys`, `orchestrator`, `telegram`, `webhooks`, `agents`) are rewritten; every other top-level key is kept | `compile::OWNED` |
 //! | Keys never enter TOML: a secret card names an env var and its store | `compile` |
 //! | Never offered: `run_command`, wallet signing, Solana sends, exec tools | `palette::offered` |
-//! | A `[generation]`-bound or hardened sandbox is view-only | [`editable`] |
+//! | A `[generation]`-bound or hardened sandbox, or a `config.toml` that does not parse, is view-only | [`editable`] |
+//! | A sandbox name is `[a-z0-9][a-z0-9_-]{0,39}` at every boundary | [`sandbox_name_error`] |
 
 pub(crate) mod compile;
 pub(crate) mod palette;
@@ -50,7 +51,10 @@ pub(crate) struct Facts {
     pub skills: Vec<(String, String)>,
 }
 
-/// Whether `name` may be a new sandbox: `[a-z0-9][a-z0-9_-]{0,39}`.
+/// Whether `name` may name a builder sandbox: `[a-z0-9][a-z0-9_-]{0,39}`
+/// (no `/`, `.`, `..` or absolute path). Checked where a name enters (CLI
+/// `new` / `compile` / `finalise`, `tengu studio --allow-edit`,
+/// `Builder::new`) and again by the store (`FsDrafts`) before any file.
 pub(crate) fn sandbox_name_error(name: &str) -> Option<String> {
     if compile::valid_name(name) {
         None
@@ -62,10 +66,12 @@ pub(crate) fn sandbox_name_error(name: &str) -> Option<String> {
 }
 
 /// Why the builder may not rewrite a sandbox whose `config.toml` is
-/// `current` (`None`: it may).
+/// `current` (`None`: it may). A file that does not parse is refused: the
+/// builder never replaces what it cannot read.
 pub(crate) fn editable(current: &str) -> Option<String> {
-    let Ok(t) = current.parse::<toml::Table>() else {
-        return None;
+    let t = match current.parse::<toml::Table>() {
+        Ok(t) => t,
+        Err(e) => return Some(malformed(&e)),
     };
     if t.contains_key("generation") {
         return Some(
@@ -90,6 +96,15 @@ pub(crate) fn editable(current: &str) -> Option<String> {
         }
     }
     signer.then(|| "a hardened sandbox (a Solana signer): its TOML stays hand-edited".into())
+}
+
+/// The refusal for a current `config.toml` that does not parse.
+pub(crate) fn malformed(e: &toml::de::Error) -> String {
+    format!(
+        "the current config.toml does not parse: {} — fix it by hand (or restore \
+         config.toml.prev); the builder never replaces a file it cannot read",
+        e.to_string().trim_end()
+    )
 }
 
 /// What the real loader said about a config file.

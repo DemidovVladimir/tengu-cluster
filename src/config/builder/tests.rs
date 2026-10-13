@@ -336,9 +336,46 @@ fn view_only_sandboxes() {
     assert!(editable("[solana]\nprivy_wallet_id = \"w\"\n").is_some());
     assert!(editable("[agents.a]\nengine = \"openrouter\"\nmodel = \"m\"\n").is_none());
     assert!(sandbox_name_error("my-team").is_none());
-    for bad in ["", "My", "-x", "a b", "../x", &"a".repeat(41)] {
+    for bad in [
+        "",
+        "My",
+        "-x",
+        "a b",
+        "../x",
+        "a/../../b",
+        "a/b",
+        "/etc",
+        "/tmp/x",
+        "..",
+        ".",
+        "a\\b",
+        "a\0b",
+        &"a".repeat(41),
+    ] {
         assert!(sandbox_name_error(bad).is_some(), "{bad}");
     }
+}
+
+#[test]
+fn a_current_file_that_does_not_parse_is_refused() {
+    let broken = "[agents.a\nengine = \"openrouter\"\n";
+    let why = editable(broken).expect("view-only");
+    assert!(
+        why.contains("does not parse") && why.contains("fix it by hand"),
+        "{why}"
+    );
+    // Compile never drops it silently: an error on the sandbox card.
+    let b = template("blank", "t").unwrap();
+    let c = compile(&b, &facts(), Some(broken));
+    assert!(!c.status.ok, "{:?}", c.status.issues);
+    let issue = c
+        .status
+        .issues
+        .iter()
+        .find(|i| i.message.contains("does not parse"))
+        .expect("parse issue");
+    assert_eq!(issue.level, crate::domain::blueprint::Level::Error);
+    assert_eq!(issue.node.as_deref(), Some("n-sandbox"));
 }
 
 #[test]

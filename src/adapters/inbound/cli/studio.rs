@@ -2,7 +2,7 @@
 //!
 //! | Command | Does |
 //! |---|---|
-//! | `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control] [--allow-edit]` | the local browser UI (`adapters/inbound/studio`, feature `studio`, on by default): loopback only (`127.0.0.1` default, `::1`; anything else refused), port 0 (default) = any free one; prints `Studio: http://127.0.0.1:<port>/#t=<token>` on stdout; SIGINT / SIGTERM drain a runtime it started, then stop it. Play / Stop / send-event when the sandbox sets `[studio] control = true` or with `--allow-control` — never for a `[generation]`-bound or hardened sandbox (`config/studio.rs`). `--allow-edit` (needs `--sandbox`): also the drag-and-drop builder at `/builder` (`studio/builder.rs`), printed as `Builder: …/builder#t=<token>`. A build without it (`--no-default-features`): an error naming the build flag |
+//! | `tengu studio --sandbox <s> [--port <n>] [--bind <ip>] [--allow-control] [--allow-edit]` | the local browser UI (`adapters/inbound/studio`, feature `studio`, on by default): loopback only (`127.0.0.1` default, `::1`; anything else refused), port 0 (default) = any free one; prints `Studio: http://127.0.0.1:<port>/#t=<token>` on stdout; SIGINT / SIGTERM drain a runtime it started, then stop it. Play / Stop / send-event when the sandbox sets `[studio] control = true` or with `--allow-control` — never for a `[generation]`-bound or hardened sandbox (`config/studio.rs`). `--allow-edit` (needs `--sandbox` with a builder name, `[a-z0-9][a-z0-9_-]`, ≤ 40 — else refused before the server starts): also the drag-and-drop builder at `/builder` (`studio/builder.rs`), printed as `Builder: …/builder#t=<token>`. A build without it (`--no-default-features`): an error naming the build flag |
 //! | `tengu studio graph --sandbox <s> [--map <file\|->]` | the sandbox's `WorkflowGraph` (`domain/workflow.rs`) as JSON on stdout: validated config + catalog tools, narrowed by an execution map when given (a refused map lists every reason), attrs redacted |
 
 use std::path::PathBuf;
@@ -99,8 +99,15 @@ async fn serve_studio(
     serve: ServeArgs,
     secrets: Arc<SecretRegistry>,
 ) -> Result<()> {
-    if serve.allow_edit && config.sandbox_name.is_none() {
-        bail!("--allow-edit needs --sandbox <name> (the builder edits sandboxes/<name>/; `tengu sandbox new` makes one)");
+    if serve.allow_edit {
+        let Some(name) = config.sandbox_name.as_deref() else {
+            bail!("--allow-edit needs --sandbox <name> (the builder edits sandboxes/<name>/; `tengu sandbox new` makes one)");
+        };
+        // The builder's name rule, before the server starts (the store
+        // checks it again on every file).
+        if let Some(why) = crate::config::builder::sandbox_name_error(name) {
+            bail!("--allow-edit: sandbox name {why}");
+        }
     }
     let opts = crate::adapters::inbound::studio::ServeOpts {
         bind: serve.bind.unwrap_or_else(|| DEFAULT_BIND.to_string()),
@@ -172,6 +179,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("server's flags"), "{err:#}");
+    }
+
+    /// `--allow-edit` refuses a sandbox name the builder's rule refuses
+    /// before the server starts.
+    #[cfg(feature = "studio")]
+    #[tokio::test]
+    async fn allow_edit_refuses_a_traversal_name() {
+        for bad in ["../x", "a/../../b", "/tmp/x", "a/b"] {
+            let mut cfg = Config::default();
+            cfg.sandbox_name = Some(bad.into());
+            let serve = ServeArgs {
+                allow_edit: true,
+                ..ServeArgs::default()
+            };
+            let err = run_studio(cfg, serve, None, secrets()).await.unwrap_err();
+            assert!(err.to_string().contains("sandbox name"), "{bad}: {err:#}");
+        }
     }
 
     /// A build without `studio` (`--no-default-features`) names the flag
