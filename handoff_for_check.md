@@ -120,7 +120,7 @@ Diff sizes: #50 = 69 files, +6142 / −81 vs `main`; #51 = 47 files, +1054 / −
 |---|---|---|
 | Key position | `crates/tengu-seal/src/target.rs` (`build`, `check_rest`, `after_key`, `split_path`), `route.rs` | a route's key goes to exactly one place (header / path template / query); `TENGU_SECRET` anywhere else → 403; path escapes (`..`, `//`, `%2f`, `%25`, `\`, `;`) refused; `allow` prefixes enforced |
 | Sessions | `crates/tengu-seal/src/{session,ssh}.rs`, `cloudflare/seal-worker/src/lib.rs` (`authorize`) | HMAC token under `SESSION_KEY`; SSH signature over fp + ts (±60 s) + nonce + Worker origin + routes; granted = asked ∩ `CLIENTS`; every call re-checks `CLIENTS` |
-| Reply masking | `target.rs` (`mask`, `mask_bytes`, `maskable`, `null_body`), `lib.rs` (`mask_reply`) | key masked in headers and text bodies ≤ 2 MiB; larger bodies stream unmasked (`masked` = -1) — documented limit |
+| Reply masking | `target.rs` (`mask`, `mask_bytes`, `maskable`, `null_body`), `lib.rs` (`mask_reply`) | key masked in headers and text bodies ≤ 2 MiB; larger bodies stream unmasked (`masked` = -1) — documented limit → fixed 2026-10-13: fail-closed `tengu-seal::mask` (every byte) |
 | Fail closed | `src/adapters/outbound/keys/mod.rs` (`install`, `DISPLACED` / `REMOVED`), `src/adapters/outbound/secrets.rs`, `src/adapters/inbound/telegram.rs` | no session → every `[keys.env]` var unset; `strip` names removed in every process; displaced / removed values stay redacted; vault never re-injects a removed name; Telegram refuses to start |
 | Privy EVM | `src/adapters/outbound/tools/crypto/helpers.rs::privy_request`, `src/config/keys.rs::FALLBACK_KEYS` | through the proxy the app secret is never read; config without `strip` `PRIVY_APP_SECRET` does not load |
 | Privy Solana | `src/adapters/outbound/solana/privy.rs`, `src/adapters/outbound/tools/solana/write_common.rs::signer_for`, `src/adapters/outbound/solana/signer.rs::sign_transaction` | only via the seal proxy with a session; reply message byte-identical; only the wallet's slot taken; ed25519 `verify_strict` for the `wallet` arg; all slots signed before any is written |
@@ -164,7 +164,7 @@ Diff sizes: #50 = 69 files, +6142 / −81 vs `main`; #51 = 47 files, +1054 / −
 |---|---|
 | Sessions are not refreshed in-process | restart a long run before `session_hours` (≤ 168 h) |
 | A session holder can USE a route's key, never READ it | e.g. any Telegram Bot API method as the bot; `allow` narrows; a Solana-signer sandbox forbids `env_reads` of the session |
-| Reply bodies > 2 MiB stream unmasked | free-plan CPU budget |
+| Reply bodies > 2 MiB stream unmasked → fixed 2026-10-13 (every byte masked; CPU cost on large replies not measured on `wrangler dev`) | free-plan CPU budget |
 | Privy keeping other partial signatures | irrelevant by design: tengu takes only the wallet's slot and fills its own one-shot key |
 | Earlier review findings | `handoff_review.md` 2026-10-09T14:55:11Z P1 (webhook planner turns detached at shutdown) / P2 (eval timed sleep before `run.closed`) — earlier sessions' code, not touched here, still open |
 
