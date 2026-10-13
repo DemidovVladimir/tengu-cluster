@@ -391,6 +391,21 @@ sources = [
   "tests/fixtures/webhooks/",
 ]
 
+[pages.builder]
+sources = [
+  "src/domain/blueprint.rs",
+  "src/config/builder/",
+  "src/ports/builder.rs",
+  "src/application/builder.rs",
+  "src/adapters/outbound/builder_store.rs",
+  "src/bootstrap/builder.rs",
+  "src/adapters/inbound/studio/builder.rs",
+  "src/adapters/inbound/cli/sandbox.rs",
+  "web/studio/builder.html",
+  "web/studio/builder.css",
+  "web/studio/builder.js",
+]
+
 # ── Trading desk ──────────────────────────────────────────────────────────
 
 [pages.solana]

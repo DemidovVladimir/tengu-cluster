@@ -307,7 +307,7 @@
 
 <div class="header">
   <h1>Tengu-Cluster · Architecture Explorer</h1>
-  <div class="sub">2026-04-27 · synced 2026-10-09 · walk the chat turn and the three other flows, expand subsystem cards (incl. SOE O3 / O4, execution trace, Tengu Studio), search the file map · companion to architecture-2026-04-27.{md,svg}</div>
+  <div class="sub">2026-04-27 · synced 2026-10-10 · walk the chat turn and the three other flows, expand subsystem cards (incl. SOE O3 / O4, execution trace, Tengu Studio), search the file map · companion to architecture-2026-04-27.{md,svg}</div>
 </div>
 
 <div class="tabs">
@@ -1032,6 +1032,7 @@ const SUBSYSTEM_GROUPS = [
   { title: "Beyond the chat turn (2026-09-24 → 2026-10-01)", keys: ["runtime", "decision", "observations", "tools", "xmarket", "xlab", "parity"] },
   { title: "Research lineage, rankings, sources, SOE (2026-10-06 → 2026-10-09)", keys: ["lineage", "ranking", "sources", "soe"] },
   { title: "Execution trace + Tengu Studio (2026-10-09)", keys: ["trace", "studio"] },
+  { title: "Studio builder + Codex engine (2026-10-10)", keys: ["builder"] },
 ];
 
 const SUBSYSTEMS = [
@@ -1342,6 +1343,21 @@ const SUBSYSTEMS = [
     ],
     deep: "Play = tengu run's start_session inside the Studio process (the same leases; another holder ⇒ 409 attached); Stop = the graceful drain of the runtime this Studio started; send-event = one scenario into the owned runtime's loop (429 when its queue is full). Safe lab: sandboxes/control-loop-lab ([studio] control = true; loop demo, feeds tick + probe, agent lab with read_file / write_file / list_directory) under an isolated TENGU_HOME. The editor (ST-40) is design only until Operator Review #3. Docs: docs/studio-2026-10-08.md, docs/control-loop-lab-2026-10-08.md, TENGU_STUDIO_PLAN.md, docs/tutorial/studio.html.",
   },
+  {
+    key: "builder", title: "Studio builder (2026-10-10)",
+    subtitle: "drag-and-drop sandboxes: tengu sandbox new asks a name, the canvas composes agents, tools, skills, workspaces, secrets and channels, Rust compiles each wire and Finalise writes config.toml.",
+    files: [
+      ["domain/blueprint.rs", "the canvas document (nodes, edges, view) + Status fold: ok · live · warn · error per card and wire — pure"],
+      ["config/builder/", "palette (10 card kinds, fields, 12 CONNECTIONS, engines, secret stores; never run_command / signing / sends) · compile (blueprint → TOML, owned sections, others kept, keys never in TOML) · templates · load_report (Config::load)"],
+      ["application/builder.rs", "state · save · preview (TOML + diff + loader verdict + secrets checklist + sha256) · finalise (409 stale / running, 422 refused, .prev backup) · create"],
+      ["adapters/outbound/builder_store.rs", "FsDrafts: sandboxes/<n>/builder.json + config.toml, atomic writes, temp-copy load check"],
+      ["adapters/inbound/studio/builder.rs", "GET /builder, GET /api/v1/builder, PUT blueprint, POST preview / finalise — under the Studio guard, --allow-edit only"],
+      ["adapters/inbound/cli/sandbox.rs", "tengu sandbox new (asks name + template, opens the builder) · compile · finalise · palette"],
+      ["adapters/outbound/engines/codex.rs", "engine = codex: the OpenAI ChatGPT subscription through codex exec; tengu tools over the MCP bridge; refused in hardened sandboxes"],
+      ["web/studio/builder.*", "the canvas — draws only; wire colours from Rust; green current on live wires"],
+    ],
+    deep: "View-only: a sandbox without builder.json, [generation]-bound or hardened. The Cloudflare seal-proxy store is probed (keys_supported) and lights up once the build knows [keys] (PR #50). Debug: tengu sandbox compile prints the TOML + every issue pinned to a card or wire.",
+  },
 ];
 
 const FILE_MAP = [
@@ -1595,6 +1611,16 @@ const FILE_MAP = [
   ["src/application/studio/", "studio", "graph (build_graph), stream, board (fold_run), inspect, control"],
   ["src/adapters/inbound/studio/", "studio", "the Studio server: mod.rs (routes), api.rs, sse.rs, control.rs, guard.rs (loopback, token, Host / Origin / CSRF, CSP), assets.rs (web/studio/ embedded)"],
   ["web/studio/", "studio", "index.html, studio.css, studio.js — the page; draws only"],
+  ["src/domain/blueprint.rs", "builder", "Blueprint (canvas doc) + Status fold — pure"],
+  ["src/config/builder/", "builder", "palette, compile (blueprint → TOML), template, load_report"],
+  ["src/application/builder.rs", "builder", "builder use cases: state, save, preview, finalise, create"],
+  ["src/ports/builder.rs", "builder", "SandboxDrafts port"],
+  ["src/adapters/outbound/builder_store.rs", "builder", "FsDrafts: sandboxes/<n>/ files, temp-copy load check"],
+  ["src/bootstrap/builder.rs", "builder", "palette facts (catalog tools, skills, [keys] probe), busy probe"],
+  ["src/adapters/inbound/studio/builder.rs", "builder", "builder routes (--allow-edit)"],
+  ["src/adapters/inbound/cli/sandbox.rs", "builder", "tengu sandbox new / compile / finalise / palette"],
+  ["src/adapters/outbound/engines/codex.rs", "builder", "engine = codex (ChatGPT subscription via codex exec)"],
+  ["web/studio/builder.html", "builder", "builder.html, builder.css, builder.js — the canvas; draws only"],
   // ── skills ──
   ["skills/orchestrator/SKILL.md", "skills", "planner system prompt"],
   ["skills/orchestrator/plan_schema.json", "skills", "the plan JSON shape the planner is asked for"],

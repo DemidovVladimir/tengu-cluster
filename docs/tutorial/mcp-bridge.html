@@ -54,7 +54,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · MCP bridge</div>
   <h1>MCP bridge</h1>
-  <p class="lede">Claude Code runs its own tool loop. Tengu gives it exactly one MCP server, <code>tengu mcp-bridge</code>, which runs Tengu's tools as the calling agent: same scopes, same redaction, same egress.</p>
+  <p class="lede">Claude Code runs its own tool loop. Tengu gives it exactly one MCP server, <code>tengu mcp-bridge</code>, which runs Tengu's tools as the calling agent: same scopes, same redaction, same egress. The Codex CLI (<code>engine = "codex"</code>) gets the same bridge, registered with <code>-c mcp_servers.tengu-tools.*</code>; its env reaches the bridge by name only (<code>env_vars</code>).</p>
   <ul class="facts">
     <li>tools seen as <b>mcp__tengu-tools__&lt;name&gt;</b></li>
     <li>result ≤ <b>50 000</b> chars</li>
@@ -369,7 +369,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
 </article>
 </main>
 </div>

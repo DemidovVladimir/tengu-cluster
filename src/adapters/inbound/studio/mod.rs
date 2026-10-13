@@ -54,6 +54,7 @@
 
 mod api;
 mod assets;
+mod builder;
 pub(crate) mod control;
 mod guard;
 mod sse;
@@ -93,6 +94,10 @@ pub(crate) struct ServeOpts {
     pub bind: String,
     pub port: u16,
     pub allow_control: bool,
+    /// Serve the builder (`/builder`, `/api/v1/builder/…`).
+    pub allow_edit: bool,
+    /// Open the page in the default browser once serving.
+    pub open: bool,
 }
 
 /// What every handler shares.
@@ -107,6 +112,9 @@ pub(crate) struct AppState {
     pub started_ms: i64,
     /// Play / Stop / event (`control.rs`); read-only unless set.
     pub control: Arc<Controller>,
+    /// The builder of this sandbox (`builder.rs`); `None` without
+    /// `--allow-edit`.
+    pub builder: Option<Arc<crate::application::builder::Builder>>,
 }
 
 impl AppState {
@@ -129,6 +137,7 @@ impl AppState {
             shutdown,
             started_ms: now_ms(),
             control,
+            builder: None,
         }
     }
 
@@ -137,11 +146,28 @@ impl AppState {
         self
     }
 
+    pub(crate) fn with_builder(
+        mut self,
+        builder: Arc<crate::application::builder::Builder>,
+    ) -> Self {
+        self.builder = Some(builder);
+        self
+    }
+
     /// The URL to open: the token rides in the fragment, which a browser
     /// never sends to the server.
     pub(crate) fn url(&self) -> String {
         format!(
             "http://{}/#t={}",
+            self.policy.hosts[0],
+            self.policy.token.as_str()
+        )
+    }
+
+    /// The builder page, token in the fragment as for [`Self::url`].
+    pub(crate) fn builder_url(&self) -> String {
+        format!(
+            "http://{}/builder#t={}",
             self.policy.hosts[0],
             self.policy.token.as_str()
         )
@@ -165,6 +191,15 @@ pub(crate) fn router(state: Arc<AppState>) -> Router {
         .route("/api/v1/control/play", post(api::play))
         .route("/api/v1/control/stop", post(api::stop))
         .route("/api/v1/control/event", post(api::event))
+        .route("/builder", get(builder::page))
+        .route("/favicon.ico", get(assets::favicon))
+        .route("/api/v1/builder", get(builder::state))
+        .route(
+            "/api/v1/builder/blueprint",
+            axum::routing::put(builder::save),
+        )
+        .route("/api/v1/builder/preview", post(builder::preview))
+        .route("/api/v1/builder/finalise", post(builder::finalise))
         .fallback(api::not_found)
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(axum::middleware::from_fn_with_state(
@@ -199,10 +234,13 @@ pub(crate) async fn run_studio(
         Controller::read_only(policy, &ctx)
     };
     let (stop_tx, stop_rx) = watch::channel(false);
-    let state = Arc::new(
-        AppState::new(ctx, guard::Token::generate()?, addr, stop_rx.clone())
-            .with_control(Arc::new(control)),
-    );
+    let mut app_state = AppState::new(ctx, guard::Token::generate()?, addr, stop_rx.clone())
+        .with_control(Arc::new(control));
+    if opts.allow_edit {
+        let b = crate::bootstrap::builder::builder(&app_state.ctx.sandbox);
+        app_state = app_state.with_builder(Arc::new(b));
+    }
+    let state = Arc::new(app_state);
     state.control.started(&addr.to_string());
     info!(
         sandbox = %state.ctx.sandbox,
@@ -214,6 +252,16 @@ pub(crate) async fn run_studio(
     );
     // The one place the token is shown (stdout; logs go to stderr).
     println!("Studio: {}", state.url());
+    if state.builder.is_some() {
+        println!("Builder: {}", state.builder_url());
+    }
+    if opts.open {
+        open_in_browser(&if state.builder.is_some() {
+            state.builder_url()
+        } else {
+            state.url()
+        });
+    }
 
     let app = router(Arc::clone(&state));
     let mut wait = stop_rx;
@@ -254,4 +302,26 @@ pub(crate) async fn run_studio(
     }
     info!("tengu studio stopped");
     Ok(())
+}
+
+/// `--open`: hand the URL to the OS (`open` · `xdg-open` · `explorer`);
+/// a failure only warns — the URL is on stdout either way.
+fn open_in_browser(url: &str) {
+    let cmd = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    match std::process::Command::new(cmd)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => info!(cmd, "opened in the browser"),
+        Err(e) => warn!(cmd, error = %e, "could not open a browser — open the printed URL"),
+    }
 }

@@ -2,6 +2,7 @@
 //! Imports only `domain` and `config` (see `tests/layering_lint.rs`).
 
 pub(crate) mod book;
+pub(crate) mod builder;
 pub(crate) mod clock;
 pub(crate) mod decision;
 pub(crate) mod engine;

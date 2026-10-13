@@ -9,7 +9,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | 50 catalog tools (51 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
 | Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loop-plan-2026-09-24.md` |
 | Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime-2026-09-30.md` |
-| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); edit / save is design-only until Operator Review #3 | `tengu studio` (default build), `tengu studio graph`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md`, `docs/control-loop-lab-2026-10-08.md` |
+| Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); the drag-and-drop **builder** (`tengu sandbox new`, `--allow-edit`) composes a sandbox on a canvas and writes its `config.toml` | `tengu studio` (default build), `tengu studio graph`, `tengu sandbox new`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md`, `docs/studio-builder-2026-10-10.md`, `docs/control-loop-lab-2026-10-08.md` |
 | Execution trace: one JSONL file per recording (`tengu run`, `tengu decide`; not `tengu webhooks` yet), correlated events, redacted + bounded payloads | `tengu trace runs` · `show` | `docs/runtime-2026-09-30.md` § Trace |
 | Paper desk: `[risk]` gate inside every order tool, paper ledger, kill switch, exit rules, weekend fade | sandboxes `xmarket`, `xmarket-weekend` | § Paper desk (xmarket) |
 | History-first research: `market.db` warehouse (+ SEC EDGAR filing events), strategy specs, deterministic backtests, Jev replayed on history | `tengu history`, `tengu backtest`, sandboxes `xlab` (W1), `xlab-w2` | § History-first research (xlab) |
@@ -34,7 +34,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 git clone https://github.com/DemidovVladimir/tengu-cluster.git
 git clone https://github.com/DemidovVladimir/lyrebird-rs.git         # sibling checkout, built into the Tor proxy image
 cd tengu-cluster
-cargo build                                            # default features: openrouter + telegram + studio
+cargo build                                            # default features: openrouter + telegram + studio + codex
 cargo run -- secret init                               # encrypted vault ~/.tengu/secrets.vault
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
@@ -81,8 +81,10 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | `webhooks` | `--sandbox` | `[webhooks.endpoints.<n>]` → `POST /webhooks/<n>` (HMAC `X-Tengu-Signature: sha256=<hex>` or a static `auth_header_env` header); 202 + a one-shot orchestrator turn, or `loop = "<name>"` → that decision loop. Takes the leases `tengu run` takes | `webhooks` | `OPENROUTER_API_KEY` (planner / Jev), each endpoint's `secret_env` / `auth_header_env` |
 | `run` | `--sandbox` | The sandbox's long-running process: every `[decision_loops.*]` built once, every `[feeds.*]`, the webhook routes (`webhooks` build + `[webhooks] enabled`); lease `runtime:<s>` (+ `state:<dir>` with `[xmarket]`), heartbeat `<state dir>/run-<s>.json`; SIGINT / SIGTERM drain ≤ `[runtime] shutdown_grace_secs` | default | `OPENROUTER_API_KEY` for Jev loops / LLM agents only |
 | `decide` | `--sandbox`, `--loop <name>`, `--event <file \| ->`, `--map <file \| ->` (an execution map: order, event, tighter caps — only narrows the loop; names its loop) | One event through `[decision_loops.<name>]` (Jev picks, tools run); prints the step outcomes; no escalation | default | `OPENROUTER_API_KEY` |
-| `studio` | `--sandbox`, `[--port <n>]` (0 = any free), `[--bind <loopback ip>]`, `[--allow-control]` | Local Studio server: loopback only, prints its URL (+ per-process token in the fragment) on stdout; graph, runs, live SSE, health; Play / Stop / send-event with control on (`[studio] control = true` or `--allow-control`, never W1-bound / hardened) | `studio` (default) | `OPENROUTER_API_KEY` (Jev, on Play) |
+| `studio` | `--sandbox`, `[--port <n>]` (0 = any free), `[--bind <loopback ip>]`, `[--allow-control]`, `[--allow-edit]`, `[--open]` | Local Studio server: loopback only, prints its URL (+ per-process token in the fragment) on stdout; graph, runs, live SSE, health; Play / Stop / send-event with control on (`[studio] control = true` or `--allow-control`, never W1-bound / hardened) | `studio` (default) | `OPENROUTER_API_KEY` (Jev, on Play) |
 | `studio graph` | `--sandbox`, `[--map <file \| ->]` | The sandbox's workflow graph (validated config + catalog tools; a map only narrows it) as redacted JSON | default | — |
+| `sandbox new` | `[--name <n>]`, `[--template blank\|team\|telegram]`, `[--no-open]`, `[--port <p>]` | Asks the name (and template), writes `sandboxes/<n>/builder.json` + `config.toml`, opens the drag-and-drop builder (`tengu studio --allow-edit --open`) | `studio` (default) | — |
+| `sandbox compile` \| `finalise` \| `palette` | `--sandbox <n>` (compile, finalise) | The builder without a browser: the TOML the canvas compiles to + every issue (exit 1 on an error) · write it · the palette JSON | default | — |
 | `trace` | `--sandbox`; `runs` · `show --run <id> [--after <seq>] [--follow]` | The execution trace `tengu run` / `tengu decide` recorded under `<TENGU_HOME>/logs/trace/<sandbox>/`, JSON lines; no config, read-only | default | — |
 | `history range` | `<key> --from --to` | Recorded observation rows (`[recorder]`) of one key, JSON lines | default | — |
 | `history asof` | `<keys>... --at [--max-age-secs]` | Per key, the latest row at or before `--at` | default | — |
@@ -209,6 +211,7 @@ cargo run --features webhooks -- webhooks --sandbox lping
 | OpenRouter | `engine = "openrouter"` | `anthropic/claude-sonnet-4-6` | always built |
 | Local (Unsloth, Ollama, llama.cpp, vLLM, LM Studio — any OpenAI-compatible server) | `engine = "local"` + optional `[agents.<a>.local] base_url`, `api_key_env`; set `limits.context_window` | the server's own id, verbatim | always built |
 | Claude Code | `engine = "claude_code"` | `claude-sonnet-4-6` (bare) | `claude_code` |
+| OpenAI Codex (ChatGPT subscription, `codex login`) | `engine = "codex"` + optional `[agents.<a>.codex] sandbox` (`read-only` / `workspace-write`); refused in hardened sandboxes | `gpt-5.5` (bare) | `codex` (default) |
 
 Claude Code runs agents through the local `claude` CLI; Tengu tools reach it via the MCP bridge as `mcp__tengu-tools__<name>` (`docs/mcp-bridge.md`). Operator rule (2026-09-30): every tool works under all three engines (`docs/engine-backends.md` § Engine matrix).
 
@@ -240,6 +243,7 @@ Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, 
 | `openrouter` | on | marker only — no code is gated on it; the OpenRouter engine is always built |
 | `telegram` | on | Telegram bot channel |
 | `claude_code` | off | Claude Code CLI backend |
+| `codex` | on | OpenAI Codex CLI backend (ChatGPT subscription) |
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
 | `webhooks` | off | `tengu webhooks` listener, webhook routes under `tengu run` |
 | `studio` | on | the `tengu studio` server (loopback, `web/studio/` embedded); a `--no-default-features` build without it refuses `tengu studio --sandbox`, naming the flag; `tengu studio graph` works in every build |

@@ -3,6 +3,7 @@
 //! `bootstrap` (see `tests/layering_lint.rs`).
 
 pub(crate) mod backtest;
+pub(crate) mod builder;
 pub(crate) mod chat;
 pub(crate) mod decision_loop;
 pub(crate) mod evidence;

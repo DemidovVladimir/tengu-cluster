@@ -68,6 +68,8 @@ pub(super) async fn meta(State(st): St) -> Response {
         "schema": {"workflow": WORKFLOW_SCHEMA_VERSION, "trace": TRACE_SCHEMA_VERSION},
         "read_only": !st.control.enabled(),
         "control_enabled": st.control.enabled(),
+        // `--allow-edit`: the page links the builder (`/builder`).
+        "builder": st.builder.is_some(),
         "server": {
             "pid": std::process::id(),
             "started_ms": st.started_ms,

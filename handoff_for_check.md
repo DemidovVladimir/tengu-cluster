@@ -352,3 +352,43 @@ export TENGU_HOME=$HOME/tengu-lab/home   # never ~/.tengu
 cargo build --release --features studio && target/release/tengu studio --sandbox control-loop-lab   # docs/studio-2026-10-08.md
 target/release/tengu lineage verify --pins --registry lineage                     # 0 errors
 ```
+
+## 11. 2026-10-10 session — Studio builder + `engine = "codex"` (PR #52, OPEN)
+
+| Ask (operator, 2026-10-10) | Delivered |
+|---|---|
+| CLI makes a sandbox template, name asked in the CLI | `tengu sandbox new` (asks name + template; `--name` / `--template` / `--no-open`) |
+| n8n-like web dashboard: draggable tools / agents / sandbox configs with fields, wire relationships, Finalise composes the config | `/builder` (`tengu studio --sandbox <s> --allow-edit`): 10 card kinds, 12 wires, Rust palette + compiler, Validate (real `Config::load` on a temp copy + diff), Finalise → `config.toml` (+ `.prev`) |
+| Secrets pluggable: local + Cloudflare (PR #50) | vault · env · Cloudflare seal proxy (probed `[keys]`: on once #50 merges; checked on a #50 + #51 test merge) |
+| Claude, OpenAI subscription, local model, OpenRouter | `engine = "codex"` added (ChatGPT subscription); live on a canvas-built sandbox: openrouter ✅ claude_code ✅ codex ✅; local not run here (operator's PC) |
+| Green "electricity" on connected wires, animations | live wires: glowing flowing current + particles; red refused wire shakes; Finalise burst |
+| Debuggable | `tengu sandbox compile\|finalise\|palette`, Debug drawer, one `builder:` log line per request |
+| Check PRs / branches for conflicts | #50, #51 mergeable; test merge found one test-only conflict (codex hardening test vs #51's `with_signer()`), fixed in `57553a4f724a3cb8f6d86b70df5c2b2986038b03` |
+| Don't touch the weekend lab binary | untouched: pid 11624 (`~/.cache/tengu-xm.noindex/weekend/tengu-acdef66`) ran throughout; all builds in `~/.cache/tengu-xm.noindex/agents/builder`, live runs with a scratch `TENGU_HOME` |
+
+| PR | Branch | Base | State |
+|---|---|---|---|
+| #52 | `feature/sandbox-builder` | `main` @ `91b2a2198bf29403aaa81c5d63760a71e3f6cf40` | OPEN — not merged (main checkout frozen until the weekend #2 stop; merge is the operator's word) |
+
+| Commit (branch `feature/sandbox-builder`) | Subject |
+|---|---|
+| `3914de4b88080ba6de6ae6f1c262f7a6ba6fbfeb` | config: one ENGINES list for engine validation |
+| `a0aecf42fc5b7a7fb72fc557d92059b0e59b845d` | engine = "codex" (branch `feature/codex-engine`, merged in, branch deleted) |
+| `cb9ea333b43269898e083ef8ad739881b5b709de` | Studio builder: blueprint, palette, compiler, routes, CLI, page |
+| `3f203ffe8d9e3c64826911d86eb1364701937411` | merge `feature/codex-engine` |
+| `ed990fe66fcbd09995d52a970325a5befc6be9ff` | fit on first load, templates, copyable commands |
+| `57553a4f724a3cb8f6d86b70df5c2b2986038b03` | codex hardening test without the signer helper (#51-proof) |
+| `dedf602970b21f29f6fba576974b8621db8905b0` | cargo fmt |
+| `4578fbe8b362128c897e798b2a5c1e879ce35f98` | docs |
+| `493b217d494c14c720fe3cf258121ca42bd7b4a9` | lint-clean in every feature set, disabled items, Studio → Builder link |
+| `d69141f43d17eb0516673e7d97f0f6c6a37adab8` | browser evidence `docs/studio-evidence/builder-0{1..6}-*.png` |
+| `275e56d5179eb9cd0129768634458521d3216712` | tutorial pages, `builder.js` URL literals, wire wording |
+
+| Check | Command |
+|---|---|
+| Unit | `cargo test --bin tengu -- builder blueprint codex hardening studio` |
+| Lints | `cargo test --test layering_lint --test scope_lint --test code_map --test tutorial_map --test language_policy` |
+| Builder without a browser | `tengu sandbox new --name t1 --template team --no-open && tengu sandbox compile --sandbox t1` |
+| Builder in a browser | `tengu studio --sandbox t1 --allow-edit --open` |
+
+Local state: worktree `~/development/tengu-builder` (branch `feature/sandbox-builder`), build cache `~/.cache/tengu-xm.noindex/agents/builder` (21 GB; delete after merge). Removed: worktrees `tengu-codex`, `tengu-mergecheck` and their caches. The main checkout `~/development/tengu-cluster` was not modified.

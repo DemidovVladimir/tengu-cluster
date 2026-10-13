@@ -302,3 +302,16 @@ input, select {
   .facts { flex-basis: 100%; }
   .drawer dl, .inspector dl.kv { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* `--allow-edit`: the link to the builder page (shown when /api/v1/meta says so). */
+.builder-link {
+  align-self: center;
+  padding: 4px 12px;
+  border: 1px solid var(--t-green);
+  border-radius: var(--radius);
+  color: var(--t-green);
+  font-weight: 600;
+  text-decoration: none;
+}
+.builder-link:hover { background: var(--t-green-soft); }
+.builder-link[hidden] { display: none; }

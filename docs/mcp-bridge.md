@@ -1,6 +1,6 @@
 # MCP Bridge
 
-The MCP bridge is a stdio subprocess that exposes Tengu-native tools to engines that manage their own workspace (currently [[engine-backends#Claude Code|Claude Code]]). It implements the [Model Context Protocol](https://modelcontextprotocol.io) (JSON-RPC 2.0 over stdin/stdout).
+The MCP bridge is a stdio subprocess that exposes Tengu-native tools to engines that manage their own workspace ([[engine-backends#Claude Code|Claude Code]] and [[engine-backends#Codex|Codex]]). It implements the [Model Context Protocol](https://modelcontextprotocol.io) (JSON-RPC 2.0 over stdin/stdout).
 
 **File:** `src/adapters/inbound/mcp_bridge.rs`
 **Subcommand:** `tengu mcp-bridge`
@@ -62,7 +62,7 @@ Every call gets the run's conversation as `ToolCtx.conversation` (`call_conversa
 
 ## Configuration
 
-Environment set by the Claude Code engine (`ClaudeCodeEngine::build_mcp_config_json`; names in `adapters/outbound/bridge_env.rs`):
+Environment set by the CLI engines — built once by `bridge_env::bridge_env` (`adapters/outbound/bridge_env.rs`, which also names the vars): Claude Code writes it into the temp `--mcp-config`; Codex passes each var as `-c mcp_servers.tengu-tools.env.<NAME>=…` and forwards the NAMES of its own env with `env_vars` (Codex starts MCP servers with a minimal env; no value on the command line):
 
 | Variable | Description |
 |----------|-------------|
@@ -227,7 +227,7 @@ Tools whose upstream host is hard-coded (no base-URL override) run their determi
 
 ## Parity rule (operator, 2026-09-30)
 
-Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). E0 closed it (`docs/xmarket-tracker-2026-09-29.md`): `x-bridge-parity` (config, secrets, `no_shell`, call id), `x-claude-code-hardening` (`--strict-mcp-config`, built-ins off in hardened sandboxes), `x-bridge-conformance-test` (every catalog tool in CI), `x-engine-matrix-smoke` (live legs), `x-engine-parity-audit` (2026-10-01: shell skills and `compress_and_store` in the bridge, `[[mcp_servers]]` tools follow `tools` in-process too, errors redacted on every surface, no secret in the temp file, explicit step options, every catalog tool + a shell skill + an `[[mcp_servers]]` proxy live on every engine — gap list in the tracker's W1 notes).
+Every tool must work under every engine — `openrouter`, `local` and, through this bridge, `claude_code` and `codex` — and behave the same through the bridge as in-process, no exceptions (CLAUDE.md / AGENTS.md "How to add a new tool" step 4, `docs/tools.md` step 5). E0 closed it (`docs/xmarket-tracker-2026-09-29.md`): `x-bridge-parity` (config, secrets, `no_shell`, call id), `x-claude-code-hardening` (`--strict-mcp-config`, built-ins off in hardened sandboxes), `x-bridge-conformance-test` (every catalog tool in CI), `x-engine-matrix-smoke` (live legs), `x-engine-parity-audit` (2026-10-01: shell skills and `compress_and_store` in the bridge, `[[mcp_servers]]` tools follow `tools` in-process too, errors redacted on every surface, no secret in the temp file, explicit step options, every catalog tool + a shell skill + an `[[mcp_servers]]` proxy live on every engine — gap list in the tracker's W1 notes).
 
 | Still open | Why |
 |---|---|

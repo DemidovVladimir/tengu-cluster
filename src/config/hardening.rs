@@ -9,6 +9,7 @@
 //! | Rule (hardened sandbox; a `validation_errors` violation fails `Config::load`) | Enforced by | Why |
 //! |---|---|---|
 //! | Every `engine = "claude_code"` agent sets `[agents.<a>.claude_code] builtin_tools_profile = "none"` — no block = `editor_shell` = refused | `validation_errors` | built-in Read / Write / Bash ignore tengu scopes: they could read the key or edit a store |
+//! | No `engine = "codex"` agent | `validation_errors` | the Codex CLI's built-in shell and patch tool ignore tengu scopes and cannot be switched off reliably across CLI versions (`engines/codex.rs`) |
 //! | The CLI sees only the tengu bridge | `--strict-mcp-config` on every run (`engines/claude_code.rs::cli_args`) | the operator's own MCP servers run outside tengu scopes and egress |
 //! | Profile `none` runs the CLI without user / project / local settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md discovery and auto-memory | `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}` (`cli_args`; CLI 2.1.286: OAuth + the bridge work; `--safe-mode` drops the bridge, `--bare` OAuth) | hooks and plugins run shell commands outside tengu scopes; a planted `CLAUDE.md` / `.claude/` steers the model |
 //! | A plan step's `compose` only narrows its base agent's tools and skills | `run-agent` (`bootstrap::tools::compose_agent`) | a planner fed hostile text must not hand a routable agent `write_file` or an exec tool |
@@ -43,6 +44,7 @@ pub(crate) fn validation_errors(cfg: &Config) -> Vec<String> {
         return Vec::new();
     }
     let mut errors = claude_code_errors(cfg);
+    errors.extend(codex_errors(cfg));
     foreign_process_errors(cfg, &mut errors);
     path_errors(
         cfg,
@@ -105,6 +107,27 @@ fn claude_code_errors(cfg: &Config) -> Vec<String> {
                  [risk] or [soe]) needs [agents.{id}.claude_code] builtin_tools_profile = \"none\" — got {got}; \
                  built-in tools run outside tengu scopes"
             ))
+        })
+        .collect()
+}
+
+/// `engine = "codex"` is refused outright in a hardened sandbox: Codex has
+/// no profile that turns its built-in shell / patch tool off for good.
+fn codex_errors(cfg: &Config) -> Vec<String> {
+    let mut ids: Vec<&String> = cfg
+        .agents
+        .iter()
+        .filter(|(_, a)| a.engine.trim() == "codex")
+        .map(|(id, _)| id)
+        .collect();
+    ids.sort();
+    ids.into_iter()
+        .map(|id| {
+            format!(
+                "agents.{id}: engine = \"codex\" is not allowed in a hardened sandbox (Solana signer, \
+                 [risk] or [soe]): the Codex CLI's built-in shell runs outside tengu scopes — use \
+                 claude_code with builtin_tools_profile = \"none\", openrouter or local"
+            )
         })
         .collect()
 }
@@ -599,5 +622,28 @@ mod tests {
         let real = std::fs::canonicalize(dir.path()).unwrap();
         let p = dir.path().join("not/yet/../there.json");
         assert_eq!(resolved(&p), real.join("not/there.json"));
+    }
+
+    /// `engine = "codex"` loads in an open sandbox and is refused in every
+    /// hardened one, whatever its `[agents.<a>.codex]` block says.
+    #[test]
+    fn codex_is_refused_in_hardened_sandboxes() {
+        let mut open = base();
+        open.agents.get_mut("main").unwrap().engine = "codex".into();
+        assert!(validation_errors(&open).is_empty());
+        // `[risk]` stands for every trigger (`[soe]`, a Solana signer): one
+        // predicate, `requires_hardened_claude_code` — and no signer helper,
+        // whose shape changes with the Privy signer (PR #51).
+        let risk: Config = toml::from_str(RISK_SANDBOX).expect("parse");
+        for mut cfg in [risk] {
+            let agent = cfg.agents.values_mut().next().unwrap();
+            agent.engine = "codex".into();
+            agent.codex = Some(crate::config::AgentCodexConfig::default());
+            let e = validation_errors(&cfg).join("\n");
+            assert!(
+                e.contains("engine = \"codex\" is not allowed in a hardened sandbox"),
+                "{e}"
+            );
+        }
     }
 }
