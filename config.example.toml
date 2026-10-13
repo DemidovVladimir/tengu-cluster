@@ -203,18 +203,24 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # slots = { pool = { observation = "pools", items = "/data/pools/*", value = "address", top = 5 } }  # from a fresh world entry (written by a dlmm_pools call with the same args)
 
 # --- Solana signing (write tools, phase 6b) ---
-# `mode = "simulate"` (default) needs no key. `mode = "send"` signs with this
-# key, only for an agent whose scope for the tool lists the wallet:
+# `mode = "simulate"` (default) needs no key. `mode = "send"` signs with a
+# Privy Solana wallet through the seal proxy (no key on this machine; [keys]
+# above + docs/cloudflare-secrets-setup.html), only for an agent whose scope
+# for the tool lists the wallet:
 #   [agents.lp_executor.scopes.dlmm_open_position]
 #   wallets = ["<full wallet pubkey>"]      # never in [default_scopes]
+#   env_reads = ["SOLANA_RPC_URL", "PRIVY_API_URL", "PRIVY_APP_ID"]
+#   net_hosts = ["<rpc host>", "tengu-seal.<subdomain>.workers.dev"]
 # With a signer the sandbox is hardened: claude_code agents only with
 # [agents.<name>.claude_code] builtin_tools_profile = "none", no
 # [[mcp_servers]], no scope granting shell_bins (tools without a scope get a
-# no-shell fallback), and the key outside every fs_roots / workspace. The
-# signing agent has no `description`, is not `default`, and is no webhook
-# endpoint's `agent`. Rules: src/config/solana.rs, src/config/hardening.rs.
+# no-shell fallback), and no env_reads of the session (TENGU_KEYS_SESSION_TOKEN,
+# an "@session" var, "*"). The signing agent has no `description`, is not
+# `default`, and is no webhook endpoint's `agent`. Rules: src/config/solana.rs,
+# src/config/hardening.rs. Limits on what the wallet may sign: Privy's own
+# wallet policies (Privy dashboard).
 # [solana]
-# signer_key_file = "~/.tengu/keys/signer.json"   # solana-keygen JSON or base58; chmod 600
+# privy_wallet_id = "<Privy Solana wallet id>"   # not a secret; needs [keys.env] PRIVY_API_URL = "privy"
 
 # --- xmarket (docs/xmarket-tracker-2026-09-29.md) ---
 # Install-wide state of the xmarket runtime lives in <TENGU_HOME>/state/<state>/

@@ -27,11 +27,11 @@ use serde::Deserialize;
 use tengu_seal::ssh::{session_message, SessionRequest};
 use tracing::{info, warn};
 
-use crate::config::keys::{KeysConfig, SESSION_VALUE};
+use crate::config::keys::{KeysConfig, SESSION_TOKEN_ENV, SESSION_VALUE};
 use crate::config::paths::expand_tilde;
 
 pub(crate) const PROXY_ENV: &str = "TENGU_KEYS_PROXY";
-pub(crate) const SESSION_ENV: &str = "TENGU_KEYS_SESSION_TOKEN";
+pub(crate) const SESSION_ENV: &str = SESSION_TOKEN_ENV;
 pub(crate) const SESSION_EXP_ENV: &str = "TENGU_KEYS_SESSION_EXP_MS";
 /// Telegram `bot<token>` placeholder the Worker swaps for the real token.
 pub(crate) const PLACEHOLDER: &str = tengu_seal::route::PLACEHOLDER;

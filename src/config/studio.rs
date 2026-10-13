@@ -136,14 +136,14 @@ mod tests {
         let p = control_policy(&bound, true);
         assert!(!p.enabled && p.why.contains("generation `W1`"), "{p:?}");
         let mut risky = cfg("");
-        risky.solana.signer_key_file = Some("/k.json".into());
+        risky.solana.privy_wallet_id = Some("w1".into());
         let p = control_policy(&risky, true);
         assert!(!p.enabled && p.why.contains("hardened"), "{p:?}");
         let mut both =
             cfg("[studio]\ncontrol = true\n[generation]\nid = \"W1\"\nregistry = \"x\"\n");
         assert_eq!(validation_errors(&both).len(), 1, "{both:?}");
         both.generation = None;
-        both.solana.signer_key_file = Some("/k.json".into());
+        both.solana.privy_wallet_id = Some("w1".into());
         let e = validation_errors(&both);
         assert!(e.len() == 1 && e[0].starts_with("studio.control = true: refused: hardened"));
     }

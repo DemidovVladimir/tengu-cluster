@@ -45,9 +45,9 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 # Seal proxy (`[keys]`, `docs/sealed-keys-2026-10-09.md`): route table,
 # session, SSH-signature and target formats shared with `cloudflare/seal-worker`.
 tengu-seal = { path = "crates/tengu-seal" }
-# Solana write tools (phase 6b): ed25519 signing of transactions with the
-# `[solana] signer_key_file` key — signing is not hand-rolled. `getrandom`
-# seeds the one-shot DLMM position keypair. Both already in the lockfile's
+# Solana write tools (phase 6b): ed25519 signing of the one-shot DLMM
+# position keypair and verifying the Privy wallet's signatures — never
+# hand-rolled. `getrandom` seeds the one-shot keypair. Both already in the lockfile's
 # dependency tree (curve25519-dalek 4.1, getrandom 0.2).
 ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"] }
 getrandom = "0.2"

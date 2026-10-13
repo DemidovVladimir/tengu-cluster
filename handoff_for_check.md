@@ -1,4 +1,131 @@
-# Handoff for check — 2026-10-08 → 2026-10-09 session
+# Handoff for check
+
+> For the operator's architecture agent. Newest session first; earlier sessions below, unchanged. Ids and hashes are full. Everything is verifiable from git, GitHub and the commands in each session's last section.
+
+# Session 2026-10-09 (afternoon → night): seal proxy + Privy signers — PRs #50, #51
+
+## S1. What was asked → what was delivered
+
+| Ask (operator, 2026-10-09) | Delivered | Where |
+|---|---|---|
+| Review the Linear "[BE] AC" tickets (IP-3150…IP-3157, IP-3289, IP-3114) and make a much simpler plan; no keys / secrets / envs on the machine; Cloudflare compute + secrets only; free-tier limits | Plan (Cloudflare Worker as key-injecting proxy; free-tier table) — first as HPKE-sealed blobs, then "simplify even more": keys are Worker secrets behind routes | `docs/sealed-keys-2026-10-09.md` (design, free tier, verified · open) |
+| "Start with it till complete … do not use any molecule infrastructure … I will create Cloudflare and add secrets myself" | Rust Worker `cloudflare/seal-worker` + shared crate `crates/tengu-seal`; tengu `[keys]` / `[keys.env]` / `strip`, `tengu keys setup / status / check`; fail-closed install in every process; Telegram / RPC / OpenRouter / Jev through the proxy | PR #50 |
+| "A concise html page with detailed instructions" to put every `.env` secret into Cloudflare | Operator guide, 11 sections, every one of the 24 `.env` names classified (Molecule names excluded) | `docs/cloudflare-secrets-setup.html` (PR #50) |
+| "A separate sandbox … prove JEV, decision loop and validation loop via the web UI and terminal work … no garbage" | `sandboxes/sealed-check` + runbook + recorded run (real Jev through a local `wrangler dev` Worker; Studio screenshots) | `docs/sealed-check-2026-10-09.md`, `docs/sealed-check-evidence/` (PR #50) |
+| "Why not simply use the existing Privy agentic wallet with app id and the rest stored in Cloudflare?" | Route `privy` (Basic header, secret `PRIVY_BASIC_AUTH`); EVM Privy tools send the session, never the app secret | PR #50, commit `71b7338201b8683baa6bd232282d697bf42023cd` |
+| "After Privy and Cloudflare are in place we would be able to remove the Solana signer?" → "yes" | `[solana] signer_key_file` removed; `[solana] privy_wallet_id` — Solana write tools sign with a Privy wallet through the same route | PR #51 |
+| "Leave it in PR for now" (weekend trading validation running) | Both PRs OPEN, not merged | § S3 |
+
+## S2. Merge model (this session)
+
+| Rule | Applied |
+|---|---|
+| Isolation | one worktree `/Users/vladimirdemidov/development/tengu-sealed` (branch `feature/sealed-keys`, then `feature/privy-solana-signer` on top); own `CARGO_TARGET_DIR`s under `~/.cache/tengu-xm.noindex/agents/` |
+| Merge | **none** — operator asked to keep both in PR during the weekend validation. Order when approved: #50 into `main`, then retarget #51 to `main` and merge |
+| Main checkout | not pulled, not built (weekend freeze): `/Users/vladimirdemidov/development/tengu-cluster` stays at `10bdbb53a27390f6a67fd73826740befe05ababe` |
+| Remotes | pushed to `origin` (DemidovVladimir/tengu-cluster) only; nothing pushed to the `mol` remote; no Molecule service used |
+| Secrets | no real secret written to any file; tests used throwaway values in the scratchpad (deleted). The one real OpenRouter key run (sealed-check) loaded it into the local `wrangler dev` Worker only |
+
+## S3. Pull requests (both OPEN)
+
+| PR | Title | Base ← head | Head SHA | CI `rust-quality` |
+|---|---|---|---|---|
+| #50 | Seal proxy: provider keys live only in a Cloudflare Worker (+ sealed-check sandbox) | `main` ← `feature/sealed-keys` | `71b7338201b8683baa6bd232282d697bf42023cd` | success, run 37973350643 |
+| #51 | Solana write tools sign with a Privy wallet through the seal proxy (stacked on #50) | `feature/sealed-keys` ← `feature/privy-solana-signer` | `b4c1c17a7a66ecfbcc36ae9fbfb312cf03abf081` | success, run 37986183258 |
+
+`origin/main` at review time: `91b2a2198bf29403aaa81c5d63760a71e3f6cf40`.
+
+### S3.1 Branch commits (full ids)
+
+| Commit | Date (+02:00) | PR | What |
+|---|---|---|---|
+| `7378ae24cdd2cabd6ae17b8bc71ea3ff156c35aa` | 2026-10-09T16:02:44 | #50 | first design: HPKE-sealed blobs + Durable Object key — **superseded by the next commit** |
+| `a0644fbe44636f21a1a0dd3fdee75463a463e915` | 2026-10-09T17:50:20 | #50 | simplified + hardened seal proxy (routes, clients, route-scoped sessions, masking), `tengu keys`, `[keys]`, sealed-check sandbox, docs |
+| `58aa1beac083e60d6cf28890683b9232568334ee` | 2026-10-09T17:53:27 | #50 | merge `origin/main` (#49); code map regenerated |
+| `71b7338201b8683baa6bd232282d697bf42023cd` | 2026-10-09T20:26:53 | #50 | route `privy` + Privy EVM tools via the session (`FALLBACK_KEYS`: `PRIVY_API_URL` needs `PRIVY_APP_SECRET` stripped); Worker trims secrets |
+| `b4c1c17a7a66ecfbcc36ae9fbfb312cf03abf081` | 2026-10-09T22:18:59 | #51 | `PrivySigner` (Solana), `signer_key_file` removed, async `SolanaSigner`, session env_reads rule, docs |
+| (this handoff) | — | #51 | `handoff_for_check.md` |
+
+Diff sizes: #50 = 69 files, +6142 / −81 vs `main`; #51 = 47 files, +1054 / −457 vs #50.
+
+## S4. What to look at (security-relevant code)
+
+| Area | Files | Claim to verify |
+|---|---|---|
+| Key position | `crates/tengu-seal/src/target.rs` (`build`, `check_rest`, `after_key`, `split_path`), `route.rs` | a route's key goes to exactly one place (header / path template / query); `TENGU_SECRET` anywhere else → 403; path escapes (`..`, `//`, `%2f`, `%25`, `\`, `;`) refused; `allow` prefixes enforced |
+| Sessions | `crates/tengu-seal/src/{session,ssh}.rs`, `cloudflare/seal-worker/src/lib.rs` (`authorize`) | HMAC token under `SESSION_KEY`; SSH signature over fp + ts (±60 s) + nonce + Worker origin + routes; granted = asked ∩ `CLIENTS`; every call re-checks `CLIENTS` |
+| Reply masking | `target.rs` (`mask`, `mask_bytes`, `maskable`, `null_body`), `lib.rs` (`mask_reply`) | key masked in headers and text bodies ≤ 2 MiB; larger bodies stream unmasked (`masked` = -1) — documented limit |
+| Fail closed | `src/adapters/outbound/keys/mod.rs` (`install`, `DISPLACED` / `REMOVED`), `src/adapters/outbound/secrets.rs`, `src/adapters/inbound/telegram.rs` | no session → every `[keys.env]` var unset; `strip` names removed in every process; displaced / removed values stay redacted; vault never re-injects a removed name; Telegram refuses to start |
+| Privy EVM | `src/adapters/outbound/tools/crypto/helpers.rs::privy_request`, `src/config/keys.rs::FALLBACK_KEYS` | through the proxy the app secret is never read; config without `strip` `PRIVY_APP_SECRET` does not load |
+| Privy Solana | `src/adapters/outbound/solana/privy.rs`, `src/adapters/outbound/tools/solana/write_common.rs::signer_for`, `src/adapters/outbound/solana/signer.rs::sign_transaction` | only via the seal proxy with a session; reply message byte-identical; only the wallet's slot taken; ed25519 `verify_strict` for the `wallet` arg; all slots signed before any is written |
+| Load rules | `src/config/solana.rs::signer_rules`, `src/config/hardening.rs` | `privy_wallet_id` 1-64 `[A-Za-z0-9_-]`; needs `[keys.env] PRIVY_API_URL`; no scope `env_reads` of `TENGU_KEYS_SESSION_TOKEN`, an `@session` var or `"*"` beside a signer; hardening otherwise unchanged (key-path rule removed — no key) |
+
+## S5. Local state (operator's Mac)
+
+| Item | State |
+|---|---|
+| Worktree | `/Users/vladimirdemidov/development/tengu-sealed` on `feature/privy-solana-signer` (`b4c1c17a7a66ecfbcc36ae9fbfb312cf03abf081` + this handoff); remove after merge (`docs/SESSION_HANDOFF.md` E5 row) |
+| Build caches (this session) | `~/.cache/tengu-xm.noindex/agents/sealed-tengu` (24G), `…/seal-worker` (1.1G), `…/sealed-crate` (273M); remove after merge |
+| Test leftovers | none: `~/tengu-sealed-check` removed; no `wrangler` / `workerd` / test `ssh-agent` running; scratch files deleted; nothing written to `~/.tengu` by the sandbox |
+| Cloudflare | nothing deployed by the agent; no account touched |
+
+## S6. Verification evidence
+
+| Check | Result |
+|---|---|
+| Unit (`cargo test --bin tengu`, worktree at #51) | 2147 passed, 0 failed |
+| Crate `crates/tengu-seal` | 20 passed (incl. `shipped_wrangler_toml_parses`) |
+| Worker | `cargo clippy --target wasm32-unknown-unknown --release -- -D warnings` + `cargo fmt --check` clean |
+| Gates | `bridge_conformance`, `run_agent_ipc`, `layering_lint`, `scope_lint`, `language_policy`, `tutorial_map`, `code_map` green; clippy: no warning in touched files |
+| Local `wrangler dev`, real OpenRouter key in the local Worker only | sealed-check: Jev `0xff`→`255`, tool error, dry run, maps, `tengu run` + `doctor --live`, Studio Play / Send / Stop (`accepted 9 · completed 9 · failed 0`), N1 fail closed; exfiltration requests 403; `allow` refused `v1/keys`; 6.5 MB reply streamed — `docs/sealed-check-2026-10-09.md` § Recorded run |
+| Local `wrangler dev`, route `privy`, throwaway secret, httpbin upstream | `get_wallet_address` through the Worker with the session, Basic key added and masked (`masked` 1); `v1/apps` 403; `TENGU_SECRET` in the path 403; no session → `Missing environment variable PRIVY_APP_SECRET`, 0 calls to `api.privy.io`; config without `strip` refused |
+| Privy Solana (tests) | `write_tokens::tests::send_signs_each_batch_through_privy` (fake Privy over HTTP: 2 batches sent, each signature verifies, Bearer session, no Basic); `privy::tests::*` (other wallet, changed message, bad base64, HTTP 400, net_host denial → nothing signed); `signer::tests::one_failing_signer_writes_nothing` |
+| CI flake (not this change) | run 37955084254 first attempt failed `bridge_conformance` backtest case at 16:00:38Z (hour boundary); rerun green; passes locally |
+
+## S7. Operator gates and open items
+
+| Gate / item | Owner |
+|---|---|
+| Merge #50 then #51 (after the weekend validation) | operator's word |
+| Cloudflare: Secretive keys, `npx wrangler login` + `deploy`, `SESSION_KEY`, provider secrets (fresh keys), `CLIENTS`, `[keys]` per sandbox — `docs/cloudflare-secrets-setup.html` | operator |
+| Privy: `PRIVY_BASIC_AUTH`; a dedicated Privy Solana wallet + `[solana] privy_wallet_id` + write-tool scopes; Privy wallet policies | operator |
+| First live Solana `send` (real money) | separate go |
+| Not verified live: a real Privy call, Tor reach of `workers.dev`, Worker CPU p95 on the free plan | after deploy |
+
+## S8. Known limits (not fixed on purpose)
+
+| Limit | Note |
+|---|---|
+| Sessions are not refreshed in-process | restart a long run before `session_hours` (≤ 168 h) |
+| A session holder can USE a route's key, never READ it | e.g. any Telegram Bot API method as the bot; `allow` narrows; a Solana-signer sandbox forbids `env_reads` of the session |
+| Reply bodies > 2 MiB stream unmasked | free-plan CPU budget |
+| Privy keeping other partial signatures | irrelevant by design: tengu takes only the wallet's slot and fills its own one-shot key |
+| Earlier review findings | `handoff_review.md` 2026-10-09T14:55:11Z P1 (webhook planner turns detached at shutdown) / P2 (eval timed sleep before `run.closed`) — earlier sessions' code, not touched here, still open |
+
+## S9. How to check (commands)
+
+```sh
+gh pr view 50 --repo DemidovVladimir/tengu-cluster --json state,headRefOid,baseRefName,mergeable
+gh pr view 51 --repo DemidovVladimir/tengu-cluster --json state,headRefOid,baseRefName,mergeable
+git fetch origin
+git log --format='%H %s' origin/main..origin/feature/sealed-keys
+git log --format='%H %s' origin/feature/sealed-keys..origin/feature/privy-solana-signer
+git worktree add /private/tmp/check-privy origin/feature/privy-solana-signer
+cd /private/tmp/check-privy
+export CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/agents/check-privy CARGO_BUILD_JOBS=2
+cargo test --bin tengu -- solana privy signer config::solana config::keys keys
+cargo test --test bridge_conformance --test run_agent_ipc --test layering_lint --test scope_lint --test tutorial_map --test code_map
+cargo test --manifest-path crates/tengu-seal/Cargo.toml
+cargo clippy --manifest-path cloudflare/seal-worker/Cargo.toml --target wasm32-unknown-unknown --release -- -D warnings
+rg -n 'signer_key_file' src tests sandboxes config.example.toml     # → nothing
+rg -n 'sk-or-v1-[0-9a-f]{64}|tss1\.[A-Za-z0-9_-]{40,}\.' --glob '!target' .   # → nothing: no real OpenRouter key or session token
+```
+
+---
+
+# Earlier sessions
+
+# Session 2026-10-08 → 2026-10-09 (PRs #39–#45; original handoff, unchanged below this title)
 
 ## Addendum 2026-10-10 — A2A (PR #53, open on purpose until the weekend #2 stop)
 
