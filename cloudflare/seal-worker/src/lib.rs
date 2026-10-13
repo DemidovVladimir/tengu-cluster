@@ -7,16 +7,19 @@
 //! | `GET /healthz` | none | liveness + route names |
 //! | `POST /session` | SSH signature of a key listed in `CLIENTS` | session token (HMAC under `SESSION_KEY`) |
 //! | `GET /whoami` | session | fingerprint, label, expiry, allowed routes |
-//! | `ANY /<route>/<rest>` | session | route's key in → fetch (`redirect: manual`) → key masked out → back |
+//! | `ANY /<route>/<rest>` | session | route's key in → fetch (`redirect: manual`) → key masked out of every header and body byte (streamed, any type / size) → back |
 //! | `ANY <path>` + `Tengu-Route: <route>` | session | same, for clients that build absolute paths (teloxide) |
 //!
 //! Config (`wrangler.toml`, no secrets): `ROUTES`, `CLIENTS`. Secrets (set
 //! in Cloudflare by the operator): `SESSION_KEY` + one per route. Pure logic
-//! lives in `crates/tengu-seal`; this file is the runtime glue. Logs carry
-//! route, client label, upstream host, status, ms — never headers, bodies
-//! or secrets.
+//! (incl. the masker, `tengu_seal::mask`) lives in `crates/tengu-seal` and is
+//! tested there; this file is the runtime glue, shipped for wasm32 (its
+//! reply-body glue `masked_stream` is tested on the host: `cargo test`).
+//! Logs carry route, client label, upstream host, status, masked count, ms —
+//! never headers, bodies or secrets.
 
 use futures_util::StreamExt;
+use tengu_seal::mask::Masker;
 use tengu_seal::route::{Clients, Routes};
 use tengu_seal::session::{self, Claims};
 use tengu_seal::ssh::SessionRequest;
@@ -66,18 +69,43 @@ fn now_ms() -> u64 {
 }
 
 /// Who called and where it went, for the one log line per request.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Trace {
+    started: u64,
     label: String,
     route: String,
     upstream: String,
-    masked: i64,
+    /// Copies of the route's key masked, headers + body.
+    masked: usize,
+    /// The reply body streams: [`MaskedBody`] writes the line when it ends.
+    deferred: bool,
+}
+
+impl Trace {
+    /// `body`: how a streamed reply body ended — `done`, or `cut` (upstream
+    /// read error / caller gone; the held tail is never sent).
+    fn log(&self, status: u16, body: Option<&str>) {
+        let mut line = serde_json::json!({
+            "client": self.label,
+            "route": self.route,
+            "upstream": self.upstream,
+            "status": status,
+            "masked": self.masked,
+            "ms": now_ms().saturating_sub(self.started),
+        });
+        if let Some(b) = body {
+            line["body"] = b.into();
+        }
+        console_log!("{line}");
+    }
 }
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    let started = now_ms();
-    let mut trace = Trace::default();
+    let mut trace = Trace {
+        started: now_ms(),
+        ..Trace::default()
+    };
     let outcome = match (req.method(), req.path().as_str()) {
         (Method::Get, "/healthz") => healthz(&env),
         (Method::Post, "/session") => new_session(req, &env, &mut trace).await,
@@ -88,15 +116,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         Ok(r) => r,
         Err(f) => error_response(&f)?,
     };
-    let line = serde_json::json!({
-        "client": trace.label,
-        "route": trace.route,
-        "upstream": trace.upstream,
-        "status": resp.status_code(),
-        "masked": trace.masked,
-        "ms": now_ms().saturating_sub(started),
-    });
-    console_log!("{line}");
+    if !trace.deferred {
+        trace.log(resp.status_code(), None);
+    }
     Ok(resp)
 }
 
@@ -252,6 +274,9 @@ async fn forward(req: Request, env: &Env, trace: &mut Trace) -> Res<Response> {
         .get(&route_name)
         .ok_or_else(|| fail(Code::BadRequest, "unknown route"))?;
     let key = secret(env, &route.secret)?;
+    // Fail closed before anything goes upstream: a key the reply masking
+    // cannot handle (shorter than MASK_MIN_SECRET) is a 500.
+    let masker = Masker::new(&key)?;
     let t = target::build(route, &key, &rest, url.query())?;
     trace.upstream = Url::parse(&t.url)
         .ok()
@@ -290,64 +315,161 @@ async fn forward(req: Request, env: &Env, trace: &mut Trace) -> Res<Response> {
         .send()
         .await
         .map_err(|_| fail(Code::BadGateway, "upstream unreachable"))?;
-    mask_reply(resp, &key, &method, trace).await
+    mask_reply(resp, masker, &method, trace)
 }
 
-/// The reply with every copy of `key` replaced in all header values and in
-/// a text / JSON / XML body of up to `MASK_MAX_BYTES` (read in chunks). A
-/// larger body streams on from there unmasked (`masked` = -1 in the log); a
-/// binary body or an event stream passes through untouched; a body-less
-/// reply (HEAD, 101/204/205/304) stays body-less.
-async fn mask_reply(
+/// The reply with every copy of the route's key masked
+/// ([`tengu_seal::mask`]): every header value (a header whose name holds it
+/// is dropped), and the whole body as it streams — any content type, any
+/// size, no pass-through. A body-less reply (HEAD, 101/204/205/304) stays
+/// body-less. A body that cannot be opened is a 502; one cut mid-stream ends
+/// short — never with unmasked bytes.
+fn mask_reply(
     mut resp: Response,
-    key: &str,
+    masker: Masker,
     method: &Method,
     trace: &mut Trace,
 ) -> Res<Response> {
     let status = resp.status_code();
-    let ct = resp.headers().get("content-type")?;
+    let (pairs, hits) = masker.reply_headers(resp.headers().entries());
+    trace.masked = hits;
     let headers = Headers::new();
-    let mut hits: i64 = 0;
-    for (k, v) in resp.headers().entries() {
-        let lower = k.to_ascii_lowercase();
-        // The body is re-emitted decoded and re-measured by the runtime.
-        if lower == "content-length" || lower == "content-encoding" {
-            continue;
-        }
-        let (v, n) = target::mask(&v, key);
-        hits += n as i64;
-        headers.set(&k, &v)?;
+    for (k, v) in &pairs {
+        headers.set(k, v)?;
     }
     let body_less = target::null_body(status)
         || matches!(method, Method::Head)
         || matches!(resp.body(), ResponseBody::Empty);
-    let out = if body_less {
-        Response::empty()?
-    } else if !target::maskable(ct.as_deref()) {
-        Response::from_stream(resp.stream()?)?
-    } else {
-        let mut stream = resp.stream()?;
-        let mut buf: Vec<u8> = Vec::new();
-        let mut over = false;
-        while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|_| fail(Code::BadGateway, "upstream reply could not be read"))?;
-            buf.extend_from_slice(&chunk);
-            if buf.len() > target::MASK_MAX_BYTES {
-                over = true;
-                break;
+    if body_less {
+        return Ok(Response::empty()?.with_headers(headers).with_status(status));
+    }
+    let upstream = resp
+        .stream()
+        .map_err(|_| fail(Code::BadGateway, "upstream reply could not be read"))?;
+    let mut line = trace.clone();
+    let body = masked_stream(upstream, masker, move |body_hits, end| {
+        line.masked += body_hits;
+        line.log(status, Some(end));
+    });
+    let out = Response::from_stream(body)?;
+    trace.deferred = true;
+    Ok(out.with_headers(headers).with_status(status))
+}
+
+/// A reply body on its way back: each upstream chunk through the
+/// [`Masker`], which holds back only a tail that could still start a key
+/// (so a key split across chunks is masked too). Dropping it — body done,
+/// upstream read error, caller gone — calls `on_end(body hits, "done" |
+/// "cut")` once: the request's log line.
+struct MaskedBody<S, F: FnOnce(usize, &'static str)> {
+    upstream: S,
+    masker: Masker,
+    on_end: Option<F>,
+    end: &'static str,
+}
+
+impl<S, F: FnOnce(usize, &'static str)> Drop for MaskedBody<S, F> {
+    fn drop(&mut self) {
+        if let Some(f) = self.on_end.take() {
+            f(self.masker.hits(), self.end);
+        }
+    }
+}
+
+/// `upstream` masked chunk by chunk; no byte reaches the caller unmasked.
+fn masked_stream<S, F>(
+    upstream: S,
+    masker: Masker,
+    on_end: F,
+) -> impl futures_util::Stream<Item = Result<Vec<u8>>>
+where
+    S: futures_util::Stream<Item = Result<Vec<u8>>> + Unpin + 'static,
+    F: FnOnce(usize, &'static str) + 'static,
+{
+    let body = MaskedBody {
+        upstream,
+        masker,
+        on_end: Some(on_end),
+        end: "cut",
+    };
+    futures_util::stream::unfold(Some(body), |state| async move {
+        let mut b = state?;
+        match b.upstream.next().await {
+            Some(Ok(chunk)) => {
+                let out = b.masker.push(&chunk);
+                Some((Ok(out), Some(b)))
+            }
+            // The held tail is dropped with `b`: a cut body ends short,
+            // never with unmasked bytes.
+            Some(Err(_)) => Some((
+                Err(Error::RustError("upstream reply could not be read".into())),
+                None,
+            )),
+            None => {
+                let out = b.masker.finish();
+                b.end = "done";
+                Some((Ok(out), None))
             }
         }
-        let (masked, n) = target::mask_bytes(&buf, key);
-        if over {
-            hits = -1;
-            let head = futures_util::stream::once(async move { Ok::<Vec<u8>, Error>(masked) });
-            Response::from_stream(head.chain(stream))?
-        } else {
-            hits += n as i64;
-            Response::from_bytes(masked)?
-        }
-    };
-    trace.masked = hits;
-    Ok(out.with_headers(headers).with_status(status))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Host-side: the body glue with a plain stream in place of the
+    //! runtime's `ByteStream` (the masker itself is tested in
+    //! `crates/tengu-seal`).
+    use super::*;
+    use futures_util::FutureExt;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const KEY: &str = "sk-or-v1-0123456789abcdef";
+
+    type Chunks = Vec<Result<Vec<u8>>>;
+    /// `on_end` calls: (body hits, `done` / `cut`).
+    type Ends = Vec<(usize, &'static str)>;
+
+    /// Run the masked stream over `chunks`; (items, `on_end` calls).
+    fn run(chunks: Chunks) -> (Chunks, Ends) {
+        let ended: Rc<RefCell<Ends>> = Rc::default();
+        let seen = ended.clone();
+        let body = masked_stream(
+            futures_util::stream::iter(chunks),
+            Masker::new(KEY).unwrap(),
+            move |n, end| seen.borrow_mut().push((n, end)),
+        );
+        let items = body
+            .collect::<Vec<_>>()
+            .now_or_never()
+            .expect("ready stream");
+        let calls = ended.borrow().clone();
+        (items, calls)
+    }
+
+    #[test]
+    fn every_chunk_goes_through_the_masker() {
+        let (a, b) = KEY.as_bytes().split_at(10);
+        let (items, ended) = run(vec![
+            Ok(b"event: x\ndata: \"".to_vec()),
+            Ok(a.to_vec()),
+            Ok([b, b"\"\n\n\x00\xff".as_slice()].concat()),
+        ]);
+        let body: Vec<u8> = items.into_iter().flat_map(|r| r.unwrap()).collect();
+        assert_eq!(body, b"event: x\ndata: \"[REDACTED]\"\n\n\x00\xff".to_vec());
+        assert_eq!(ended, vec![(1, "done")]);
+    }
+
+    #[test]
+    fn a_cut_body_never_sends_its_held_tail() {
+        let (a, _) = KEY.as_bytes().split_at(KEY.len() - 1);
+        let (items, ended) = run(vec![
+            Ok([b"data: ".as_slice(), a].concat()),
+            Err(Error::RustError("reset".into())),
+        ]);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].as_ref().unwrap(), b"data: ");
+        assert!(items[1].is_err());
+        assert_eq!(ended, vec![(0, "cut")]);
+    }
 }

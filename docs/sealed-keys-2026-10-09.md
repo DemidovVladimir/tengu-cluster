@@ -10,7 +10,8 @@ Operator decision 2026-10-09 (local k8s / Helm, VPS cluster and encrypted USB re
 | `CLIENTS` `SHA256:<fp> → {label, session_hours, routes}` | `wrangler.toml` `[vars]`; fingerprints are public | `route.rs` |
 | Client key (`ecdsa-sha2-nistp256` / `ssh-ed25519`) | ssh-agent — Secretive keeps it in the Secure Enclave (Touch ID) | `crates/tengu-seal/src/ssh.rs` · `src/adapters/outbound/keys/agent.rs` |
 | Session `tss1.<claims>.<hmac>` (24 h default, 1–168 per client), claims carry the granted routes | tengu process env only (`TENGU_KEYS_SESSION_TOKEN`) | `session.rs` |
-| Upstream target, key position, path checks, reply masking | the Worker | `crates/tengu-seal/src/target.rs` · `cloudflare/seal-worker/src/lib.rs` |
+| Upstream target, key position, path checks | the Worker | `crates/tengu-seal/src/target.rs` · `cloudflare/seal-worker/src/lib.rs` |
+| Reply masking (streamed, every header and body byte) | the Worker | `crates/tengu-seal/src/mask.rs` · `cloudflare/seal-worker/src/lib.rs` (`mask_reply`) |
 
 ## Worker
 
@@ -40,6 +41,7 @@ Each route sets exactly one key position — anything else is 403, so a session 
 | `query` | parameter name `[A-Za-z0-9_-]`, ≤ 64 |
 | `allow` | optional path prefixes (after a `path` key part), whole segments; empty = any; else 403 `this path is not allowed on this route` |
 | key with `/ ? # @ \ % & =` or a space | header route only (path / query: 500) |
+| key shorter than 8 chars | 500 before any upstream call (it could not be masked out of replies) |
 | `CLIENTS` key | full OpenSSH fingerprint (`SHA256:` + 43 chars, what `ssh-add -l` prints) |
 | `session_hours` · `routes` | 1–168, default 24 · route names or `["*"]`; **empty = none**; a name not in `ROUTES` = 500 on `/session` and every call |
 
@@ -53,15 +55,27 @@ Each route sets exactly one key position — anything else is 403, so a session 
 
 `crates/tengu-seal` test `shipped_wrangler_toml_parses` parses the shipped `ROUTES` / `CLIENTS`.
 
-Replies: the route's key (≥ 8 chars) → `[REDACTED]` in every header value; text / JSON / XML / JavaScript bodies read in chunks up to 2 MiB and masked on bytes (invalid UTF-8 survives); a larger one streams on unmasked from there (log `masked` = -1); `text/event-stream` and binary pass through; HEAD and 101 / 204 / 205 / 304 stay body-less. Dropped before forwarding: `authorization` (the session), `cookie`, `host`, hop-by-hop, `accept-encoding`, `cf-*`, `tengu-*`, `x-forwarded-*`, `forwarded`. Log: one JSON line — client, route, upstream host, status, masked count, ms.
+Replies fail closed (`crates/tengu-seal/src/mask.rs`, `Masker`) — no pass-through branch, no size cut-off:
+
+| Reply part | Rule |
+|---|---|
+| forms of the key masked | raw · percent-encoded · JSON-escaped (`\/`, `\"`, `\\`), each in any ASCII case → `[REDACTED]`; base64 of the key, HTML entities or a partial copy are not recognised |
+| header value | masked |
+| header name holding the key (any case) | header dropped |
+| body (text, JSON, `text/event-stream`, binary, any size) | streamed through the masker on bytes (invalid UTF-8 survives); only a chunk tail that could still start a key is held (≤ longest form − 1 bytes), so a key split across chunks is masked; an SSE event is not held past its `\n\n` |
+| `content-length` · `content-encoding` | dropped (body re-emitted decoded; masking changes its length) |
+| upstream body read error | stream cut, held tail never sent (log `body` = `cut`); before the first byte: 502 |
+| HEAD · 101 / 204 / 205 / 304 | body-less |
+
+Dropped before forwarding: `authorization` (the session), `cookie`, `host`, hop-by-hop, `accept-encoding`, `cf-*`, `tengu-*`, `x-forwarded-*`, `forwarded`. Log: one JSON line per request — client, route, upstream host, status, `masked` (headers + body), ms; a proxied body writes it when the body ends (`body` = `done` / `cut`).
 
 | Status | When |
 |---|---|
 | 400 | unknown route, a session request with no / an unknown route, malformed request |
 | 401 | no / forged / expired session, `SESSION_KEY` rotated, key not (or no longer) in `CLIENTS`, clock > 60 s off |
 | 403 | key may use none of the asked routes · route not in the session or no longer in `CLIENTS` · `TENGU_SECRET` not exactly at the route's key position · path outside `allow` · path or query leaves the upstream |
-| 500 | misconfigured: a route's secret or `SESSION_KEY` missing / short, `ROUTES` / `CLIENTS` do not parse, a bad route entry, a `CLIENTS` route not in `ROUTES`, a URL-unsafe key on a path / query route |
-| 502 | upstream unreachable (its URL never in the message) |
+| 500 | misconfigured: a route's secret (< 8 chars) or `SESSION_KEY` missing / short, `ROUTES` / `CLIENTS` do not parse, a bad route entry, a `CLIENTS` route not in `ROUTES`, a URL-unsafe key on a path / query route |
+| 502 | upstream unreachable, or its reply body unreadable (its URL never in the message) |
 
 ## tengu side
 
@@ -100,7 +114,7 @@ Replies: the route's key (≥ 8 chars) → `[REDACTED]` in every header value; t
 | Limit | Free | Fit |
 |---|---|---|
 | Requests | 100k/day | 5–20k/day expected; `sealed-check`'s tick feed ≈ 2.9k/day while it runs; watch xlab Jev replays |
-| CPU | 10 ms/request (fetch wait free) | HMAC + target ≈ ms; masking a body ≤ 2 MiB is the cost — measure in the deploy check |
+| CPU | 10 ms/request (fetch wait free) | HMAC + target ≈ ms; masking every body byte is the cost (grows with reply size: a multi-MB reply may need Workers Paid) — measure in the deploy check |
 | Subrequests | 50/request | 1 |
 | Workers Logs | 200k events/day, 3 days | 1 line/request |
 | Durable Objects · KV | — | not used |
@@ -119,5 +133,6 @@ Replies: the route's key (≥ 8 chars) → `[REDACTED]` in every header value; t
 | sessions are not refreshed in-process | a long run must restart before `session_hours` (unattended key: up to 168 h) |
 | a session holder can USE a route's key, never READ it | e.g. call any Telegram Bot API method as the bot; `allow` narrows what a route accepts |
 | live deploy · Tor reach of workers.dev · CPU p95 | operator steps, `docs/cloudflare-secrets-setup.html` |
+| fail-closed masking (2026-10-13) on `wrangler dev` | unit-tested in `crates/tengu-seal` (> 2 MiB, SSE, binary, every chunk split, headers); the "6.5 MB reply streamed" row above predates it — re-run it (and an SSE stream) to measure CPU |
 
 Residual: while tengu runs, an agent with a shell on this machine can USE the session or the agent socket; it can never READ a provider key — there is none here.

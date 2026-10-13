@@ -1,6 +1,6 @@
-//! Build the upstream request for a route, refuse anything that would
-//! leave the route's upstream or move its key, and mask the key out of
-//! replies.
+//! Build the upstream request for a route and refuse anything that would
+//! leave the route's upstream or move its key. Masking the key out of
+//! replies is [`crate::mask`].
 //!
 //! The upstream, the secret and where the secret goes come from the
 //! Worker's config, never from the caller. The caller only supplies `rest`
@@ -271,64 +271,13 @@ pub fn drop_request_header(name: &str) -> bool {
         || n == "accept-encoding"
 }
 
-/// Replacement for a key found in a reply.
-pub const MASK: &str = "[REDACTED]";
-/// Reply bodies up to this size are read and masked; a larger one streams
-/// through unmasked from that point (memory / CPU budget on the free plan).
-pub const MASK_MAX_BYTES: usize = 2 * 1024 * 1024;
-/// Shorter keys are not masked (they would cut ordinary words).
-pub const MASK_MIN_SECRET: usize = 8;
-
-/// Whether a reply body is text the Worker reads and masks: text / JSON /
-/// XML / JavaScript, never an event stream or binary.
-pub fn maskable(content_type: Option<&str>) -> bool {
-    let ct = content_type.unwrap_or("").to_ascii_lowercase();
-    let texty = ct.starts_with("text/")
-        || ct.contains("json")
-        || ct.contains("xml")
-        || ct.contains("javascript");
-    texty && !ct.starts_with("text/event-stream")
-}
+/// Reply masking lives in [`crate::mask`]; `tengu keys check` reads the
+/// replacement text from here.
+pub use crate::mask::MASK;
 
 /// Statuses whose reply never has a body (and must not get one).
 pub fn null_body(status: u16) -> bool {
     matches!(status, 101 | 204 | 205 | 304)
-}
-
-/// Replace every copy of `secret` in `text` (a header value); returns the count.
-pub fn mask(text: &str, secret: &str) -> (String, usize) {
-    if secret.len() < MASK_MIN_SECRET {
-        return (text.to_string(), 0);
-    }
-    let n = text.matches(secret).count();
-    if n == 0 {
-        return (text.to_string(), 0);
-    }
-    (text.replace(secret, MASK), n)
-}
-
-/// [`mask`] on raw bytes, so a body that is not valid UTF-8 survives.
-pub fn mask_bytes(body: &[u8], secret: &str) -> (Vec<u8>, usize) {
-    let needle = secret.as_bytes();
-    if needle.len() < MASK_MIN_SECRET || body.len() < needle.len() {
-        return (body.to_vec(), 0);
-    }
-    let mut out = Vec::with_capacity(body.len());
-    let (mut i, mut n) = (0, 0);
-    while i < body.len() {
-        if body.len() - i >= needle.len()
-            && body[i] == needle[0]
-            && &body[i..i + needle.len()] == needle
-        {
-            out.extend_from_slice(MASK.as_bytes());
-            i += needle.len();
-            n += 1;
-        } else {
-            out.push(body[i]);
-            i += 1;
-        }
-    }
-    (out, n)
 }
 
 #[cfg(test)]
@@ -546,23 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn masking_rules() {
-        assert!(maskable(Some("application/json; charset=utf-8")));
-        assert!(maskable(Some("text/html")));
-        assert!(!maskable(Some("text/event-stream")));
-        assert!(!maskable(Some("image/png")));
-        assert!(null_body(204) && null_body(304) && !null_body(200));
-        let (out, n) = mask(
-            r#"{"auth":"Bearer sk-secret-123","echo":"sk-secret-123"}"#,
-            "sk-secret-123",
-        );
-        assert_eq!(n, 2);
-        assert!(!out.contains("sk-secret-123"));
-        assert_eq!(mask("short k", "k").1, 0);
-        let body = [b"\xff\xfe x sk-secret-123 y".as_slice(), b"sk-secret-123"].concat();
-        let (out, n) = mask_bytes(&body, "sk-secret-123");
-        assert_eq!(n, 2);
-        assert_eq!(out, b"\xff\xfe x [REDACTED] y[REDACTED]".to_vec());
-        assert_eq!(mask_bytes(b"abc", "sk-secret-123"), (b"abc".to_vec(), 0));
+    fn body_less_statuses() {
+        assert!(null_body(204) && null_body(304) && null_body(101) && !null_body(200));
     }
 }
