@@ -68,6 +68,8 @@ Kept (weekend research, operator rule): `~/.cache/tengu-xm.noindex/weekend/{teng
 
 # Session 2026-10-09 (afternoon → night): seal proxy + Privy signers — PRs #50, #51
 
+> **Status 2026-10-13:** both MERGED — #50 `0316f4698699d5c636d13cd5bf7e73d038fbeb33` (rebased head `6275ca74535392d708b2120742c893ff370f8915`), #51 `099ceb6fdf1e217293b614b6d232d74ab29d123c` (head `309650dffbd5c901037c0040cfe9b8342c377b27`); see § T2. The OPEN / head / "not pulled" lines of this section are as of 2026-10-09.
+
 ## S1. What was asked → what was delivered
 
 | Ask (operator, 2026-10-09) | Delivered | Where |
@@ -192,6 +194,8 @@ rg -n 'sk-or-v1-[0-9a-f]{64}|tss1\.[A-Za-z0-9_-]{40,}\.' --glob '!target' .   # 
 # Session 2026-10-08 → 2026-10-09 (PRs #39–#45; original handoff, unchanged below this title)
 
 ## Addendum 2026-10-10 — A2A (PR #53, open on purpose until the weekend #2 stop)
+
+> **Status 2026-10-13:** MERGED as #53 `3e16a8694535859a20d97ab52687532b1cc3571b` (head `9c1ce529b5dd51e13639539026d5c7b7eec8f1ab`, + the `codex_a2a` leg); see § T2.
 
 | Field | Value |
 |---|---|
@@ -560,6 +564,8 @@ target/release/tengu lineage verify --pins --registry lineage                   
 ```
 
 ## 11. 2026-10-10 session — Studio builder + `engine = "codex"` (PR #52, OPEN)
+
+> **Status 2026-10-13:** MERGED as #52 `23a586d1d85cd8a037e23fa3c57ab1c9b949f7ea` (head `fb190f76431e2e8822d479b2ef5ff22e62e07c0a`); see § T2.
 
 | Ask (operator, 2026-10-10) | Delivered |
 |---|---|

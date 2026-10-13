@@ -212,7 +212,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | P9 cost / liquidity (2026-10-08) | cost model v2 in `xlab-w2` (observed fees: 9.0 for BMNR / MSTR / PURRDAT; measured $100 spread, mean 4.13 bps / side); knobs `stop_loss_bps`, `rank_by = "net_of_cost"`; top 4 close stop 300 +163.14 vs +142.65 (CIs overlap) ⇒ INCONCLUSIVE, the stop is W2's one capital candidate — `docs/p9-cost-liquidity-2026-10-08.md` |
 | P10 / P11 (2026-10-08) | no W2 candidate: nothing beats rule W; the close stop 300 (development +163.14 vs +142.65) failed the forward weekend (−40.57 vs +131.04) ⇒ G11 FAIL, keep W1, no P12 run — `docs/p10-w2-candidate-2026-10-08.md` |
 | Weekend #2 (prereg 2026-10-08) | `fwd.rule_w.2026-10-09` sealed 2026-10-08T12:56:28Z (before the 2026-10-10T00:00:00Z anchor); frozen binary `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` (sha256 `fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445`); operator start ≤ Fri 19:30 ET — `docs/forward-evidence-runbook-2026-10-08.md` |
-| Next | forward evidence: the W1 desk + recorder every weekend (operator: `tengu run --sandbox xmarket-weekend` Fri ≤ 19:30 ET; M3 go needs 12 weekends, 1 so far → 2 since 2026-10-12), counterfactual grading of stops / labels / net-of-cost each Monday; D11 open |
+| Next | forward evidence: the W1 desk + recorder every weekend (operator: `tengu run --sandbox xmarket-weekend` Fri ≤ 19:30 ET; M3 go needs 12 weekends, 2 so far (since 2026-10-12)), counterfactual grading of stops / labels / net-of-cost each Monday; D11 open |
 
 ## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
 
