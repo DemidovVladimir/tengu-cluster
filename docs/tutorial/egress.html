@@ -486,6 +486,7 @@
         <tr><td><code>src/config/egress.rs</code></td><td><code>EgressConfig</code>, defaults, <code>resolved()</code>, validation, proxy parsing</td></tr>
         <tr><td><code>src/adapters/outbound/egress.rs</code></td><td>the policy: <code>install</code>, <code>check_url</code>, client builders, shell guard, audit, <code>TENGU_EGRESS</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/http/request.rs</code></td><td>per-hop gate, redirects, the <code>http_request</code> audit record</td></tr>
+        <tr><td><code>src/adapters/outbound/a2a/mod.rs</code></td><td>A2A remotes: <code>peer_client</code> (proxied, loopback direct, no redirects), gate per request, <code>tool = "a2a"</code> audit (<a href="a2a.html">A2A</a>)</td></tr>
         <tr><td><code>src/adapters/outbound/http_class.rs</code></td><td>error classes, URL scrubbing</td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td>installs the sandbox's policy, warns on a dead proxy</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>hands <code>TENGU_EGRESS</code> to <code>run-agent</code></td></tr>
@@ -501,7 +502,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
 </article>
 </main>
 </div>

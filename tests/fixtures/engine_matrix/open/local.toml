@@ -3,7 +3,8 @@
 # by TENGU_MATRIX_LOCAL_BASE_URL — the operator's PC over the LAN, never a
 # model on this Mac (unset: the live legs are skipped); offline, a scripted
 # mock server (`offline_local_shell`). The test sets TENGU_MATRIX_WORKSPACE,
-# TENGU_MATRIX_FIXTURES (../), TENGU_MATRIX_MCP_VALUE and TENGU_HOME.
+# TENGU_MATRIX_FIXTURES (../), TENGU_MATRIX_MCP_VALUE, TENGU_MATRIX_A2A_URL and
+# TENGU_HOME.
 #
 # The sets that need a sandbox without [risk] (a shell, [[mcp_servers]],
 # memory on) and every catalog tool the hardened fixtures (../*.toml) do not
@@ -40,6 +41,16 @@ shell_bins = ["cat"]
 
 # The util set's loopback endpoint.
 [default_scopes.http_request]
+net_hosts = ["127.0.0.1"]
+
+# The a2a set's remote: a loopback A2A agent the test starts
+# (TENGU_MATRIX_A2A_URL; a placeholder URL for the other sets).
+[a2a.remotes.matrix]
+url = "${TENGU_MATRIX_A2A_URL}"
+description = "Engine-matrix peer: answers with a token."
+timeout_secs = 30
+
+[default_scopes.a2a]
 net_hosts = ["127.0.0.1"]
 
 # Privy signing off: a scope without wallets refuses before any env read or
@@ -131,7 +142,7 @@ env_reads = ["SOLANA_RPC_URL"]
 engine = "local"
 model = "gemma4:latest"
 description = "Engine-matrix open fixture: local Ollama gemma4:latest."
-tools = ["run_command", "matrix__token", "memory_ingest", "memory_search", "persistent_store", "view_skill", "skill_resource", "manage_skill", "skill_distill", "apply_improver_proposal", "shared_cache", "http_request", "abi_encode", "hex_to_uint256", "sign_message", "sign_and_send_transaction", "get_wallet_address", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_swap_plan", "lp_snapshot", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order", "agentic_memory"]
+tools = ["run_command", "matrix__token", "memory_ingest", "memory_search", "persistent_store", "view_skill", "skill_resource", "manage_skill", "skill_distill", "apply_improver_proposal", "shared_cache", "http_request", "abi_encode", "hex_to_uint256", "sign_message", "sign_and_send_transaction", "get_wallet_address", "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps", "solana_wallet", "solana_tx", "lp_swap_plan", "lp_snapshot", "hedge_decide", "lp_decide", "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position", "dlmm_close_position", "jup_perps_order", "agentic_memory", "a2a"]
 skill_packages = ["matrix_cat"]
 workspace = "${TENGU_MATRIX_WORKSPACE}"
 

@@ -20,6 +20,7 @@
 //! Not in the catalog: skill shell tools (`skill/`, built from SKILL.md) and
 //! external MCP server tools (`outbound/mcp_client/`, from `[[mcp_servers]]`).
 
+pub(crate) mod a2a;
 #[cfg(feature = "postgres_memory")]
 pub(crate) mod agentic_memory;
 pub(crate) mod args;
@@ -360,6 +361,14 @@ pub(crate) fn catalog() -> Vec<ToolEntry> {
             needs_memory: false,
             defs: || soe::defs_named(names::SOE_CHALLENGE),
             plugin: |_| Box::new(soe::SoePlugin),
+        },
+        // A2A client (`a2a/`): another agent harness, one of the sandbox's
+        // `[a2a.remotes.<name>]` only.
+        ToolEntry {
+            opt_in: Some(names::A2A),
+            needs_memory: false,
+            defs: a2a::tool_defs,
+            plugin: |_| Box::new(a2a::A2aPlugin),
         },
     ]);
     rows

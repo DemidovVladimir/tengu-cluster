@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::a2a::A2aConfig;
 use super::backtest::BacktestConfig;
 use super::rate_limits::RateLimitConfig;
 use super::risk::{PaperConfig, RiskConfig};
@@ -81,6 +82,10 @@ pub struct SandboxSections {
     /// run-dir retention bound or not (`application/backtest/mod.rs`);
     /// `None` = no ranking.
     pub ranking: Option<Arc<RankingSection>>,
+    /// `[a2a]` (`config/a2a.rs`): the remotes the `a2a` tool may call
+    /// (`outbound/tools/a2a/`) and the server `tengu a2a serve` runs;
+    /// `None` = no A2A.
+    pub a2a: Option<Arc<A2aConfig>>,
 }
 
 impl SandboxSections {
