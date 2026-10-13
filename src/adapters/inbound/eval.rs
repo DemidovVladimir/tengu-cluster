@@ -1046,6 +1046,7 @@ use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObs
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::AgentConfig;
 use crate::ports::tool_activity::ToolActivityPort;
+use crate::ports::trace::TraceSink;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Instant;
@@ -2034,6 +2035,201 @@ impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory 
     }
 }
 
+/// An orchestrated row's event observer: each `OrchestratorEvent` as a
+/// synthetic observation for the judge ([`event_observation`]), on a task of
+/// its own (the bus lags no one). [`Self::finish`] ends it after every event
+/// sent so far — no timed wait.
+struct RowObserver {
+    stop: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl RowObserver {
+    fn start(
+        mut events: crate::application::orchestrator::EventReceiver,
+        observations: Arc<std::sync::Mutex<Vec<Observation>>>,
+        seq: Arc<AtomicU32>,
+    ) -> Self {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+        let push = move |ev| {
+            if let Some((name, detail)) = event_observation(ev) {
+                let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                observations.lock().unwrap().push(Observation {
+                    seq: n,
+                    name,
+                    args_preview: detail,
+                });
+            }
+        };
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    got = events.recv() => match got {
+                        Ok(ev) => push(ev),
+                        Err(RecvError::Lagged(n)) => {
+                            tracing::warn!(dropped = n, "eval row observer lagged");
+                        }
+                        Err(RecvError::Closed) => return,
+                    },
+                    _ = &mut stopped => {
+                        // Everything sent before the stop is in the channel.
+                        loop {
+                            match events.try_recv() {
+                                Ok(ev) => push(ev),
+                                Err(TryRecvError::Lagged(_)) => {}
+                                Err(_) => return,
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        Self { stop, task }
+    }
+
+    /// Observe every event sent so far, then stop.
+    async fn finish(self) {
+        let _ = self.stop.send(());
+        let _ = self.task.await;
+    }
+}
+
+/// The end of an orchestrated row, in order and with no timed wait: the
+/// metrics barrier (every record put on the process sink so far is on the
+/// bus — in the trace and with the observer), the observer drained to
+/// everything sent, the row's trace gate shut (a straggler of an aborted
+/// step lands nowhere), then `run.closed`, the run's last event.
+async fn close_row(
+    orchestrator: &crate::application::orchestrator::Orchestrator,
+    observer: RowObserver,
+    gate: Option<&crate::application::trace_exec::GatedTrace>,
+    trace: Option<&Arc<dyn TraceSink>>,
+    timed_out: bool,
+) {
+    orchestrator.flush_metrics().await;
+    observer.finish().await;
+    if let Some(g) = gate {
+        g.close();
+    }
+    if let Some(t) = trace {
+        let reason = if timed_out {
+            "row timed out"
+        } else {
+            "row done"
+        };
+        crate::bootstrap::trace::close(&**t, reason, timed_out);
+    }
+}
+
+/// One `OrchestratorEvent` as the judge's observation `(name, detail)`;
+/// `None`: not observed (`StepProgress`).
+fn event_observation(
+    ev: crate::application::orchestrator::OrchestratorEvent,
+) -> Option<(String, String)> {
+    use crate::application::orchestrator::OrchestratorEvent;
+    let (name, detail) = match ev {
+        OrchestratorEvent::PlanCreated { plan } => {
+            let steps: Vec<String> = plan
+                .steps
+                .iter()
+                .map(|s| {
+                    let deps: Vec<String> = s.depends_on.iter().map(|d| d.0.clone()).collect();
+                    if deps.is_empty() {
+                        format!("{}:{}(deps=[])", s.id.0, s.agent)
+                    } else {
+                        format!("{}:{}(deps=[{}])", s.id.0, s.agent, deps.join(","))
+                    }
+                })
+                .collect();
+            (
+                "orchestrator:plan_created".to_string(),
+                format!("steps=[{}]", steps.join(", ")),
+            )
+        }
+        OrchestratorEvent::StepStarted { step_id, agent } => (
+            "orchestrator:step_started".to_string(),
+            format!("{}:{}", step_id.0, agent),
+        ),
+        OrchestratorEvent::StepSucceeded { step_id, output } => (
+            "orchestrator:step_succeeded".to_string(),
+            format!("{}:{}", step_id.0, truncate(&output, 200)),
+        ),
+        OrchestratorEvent::StepFailed {
+            step_id,
+            attempt,
+            error,
+            ..
+        } => (
+            "orchestrator:step_failed".to_string(),
+            format!(
+                "{}:attempt={} err={}",
+                step_id.0,
+                attempt,
+                truncate(&error, 200)
+            ),
+        ),
+        OrchestratorEvent::StepExhausted {
+            step_id,
+            final_error,
+        } => (
+            "orchestrator:step_exhausted".to_string(),
+            format!("{}:err={}", step_id.0, truncate(&final_error, 200)),
+        ),
+        OrchestratorEvent::ReplanTriggered { reason } => (
+            "orchestrator:replan_triggered".to_string(),
+            truncate(&reason, 200),
+        ),
+        OrchestratorEvent::PlanCompleted {
+            final_response,
+            cancelled,
+            ..
+        } => (
+            "orchestrator:plan_completed".to_string(),
+            format!("cancelled={} final_len={}", cancelled, final_response.len()),
+        ),
+        OrchestratorEvent::StepProgress { .. } => return None,
+        // Phase 6.1 (full) — record planner RAG queries so the judge
+        // sees what roster the planner LLM was given. Top-5 hits is
+        // enough signal to reproduce ranking decisions without
+        // ballooning the trace.
+        OrchestratorEvent::RagQueried { phase, query, hits } => {
+            let top: Vec<String> = hits
+                .iter()
+                .take(5)
+                .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
+                .collect();
+            (
+                "orchestrator:rag_queried".to_string(),
+                format!(
+                    "phase={} query={} hits=[{}]",
+                    phase,
+                    truncate(&query, 200),
+                    top.join(",")
+                ),
+            )
+        }
+        // Metrics — record one observation per LLM/embedding call so
+        // eval rows can compare token consumption across runs. The
+        // canonical analysis surface is the tracing log + global
+        // metrics bus; this is the eval-judge mirror.
+        OrchestratorEvent::MetricsRecorded { record } => (
+            "orchestrator:metrics_recorded".to_string(),
+            format!(
+                "kind={} agent={} model={} tok in/out={}/{} latency_ms={}",
+                record.kind.as_str(),
+                record.agent,
+                record.model,
+                record.prompt_tokens,
+                record.completion_tokens,
+                record.latency_ms,
+            ),
+        ),
+    };
+    Some((name, detail))
+}
+
 async fn run_row_via_orchestrator(
     ctx: RowCtx<'_>,
     started: Instant,
@@ -2068,7 +2264,9 @@ async fn run_row_via_orchestrator(
     let memory_manager = Arc::new(crate::application::memory::manager::MemoryManager::new());
 
     // One recording per orchestrated row (`RunKind::Eval`): its plans,
-    // steps and their `run-agent` tool calls; `run.closed` at the end.
+    // steps and their `run-agent` tool calls; `run.closed` at the end. The
+    // orchestrator writes through a gate the row shuts before `run.closed`
+    // (`close_row`).
     let trace = crate::bootstrap::trace::open_orchestration(
         &cfg_arc,
         crate::domain::trace::RunKind::Eval,
@@ -2076,14 +2274,18 @@ async fn run_row_via_orchestrator(
             None,
         )),
     );
+    let gate = trace
+        .as_ref()
+        .map(|s| crate::application::trace_exec::GatedTrace::new(Arc::clone(s)));
     let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
         &cfg_arc,
         Arc::clone(&factory),
         Arc::clone(&memory_manager),
         crate::bootstrap::orchestrator::resolve_session_id(),
-        trace
-            .as_ref()
-            .and_then(|s| crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)),
+        gate.as_ref().and_then(|g| {
+            let sink: Arc<dyn TraceSink> = Arc::clone(g) as Arc<dyn TraceSink>;
+            crate::application::orchestrator::trace::OrchestratorTrace::of(&sink, None)
+        }),
     )
     .ok_or_else(|| {
         anyhow::anyhow!("build_orchestrator returned None despite [orchestrator] block")
@@ -2096,119 +2298,11 @@ async fn run_row_via_orchestrator(
     // fanned out to 3 parallel researchers" from "one researcher made 3
     // sequential calls" — the plan semantics are invisible at the tool
     // layer alone.
-    let event_obs = Arc::clone(&accum.observations);
-    let event_seq = Arc::clone(&accum.seq);
-    let mut event_rx = orchestrator.subscribe();
-    let event_task = tokio::spawn(async move {
-        use crate::application::orchestrator::OrchestratorEvent;
-        while let Ok(ev) = event_rx.recv().await {
-            let (name, detail) = match ev {
-                OrchestratorEvent::PlanCreated { plan } => {
-                    let steps: Vec<String> = plan
-                        .steps
-                        .iter()
-                        .map(|s| {
-                            let deps: Vec<String> =
-                                s.depends_on.iter().map(|d| d.0.clone()).collect();
-                            if deps.is_empty() {
-                                format!("{}:{}(deps=[])", s.id.0, s.agent)
-                            } else {
-                                format!("{}:{}(deps=[{}])", s.id.0, s.agent, deps.join(","))
-                            }
-                        })
-                        .collect();
-                    (
-                        "orchestrator:plan_created".to_string(),
-                        format!("steps=[{}]", steps.join(", ")),
-                    )
-                }
-                OrchestratorEvent::StepStarted { step_id, agent } => (
-                    "orchestrator:step_started".to_string(),
-                    format!("{}:{}", step_id.0, agent),
-                ),
-                OrchestratorEvent::StepSucceeded { step_id, output } => (
-                    "orchestrator:step_succeeded".to_string(),
-                    format!("{}:{}", step_id.0, truncate(&output, 200)),
-                ),
-                OrchestratorEvent::StepFailed {
-                    step_id,
-                    attempt,
-                    error,
-                    ..
-                } => (
-                    "orchestrator:step_failed".to_string(),
-                    format!(
-                        "{}:attempt={} err={}",
-                        step_id.0,
-                        attempt,
-                        truncate(&error, 200)
-                    ),
-                ),
-                OrchestratorEvent::StepExhausted {
-                    step_id,
-                    final_error,
-                } => (
-                    "orchestrator:step_exhausted".to_string(),
-                    format!("{}:err={}", step_id.0, truncate(&final_error, 200)),
-                ),
-                OrchestratorEvent::ReplanTriggered { reason } => (
-                    "orchestrator:replan_triggered".to_string(),
-                    truncate(&reason, 200),
-                ),
-                OrchestratorEvent::PlanCompleted {
-                    final_response,
-                    cancelled,
-                    ..
-                } => (
-                    "orchestrator:plan_completed".to_string(),
-                    format!("cancelled={} final_len={}", cancelled, final_response.len()),
-                ),
-                OrchestratorEvent::StepProgress { .. } => continue,
-                // Phase 6.1 (full) — record planner RAG queries so the judge
-                // sees what roster the planner LLM was given. Top-5 hits is
-                // enough signal to reproduce ranking decisions without
-                // ballooning the trace.
-                OrchestratorEvent::RagQueried { phase, query, hits } => {
-                    let top: Vec<String> = hits
-                        .iter()
-                        .take(5)
-                        .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
-                        .collect();
-                    (
-                        "orchestrator:rag_queried".to_string(),
-                        format!(
-                            "phase={} query={} hits=[{}]",
-                            phase,
-                            truncate(&query, 200),
-                            top.join(",")
-                        ),
-                    )
-                }
-                // Metrics — record one observation per LLM/embedding call so
-                // eval rows can compare token consumption across runs. The
-                // canonical analysis surface is the tracing log + global
-                // metrics bus; this is the eval-judge mirror.
-                OrchestratorEvent::MetricsRecorded { record } => (
-                    "orchestrator:metrics_recorded".to_string(),
-                    format!(
-                        "kind={} agent={} model={} tok in/out={}/{} latency_ms={}",
-                        record.kind.as_str(),
-                        record.agent,
-                        record.model,
-                        record.prompt_tokens,
-                        record.completion_tokens,
-                        record.latency_ms,
-                    ),
-                ),
-            };
-            let n = event_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            event_obs.lock().unwrap().push(Observation {
-                seq: n,
-                name,
-                args_preview: detail,
-            });
-        }
-    });
+    let observer = RowObserver::start(
+        orchestrator.subscribe(),
+        Arc::clone(&accum.observations),
+        Arc::clone(&accum.seq),
+    );
 
     // Drive with the row's timeout.
     let prompt = ctx.row.prompt.clone();
@@ -2222,21 +2316,14 @@ async fn run_row_via_orchestrator(
         Ok(text) => (false, text),
         Err(_) => (true, String::new()),
     };
-    // Let the event drain finish — PlanCompleted should already have
-    // fired. Give it a brief grace window to flush before we snapshot.
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    event_task.abort();
-    // After the grace window: a record the metrics forwarder hands the bus
-    // late (`metrics.recorded`) lands before `run.closed`, not after it
-    // (an event after it would leave the run `open`).
-    if let Some(t) = &trace {
-        let reason = if timed_out {
-            "row timed out"
-        } else {
-            "row done"
-        };
-        crate::bootstrap::trace::close(&**t, reason, timed_out);
-    }
+    close_row(
+        &orchestrator,
+        observer,
+        gate.as_deref(),
+        trace.as_ref(),
+        timed_out,
+    )
+    .await;
 
     // Snapshot results from the accumulator.
     let obs_snapshot = accum.observations.lock().unwrap().clone();
@@ -3448,5 +3535,89 @@ metrics:
             "unexpected error: {}",
             err
         );
+    }
+
+    /// Never called: the barrier test runs no turn.
+    struct NoTurns;
+
+    #[async_trait]
+    impl crate::ports::orchestration::ChatServiceFactory for NoTurns {
+        async fn run_turn(&self, _agent: &str, _text: &str) -> anyhow::Result<String> {
+            anyhow::bail!("no turn in this test")
+        }
+    }
+
+    /// Finding P2 (trace closure): a metric put on the process sink just
+    /// before the row ends is in the trace (and with the judge's observer)
+    /// before `run.closed` — the metrics barrier, no timed sleep. On a
+    /// current-thread runtime the forwarder has not run once when the row
+    /// closes, so the old 100 ms sleep was all that ordered them. After
+    /// `close_row` the row's gate is shut: a straggler lands nowhere.
+    #[tokio::test]
+    async fn close_row_writes_a_late_metric_before_run_closed() {
+        use crate::application::trace_exec::tests::MemTrace;
+        use crate::application::trace_exec::GatedTrace;
+        use crate::domain::metrics::{MetricsKind, MetricsRecord};
+        let cfg = Config {
+            orchestrator: Some(toml::from_str("agent = \"planner\"").unwrap()),
+            ..Config::default()
+        };
+        let sink = Arc::new(MemTrace::default());
+        let trace: Arc<dyn TraceSink> = sink.clone();
+        let gate = GatedTrace::new(Arc::clone(&trace));
+        let via: Arc<dyn TraceSink> = gate.clone();
+        let session = format!("eval-barrier-{}", uuid::Uuid::new_v4());
+        let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
+            &cfg,
+            Arc::new(NoTurns),
+            Arc::new(crate::application::memory::manager::MemoryManager::new()),
+            session.clone(),
+            crate::application::orchestrator::trace::OrchestratorTrace::of(&via, None),
+        )
+        .unwrap();
+        let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observer = RowObserver::start(
+            orchestrator.subscribe(),
+            Arc::clone(&observations),
+            Arc::new(AtomicU32::new(0)),
+        );
+        crate::application::metrics::record(MetricsRecord {
+            ts_unix: 0,
+            session_id: session.clone(),
+            kind: MetricsKind::Planner,
+            agent: "planner/planner".into(),
+            model: session.clone(),
+            prompt_tokens: 10,
+            completion_tokens: 2,
+            total_tokens: 12,
+            prompt_chars: 40,
+            prompt_bytes: 40,
+            response_chars: 8,
+            latency_ms: 5,
+            layers: Vec::new(),
+            step_id: None,
+        });
+        close_row(&orchestrator, observer, Some(&gate), Some(&trace), false).await;
+        // The trace bridge keeps this session's record only.
+        assert_eq!(sink.kinds(), ["metrics.recorded", "run.closed"]);
+        assert_eq!(sink.all()[0].payload["total_tokens"], serde_json::json!(12));
+        // The observer mirrors every record on the bus (other tests share the
+        // process sink): this one is among them.
+        let model = format!("model={session} ");
+        let seen = observations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|o| o.args_preview.contains(&model))
+            .map(|o| o.name.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(seen, ["orchestrator:metrics_recorded"]);
+        let late = crate::domain::trace::EventDraft::new(
+            crate::domain::trace::Component::Orchestrator,
+            "plan.completed",
+            crate::domain::trace::Status::Ok,
+        );
+        assert_eq!(via.emit(late), None);
+        assert_eq!(sink.kinds().last().map(String::as_str), Some("run.closed"));
     }
 }

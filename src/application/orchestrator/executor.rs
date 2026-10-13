@@ -32,15 +32,14 @@ impl DagExecutor {
     ) -> ExecResult {
         let mut completed_outputs: HashMap<StepId, String> = HashMap::new();
         let mut in_flight: HashSet<StepId> = HashSet::new();
-        let mut futures = FuturesUnordered::new();
+        // Every way out — an early return, this future dropped unfinished —
+        // aborts the steps still in flight ([`InFlight`]).
+        let mut futures = InFlight(FuturesUnordered::new());
 
         loop {
             // Honor cancellation before dispatching the next batch of ready
-            // steps. Every early return aborts the steps still in flight
-            // (`abort_in_flight`): a dropped `JoinHandle` only detaches its
-            // task, which kept running (and its `run-agent` child with it).
+            // steps.
             if cancel.load(Ordering::SeqCst) {
-                abort_in_flight(&futures);
                 return ExecResult::Cancelled;
             }
 
@@ -90,7 +89,6 @@ impl DagExecutor {
                 }
                 Some(Ok((id, StepOutcome::Exhausted(err)))) => {
                     in_flight.remove(&id);
-                    abort_in_flight(&futures);
                     return ExecResult::NeedsReplan {
                         failed: id,
                         error: err,
@@ -99,7 +97,6 @@ impl DagExecutor {
                 Some(Err(join_err)) => {
                     // Task panicked. Treat as catastrophic.
                     info!(?join_err, "executor task panicked");
-                    abort_in_flight(&futures);
                     return ExecResult::NeedsReplan {
                         failed: StepId::new("<panicked>"),
                         error: format!("task panic: {}", join_err),
@@ -111,7 +108,6 @@ impl DagExecutor {
             // Re-check cancellation after each completion so a flag set
             // while steps were running is observed before the next dispatch.
             if cancel.load(Ordering::SeqCst) {
-                abort_in_flight(&futures);
                 return ExecResult::Cancelled;
             }
         }
@@ -161,11 +157,31 @@ impl DagExecutor {
     }
 }
 
-/// Abort every step task still running: dropping its `JoinHandle` would only
-/// detach it. The task drops its `run-agent` child, which is `kill_on_drop`.
-fn abort_in_flight<T>(futures: &FuturesUnordered<tokio::task::JoinHandle<T>>) {
-    for handle in futures.iter() {
-        handle.abort();
+/// The step tasks of one [`DagExecutor::run`]: dropped, it aborts every one
+/// still running — dropping a `JoinHandle` would only detach its task, which
+/// kept running (and its `run-agent` child, `kill_on_drop`, with it). Also
+/// when the run's own future is dropped (a turn aborted at a shutdown
+/// deadline, an eval row's timeout).
+struct InFlight<T>(FuturesUnordered<tokio::task::JoinHandle<T>>);
+
+impl<T> std::ops::Deref for InFlight<T> {
+    type Target = FuturesUnordered<tokio::task::JoinHandle<T>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for InFlight<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<T> Drop for InFlight<T> {
+    fn drop(&mut self) {
+        for handle in self.0.iter() {
+            handle.abort();
+        }
     }
 }
 
@@ -440,6 +456,31 @@ mod tests {
         assert!(
             !slow_finished.load(std::sync::atomic::Ordering::SeqCst),
             "the in-flight sibling kept running after the replan"
+        );
+    }
+
+    /// The run's future dropped unfinished (a turn aborted at the shutdown
+    /// deadline, an eval timeout) aborts its steps too — they used to run
+    /// on, detached, and write their events after the trace closed.
+    #[tokio::test]
+    async fn dropping_the_run_aborts_steps_still_in_flight() {
+        let bus = new_bus();
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = Arc::new(FailFastSlowWorker {
+            slow_finished: Arc::clone(&slow_finished),
+        });
+        let plan = Plan {
+            steps: vec![step("slow", &[])],
+        };
+        let run = DagExecutor::run(&plan, worker, &policy, &bus, no_cancel());
+        let cut = tokio::time::timeout(std::time::Duration::from_millis(50), run).await;
+        assert!(cut.is_err(), "the step outlives the timeout");
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            !slow_finished.load(std::sync::atomic::Ordering::SeqCst),
+            "the step kept running after its run was dropped"
         );
     }
 

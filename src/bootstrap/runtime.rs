@@ -11,7 +11,8 @@
 //! | live verdict | [`read_live`]: the heartbeat file + the `loop/1` / `feed/1` rows of each agent store that exists → `domain::runtime::live_verdict` — `tengu doctor --live` and Studio's `/api/v1/health` read the same |
 //! | feeds | [`start_feeds`]: one task `feed:<name>` per `[feeds.<n>]` (`application::runtime::feeds::run_feed`, `SystemClock`, `jitter01`); a tool feed calls through its agent's executor (`decision::agent_tool_executor`, one per agent; a tool it cannot run fails the start) under `egress::AttributedExecutor` (egress records: the feed's agent, session `feed:<name>`, the call id), a tick feed submits to [`Runtime::loops`]; a job feed runs the named job ([`job_for`]: `soe_cycle` = `bootstrap::soe::soe_cycle_job`); `feed/1:<name>` rows go to the feed agent's store (tick: the target loop agent's; job `soe_cycle`: the `[soe] architect`'s) |
 //! | tasks | [`Runtime::spawn`] registers long-running tasks on the stop signal: the webhook router and the feeds |
-//! | shutdown | [`Runtime::shutdown`]: stop signal → loops drain + tasks stop ≤ `[runtime] shutdown_grace_secs` → leases released |
+//! | turns | [`Runtime::turns`]: the orchestrator turns of the process (a webhook agent endpoint's, a loop escalation's — `inbound/webhooks.rs`), owned by the loops' dispatch; [`start`] hands them and the recording to the escalator before any loop runs |
+//! | shutdown | [`Runtime::shutdown`]: stop signal → loop events + turns drain, tasks stop ≤ `[runtime] shutdown_grace_secs` (then aborted) → leases released → `runtime.stopped` |
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -32,7 +33,9 @@ use crate::adapters::outbound::rate_limit::jitter01;
 use crate::adapters::outbound::runtime_store::{read_heartbeat, SqliteRuntimeStore};
 use crate::application::runtime::feeds::{run_feed, FeedEnv, FeedJob, FeedSpec, Rand01};
 use crate::application::runtime::health::{heartbeat_task, write_beat, HealthBoard};
-use crate::application::runtime::loops::{DrainReport, LoopDispatch, LoopHandler, LoopStats};
+use crate::application::runtime::loops::{
+    DrainReport, LoopDispatch, LoopHandler, LoopStats, Turns,
+};
 use crate::application::runtime::{
     keep_lease, HeldLeases, LeaseTiming, Stop, StopRx, Stopper, Supervisor,
 };
@@ -456,21 +459,29 @@ pub(crate) struct Runtime {
     started_at_ms: i64,
     supervisor: Supervisor,
     loops: Arc<LoopDispatch>,
+    /// The process's orchestrator turns, owned by every `loops` it has.
+    turns: Arc<Turns>,
     health: Arc<HealthBoard>,
     /// This process's trace recording (`bootstrap::trace::open_sink`);
     /// `NoopTrace` until [`start`] opens it.
     trace: Arc<dyn TraceSink>,
 }
 
+/// The loops' escalator, built from the recording and the turns once both
+/// exist (before any loop runs); `None` = loops never escalate.
+pub(crate) type MakeEscalator<'a> =
+    Box<dyn FnOnce(Arc<dyn TraceSink>, Arc<Turns>) -> Option<Arc<dyn Escalator>> + Send + 'a>;
+
 /// Take the lease, open the trace recording (`run_id`; `runtime_id` = the
 /// lease holder), build every decision loop (their audit lines carry both
 /// ids), start the lease keeper and the heartbeat. `escalator` comes from
 /// the inbound side (the webhook listener's orchestrator escalator when
-/// built with `--features webhooks`).
+/// built with `--features webhooks`): it records into this run and its
+/// turns are the runtime's ([`Runtime::turns`], drained on shutdown).
 pub(crate) async fn start(
     config: &Config,
     secrets: Arc<SecretRegistry>,
-    escalator: Option<Arc<dyn Escalator>>,
+    escalator: MakeEscalator<'_>,
 ) -> Result<Runtime> {
     let rt = Runtime::begin(
         LeasePlan::of(config),
@@ -484,6 +495,7 @@ pub(crate) async fn start(
         crate::domain::trace::RunKind::Run,
         &secrets,
     );
+    let escalator = escalator(Arc::clone(&trace), rt.turns());
     rt.start_recorded(config, secrets, escalator, trace).await
 }
 
@@ -773,11 +785,15 @@ impl Runtime {
             state_dir = %state_dir.display(),
             "runtime leases taken"
         );
-        let loops = Arc::new(LoopDispatch::new(
-            BTreeMap::new(),
-            cfg.max_decisions_in_flight,
-            cfg.max_queued_per_loop,
-        ));
+        let turns = Turns::new();
+        let loops = Arc::new(
+            LoopDispatch::new(
+                BTreeMap::new(),
+                cfg.max_decisions_in_flight,
+                cfg.max_queued_per_loop,
+            )
+            .with_turns(Arc::clone(&turns)),
+        );
         let health = Arc::new(HealthBoard::new(
             &sandbox,
             owner.holder(),
@@ -794,6 +810,7 @@ impl Runtime {
             started_at_ms: now,
             supervisor,
             loops,
+            turns,
             health,
             trace: Arc::new(NoopTrace),
         })
@@ -890,7 +907,8 @@ impl Runtime {
                 self.cfg.max_decisions_in_flight,
                 self.cfg.max_queued_per_loop,
             )
-            .with_trace(Arc::clone(&self.trace)),
+            .with_trace(Arc::clone(&self.trace))
+            .with_turns(Arc::clone(&self.turns)),
         );
         self.health = Arc::new(HealthBoard::new(
             &self.sandbox,
@@ -933,6 +951,12 @@ impl Runtime {
         self.owner.ownership()
     }
 
+    /// The process's orchestrator turns (module table): owned by
+    /// [`Self::loops`], drained with its events on shutdown.
+    pub(crate) fn turns(&self) -> Arc<Turns> {
+        Arc::clone(&self.turns)
+    }
+
     /// Where loop events go (webhook endpoints, tick feeds).
     pub(crate) fn loops(&self) -> Arc<LoopDispatch> {
         Arc::clone(&self.loops)
@@ -956,9 +980,11 @@ impl Runtime {
         self.supervisor.spawn(name, f);
     }
 
-    /// Stop (if not yet requested), drain loops and tasks until
-    /// `shutdown_grace_secs`, then release the leases. The heartbeat says
-    /// `stopping` during the drain and `stopped` after it.
+    /// Stop (if not yet requested), drain loop events, orchestrator turns
+    /// and tasks until `shutdown_grace_secs` (then abort them), then release
+    /// the leases and write `runtime.stopped` — nothing a turn writes follows
+    /// it. The heartbeat says `stopping` during the drain and `stopped` after
+    /// it.
     pub(crate) async fn shutdown(self) -> ShutdownReport {
         let life = self.life();
         let Runtime {
@@ -1011,11 +1037,7 @@ impl Runtime {
         let stopped = json!({
             "reason": stop.reason,
             "failed": stop.failed,
-            "drain": {
-                "finished": drained.finished,
-                "dropped": drained.dropped,
-                "aborted": drained.aborted,
-            },
+            "drain": drained.to_json(),
             "aborted_tasks": aborted_tasks,
             "lease_released": lease_released,
             "stats": loop_stats_json(&loops.stats()),
@@ -1440,6 +1462,83 @@ mod tests {
         (slow, store)
     }
 
+    /// Writes `kind` (dropped) through `sink` when dropped: what an aborted
+    /// turn's drop records (`plan.completed`, cancelled).
+    struct DropRecord(Arc<dyn TraceSink>, &'static str);
+
+    impl Drop for DropRecord {
+        fn drop(&mut self) {
+            self.0.emit(EventDraft::new(
+                Component::Orchestrator,
+                self.1,
+                Status::Dropped,
+            ));
+        }
+    }
+
+    /// Finding P1, the mounted path (`tengu run`, Studio Play): a turn the
+    /// runtime owns (`Runtime::turns` — a webhook agent endpoint's, an
+    /// escalation's) is waited for before the lease release and
+    /// `runtime.stopped`; one still running at the end of the grace is
+    /// aborted and what its drop writes precedes `runtime.stopped` too.
+    #[tokio::test]
+    async fn shutdown_waits_for_owned_turns_then_aborts_at_the_grace() {
+        use crate::application::trace_exec::tests::MemTrace;
+        let dir = tempfile::tempdir().unwrap();
+        for (grace_secs, turn_ms, want) in [(10, 100, (1, 0)), (0, 60_000, (0, 1))] {
+            let sink = Arc::new(MemTrace::default());
+            let cfg = RuntimeConfig {
+                shutdown_grace_secs: grace_secs,
+                ..RuntimeConfig::default()
+            };
+            let rt = Runtime::begin(
+                plan("control-loop-lab", dir.path(), false),
+                cfg,
+                slow_timing(),
+            )
+            .await
+            .unwrap()
+            .start_recorded(
+                &Config::default(),
+                Arc::new(SecretRegistry::new()),
+                None,
+                sink.clone(),
+            )
+            .await
+            .unwrap();
+            let via: Arc<dyn TraceSink> = sink.clone();
+            let (started, running) = tokio::sync::oneshot::channel();
+            rt.loops()
+                .spawn_turn(async move {
+                    let record = DropRecord(via, "plan.completed");
+                    let _ = started.send(());
+                    tokio::time::sleep(Duration::from_millis(turn_ms)).await;
+                    drop(record);
+                })
+                .unwrap();
+            running.await.unwrap();
+            let t0 = std::time::Instant::now();
+            let report = rt.shutdown().await;
+            assert!(t0.elapsed() < Duration::from_secs(5));
+            assert!(report.lease_released);
+            assert_eq!(
+                (report.loops.turns_finished, report.loops.turns_aborted),
+                want
+            );
+            let kinds = sink.kinds();
+            assert_eq!(
+                kinds[kinds.len() - 3..],
+                ["runtime.stopping", "plan.completed", "runtime.stopped"],
+                "grace {grace_secs}"
+            );
+            let stopped = sink.all().pop().unwrap();
+            assert_eq!(
+                stopped.payload["drain"]["turns"],
+                json!({"finished": want.0, "aborted": want.1})
+            );
+        }
+    }
+
     #[tokio::test]
     async fn shutdown_drains_a_running_loop_event() {
         let dir = tempfile::tempdir().unwrap();
@@ -1460,7 +1559,8 @@ mod tests {
             DrainReport {
                 finished: 1,
                 dropped: 0,
-                aborted: 0
+                aborted: 0,
+                ..DrainReport::default()
             }
         );
         assert!(report.aborted_tasks.is_empty(), "{report:?}");

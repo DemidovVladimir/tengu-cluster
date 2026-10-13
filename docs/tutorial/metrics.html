@@ -169,7 +169,7 @@
         <li>The records ride back in <code>AgentIpcOutput.metrics</code>. The parent puts each one on the sink, after a success and after a failure; its log line already came with the child's log.</li>
         <li>Embedding calls (agent <code>embedder</code>), the wiki compiler and Jev decisions (agent = the loop's name) report the same way.</li>
         <li><code>build_orchestrator</code> installs one global sink: a broadcast channel with 256 slots. Without an orchestrator there is no sink, only the log line.</li>
-        <li>A bridge task copies every record onto the orchestrator bus as <code>OrchestratorEvent::MetricsRecorded</code>. Eval runs read it there too.</li>
+        <li>Each orchestrator owns one bridge task that copies every record onto its bus as <code>OrchestratorEvent::MetricsRecorded</code> (the trace writes <code>metrics.recorded</code> then), and ends with the orchestrator. Eval runs read it there too.</li>
         <li>The TUI folds every record into <code>AggregatorState</code>, panel on or off. With <code>TENGU_TUI_METRICS=1</code> it adds a <code>metrics:</code> System bubble after each call.</li>
       </ol>
     </div>
@@ -312,6 +312,7 @@
   <ul class="checks">
     <li><span><b>Metrics never gate work.</b> <code>record()</code> returns nothing and cannot fail; a send with no subscriber is ignored.</span></li>
     <li><span><b>One sink per process.</b> The first install wins; every later <code>build_orchestrator</code> reuses it.</span></li>
+    <li><span><b>A barrier, not a sleep.</b> <code>Orchestrator::flush_metrics</code> resolves once the bridge has handed on every record sent before it. An eval row and a webhook turn await it before their trace closes, so no <code>metrics.recorded</code> follows <code>run.closed</code>.</span></li>
     <li><span><b>Both outcomes report.</b> The parent re-emits a child's records after <code>ok</code> and after <code>failed</code>.</span></li>
     <li><span><b>Old children still parse.</b> A payload without <code>metrics</code> reads as an empty list.</span></li>
     <li><span><b>True totals.</b> The TUI aggregator absorbs every record even with the panel off, so turning it on shows real numbers.</span></li>
@@ -346,14 +347,14 @@
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/domain/metrics.rs</code></td><td><code>MetricsRecord</code>, kinds, layers, <code>AggregatorState</code>, the status line</td></tr>
-        <tr><td><code>src/application/metrics.rs</code></td><td>the global sink, <code>record()</code>, the log line</td></tr>
+        <tr><td><code>src/application/metrics.rs</code></td><td>the global sink, <code>record()</code>, the log line; <code>forward_sink</code> + <code>MetricsBarrier</code> (the bridge and its flush)</td></tr>
         <tr><td><code>src/domain/usage.rs</code></td><td>chat-turn token totals behind <code>/cost</code></td></tr>
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td>planner records and their layers</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>one record per child engine turn</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td><code>AgentIpcOutput.metrics</code>, re-emit</td></tr>
         <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>embedding records</td></tr>
         <tr><td><code>src/application/decision_loop/mod.rs</code></td><td>decision records, <code>decisions.jsonl</code> lines</td></tr>
-        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>sink install, bus bridge</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>sink install, bus bridge (owned by the orchestrator)</td></tr>
         <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td><code>TENGU_TUI_METRICS</code> panel</td></tr>
         <tr><td><code>src/adapters/outbound/egress.rs</code></td><td><code>egress.jsonl</code></td></tr>
         <tr><td><code>src/adapters/outbound/paper_store.rs</code></td><td><code>risk.jsonl</code></td></tr>
@@ -363,7 +364,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

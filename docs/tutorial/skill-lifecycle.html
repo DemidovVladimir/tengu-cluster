@@ -398,6 +398,7 @@ tengu skill remove my-notes --tier project
     <li><span><b>Evals stay contained.</b> Each row gets a fresh temp folder; tool output is redacted; stubs never reach a <code>claude_code</code> agent's bridge (that row is refused).</span></li>
     <li><span><b>Evals use the sandbox's sealed keys.</b> With <code>--sandbox &lt;s&gt;</code> and <code>[keys]</code>, its egress and a seal-proxy session are installed before any engine, the judge included (<a href="sealed-keys.html">Sealed keys</a>).</span></li>
     <li><span><b>A timeout is a fail.</b> A row past its <code>timeout_secs</code> fails without a judge call; malformed judge output fails with a preview.</span></li>
+    <li><span><b>An orchestrated row's trace ends last.</b> With <code>[orchestrator]</code> the row awaits the metrics barrier, then reads every event sent to its observer, then shuts its trace gate and writes <code>run.closed</code> — no timed sleep; a timed-out row's turn is cancelled (<code>plan.completed</code>, dropped) first.</span></li>
     <li><span><b>Installs are checked first.</b> Symlink escapes are rejected; <code>--strict</code> refuses a caution or dangerous verdict; an existing target is never overwritten.</span></li>
     <li><span><b>Busy skills can't vanish.</b> <code>remove</code> and <code>manage_skill delete</code> refuse while an evolve worktree for that skill exists.</span></li>
   </ul>
@@ -432,7 +433,7 @@ tengu skill remove my-notes --tier project
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/eval.rs</code></td><td><code>tengu eval</code>: rows, stubs, judge, report, exit codes</td></tr>
+        <tr><td><code>src/adapters/inbound/eval.rs</code></td><td><code>tengu eval</code>: rows, stubs, judge, report, exit codes; an orchestrated row's observer and trace close (<code>close_row</code>)</td></tr>
         <tr><td><code>src/adapters/inbound/evolve.rs</code></td><td>the evolve driver: baseline, improver call, cycles, gate, apply</td></tr>
         <tr><td><code>src/application/skills/lifecycle/evolve.rs</code></td><td>target pick, <code>pick_best</code>, proposal apply, <code>editable_by_learner</code></td></tr>
         <tr><td><code>src/application/skills/lifecycle/metrics.rs</code></td><td><code>MetricSpec</code> and its validation</td></tr>

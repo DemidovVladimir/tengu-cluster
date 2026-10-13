@@ -491,11 +491,7 @@ impl Controller {
         let end = json!({
             "reason": report.stop.reason,
             "failed": report.stop.failed,
-            "drain": {
-                "finished": report.loops.finished,
-                "dropped": report.loops.dropped,
-                "aborted": report.loops.aborted,
-            },
+            "drain": report.loops.to_json(),
             "aborted_tasks": report.aborted_tasks,
             "lease_released": report.lease_released,
         });
