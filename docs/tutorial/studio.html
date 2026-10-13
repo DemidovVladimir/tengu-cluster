@@ -238,7 +238,7 @@
     <table>
       <thead><tr><th>Family</th><th>Kinds</th><th>Parent</th></tr></thead>
       <tbody>
-        <tr><td><code>runtime</code></td><td><code>run.opened</code>, <code>runtime.starting</code> · <code>running</code> · <code>start_failed</code> · <code>stopping</code> · <code>stopped</code> (drain, lease released)</td><td><code>stopped</code> ← <code>stopping</code></td></tr>
+        <tr><td><code>runtime</code></td><td><code>run.opened</code>, <code>runtime.starting</code> · <code>running</code> · <code>start_failed</code> · <code>stopping</code> · <code>stopped</code> (drain: loop events + orchestrator turns, lease released; always the last line)</td><td><code>stopped</code> ← <code>stopping</code></td></tr>
         <tr><td><code>feed</code></td><td><code>feed.fired</code> → <code>completed</code> · <code>retrying</code> (class, delay) · <code>failed</code> · <code>tick_sent</code> · <code>dropped</code> · <code>skipped</code></td><td>outcome ← <code>feed.fired</code></td></tr>
         <tr><td><code>loop</code></td><td><code>loop.queued</code> → <code>started</code> → <code>completed</code> · <code>failed</code>; <code>dropped</code>, <code>refused</code>; each with the loop's counters</td><td><code>queued</code> ← the tick's <code>feed.fired</code></td></tr>
         <tr><td><code>trigger</code></td><td><code>trigger.decide</code> · <code>trigger.map</code> → <code>trigger.completed</code> · <code>trigger.failed</code></td><td>the root of a <code>tengu decide</code> run</td></tr>
@@ -490,7 +490,7 @@
         <tr><td><code>src/application/trace_exec.rs</code></td><td>the per-task cause (<code>parent_event_id</code>); <code>TracedExecutor</code> for <code>tool.*</code>; <code>DraftBuffer</code> / <code>replay_child</code>: a <code>run-agent</code> child's tool events, written by the parent</td></tr>
         <tr><td><code>application/runtime/loops.rs</code> · <code>feeds.rs</code> · <code>decision_loop/mod.rs</code></td><td><code>loop.*</code> · <code>feed.*</code> · <code>observation.*</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code> · <code>cli/decide.rs</code></td><td><code>runtime.*</code> · <code>trigger.*</code></td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request; <code>tengu webhooks</code>' own recording (<code>run.closed</code>)</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code> + <code>webhook.responded</code> per request; <code>tengu webhooks</code>' own recording (<code>run.closed</code>, after every turn it owns has ended)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code> · <code>events.rs</code></td><td>the bridge: each <code>OrchestratorEvent</code> written as <code>plan.*</code> / <code>step.*</code> / <code>metrics.recorded</code> when the bus sends it; a step's cause for its <code>run-agent</code> child</td></tr>
         <tr><td><code>src/adapters/inbound/cli/studio.rs</code> · <code>cli/trace.rs</code></td><td><code>tengu studio [graph]</code> · <code>tengu trace runs | show</code></td></tr>
         <tr><td><code>src/adapters/inbound/studio/</code></td><td>the server (feature <code>studio</code>, default): routes, guard (token, Host, Origin, CSRF, body cap), SSE, control, embedded page; tests on a real listener</td></tr>

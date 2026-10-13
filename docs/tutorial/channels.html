@@ -206,7 +206,7 @@
         <li><code>@role: text</code> or <code>role: text</code> goes to that agent; a plain message to the default one. Roles and ids match case-insensitively, with <code>-</code> and <code>_</code> alike (<code>@lp-exec:</code> reaches <code>lp-exec</code>). Agents with no <code>description</code> that are not default are unreachable.</li>
         <li>With <code>[orchestrator]</code>, the default agent's messages go to the planner. An explicit <code>@role:</code> to another agent skips it, unless <code>route_explicit_agents = true</code>.</li>
         <li>A webhook POST to <code>/webhooks/&lt;name&gt;</code>: unknown name is <code>404</code>; a missing or wrong signature or header is <code>401</code>.</li>
-        <li>A planner endpoint answers <code>202</code> with <code>webhook-&lt;name&gt;-&lt;uuid&gt;</code> and runs one orchestrator turn in the background. Its <code>agent</code> field is only a label.</li>
+        <li>A planner endpoint answers <code>202</code> with <code>webhook-&lt;name&gt;-&lt;uuid&gt;</code> and runs one orchestrator turn the process owns: a shutdown waits for it (≤ <code>shutdown_grace_secs</code>) and answers <code>503</code> meanwhile. Its <code>agent</code> field is only a label.</li>
         <li>A loop endpoint queues the body as one event for its <code>[decision_loops.*]</code> loop: <code>429</code> past 64 waiting, <code>503</code> while shutting down.</li>
         <li>A direct turn's tool calls show activity lines: <code>[tool]</code> in the TUI, a log line for Telegram. Plan steps run in child processes and show none. Tool output is always redacted.</li>
         <li>The TUI shows bubbles, Telegram sends replies in 4000-character chunks, a webhook's answer goes to the log (and Open Brain with <code>postgres_memory</code>).</li>
@@ -395,8 +395,8 @@
         <tr><td><code>src/adapters/inbound/channel.rs</code></td><td><code>@role:</code> parsing, chunking, team activity</td></tr>
         <tr><td><code>src/adapters/inbound/activity.rs</code></td><td>activity line text per tool</td></tr>
         <tr><td><code>src/ports/tool_activity.rs</code></td><td>the activity port every surface implements</td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns; each request's <code>trigger.webhook</code> root and answer; <code>tengu webhooks</code>' recording</td></tr>
-        <tr><td><code>src/application/runtime/loops.rs</code></td><td>the loop queue: one at a time, cap, drain</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns owned by the loop dispatch; each request's <code>trigger.webhook</code> root and answer; <code>tengu webhooks</code>' recording</td></tr>
+        <tr><td><code>src/application/runtime/loops.rs</code></td><td>the loop queue: one at a time, cap, drain; <code>Turns</code>: the orchestrator turns the drain waits for</td></tr>
         <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>resolve_session_id</code>, <code>build_orchestrator</code> (+ the recording a surface hands it)</td></tr>
       </tbody>
     </table>
@@ -497,7 +497,8 @@
     var prefixOpt = auth.querySelector('option[value="prefix"]');
     prefixOpt.disabled = name === "helius";
     if (name === "helius" && auth.value === "prefix") auth.value = "wrong";
-    q.disabled = down.disabled = !(e && e.loop);
+    q.disabled = !(e && e.loop);
+    down.disabled = !e;
     toml.innerHTML = e ? esc(e.toml) : "<span class=\"c\"># no [webhooks.endpoints.helios] block</span>";
     if (!e) return out(404, { error: "unknown webhook endpoint '" + name + "'" }, "Checked first, before any auth: a typo in the URL is easy to spot.");
     if (!env.checked) {
@@ -516,6 +517,7 @@
       if (+q.value >= 64) return out(429, { error: "decision loop queue full: 64 events already waiting ([runtime] max_queued_per_loop) — event refused, retry later" }, "The refused event is counted as dropped in the loop's stats.");
       return out(202, { endpoint: name, loop: e.loop, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The JSON body becomes the loop event (a non-JSON body becomes a string). Events run one at a time.");
     }
+    if (down.checked) return out(503, { error: "shutting down — not accepting webhook turns" }, "New turns are refused; running ones get <code>shutdown_grace_secs</code>, then are aborted (recorded <code>plan.completed</code>, dropped).");
     out(202, { agent: e.agent, endpoint: name, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The planner gets <code>goal_template</code> plus the raw body. The answer goes to the log and, with <code>postgres_memory</code>, to Open Brain.");
   }
   [ep, auth, env, down].forEach(function (x) { x.addEventListener("change", wh); });

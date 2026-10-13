@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::application::memory::manager::MemoryManager;
+use crate::application::metrics::MetricsBarrier;
 use crate::application::orchestrator::retry::RetryPolicy;
 use crate::ports::orchestration::Planner;
 use crate::ports::orchestration::WorkerHandle;
@@ -43,6 +44,9 @@ pub struct Orchestrator {
     #[allow(dead_code)]
     memory: Arc<MemoryManager>,
     cancel_flag: Arc<AtomicBool>,
+    /// The metrics forwarder onto `bus` (`bootstrap::orchestrator`); it
+    /// ends with this orchestrator. `None`: no forwarder (tests).
+    metrics: Option<MetricsBarrier>,
 }
 
 impl Orchestrator {
@@ -67,6 +71,24 @@ impl Orchestrator {
             bus,
             memory,
             cancel_flag: Arc::new(AtomicBool::new(false)),
+            metrics: None,
+        }
+    }
+
+    /// Own the metrics forwarder onto this orchestrator's bus
+    /// (`application::metrics::forward_sink`).
+    pub(crate) fn with_metrics(mut self, barrier: MetricsBarrier) -> Self {
+        self.metrics = Some(barrier);
+        self
+    }
+
+    /// Resolves once every metrics record put on the process sink before
+    /// this call is on the bus — and so in the trace (`metrics.recorded`)
+    /// and with its subscribers. Await it before a surface closes its trace
+    /// (`run.closed`): a record still in the sink would land after it.
+    pub(crate) async fn flush_metrics(&self) {
+        if let Some(m) = &self.metrics {
+            m.flush().await;
         }
     }
 
@@ -85,11 +107,17 @@ impl Orchestrator {
         self.cancel_flag.store(true, Ordering::SeqCst);
     }
 
+    /// One turn: plan, run, replan; every way out sends `PlanCompleted`.
+    /// Dropped unfinished (aborted at a shutdown deadline, an eval row's
+    /// timeout) it sends `PlanCompleted { cancelled: true }` as it drops —
+    /// after its steps were aborted — so the trace closes the turn
+    /// (`plan.completed`, dropped) instead of leaving it running.
     pub async fn handle(&self, user_message: String) -> String {
         // Reset the flag each turn so a stale cancellation from a previous
         // turn does not short-circuit this one.
         self.cancel_flag.store(false, Ordering::SeqCst);
-        replan::drive(
+        let mut unfinished = Unfinished(Some(&self.bus));
+        let reply = replan::drive(
             Arc::clone(&self.planner),
             &user_message,
             Arc::clone(&self.worker),
@@ -98,7 +126,25 @@ impl Orchestrator {
             &self.bus,
             Arc::clone(&self.cancel_flag),
         )
-        .await
+        .await;
+        unfinished.0 = None;
+        reply
+    }
+}
+
+/// [`Orchestrator::handle`] still running: dropped, it reports the turn
+/// cancelled (`drive` sent no `PlanCompleted`).
+struct Unfinished<'a>(Option<&'a EventBus>);
+
+impl Drop for Unfinished<'_> {
+    fn drop(&mut self) {
+        if let Some(bus) = self.0 {
+            let _ = bus.send(OrchestratorEvent::PlanCompleted {
+                final_response: String::new(),
+                cancelled: true,
+                failed: false,
+            });
+        }
     }
 }
 
