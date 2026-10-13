@@ -639,7 +639,14 @@ These are not preferences. They're load-bearing.
   `[agents.<a>.codex] sandbox = "read-only" | "workspace-write"`, gets tengu
   tools through the bridge (`-c mcp_servers.tengu-tools.*`, env names
   forwarded, never values) and is refused in a hardened sandbox
-  (`docs/engine-backends.md` § Codex); `local` sends the server's own id verbatim.
+  (`docs/engine-backends.md` § Codex). Its CLI starts from an EMPTY env
+  (2026-10-13, review P1: its built-in shell ignores tengu scopes) + the base
+  set (`engines/codex.rs::BASE_ENV`) + `[agents.<a>.codex] forward_env` —
+  so no vault secret, `.env` key, master password or seal-proxy session
+  reaches it, and a bridged tool under codex sees only those names; a
+  forwarded name is readable by the shell, and the master password,
+  `TENGU_KEYS_*`, `[keys.env]` names, `OPENAI_API_KEY` and `CODEX_*` are
+  refused at load; `local` sends the server's own id verbatim.
 - **`engine = "local"` = any OpenAI-compatible server on this host
   (2026-09-23)** — Unsloth (`unsloth run`, default `http://127.0.0.1:8888`,
   key in `$UNSLOTH_API_KEY`), Ollama, llama.cpp, vLLM. Optional

@@ -62,7 +62,7 @@ Every call gets the run's conversation as `ToolCtx.conversation` (`call_conversa
 
 ## Configuration
 
-Environment set by the CLI engines — built once by `bridge_env::bridge_env` (`adapters/outbound/bridge_env.rs`, which also names the vars): Claude Code writes it into the temp `--mcp-config`; Codex passes each var as `-c mcp_servers.tengu-tools.env.<NAME>=…` and forwards the NAMES of its own env with `env_vars` (Codex starts MCP servers with a minimal env; no value on the command line):
+Environment set by the CLI engines — built once by `bridge_env::bridge_env` (`adapters/outbound/bridge_env.rs`, which also names the vars): Claude Code writes it into the temp `--mcp-config`; Codex passes each var as `-c mcp_servers.tengu-tools.env.<NAME>=…` and forwards the NAMES of its own env with `env_vars` (Codex starts MCP servers with a minimal env; no value on the command line) — and the Codex CLI itself starts from an EMPTY env + the base set + `[agents.<a>.codex] forward_env`, so under codex a bridged tool sees only those names (no vault secret or seal-proxy session unless forwarded):
 
 | Variable | Description |
 |----------|-------------|

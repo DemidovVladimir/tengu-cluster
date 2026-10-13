@@ -430,6 +430,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span class="chip bad">empty</span><span><b>at least one agent must be configured</b>A file with no <code>[agents.*]</code> block.</span></li>
     <li><span class="chip guard">hardened</span><span><b>builtin_tools_profile = "none"</b>A <code>claude_code</code> agent in a <code>[risk]</code>, <code>[soe]</code> or signer sandbox without it.</span></li>
     <li><span class="chip guard">hardened</span><span><b>engine = "codex" is not allowed in a hardened sandbox</b>Codex's built-in shell runs outside Tengu scopes.</span></li>
+    <li><span class="chip guard">codex env</span><span><b>agents.&lt;a&gt;.codex.forward_env: 'TENGU_KEYS_SESSION_TOKEN' is the seal-proxy session …</b>The Codex CLI starts from an empty env; <code>forward_env</code> names extra vars it may see. Refused: <code>TENGU_MASTER_PASSWORD</code>, <code>TENGU_KEYS_*</code>, <code>[keys.env]</code> names, <code>OPENAI_API_KEY</code>, <code>CODEX_*</code>.</span></li>
     <li><span class="chip guard">hardened</span><span><b>[[mcp_servers]] are not allowed</b>Also: any scope granting <code>shell_bins</code>.</span></li>
     <li><span class="chip bad">loop</span><span><b>decision_loops.&lt;n&gt;.agent: no [agents.&lt;a&gt;] block</b>A loop names an agent that does not exist.</span></li>
     <li><span class="chip guard">studio</span><span><b>studio.control = true: refused: …</b>A <code>[generation]</code>-bound or hardened sandbox: <a href="studio.html">Studio</a> never plays or stops it.</span></li>

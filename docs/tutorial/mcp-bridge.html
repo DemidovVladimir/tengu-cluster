@@ -359,7 +359,7 @@
         <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>stdio loop, agent resolution, executor, call ids, <code>compress_and_store</code></td></tr>
         <tr><td><code>src/adapters/outbound/bridge_env.rs</code></td><td>the env contract between engine and bridge</td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>writes <code>--mcp-config</code>, transcript, <code>ToolRan</code>, stop after a stored summary</td></tr>
-        <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td>the same bridge for Codex: <code>-c mcp_servers.tengu-tools.*</code>, env names forwarded with <code>env_vars</code></td></tr>
+        <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td>the same bridge for Codex: <code>-c mcp_servers.tengu-tools.*</code>, env names forwarded with <code>env_vars</code> — only what the CLI holds: an empty env + <code>BASE_ENV</code> + <code>forward_env</code> (<code>child_env</code>)</td></tr>
         <tr><td><code>src/adapters/outbound/mcp_client/</code></td><td><code>[[mcp_servers]]</code>: stdio / http client, <code>{server}__{tool}</code> proxies, lint drop</td></tr>
         <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset every engine accepts</td></tr>
         <tr><td><code>src/adapters/outbound/secrets.rs</code></td><td><code>SanitizedToolExecutor</code></td></tr>

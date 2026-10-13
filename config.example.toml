@@ -840,6 +840,10 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # [agents.coder.codex]
 # sandbox = "read-only"                     # read-only | workspace-write (Codex's own shell / patch tool; never network)
 # cli_path = "codex"                        # default: `codex` on PATH
+# forward_env = ["OPENROUTER_API_KEY"]      # default []: the CLI starts from an EMPTY
+#                                           # env (no vault secret, .env key or seal-proxy
+#                                           # session); names listed here reach it and its
+#                                           # bridge — readable by its built-in shell
 
 # --- Network egress (Tor by default, host allowlist, audit) ---
 # Code-enforced policy for every request tengu makes. docs/egress-2026-09-16.md

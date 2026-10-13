@@ -14,11 +14,12 @@
 //! | `-s <sandbox>` (`[agents.<a>.codex] sandbox`, default `read-only`) `-c approval_policy="never"` | the CLI's built-in shell / patch tool: read-only or workspace-write, no network, never asks |
 //! | `-c web_search="disabled"` · `-c features.<f>=false` ([`OFF_FEATURES`]) | Codex integrations that run outside tengu scopes and egress (apps, plugins, browser / computer use, image generation, sub-agents, memories, hooks); `features.*` overrides tolerate a name this CLI version lacks |
 //! | `-m <model>` · `-C <workspace>` · `-c developer_instructions=…` | the agent's model; its workspace; the system prompt (once — not repeated in stdin, `cli_run::format_prompt`) |
-//! | `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec,tool_timeout_sec}` | the bridge; no secret value on the command line — Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES of this run's env (vault secrets, `OPENROUTER_API_KEY`, `$VAR`s of `[[mcp_servers]]`); every bridged call is pre-approved (tengu scopes gate them in the bridge) |
+//! | `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec,tool_timeout_sec}` | the bridge; no secret value on the command line — Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES the CLI itself holds (the base set + `forward_env`, below): a bridged tool reads only those; every bridged call is pre-approved (tengu scopes gate them in the bridge) |
 //!
 //! | Env of the CLI | Rule |
 //! |---|---|
-//! | removed | `OPENAI_API_KEY`, every `CODEX_*` but `CODEX_HOME` / `CODEX_CA_CERTIFICATE` (an API key would bill the account instead of the subscription; a parent Codex session's sandbox / thread vars) — [`stripped_env`] |
+//! | start | an EMPTY env (`env_clear`): vault secrets, `.env` keys, `TENGU_MASTER_PASSWORD` and the seal-proxy session (`TENGU_KEYS_*`, `[keys.env]` exports) never reach the CLI, whose built-in shell ignores tengu scopes — [`child_env`] |
+//! | kept | [`BASE_ENV`] (`PATH`, `HOME`, user, shell, temp, locale `LANG` / `LC_*`, `XDG_*`, TLS certs, `CODEX_HOME`, `CODEX_CA_CERTIFICATE`, `RUST_LOG`, `TENGU_HOME` / `TENGU_SESSION_ID` / `TENGU_AGENT_NAME` / `TENGU_SECRETS_LOADED`) + `[agents.<a>.codex] forward_env` (opt-in names, readable by the CLI's shell; `config::codex_forward_env_error` refuses the master password, the session, `[keys.env]` names, `OPENAI_API_KEY`, `CODEX_*`); a value equal to the session token is dropped whatever its name. `OPENAI_API_KEY` / `CODEX_API_KEY` are never kept (an API key would bill the account instead of the subscription) |
 //! | added | `[egress]` `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when the LLM API is routed through the proxy (`EgressPolicy::claude_cli_env`) |
 //!
 //! | Run | Handling |
@@ -116,6 +117,9 @@ pub(crate) struct CodexEngine {
     /// `[agents.<id>]` + its absolute config file for the bridge.
     bridge_agent: Option<(String, PathBuf)>,
     step: StepBridge,
+    /// `[agents.<a>.codex] forward_env`: env names the CLI gets besides
+    /// [`BASE_ENV`] ([`child_env`]).
+    forward_env: Vec<String>,
 }
 
 impl CodexEngine {
@@ -133,6 +137,7 @@ impl CodexEngine {
             scopes: HashMap::new(),
             bridge_agent: None,
             step: StepBridge::default(),
+            forward_env: Vec::new(),
         }
     }
 
@@ -153,6 +158,11 @@ impl CodexEngine {
 
     pub(crate) fn with_step_bridge(mut self, step: StepBridge) -> Self {
         self.step = step;
+        self
+    }
+
+    pub(crate) fn with_forward_env(mut self, names: Vec<String>) -> Self {
+        self.forward_env = names;
         self
     }
 }
@@ -236,14 +246,64 @@ pub(crate) fn cli_args(
     args
 }
 
-/// Env names removed from the CLI's env (module table).
-pub(crate) fn stripped_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
-    names
-        .into_iter()
-        .filter(|n| {
-            *n == "OPENAI_API_KEY"
-                || (n.starts_with("CODEX_") && !matches!(*n, "CODEX_HOME" | "CODEX_CA_CERTIFICATE"))
+/// Env names the CLI keeps from tengu's env with no opt-in: the process
+/// basics the CLI, its shell and the bridge need — never a secret
+/// (module table). `LC_*` and `XDG_*` pass too ([`base_env`]).
+pub(crate) const BASE_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LANGUAGE",
+    "TERM",
+    "TZ",
+    "NO_COLOR",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "__CF_USER_TEXT_ENCODING",
+    "CODEX_HOME",
+    "CODEX_CA_CERTIFICATE",
+    "RUST_LOG",
+    "TENGU_HOME",
+    "TENGU_SESSION_ID",
+    "TENGU_AGENT_NAME",
+    "TENGU_SECRETS_LOADED",
+];
+
+/// `name` is in the base set ([`BASE_ENV`], `LC_*`, `XDG_*`).
+pub(crate) fn base_env(name: &str) -> bool {
+    BASE_ENV.contains(&name) || name.starts_with("LC_") || name.starts_with("XDG_")
+}
+
+/// The CLI's whole env, built from tengu's (`inherited`): the base set plus
+/// the agent's `forward_env` names that are set — nothing else (the command
+/// is `env_clear`ed first). A value equal to the seal-proxy session token is
+/// dropped whatever its name (a `[keys.env]` `@session` export renamed, an
+/// operator mistake), as are the names `config::codex_forward_env_error`
+/// refuses at load.
+pub(crate) fn child_env(
+    inherited: &[(String, String)],
+    forward: &[String],
+) -> Vec<(String, String)> {
+    let session = inherited
+        .iter()
+        .find(|(k, _)| k == crate::config::keys::SESSION_TOKEN_ENV)
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty());
+    inherited
+        .iter()
+        .filter(|(k, v)| {
+            let wanted = base_env(k)
+                || (forward.contains(k)
+                    && crate::config::codex_forward_env_error(k, &[]).is_none());
+            wanted && session != Some(v.as_str())
         })
+        .cloned()
         .collect()
 }
 
@@ -591,12 +651,28 @@ impl Engine for CodexEngine {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let inherited: Vec<String> = std::env::vars_os()
-            .filter_map(|(k, _)| k.into_string().ok())
+        // An empty env + the base set + the agent's `forward_env` (module
+        // table): vault secrets, `.env` keys and the seal-proxy session never
+        // reach the CLI, whose built-in shell ignores tengu scopes.
+        let inherited: Vec<(String, String)> = std::env::vars_os()
+            .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
             .collect();
-        let removed = stripped_env(inherited.iter().map(String::as_str));
-        for name in &removed {
-            cmd.env_remove(name);
+        let kept = child_env(&inherited, &self.forward_env);
+        cmd.env_clear();
+        for (k, v) in &kept {
+            cmd.env(k, v);
+        }
+        let kept_names: Vec<&str> = kept.iter().map(|(k, _)| k.as_str()).collect();
+        let forwarded: Vec<&String> = self
+            .forward_env
+            .iter()
+            .filter(|n| kept_names.contains(&n.as_str()))
+            .collect();
+        if !forwarded.is_empty() {
+            info!(
+                names = ?forwarded,
+                "Codex: forward_env names reach the CLI (its shell can read them)"
+            );
         }
         let proxy_env = crate::adapters::outbound::egress::policy().claude_cli_env();
         for (k, v) in &proxy_env {
@@ -631,11 +707,12 @@ impl Engine for CodexEngine {
                 transcript: transcript.as_ref().map(Transcript::path),
                 mcp_servers: &context.mcp_servers,
             });
-            forward = inherited
+            // Only what the CLI itself holds (the kept env + the proxy vars).
+            forward = kept_names
                 .iter()
-                .map(String::as_str)
+                .copied()
                 .chain(proxy_env.iter().map(|(k, _)| *k))
-                .filter(|n| !removed.contains(n) && !env.contains_key(*n))
+                .filter(|n| !env.contains_key(*n))
                 .map(str::to_string)
                 .collect();
             forward.sort();
@@ -1009,29 +1086,114 @@ mod tests {
         );
     }
 
-    /// An API key would bill the account; a parent Codex session's vars
-    /// would confuse the nested CLI. The login (`CODEX_HOME`) stays.
+    fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// The env tengu holds at run time: process basics, vault secrets, the
+    /// master password, the seal-proxy session and a `[keys.env]` export.
+    fn tengu_env() -> Vec<(String, String)> {
+        kv(&[
+            ("PATH", "/usr/bin:/bin"),
+            ("HOME", "/Users/op"),
+            ("LC_ALL", "C"),
+            ("CODEX_HOME", "/Users/op/.codex"),
+            ("CODEX_CA_CERTIFICATE", "/etc/ca.pem"),
+            ("TENGU_SECRETS_LOADED", "HL_API_KEY,OPENROUTER_API_KEY"),
+            ("OPENAI_API_KEY", "sk-billing"),
+            ("CODEX_API_KEY", "ck-billing"),
+            ("CODEX_SANDBOX", "seatbelt"),
+            ("HL_API_KEY", "vault-secret"),
+            ("OPENROUTER_API_KEY", "or-secret"),
+            ("TENGU_MASTER_PASSWORD", "master"),
+            ("TENGU_KEYS_SESSION_TOKEN", "sess-123"),
+            ("TENGU_KEYS_PROXY", "https://seal.example"),
+            ("TENGU_KEYS_SESSION_EXP_MS", "1"),
+            ("OPENROUTER_BASE_URL", "https://seal.example/openrouter"),
+            ("RENAMED_SESSION", "sess-123"),
+        ])
+    }
+
+    /// Review 2026-10-13 P1: no vault secret, master password, session or
+    /// route export reaches the CLI (its shell ignores tengu scopes); only
+    /// the base set does — the login (`CODEX_HOME`) included, never an API key.
     #[test]
-    fn stripped_env_keeps_the_login() {
-        let names = [
-            "OPENAI_API_KEY",
-            "CODEX_API_KEY",
-            "CODEX_SANDBOX",
-            "CODEX_THREAD_ID",
-            "CODEX_HOME",
-            "CODEX_CA_CERTIFICATE",
-            "HOME",
-            "OPENROUTER_API_KEY",
-        ];
+    fn child_env_keeps_only_the_base_set() {
+        let kept = child_env(&tengu_env(), &[]);
+        let names: Vec<&str> = kept.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(
-            stripped_env(names),
+            names,
             [
-                "OPENAI_API_KEY",
-                "CODEX_API_KEY",
-                "CODEX_SANDBOX",
-                "CODEX_THREAD_ID"
+                "PATH",
+                "HOME",
+                "LC_ALL",
+                "CODEX_HOME",
+                "CODEX_CA_CERTIFICATE",
+                "TENGU_SECRETS_LOADED"
             ]
         );
+        assert!(kept
+            .iter()
+            .all(|(_, v)| !v.contains("secret") && !v.contains("sess-")));
+    }
+
+    /// `forward_env` adds exactly the names asked for; a refused name (the
+    /// master password, the session, `OPENAI_API_KEY`, `CODEX_*`) and any
+    /// value equal to the session token stay out even when listed.
+    #[test]
+    fn child_env_forwards_only_allowed_opt_in_names() {
+        let forward: Vec<String> = [
+            "OPENROUTER_API_KEY",
+            "TENGU_MASTER_PASSWORD",
+            "TENGU_KEYS_SESSION_TOKEN",
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
+            "RENAMED_SESSION",
+            "NOT_SET",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let kept = child_env(&tengu_env(), &forward);
+        let extra: Vec<&str> = kept
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .filter(|k| !base_env(k))
+            .collect();
+        assert_eq!(extra, ["OPENROUTER_API_KEY"]);
+    }
+
+    /// The real child: a command built as `run` builds it (`env_clear` + the
+    /// kept env) shows nothing else — a stub CLI (`/usr/bin/env`) prints it.
+    #[cfg(unix)]
+    #[test]
+    fn the_cli_process_sees_only_the_kept_env() {
+        let mut cmd = std::process::Command::new("/usr/bin/env");
+        cmd.env_clear();
+        for (k, v) in child_env(&tengu_env(), &["OPENROUTER_API_KEY".to_string()]) {
+            cmd.env(k, v);
+        }
+        // What this test process holds must not leak either.
+        let out = String::from_utf8(cmd.output().expect("/usr/bin/env runs").stdout).unwrap();
+        let names: Vec<&str> = out.lines().filter_map(|l| l.split('=').next()).collect();
+        assert!(names.contains(&"OPENROUTER_API_KEY"), "{out}");
+        for leaked in [
+            "HL_API_KEY",
+            "TENGU_MASTER_PASSWORD",
+            "TENGU_KEYS_SESSION_TOKEN",
+            "OPENROUTER_BASE_URL",
+            "OPENAI_API_KEY",
+            "CARGO_MANIFEST_DIR",
+        ] {
+            assert!(!names.contains(&leaked), "{leaked} leaked: {out}");
+        }
+    }
+
+    #[test]
+    fn sandbox_values_parse() {
         assert_eq!(
             CodexSandbox::parse(" workspace-write"),
             Some(CodexSandbox::WorkspaceWrite)
@@ -1231,5 +1393,57 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, StreamEvent::TextDelta { text } if text == "marker.txt")));
+    }
+
+    /// Review 2026-10-13 P1, end to end: the CLI `run` spawns gets an empty
+    /// env + the base set + `forward_env` — the stub CLI dumps what it sees.
+    /// `CARGO_*` (set in this test process by cargo, outside the base set)
+    /// must not reach it; `PATH` and a forwarded name must.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_spawned_cli_gets_only_the_kept_env() {
+        use futures::StreamExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let script = format!("env > \"$PWD/env.txt\"\necho '{ANSWER}'\necho '{USAGE}'\n");
+        let engine = CodexEngine::new(
+            stub_cli(dir.path(), &script),
+            CodexSandbox::ReadOnly,
+            "gpt-5.5".into(),
+            60,
+        )
+        .with_forward_env(vec!["CARGO_PKG_NAME".into()]);
+        let context = EngineContext {
+            workspace: Some(dir.path().to_path_buf()),
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: Some(10),
+            max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
+        };
+        let user = Message {
+            role: Role::User,
+            content: "go".into(),
+            tool_call_id: None,
+            tool_calls: None,
+        };
+        let stream = engine.run(&[user], &[], &context).await.unwrap();
+        let events = tokio::time::timeout(Duration::from_secs(15), stream.collect::<Vec<_>>())
+            .await
+            .expect("the run ends");
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done)),
+            "{events:?}"
+        );
+        let seen = std::fs::read_to_string(dir.path().join("env.txt")).expect("the stub ran");
+        let names: Vec<&str> = seen.lines().filter_map(|l| l.split('=').next()).collect();
+        assert!(names.contains(&"PATH"), "{seen}");
+        if std::env::var_os("CARGO_PKG_NAME").is_some() {
+            assert!(names.contains(&"CARGO_PKG_NAME"), "forwarded: {seen}");
+        }
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_none()
+                || !names.contains(&"CARGO_MANIFEST_DIR"),
+            "an inherited name outside the base set leaked: {seen}"
+        );
     }
 }

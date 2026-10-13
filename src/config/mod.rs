@@ -1006,6 +1006,16 @@ pub struct AgentCodexConfig {
     /// The `codex` executable (`PATH` lookup unless absolute).
     #[serde(default = "default_codex_cli_path")]
     pub cli_path: String,
+    /// Env names the CLI gets (and forwards to `tengu mcp-bridge`) besides
+    /// the harmless base set (`engines/codex.rs::BASE_ENV`). The CLI starts
+    /// from an empty env, so vault secrets, `.env` keys and the seal-proxy
+    /// session never reach it unless named here — and a name here is
+    /// readable by the CLI's built-in shell, which ignores tengu scopes.
+    /// List only what this agent's bridged tools must read. Refused at load
+    /// ([`codex_forward_env_error`]): `TENGU_MASTER_PASSWORD`, `TENGU_KEYS_*`,
+    /// every `[keys.env]` name, `OPENAI_API_KEY`, `CODEX_*`.
+    #[serde(default)]
+    pub forward_env: Vec<String>,
 }
 
 impl Default for AgentCodexConfig {
@@ -1013,8 +1023,38 @@ impl Default for AgentCodexConfig {
         Self {
             sandbox: default_codex_sandbox(),
             cli_path: default_codex_cli_path(),
+            forward_env: Vec::new(),
         }
     }
+}
+
+/// Why `name` may not be in `[agents.<a>.codex] forward_env` (`None`: it
+/// may). `keys_env` = the sandbox's `[keys.env]` names (route URLs and
+/// `@session` values: the seal-proxy capability).
+pub(crate) fn codex_forward_env_error(name: &str, keys_env: &[&str]) -> Option<String> {
+    let valid = !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        return Some(format!("'{name}' is not an env name"));
+    }
+    if name == "TENGU_MASTER_PASSWORD" {
+        return Some("the vault's master password never reaches the Codex CLI".into());
+    }
+    if name.starts_with("TENGU_KEYS_") || keys_env.contains(&name) {
+        return Some(format!(
+            "'{name}' is the seal-proxy session or one of its [keys.env] exports — it would let the CLI's shell use every route"
+        ));
+    }
+    if name == "OPENAI_API_KEY" || name.starts_with("CODEX_") {
+        return Some(format!(
+            "'{name}': the CLI runs on the ChatGPT login (an API key would bill the account; CODEX_HOME / CODEX_CA_CERTIFICATE are passed already)"
+        ));
+    }
+    None
 }
 
 fn default_codex_sandbox() -> String {
@@ -1466,6 +1506,14 @@ impl Config {
         self.agents.iter().for_each(|(agent_id, agent)| {
             Self::validate_agent(agent_id, agent, &mut errors);
         });
+        let keys_env: Vec<&str> = self.keys.env.keys().map(String::as_str).collect();
+        for (agent_id, agent) in &self.agents {
+            for name in agent.codex.iter().flat_map(|cx| &cx.forward_env) {
+                if let Some(why) = codex_forward_env_error(name, &keys_env) {
+                    errors.push(format!("agents.{agent_id}.codex.forward_env: {why}"));
+                }
+            }
+        }
 
         for issue in self.egress.validation_errors() {
             errors.push(issue);
@@ -2165,6 +2213,37 @@ ttl_days = 7
             "{err}"
         );
         assert!(parse("[agents.cx.codex]\nsandbox_mode = \"read-only\"").is_err());
+        // forward_env: plain names pass; the master password, the seal-proxy
+        // session and its [keys.env] exports, API keys and CODEX_* are refused.
+        let fwd = parse("[agents.cx.codex]\nforward_env = [\"OPENROUTER_API_KEY\", \"MY_VAR\"]")
+            .expect("forward_env");
+        assert!(fwd.validate().is_ok());
+        for bad in [
+            "TENGU_MASTER_PASSWORD",
+            "TENGU_KEYS_SESSION_TOKEN",
+            "TENGU_KEYS_PROXY",
+            "OPENAI_API_KEY",
+            "CODEX_API_KEY",
+            "1X",
+            "A-B",
+            "",
+        ] {
+            let c =
+                parse(&format!("[agents.cx.codex]\nforward_env = [\"{bad}\"]")).expect("parses");
+            let err = c.validate().expect_err(bad).to_string();
+            assert!(err.contains("agents.cx.codex.forward_env"), "{bad}: {err}");
+        }
+        let mut routed =
+            parse("[agents.cx.codex]\nforward_env = [\"OPENROUTER_BASE_URL\"]").expect("parses");
+        routed
+            .keys
+            .env
+            .insert("OPENROUTER_BASE_URL".into(), "openrouter".into());
+        let err = routed
+            .validate()
+            .expect_err("[keys.env] export")
+            .to_string();
+        assert!(err.contains("seal-proxy session"), "{err}");
     }
 
     #[test]
