@@ -1,0 +1,23 @@
+[package]
+name = "tengu-seal"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT"
+description = "Seal-proxy formats shared by tengu and the tengu-seal Cloudflare Worker: route table, client list, session tokens, SSH signature checks, target building, reply masking."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+# Pure Rust only, so the same code builds natively (tengu) and for
+# wasm32-unknown-unknown (cloudflare/seal-worker).
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+hmac = "0.12"
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+url = "2"

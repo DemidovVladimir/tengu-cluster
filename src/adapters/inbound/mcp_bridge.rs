@@ -215,6 +215,11 @@ pub async fn run_mcp_bridge() -> Result<()> {
         .map(|c| c.egress.clone())
         .unwrap_or_default();
     crate::adapters::outbound::egress::install(&egress)?;
+    // `[keys]`: reuse the run's seal-proxy session (inherited env) and strip
+    // local key copies again — this process re-read `.env` at start.
+    if let Some(c) = config.as_ref() {
+        crate::adapters::outbound::keys::install(&c.keys);
+    }
 
     let tools: Vec<ToolDef> = match std::env::var("TENGU_BRIDGE_TOOLS") {
         Ok(json) => serde_json::from_str(&json)

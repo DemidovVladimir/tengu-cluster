@@ -115,6 +115,7 @@ fn is_chain_id(v: &str) -> bool {
 
 /// Registry of secret values that must never appear in tool output,
 /// flow transcripts, or memory storage.
+#[derive(Clone)]
 pub(crate) struct SecretRegistry {
     /// Sorted longest-first to avoid partial-match issues during redaction.
     values: Vec<String>,

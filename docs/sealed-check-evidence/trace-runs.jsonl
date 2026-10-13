@@ -1,0 +1,10 @@
+{"run_id":"b088e72e-eade-4b1e-8310-955aba4b7c04","kind":"decide","events":6,"last_kind":"trigger.completed","last_status":"ok"}
+{"run_id":"1fc106d5-c3e4-471e-a3fd-6b12010147a8","kind":"decide","events":12,"last_kind":"trigger.completed","last_status":"ok"}
+{"run_id":"0e1b3a1b-b3c0-4f8c-91ee-c9838c1300b2","kind":"decide","events":12,"last_kind":"trigger.completed","last_status":"ok"}
+{"run_id":"5915102d-611c-46cf-82d3-fec90e42c3aa","kind":"decide","events":9,"last_kind":"trigger.completed","last_status":"ok"}
+{"run_id":"3d0e8d4b-3d11-4f12-b3ac-b990db80ee4c","kind":"decide","events":6,"last_kind":"trigger.completed","last_status":"ok"}
+{"run_id":"1745d361-dd79-4340-8360-093414190f04","kind":"decide","events":12,"last_kind":"trigger.completed","last_status":"ok"}
+{"run_id":"f4d06d27-d0c2-4b45-8b9d-d3e014be04b8","kind":"decide","events":2,"last_kind":"trigger.decide","last_status":"failed"}
+{"run_id":"ad6103b1-b003-4388-9268-d9bbabe9f363","kind":"run","events":13,"last_kind":"runtime.stopped","last_status":"ok"}
+{"run_id":"4565331d-2ce0-4767-a67b-e460fc6f7ae1","kind":"studio","events":14,"last_kind":"studio.stopped","last_status":"ok"}
+{"run_id":"5b4a9c66-b9dd-4234-a440-26bb884f2511","kind":"run","events":86,"last_kind":"runtime.stopped","last_status":"ok"}
