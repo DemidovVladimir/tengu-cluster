@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-10-13: review fixes (`handoff_review.md` 2026-10-13T11:06:01Z) — branch `fix/review-2026-10-13`, one PR
+
+| Finding | Fix | Where | Tests |
+|---|---|---|---|
+| P1 seal proxy fails open (big / SSE / binary bodies unmasked) | streaming `Masker`: every header and body byte, any size / type, cross-chunk tail | `crates/tengu-seal/src/mask.rs`, `cloudflare/seal-worker` | crate 30 + Worker tests (now in CI) |
+| P1 codex inherits vault secrets + the seal-proxy session | CLI starts from an empty env + `BASE_ENV` + `[agents.<a>.codex] forward_env`; master password, `TENGU_KEYS_*`, `[keys.env]` names, `OPENAI_API_KEY`, `CODEX_*` refused at load | `engines/codex.rs`, `config/mod.rs` | `child_env_*`, `the_spawned_cli_gets_only_the_kept_env` |
+| P1 builder path traversal | sandbox name rule at CLI, Studio, `Builder::new`, every store method; blueprint `sandbox` must equal the server's; links out of `sandboxes/` refused; `.prev` written temp + rename | `config/builder/`, `application/builder.rs`, `builder_store.rs`, `cli/{sandbox,studio}.rs`, `studio/` | `traversal_*`, `*_linked_outside_*`, `builder_routes_refuse_a_blueprint_for_another_path` |
+| P1 webhook trace races detached planner turns | `runtime::loops::Turns` owned by `LoopDispatch`; drain waits ≤ `shutdown_grace_secs`, then aborts (`plan.completed` dropped); new turn 503 while draining; steps aborted with their run | `loops.rs`, `webhooks.rs`, `bootstrap/runtime.rs`, `orchestrator/{mod,executor}.rs`, `trace_exec.rs` | `a_running_planner_turn_is_awaited_*`, `shutdown_waits_for_owned_turns_*` |
+| P2 malformed current TOML fails open | view-only with the parse error; compile error; CLI finalise prints warnings + diff first | `config/builder/{mod,compile}.rs`, `cli/sandbox.rs` | `a_current_file_that_does_not_parse_is_refused` |
+| P2 eval closes traces without a metrics barrier | `MetricsBarrier` / `Orchestrator::flush_metrics`; eval `close_row` (no sleep) | `application/metrics.rs`, `inbound/eval.rs` | `flush_resolves_*`, `close_row_writes_a_late_metric_before_run_closed` |
+| P2 docs stale | M3 tally 2 / 12, merged status on older sections, guides, tutorial pages, operator docs | docs | `tutorial_map`, `code_map` |
+
+| Item | State |
+|---|---|
+| Checks (local) | fmt · clippy `--all-features --all-targets` (no errors) · 577 targeted unit tests `--features webhooks` · `tutorial_map` `code_map` `layering_lint` `scope_lint` `language_policy` `lineage_cli` `engine_matrix` (offline) `run_agent_ipc` · no-studio build · `lineage verify --pins --evidence` 0 errors |
+| Behaviour changes | a codex tool that needs a secret needs that name in `forward_env`; an escalation that arrives during the drain is dropped with a warn |
+| Not covered | plain `--sandbox ../x` loading (`load_sandbox_or`, read-only) has no name rule; store check-then-use race (local process swapping a link); Worker CPU on large replies not measured on `wrangler dev`; live `codex_*` legs not run |
+
 ## 2026-10-13: PRs #50–#53 rebased and merged; local caches removed
 
 | PR | Squash on `main` (merge order) | What |

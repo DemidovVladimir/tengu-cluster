@@ -2,7 +2,7 @@
 
 > For the operator's architecture agent. Newest session first; earlier sessions below, unchanged. Ids and hashes are full. Everything is verifiable from git, GitHub and the commands in each session's last section.
 
-# Session 2026-10-12 → 2026-10-13: weekend #2 stop + grade, PRs #50–#54 merged, cleanup, docs sweep
+# Session 2026-10-12 → 2026-10-13: weekend #2 stop + grade, PRs #50–#54 merged, cleanup, docs sweep, review fixes
 
 ## T1. What was asked → what was delivered
 
@@ -12,7 +12,8 @@
 | "go" (grade weekend #2) | vaults, grade, regrade, backfill, secondaries, graded record, 3 incidents | PR #54 |
 | Merge every PR and branch into main; rebase; fix conflicts | #52 → #53 → #50 → #51 rebased in that order and squash-merged on green CI; 0 open PRs; only `main` | § T2 |
 | Remove `~/.cache/tengu-xm.noindex/agents/` if weekend research is unaffected; clean up; keep weekend research | `agents/` (90 GB), `seed/`, `a2a/`, `weekend/post-stop-backup-2026-10-12/` deleted; weekend binaries, vaults, `xmarket-weekend` / `xlab` state kept | § T3 |
-| Update all docs / tutorial to the code | docs sweep PR (this handoff's PR) | § T4 |
+| Update all docs / tutorial to the code | docs sweep, PR #55 (merged) | § T4 |
+| "yes please" (fix the 2026-10-13 review findings) | 4 P1 + 3 P2 fixed, one PR | § T6 |
 
 ## T2. Merges (squash, `rust-quality` green on each final head)
 
@@ -49,14 +50,14 @@ Deleted: branches `feature/{sandbox-builder,a2a,sealed-keys,privy-solana-signer}
 
 Kept (weekend research, operator rule): `~/.cache/tengu-xm.noindex/weekend/{tengu-6fcb455,tengu-acdef66,tengu-desk-2026-10-02}`, `~/.cache/tengu-xm.noindex/tengu-xlab-f554db0`, `~/.tengu/state/{evidence,xmarket-weekend,xlab,xmarket,research}`, logs. Not ours: `~/development/muliagent-tengu-cluster` (repo `moleculeprotocol/multiagent-tengu-cluster`, 17 GB `target/`); `/private/tmp/tengu-review-target` (8.2 GB, the reviewer's cargo cache).
 
-## T4. Docs sweep + record fix (this handoff's PR)
+## T4. Docs sweep + record fix — PR #55, merged `e0b10923761c854d13e47a066ccf675fdea8e26e`
 
 | Item | Note |
 |---|---|
 | `fwd.rule_w.2026-10-09.graded` | review P1 "fails its declared verifier": the `ledger:` source is cumulative — the weekend-only rows lose `extract`; new rows `capped_cumulative` (n 8, 172.89980107619598 bps, $3.429751754824897) and `shadow_cumulative` (n 149, 58.72003458464617, $86.9575096438379) carry it. `tengu lineage verify --evidence`: 0 errors |
 | Docs | agent guides, handoff, hub, code map, feature docs, architecture, tutorial pages swept against `main` @ `099ceb6fdf1e217293b614b6d232d74ab29d123c` |
 
-## T5. Open (from `handoff_review.md` 2026-10-13T11:06:01Z — not fixed in this session)
+## T5. Findings of `handoff_review.md` 2026-10-13T11:06:01Z (→ all fixed in § T6)
 
 | Finding | Area |
 |---|---|
@@ -65,6 +66,38 @@ Kept (weekend research, operator rule): `~/.cache/tengu-xm.noindex/weekend/{teng
 | P1 `tengu sandbox compile` / `finalise` path traversal | `src/adapters/inbound/cli/sandbox.rs`, `src/adapters/outbound/builder_store.rs` |
 | P1 webhook trace closure races a detached planner turn | `src/adapters/inbound/webhooks.rs` |
 | P2 malformed TOML fails open in builder finalise; eval trace metrics barrier | `src/config/builder/`, eval |
+
+## T6. Review fixes — branch `fix/review-2026-10-13`, PR #56 (review target = that PR's head commit, `gh pr view 56 --json headRefOid`)
+
+Base: `main` @ `e0b10923761c854d13e47a066ccf675fdea8e26e` (#55). Commits, in order:
+
+| Commit | Finding | What |
+|---|---|---|
+| `f6c17f3f58728577c0e9a61ddfae9da8ff35c7c3` | P1 codex env | `engines/codex.rs`: `env_clear()` + `BASE_ENV` + `[agents.<a>.codex] forward_env`; the bridge forwards only kept names; `config/mod.rs::codex_forward_env_error` refuses the master password, `TENGU_KEYS_*`, `[keys.env]` names, `OPENAI_API_KEY`, `CODEX_*` |
+| `8df01e7b0ebf1064010599101b83bdbdee7b1d51` | P2 docs | M3 tally 2 / 12 (`TENGU_ROADMAP.md`, tracker, handoff); merged status on the older handoff sections |
+| `c1f05af6188b2ec37d0aa32d1e46acbfe03f65c4` | P1 seal fail-open | `crates/tengu-seal/src/mask.rs` streaming `Masker` (every header + body byte, any size / type, cross-chunk tail); Worker `masked_stream`; CI runs the Worker tests |
+| `3884af3a05ab383dc140851e0aadae4dc514f570` | P2 docs | guides + handoff: masking is fail-closed |
+| `381c28633adfe1d3294e30313823ad3ef970fb55` | P1 builder traversal + P2 malformed TOML | name rule at CLI / Studio / `Builder::new` / every store method; blueprint `sandbox` must be the server's; links out of `sandboxes/` refused; `.prev` temp + rename; an unparsable current `config.toml` = view-only + compile error; CLI finalise prints warnings + diff first |
+| `246012543e8d10e44a9e159259abbe1646419085` | P1 webhook trace race + P2 eval barrier | `runtime::loops::Turns` owned by `LoopDispatch`, drained ≤ `shutdown_grace_secs` before lease release / `run.closed` / `runtime.stopped`, then aborted (`plan.completed` dropped), 503 while draining; `DagExecutor` aborts in-flight steps on drop; `MetricsBarrier` / `Orchestrator::flush_metrics`; eval `close_row` (no sleep) |
+| this PR's last commit | P2 docs | guides (trace gotcha, builder row, footer), `config.example.toml` grace comment, code map regenerated, `docs/SESSION_HANDOFF.md` 2026-10-13 review-fixes section, this § |
+
+| Check (local, on the last commit's tree) | Result |
+|---|---|
+| `cargo fmt --all --check` | clean |
+| `cargo clippy --all-features --all-targets` | no errors |
+| `cargo test --features webhooks --bin tengu -- builder codex config:: webhooks trace eval runtime orchestrator metrics studio cli::sandbox decision_loop keys` | 577 passed |
+| `cargo test --test {tutorial_map,code_map,layering_lint,scope_lint,language_policy,lineage_cli,engine_matrix,run_agent_ipc}` | all green (engine matrix: offline legs) |
+| `cargo test --manifest-path crates/tengu-seal/Cargo.toml` · `cloudflare/seal-worker/Cargo.toml` | 30 + Worker tests green |
+| `cargo check --no-default-features --features openrouter,telegram --bin tengu --tests` | OK |
+| `tengu lineage verify --pins --evidence` | 0 errors (9 warnings: unsealed rankings etc.) |
+| CI `rust-quality` on the PR head | see the PR |
+
+| Not covered (known) | Note |
+|---|---|
+| `load_sandbox_or` name rule | `--sandbox ../x` still loads that file read-only for every command; `--allow-edit` refuses it |
+| store check-then-use race | a local process swapping in a link between check and use |
+| Worker CPU on large replies | not measured on `wrangler dev` |
+| live `codex_*` legs | not run; a codex tool that needs a secret now needs `forward_env` |
 
 # Session 2026-10-09 (afternoon → night): seal proxy + Privy signers — PRs #50, #51
 

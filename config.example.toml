@@ -450,7 +450,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
 # once + the [webhooks] routes (build with --features webhooks). All optional.
 # [runtime]
-# shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events get this long, then abort
+# shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events + planner turns (webhook, escalation) get this long, then abort
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
 # max_queued_per_loop = 64                  # events one loop holds waiting; one more is refused (warn, webhook 429)
 # heartbeat_secs = 5                        # <state dir>/run-<name>.json + loop/1 / feed/1 rows
