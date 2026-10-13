@@ -7,6 +7,7 @@ mod decide;
 mod doctor;
 mod evidence;
 mod history;
+mod keys;
 mod lineage;
 mod ranking;
 mod risk;
@@ -294,6 +295,12 @@ enum Commands {
     Secret {
         #[command(subcommand)]
         action: SecretAction,
+    },
+    /// Sealed keys: provider keys live only inside blobs the tengu-seal
+    /// Cloudflare Worker opens (docs/sealed-keys-2026-10-09.md).
+    Keys {
+        #[command(subcommand)]
+        action: keys::KeysAction,
     },
     /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
     Prune {
@@ -728,6 +735,7 @@ pub(crate) async fn run() -> Result<()> {
     match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
         Commands::Chat { sandbox } => {
             let config = load_sandbox_or(sandbox, config)?;
+            let secret_registry = registry_after_keys(secret_registry, &config);
             tokio::task::block_in_place(|| {
                 crate::adapters::inbound::tui::run_tui(config, profile, secret_registry)
             })
@@ -748,6 +756,7 @@ pub(crate) async fn run() -> Result<()> {
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
             let config = load_sandbox_or(sandbox, config)?;
+            let secret_registry = registry_after_keys(secret_registry, &config);
             crate::adapters::inbound::telegram::run_telegram(config, secret_registry)
         }),
         #[cfg(not(feature = "telegram"))]
@@ -757,6 +766,7 @@ pub(crate) async fn run() -> Result<()> {
         #[cfg(feature = "webhooks")]
         Commands::Webhooks { sandbox } => {
             let config = load_sandbox_or(sandbox, config)?;
+            let secret_registry = registry_after_keys(secret_registry, &config);
             crate::adapters::inbound::webhooks::run_webhooks(config, secret_registry).await
         }
         #[cfg(not(feature = "webhooks"))]
@@ -765,6 +775,7 @@ pub(crate) async fn run() -> Result<()> {
         }
         Commands::Run { sandbox } => {
             let config = load_sandbox_or(sandbox, config)?;
+            let secret_registry = registry_after_keys(secret_registry, &config);
             crate::adapters::inbound::run::run_runtime(config, secret_registry).await
         }
         Commands::A2a { sandbox, action } => {
@@ -778,6 +789,7 @@ pub(crate) async fn run() -> Result<()> {
             map,
         } => {
             let config = load_sandbox_or(sandbox, config)?;
+            let secret_registry = registry_after_keys(secret_registry, &config);
             decide::run_decide(
                 &config,
                 loop_name.as_deref(),
@@ -793,6 +805,7 @@ pub(crate) async fn run() -> Result<()> {
             action,
         } => {
             let config = load_sandbox_or(sandbox, config)?;
+            let secret_registry = registry_after_keys(secret_registry, &config);
             studio::run_studio(config, serve, action, secret_registry).await
         }
         Commands::History { sandbox, action } => {
@@ -948,6 +961,7 @@ pub(crate) async fn run() -> Result<()> {
             }
             Ok(())
         }
+        Commands::Keys { action } => keys::run_keys(&config, action).await,
         Commands::Skill { action } => run_skill_command(config, action).await,
         Commands::RunAgent => {
             // Handled by the early-return in main(); this arm is for
@@ -1017,10 +1031,32 @@ fn stdout_is_data(command: &Option<Commands>) -> bool {
     )
 }
 
+/// The startup redaction registry, extended when `[keys]` exported a
+/// seal-proxy session after it was made (`load_sandbox_or` runs later), so
+/// the session token is masked on this process's surfaces too. Extended,
+/// never rebuilt: a key `[keys]` overwrote or stripped (still in `.env` or
+/// the vault on disk) stays masked.
+fn registry_after_keys(
+    registry: std::sync::Arc<crate::domain::secrets::SecretRegistry>,
+    config: &Config,
+) -> std::sync::Arc<crate::domain::secrets::SecretRegistry> {
+    if config.keys.enabled() {
+        let mut extended = (*registry).clone();
+        secrets::register_process_env(&mut extended);
+        std::sync::Arc::new(extended)
+    } else {
+        registry
+    }
+}
+
 /// Whether startup unlocks the secrets vault: every command but `tengu
-/// secret`, which opens it itself (one password prompt, not two).
+/// secret`, which opens it itself (one password prompt, not two), and
+/// `tengu keys`, which needs no vault secret.
 fn loads_vault_at_startup(command: &Option<Commands>) -> bool {
-    !matches!(command, Some(Commands::Secret { .. }))
+    !matches!(
+        command,
+        Some(Commands::Secret { .. } | Commands::Keys { .. })
+    )
 }
 
 #[cfg(test)]

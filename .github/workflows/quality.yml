@@ -47,3 +47,15 @@ jobs:
       # compiles none of these tests.
       - name: Webhook tests (feature webhooks)
         run: cargo test --features webhooks --bin tengu webhooks
+
+      # Sealed keys (docs/sealed-keys-2026-10-09.md): the shared formats crate
+      # is a path dependency, not a workspace member, so `--workspace` skips
+      # its own tests; the Worker builds for wasm32 only.
+      - name: Sealed-keys formats (crates/tengu-seal)
+        run: cargo test --manifest-path crates/tengu-seal/Cargo.toml
+
+      - name: Seal Worker (wasm32, fmt + clippy)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo fmt --manifest-path cloudflare/seal-worker/Cargo.toml --check
+          cargo clippy --manifest-path cloudflare/seal-worker/Cargo.toml --target wasm32-unknown-unknown -- -D warnings

@@ -177,13 +177,16 @@ impl RpcTransport for HttpTransport {
             return Err(err);
         }
         let started = Instant::now();
-        let sent = self
+        let mut req = self
             .http
             .post(self.url.clone())
             .timeout(self.timeout)
-            .json(&body)
-            .send()
-            .await;
+            .json(&body);
+        // `[keys]`: an RPC URL that is the seal proxy carries the session.
+        if let Some(auth) = crate::adapters::outbound::keys::auth_header_for(self.url.as_str()) {
+            req = req.header(reqwest::header::AUTHORIZATION, auth);
+        }
+        let sent = req.send().await;
         let result = match sent {
             Err(e) => Err(reqwest_error(e, &self.host, &self.scrub)),
             Ok(resp) => {

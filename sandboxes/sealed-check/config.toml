@@ -1,0 +1,118 @@
+# Tengu Cluster — "sealed-check" sandbox (2026-10-09): proves that Jev, a decision
+# loop and its validation path (decide · --map · run · trace · Studio) reach
+# OpenRouter ONLY through the tengu-seal Worker — no provider key on this machine.
+#
+#   [feeds.tick] every 30 s ──► [decision_loops.check] ──► Jev via <proxy>/openrouter
+#   tengu decide (scenario) ──┘   picks hold · convert · convert_bad · convert_dry
+#
+# One tool, hex_to_uint256 (pure compute: no file, network, env, shell or wallet).
+# No money, signer, memory, skills, MCP, planner, Telegram, webhooks, [generation].
+# Guard test: config::keys::tests::sealed_check_sandbox_is_harmless.
+#
+# SET-UP — runbook docs/sealed-check-2026-10-09.md (terminal + Studio, ~15 min):
+#   1. Deploy the Worker + add its secrets: docs/cloudflare-secrets-setup.html
+#   2. Below: set [keys] proxy to your Worker origin (not a secret; commit it)
+#   3. Allow-list the agent key (`tengu keys setup`), routes must include "openrouter"
+#   4. Own root, nothing written to ~/.tengu; `rm -rf ~/tengu-sealed-check` removes it all:
+#        export TENGU_HOME="$HOME/tengu-sealed-check/home"
+#        mkdir -p "$TENGU_HOME" "$HOME/tengu-sealed-check/ws"
+#        unset OPENROUTER_API_KEY OPENROUTER_BASE_URL
+#   5. tengu keys status --sandbox sealed-check
+#      tengu decide --sandbox sealed-check --loop check --event sandboxes/sealed-check/scenarios/convert.json
+#      tengu run --sandbox sealed-check            # Ctrl-C = graceful stop
+#      tengu studio --sandbox sealed-check --allow-control
+
+runtime_profile = "auto"
+
+# The seal proxy. http://127.0.0.1:8787 = `npx wrangler dev` in cloudflare/seal-worker
+# (local check); after `npx wrangler deploy` put your https://tengu-seal.<subdomain>.workers.dev.
+[keys]
+proxy = "http://127.0.0.1:8787"
+client = "tengu-unattended"           # Secretive key comment (no Touch ID prompt); socket = $SSH_AUTH_SOCK
+[keys.env]
+OPENROUTER_BASE_URL = "openrouter"    # → <proxy>/openrouter → https://openrouter.ai/api (Jev: /alpha/decisions)
+OPENROUTER_API_KEY = "@session"       # → the session token; no OpenRouter key here
+
+# Open, with a host ceiling for tools (the one tool makes no call); the proxy host must
+# be listed — [keys] validation refuses it otherwise.
+[egress]
+network = "open"
+allow_hosts = ["127.0.0.1", "*.workers.dev"]
+https_only = true
+
+[memory]
+enabled = false
+
+# Short beats so a demo shows health moving within seconds; one event at a time.
+[runtime]
+heartbeat_secs = 2
+heartbeat_stale_secs = 10
+shutdown_grace_secs = 10
+max_decisions_in_flight = 1
+max_queued_per_loop = 4
+
+# --- checker: the loop's tool / scope / workspace owner ---------------------------
+# Private (no description, not default): never chats, never routable. engine + model
+# are required by the schema, never called.
+[agents.checker]
+engine = "openrouter"
+model = "anthropic/claude-haiku-4-5"
+workspace = "~/tengu-sealed-check/ws"
+tools = ["hex_to_uint256"]
+
+[agents.checker.scopes]
+hex_to_uint256 = {}                   # grants nothing: no fs / net / env / shell / wallet
+
+# --- check: the loop ----------------------------------------------------------------
+# Scenario = event.scenario (scenarios/*.json, a tick, or an execution map's event).
+[decision_loops.check]
+model = "~typesafe/jev-latest"
+goal = """Seal-proxy check. Act on event.scenario:
+- "normal": nothing to do — pick hold.
+- "convert": run convert once with hex equal to event.pick, then pick hold.
+- "tool-error": run convert_bad once (expected to fail; never retry it), then pick hold.
+- "dry": run convert_dry once, then pick hold.
+- "uncertain": the evidence is contradictory and no action is clearly right.
+Never run an action twice for one event. Any other scenario: hold."""
+agent = "checker"
+dry_run = true                        # convert_dry (not read_only) is logged, never run
+act_at = 0.8                          # below → `escalated`, the event stops
+escalate = false                      # no orchestrator: escalation = stop + audit line
+history = 4
+max_steps = 3
+world = { tick = "feed/1:tick" }      # the tick feed's health row (fresh while `tengu run` runs)
+world_max_age_secs = 60
+
+[decision_loops.check.actions.hold]
+description = "Nothing (more) to do for this event — stop"
+
+[decision_loops.check.actions.convert]
+description = "Convert a hex string to its decimal uint256 value"
+tool = "hex_to_uint256"
+read_only = true
+args = { hex = "{hex}" }
+slots = { hex = ["0x2a", "0xff", "0x2710"] }   # Jev answers one typed choice
+
+[decision_loops.check.actions.convert_bad]
+description = "Convert the malformed probe hex 0xzz (fails on purpose)"
+tool = "hex_to_uint256"
+read_only = true
+args = { hex = "{hex}" }
+slots = { hex = ["0xzz"] }            # one candidate: filled without a question
+
+[decision_loops.check.actions.convert_dry]
+description = "Convert event.hex — dry run: logged, never executed"
+tool = "hex_to_uint256"
+args = { hex = "{hex}" }
+slots = { hex = { event = "/hex" } }  # bound from the event; no event.hex ⇒ not legal
+
+# --- feeds (tengu run) -------------------------------------------------------------
+# A loop event every 30 s (UTC grid) + one at start ≈ 2.9k Worker requests/day while running.
+[feeds.tick]
+kind = "tick"
+target = "check"
+every_secs = 30
+run_on_start = true
+event = { scenario = "normal", source = "tick" }
+required = true
+stale_after_secs = 90

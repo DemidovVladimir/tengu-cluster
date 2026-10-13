@@ -344,6 +344,7 @@
     <div class="sbx open"><h3>xmarket-weekend</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>https_only</span></div></div>
     <div class="sbx open"><h3>xlab</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>api.geckoterminal.com</span><span>https_only</span></div></div>
     <div class="sbx open"><h3>xlab-w2</h3><span class="chip warn">open</span><div class="hosts"><span>api.hyperliquid.xyz</span><span>api.geckoterminal.com</span><span>www.sec.gov</span><span>data.sec.gov</span><span>https_only</span></div></div>
+    <div class="sbx open"><h3>sealed-check</h3><span class="chip warn">open</span><div class="hosts"><span>127.0.0.1</span><span>*.workers.dev</span><span>https_only</span></div><small>Jev only through the seal proxy (<code>[keys]</code>).</small></div>
     <div class="sbx open"><h3>soe</h3><span class="chip warn">open</span><div class="hosts"><span>www.sec.gov</span><span>data.sec.gov</span><span>api.ted.europa.eu</span><span>https_only</span></div></div>
     <div class="sbx open"><h3>lping</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
     <div class="sbx open"><h3>jev-exec</h3><span class="chip warn">open</span><small>No host ceiling.</small></div>
@@ -442,6 +443,7 @@
     <li><span><b>A bad policy never runs.</b> An unknown <code>network</code> or field, <code>socks5://</code> (DNS leak), a proxy without a port, or <code>route_llm_api</code> without a proxy fails the config load.</span></li>
     <li><span><b>One route, fail closed.</b> A proxied client uses only the configured proxy (env proxy detection off). If Arti is down the request fails; it never goes direct.</span></li>
     <li><span><b>Every tool hop is gated.</b> <code>http_request</code> checks scheme, <code>deny_hosts</code>, <code>allow_hosts</code> and <code>net_hosts</code> on the first hop and each redirect, up to 10; env-expanded headers are dropped on a cross-origin redirect.</span></li>
+    <li><span><b>The seal proxy is one more host.</b> With <code>[keys]</code>, provider calls go to <code>&lt;proxy&gt;/&lt;route&gt;</code> on the <code>tengu-seal</code> Worker, which holds the keys as Cloudflare secrets; its session runs through the LLM-API client (Tor when <code>route_llm_api</code>); a sandbox with <code>allow_hosts</code> must list its host, or the config does not load (<a href="sealed-keys.html">sealed keys</a>).</span></li>
     <li><span><b>Children inherit the parent's policy.</b> <code>run-agent</code> and <code>mcp-bridge</code> apply <code>TENGU_EGRESS</code> over their own config, same audit file.</span></li>
     <li><span><b>No ungated Bash under a proxy.</b> Claude Code profile <code>editor_shell</code> launches as <code>editor</code> while a proxy is set.</span></li>
     <li><span><b>Isolated shells are kernel-fenced.</b> With <code>shell_network = "isolated"</code> (macOS <code>sandbox-exec</code>) every outbound connection but the proxy port is refused, DNS included.</span></li>

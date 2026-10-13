@@ -80,6 +80,18 @@ fn prune_old_run_dirs(parent: &Path, keep: usize) -> std::io::Result<()> {
 }
 
 pub async fn run(args: EvalArgs) -> anyhow::Result<i32> {
+    // `[keys]` of the eval sandbox, before any engine (the judge included)
+    // is built: its egress, a seal-proxy session, the exports and `strip` —
+    // as `load_sandbox_or` does for every other sandbox command.
+    if let Some(name) = &args.sandbox {
+        let path = PathBuf::from("sandboxes").join(name).join("config.toml");
+        if let Ok(cfg) = Config::load(&path) {
+            if cfg.keys.enabled() {
+                crate::adapters::outbound::egress::install(&cfg.egress)?;
+                crate::adapters::outbound::keys::install(&cfg.keys);
+            }
+        }
+    }
     let started_at = chrono::Utc::now();
     let auto_out_dir = args.out_dir.is_none();
     let out_dir = args.out_dir.clone().unwrap_or_else(|| {

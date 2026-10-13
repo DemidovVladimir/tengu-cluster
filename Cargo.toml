@@ -42,6 +42,9 @@ regex = "1"
 once_cell = "1"
 alloy = { version = "1", features = ["full"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+# Seal proxy (`[keys]`, `docs/sealed-keys-2026-10-09.md`): route table,
+# session, SSH-signature and target formats shared with `cloudflare/seal-worker`.
+tengu-seal = { path = "crates/tengu-seal" }
 # Solana write tools (phase 6b): ed25519 signing of transactions with the
 # `[solana] signer_key_file` key — signing is not hand-rolled. `getrandom`
 # seeds the one-shot DLMM position keypair. Both already in the lockfile's

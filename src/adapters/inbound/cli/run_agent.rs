@@ -146,6 +146,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // child rather than running tools unproxied.
     crate::adapters::outbound::egress::install(&parent_config.egress)
         .context("run-agent: install egress policy")?;
+    // `[keys]`: reuse the parent's seal-proxy session (inherited env) and
+    // strip local key copies again — this process re-read `.env` at start.
+    crate::adapters::outbound::keys::install(&parent_config.keys);
 
     // ----- Resolve the agent: `[agents.<name>]` of that config -----
     //
