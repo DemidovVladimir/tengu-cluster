@@ -9,7 +9,7 @@
 //! | cards | kind known, singletons once, field types / options / ranges, required fields, name rules |
 //! | wires | the kind pair is in `CONNECTIONS`; then what each writes (palette module table) and its rules |
 //! | after | unused cards warn; a Cloudflare-stored secret needs the proxy card and a `[keys.env]` line; one planner, one bot agent, one default |
-//! | emit | owned sections in a fixed order (`OWNED`); every other top-level key of the current `config.toml` kept as it is |
+//! | emit | owned sections in a fixed order (`OWNED`); every other top-level key of the current `config.toml` kept as it is; a current file that does not parse is an error (nothing of it would be kept) |
 //!
 //! Keys never enter the TOML: a secret card names an env var and where it
 //! lives; only the Cloudflare store writes routes (`[keys.env]`), never a
@@ -134,7 +134,8 @@ impl Card<'_> {
     }
 }
 
-/// Whether `name` is an agent / endpoint name: `[a-z0-9][a-z0-9_-]{0,39}`.
+/// Whether `name` is an agent / endpoint / sandbox name:
+/// `[a-z0-9][a-z0-9_-]{0,39}`.
 pub(crate) fn valid_name(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
@@ -938,9 +939,15 @@ fn emit(
                     );
                 }
             }
-            Err(e) => issues.push(Issue::warn(format!(
-                "the current config.toml does not parse ({e}); nothing is kept from it"
-            ))),
+            // An error, never a warning: Finalise would drop the file's
+            // content. `editable` makes the sandbox view-only too.
+            Err(e) => {
+                let issue = Issue::error(super::malformed(&e));
+                issues.push(match of("sandbox").first() {
+                    Some(sb) => issue.node(sb.id()),
+                    None => issue,
+                });
+            }
         }
     }
 
