@@ -66,7 +66,7 @@
   <h1>Sandbox config</h1>
   <p class="lede">One TOML file is the whole team: agents, tools, scopes, network, memory, loops. <code>--sandbox &lt;name&gt;</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code>, and every child process loads that same file again.</p>
   <ul class="facts">
-    <li><b>12</b> sandboxes in the repo</li>
+    <li><b>13</b> sandboxes in the repo</li>
     <li>unknown key = <b>load error</b></li>
     <li>home <b>~/.tengu</b> (<code>TENGU_HOME</code>)</li>
     <li>network <b>tor</b> unless <code>[egress]</code> says open</li>
@@ -211,7 +211,7 @@
         <li>Base path: <code>-c</code>, else <code>$TENGU_CONFIG</code>, else <code>&lt;TENGU_HOME&gt;/config.toml</code>. It is pinned as <code>TENGU_CONFIG</code>. No file there: built-in defaults, one <code>main</code> agent.</li>
         <li><code>Config::load</code> reads the file and fills every <code>${VAR}</code> from the environment. An unset variable stays as literal text, with a warning naming it (comment lines are skipped).</li>
         <li>Strict parse: an unknown key at the root or inside an <code>[agents.*]</code> block fails the load. A typo never switches a knob off silently.</li>
-        <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, Telegram approvals, a <code>tools</code> name no catalog row or MCP server knows) are only logged.</li>
+        <li>Every rule runs and every issue lands in one error. Warnings (local model window, temp workspace, Telegram approvals, a <code>tools</code> name no catalog row or MCP server knows, an <code>a2a</code> tool with no <code>[a2a.remotes.*]</code>) are only logged.</li>
         <li><code>[default_scopes]</code> is copied into each agent that has no scope for that tool; <code>~</code> is expanded. Every agent gets the same <code>SandboxSections</code>.</li>
         <li><code>--sandbox lping</code> loads <code>sandboxes/lping/config.toml</code> from the current directory, through the same steps. It replaces the base config whole.</li>
         <li><code>TENGU_CONFIG</code> is re-pinned to the sandbox file's absolute path, and that file's <code>[egress]</code> policy is installed. With <code>[keys]</code>, a seal-proxy session is signed (or the parent's reused) and <code>[keys.env]</code> exported as Worker route URLs (<a href="sealed-keys.html">sealed keys</a>).</li>
@@ -323,7 +323,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 <section class="sec" aria-labelledby="s-shelf">
   <div class="sec-head">
     <span class="kicker">The real sandboxes</span>
-    <h2 id="s-shelf">Twelve teams, twelve files</h2>
+    <h2 id="s-shelf">Thirteen teams, thirteen files</h2>
     <p>Read from <code>sandboxes/*/config.toml</code>. Filter by what each one turns on.</p>
   </div>
   <div class="shelf-filter" role="group" aria-label="Filter sandboxes">
@@ -443,12 +443,12 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>No silent typos.</b> <code>Config</code>, <code>AgentConfig</code> and <code>[agents.*.local]</code> deny unknown keys; the load fails.</span></li>
+    <li><span><b>No silent typos.</b> <code>Config</code>, <code>AgentConfig</code>, <code>[agents.*.local]</code>, <code>[agents.*.codex]</code>, <code>[keys]</code> and <code>[a2a]</code> deny unknown keys; the load fails.</span></li>
     <li><span><b>All issues at once.</b> Validation collects every problem into one <code>Config validation failed (N issues)</code> error.</span></li>
     <li><span><b>No merging.</b> <code>--sandbox</code> replaces the base config whole; an agent's own scope replaces the default whole.</span></li>
-    <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>a2a</code>, <code>doctor</code>, <code>decide</code>, <code>studio</code>, <code>history</code>, <code>backtest</code>, <code>ranking</code>, <code>risk</code> and <code>sources</code> with <code>--sandbox</code> log a warning and go on; any other command stops. <code>evidence</code>, <code>lineage</code> and <code>trace</code> never read it; <code>soe</code> reads a config only for its weekly commands (<code>--sandbox</code> or <code>-c</code>).</span></li>
+    <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>a2a</code>, <code>doctor</code>, <code>decide</code>, <code>studio</code>, <code>history</code>, <code>backtest</code>, <code>ranking</code>, <code>risk</code> and <code>sources</code> with <code>--sandbox</code> log a warning and go on; any other command stops. <code>evidence</code>, <code>lineage</code>, <code>trace</code> and <code>sandbox</code> never read it; <code>soe</code> reads a config only for its weekly commands (<code>--sandbox</code> or <code>-c</code>).</span></li>
     <li><span><b>Children see the same file.</b> <code>run-agent</code> reloads it by sandbox name; the bridge reads the absolute <code>TENGU_CONFIG</code>.</span></li>
-    <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, <code>[sources]</code>, <code>[soe]</code>, <code>[a2a]</code> remotes, state dirs and rate limits.</span></li>
+    <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, <code>[sources]</code>, <code>[soe]</code>, <code>[a2a]</code> remotes, the <code>[solana] privy_wallet_id</code>, state dirs and rate limits.</span></li>
     <li><span><b>Hardened means hardened.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
     <li><span><b>Bound sandboxes stay in their generation.</b> With <code>[generation]</code>, every load checks the sandbox against <code>lineage/generations/&lt;id&gt;.toml</code>; xlab and xmarket-weekend bind W1.</span></li>
     <li><span><b>Ranking contracts fit the sandbox.</b> With <code>[strategy_ranking]</code>, every load refuses an unknown contract, one of another sandbox, or a contract strategy missing from <code>[backtest.strategies]</code> (<a href="strategy-ranking.html">Strategy ranking</a>).</span></li>
@@ -504,7 +504,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>
@@ -569,7 +569,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 
   /* agent block anatomy */
   var A = {
-    hdr: ["One block = one agent", ["deny_unknown_fields"], "The same block serves in-process chat, plan steps, decision loops, feeds and the Claude Code bridge. A misspelled key fails the load.", "src/config/mod.rs · AgentConfig"],
+    hdr: ["One block = one agent", ["deny_unknown_fields"], "The same block serves in-process chat, plan steps, decision loops, feeds and the Claude Code / Codex bridge. A misspelled key fails the load.", "src/config/mod.rs · AgentConfig"],
     "default": ["default = true", ["at most one"], "tengu chat talks to this agent (without one: whichever comes first in the agent map). Telegram sends plain messages to it. Two defaults fail validation.", "src/adapters/inbound/tui/mod.rs · run_tui"],
     engine: ["engine", ["required"], "openrouter, claude_code, local or codex (config::ENGINES). Anything else fails validation. Picks the adapter that thinks for this agent.", "src/config/mod.rs · validate_agent"],
     model: ["model", ["required", "non-empty"], "Format follows the engine: claude_code takes a bare slug like this one, OpenRouter wants anthropic/claude-sonnet-4-6, local sends the server's own id.", "src/config/mod.rs · validate_agent"],
@@ -579,7 +579,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     examples: ["example_queries", ["default: []"], "Listed under the registry entry so the planner can match short questions. Used only with a description.", "src/config/mod.rs · AgentConfig.example_queries"],
     identity: ["identity", ["name", "instructions"], "Goes into the system prompt. The TUI header shows the name.", "src/config/mod.rs · IdentityConfig"],
     limits: ["limits", ["LimitsConfig"], "Per-agent budgets: tool rounds, step wall clock, result sizes, context window, request timeout.", "src/config/mod.rs · LimitsConfig"],
-    rounds: ["max_tool_rounds", ["default 70"], "Tool cap per chat turn or plan step. OpenRouter and local count engine turns; claude_code counts tool calls.", "src/config/mod.rs · default_max_tool_rounds"],
+    rounds: ["max_tool_rounds", ["default 70"], "Tool cap per chat turn or plan step. OpenRouter and local count engine turns; claude_code and codex count tool calls.", "src/config/mod.rs · default_max_tool_rounds"],
     timeout: ["step_timeout_secs", ["default 600", "must be > 0"], "Wall clock for one plan step run as tengu run-agent; the parent kills the child after it.", "src/config/mod.rs · default_step_timeout_secs"],
     cc: ["claude_code.builtin_tools_profile", ["default editor_shell"], "none, read_only, editor or editor_shell. A sandbox with [risk], [soe] or a Solana signer requires none: built-in tools ignore Tengu scopes.", "src/config/hardening.rs · claude_code_errors"],
     "private": ["A private agent", ["no description", "not default"], "Never routable by the planner or Telegram. Only such an agent may hold exec tools like paper_order. Feeds run its tools.", "src/config/risk.rs · src/adapters/inbound/telegram.rs"]

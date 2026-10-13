@@ -16,7 +16,6 @@
 //! | Keys never enter TOML: a secret card names an env var and its store | `compile` |
 //! | Never offered: `run_command`, wallet signing, Solana sends, exec tools | `palette::offered` |
 //! | A `[generation]`-bound or hardened sandbox is view-only | [`editable`] |
-//! | The Cloudflare store needs a build with `[keys]` (PR #50) — probed, not compiled in | [`keys_supported`] |
 
 pub(crate) mod compile;
 pub(crate) mod palette;
@@ -49,15 +48,6 @@ pub(crate) struct Facts {
     pub tools: Vec<OfferedTool>,
     /// (name, description) of every skill found.
     pub skills: Vec<(String, String)>,
-    /// This build knows `[keys]` (the Cloudflare seal proxy).
-    pub keys_supported: bool,
-}
-
-/// Whether this build's `Config` accepts a `[keys]` section — the seal
-/// proxy (PR #50). Probed so the builder lights the Cloudflare store up by
-/// itself once that lands.
-pub(crate) fn keys_supported() -> bool {
-    toml::from_str::<Config>("[keys]\n").is_ok()
 }
 
 /// Whether `name` may be a new sandbox: `[a-z0-9][a-z0-9_-]{0,39}`.
@@ -86,7 +76,7 @@ pub(crate) fn editable(current: &str) -> Option<String> {
     let signer = t
         .get("solana")
         .and_then(|s| s.as_table())
-        .is_some_and(|s| s.contains_key("signer_key_file") || s.contains_key("privy_wallet_id"));
+        .is_some_and(|s| s.contains_key("privy_wallet_id"));
     for (key, why) in [
         ("risk", "[risk]"),
         ("paper", "[paper]"),

@@ -144,7 +144,7 @@
         <li>At sandbox load tengu asks the SSH agent to sign <code>tengu-seal/session/v1</code>: fingerprint, time, a random nonce, the Worker origin and the routes <code>[keys.env]</code> uses. Secretive can ask for Touch ID.</li>
         <li><code>POST /session</code>: fingerprint in <code>CLIENTS</code>, signature valid, clock within ±60 s. The Worker grants the asked routes <code>CLIENTS</code> allows (none: 403) in a <code>tss1</code> token, HMAC under <code>SESSION_KEY</code>.</li>
         <li><code>[keys] strip</code> removes local key copies. <code>[keys.env]</code> is exported: a route value becomes <code>&lt;proxy&gt;/&lt;route&gt;[/path][?query]</code>, <code>@session</code> the token. Children reuse the session and strip again.</li>
-        <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/openrouter/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. RPC and Telegram clients add that header themselves, to the proxy only.</li>
+        <li>The unchanged OpenRouter client posts to <code>&lt;proxy&gt;/openrouter/v1/chat/completions</code> with <code>Authorization: Bearer &lt;session&gt;</code>. RPC, Privy and Telegram clients add that header themselves, to the proxy only.</li>
         <li>The Worker checks the route is in the session and still in <code>CLIENTS</code>, puts the key only at its header, path or query spot, checks <code>allow</code>, forwards with <code>redirect: manual</code>.</li>
         <li>Reply: the key becomes <code>[REDACTED]</code> in every header and in text or JSON bodies up to 2 MiB; larger ones stream on. One JSON log line, never a key.</li>
         <li>Revoke a machine: delete its <code>CLIENTS</code> line and <code>npx wrangler deploy</code>; its next request gets 401. Rotating <code>SESSION_KEY</code> ends every session at once.</li>
@@ -197,7 +197,7 @@
     <li><span><b>No session without the agent key.</b> A fresh signature by a key in <code>CLIENTS</code>, within ±60 s, bound to this Worker's origin.</span></li>
     <li><span><b>Revocation on the next request.</b> <code>CLIENTS</code> is read on every request, not only at <code>/session</code>.</span></li>
     <li><span><b>The session goes only to the proxy.</b> <code>auth_header_for</code> and <code>header_mode</code> return nothing for any other origin.</span></li>
-    <li><span><b>Fail closed.</b> If no session can be had, every <code>[keys.env]</code> var and the session vars are unset, so a stray local key cannot bypass the proxy. <code>tengu telegram</code> routed through the proxy refuses to start. The Privy wallet tools on route <code>privy</code> need <code>PRIVY_APP_SECRET</code> in <code>strip</code> (a load error otherwise), so without a session they fail rather than use a local secret.</span></li>
+    <li><span><b>Fail closed.</b> If no session can be had, every <code>[keys.env]</code> var and the session vars are unset, so a stray local key cannot bypass the proxy. <code>tengu telegram</code> routed through the proxy refuses to start. The Privy wallet tools on route <code>privy</code> need <code>PRIVY_APP_SECRET</code> in <code>strip</code> (a load error otherwise), so without a session they fail rather than use a local secret. The Solana signer (<code>[solana] privy_wallet_id</code>) refuses with <code>signer_unavailable</code> unless <code>PRIVY_API_URL</code> is the proxy with a session.</span></li>
     <li><span><b>Local copies stripped.</b> <code>[keys] strip</code> names are removed at load, success or not, and again in every child. <code>@session</code> only for <code>OPENROUTER_API_KEY</code> next to an <code>OPENROUTER_BASE_URL</code> route.</span></li>
     <li><span><b>Never on disk.</b> The session lives in process env; its name ends in <code>_TOKEN</code>. The redaction registry is extended after the export, so old <code>.env</code> / vault values stay masked.</span></li>
     <li><span><b>Replies are masked.</b> Every header value; text, JSON and XML bodies up to 2 MiB, on bytes. A bigger body streams on unmasked past 2 MiB; event streams and binary pass through.</span></li>
@@ -261,7 +261,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

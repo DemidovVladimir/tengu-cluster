@@ -504,11 +504,12 @@
       <thead><tr><th>Not recorded</th><th>What the run shows instead</th></tr></thead>
       <tbody>
         <tr><td class="wrap">A typed scope refusal</td><td class="wrap"><code>tool.failed</code> with the refusal text</td></tr>
-        <tr><td class="wrap">A <code>claude_code</code> plan step's tool calls (they run in its MCP bridge process)</td><td class="wrap">only <code>step.*</code></td></tr>
+        <tr><td class="wrap">A <code>claude_code</code> or <code>codex</code> plan step's tool calls (they run in its MCP bridge process)</td><td class="wrap">only <code>step.*</code></td></tr>
         <tr><td class="wrap">The tool calls of a <code>run-agent</code> child that ends without its IPC output (an engine error mid-loop, a step-timeout kill)</td><td class="wrap">only <code>step.retrying</code> / <code>step.failed</code></td></tr>
         <tr><td class="wrap">The end of a step aborted because a sibling step was exhausted or the turn was cancelled</td><td class="wrap">its <code>step.started</code>, no outcome event</td></tr>
         <tr><td class="wrap">An escalation <code>tengu run</code> triggers before its recording reaches the escalator (the first feed slot of the start)</td><td class="wrap">the loop's <code>action.escalated</code>; no <code>plan.*</code></td></tr>
         <tr><td class="wrap">A planner's <code>RagQueried</code> (the query is user text)</td><td class="wrap">nothing, by design</td></tr>
+        <tr><td class="wrap">An A2A task <code>tengu a2a serve</code> runs (planner or agent; <a href="a2a.html">A2A</a>)</td><td class="wrap">no run file: its plan is built without a recording</td></tr>
       </tbody>
     </table>
   </div>
@@ -575,7 +576,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

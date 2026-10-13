@@ -9,11 +9,11 @@ The MCP bridge is a stdio subprocess that exposes Tengu-native tools to engines 
 
 When `manages_own_workspace() = true`, the engine handles file reads, writes, and shell commands natively. But Tengu's platform tools — HTTP requests, crypto signing, shared cache, memory — live inside Tengu's runtime. The MCP bridge makes these tools available to the external engine process.
 
-The bridge runs as a child subprocess of the Claude CLI:
+The bridge runs as a child subprocess of the Claude or Codex CLI:
 
 ```
 Tengu process (parent, or a `tengu run-agent` child for subagents)
-  └─ claude -p subprocess (--mcp-config <temp file>)
+  └─ claude -p subprocess (--mcp-config <temp file>)  ·  codex exec (-c mcp_servers.tengu-tools.*)
        └─ tengu mcp-bridge subprocess (MCP stdio server, serverInfo.name = tengu-tools)
 ```
 
@@ -43,14 +43,14 @@ Claude sees each tool as `mcp__tengu-tools__<name>` (e.g. `mcp__tengu-tools__per
 
 ## Dispatch
 
-The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor` inside a `SanitizedToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): the whole catalog (workspace, memory, cache, skill lifecycle, http, crypto, skill tools, Solana, Hyperliquid, xm, xlab — `market_history`, `backtest`, `strategy_ranking` —, sources — `source_evidence` —, SOE — `soe_view`, `soe_propose`, `soe_challenge` —, `agentic_memory` under `postgres_memory`), the agent's shell skills, and the `[[mcp_servers]]` the engine passed. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits the executor directly.
+The bridge builds its own `ToolRegistry` through `adapters::outbound::tools::register_catalog` — the same helper the in-process executor uses — and wraps it in a `PluginToolExecutor` inside a `SanitizedToolExecutor`. Registered (each gated by the `TENGU_BRIDGE_TOOLS` allow-list): the whole catalog (workspace, memory, cache, skill lifecycle, http, crypto, skill tools, Solana, Hyperliquid, xm, xlab — `market_history`, `backtest`, `strategy_ranking` —, sources — `source_evidence` —, SOE — `soe_view`, `soe_propose`, `soe_challenge` —, A2A — `a2a` —, `agentic_memory` under `postgres_memory`), the agent's shell skills, and the `[[mcp_servers]]` the engine passed. `run_mcp_bridge` is async on the ambient tokio runtime; `tools/call` awaits the executor directly.
 
 | Tool kind | In the bridge |
 |---|---|
 | Catalog rows | `register_catalog`, as in-process |
 | Shell skills | `bootstrap::tools::agent_skill_registry` over `TENGU_BRIDGE_WORKSPACE`, as `run-agent` loads them: `skill_packages` of the agent **plus every requested name** (a composed plan step's `skills` reach the bridge only through its parent's tool list); none when the agent runs no shell (`no_shell_fallback`: a `[risk]`, `[soe]` or signer sandbox) |
-| `[[mcp_servers]]` | only the servers the Claude Code engine names in `TENGU_BRIDGE_MCP_SERVERS` (their `{server}__{tool}` names in the allow-list), each taken from the loaded config's `[[mcp_servers]]` (`resolve_mcp_servers`; a whole server object is accepted too — standalone, tests); a standalone bridge proxies none. The CLI runs with `--strict-mcp-config`, so the bridge is its only MCP server |
-| `compress_and_store` | `StepSummary` (no plugin): with `TENGU_BRIDGE_SUMMARY_FILE` (a `run-agent` step) the `summary` is written there → `stored — stop now`, and the step uses it as its IPC summary (+ the `agentic_memory` write); the engine then ends the CLI run once the round's other calls are answered (`claude_code.rs`); without the file the call is refused naming why ("give your summary as plain text") |
+| `[[mcp_servers]]` | only the servers the CLI engine (Claude Code, Codex) names in `TENGU_BRIDGE_MCP_SERVERS` (their `{server}__{tool}` names in the allow-list), each taken from the loaded config's `[[mcp_servers]]` (`resolve_mcp_servers`; a whole server object is accepted too — standalone, tests); a standalone bridge proxies none. The Claude CLI runs with `--strict-mcp-config`, Codex with `--ignore-user-config`, so the bridge is its only MCP server |
+| `compress_and_store` | `StepSummary` (no plugin): with `TENGU_BRIDGE_SUMMARY_FILE` (a `run-agent` step) the `summary` is written there → `stored — stop now`, and the step uses it as its IPC summary (+ the `agentic_memory` write); the engine then ends the CLI run once the round's other calls are answered (`claude_code.rs`, `codex.rs`); without the file the call is refused naming why ("give your summary as plain text") |
 
 Every call gets the run's conversation as `ToolCtx.conversation` (`call_conversation`) — what in-process tools get from their loop and `skill_distill` seeds fixtures from:
 
@@ -105,7 +105,7 @@ Shape of the temp `--mcp-config` file:
 
 | `TENGU_CONFIG` file | `[agents.<TENGU_BRIDGE_AGENT>]` | Tools run as |
 |---|---|---|
-| present | present | that block as `Config::load` folded it: scopes (with `[default_scopes]`), `sandbox` sections (`xm_state_dir`, …), `no_shell_fallback`, signer; `[memory]` as in-process. With `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's engine) every configured scope but a deny-all one also gets the workspace as an fs root — the step's own executor does the same (`grant_workspace_root`) |
+| present | present | that block as `Config::load` folded it: scopes (with `[default_scopes]`), `sandbox` sections (`xm_state_dir`, `a2a`, `privy_wallet_id`, …), `no_shell_fallback`; `[memory]` as in-process. With `TENGU_BRIDGE_GRANT_WORKSPACE=1` (a `run-agent` step's engine) every configured scope but a deny-all one also gets the workspace as an fs root — the step's own executor does the same (`grant_workspace_root`) |
 | present | absent / unset | `Config::default()`'s `main` + `TENGU_BRIDGE_SCOPES`, warn; shell-free when the loaded config's agents are |
 | absent | — | standalone bridge: default `main` + `TENGU_BRIDGE_SCOPES`, warn; disk memory under `<workspace>/memory` |
 | present but invalid | — | the bridge exits with the load error |
@@ -138,7 +138,7 @@ Build with `--features postgres_memory`.
 | | `tengu mcp-bridge` | `tengu agentic-memory-server` |
 |---|---|---|
 | Tool set | `TENGU_BRIDGE_TOOLS` (caller-supplied) | fixed: `agentic_memory` only |
-| Spawned by | the Claude Code engine | any MCP client config |
+| Spawned by | the Claude Code and Codex engines | any MCP client config |
 | `serverInfo.name` | `tengu-tools` | `tengu-agentic-memory` |
 | Agent | `[agents.<TENGU_BRIDGE_AGENT>]` of `TENGU_CONFIG` | default `main` (no config load) |
 | Needs | — | `TENGU_MEMORY_DATABASE_URL` (per call) |
@@ -185,6 +185,8 @@ server starts even without these — tool calls just error or degrade.
 | `cargo test --features claude_code --test run_agent_ipc claude_code_step_without_workspace` | a `claude_code` step without `workspace`, stand-in CLI: `--mcp-config` + every tool in `--allowedTools`, cwd = the step's temp dir (gone after), system prompt only in `--system-prompt`, the transcript, the run ends at the stored summary |
 | `cargo test --test mcp_bridge_external` | a real `tengu mcp-bridge` proxies `[[mcp_servers]]`, runs tools as the configured agent; two bridge processes give the same JSON-RPC id two call ids (`mcp:<nonce>:<id>`) |
 | `cargo test --test bridge_conformance` | every catalog tool in-process vs through a real bridge (below); fails for a catalog tool without a case (tracker convention 20); two bridge sessions on one sandbox place two paper orders with the same JSON-RPC id (`two_bridge_sessions_place_two_orders`) |
+| `cargo test --bin tengu engines::codex` | the Codex engine's `codex exec` args (`-c mcp_servers.tengu-tools.*`: the bridge env, forwarded env names, no secret value on the command line), the stripped env, the JSONL events → `StreamEvent`s, the transcript follows them, a stored summary ends the run (stub CLI) |
+| `cargo test --test engine_matrix -- --ignored codex_` | live: the Codex CLI runs the 11 open tool sets through `run-agent` + a real bridge (not run live yet) |
 | `cargo test --features claude_code --test engine_matrix -- --ignored claude_code_` | live: the Claude CLI runs every tool set through `run-agent` + a real bridge (workspace grant, a registered secret back as `[REDACTED]`, the shell skill and the `[[mcp_servers]]` proxy, `compress_and_store` served) and the xm set through `tengu tool turn` on the private `xm_claude` agent (`docs/engine-backends.md` § Engine matrix) |
 | `tengu tool call --agent <a> (--tool <t> --args '<json>' [--call-id <id>] \| --batch) [--transcript <file>]` (hidden) | in-process half of the conformance harness: the executor a `run-agent` child or a decision loop builds (`build_subprocess_tool_executor` + `SanitizedToolExecutor`); call ids mapped like the bridge's (`mcp:<process nonce>:<id>`); `--transcript` = the conversation, built like the bridge's (`call_conversation`); prints `{text, observation, is_error}` per call |
 | `tengu tool turn --agent <a> --goal <text>` (hidden) | one engine turn as `[agents.<a>]` in this process — the `@<agent>` chat path, so a private agent (no `description`, the only kind that may hold exec tools) runs too; its configured scopes as they are (no workspace grant); `claude_code` tools through the real bridge (`TENGU_BRIDGE_AGENT` = that agent); prints `{status, output, tools, metrics}` (the `run-agent` IPC fields). The engine matrix's xm legs (`src/adapters/inbound/cli/tool.rs`) |
@@ -196,7 +198,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | tengu mcp-br
 
 ### Conformance harness (`x-bridge-conformance-test`)
 
-`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 79 cases with default features (80 with `postgres_memory`: the `.gated()` `agentic_memory` case) on 8 threads, < 10 s — `market_history` fetches through the mock into the side's `market.db` (HL captures moved to the current hours; GeckoTerminal) and reads back; `backtest` runs a library move trigger and an inline spec on those bars (run dirs compared file by file), refuses a bad spec (every problem named) and a sandbox without `[backtest]`; `strategy_ranking` runs a ranking date on those bars; `source_evidence` reads a `sources.db` seeded by `tengu sources import` (TED change-notice capture) before and after the change, and is refused without `[sources]`; the `soe_*` tools run on the fixture state root `tests/fixtures/soe/state/` (`soe_view` head / candidates / history / packet + an unknown run, `soe_propose` + its duplicate refused, `soe_challenge` + an unknown target and a closed stage refused, `soe_view` without `[sources]` refused); besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
+`tests/bridge_conformance.rs` runs each case on two identical fixture sandboxes: in-process through the hidden `tengu tool call --batch` (the executor a `run-agent` child or a decision loop builds: `build_subprocess_tool_executor` + `SanitizedToolExecutor`, `src/adapters/inbound/cli/tool.rs`) and through a real `tengu mcp-bridge` (`TENGU_CONFIG`, `TENGU_BRIDGE_AGENT`, `TENGU_BRIDGE_GRANT_WORKSPACE=1`). 82 cases with default features (83 with `postgres_memory`: the `.gated()` `agentic_memory` case) on 8 threads, < 10 s — `a2a` `send` / `list` / `card` against the mock as the remote (`a2a:pinned_host`: a card naming another host is refused before any call); `market_history` fetches through the mock into the side's `market.db` (HL captures moved to the current hours; GeckoTerminal) and reads back; `backtest` runs a library move trigger and an inline spec on those bars (run dirs compared file by file), refuses a bad spec (every problem named) and a sandbox without `[backtest]`; `strategy_ranking` runs a ranking date on those bars; `source_evidence` reads a `sources.db` seeded by `tengu sources import` (TED change-notice capture) before and after the change, and is refused without `[sources]`; the `soe_*` tools run on the fixture state root `tests/fixtures/soe/state/` (`soe_view` head / candidates / history / packet + an unknown run, `soe_propose` + its duplicate refused, `soe_challenge` + an unknown target and a closed stage refused, `soe_view` without `[sources]` refused); besides the catalog: the shell skill `tests/fixtures/skills/matrix_cat` (`.skill(..)`, and refused under `[risk]`), a `[[mcp_servers]]` tool (named, as the engine names it) and one outside the agent's `tools`, the Privy egress / scope gate, `skill_distill` with a conversation (`.transcript(..)`: `--transcript` / `TENGU_BRIDGE_TRANSCRIPT_FILE`, `from_message_index` 1, two fixtures) and without one (refused).
 
 | Must match (both sides normalised) | How |
 |---|---|
@@ -233,6 +235,7 @@ Every tool must work under every engine — `openrouter`, `local` and, through t
 |---|---|
 | The live `local` legs | run on the operator's PC (`TENGU_MATRIX_LOCAL_BASE_URL`), never on the dev Mac; offline mock legs cover the local path meanwhile |
 | The live xlab_rank, sources and soe legs (`strategy_ranking`, `source_evidence`, `soe_*`) | not run yet on any engine; their bridge conformance cases and offline mock legs pass (`docs/engine-backends.md` § Engine matrix) |
+| The 11 live `codex_*` legs (open sets, `codex_a2a` included) | not run yet; a `tengu tool turn` on a codex agent passed through the bridge (2026-10-10) |
 | `agentic_memory` live | needs `--features postgres_memory` + Postgres (`TENGU_MEMORY_DATABASE_URL`) |
 | Privy signing, Solana `send` | never run (operator rule): the refusal and `simulate` paths are what the matrix runs |
 
@@ -242,7 +245,7 @@ Every tool must work under every engine — `openrouter`, `local` and, through t
 - Memory tools (`memory_ingest`, `memory_search`, `persistent_store`) need `OPENROUTER_API_KEY` for embeddings; with a config they follow `[memory]` (off → not registered, as in-process), standalone they use a disk `DiskVectorStore` under `<workspace>/memory`
 - `agentic_memory` needs `TENGU_MEMORY_DATABASE_URL` per call; the bridge inherits it from the parent env
 - `tengu eval` / `tengu skill evolve`: a `claude_code` eval agent gets the executor's tool list as its bridge list (`bootstrap::tools::bridge_inputs`, as webhooks) and its bridge loads the expanded eval config (`TENGU_CONFIG` = a temp copy, `eval.rs::bridge_config_file`), so tools run as that eval agent. The bridge loads it strictly (`Config::load`), so the eval config must pass validation (e.g. `workspace_tools` only opt-in names) — else the row fails naming the field. Row `stubs` never reach the bridge (no stub layer: a stub hook in the production bridge would fake results wherever its env leaked), so a stubbed row on a `claude_code` agent is refused instead of calling the real tools. Every eval / evolve executor is wrapped in `SanitizedToolExecutor` with `process_secret_registry(None)`
-- The engine passes `--strict-mcp-config` on every run (`x-claude-code-hardening`): the bridge is the Claude CLI's only MCP server — the user's own / plugin MCP servers are not loaded
+- The engine passes `--strict-mcp-config` on every run (`x-claude-code-hardening`): the bridge is the Claude CLI's only MCP server — the user's own / plugin MCP servers are not loaded. Codex: `--ignore-user-config` (no `~/.codex/config.toml` MCP servers), the bridge registered as `required = true` with every call pre-approved (`default_tools_approval_mode = "approve"`; tengu scopes gate them in the bridge)
 - Profile `none` (the hardened one) also passes `--setting-sources "" --disable-slash-commands --settings {"autoMemoryEnabled":false,"disableAllHooks":true}`: no settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md or auto-memory, and the `--mcp-config` bridge still loads (CLI 2.1.286, subscription OAuth — [[engine-backends#Claude Code]] § Safety Policy). `--safe-mode` would drop the bridge with the rest
 
 ## Related

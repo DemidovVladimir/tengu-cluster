@@ -53,14 +53,14 @@ Browser check 2026-10-10 (headless Chrome on the real server — the Chrome exte
 | Env / `.env` | the shell or `.env` | `export NAME=<value>` |
 | Cloudflare seal proxy | a Worker secret; tengu gets a route + session | `npx wrangler secret put NAME` |
 
-The Cloudflare store needs a build with `[keys]` (PR #50). The builder probes it (`config::builder::keys_supported`), so it switches on once #50 merges, with no builder change. Checked on #50 + #51 merged in: the composed `[keys]` loads.
+The Cloudflare store and the seal-proxy card are always offered. A secret card on that store writes `[keys.env]` + `strip` and must be wired to the seal-proxy card, which writes `[keys] proxy` / `client` / `agent_socket` (`docs/sealed-keys-2026-10-09.md`). The composed `[keys]` passes `Config::load`.
 
 ## Rules
 
 | Rule | Where |
 |---|---|
 | Only sandboxes made by `tengu sandbox new` (with `builder.json`) are editable; hand-written ones are view-only | `application/builder.rs::why_not` |
-| `[generation]`-bound (W1) or hardened (`[risk]`, `[paper]`, `[soe]`, `[xmarket]`, a Solana signer) = view-only | `config/builder::editable` |
+| `[generation]`-bound (W1) or hardened (`[risk]`, `[paper]`, `[soe]`, `[xmarket]`, a Solana signer = `[solana] privy_wallet_id`) = view-only | `config/builder::editable` |
 | Finalise refused while the sandbox's `tengu run` heartbeat is fresh (409) or the preview is stale (409, sha256) | `Builder::finalise` |
 | Owned sections rewritten; every other top-level key of `config.toml` kept as it is | `compile::OWNED` |
 | Never offered: `run_command`, wallet signing, Solana sends, exec tools | `palette::offered` |

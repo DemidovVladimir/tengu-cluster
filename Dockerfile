@@ -3,14 +3,16 @@ FROM rust:1.91-bookworm AS builder
 
 WORKDIR /usr/src/tengu
 
-# Copy manifests first for layer caching
+# Copy manifests first for layer caching; crates/ = the path dependency
+# tengu-seal (Cargo.toml) — needed by the dependency pre-build and the real one
 COPY Cargo.toml Cargo.lock ./
+COPY crates crates
 
 # Create stub main.rs for dependency caching
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 
 # Pre-build dependencies (cached unless Cargo.toml changes)
-# The Cargo.toml default features (openrouter, telegram, studio) are always on:
+# The Cargo.toml default features (openrouter, telegram, studio, codex, a2a) are always on:
 # no --no-default-features here, so FEATURES only adds to them.
 # Optional extras: postgres_memory, claude_code, webhooks (no qdrant feature exists)
 ARG FEATURES="openrouter,telegram"

@@ -204,7 +204,7 @@
     <li><span><b>Fail-closed server.</b> No <code>token_env</code> and no loopback <code>allow_unauthenticated</code>: the config does not load. An unset token stops the start.</span></li>
     <li><span><b>No private agents.</b> Only agents with a <code>description</code> can be served; tasks of one endpoint are invisible to another.</span></li>
     <li><span><b>Redacted out.</b> Answers and errors pass the secret registry before they leave.</span></li>
-    <li><span><b>Same tool on every engine.</b> OpenRouter, local and Claude Code (through the MCP bridge) run the same code; <code>bridge_conformance</code> and the engine matrix prove it.</span></li>
+    <li><span><b>Same tool on every engine.</b> OpenRouter, local, Claude Code and Codex (the last two through the MCP bridge) run the same code; <code>bridge_conformance</code> and the engine matrix (one <code>a2a</code> leg per engine) prove it.</span></li>
   </ul>
 </section>
 
@@ -212,18 +212,20 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Serve, then call</h2>
-    <p>Two terminals on one sandbox with an <code>[a2a.server]</code> and a remote that points at it. Example ids and text.</p>
+    <p>Two terminals on the shipped <code>a2a-lab</code> sandbox: it serves its planner and <code>helper</code>, and its remote <code>self</code> points back at <code>helper</code>. Terminal 2 needs the same <code>TENGU_A2A_LAB_TOKEN</code> value. Example ids and text.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_A2A_TOKEN=$(openssl rand -hex 24) tengu a2a serve --sandbox lab</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>export TENGU_A2A_LAB_TOKEN=$(openssl rand -hex 24)</span>
+<span class="ln cmd"><span class="p">$ </span>tengu a2a serve --sandbox a2a-lab</span>
 <span class="ln">tengu a2a serve: planner → http://127.0.0.1:8710/a2a, helper → http://127.0.0.1:8710/a2a/agents/helper (card: http://127.0.0.1:8710/.well-known/agent-card.json)</span>
-<span class="ln cmd"><span class="p">$ </span>tengu a2a card --sandbox lab --remote helper</span>
-<span class="ln">a2a helper: helper v0.1.0</span>
+<span class="ln cmd"><span class="p">$ </span>tengu a2a card --sandbox a2a-lab --remote self</span>
+<span class="ln">a2a self: helper v0.1.0</span>
+<span class="ln">Answers short factual and arithmetic questions directly, in one sentence.</span>
 <span class="ln">interface: JsonRpc 1.0 at http://127.0.0.1:8710/a2a/agents/helper</span>
-<span class="ln cmd"><span class="p">$ </span>tengu a2a send --sandbox lab --remote helper "What is 2 + 2?"</span>
-<span class="ln">a2a helper: task 3f2c7a10-5d4e-4b8a-9c11-0e6f2b7d9a42 TASK_STATE_COMPLETED context 8b1e4c2d-7f30-4a9e-b5d6-1c2a3e4f5a6b</span>
+<span class="ln cmd"><span class="p">$ </span>tengu a2a send --sandbox a2a-lab --remote self "What is 2 + 2?"</span>
+<span class="ln">a2a self: task 3f2c7a10-5d4e-4b8a-9c11-0e6f2b7d9a42 TASK_STATE_COMPLETED context 8b1e4c2d-7f30-4a9e-b5d6-1c2a3e4f5a6b</span>
 <span class="ln">artifact response 6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d:</span>
-<span class="ln"><span class="hl">4</span></span></pre>
+<span class="ln"><span class="hl">2 + 2 is 4.</span></span></pre>
   </div>
   <p class="note">The full setup and every key: <code>docs/a2a-2026-10-10.md</code>. The same flow runs in <code>tests/a2a_e2e.rs</code>.</p>
 </section>
@@ -241,6 +243,7 @@
         <tr><td><code>src/config/a2a.rs</code></td><td><code>[a2a.remotes.&lt;name&gt;]</code>, <code>[a2a.server]</code>, load rules</td></tr>
         <tr><td><code>src/adapters/outbound/a2a/mod.rs</code></td><td>the client: card, host pin, calls, polling, audit</td></tr>
         <tr><td><code>src/adapters/outbound/tools/a2a/mod.rs</code></td><td>the <code>a2a</code> tool</td></tr>
+        <tr><td><code>src/ports/a2a.rs</code></td><td><code>A2aRunner</code>: who answers a served message (planner or one agent)</td></tr>
         <tr><td><code>src/application/a2a/</code></td><td>the server's methods and task store</td></tr>
         <tr><td><code>src/bootstrap/a2a.rs</code></td><td>who answers (planner or agent turn), the cards</td></tr>
         <tr><td><code>src/adapters/inbound/a2a.rs</code> · <code>cli/a2a.rs</code></td><td>HTTP routes, SSE, auth · <code>tengu a2a</code></td></tr>
@@ -250,7 +253,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

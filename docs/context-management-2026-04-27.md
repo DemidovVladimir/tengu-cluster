@@ -38,7 +38,7 @@ prior-round tool results to first-line-only mid-loop).
 │ Layer 1  Per-flow lifecycle      application/chat/flow.rs, chat/service.rs               │
 │ Layer 2  Per-turn assembly       application/chat/prompt_budget.rs, service.rs           │
 │ Layer 3  Inner tool loop         application/chat/tool_loop.rs                           │
-│ Layer 4  MCP bridge              outbound/engines/claude_code.rs, inbound/mcp_bridge.rs  │
+│ Layer 4  MCP bridge              engines/{claude_code,codex}.rs, inbound/mcp_bridge.rs   │
 │ Layer 5  Subagent IPC            outbound/subprocess_runner.rs, inbound/cli/run_agent.rs │
 │ Layer 6  Open Brain / Wiki state orchestrator/shared_files.rs, tools/agentic_memory/     │
 │ Layer 7  File chunking           outbound/tools/memory/persistent_store.rs               │
@@ -173,7 +173,7 @@ more (`MAX_HISTORY_MESSAGES = 20`).
 
 ### 8. Memory recall block (+ #9, #10)
 
-Two sides, different knobs (`[memory]`, `MemoryConfig`, `config/mod.rs:956`):
+Two sides, different knobs (`[memory]`, `MemoryConfig`, `config/mod.rs:1042`):
 
 | Side | field | default | what |
 |---|---|---|---|
@@ -223,7 +223,7 @@ This is set inside `bootstrap/orchestrator.rs::run_turn_inner` (`:253`,
 ### 12. Skill body assembly (+ #13)
 
 `application/skills/registry.rs::build_system_prompt_with_tools` (`:1253-1360`).
-Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1066`):
+Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1152`):
 
 | knob | default | what |
 |---|---|---|
@@ -289,8 +289,8 @@ auto-continue.
 ### 17. `max_tool_rounds` hard stop (default **70**)
 
 After 70 rounds the loop exits and forces one final `tools=[]` engine
-turn (`application/chat/tool_loop.rs:231`). Claude Code counts tool calls
-instead and kills the CLI past the cap (`claude_code.rs`).
+turn (`application/chat/tool_loop.rs:231`). Claude Code and Codex count tool
+calls instead and kill the CLI past the cap (`claude_code.rs`, `codex.rs`).
 
 ### 18. `token_budget` mid-loop early-exit (`application/chat/tool_loop.rs:114`)
 
@@ -303,20 +303,20 @@ own flow budget (#5).
 
 ## Layer 4 — MCP bridge
 
-`adapters/outbound/engines/claude_code.rs` (sets it) · `adapters/inbound/mcp_bridge.rs` (cuts).
+`adapters/outbound/engines/{claude_code,codex}.rs` (set it, through `outbound/bridge_env.rs`) · `adapters/inbound/mcp_bridge.rs` (cuts).
 
-### 19. `max_mcp_result_chars` (`config/mod.rs:598` → `claude_code.rs:223` → `mcp_bridge.rs:634`)
+### 19. `max_mcp_result_chars` (`config/mod.rs:641` → `claude_code.rs:835` / `codex.rs:624` → `bridge_env.rs:112` → `mcp_bridge.rs:252`, cut at `:639`)
 
-Caps tool results returned to the Claude Code CLI through the MCP
+Caps tool results returned to the Claude Code and Codex CLIs through the MCP
 bridge. Default **50 000 chars / ~12.5K tokens**. The knob is
 `[agents.<name>.limits] max_mcp_result_chars`; the engine writes it into the
-bridge's env as `TENGU_BRIDGE_MAX_RESULT_CHARS` (`build_mcp_config_json`), and
+bridge's env as `TENGU_BRIDGE_MAX_RESULT_CHARS` (`bridge_env::bridge_env`: Claude Code's `--mcp-config`, Codex's `-c mcp_servers.tengu-tools.env.*`), and
 `tengu mcp-bridge` cuts each result there (`truncate_mcp_result`, same
 `[truncated — showing X of Y chars]` footer; 50 000 when the env is unset).
 
-This exists because the **Claude Code CLI engine has no in-loop
+This exists because the **Claude Code and Codex CLI engines have no in-loop
 compaction at all**. Without this cap, bridge-routed tool results would
-leak unbounded context into Claude. Layer 3's `truncate_tool_result` and
+leak unbounded context into the CLI's model. Layer 3's `truncate_tool_result` and
 `compact_tool_result` only run on the in-process path (OpenRouter, local).
 
 ---
@@ -350,9 +350,9 @@ with embeddings when available and text-only fallback otherwise
 
 | Path | Trigger |
 |---|---|
-| **A — Out-of-band** | OpenRouter / local subagents — `run_agent.rs:497` intercepts the call before the executor runs (answers `stored`), then ends the loop after that round |
-| **B — Bridge** | Claude Code subagents — the step's bridge (`mcp_bridge.rs::StepSummary`) writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary (`:584`) |
-| **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` (`:612`) |
+| **A — Out-of-band** | OpenRouter / local subagents — `run_agent.rs:534` intercepts the call before the executor runs (answers `stored`), then ends the loop after that round |
+| **B — Bridge** | Claude Code and Codex subagents — the step's bridge (`mcp_bridge.rs::StepSummary`) writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary (`:619`) |
+| **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` (`:648`) |
 
 **Read side** — cross-plan recall: `RagPlanner::replan` (legacy planner type
 name) surfaces past step summaries to the planner LLM. With
@@ -362,7 +362,7 @@ Without that feature, planner memory lanes are empty. Capped by
 `cross_plan_top_k` (default 5; `0` = off). `plan()` reads this session's
 step outputs too when `within_session_output_top_k > 0`.
 
-### 22. Phase 5c middle-ground protocol (`adapters/inbound/cli/run_agent.rs:642`)
+### 22. Phase 5c middle-ground protocol (`adapters/inbound/cli/run_agent.rs:678`)
 
 | compress_called? | final_text non-empty? | Verdict |
 |---|---|---|
@@ -377,7 +377,7 @@ step outputs too when `within_session_output_top_k > 0`.
 `limits.max_tool_rounds` (the serde default 20 only applies to payloads
 without the field). Hard cap on the subagent's mini-loop; hits the
 `compress_and_store` warn path on exhaust. It counts engine turns on
-OpenRouter / local, but **tool calls** of the one CLI run on Claude Code
+OpenRouter / local, but **tool calls** of the one CLI run on Claude Code and Codex
 (`EngineContext.max_tool_rounds`: the CLI is killed past it). Wall clock per step:
 `limits.step_timeout_secs` (default **600**), enforced by `run_with_timeout` (`:191`).
 
@@ -524,12 +524,12 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | application/chat/tool_loop.rs:406 | 300 000 chars (local: window / 8 × 4) |
 | 15 | 3 | `compact_tool_result` | application/chat/tool_loop.rs:458 (caller :226) | 200 chars |
 | 16 | 3 | `[OUTPUT_TRUNCATED]` continue | application/chat/tool_loop.rs:135 | sentinel |
-| 17 | 3 | `max_tool_rounds` | config/mod.rs:579 · tool_loop.rs:231 | 70 |
+| 17 | 3 | `max_tool_rounds` | config/mod.rs:622 · tool_loop.rs:231 | 70 |
 | 18 | 3 | `token_budget` early-exit | application/chat/tool_loop.rs:114 | `None` on every caller |
-| 19 | 4 | `max_mcp_result_chars` | config/mod.rs:598 · claude_code.rs:223 · inbound/mcp_bridge.rs:634 | 50 000 |
+| 19 | 4 | `max_mcp_result_chars` | config/mod.rs:641 · claude_code.rs:835 · codex.rs:624 · bridge_env.rs:112 · inbound/mcp_bridge.rs:252 | 50 000 |
 | 20 | 5 | subprocess fresh ctx | subprocess_runner.rs:26 | by design |
-| 21 | 5 | `compress_and_store` (+ cross-plan read) | outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs:497 (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge) | implicit append · `cross_plan_top_k` 5 |
-| 22 | 5 | Phase 5c protocol | inbound/cli/run_agent.rs:642 | three rows |
+| 21 | 5 | `compress_and_store` (+ cross-plan read) | outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs:534 (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge) | implicit append · `cross_plan_top_k` 5 |
+| 22 | 5 | Phase 5c protocol | inbound/cli/run_agent.rs:678 | three rows |
 | 23 | 5 | subprocess `max_turns` / step wall clock | subprocess_runner.rs:43 · `run_step` :355 | `limits.max_tool_rounds` 70 / `step_timeout_secs` 600 s |
 | 24 | 6 | Open Brain memory | outbound/tools/agentic_memory | Postgres |
 | 25 | 6 | LLM Wiki + planner files | `.tengu/agentic-memory/wiki`, `TENGU_PLANNER_REGISTRY.md` | Markdown/root files |
@@ -561,9 +561,9 @@ Comparison points for future sessions:
   Only the `compress_and_store` summary survives. With `postgres_memory`,
   `replan` reads those summaries for cross-plan recall and `plan` reads them
   within-session when `within_session_output_top_k > 0`.
-- **Claude Code engine has zero in-loop compaction.** Layer 4's
-  `max_mcp_result_chars` is the only governor on that path. If a Claude
-  Code subagent fans out a lot of tool calls, Claude's own context
+- **Claude Code and Codex engines have zero in-loop compaction.** Layer 4's
+  `max_mcp_result_chars` is the only governor on that path. If a CLI
+  subagent fans out a lot of tool calls, the CLI model's own context
   fills up — the harness can only cap individual results, not compact
   prior ones.
 - **No persistent metrics store.** Layer 8 records are tracing-only +

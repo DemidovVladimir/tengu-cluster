@@ -62,7 +62,7 @@
     <li>JSON-RPC 2.0 on stdio · <b>2024-11-05</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
-    <li><span class="chip heart"><span class="k">心</span> heart</span> Claude Code</li>
+    <li><span class="chip heart"><span class="k">心</span> heart</span> Claude Code (or Codex)</li>
     <li><span class="chip hands"><span class="k">手</span> hands</span> tools</li>
     <li><span class="chip guard"><span class="k">守</span> guard</span> agent, scopes</li>
     <li><span class="chip data">data</span> files, config</li>
@@ -325,6 +325,7 @@
     <li><span><b>Bounded results.</b> At most <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code> (default 50 000) plus a <code>[truncated — showing …]</code> footer.</span></li>
     <li><span><b>No replayed orders.</b> A fresh nonce per bridge process: two sessions with the same JSON-RPC ids place two orders (tested).</span></li>
     <li><span><b>The parent's egress.</b> The bridge installs <code>TENGU_EGRESS</code> from the engine, so proxied MCP calls follow the same policy.</span></li>
+    <li><span><b>The run's seal-proxy session.</b> With <code>[keys]</code> in its config, the bridge reuses the session it inherits and strips local key copies again, as a <code>run-agent</code> child does (<a href="sealed-keys.html">sealed keys</a>).</span></li>
     <li><span><b>Proven equal.</b> <code>tests/bridge_conformance.rs</code> runs every catalog tool in-process and through a real bridge, then compares text, files and upstream requests.</span></li>
   </ul>
 </section>
@@ -358,6 +359,7 @@
         <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td>stdio loop, agent resolution, executor, call ids, <code>compress_and_store</code></td></tr>
         <tr><td><code>src/adapters/outbound/bridge_env.rs</code></td><td>the env contract between engine and bridge</td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>writes <code>--mcp-config</code>, transcript, <code>ToolRan</code>, stop after a stored summary</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td>the same bridge for Codex: <code>-c mcp_servers.tengu-tools.*</code>, env names forwarded with <code>env_vars</code></td></tr>
         <tr><td><code>src/adapters/outbound/mcp_client/</code></td><td><code>[[mcp_servers]]</code>: stdio / http client, <code>{server}__{tool}</code> proxies, lint drop</td></tr>
         <tr><td><code>src/adapters/outbound/tools/schema_lint.rs</code></td><td>the schema subset every engine accepts</td></tr>
         <tr><td><code>src/adapters/outbound/secrets.rs</code></td><td><code>SanitizedToolExecutor</code></td></tr>
@@ -369,7 +371,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

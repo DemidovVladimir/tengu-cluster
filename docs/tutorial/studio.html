@@ -43,7 +43,7 @@
     <li>graph in <b>8</b> columns</li>
     <li><b>9</b> event families</li>
     <li>follow: <b>250 ms</b> poll · <b>256</b> buffered</li>
-    <li>server: <b>loopback</b> · POST = control only, body ≤ <b>1 MiB</b></li>
+    <li>server: <b>loopback</b> · POST = control (+ builder with <code>--allow-edit</code>), body ≤ <b>1 MiB</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip heart"><span class="k">心</span> heart</span> Architect / map</li>
@@ -279,21 +279,21 @@
       </tbody>
     </table>
   </div>
-  <p class="note">Not traced yet: a typed scope refusal (today a <code>tool.failed</code> with the refusal text); a <code>claude_code</code> step's tool calls (they run in its MCP bridge process); the tool calls of a <code>run-agent</code> child that ends without its output (an engine error mid-loop, a timeout kill); a step aborted with its turn (no outcome event). Who records: <code>tengu run</code>, <code>tengu decide</code>, <code>tengu webhooks</code>, and, with <code>[orchestrator]</code>, <code>tengu chat</code>, <code>tengu telegram</code> and each <code>tengu eval</code> row.</p>
+  <p class="note">Not traced yet: a typed scope refusal (today a <code>tool.failed</code> with the refusal text); a <code>claude_code</code> or <code>codex</code> step's tool calls (they run in its MCP bridge process); the tool calls of a <code>run-agent</code> child that ends without its output (an engine error mid-loop, a timeout kill); a step aborted with its turn (no outcome event). Who records: <code>tengu run</code>, <code>tengu decide</code>, <code>tengu webhooks</code>, and, with <code>[orchestrator]</code>, <code>tengu chat</code>, <code>tengu telegram</code> and each <code>tengu eval</code> row.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-server">
   <div class="sec-head">
     <span class="kicker">Loopback only</span>
     <h2 id="s-server">The Studio server</h2>
-    <p><code>tengu studio --sandbox &lt;s&gt;</code> (in the default build: feature <code>studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code>.</p>
+    <p><code>tengu studio --sandbox &lt;s&gt;</code> (in the default build: feature <code>studio</code>) serves the page in <code>web/studio/</code> and a JSON / SSE API over what Rust already computed. The page draws; it decides nothing. It prints one URL on stdout, with a fresh token after <code>#t=</code> (with <code>--allow-edit</code> a second one, <code>Builder: …/builder#t=&lt;token&gt;</code>).</p>
   </div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Route</th><th>Serves</th></tr></thead>
       <tbody>
         <tr><td><code>/</code> · <code>/assets/&lt;file&gt;</code></td><td>the page, compiled into the binary (<code>include_str!</code>); nothing loads from the network</td></tr>
-        <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only</code> / <code>control_enabled</code>, evidence paths, the colour legend</td></tr>
+        <tr><td><code>/api/v1/meta</code></td><td>sandbox, <code>config_hash</code>, schema versions, <code>read_only</code> / <code>control_enabled</code>, <code>builder</code>, evidence paths, the colour legend</td></tr>
         <tr><td><code>/api/v1/graph[?map=&lt;sha256&gt;]</code></td><td>the graph above; with <code>map</code>, a map <code>tengu decide --map</code> kept, re-hashed and re-applied to this config</td></tr>
         <tr><td><code>/api/v1/health</code></td><td>the heartbeat and the <code>tengu doctor --live</code> checks (one function, <code>runtime::read_live</code>)</td></tr>
         <tr><td><code>/api/v1/runs</code></td><td>every recorded run, the heartbeat holder, the live run, each run's state (live, closed, open) and whether its config hash is the current one</td></tr>
@@ -304,6 +304,8 @@
         <tr><td><code>/api/v1/live/stream</code></td><td>SSE: the run of the runtime holding the lease; <code>event: run</code> on attach and on every restart</td></tr>
         <tr><td><code>/api/v1/control</code></td><td>the control state, its tone, each button's verdict (ok, or why not), the runtime Studio runs, the heartbeat seen, the scenarios and loops, the last verdict</td></tr>
         <tr><td>POST <code>/api/v1/control/play</code> · <code>stop</code> · <code>event</code></td><td>Play, Stop, send a scenario (next section). Only with control on; otherwise 403 with the reason</td></tr>
+        <tr><td><code>/builder</code> · <code>/api/v1/builder</code> · PUT <code>…/blueprint</code> · POST <code>…/preview</code> · <code>…/finalise</code></td><td>the <a href="builder.html">sandbox builder</a>: only with <code>--allow-edit</code>, else 404</td></tr>
+        <tr><td><code>/favicon.ico</code></td><td>204, no icon</td></tr>
       </tbody>
     </table>
   </div>
@@ -394,7 +396,7 @@
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
     <li><span><b>No path from input.</b> A run id must be a lowercase UUID and a sandbox name a plain name before any file is opened.</span></li>
     <li><span><b>Fail-soft.</b> If the trace dir cannot be written, the run goes on without a trace and logs a warning.</span></li>
-    <li><span><b>Only the control routes change anything.</b> Every other route is GET / HEAD (anything else is 405). Any request but GET / HEAD — on any path, however it is spelled — passes the guard only with the token header, its own <code>Origin</code> and <code>Sec-Fetch-Site: same-origin</code>; a <code>Host</code> that is not this server is 421 first. The page decides nothing: tones, lit edges, grey nodes, run states, the health verdict and which button may act all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
+    <li><span><b>Only the control routes change anything</b>, and with <code>--allow-edit</code> the builder's PUT / POST (<code>builder.json</code>, <code>config.toml</code>). Every other route is GET / HEAD (anything else is 405). Any request but GET / HEAD — on any path, however it is spelled — passes the guard only with the token header, its own <code>Origin</code> and <code>Sec-Fetch-Site: same-origin</code>; a <code>Host</code> that is not this server is 421 first. The page decides nothing: tones, lit edges, grey nodes, run states, the health verdict and which button may act all arrive computed. Tests run the real router on a <code>127.0.0.1:0</code> listener.</span></li>
     <li><span><b>One runtime per sandbox.</b> Play is <code>tengu run</code>'s own start, so the lease refuses a second runner either way: a CLI <code>tengu run</code> while Studio runs one, a Play while the CLI runs one (Studio then attaches read-only). Stop never touches a runtime Studio did not start.</span></li>
     <li><span><b>No orphan.</b> The runtime lives in the Studio process. SIGINT / SIGTERM drain it first (no new Play, the Stop path, then <code>studio.stopped</code>); a killed Studio takes it along and its lease frees after 30 s.</span></li>
     <li><span><b>A click never pretends.</b> Every Play, Stop and event is a <code>studio.control</code> request and its verdict in Studio's recording; a failed start is <code>failed</code> with the error, a held lease <code>refused</code> with the holder.</span></li>
@@ -508,7 +510,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

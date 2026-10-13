@@ -384,7 +384,7 @@ wallets   = [<span class="s">"&lt;the Privy wallet's full address&gt;"</span>]
     <li><span><b>No mode is simulate.</b> Simulate never calls the signer and never sends.</span></li>
     <li><span><b>Send needs the full wallet in this agent's own scope.</b> <code>check_wallet</code> has no wildcard; a grant in <code>[default_scopes]</code> fails the load.</span></li>
     <li><span><b>Only private agents sign.</b> A grant on an agent with a <code>description</code>, the default agent or a webhook agent fails the load.</span></li>
-    <li><span><b>A signer hardens the sandbox.</b> No <code>[[mcp_servers]]</code>, no shell scopes, <code>claude_code</code> only with built-ins off, state and config outside every fs root.</span></li>
+    <li><span><b>A signer hardens the sandbox.</b> No <code>[[mcp_servers]]</code>, no shell scopes, <code>claude_code</code> only with built-ins off, no <code>codex</code> agent, state and config outside every fs root.</span></li>
     <li><span><b>No wallet key on this machine.</b> <code>privy_wallet_id</code> needs <code>[keys.env] PRIVY_API_URL</code> on a proxy route and <code>PRIVY_APP_SECRET</code> stripped; the signer calls Privy only through the proxy; no scope may read the session.</span></li>
     <li><span><b>Privy's answer is checked.</b> The message must come back unchanged and the wallet's signature must verify (ed25519); else nothing is signed or sent.</span></li>
     <li><span><b>One sender per wallet</b> across every process of the install, through one SQL lease.</span></li>
@@ -440,7 +440,7 @@ wallets   = [<span class="s">"&lt;the Privy wallet's full address&gt;"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

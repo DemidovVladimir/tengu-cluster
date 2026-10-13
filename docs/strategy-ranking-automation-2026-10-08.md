@@ -1,7 +1,7 @@
 # Scheduled strategy ranking — audit, plan and as-built state (2026-10-08)
 
-> **State (main, 2026-10-09):** SR-0 to SR-8 are built and tested, merged as #40 (squash `117b2595b0864066502d156aca42c7180494d67a`, 2026-10-08). Both contracts are committed **unsealed**, so the publisher refuses every real ranking until the operator seals one (gate G-SR1, § Operator decisions). Nothing has run on `~/.tengu/state/xlab`.
-> **Local checkout:** not pulled until weekend #2 stops (Mon 2026-10-12, gate G-WKND): the frozen weekend binary refuses the new `lineage/rankings/` dir.
+> **State (main, 2026-10-13):** SR-0 to SR-8 are built and tested, merged as #40 (squash `117b2595b0864066502d156aca42c7180494d67a`, 2026-10-08). Both contracts are committed **unsealed**, so the publisher refuses every real ranking until the operator seals one (gate G-SR1, § Operator decisions). Nothing has run on `~/.tengu/state/xlab`.
+> **Local checkout:** pulled 2026-10-12 after the weekend #2 stop (gate G-WKND done); the frozen weekend binary that refused `lineage/rankings/` no longer runs.
 > **Tutorial:** [`tutorial/strategy-ranking.html`](tutorial/strategy-ranking.html).
 
 ## Decision
@@ -117,6 +117,6 @@
 
 ## Sequence
 
-`SR-0 → SR-1 (drafted) → SR-2/SR-3 → SR-4 → SR-5 → SR-6 → SR-7/SR-8` ✅ → merged (#40) ✅ → **G-SR1** operator seal + **G-WKND** (local checkout pulled after Mon 2026-10-12), in either order → `tengu run --sandbox xlab-w2`.
+`SR-0 → SR-1 (drafted) → SR-2/SR-3 → SR-4 → SR-5 → SR-6 → SR-7/SR-8` ✅ → merged (#40) ✅ → G-WKND ✅ (local checkout pulled 2026-10-12) → **G-SR1** operator seal → `tengu run --sandbox xlab-w2`.
 
 The SR-1 stop holds: the rating and comparability policy shape research conclusions, so the operator seals the contract before any ranked outcome is observed. Everything above ran on test fixtures only.

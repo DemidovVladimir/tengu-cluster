@@ -238,12 +238,12 @@
   <div class="grid">
     <div class="card data kind"><span class="n">families/ · 15</span><h3>Family</h3><p>One idea: <code>hypothesis</code>, <code>role</code> (primary, negative control, placebo), <code>status</code>, <code>[prior_search]</code>. Links <code>preceded_by</code> and <code>controls</code>.</p></div>
     <div class="card data kind"><span class="n">variants/ · 49</span><h3>Variant</h3><p><code>family</code>, <code>parent</code> (or <code>ROOT</code>), <code>[[changed]]</code> dims, <code>preregistered</code>, exactly one <code>[spec]</code> shape.</p></div>
-    <div class="card data kind"><span class="n">experiments/ · 37</span><h3>Experiment</h3><p><code>kind</code>, <code>[[windows]]</code>, <code>[[results]]</code> with <code>evidence</code> and <code>extract</code>, <code>[verdict]</code>, <code>validity</code>. Links family, variant, generation, capabilities, incidents.</p></div>
+    <div class="card data kind"><span class="n">experiments/ · 38</span><h3>Experiment</h3><p><code>kind</code>, <code>[[windows]]</code>, <code>[[results]]</code> with <code>evidence</code> and <code>extract</code>, <code>[verdict]</code>, <code>validity</code>. Links family, variant, generation, capabilities, incidents.</p></div>
     <div class="card data kind"><span class="n">episodes/ · 3</span><h3>Episode</h3><p>Context, information with <code>available_at</code>, alternatives (one chosen), decision, action, outcome, <code>[quality]</code>, a lesson.</p></div>
-    <div class="card data kind"><span class="n">incidents/ · 8</span><h3>Incident</h3><p><code>class</code>, start and end, <code>strategy_impact</code>, <code>[[data_impact]]</code>: each gap <code>MISSING</code>, <code>BACKFILLED</code> or <code>LIVE_RECORDED</code>.</p></div>
+    <div class="card data kind"><span class="n">incidents/ · 11</span><h3>Incident</h3><p><code>class</code>, start and end, <code>strategy_impact</code>, <code>[[data_impact]]</code>: each gap <code>MISSING</code>, <code>BACKFILLED</code> or <code>LIVE_RECORDED</code>.</p></div>
     <div class="card hands kind"><span class="n">capabilities/ · 22</span><h3>Capability</h3><p>Class, <code>version</code>, permission, lifecycle, a <code>contract</code> pin target, <code>bindings</code>: <code>tool:&lt;name&gt;</code> or <code>strategy_kind:&lt;kind&gt;</code>. W1 lists 17; SOE-G0 lists the three <code>intel.soe_*</code> and <code>intel.source_evidence</code>; <code>intel.strategy_ranking</code> is a <code>CANDIDATE</code> no generation lists.</p></div>
     <div class="card guard kind"><span class="n">generations/ · 2</span><h3>Generation</h3><p>W1 (frozen) and SOE-G0 (candidate, unlocked): <code>status</code>, <code>sandboxes</code>, <code>[[capabilities]] id, version</code>, decision and research policy, models, <code>[[pins]]</code>.</p></div>
-    <div class="card data kind"><span class="n">evidence/ · 1</span><h3>Evidence</h3><p>A read-only vault snapshot: items with sha256. See <a href="evidence.html">Forward evidence</a>.</p></div>
+    <div class="card data kind"><span class="n">evidence/ · 3</span><h3>Evidence</h3><p>A read-only vault snapshot: items with sha256. See <a href="evidence.html">Forward evidence</a>.</p></div>
     <div class="card guard kind"><span class="n">rankings/ · 2</span><h3>Ranking contract</h3><p>A strategy ranking's policy: <code>strategies</code>, <code>cohort</code>, <code>[eligibility]</code>, <code>[rating] order</code>, cutoff, tz. Both are drafts: unsealed is a Warn. See <a href="strategy-ranking.html">Strategy ranking</a>.</p></div>
   </div>
   <p class="note"><b>Values.</b> A missing fact is the string <code>"UNKNOWN"</code>, never a guess. Times are quoted UTC: an instant <code>"2026-10-04T22:00:00Z"</code> or a day <code>"2026-09-30"</code>. Evidence is a locator: <code>repo:</code>, <code>run:</code>, <code>vault:</code>, <code>state:</code>, <code>git:</code> (40 hex), <code>record:&lt;kind&gt;/&lt;id&gt;</code> or <code>url:</code>. <code>locks.toml</code> holds one <code>[[frozen]]</code> row (W1) and one <code>[[sealed]]</code> row (<code>experiment:fwd.rule_w.2026-10-09</code>).</p>
@@ -512,7 +512,7 @@ ERROR  seal_mismatch  experiment/&lt;id&gt;  <span class="h">preregistered, but 
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

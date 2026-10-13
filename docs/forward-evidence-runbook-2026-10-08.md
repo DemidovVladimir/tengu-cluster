@@ -34,5 +34,6 @@ Binary: `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` = main `acdef66fc45252
 | Grade | `lineage/experiments/fwd.rule_w.2026-10-09.graded.toml`: capped +203.98 bps (n 4), shadow +108.34 (n 75), verdict PENDING, M3 tally 2 / 12 |
 | Vaults | `w1-2026-10-12` (step 1) · `w1-2026-10-12-bars` (step 4's `market.db` + the pmset log) |
 | Step 3 as run | the command above reads every `mkt_ctx/1` name (134) and the sleep-gap funding hour is MISSING; add `--fill-book next --market-db <bars vault>/xlab/market.db --instruments <the 75 universe ids>` (as in `docs/w1-p0-weekend-2026-10-06.md`) |
+| Result rows | the `ledger:<account>` extractor grades the whole account and the weekend ledger is cumulative: `extract` only the cumulative rows (n 8 / 149 after #2); weekend-only rows carry no `extract` (`fwd.rule_w.2026-10-09.graded`, fixed 2026-10-13 after `lineage verify --evidence` reported 6 × `result_mismatch`) |
 | Not run | the Jev gate run (`tengu evidence evaluate`) |
 | Next weekend | AC power + lid open checked before the entry, or a VPS (`inc.2026-10-10.host-on-battery`, `inc.2026-10-12.host-sleep`) |

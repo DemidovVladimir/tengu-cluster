@@ -6,6 +6,25 @@
 
 ---
 
+## 2026-10-13: PRs #50–#53 rebased and merged; local caches removed
+
+| PR | Squash on `main` (merge order) | What |
+|---|---|---|
+| #54 | `43ce6384745b126d4478b083ea0491a25fbfb929` | forward weekend #2 graded: lineage records, docs only (2026-10-12 section) |
+| #52 | `23a586d1d85cd8a037e23fa3c57ab1c9b949f7ea` | Studio builder (`tengu sandbox new`, `/builder`, `tengu sandbox compile\|finalise\|palette`) + `engine = "codex"` (2026-10-10 section) |
+| #53 | `3e16a8694535859a20d97ab52687532b1cc3571b` | A2A: tool `a2a`, `tengu a2a serve`, `[a2a]`, `sandboxes/a2a-lab`; rebased on #52, + engine-matrix leg `codex_a2a` |
+| #50 | `0316f4698699d5c636d13cd5bf7e73d038fbeb33` | seal proxy: Worker `cloudflare/seal-worker`, crate `crates/tengu-seal`, `[keys]` / `[keys.env]` / `strip`, `tengu keys`, `sandboxes/sealed-check` — NOT deployed to Cloudflare yet (operator step) |
+| #51 | `099ceb6fdf1e217293b614b6d232d74ab29d123c` | Solana write tools sign with a Privy wallet through the seal proxy: `[solana] signer_key_file` removed → `[solana] privy_wallet_id` |
+
+| Item | State |
+|---|---|
+| Repo | 0 open PRs; no branch but `main`; branch tips kept as `archive/<branch>` tags on origin |
+| Weekend no-pull rule | lifted — main checkout pulled after the weekend #2 stop |
+| Fixed after the merges | Docker build: the missing `COPY crates crates` (the `tengu-seal` path dependency) added to `Dockerfile` · builder: the dead "merge PR #50" branches removed — no `keys_supported` probe, the Cloudflare seal-proxy store is always offered, the view-only check treats only `[solana] privy_wallet_id` as a signer |
+| Local data | deleted: `~/.cache/tengu-xm.noindex/{agents,seed,a2a}`, `~/.cache/tengu-xm.noindex/weekend/post-stop-backup-2026-10-12/` (cleanup rows E4, E5 gone); kept: weekend research data (rows A1–A3, B1, B4) |
+| Open (operator) | deploy the Worker + secrets, then a Privy Solana wallet (2026-10-09 sections); G-SR1, G-O0 (§ Operator decisions open) |
+| Open (live legs / code) | the 11 live `codex_*` engine-matrix legs; the live `local` legs (operator's PC); builder cards for loops / feeds / `[[mcp_servers]]` (2026-10-10 section) |
+
 ## 2026-10-12: forward weekend #2 graded (rule W, W1) — `fwd.rule_w.2026-10-09.graded`
 
 Run: `tengu-acdef66`, one start 2026-10-09T14:54:10Z → operator SIGINT 2026-10-12T14:50:41Z (clean: `finished=0 dropped=0 aborted=0 lease_released=true`). Graded per `docs/forward-evidence-runbook-2026-10-08.md` § Monday grading; verdict PENDING, M3 tally **2 / 12**.
@@ -22,22 +41,22 @@ Run: `tengu-acdef66`, one start 2026-10-09T14:54:10Z → operator SIGINT 2026-10
 | `tengu evidence grade` | 12 / 12 checks PASS, both accounts |
 | Incidents | `inc.2026-10-10.host-on-battery` (3 spells, down to 4 %, no downtime) · `inc.2026-10-12.host-sleep` (lid closed 07:40:27 → 08:11:38Z, positions open, exits blind ~32 min, DEGRADED) · `inc.2026-10-12.funding-booked-late` (08:00Z hour booked 795–840 s late; capped −$0.000905) |
 | Not run | the prereg's Jev gate run (`tengu evidence evaluate`); `net_of_cost` used modelled costs, not the recorded books |
-| Main checkout | pulled to `91b2a21` (#49) after the snapshot; the 3 stale untracked copies moved (not deleted) to `~/.cache/tengu-xm.noindex/weekend/post-stop-backup-2026-10-12/` |
+| Main checkout | pulled to `91b2a2198bf29403aaa81c5d63760a71e3f6cf40` (#49) after the snapshot; the 3 stale untracked copies moved to a backup dir (→ deleted 2026-10-13) |
 | Lesson | on battery `caffeinate -s` does not hold; a lid close sleeps the Mac — next weekend: VPS, or AC + lid open checked before the entry |
 
-## 2026-10-10: Studio builder + `engine = "codex"` — branch `feature/sandbox-builder` (separate PR)
+## 2026-10-10: Studio builder + `engine = "codex"` — branch `feature/sandbox-builder` (separate PR) → merged 2026-10-13 as #52 (`23a586d1d85cd8a037e23fa3c57ab1c9b949f7ea`)
 
 | What | Where | Proof |
 |---|---|---|
 | `tengu sandbox new` (asks name + template) → `sandboxes/<n>/{builder.json,config.toml}` → builder opens | `cli/sandbox.rs`, `application/builder.rs::create` | `application::builder::tests`, live CLI run |
 | Drag-and-drop canvas `/builder` (`tengu studio --allow-edit`): 10 card kinds, 12 wires, autosave, Validate (compile + `Config::load` on a temp copy + diff), Finalise (`.prev` backup), green current on live wires | `domain/blueprint.rs`, `config/builder/`, `inbound/studio/builder.rs`, `web/studio/builder.*` | `config::builder::tests` (round-trip of every field, templates load), headless Chrome on the real server (load → connect → red wire → fix → validate → finalise) |
 | `engine = "codex"` (ChatGPT subscription, `codex exec`, tools via the bridge; refused in hardened sandboxes) | `engines/{codex,cli_run}.rs`, `config/hardening.rs` | 9 codex tests; live `tool turn` ok |
-| Secrets: vault / env / Cloudflare seal proxy (probed: on once PR #50 merges) | `config/builder/palette.rs`, `compile.rs` | test-merge on #50 + #51: clean, 86 tests, `[keys]` loads |
+| Secrets: vault / env / Cloudflare seal proxy (then probed until PR #50 merged → since 2026-10-13 the Cloudflare store is always offered, probe removed) | `config/builder/palette.rs`, `compile.rs` | test-merge on #50 + #51: clean, 86 tests, `[keys]` loads |
 | Live engines on one canvas-built sandbox (list_directory + read_file) | `tengu tool turn` | openrouter ✅ claude_code ✅ codex ✅ local — operator's PC |
 
 Open: decision-loop / feed / `[[mcp_servers]]` cards (kept as TOML today) · import a hand-written sandbox onto the canvas · local engine live leg · 11 codex engine-matrix legs not run live (incl. `codex_a2a`, added when #53 was rebased on #52).
 
-## 2026-10-10: A2A — agents talk to other agent harnesses — branch `feature/a2a`
+## 2026-10-10: A2A — agents talk to other agent harnesses — branch `feature/a2a` → merged 2026-10-13 as #53 (`3e16a8694535859a20d97ab52687532b1cc3571b`)
 
 Doc `docs/a2a-2026-10-10.md`; tutorial `docs/tutorial/a2a.html`; example `sandboxes/a2a-lab`. Spec: A2A 1.0.1 (`a2aproject/A2A`, released 2026-05-28).
 
@@ -63,9 +82,9 @@ Doc `docs/a2a-2026-10-10.md`; tutorial `docs/tutorial/a2a.html`; example `sandbo
 |---|---|
 | Live `local` leg of the `a2a` set | the operator's PC (rule: no local models on this Mac) |
 | Not built | push notifications (card says `false`), gRPC, persistent task store (restart forgets tasks), A2A events in the Studio trace, signed cards |
-| Merge | PR #53, rebased on main after #52 (2026-10-13) |
+| Merge | PR #53, rebased on main after #52 (2026-10-13) → merged 2026-10-13 (`3e16a8694535859a20d97ab52687532b1cc3571b`) |
 
-## 2026-10-09: Privy Solana signer — branch `feature/privy-solana-signer` (on top of `feature/sealed-keys`)
+## 2026-10-09: Privy Solana signer — branch `feature/privy-solana-signer` (on top of `feature/sealed-keys`) → merged 2026-10-13 as #51 (`099ceb6fdf1e217293b614b6d232d74ab29d123c`)
 
 | Item | State |
 |---|---|
@@ -74,7 +93,7 @@ Doc `docs/a2a-2026-10-10.md`; tutorial `docs/tutorial/a2a.html`; example `sandbo
 | Verified | unit: request body, reply checks (other wallet / changed message / bad base64 refused), net_host denial, Privy 400 → nothing signed, one failing signer writes no slot; `write_tokens::send_signs_each_batch_through_privy` (fake Privy over HTTP → 2 batches sent, each signature verifies, Bearer session, no Basic). Full unit suite + bridge conformance + run_agent_ipc green. No live Privy call, no live send |
 | Open (operator) | create a Privy Solana wallet (Privy dashboard / API), fund it, set `[solana] privy_wallet_id` + the write tools' scopes (`docs/cloudflare-secrets-setup.html`); Privy wallet policies limit what it may sign; first live send = separate go (real money) |
 
-## 2026-10-09: sealed keys — branch `feature/sealed-keys` (`docs/sealed-keys-2026-10-09.md`)
+## 2026-10-09: sealed keys — branch `feature/sealed-keys` (`docs/sealed-keys-2026-10-09.md`) → merged 2026-10-13 as #50 (`0316f4698699d5c636d13cd5bf7e73d038fbeb33`); Worker not deployed yet
 
 | Item | State |
 |---|---|
@@ -85,7 +104,7 @@ Doc `docs/a2a-2026-10-10.md`; tutorial `docs/tutorial/a2a.html`; example `sandbo
 | Open (code) | sessions are not refreshed in-process — a long run must restart before `session_hours` (unattended key: up to 168 h) · a session holder can still USE a route's key (e.g. call any Telegram Bot API method as the bot), never READ it |
 | Not moved | local Postgres, Claude Code login (the Solana signer moved to Privy — section above) |
 
-## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop`
+## 2026-10-09: lease fail-stop (review `handoff_review.md` P1 + P2) — branch `fix/lease-loss-fail-stop` → merged 2026-10-09 as #47 (`958ef05cddbafa492a572f90706fcd987b08c2a3`)
 
 | Finding | Fixed | Test |
 |---|---|---|
@@ -104,7 +123,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | #42 | `e84e886c6d3d4dc985e408991fe66d1773140c01` | docs sweep A: README, architecture, context, research, memory / skills docs and 22 tutorial pages match the code |
 | #43 | `7cae230f61eddcc014b94521564b15a7b3ac817f` | SOE O3 / O4: weekly cycle, replay + grading, Review #2 packet, tools `soe_view` / `soe_propose` / `soe_challenge`, feed `kind = "job"` (`soe_cycle`), generation SOE-G0 |
 | #44 | `f7ac9a5636e2493e3839e896cba9951a2d41aefb` | Tengu Studio + control-loop-lab ST-00..ST-40: workflow graph, trace store, `tengu studio` / `tengu trace`, `web/studio/`, Play / Stop — § Studio below |
-| #45 | (this PR) | docs sweep B (agent guides, handoff, hub, code map, runtime / tool docs, 15 tutorial pages, feature docs), ST-90 clean room PASS, `docs/studio-evidence/`, `handoff_for_check.md` |
+| #45 | `5e3c603aedb49c16642e5f9cb336d24973102f4f` | docs sweep B (agent guides, handoff, hub, code map, runtime / tool docs, 15 tutorial pages, feature docs), ST-90 clean room PASS, `docs/studio-evidence/`, `handoff_for_check.md` |
 
 ### Operator decisions open
 
@@ -113,12 +132,12 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | ~~G-WKND~~ | ✅ 2026-10-12: stopped, snapshotted, graded (top section) | — | `docs/forward-evidence-runbook-2026-10-08.md` |
 | G-SR1 | seals both ranking contracts as drafted (`tengu lineage seal ranking:<id>`) or changes them first | every ranking — refused while unsealed (`tengu lineage verify` warns `ranking_unsealed`) | `docs/strategy-ranking-automation-2026-10-08.md` § Operator decisions |
 | G-O0 | signs the private SOE profile (`tengu soe init` writes the UNSIGNED template `<TENGU_HOME>/state/soe/operator.toml`: four money values `REQUIRED`, add `[[capabilities]]`, sign); approves each source row's terms + hash and enables it; approves committing sanitized planning docs | a source `enabled = true`; the first live cycle | `docs/soe-2026-10-08.md` § 1, § 15.1 |
-| SOE-G0 lock | after G-O0 + G-WKND: appends SOE-G0's `[[frozen]]` row to `lineage/locks.toml` | nothing in code (a CANDIDATE runs) | same, § 15.1 #8 |
+| SOE-G0 lock | after G-O0 + G-WKND (✅ 2026-10-12): appends SOE-G0's `[[frozen]]` row to `lineage/locks.toml` | nothing in code (a CANDIDATE runs) | same, § 15.1 #8 |
 | Operator Review #2 (SOE G-R2; not `TENGU_ROADMAP.md`'s trading Review #2 after P13 — not reached) | 4 frozen live weekly cycles, each graded; a replay of ≥ 8 older dated cases with a counted holdout read; `tengu soe review` packet | STOP: nothing from O5–O8 | same, §§ 15.2–15.4 |
-| Live engine-matrix legs | sets `xlab_rank` (`strategy_ranking`), `sources` (`source_evidence`), `soe` (`soe_view` · `soe_propose` · `soe_challenge`): only the offline local legs ran; openrouter + claude_code live legs not run, local on the operator's PC; also `tengu run --sandbox xlab-w2` live | each tool's definition of done (CLAUDE.md "How to add a new tool" step 4) | `tests/engine_matrix.rs` module table |
-| Operator Review #3 | decides on building the Studio editor (ST-40 = design only) | any edit / save code or route | `docs/studio-editor-design-2026-10-08.md` |
+| Live engine-matrix legs | sets `xlab_rank` (`strategy_ranking`), `sources` (`source_evidence`), `soe` (`soe_view` · `soe_propose` · `soe_challenge`): only the offline local legs ran; openrouter + claude_code live legs not run, local on the operator's PC; also `tengu run --sandbox xlab-w2` live; since #52 also the 11 live `codex_*` legs (open sets only) | each tool's definition of done (CLAUDE.md "How to add a new tool" step 4) | `tests/engine_matrix.rs` module table |
+| ~~Operator Review #3~~ | ✅ answered 2026-10-10 by the operator's request ("something similar to n8n"): the builder (ST-50) built, merged 2026-10-13 as #52 | — | `docs/studio-builder-2026-10-10.md` (design: `docs/studio-editor-design-2026-10-08.md`) |
 
-### Weekend no-pull rule (main checkout) — ✅ lifted 2026-10-12: stopped, vaulted, graded, pulled (top section; the two `rm` rows were done as moves to `~/.cache/tengu-xm.noindex/weekend/post-stop-backup-2026-10-12/`)
+### Weekend no-pull rule (main checkout) — ✅ lifted 2026-10-12: stopped, vaulted, graded, pulled (2026-10-12 section; the two `rm` rows were done as moves to a backup dir, deleted 2026-10-13)
 
 | When | Do |
 |---|---|
@@ -144,9 +163,9 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | ST-40 + docs | editor = design only `docs/studio-editor-design-2026-10-08.md` (palette from Rust, connections = the graph's edges → one TOML key each, `Config::load` validation, Save-as-new + TOML diff, W1 / hardened view-only, maps via `ExecutionMap::apply`; no code, no route); operator doc `docs/studio-2026-10-08.md` (quick start, routes, security, Play / Stop, troubleshooting); CLAUDE.md + AGENTS.md "Beyond chat" row + gotcha; code map `[studio]` row + recipe |
 | Review ST-20..ST-40 | adversarial pass (`7a69f79e51c46b54cfdaa0123da5b18c00610d7e`): the CSRF proofs guard every request but GET / HEAD on any path (was: `/api/` only — the guard leaned on the router not normalising paths); `scenario` / `loop` names 1–128 bytes (400; a 1 MiB name was kept in the served view and trace); the control verdict carries its `tone`, `studio.js` compares no status / tone (test); the Studio server logs to `tengu.log` + stderr like `tengu run`; acceptance doc no longer cites the folded WIP commit as its base. Live (`docs/studio-acceptance-2026-10-08.md` § Review): guards incl. traversal + bogus `Last-Event-ID`, a live drain of an in-flight event (`finished 1`), secrets sweep 0 matches, `kill -9` → no orphan, lease taken over after its TTL |
 | Screenshots | `docs/studio-evidence/01-idle.png` (no runtime, health not live) · `02-running.png` (after Play: live run, a scenario event queued) · `03-replay.png` (the stopped run replayed at seq 60 of 117) — `control-loop-lab`, 2026-10-09 08:01–08:05 UTC |
-| Next | ST-90 clean room PASSED 2026-10-09 (fresh clone of `f7ac9a5636e2493e3839e896cba9951a2d41aefb`: release build, lab A0–A15 + G1–G8 + Studio flow, `cargo test --workspace` 2130 / `--features studio` 2176 passed; 8 doc fixes applied — `docs/studio-clean-room-2026-10-09.md`); next: Operator Review #3 decides on building the editor |
+| Next | ST-90 clean room PASSED 2026-10-09 (fresh clone of `f7ac9a5636e2493e3839e896cba9951a2d41aefb`: release build, lab A0–A15 + G1–G8 + Studio flow, `cargo test --workspace` 2130 / `--features studio` 2176 passed; 8 doc fixes applied — `docs/studio-clean-room-2026-10-09.md`); next: Operator Review #3 decides on building the editor (→ answered 2026-10-10: builder built, merged #52) |
 | Integration with #39–#43 (Fri 2026-10-09, before the squash) | #39–#43 (xlab-w2 `keep_runs`, strategy ranking, SOE O0–O4, docs sweep) merged into `feature/studio`: a `kind = "job"` feed (`soe_cycle`) starts through the same `start_session` under `tengu run` and Studio's Play; its runs trace like a tool run (`feed.fired` `kind = "job"` → `feed.completed` · `retrying` · `failed`, correlation `feed:<name>:<slot ms>`); the workflow graph draws a job feed owned by the `[soe] architect` (whose store holds its `feed/1` row); an `[soe]` refusal carries `LeaseHeld` like the others; `sources` / `ranking` log to stderr via `stdout_is_data` |
-| Default build (2026-10-09, branch `feature/studio-default-trace-orch`) | `studio` joins Cargo `default` (`openrouter`, `telegram`, `studio`): `cargo build` and the Docker image carry the server (the image build now copies `web/`, the page `include_str!` needs it); CI: `cargo test --workspace` runs the Studio tests, the old opt-in Studio step became the no-studio check `cargo test --no-default-features --features openrouter,telegram --bin tengu studio` (the stub that names the flag) |
+| Default build (2026-10-09, branch `feature/studio-default-trace-orch` → merged 2026-10-09 as #46, `a0d476f90a6fa9a612e988893b0797198f66b439`) | `studio` joins Cargo `default` (`openrouter`, `telegram`, `studio`): `cargo build` and the Docker image carry the server (the image build now copies `web/`, the page `include_str!` needs it); CI: `cargo test --workspace` runs the Studio tests, the old opt-in Studio step became the no-studio check `cargo test --no-default-features --features openrouter,telegram --bin tengu studio` (the stub that names the flag) |
 | Webhooks + orchestration traced (2026-10-09, same branch) | `tengu webhooks` records (`RunKind::Webhooks`, `run.closed`); every request to a configured endpoint = `trigger.webhook` root → its loop / plan events → `webhook.responded` (code; never body or headers) under `tengu webhooks`, `tengu run`, Play; `OrchestratorEvent` → `plan.*` / `step.*` / `metrics.recorded` (`application/orchestrator/trace.rs`, written synchronously by `EventBus::send`) for chat / telegram / eval (with `[orchestrator]`), webhook agent endpoints, escalations; a step's `run-agent` child records its `tool.*` (`AgentIpcInput.trace` → `AgentIpcOutput.trace` → parent `replay_child`); graph: `planner` —delegates→ routable agents —calls→ their tools (lping golden 62 → 100 nodes, 88 → 129 edges); live check: `docs/runtime-2026-09-30.md` § Trace (fixture `tests/fixtures/webhooks/trace.toml`, no model reached). Review 2026-10-09: CI gains `cargo test --features webhooks --bin tengu webhooks` (no CI step compiled the webhook tests); a late subagent `metrics.recorded` keeps its step after `plan.completed`; `tengu telegram` opens its run only once the session is built (a refused start left an open run); an eval row writes `run.closed` after its drain window; test `executor::tests::traced_bus_runs_each_step_under_its_step_started`; re-run live: no secret, body or header in 5 runs. Open: a `claude_code` step's bridged tool calls are not recorded; a `run-agent` child that ends without its IPC output (engine error mid-loop, timeout kill) loses its tool events; a step aborted with its turn has no outcome event |
 | Gotchas | lab runs export `TENGU_HOME="$HOME/tengu-lab/home"` first (parent `.env` = `~/.tengu`); `--sandbox` is cwd-relative (run from the repo / worktree root); a tick's feed and loop events share the session `tick:<slot ms>` = one correlation; the Studio server is in the default build since 2026-10-09 (feature `studio`; a `--no-default-features` build without it refuses, naming the flag; `tengu studio graph` works in every build); Studio control lives in the Studio process — a killed Studio takes its runtime along, the lease frees after 30 s |
 
@@ -158,7 +177,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | Built | record kind `ranking` (`lineage/rankings/`, `tengu lineage seal ranking:<id>`, Warn `ranking_unsealed`) · cohort identity in `report.json` (`generation`, `instruments_sha256`, `costs_sha256`) · `[strategy_ranking]` + retention of cited runs in unbound sandboxes · pure ranker `domain/backtest/ranking.rs` · coordinator `application/ranking/` (seal check, DST-correct date + cutoff, lease `ranking:<id>`, manifest resume, freshness, backtests, publish dated + `latest`) · `tengu ranking run \| show` · opt-in tool `strategy_ranking` (every engine; capability `intel.strategy_ranking` CANDIDATE) · xlab-w2: contracts listed, private `xl_ranker`, feeds `history_refresh` / `strategy_ranking_daily` / `strategy_ranking_weekend`, `keep_runs = 200` |
 | Commits | `caacdc0be446ce9d7628beacbc31ef0992855c1f`, `42584f85ca739b7ee6a0df408726e05488d5deec`, `5a4682e8f0c7fce262f94895e2fe9b134f71e4ae`, `7c7a7cdc5df01f1b117abbc8b0c3a30dcff5b78d`, `6573e24f44da1eb35ff2f7930348cbd884fa1239`, `6a99fe212062036833b8a4bb28e3a6457573262d` + the SR-8 docs — pre-squash branch commits (PR #40's history; on no branch since the merge), squash `117b2595b0864066502d156aca42c7180494d67a` |
 | Tests | domain ranker + contract + validate unit tests; `application::ranking::tests` (lease, resume, publish order, stale, DST, `a_forward_grade_changes_only_later_dates`); `tests/strategy_ranking.rs` on the binary; conformance case `strategy_ranking_hl`; engine-matrix set `xlab_rank` (offline local leg) |
-| G-WKND (merge) | merged to `main` anyway (#40); the frozen weekend binary's W1 load refuses the unknown `lineage/rankings/` dir, so the main checkout is not pulled until weekend #2 stops (§ Weekend no-pull rule) |
+| G-WKND (merge) | merged to `main` anyway (#40); the frozen weekend binary's W1 load refuses the unknown `lineage/rankings/` dir, so the main checkout is not pulled until weekend #2 stops (§ Weekend no-pull rule) → pulled 2026-10-12 after the stop |
 | G-SR1 (operator) | both contracts committed **unsealed**: seal as drafted or change first (strategy set, rating order, cohort fields — `instruments_sha256` + `costs_sha256` split xlab-w2 into several cohorts — cutoffs, the weekend contract's `days`). Until then every ranking is refused; nothing ran on `~/.tengu/state/xlab` |
 | Open | INCOMPLETE is terminal (rerun = delete the date dir) · a run cut by shutdown keeps its lease ≤ 15 min · the W1 `xlab` sandbox shares the state dir and can prune xlab-w2 runs no `latest.json` cites · live matrix legs `*_xlab_rank` and `tengu run --sandbox xlab-w2` not run |
 
@@ -193,7 +212,7 @@ All squash-merged (#39–#45); this session's branches deleted, their tips kept 
 | P9 cost / liquidity (2026-10-08) | cost model v2 in `xlab-w2` (observed fees: 9.0 for BMNR / MSTR / PURRDAT; measured $100 spread, mean 4.13 bps / side); knobs `stop_loss_bps`, `rank_by = "net_of_cost"`; top 4 close stop 300 +163.14 vs +142.65 (CIs overlap) ⇒ INCONCLUSIVE, the stop is W2's one capital candidate — `docs/p9-cost-liquidity-2026-10-08.md` |
 | P10 / P11 (2026-10-08) | no W2 candidate: nothing beats rule W; the close stop 300 (development +163.14 vs +142.65) failed the forward weekend (−40.57 vs +131.04) ⇒ G11 FAIL, keep W1, no P12 run — `docs/p10-w2-candidate-2026-10-08.md` |
 | Weekend #2 (prereg 2026-10-08) | `fwd.rule_w.2026-10-09` sealed 2026-10-08T12:56:28Z (before the 2026-10-10T00:00:00Z anchor); frozen binary `~/.cache/tengu-xm.noindex/weekend/tengu-acdef66` (sha256 `fdcf2c270dd94347b2786d2b1a0b6dda162d91c1a4f02dc37408ce497555b445`); operator start ≤ Fri 19:30 ET — `docs/forward-evidence-runbook-2026-10-08.md` |
-| Next | forward evidence: the W1 desk + recorder every weekend (operator: `tengu run --sandbox xmarket-weekend` Fri ≤ 19:30 ET; M3 go needs 12 weekends, 1 so far), counterfactual grading of stops / labels / net-of-cost each Monday; D11 open |
+| Next | forward evidence: the W1 desk + recorder every weekend (operator: `tengu run --sandbox xmarket-weekend` Fri ≤ 19:30 ET; M3 go needs 12 weekends, 1 so far → 2 since 2026-10-12), counterfactual grading of stops / labels / net-of-cost each Monday; D11 open |
 
 ## Resume here (Tue 2026-10-06) — `TENGU_ROADMAP.md` P0–P5 done, STOP at Operator Review #1
 
@@ -202,21 +221,21 @@ Branch `feature/w1-lineage` (from `main` `2aa79717f5cfb1d8a8211672c50ecaed18b568
 | Phase | Landed | Doc |
 |---|---|---|
 | P0 | vault `~/.tengu/state/evidence/w1-2026-10-06/` (486 files, read-only, record `lineage/evidence/w1-2026-10-06.toml`); `tengu evidence snapshot / verify / coverage / grade / regrade`; forward run `VALID_WITH_LIMITATIONS` (capped +1.370036060021 USD, +141.82 bps, n 4; shadow +6.213796012 USD, +8.43 bps, n 74; all reconciliation checks PASS); Saturday prereg graded from the books (+54.66 bps as registered, INCONCLUSIVE, validity UNRESOLVED) | `docs/w1-p0-weekend-2026-10-06.md` |
-| P1 | inventory, gap analysis, 11 known defects; 1,514 unit tests + offline suites green; 8 of 10 recorded xlab runs + the Jev gate replay byte-identical; W1 manifest `lineage/generations/W1.toml` (37 pins) frozen in `lineage/locks.toml`; tags `w1-forward-2026-10-02` (`6fcb455bae5553e2d51390e4cedd334779ca0d9c`) + `w1-forward-config-2026-10-02` (local, not pushed) | `docs/w1-inventory-2026-10-06.md` |
+| P1 | inventory, gap analysis, 11 known defects; 1,514 unit tests + offline suites green; 8 of 10 recorded xlab runs + the Jev gate replay byte-identical; W1 manifest `lineage/generations/W1.toml` (37 pins) frozen in `lineage/locks.toml`; tags `w1-forward-2026-10-02` (`6fcb455bae5553e2d51390e4cedd334779ca0d9c`) + `w1-forward-config-2026-10-02` (local then; on origin = `c1c96426f595cba909300384c69e905888cc3d55`, checked 2026-10-13) | `docs/w1-inventory-2026-10-06.md` |
 | P2–P4 | `lineage/` registry (14 families, 41 variants, 30 experiments, 3 episodes, 8 incidents) + `tengu lineage verify / show / trace / family / attempts / report / capabilities / generation / seal` | `docs/lineage-2026-10-06.md` |
 | P5 | 17 capabilities; `[generation] id = "W1"` in `sandboxes/xlab` + `xmarket-weekend` — refused at load: a non-W1 opt-in tool, an unlisted sandbox, a drifted pin; `backtest` refuses a kind outside the generation | same, § 4 |
 | Review fixes | branch `feature/w1-review-fixes`: the W1 lock now covers its capability records (row recomputed: `a64c505f5ac99e3ed25f63cca31513de273771c9a5467287eda06007f2e74a43`); `sandbox_unbound`; live `-wal` refused (readers + snapshot); forward seal = window start; `holdout_seen_before` / `window_unknown`; grade checks `funding_qty` / `funding_hours` (vault: 12 / 12 PASS both accounts); regrade look-ahead flag + `mkt_ctx/1` universe; Docker mounts `SANDBOX=<s>` at its own path; minors #11 #14 #16 #18 #19 #21–#23; #12 #13 #15 #17 #20 #24 = known limits | `docs/lineage-2026-10-06.md` § 6 |
 
 | Open | Note |
 |---|---|
-| PRs #25 / #26 | merged 2026-10-08 (`aa73e42e2628987f6fe6e5b5b7da3482fec37ab2`, `746efca44e115f8888862599b0d5c366ccea9df1`); branches kept — lineage records cite their commits (`e5daae83febea00e549ce9b8cac83bddce12a0a2` also tagged `w1-forward-config-2026-10-02`) |
+| PRs #25 / #26 | merged 2026-10-08 (`aa73e42e2628987f6fe6e5b5b7da3482fec37ab2`, `746efca44e115f8888862599b0d5c366ccea9df1`); branches kept — lineage records cite their commits (→ since deleted: no branch but `main` on 2026-10-13, tips as `archive/<branch>` tags) (`e5daae83febea00e549ce9b8cac83bddce12a0a2` also tagged `w1-forward-config-2026-10-02`) |
 | Docker | a bound sandbox loads `lineage/` (`COPY lineage` added); `make up SANDBOX=<s>` mounts at `/opt/tengu/sandboxes/<s>/config.toml` (`TENGU_CONTAINER_CONFIG`) so `../../lineage` resolves |
 | Known defects D1–D11 | `docs/w1-inventory-2026-10-06.md` § 5 — proposed for P6 |
 ## Visual tutorial `docs/tutorial/` (2026-10-07, on `main` @ `9f0e98f96704eca960575d6c453c5dabb5487d65`)
 
 | What | State |
 |---|---|
-| Site | `docs/tutorial/index.html` + 32 feature pages (2026-10-09; 25 at launch), one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
+| Site | `docs/tutorial/index.html` + 35 feature pages (2026-10-13, + `builder`, `a2a`, `sealed-keys`; 32 on 2026-10-09, 25 at launch), one animated page per feature, written from the code; static, no build (`AUTHORING.md`: page anatomy, components, deploy = copy the folder) |
 | Sync rule | every code change updates the pages whose `sources` cover it (`docs/tutorial/sources.toml`) — CLAUDE.md / AGENTS.md "REQUIRED updates"; `cargo test --test tutorial_map`; Claude Code `PostToolUse` hook in `.claude/settings.json` (`.gitignore` now `/.claude/*` + `!/.claude/settings.json`) |
 | Not covered | lineage / evidence (only on `feature/w1-lineage`): when it merges, `tutorial_map` fails on the unmapped files → add pages `lineage`, `evidence` — done with #32; 2026-10-09: 32 feature pages (+ `trace`) (`docs/tutorial/sources.toml`), incl. `strategy-ranking`, `studio`, `soe`, `source-evidence` |
 | Found on the way | `docs/code-findings-2026-10-07.md`: 32 bugs + 18 stale docs fixed 2026-10-07 (PR #31, each with a test; pages re-checked), 3 rows not a bug, 17 gaps open, 1 operator decision open (reduce-only exit with a stale book: the gate waives `book_age`, the paper fill still rejects `stale_book`) — #38 closed 4 gaps 2026-10-08: 13 open, the decision still open |
@@ -227,9 +246,9 @@ Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kep
 
 | # | Path | Size (2026-10-09) | What | Delete when | How |
 |---|---|---|---|---|---|
-| A1 | `~/.tengu/state/evidence/w1-2026-10-06/` | 2.2 GB | W1 weekend evidence vault (read-only); its tree hash is pinned by `lineage/evidence/w1-2026-10-06.toml` (on `main` since #32). Weekend #2's vault `w1-2026-10-12/` joins it after the Monday snapshot | W1 retired (Review #1 APPROVE + P10 kept W1: not yet) | `chmod -R u+w` then `rm -rf`; `tengu evidence verify` then fails for that record — expected |
-| A2 | `~/.tengu/state/xmarket-weekend/` | 1.2 GB | weekend paper runs: `ledger.db`, `history/` day files, `run-logs/`, `runtime.db` (the vaults' source); weekend #2 writes here 2026-10-09 → 10-12 | with A1, never before weekend #2 is vaulted + graded | `rm -rf` |
-| A3 | `~/.cache/tengu-xm.noindex/weekend/` | 96 MB | frozen weekend binaries `tengu-6fcb455`, `tengu-desk-2026-10-02` (commit = tag `w1-forward-2026-10-02`, on origin), `tengu-acdef66` (weekend #2, `acdef66fc45252cba181a351cbc237ed6886ad57`) | with A1; `tengu-acdef66` not before weekend #2 is graded | `rm -rf` |
+| A1 | `~/.tengu/state/evidence/w1-2026-10-06/` | 2.2 GB | W1 weekend evidence vault (read-only); its tree hash is pinned by `lineage/evidence/w1-2026-10-06.toml` (on `main` since #32). Weekend #2's vaults `w1-2026-10-12/` + `w1-2026-10-12-bars/` sit beside it since the 2026-10-12 snapshot | W1 retired (Review #1 APPROVE + P10 kept W1: not yet) | `chmod -R u+w` then `rm -rf`; `tengu evidence verify` then fails for that record — expected |
+| A2 | `~/.tengu/state/xmarket-weekend/` | 1.2 GB | weekend paper runs: `ledger.db`, `history/` day files, `run-logs/`, `runtime.db` (the vaults' source); weekend #2 wrote here 2026-10-09 → 10-12 (vaulted + graded 2026-10-12) | with A1 | `rm -rf` |
+| A3 | `~/.cache/tengu-xm.noindex/weekend/` | 96 MB | frozen weekend binaries `tengu-6fcb455`, `tengu-desk-2026-10-02` (commit = tag `w1-forward-2026-10-02`, on origin), `tengu-acdef66` (weekend #2, `acdef66fc45252cba181a351cbc237ed6886ad57`; graded 2026-10-12) | with A1 | `rm -rf` |
 | B1 | `~/.tengu/state/xlab/` | 535 MB | xlab warehouse `market.db` (+ `-wal` / `-shm`), `backtests/` run dirs, `holdout-reads.jsonl`; shared with `xlab-w2` (its `strategy-rankings/` appear once G-SR1 seals a contract — none yet) | xlab research finished | `rm -rf` (backfill can rebuild `market.db`; run dirs and holdout reads cannot) |
 | B2 | `~/.tengu/state/xmarket/` | 646 MB | xmarket paper ledger + recorder history | xmarket work finished | `rm -rf` |
 | B3 | `~/.tengu/state/research/` | 8.3 GB | `market-scan-2026-10-05/`, `qnt/`, `sliding/` research data | research finished | `rm -rf` |
@@ -237,8 +256,6 @@ Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kep
 | C1 | main checkout `docs/crypto-opportunity-research-2026-10-05.md`, `docs/crypto-opportunity-deep-dive-2026-10-06.{md,html}`, `docs/software-opportunity-{prd,roadmap,compatibility}-2026-10-04.md` | ~160 KB | private, untracked (never committed — public repo): the two crypto research docs + the three SOE planning docs (private figures; committing sanitized versions is a G-O0 item). Not C1: the untracked `TENGU_STUDIO_PLAN.md` + `docs/strategy-ranking-automation-2026-10-08.md` — tracked upstream, deleted before the post-weekend pull (§ Weekend no-pull rule) | operator decides: move somewhere private, or drop | `rm` the six files |
 | D1 | `~/.tengu/logs/` | 75 MB | `decisions.jsonl`, `egress.jsonl`, `risk.jsonl`, `tengu.log`, `maps/` (execution maps by sha256); `trace/<sandbox>/` appears once a post-#44 binary runs `tengu run` / `decide` on `~/.tengu` | no longer needed for audit | truncate or `rm` the files (the dir is recreated) |
 | D2 | `~/lping-workspace/.tengu/`, `~/.tengu/state/solana-writes.db` | 128 KB, 28 KB | lping observation cache, Solana write lease store | lping work finished | `rm -rf` / `rm` |
-| E4 | `~/.cache/tengu-xm.noindex/seed/` | 6.2 GB | clone source for agent target dirs (`agents/<label>`, deleted after each agent), refreshed 2026-10-09 | any time (refresh before the next parallel build) | `rm -rf` |
-| E5 | `~/.cache/tengu-xm.noindex/agents/{sealed-tengu,seal-worker,sealed-crate}/`, `~/development/tengu-sealed/` (worktree) | ~13 GB | sealed-keys build caches and the `feature/sealed-keys` worktree (the throwaway test ssh key was deleted after the local runs) | after the sealed-keys PR merges | `rm -rf` the dirs; `git worktree remove ~/development/tengu-sealed` |
 | F1 | `~/tengu-lab/` | 464 KB | control-loop-lab + Studio: workspace `control-loop-lab/{in,out}` (the lab agent's only fs roots, empty); the lab `TENGU_HOME` `home/` (312 KB: `logs/trace/<sandbox>/<run_id>.jsonl`, `logs/decisions.jsonl`, `logs/maps/`, `state/`) and the Studio validation home `home-validation-2026-10-09/` (152 KB: `logs/` + `state/`; its trace `cbd8cd05-30fb-4177-aa99-0b978f0e83e5` backs `docs/studio-evidence/`) | Studio / lab work finished (after Operator Review #3) | `rm -rf ~/tengu-lab` (only ever lab data — `docs/control-loop-lab-2026-10-08.md` reset steps) |
 | F2 | `~/.tengu/state/soe/` (+ workspace `~/soe-ws`) | none yet | SOE state root: signed `operator.toml`, `sources.db`, `cycles/`, `replays/`, `reviews/`, `eval/` — private (never in git); created by `tengu soe init` / the first `tengu sources fetch` | never without the operator: it holds the signed profile and the graded cycles of Operator Review #2 | back up first; `rm -rf` |
 
@@ -354,13 +371,13 @@ The xmarket section further down (2026-09-29 / 2026-09-30 rows) lists what is de
 
 ## TL;DR — current state (2026-09-29): Solana write tools (phase 6b)
 
-Branch `feature/decision-loop` (not merged). Doc: **`docs/typed-observations-2026-09-24.md` § Write tools**. Plan: `/Users/vladimirdemidov/.claude/plans/enchanted-waddling-reef.md` (reviewed: 5 high findings folded in).
+Branch `feature/decision-loop` (not merged → merged 2026-09-29 as #18, `ff90d131039a3c169a4f082ad1f13a7bd0e24418`). Doc: **`docs/typed-observations-2026-09-24.md` § Write tools**. Plan: `/Users/vladimirdemidov/.claude/plans/enchanted-waddling-reef.md` (reviewed: 5 high findings folded in).
 
 | Area | Change |
 |---|---|
 | Tools | 5 opt-in rows (`tools/solana/write_{tokens,swap,dlmm,perps}.rs`): `solana_close_token_accounts`, `jupiter_swap` (Ultra), `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order`; `mode` = simulate (default, keyless) \| send; result `write/1` (`domain/solana_write.rs`) |
 | Wire format | `domain/solana_tx.rs` (legacy compile + serialize, legacy / v0 parse, System / SPL / ATA / ComputeBudget ix), `domain/lp/{dlmm_ix,perps_ix}.rs` — byte-for-byte goldens from the bot's own libraries (`tests/fixtures/solana/tx/golden.json`) |
-| Signer | `ports/solana_signer.rs`; `outbound/solana/signer.rs` = `ed25519-dalek` over `[solana] signer_key_file` (0600, no-echo errors). Send only with the tool scope's `wallets = ["<pubkey>"]` on one non-routable agent |
+| Signer | `ports/solana_signer.rs`; `outbound/solana/signer.rs` = `ed25519-dalek` over `[solana] signer_key_file` (0600, no-echo errors). Send only with the tool scope's `wallets = ["<pubkey>"]` on one non-routable agent (→ key file replaced 2026-10-13 by `[solana] privy_wallet_id`, a Privy wallet through the seal proxy, #51) |
 | Signing sandbox | `config/solana.rs`: no `claude_code`, no `[[mcp_servers]]`, no scope with `shell_bins` (runtime: permissive fallback runs no shell — `AgentConfig::no_shell_fallback`), key outside every fs root; grant rules; read_only write actions must simulate |
 | Send pipeline | `outbound/solana/send.rs` + `writes_store.rs` (`<TENGU_HOME>/state/solana-writes.db`): lease per wallet, pending record before submit (resolved first next time), one-attempt `sendTransaction` (JSON-RPC error = not sent), confirm / expire by `lastValidBlockHeight`, write fence; `Submitter` seam (RPC or Ultra `/execute`) |
 | State | fence pins `lp_snapshot` and makes older snapshots `stale_input` in the decide tools; `merge_lp_state` (CAS × 3): close ⇒ `reentry`, perps ⇒ `last_hedge_action` (request-aware cooldown); open keeper requests keep wSOL open / refuse SOL-leg orders |
@@ -377,7 +394,7 @@ Branch `feature/decision-loop` (not merged). Doc: **`docs/typed-observations-202
 
 ## Previous TL;DR (2026-09-24): typed observations + Solana LP read tools
 
-Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observations-2026-09-24.md`**. Loop doc: `docs/decision-loop-plan-2026-09-24.md`; sandbox: `docs/lping-2026-09-24.md`.
+Branch `feature/decision-loop` (not merged → merged 2026-09-29 as #18, `ff90d131039a3c169a4f082ad1f13a7bd0e24418`). Subsystem doc: **`docs/typed-observations-2026-09-24.md`**. Loop doc: `docs/decision-loop-plan-2026-09-24.md`; sandbox: `docs/lping-2026-09-24.md`.
 
 | Area | Change |
 |---|---|
@@ -439,7 +456,7 @@ Branch `feature/decision-loop` (not merged). Subsystem doc: **`docs/typed-observ
 
 ## Previous TL;DR (2026-09-23): hexagonal layout
 
-Branch `refactor/hexagonal` (not merged). Plan + per-phase status: `docs/hexagonal-plan-2026-09-23.md`. Start any "where is / how do I" question at **`docs/code-map.md`** (+ interactive `docs/code-map.html`).
+Branch `refactor/hexagonal` (not merged → merged 2026-09-23 as #17, `51c16256e5a900ccafa30c2c618bdb34da4ee32a`). Plan + per-phase status: `docs/hexagonal-plan-2026-09-23.md`. Start any "where is / how do I" question at **`docs/code-map.md`** (+ interactive `docs/code-map.html`).
 
 | Area | Change |
 |---|---|
@@ -465,6 +482,7 @@ Tor-by-default egress, one config per sandbox, deploy/tor = Arti + lyrebird-rs.
 Everything below is **uncommitted on `main`** (on top of the 2026-09-12 /
 2026-09-16 work, also uncommitted). `cargo check --all-features`, `cargo fmt
 --check`, scoped tests, `tests/run_agent_ipc.rs`, `tests/scope_lint.rs` pass.
+(→ all on `main` since.)
 
 | Area | Change |
 |---|---|
@@ -590,7 +608,7 @@ verification block.
 
 ---
 
-## What landed (agentic-memory rework — uncommitted)
+## What landed (agentic-memory rework — uncommitted → on `main` since)
 
 | Area | Change |
 |---|---|

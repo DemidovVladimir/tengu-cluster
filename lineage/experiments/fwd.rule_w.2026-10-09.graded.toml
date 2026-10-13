@@ -42,8 +42,7 @@ n = 4
 mean_net_bps = 203.9828098054082
 net_usd = 2.059715694804109
 evidence = "vault:w1-2026-10-12/xmarket-weekend/ledger.db"
-extract = "ledger:xmarket-weekend"
-note = "Weekend #2 trades only (opened 2026-10-11T22:00Z): net_usd = final cash 103.429751754825 − 101.370036060021 at the weekend-#1 close = realized 2.0314 − fees 0.016960 + funding received 0.045276; mean = per-trade net bps on filled notional ($95.24) = fade row capped_mean_net_bps; 3 / 4 positive."
+note = "Weekend #2 trades only (opened 2026-10-11T22:00Z): not `extract`ed: the `ledger:` source grades the whole account and this ledger holds both weekends (see the cumulative rows below). net_usd = final cash 103.429751754825 − 101.370036060021 at the weekend-#1 close = realized 2.0314 − fees 0.016960 + funding received 0.045276; mean = per-trade net bps on filled notional ($95.24) = fade row capped_mean_net_bps; 3 / 4 positive."
 
 [[results]]
 label = "shadow account xmarket-weekend-shadow: every eligible name at $100, no caps (variant weekend_fade)"
@@ -53,8 +52,29 @@ n = 75
 mean_net_bps = 108.33745486661118
 net_usd = 80.7437136318292
 evidence = "vault:w1-2026-10-12/xmarket-weekend/ledger.db"
+note = "Weekend #2 trades only: not `extract`ed (cumulative ledger, see below). net_usd = final cash 10086.957509643802 − 10006.213796012 = realized 82.1043 − fees 1.801966 + funding received 0.441339 on $7455.05 filled notional; mean = fade row shadow_mean_net_bps; 59 / 75 positive."
+
+[[results]]
+label = "capped account xmarket-weekend, both forward weekends (cumulative ledger: 2026-10-02 + 2026-10-09)"
+arm = "capped_cumulative"
+class = "FORWARD_PAPER"
+n = 8
+mean_net_bps = 172.89980107619598
+net_usd = 3.429751754824897
+evidence = "vault:w1-2026-10-12/xmarket-weekend/ledger.db"
+extract = "ledger:xmarket-weekend"
+note = "The ledger-verified figure (tengu lineage verify --evidence recomputes it): weekend #1 4 trades (fwd.rule_w.2026-10-02, +141.82 bps) + weekend #2 4 trades (+203.98); final cash 103.429751754825 − 100."
+
+[[results]]
+label = "shadow account xmarket-weekend-shadow, both forward weekends (cumulative ledger)"
+arm = "shadow_cumulative"
+class = "FORWARD_PAPER"
+n = 149
+mean_net_bps = 58.72003458464617
+net_usd = 86.9575096438379
+evidence = "vault:w1-2026-10-12/xmarket-weekend/ledger.db"
 extract = "ledger:xmarket-weekend-shadow"
-note = "Weekend #2 trades only: net_usd = final cash 10086.957509643802 − 10006.213796012 = realized 82.1043 − fees 1.801966 + funding received 0.441339 on $7455.05 filled notional; mean = fade row shadow_mean_net_bps; 59 / 75 positive."
+note = "Ledger-verified: weekend #1 74 trades (+8.43 bps) + weekend #2 75 (+108.34); final cash 10086.957509643802 − 10000."
 
 [[results]]
 label = "book-replay regrade of the capped picks (independent of the paper engine; first book at / after each instant, recorded fees, backfilled funding where the recorded rate is missing)"

@@ -188,7 +188,7 @@
         <li>The tor container runs Arti, SOCKS5 and HTTP CONNECT on port 9050. Arti starts lyrebird-rs; every connection into Tor goes through an obfs4 or snowflake bridge.</li>
         <li>The tor container is healthy only once <code>check.torproject.org</code> reports a Tor exit, tried every 15 s up to 40 times. tengu waits for that.</li>
         <li>The tengu container runs <code>tengu telegram</code>. <code>TENGU_HOME</code> is <code>/opt/tengu/data</code> on the <code>tengu-data</code> volume. <code>skills/</code>, <code>sandboxes/</code> and <code>lineage/</code> are baked in, so <code>registry = "../../lineage"</code> finds <code>/opt/tengu/lineage</code>.</li>
-        <li>Every 60 s Docker runs <code>tengu doctor</code>: it builds every agent's engine, looks for the Claude CLI of each <code>claude_code</code> agent and checks the proxy port answers. Any failure exits 1.</li>
+        <li>Every 60 s Docker runs <code>tengu doctor</code>: it builds every agent's engine, looks for the CLI of each <code>claude_code</code> or <code>codex</code> agent and checks the proxy port answers. Any failure exits 1.</li>
         <li>Three failed checks in a row mark the container unhealthy. <code>make doctor</code> runs the same command, plus <code>--tor</code> under tor for a live exit check.</li>
         <li><code>NETWORK=open</code> skips the override: no tor container, port 7080 published for <code>tengu webhooks</code>, traffic leaves under the config's <code>[egress]</code> rules.</li>
       </ol>
@@ -295,15 +295,17 @@
   <div class="sec-head">
     <span class="kicker">tengu --help</span>
     <h2 id="s-cmds">Every command, one line each</h2>
-    <p>The top-level commands in <code>cli/mod.rs</code>. A command with <code>--sandbox</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code> instead of the base config; <code>evidence</code>, <code>lineage</code> and <code>trace</code> load no config, <code>soe</code> only for its weekly commands.</p>
+    <p>The top-level commands in <code>cli/mod.rs</code>. A command with <code>--sandbox</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code> instead of the base config; <code>evidence</code>, <code>lineage</code> and <code>trace</code> load no config, <code>soe</code> only for its weekly commands; <code>sandbox</code> reads and writes the sandbox's own files.</p>
   </div>
   <div class="targets">
     <div class="dk"><b>chat · telegram · webhooks</b>the TUI · the bot · the webhook listener (<code>--features webhooks</code>) — <a href="channels.html">channels</a></div>
     <div class="dk"><b>run · decide</b><code>tengu run</code>: loops, feeds, lease, heartbeat — <a href="runtime.html">runtime</a> · one loop event, <code>--map</code> — <a href="decision-loop.html">decision loop</a></div>
     <div class="dk"><b>a2a</b><code>serve</code> (default build) · <code>cards</code> <code>remotes</code> · <code>card</code> <code>send</code> <code>get</code> <code>cancel</code> (<code>--remote</code> or <code>--url</code>) — <a href="a2a.html">A2A</a></div>
+    <div class="dk"><b>sandbox</b><code>new</code> (template, then the builder in the browser) · <code>compile</code> <code>finalise</code> <code>palette</code> without a browser — <a href="builder.html">builder</a></div>
     <div class="dk"><b>studio · trace</b><code>graph</code> (JSON); no subcommand = the loopback browser UI (default build), Play / Stop with control on · <code>runs</code> <code>show</code> — <a href="studio.html">Studio</a></div>
     <div class="tor"><b>status · doctor · prune</b>this page: snapshot · <code>--tor</code> <code>--live</code> <code>--engines</code> · clean state</div>
     <div class="tor"><b>secret</b><code>init</code> <code>set</code> <code>remove</code> <code>list</code> <code>change-password</code> <code>path</code> — <a href="secrets.html">secrets</a></div>
+    <div class="tor"><b>keys</b><code>setup</code> (the <code>CLIENTS</code> line) · <code>status</code> (session, <code>/whoami</code>) · <code>check &lt;route&gt;</code> — <a href="sealed-keys.html">sealed keys</a></div>
     <div><b>history</b><code>range</code> <code>asof</code> · <code>backfill</code> <code>events</code> <code>import-hl-archive</code> <code>import-json</code> <code>coverage</code> — <a href="history.html">history</a></div>
     <div><b>backtest · ranking</b>one strategy on <code>market.db</code> — <a href="backtest.html">backtest</a> · <code>run</code> <code>show</code> — <a href="strategy-ranking.html">ranking</a></div>
     <div><b>evidence</b><code>snapshot</code> <code>verify</code> <code>coverage</code> <code>grade</code> <code>evaluate</code> <code>regrade</code> — <a href="evidence.html">evidence</a></div>
@@ -341,9 +343,9 @@ tengu secret change-password
 tengu secret path</pre></div>
     <div class="tabpanel" id="tab-img" hidden><pre><span class="c"># Dockerfile (tengu)</span>
 builder  rust:1.91-bookworm, FEATURES=<span class="s">"openrouter,telegram"</span> (TENGU_FEATURES overrides)
-         + the default features (openrouter, telegram, studio)   <span class="c"># no --no-default-features</span>
+         + the default features (openrouter, telegram, studio, codex, a2a)   <span class="c"># no --no-default-features</span>
          copies src/, web/ (the Studio page, compiled in), skills/, sandboxes/
-runtime  debian:bookworm-slim + ca-certificates, libssl3   <span class="c"># no Claude CLI inside</span>
+runtime  debian:bookworm-slim + ca-certificates, libssl3   <span class="c"># no Claude or Codex CLI inside</span>
          /opt/tengu/{skills,sandboxes,lineage}, WORKDIR /opt/tengu
          TENGU_CONFIG=/opt/tengu/config.toml  TENGU_HOME=/opt/tengu/data
          <span class="c"># compose sets TENGU_CONFIG=${TENGU_CONTAINER_CONFIG} (Makefile: the sandbox's own path)</span>
@@ -377,6 +379,7 @@ ufw: allow 22/tcp and 7080/tcp
     <li><span class="chip ok">0</span><span><b>all ok</b>Exit 0; Docker keeps the container healthy.</span></li>
     <li><span class="chip bad">1</span><span><b>backend init error</b>An engine did not build: e.g. <code>OPENROUTER_API_KEY is required</code>, or <code>claude_code</code> without its feature.</span></li>
     <li><span class="chip bad">1</span><span><b>Claude CLI `claude` not found</b>A <code>claude_code</code> agent whose CLI (<code>[claude_code] cli_path</code>) is not on <code>PATH</code>; the shipped image has none.</span></li>
+    <li><span class="chip bad">1</span><span><b>Codex CLI `codex` not found</b>A <code>codex</code> agent whose CLI (<code>[agents.&lt;a&gt;.codex] cli_path</code>) is not on <code>PATH</code>; its login is checked only by <code>--engines</code>.</span></li>
     <li><span class="chip bad">1</span><span><b>proxy unreachable</b>The <code>[egress]</code> proxy port refused or timed out: is tor running?</span></li>
     <li><span class="chip bad">1</span><span><b>not via Tor</b><code>--tor</code>: the exit is not a Tor exit, or the check failed.</span></li>
     <li><span class="chip bad">1</span><span><b>NOT live</b><code>--live</code>: heartbeat missing, stopped or stale, or a required feed down or stale.</span></li>
@@ -454,7 +457,7 @@ ufw: allow 22/tcp and 7080/tcp
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-10.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>
@@ -468,6 +471,7 @@ ufw: allow 22/tcp and 7080/tcp
   /* --- make up: sandbox facts read from sandboxes/<name>/config.toml --- */
   var SB = {
     "": { file: "config.toml", open: false, cc: 0, or: 1, tg: false },
+    "a2a-lab": { file: "sandboxes/a2a-lab/config.toml", open: true, cc: 0, or: 3, tg: false },
     "control-loop-lab": { file: "sandboxes/control-loop-lab/config.toml", open: true, cc: 0, or: 1, tg: false },
     "jev-exec":{ file: "sandboxes/jev-exec/config.toml", open: true, cc: 1, or: 1, tg: false },
     "lping": { file: "sandboxes/lping/config.toml", open: true, cc: 0, or: 3, tg: false },

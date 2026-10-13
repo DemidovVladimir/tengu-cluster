@@ -29,7 +29,6 @@ fn facts() -> Facts {
             tool("memory_search", true),
         ],
         skills: vec![("git".into(), "git helper".into())],
-        keys_supported: false,
     }
 }
 
@@ -83,7 +82,7 @@ fn every_connection_names_known_kinds() {
     assert!(p.items.iter().any(|i| i.id == "tool.http_request"));
     assert!(p.items.iter().any(|i| i.id == "skill.git"));
     let proxy = p.items.iter().find(|i| i.kind == "seal_proxy").unwrap();
-    assert!(proxy.disabled.is_some(), "no [keys] in this build");
+    assert!(proxy.disabled.is_none(), "{:?}", proxy.disabled);
 }
 
 #[test]
@@ -256,7 +255,7 @@ fn delegation_needs_the_planner_and_a_description() {
 }
 
 #[test]
-fn cloudflare_store_needs_a_build_with_keys_and_the_proxy_card() {
+fn cloudflare_store_needs_the_proxy_card() {
     let b = bp(
         json!([
             sandbox_node(),
@@ -272,14 +271,12 @@ fn cloudflare_store_needs_a_build_with_keys_and_the_proxy_card() {
         .iter()
         .map(|i| i.message.as_str())
         .collect();
-    assert!(msgs.iter().any(|m| m.contains("no [keys]")), "{msgs:?}");
     assert!(
         msgs.iter().any(|m| m.contains("seal proxy card")),
         "{msgs:?}"
     );
-    // With a build that knows [keys]: the proxy card + routes are emitted.
-    let mut f = facts();
-    f.keys_supported = true;
+    // Wired to the proxy card: the card + routes are emitted.
+    let f = facts();
     let b = bp(
         json!([
             sandbox_node(),
@@ -336,7 +333,7 @@ fn checklist_names_keys_by_name_only() {
 fn view_only_sandboxes() {
     assert!(editable("[generation]\nid = \"W1\"\n").is_some());
     assert!(editable("[risk]\nmax = 1\n").is_some());
-    assert!(editable("[solana]\nsigner_key_file = \"/k\"\n").is_some());
+    assert!(editable("[solana]\nprivy_wallet_id = \"w\"\n").is_some());
     assert!(editable("[agents.a]\nengine = \"openrouter\"\nmodel = \"m\"\n").is_none());
     assert!(sandbox_name_error("my-team").is_none());
     for bad in ["", "My", "-x", "a b", "../x", &"a".repeat(41)] {

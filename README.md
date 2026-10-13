@@ -5,12 +5,14 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | Capability | Entry point | Doc |
 |---|---|---|
 | Orchestrated chat: planner → `tengu run-agent` subagents | `tengu chat` / `telegram` / `webhooks` | § Orchestration |
-| Three engines, every tool under each (schema lint, bridge conformance, live engine matrix; the live `local` legs still to run on the operator's PC) | `[agents.<a>] engine` | § Engines, `docs/engine-backends.md` |
-| 50 catalog tools (51 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
+| Four engines — `openrouter`, `local`, `claude_code`, `codex` (ChatGPT subscription) — every tool under each (schema lint, bridge conformance, live engine matrix; the live `local` legs (operator's PC) and the live `codex` legs still to run) | `[agents.<a>] engine` | § Engines, `docs/engine-backends.md` |
+| 51 catalog tools (52 with `postgres_memory`: `agentic_memory`); typed rows cached in `<workspace>/.tengu/observations.db` | `tengu tool list` (hidden) | § Tools, `docs/tools.md` |
 | Jev decision loops (System One picks the action, existing tools run it) | `tengu decide`, `tengu run` | `docs/decision-loop-plan-2026-09-24.md` |
 | Long-running runtime: feeds, loops, webhook routes, lease, heartbeat, recorder | `tengu run`, `tengu doctor --live` | `docs/runtime-2026-09-30.md` |
 | Tengu Studio: local browser UI over the validated workflow graph, live + replayed execution traces, health; Play / Stop only where `[studio] control` allows it (never `[generation]`-bound / hardened); the drag-and-drop **builder** (`tengu sandbox new`, `--allow-edit`) composes a sandbox on a canvas and writes its `config.toml` | `tengu studio` (default build), `tengu studio graph`, `tengu sandbox new`, sandbox `control-loop-lab` | `docs/studio-2026-10-08.md`, `docs/studio-builder-2026-10-10.md`, `docs/control-loop-lab-2026-10-08.md` |
-| Execution trace: one JSONL file per recording (`tengu run`, `tengu decide`; not `tengu webhooks` yet), correlated events, redacted + bounded payloads | `tengu trace runs` · `show` | `docs/runtime-2026-09-30.md` § Trace |
+| Execution trace: one JSONL file per recording (`tengu run`, `tengu decide`, `tengu webhooks`, Studio; chat / telegram / eval plans with `[orchestrator]`), correlated events, redacted + bounded payloads | `tengu trace runs` · `show` | `docs/runtime-2026-09-30.md` § Trace |
+| A2A (Agent2Agent 1.0.1): agents call other agent harnesses; other harnesses call this sandbox's planner / chosen agents (JSON-RPC 1.0 + 0.3, SSE, bearer token) | tool `a2a`, `tengu a2a serve` (default build), sandbox `a2a-lab` | `docs/a2a-2026-10-10.md` |
+| Seal proxy: provider keys live only as secrets of the `tengu-seal` Cloudflare Worker; tengu calls them through a route-scoped ssh-agent session; the Solana write tools sign with a Privy wallet through it. Worker not deployed yet (operator step) | `[keys]` / `[keys.env]`, `tengu keys`, `[solana] privy_wallet_id`, sandbox `sealed-check` | `docs/sealed-keys-2026-10-09.md`, `docs/cloudflare-secrets-setup.html`, `docs/sealed-check-2026-10-09.md` |
 | Paper desk: `[risk]` gate inside every order tool, paper ledger, kill switch, exit rules, weekend fade | sandboxes `xmarket`, `xmarket-weekend` | § Paper desk (xmarket) |
 | History-first research: `market.db` warehouse (+ SEC EDGAR filing events), strategy specs, deterministic backtests, Jev replayed on history | `tengu history`, `tengu backtest`, sandboxes `xlab` (W1), `xlab-w2` | § History-first research (xlab) |
 | Research lineage: `lineage/` registry (one TOML per record), generation W1 frozen + bound by `[generation]`, read-only evidence vault, forward grading | `tengu lineage`, `tengu evidence` | `docs/lineage-2026-10-06.md` |
@@ -26,6 +28,8 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | OpenRouter API key | [openrouter.ai](https://openrouter.ai) — planner, subagents, embeddings and the Jev decisions endpoint |
 | Docker + `lyrebird-rs` checkout | The Tor proxy (`make tor`) is a container: Arti + lyrebird-rs built from `../lyrebird-rs` (`LYREBIRD_RS_DIR=<dir or git URL>` to override). Skip only if every config sets `[egress] network = "open"` |
 | Claude Code CLI (optional) | `claude` installed + authenticated; build with `--features claude_code` |
+| Codex CLI (optional) | `codex` installed + `codex login` (ChatGPT subscription) for `engine = "codex"`; feature `codex` is on by default |
+| Cloudflare account + ssh-agent key (optional) | the seal proxy (`[keys]`): deploy `cloudflare/seal-worker` with `npx wrangler`, keys as its secrets — `docs/cloudflare-secrets-setup.html` |
 | Postgres + pgvector (optional) | Agentic memory; build with `--features postgres_memory` |
 
 ## Quickstart
@@ -34,7 +38,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 git clone https://github.com/DemidovVladimir/tengu-cluster.git
 git clone https://github.com/DemidovVladimir/lyrebird-rs.git         # sibling checkout, built into the Tor proxy image
 cd tengu-cluster
-cargo build                                            # default features: openrouter + telegram + studio + codex
+cargo build                                            # default features: openrouter + telegram + studio + codex + a2a
 cargo run -- secret init                               # encrypted vault ~/.tengu/secrets.vault
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
@@ -85,7 +89,9 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | `studio graph` | `--sandbox`, `[--map <file \| ->]` | The sandbox's workflow graph (validated config + catalog tools; a map only narrows it) as redacted JSON | default | — |
 | `sandbox new` | `[--name <n>]`, `[--template blank\|team\|telegram]`, `[--no-open]`, `[--port <p>]` | Asks the name (and template), writes `sandboxes/<n>/builder.json` + `config.toml`, opens the drag-and-drop builder (`tengu studio --allow-edit --open`) | `studio` (default) | — |
 | `sandbox compile` \| `finalise` \| `palette` | `--sandbox <n>` (compile, finalise) | The builder without a browser: the TOML the canvas compiles to + every issue (exit 1 on an error) · write it · the palette JSON | default | — |
-| `trace` | `--sandbox`; `runs` · `show --run <id> [--after <seq>] [--follow]` | The execution trace `tengu run` / `tengu decide` recorded under `<TENGU_HOME>/logs/trace/<sandbox>/`, JSON lines; no config, read-only | default | — |
+| `trace` | `--sandbox`; `runs` · `show --run <id> [--after <seq>] [--follow]` | The execution trace (`tengu run`, `decide`, `webhooks`, Studio; orchestrated chat / telegram / eval) recorded under `<TENGU_HOME>/logs/trace/<sandbox>/`, JSON lines; no config, read-only | default | — |
+| `a2a` | `--sandbox`; `serve` · `cards` · `remotes` · `card` / `send <text>` / `get --task` / `cancel --task` (`--remote <name>` or `--url`, `--json`) | A2A: serve `[a2a.server]` (the planner at `/a2a`, agents at `/a2a/agents/<n>`), the cards it would publish, the `[a2a.remotes]`; talk to a remote as the `a2a` tool does | `a2a` (default) for `serve` | the server's `token_env`; a remote's `bearer_env` / `header_env` |
+| `keys` | `setup [--proxy] [--agent-socket]` · `status` · `check <route> [--path]`; each `--sandbox` | Seal proxy, operator side: print the `CLIENTS` lines + `[keys]` block for this Mac's ssh-agent keys · routes, session, `/whoami` · one GET through a route; never prints a key or the session token | default | `SSH_AUTH_SOCK` (or `[keys] agent_socket`) |
 | `history range` | `<key> --from --to` | Recorded observation rows (`[recorder]`) of one key, JSON lines | default | — |
 | `history asof` | `<keys>... --at [--max-age-secs]` | Per key, the latest row at or before `--at` | default | — |
 | `history backfill` | `--instruments <ids \| @universe>` `--from [--to] [--source hl\|gecko] [--interval 1m\|5m\|15m\|1h\|4h\|1d] [--funding] [--no-bars]` | Fill `<state dir>/market.db` from Hyperliquid (bars, funding) or GeckoTerminal (`<id>@<pool>`); resumes | default | `HL_API_URL`, `GECKO_API_URL` (optional overrides) |
@@ -107,7 +113,7 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | `secret` | `init\|set\|remove\|list\|change-password\|path` | Encrypted vault `<TENGU_HOME>/secrets.vault` (default `~/.tengu/`) | default | `TENGU_MASTER_PASSWORD` (optional) |
 | `prune` | `--sandbox`, `--yes`, `--hard` (needs `--sandbox`) | Remove cached / ephemeral state; never `<TENGU_HOME>/state` beyond `state/flows`, config or secrets | default | — |
 | `skill` | `evolve [--max-cycles --target-metric --base-branch --sandbox]` · `metrics [--last]` · `accept-proposal` · `remove [--tier --yes]` · `list [--tier]` · `doctor [--sandbox --no-fail]` · `export [--out]` · `install [--tier --strict --yes]` · `seed [--tier --description --learner-facing --yes]` | Skill lifecycle (`docs/skills.md`) | default | `OPENROUTER_API_KEY` (evolve) |
-| `mcp-bridge` | — | MCP stdio server exposing Tengu tools; spawned by the Claude Code engine | default | set by the engine (`TENGU_BRIDGE_*`) |
+| `mcp-bridge` | — | MCP stdio server exposing Tengu tools; spawned by the Claude Code and Codex engines | default | set by the engine (`TENGU_BRIDGE_*`) |
 | `agentic-memory-server` | — | Standalone MCP stdio server exposing `agentic_memory` to external agents | `postgres_memory` | `TENGU_MEMORY_DATABASE_URL` (+ `OPENROUTER_API_KEY` for embeddings; without it FTS / text only) |
 | `run-agent` (hidden) | — | Plan-step subprocess of `SubprocessRunner`; refuses to run without `TENGU_AGENT_IPC=1` | — | — |
 
@@ -213,7 +219,7 @@ cargo run --features webhooks -- webhooks --sandbox lping
 | Claude Code | `engine = "claude_code"` | `claude-sonnet-4-6` (bare) | `claude_code` |
 | OpenAI Codex (ChatGPT subscription, `codex login`) | `engine = "codex"` + optional `[agents.<a>.codex] sandbox` (`read-only` / `workspace-write`); refused in hardened sandboxes | `gpt-5.5` (bare) | `codex` (default) |
 
-Claude Code runs agents through the local `claude` CLI; Tengu tools reach it via the MCP bridge as `mcp__tengu-tools__<name>` (`docs/mcp-bridge.md`). Operator rule (2026-09-30): every tool works under all three engines (`docs/engine-backends.md` § Engine matrix).
+Claude Code runs agents through the local `claude` CLI, Codex through `codex exec`; Tengu tools reach both via the MCP bridge (Claude Code sees `mcp__tengu-tools__<name>`; `docs/mcp-bridge.md`). Operator rule (2026-09-30): every tool works under every engine (`docs/engine-backends.md` § Engine matrix).
 
 ## Tools
 
@@ -223,16 +229,17 @@ One `catalog()` row per always-on group or opt-in name (`src/adapters/outbound/t
 |---|---|---|
 | workspace | `read_file`, `list_directory`, `write_file`, `run_command` | always |
 | http | `http_request` | always |
-| crypto (Privy) | `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` | always (`[risk]` sandboxes: signing off) |
+| crypto (Privy) | `sign_and_send_transaction`, `sign_message`, `get_wallet_address`, `abi_encode`, `hex_to_uint256` | always (`[risk]` sandboxes: signing off; with `[keys.env] PRIVY_API_URL = "privy"` Privy is reached through the seal proxy, no local app secret) |
 | memory | `memory_ingest`, `memory_search` · `persistent_store` · `agentic_memory` | `[memory] enabled` · opt-in · opt-in + `postgres_memory` |
 | cache | `shared_cache` | opt-in |
 | skills | `skill_resource`, `view_skill` · `manage_skill`, `skill_distill`, `apply_improver_proposal` | always · opt-in |
-| solana | reads `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide`; writes `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` (simulate by default) | opt-in |
+| solana | reads `sol_price`, `dlmm_pools`, `dlmm_pool`, `dlmm_positions`, `jup_perps`, `solana_wallet`, `solana_tx`, `lp_snapshot`, `lp_swap_plan`, `hedge_decide`, `lp_decide`; writes `solana_close_token_accounts`, `jupiter_swap`, `dlmm_open_position`, `dlmm_close_position`, `jup_perps_order` (simulate by default; `send` signs with the `[solana] privy_wallet_id` Privy wallet through the seal proxy) | opt-in |
 | hyperliquid | `hl_ctx`, `hl_book` | opt-in |
 | xm (paper desk) | `risk_status`, `paper_positions`; exec `paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` | opt-in; exec tools only on a private agent |
 | xlab (research) | `market_history`, `backtest`, `strategy_ranking` (run a sealed contract's ranking date or read the published one) | opt-in; need `[xmarket]` (+ `[backtest]`; `strategy_ranking` + `[strategy_ranking]`) |
 | sources | `source_evidence` (as-of evidence packet of `sources.db`; read-only — agents never fetch) | opt-in; needs `[sources]` |
 | soe (weekly cycle stages) | `soe_view` (read a run: head, packet, candidates, proposals, challenges, history); `soe_propose` (Architect draft), `soe_challenge` (Critic draft) — into the open run dir only, through `application::soe::submit` | opt-in; state root = the `[sources]` state dir; with `[soe]`: `soe_propose` only as `[soe] architect`, `soe_challenge` only as `[soe] critic` |
+| a2a | `a2a` (`list` / `card` / `send` / `get` / `cancel` on another agent harness) | opt-in; only `[a2a.remotes.<name>]` hosts (+ the scope's `net_hosts`) |
 
 Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, keys, TTLs: `docs/typed-observations-2026-09-24.md`.
 
@@ -247,6 +254,7 @@ Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, 
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
 | `webhooks` | off | `tengu webhooks` listener, webhook routes under `tengu run` |
 | `studio` | on | the `tengu studio` server (loopback, `web/studio/` embedded); a `--no-default-features` build without it refuses `tengu studio --sandbox`, naming the flag; `tengu studio graph` works in every build |
+| `a2a` | on | the `tengu a2a serve` server (`[a2a.server]`); the A2A client (tool `a2a`, `tengu a2a send`) needs no feature |
 
 ```bash
 cargo build --features claude_code,postgres_memory,webhooks
@@ -263,6 +271,7 @@ One file per sandbox — channel settings, `[egress]`, the planner and every age
 
 | Sandbox | Network | Purpose |
 |---|---|---|
+| `a2a-lab` | `open` | A2A both ways on one machine: `tengu a2a serve` serves the planner + `helper`; `liaison` calls it back with the `a2a` tool (remote `self`) — header of `sandboxes/a2a-lab/config.toml`, `docs/a2a-2026-10-10.md` |
 | `control-loop-lab` | `open` (Jev only; no tool host) | Safe reference run of the control loop (tick → Jev → tool → audit → health): one loop `demo`, feeds `tick` + `probe`, private agent `lab` with `read_file` / `write_file` / `list_directory` inside `~/tengu-lab/control-loop-lab`; `[studio] control = true` — runbook `docs/control-loop-lab-2026-10-08.md` |
 | `jev-exec` | `open` | Experiment: a Claude Code architect (built-ins off, only `run_command` → `tengu`) drives Jev through `tengu decide --loop executor` |
 | `lping` | `open` (RPC / market APIs, latency) | Crypto research + Solana LP / hedge decision loops `lp_watch`, `hedge_watch`, `hedge_exec`, `lp_exec` over 11 typed Solana reads; 5 write tools simulate only (no signer); planner `lping`, routable `crypto_researcher`, private `lp_executor`; webhooks `helius` → loop, `solana_events` → planner. Plan: `docs/lping-2026-09-24.md` |
@@ -309,10 +318,10 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 | Baked into the image | `skills/`, `sandboxes/`, `lineage/` under `/opt/tengu` (a `[generation]` sandbox loads `registry = "../../lineage"` at every config load; without it the load fails closed) |
 | Config | mounted read-only as `TENGU_CONFIG` (Makefile `TENGU_CONTAINER_CONFIG`): `./config.toml` at `/opt/tengu/config.toml`, or with `SANDBOX=<name>` `sandboxes/<name>/config.toml` at `/opt/tengu/sandboxes/<name>/config.toml` (its own path: the sandbox name and relative `registry` paths resolve); TOML edits apply on container restart |
 | Container command | `tengu telegram` (image `CMD`); `tengu run` is not wired into compose yet |
-| `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) | Not runnable in the image: it has no Claude Code CLI. `doctor` fails → container unhealthy |
+| `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) · any `engine = "codex"` agent | Not runnable in the image: it has no Claude Code or Codex CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
 | Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
-| Features | the Cargo default features (`openrouter`, `telegram`, `studio`) are always built in (the build stage copies `web/` for the Studio page); `TENGU_FEATURES` adds more: `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
+| Features | the Cargo default features (`openrouter`, `telegram`, `studio`, `codex`, `a2a`) are always built in (the build stage copies `web/` for the Studio page and `crates/` for the `tengu-seal` path dependency); `TENGU_FEATURES` adds more: `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
 | Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build or the Tor proxy is unreachable — a config with `engine = "claude_code"` agents needs `claude_code` in `TENGU_FEATURES` or the container reports unhealthy |
 
 VPS one-liner: `curl -fsSL https://raw.githubusercontent.com/DemidovVladimir/tengu-cluster/main/deploy/install.sh | bash` (`TENGU_NETWORK=open` to skip Tor, `TENGU_PROFILE=postgres-memory` for memory; clones lyrebird-rs next to the checkout). Cloud-init: `deploy/cloud-init.yml`.
@@ -335,7 +344,7 @@ Restart=on-failure
 | Section | Purpose |
 |---|---|
 | `runtime_profile` | `auto` / `cloud` / `desktop` / `minimal` |
-| `[agents.<id>]` | engine, model, workspace, `tools` (allow-list), `skill_packages`, `workspace_tools`, `scopes`, limits, identity, `claude_code`, `local`; a `description` (+ `example_queries`) makes it planner-routable |
+| `[agents.<id>]` | engine, model, workspace, `tools` (allow-list), `skill_packages`, `workspace_tools`, `scopes`, limits, identity, `claude_code`, `local`, `codex`; a `description` (+ `example_queries`) makes it planner-routable |
 | `[orchestrator]` | `agent`, `engine = "rag"`, `max_attempts_per_step`, `max_replans`, `route_explicit_agents` |
 | `[memory]` | disk vector store, recall knobs, `within_session_output_top_k` |
 | `[telegram]` · `[webhooks]` | channels: allow-list · listener + `[webhooks.endpoints.<n>]` |
@@ -346,6 +355,8 @@ Restart=on-failure
 | `[egress]` | `network = "tor"` (default) or `"open"`, proxy, host ceiling, shell isolation, JSONL audit — `docs/egress-2026-09-16.md` |
 | `[[mcp_servers]]` | external MCP servers; tools appear as `<server>__<tool>` |
 | `[solana]` | `privy_wallet_id` — the Privy wallet the Solana write tools' `mode = "send"` signs with, through the seal proxy (`[keys]`); hardens the sandbox |
+| `[keys]` (+ `.env`) | seal proxy: `proxy` (Worker origin), `client`, `agent_socket`, `strip` (local key copies removed at load); `[keys.env]` = env var → `<route>[/path][?query]` or `@session` — `docs/sealed-keys-2026-10-09.md` |
+| `[a2a]` (`.remotes.<name>`, `.server`) | remote agent harnesses the `a2a` tool may call · what `tengu a2a serve` exposes (bind, token, planner, agents, limits) — `docs/a2a-2026-10-10.md` |
 | `[xmarket]` (+ `.calendars.<id>`, `.weekend_fade`) | state dir `<TENGU_HOME>/state/<state>`, session calendars, rule W |
 | `[risk]` (+ `.exits`, `.max_data_age_ms`) · `[paper]` | every limit of the gate inside the exec tools (all required) · the paper fill engine |
 | `[rate_limits.<name>]` | request budgets (`hyperliquid`, `geckoterminal`, `sec`, `ted`) |
@@ -373,7 +384,7 @@ Restart=on-failure
 | `docs/code-map.md` · `docs/code-map.html` | Where every file lives + how to add tools / engines / config / channels |
 | `docs/SESSION_HANDOFF.md` | Running state log, open items, gotchas |
 | `docs/configuration.md` · `docs/tools.md` · `docs/skills.md` | Config schema + env vars · tools · skills |
-| `docs/engine-backends.md` · `docs/mcp-bridge.md` | Engines + engine matrix · the Claude Code bridge |
+| `docs/engine-backends.md` · `docs/mcp-bridge.md` | Engines (`openrouter`, `local`, `claude_code`, `codex`) + engine matrix · the MCP bridge the CLI engines use |
 | `docs/egress-2026-09-16.md` · `docs/webhooks-2026-05-11.md` | Tor / host allowlist / audit · webhook listener |
 | `docs/context-management-2026-04-27.md` (+ `.svg`, `.html`) | Every mechanism that shapes what an LLM sees |
 | `docs/agentic-memory-*-2026-05-13.md` | Open Brain + LLM Wiki spec |
@@ -390,8 +401,10 @@ Restart=on-failure
 | `docs/forward-evidence-runbook-2026-10-08.md` | Rule W forward weekend #2: start, stop, snapshot, grade, regrade |
 | `docs/strategy-ranking-automation-2026-10-08.md` | Scheduled strategy ranking: contracts, ranker, publisher, `tengu ranking`, xlab-w2 feeds |
 | `docs/soe-2026-10-08.md` · `docs/source-evidence-2026-10-08.md` | Software Opportunity Engine contract, `tengu soe`, the weekly cycle, replay, grades, the Review #2 packet · the source layer (SEC EDGAR, EU TED, as-of view, `tengu sources`) |
-| `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` · `TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-40) |
-| `docs/studio-editor-design-2026-10-08.md` | Studio editor (ST-40): design only, nothing built until Operator Review #3 |
+| `docs/studio-2026-10-08.md` · `docs/control-loop-lab-2026-10-08.md` · `TENGU_STUDIO_PLAN.md` | Tengu Studio operator doc · the safe control-loop lab (runbook, acceptance matrix) · Studio plan + tracker (ST-00…ST-90; ST-50 = the builder) |
+| `docs/studio-builder-2026-10-10.md` · `docs/studio-editor-design-2026-10-08.md` | Studio builder (`tengu sandbox new`, `--allow-edit`: cards → TOML, wires, secret stores, Finalise) · its design (ST-40; built as the builder after the operator's 2026-10-10 request) |
+| `docs/a2a-2026-10-10.md` | A2A: the `a2a` tool, `tengu a2a serve`, `[a2a]`, interop, `sandboxes/a2a-lab` |
+| `docs/sealed-keys-2026-10-09.md` · `docs/cloudflare-secrets-setup.html` · `docs/sealed-check-2026-10-09.md` | Seal proxy: Worker, routes, clients, sessions, `[keys]`, `tengu keys` · the operator's step-by-step setup (deploy, secrets, `[keys]`) · the `sealed-check` proof runbook |
 
 ## Module map
 
@@ -402,35 +415,43 @@ src/main.rs                 14 lines → adapters::inbound::cli::run
 src/domain/                 plain data + pure policy: message, session, plan, scope (ToolScope), secrets, tools, metrics, memory,
                             observation, decision, schedule, tz, calendar, backoff, market, book, solana*, marketdata (+ _decode, _stats),
                             canonical (JSON + sha256), evidence (+ _coverage), sec (EDGAR decoders), workflow (Studio graph), trace
-                            (execution-trace envelope); hl/ (ctx, book), lp/ (DLMM, perps, hedge), xm/ (risk gate, ledger, paper,
-                            exits, weekend_fade, cost, grade, regrade), backtest/ (spec, kinds, engine, fills, costs, features, gate,
-                            stats, report, checks, evaluation, labels, ranking), lineage/ (records, registry + checks, pins, locks,
-                            ranking contracts), source/ (records, as-of view, packet, SEC, TED), soe/ (opportunity, economics,
-                            gates, rank, allocate, portfolio, profile, proposal, challenge, forecast, memo, replay, review, eval)
+                            (execution-trace envelope), blueprint (builder canvas); hl/ (ctx, book), lp/ (DLMM, perps, hedge), xm/ (risk
+                            gate, ledger, paper, exits, weekend_fade, cost, grade, regrade), backtest/ (spec, kinds, engine, fills, costs,
+                            features, gate, stats, report, checks, evaluation, labels, ranking), lineage/ (records, registry + checks,
+                            pins, locks, ranking contracts), source/ (records, as-of view, packet, SEC, TED), soe/ (opportunity,
+                            economics, gates, rank, allocate, portfolio, profile, proposal, challenge, forecast, memo, replay, review,
+                            eval), a2a/ (A2A 1.0 types, JSON-RPC, 0.3 dialect, card, text)
 src/ports/                  traits: engine, tool, memory, orchestration, shell, observation, decision, clock, history, market_data,
                             book, paper, runtime, solana_signer, solana_writes, skill_source, tool_activity, evidence, lineage,
-                            source_store, soe (cycle store, stage runner), trace (sink, reader)
+                            source_store, soe (cycle store, stage runner), trace (sink, reader), a2a (server runner), builder (drafts)
 src/config/                 schema + validation (mod.rs) + one file per section: egress, decision_loop, solana, hardening, xmarket,
                             risk, rate_limits, runtime, recorder, feeds, backtest, skill_lifecycle, lineage ([generation] + registry
-                            loader), strategy_ranking, sources, soe (private profile + [soe]), studio; execution_map
-                            (`tengu decide --map`); sections (what tools read), paths
+                            loader), strategy_ranking, sources, soe (private profile + [soe]), studio, keys (seal proxy), a2a;
+                            builder/ (palette, compiler, templates); execution_map (`tengu decide --map`); sections (what tools
+                            read), paths
 src/application/            use cases: chat/, orchestrator/, memory/, skills/, tools/, decision_loop/ (Jev loop, world, slots),
                             runtime/ (feeds, loops, health), backtest/ (run, run dir, Jev gate arm), ranking/ (coordinator, files),
                             lineage/ (verify, attempts), soe/ (weekly cycle, freeze, replay, grade, review, the soe_cycle job),
-                            studio/ (graph, stream, board, inspect, control), evidence.rs, sources.rs (as-of packet, purge),
-                            trace_exec.rs (cause, TracedExecutor), observe.rs, paper.rs, metrics.rs
+                            studio/ (graph, stream, board, inspect, control), a2a/ (server methods, task store), builder.rs,
+                            evidence.rs, sources.rs (as-of packet, purge), trace_exec.rs (cause, TracedExecutor), observe.rs,
+                            paper.rs, metrics.rs
 src/bootstrap/              composition root: tools.rs, memory.rs, orchestrator.rs, sandbox.rs, decision.rs, runtime.rs, soe.rs,
-                            studio.rs, trace.rs
-src/adapters/outbound/      engines/ (openrouter, local, claude_code), tools/ (catalog: workspace, http, crypto, memory, cache, skill*,
-                            manage_skill, view_skill, agentic_memory, solana, hyperliquid, xm, xlab, sources, soe), mcp_client/,
-                            memory/, hyperliquid/ (info client), solana/ (RPC, send), backfill/ (hl, gecko, hl_archive, json, sec),
-                            sources/ (SEC, TED fetchers, sources.db), soe/ (cycle store, stage runner + cache), evidence/ (vault,
-                            read-only readers), lineage/ (read-only resolvers), market_data.rs, paper_store.rs, history_sqlite.rs,
-                            decision_cache.rs, decisions.rs, observations.rs, runtime_store.rs, trace_store.rs, rate_limit.rs,
-                            http_class.rs, clock.rs, egress.rs, secrets.rs, shell.rs, bridge_env.rs, subprocess_runner.rs, noop.rs,
-                            prune.rs, scaffold.rs
+                            studio.rs, trace.rs, a2a.rs, builder.rs
+src/adapters/outbound/      engines/ (openrouter, local, claude_code, codex, cli_run), tools/ (catalog: workspace, http, crypto, memory,
+                            cache, skill*, manage_skill, view_skill, agentic_memory, solana, hyperliquid, xm, xlab, sources, soe, a2a),
+                            mcp_client/, memory/, hyperliquid/ (info client), solana/ (RPC, send, Privy signer), backfill/ (hl,
+                            gecko, hl_archive, json, sec), sources/ (SEC, TED fetchers, sources.db), soe/ (cycle store, stage runner
+                            + cache), evidence/ (vault, read-only readers), lineage/ (read-only resolvers), a2a/ (A2A client),
+                            keys/ (seal-proxy client, ssh-agent), market_data.rs, paper_store.rs, history_sqlite.rs,
+                            decision_cache.rs, decisions.rs, observations.rs, runtime_store.rs, trace_store.rs, builder_store.rs,
+                            rate_limit.rs, http_class.rs, clock.rs, egress.rs, secrets.rs, shell.rs, bridge_env.rs,
+                            subprocess_runner.rs, noop.rs, prune.rs, scaffold.rs
 src/adapters/inbound/       cli/ (mod + run_agent, doctor, decide, history, backtest, ranking, risk, evidence, lineage, soe (+ soe/weekly),
-                            sources, studio, trace, skill, tool), run.rs (`tengu run`), studio/ (Studio server, default feature `studio`),
-                            tui/, telegram.rs, webhooks.rs, mcp_bridge.rs, eval.rs, evolve.rs, channel.rs, activity.rs
-web/studio/                 the Studio page (index.html, studio.css, studio.js), embedded with include_str!; draws only
+                            sources, studio, sandbox, trace, a2a, keys, skill, tool), run.rs (`tengu run`), a2a.rs (`tengu a2a serve`),
+                            studio/ (Studio server + builder routes, default feature `studio`), tui/, telegram.rs, webhooks.rs,
+                            mcp_bridge.rs, eval.rs, evolve.rs, channel.rs, activity.rs
+web/studio/                 the Studio pages (index.html, studio.css, studio.js; builder.html, builder.css, builder.js), embedded
+                            with include_str!; draw only what the Rust API serves
+crates/tengu-seal/          seal-proxy formats shared with the Worker (route, session, ssh, target)
+cloudflare/seal-worker/     the `tengu-seal` Cloudflare Worker (Rust; wrangler.toml ROUTES / CLIENTS)
 ```

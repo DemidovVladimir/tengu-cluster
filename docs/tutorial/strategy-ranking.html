@@ -394,7 +394,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
       <thead><tr><th>Caller</th><th>How</th><th>INCOMPLETE</th></tr></thead>
       <tbody>
         <tr><td><code>tengu ranking run</code></td><td>the operator or an external cron; <code>show</code> prints <code>latest.md</code> or a published date's <code>ranking.md</code> (manifest COMPLETE or INCOMPLETE); lease holder <code>cli:&lt;pid&gt;</code></td><td>exit 1</td></tr>
-        <tr><td><code>strategy_ranking</code> tool</td><td><code>action</code> <code>run</code> or <code>latest</code>, optional <code>contract</code> and <code>date</code>; every engine (in-process, the MCP bridge for Claude Code); the backtests run on a thread of their own; holder = the call id; no observation row</td><td>an error, <code>ranking_incomplete: …</code>, with the rows</td></tr>
+        <tr><td><code>strategy_ranking</code> tool</td><td><code>action</code> <code>run</code> or <code>latest</code>, optional <code>contract</code> and <code>date</code>; every engine (in-process, the MCP bridge for Claude Code and Codex); the backtests run on a thread of their own; holder = the call id; no observation row</td><td>an error, <code>ranking_incomplete: …</code>, with the rows</td></tr>
         <tr><td>xlab-w2 feeds</td><td>the private agent <code>xl_ranker</code> calls the tool on the clock above; the Architect does not hold it</td><td>the feed shows <code>down</code>; <code>doctor --live</code> names it</td></tr>
       </tbody>
     </table>
@@ -457,7 +457,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
     <li><span><b>Latest moves last.</b> Both dated files are written before <code>latest.md</code>, then <code>latest.json</code>. An older date never replaces a newer one.</span></li>
     <li><span><b>No holdout read.</b> A ranking run has no split, so it never writes <code>holdout-reads.jsonl</code>.</span></li>
     <li><span><b>Cited runs stay.</b> In a sandbox bound to no generation too, retention keeps the <code>[strategy_ranking]</code> registry's cited runs and every run a <code>latest.json</code> names.</span></li>
-    <li><span><b>Same answer on every engine.</b> The tool's conformance case runs it in-process and through the MCP bridge on the same data; an engine-matrix set (<code>xlab_rank</code>) calls it from each engine. Its offline local leg runs in CI; the live legs have not run yet.</span></li>
+    <li><span><b>Same answer on every engine.</b> The tool's conformance case runs it in-process and through the MCP bridge on the same data; an engine-matrix set (<code>xlab_rank</code>) calls it from OpenRouter, Claude Code and local; Codex has none, since the set runs in a hardened fixture, where <code>engine = "codex"</code> is refused. Its offline local leg runs in CI; the live legs have not run yet.</span></li>
     <li><span><b>Tested on the binary.</b> <code>tests/strategy_ranking.rs</code>: a rerun is byte-identical, a restart reruns only the unfinished strategy to the same <code>content_sha256</code>, an INCOMPLETE date keeps <code>latest</code>, an unsealed or edited contract writes nothing.</span></li>
   </ul>
 </section>

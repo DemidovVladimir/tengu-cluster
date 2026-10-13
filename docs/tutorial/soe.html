@@ -442,7 +442,7 @@
       <tbody>
         <tr><td><code>[soe]</code></td><td><code>architect</code>, <code>critic</code> (two agents with a description), <code>max_proposals</code>, <code>forecast_max_weeks</code>; <code>token_prices</code> optional — absent, the cost is <code>UNKNOWN</code></td></tr>
         <tr><td>Closed world</td><td>every agent lists its tools, only from <code>soe_view</code>, <code>soe_propose</code>, <code>soe_challenge</code>, <code>source_evidence</code>, <code>read_file</code>, <code>list_directory</code>, <code>view_skill</code>, <code>skill_resource</code></td></tr>
-        <tr><td>No side effect</td><td>deny-all scopes for <code>http_request</code>, <code>write_file</code>, <code>run_command</code> and the two signing tools; no loops, MCP servers, trading or inbound sections; feeds of kind <code>job</code> only</td></tr>
+        <tr><td>No side effect</td><td>deny-all scopes for <code>http_request</code>, <code>write_file</code>, <code>run_command</code> and the two signing tools; no loops, MCP servers, trading, signing (<code>[solana] privy_wallet_id</code>) or inbound sections (<code>[telegram]</code>, <code>[webhooks]</code>); feeds of kind <code>job</code> only</td></tr>
         <tr><td>Network</td><td><code>[egress] allow_hosts</code> equals the registry rows' hosts</td></tr>
         <tr><td><code>FsCycleStore</code></td><td>run dirs claimed once, files written once, appends one line per write, freeze = the manifest linked in whole, then read-only</td></tr>
         <tr><td>Stage runners</td><td>one <code>tengu run-agent</code> child per stage, behind a cache keyed by the sha256 of agent, model, skill, stage and goal (which names the profile and generation sha256): a rerun asks no model; offline, a miss names the full key</td></tr>
@@ -776,7 +776,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
 </article>
 </main>
 </div>

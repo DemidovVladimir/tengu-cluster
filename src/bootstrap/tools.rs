@@ -244,8 +244,8 @@ pub(crate) fn within_generation(agent: &AgentConfig, tools: &[ToolDef]) -> Vec<T
 /// `configured` (per-agent `[agents.*.scopes.<tool>]`, with `[default_scopes]`
 /// already folded in) wins; any tool without one gets `permissive_scope` —
 /// minus the shell when `no_shell` (every hardened sandbox — a `[solana]`
-/// signer or a `[risk]` section, `config/hardening.rs`: a shell could read a
-/// key file or route around the risk gate).
+/// `privy_wallet_id` signer, `[risk]` or `[soe]`, `config/hardening.rs`: a shell
+/// could read the seal-proxy session or route around the risk gate).
 /// Shared by `build_tool_executor` and `mcp_bridge::build_bridge_executor`.
 pub(crate) fn resolve_tool_scopes(
     workspace: &Path,
@@ -697,7 +697,7 @@ mod golden_tests {
     }
 
     /// A `[solana]` signing sandbox: the fallback runs no shell (a shell
-    /// could read the key file); everything else stays permissive and a
+    /// could read the signing session); everything else stays permissive and a
     /// configured scope is untouched.
     #[test]
     fn signing_sandbox_fallback_runs_no_shell() {
