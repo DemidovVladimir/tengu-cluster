@@ -447,11 +447,11 @@
     <li><span><b>Every tool hop is gated.</b> <code>http_request</code> checks scheme, <code>deny_hosts</code>, <code>allow_hosts</code> and <code>net_hosts</code> on the first hop and each redirect, up to 10; env-expanded headers are dropped on a cross-origin redirect.</span></li>
     <li><span><b>The seal proxy is one more host.</b> With <code>[keys]</code>, provider calls go to <code>&lt;proxy&gt;/&lt;route&gt;</code> on the <code>tengu-seal</code> Worker, which holds the keys as Cloudflare secrets; its session runs through the LLM-API client (Tor when <code>route_llm_api</code>); a sandbox with <code>allow_hosts</code> must list its host, or the config does not load (<a href="sealed-keys.html">sealed keys</a>).</span></li>
     <li><span><b>Children inherit the parent's policy.</b> <code>run-agent</code> and <code>mcp-bridge</code> apply <code>TENGU_EGRESS</code> over their own config, same audit file.</span></li>
-    <li><span><b>No ungated Bash under a proxy.</b> Claude Code profile <code>editor_shell</code> launches as <code>editor</code> while a proxy is set.</span></li>
+    <li><span><b>No ungated Bash under a proxy.</b> Claude Code profile <code>editor_shell</code> launches as <code>editor</code> while a proxy is set. <code>research</code> (Read, Glob, Grep, WebSearch) has no Bash and no WebFetch, so it is not changed.</span></li>
     <li><span><b>Isolated shells are kernel-fenced.</b> With <code>shell_network = "isolated"</code> (macOS <code>sandbox-exec</code>) every outbound connection but the proxy port is refused, DNS included.</span></li>
     <li><span><b>Audit lines keep secrets out.</b> The URL is logged as the model wrote it (<code>$VAR</code> unexpanded), headers by name only, body and reason redacted.</span></li>
   </ul>
-  <p class="note warn"><b>Advisory paths.</b> <code>proxy_env</code> shells and MCP stdio servers only get proxy env vars. LLM, Claude and Codex CLI, MCP and Telegram traffic is proxied but not host-checked. A <code>local</code> engine always connects directly. The shell URL check misses built or encoded URLs.</p>
+  <p class="note warn"><b>Advisory paths.</b> <code>proxy_env</code> shells and MCP stdio servers only get proxy env vars. LLM, Claude and Codex CLI, MCP and Telegram traffic is proxied but not host-checked. A <code>local</code> engine always connects directly. Hosted web search (Claude Code profile <code>research</code>, Codex <code>web_search = "cached" | "live"</code>) runs at Anthropic / OpenAI, not from this host: no hop here, no audit line; pages the agent reads still go through <code>http_request</code>. The shell URL check misses built or encoded URLs.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-try">
@@ -506,7 +506,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>
@@ -688,7 +688,7 @@
         why.push("<code>HTTPS_PROXY</code> = <code>HTTP_PROXY</code> = <code>" + esc(cf) + "</code> (HTTP CONNECT on the same port), <code>NO_PROXY</code> = <code>localhost,127.0.0.1,::1</code>. Advisory: the CLI honours the env.");
       } else hops.push(["direct", "warn"]);
       if (r.proxy && k === "claude") why.push("While a proxy is set, profile <code>editor_shell</code> launches as <code>editor</code>: the built-in Bash is dropped.");
-      if (k === "codex") why.push("Codex's own shell and patch tool run under <code>-s read-only</code> or <code>workspace-write</code>: no network either way.");
+      if (k === "codex") why.push("Codex's own shell and patch tool run under <code>-s read-only</code> or <code>workspace-write</code>: no network either way. Its web search (<code>web_search</code>, default <code>disabled</code>) runs at OpenAI, not from this host.");
     } else if (k === "mcp_http") {
       hops.push(["mcp_client", "hands"]);
       var mu = parseUrl(v), loop = mu && LOOP.indexOf(mu.hostname) >= 0;

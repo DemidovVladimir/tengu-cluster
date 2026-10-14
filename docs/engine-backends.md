@@ -136,16 +136,17 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 
 ### Builtin Tools Profiles
 
-Configured via `[agents.<id>.claude_code].builtin_tools_profile` (default `editor_shell`; read trimmed — `" none"` is `none` — and an unknown value is a load error, never a silent `editor_shell`). Applies to subagents too — `run-agent` builds the child engine from the parent's `[agents.<name>]` block (`bootstrap::tools::subagent_config` → `adapters::outbound::engines::build_step_engine`).
+Configured via `[agents.<id>.claude_code].builtin_tools_profile` (one of `config::CLAUDE_CODE_PROFILES`, the list the engine's parser and config validation share; default `editor_shell`; read trimmed — `" none"` is `none` — and an unknown value is a load error, never a silent `editor_shell`). Applies to subagents too — `run-agent` builds the child engine from the parent's `[agents.<name>]` block (`bootstrap::tools::subagent_config` → `adapters::outbound::engines::build_step_engine`).
 
 | Profile | Claude Native Tools (`--tools`) |
 |---------|-------------------|
 | `none` | (none) |
 | `read_only` | Read, Glob, Grep |
+| `research` | Read, Glob, Grep, WebSearch — the search runs at Anthropic on the subscription; no WebFetch (it would fetch from this machine outside tengu egress and scopes): pages go through tengu's `http_request` (scopes, egress, audit). Not allowed in a hardened sandbox (only `none` is) |
 | `editor` | Read, Glob, Grep, Edit, Write, MultiEdit |
 | `editor_shell` | Read, Glob, Grep, Edit, Write, MultiEdit, Bash |
 
-`[egress]`: while a proxy is set (default under Tor), `editor_shell` launches as `editor` — builtin Bash has no egress control (`egress::claude_code_profile`, warn logged).
+`[egress]`: while a proxy is set (default under Tor), `editor_shell` launches as `editor` — builtin Bash has no egress control (`egress::claude_code_profile`, warn logged). No other profile changes: `research` has no Bash and no WebFetch.
 
 ### Safety Policy
 
@@ -159,7 +160,7 @@ The CLI runs with `--dangerously-skip-permissions`; there is no per-call permiss
 | Tengu tools | `--allowedTools mcp__tengu-tools__<name>` for each bridged tool only |
 | Hardened sandbox (`src/config/hardening.rs`: a `[solana] privy_wallet_id` signer, `[risk]` or `[soe]`, one code path) | load refuses a `claude_code` agent unless `builtin_tools_profile = "none"` (no block = `editor_shell` = refused), any `engine = "codex"` agent, any `[[mcp_servers]]`, any scope granting `shell_bins`, and an fs root / workspace reaching `<TENGU_HOME>/state`, the kill-switch file or the config file (no signer key file exists: Privy signs through the seal proxy); every agent's fallback scope runs no shell (`no_shell_fallback`); a plan step's `compose` only narrows its base agent (`bootstrap::tools::compose_agent`) |
 | Per-tool scopes | `[default_scopes.*]` / `[agents.<id>.scopes.*]`: the bridge loads the agent's folded scopes from `TENGU_CONFIG` (`TENGU_BRIDGE_SCOPES` only as the fallback when no config / agent resolves) and enforces them (`fs_roots` includes the child workspace, except on a deny-all scope) |
-| Network | CLI API traffic via `HTTPS_PROXY` (advisory); bridge tools via `TENGU_EGRESS` (enforced); builtin Bash dropped under a proxy |
+| Network | CLI API traffic via `HTTPS_PROXY` (advisory); bridge tools via `TENGU_EGRESS` (enforced); builtin Bash dropped under a proxy; WebSearch (`research`) runs at Anthropic, no built-in fetch in any profile |
 
 Not enforced by the engine: destructive-Bash patterns, `skills/` write denial, workspace containment for builtin tools (the CLI is only started with `current_dir` = workspace).
 
@@ -184,8 +185,8 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 | Setup | |
 |---|---|
 | Install + log in | `npm i -g @openai/codex` · `codex login` (ChatGPT) · `codex login status` |
-| Model | bare OpenAI id the CLI accepts — `gpt-5.5`, `gpt-5.6-sol`, `gpt-6-sol`, `gpt-6.1-sol` (the CLI's list: `~/.codex/models_cache.json`) |
-| Agent block | `engine = "codex"`, `model = "gpt-5.5"`; optional `[agents.<a>.codex] sandbox = "read-only"` (default) \| `"workspace-write"`, `cli_path = "codex"` |
+| Model | bare OpenAI id the CLI accepts — `gpt-5.5`, `gpt-5.6-sol`, `gpt-6-sol`, `gpt-6.1-sol` (the CLI's list: `~/.codex/models_cache.json`); a ChatGPT login refuses some ids (2026-10-14: `gpt-5.5` → "not supported when using Codex with a ChatGPT account") — use one the login serves (`gpt-5.6-sol` there). `--ignore-user-config`: the model and effort in `~/.codex/config.toml` never apply |
+| Agent block | `engine = "codex"`, `model = "gpt-5.5"`; optional `[agents.<a>.codex] sandbox = "read-only"` (default) \| `"workspace-write"`, `web_search = "disabled"` (default) \| `"cached"` \| `"live"`, `cli_path = "codex"` |
 | Check | `tengu doctor` (CLI on `PATH`), `tengu doctor --engines` (a live smoke turn), `tengu tool turn --sandbox <s> --agent <a> --goal "…"` |
 
 ### How it works
@@ -195,7 +196,8 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 | `--json` | events: `item.started` / `item.completed` (`agent_message` → text, `reasoning` → thinking, `mcp_tool_call` / `command_execution` / `file_change` → `ToolRan`), `turn.completed` (usage), `turn.failed` (error) |
 | `--ignore-user-config` `--ignore-rules` `--ephemeral` `--skip-git-repo-check` | no `~/.codex/config.toml` (your MCP servers, profiles, hooks, notify) and no execpolicy rules; no session files; any workspace — the ChatGPT login still works |
 | `-s <sandbox>` `-c approval_policy="never"` | Codex's own shell / patch tool: read-only (default) or workspace-write, never network, never asks |
-| `-c web_search="disabled"` + `-c features.<f>=false` (apps, plugins, browser / computer use, image generation, multi-agent, goals, memories, hooks, …) | Codex integrations that run outside tengu scopes and egress are off; a `features.*` name the installed CLI lacks is ignored |
+| `-c web_search="<mode>"` (`[agents.<a>.codex] web_search`: `disabled` default, `cached` = OpenAI's index, `live`; `config::CODEX_WEB_SEARCH`) | OpenAI's hosted web search on the ChatGPT subscription: it runs at OpenAI, not from this machine, so it needs no tengu egress; pages the agent must read still come through `http_request` (scopes, egress, audit) |
+| `-c features.<f>=false` (apps, plugins, browser / computer use, image generation, multi-agent, goals, memories, hooks, …) | Codex integrations that run outside tengu scopes and egress are off; a `features.*` name the installed CLI lacks is ignored |
 | `-c developer_instructions=…` | the system prompt, once |
 | `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec=30,tool_timeout_sec=600}` | tengu tools through `tengu mcp-bridge` — the same env contract as Claude Code ([[mcp-bridge]]); Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES the CLI holds (the base set + `forward_env`; no value on the command line); bridged calls are pre-approved (tengu scopes gate them in the bridge) |
 
@@ -203,6 +205,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 |---|---|
 | `run-agent` step | `bridge_tools` + workspace grant + the summary file the bridge serves `compress_and_store` into (`engines::bridges_tools`); a stored summary ends the CLI run |
 | `max_tool_rounds` | counts tool calls (MCP + built-in) of the run |
+| silence | `--json` reports nothing while the model reasons (minutes at high effort), which used to trip `stream_event_timeout_secs` (120 s: "Engine stream timed out — no data for 120s"); now every `KEEPALIVE_SECS` (30) of silence the engine sends an empty `ThinkingDelta` (resets the caller's idle clock) and kills the CLI only after `idle_limit_secs` = max(configured timeout, `REASONING_IDLE_FLOOR_SECS` 900) — "Codex CLI idle timeout — no output for <n>s" |
 | failure | `turn.failed`, or a non-zero exit with no answer → an error naming the CLI's reason (last `error` event, else stderr) |
 | `[egress]` | the CLI's own API traffic gets `HTTPS_PROXY` (HTTP CONNECT on the proxy port) when `route_llm_api`; its shell has no network in either sandbox mode |
 | Hardened sandbox (`[risk]`, `[soe]`, a Solana signer) | refused at load (`config/hardening.rs`): the built-in shell cannot be switched off for good and ignores tengu scopes — use `claude_code` with `builtin_tools_profile = "none"`, `openrouter` or `local` there |

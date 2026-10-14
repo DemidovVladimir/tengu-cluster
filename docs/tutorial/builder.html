@@ -234,7 +234,7 @@
   </div>
   <div class="kinds" data-inview>
     <div class="kind" style="--kc: var(--faint)"><span class="one">always one</span><b>sandbox</b><code>[egress] network · allow_hosts</code><code>[memory] enabled · [studio] control</code><small>Network defaults to <code>tor</code>; cannot be deleted.</small></div>
-    <div class="kind" style="--kc: var(--heart)"><span class="one">many</span><b>agent</b><code>[agents.&lt;name&gt;]</code><small>engine, model, default, identity, limits; <code>local</code> / <code>claude_code</code> / <code>codex</code> blocks shown only for their engine.</small></div>
+    <div class="kind" style="--kc: var(--heart)"><span class="one">many</span><b>agent</b><code>[agents.&lt;name&gt;]</code><small>engine, model, default, identity, limits; <code>local</code> / <code>claude_code</code> (built-in tools profile, <code>research</code> included) / <code>codex</code> (<code>sandbox</code>, <code>web_search</code>) blocks shown only for their engine.</small></div>
     <div class="kind" style="--kc: var(--heart)"><span class="one">one</span><b>orchestrator</b><code>[orchestrator] agent</code><small><code>max_attempts_per_step</code> 3, <code>max_replans</code> 2. Wire it to the planner agent.</small></div>
     <div class="kind" style="--kc: var(--hands)"><span class="one">many</span><b>tool</b><code>agents.&lt;a&gt;.tools</code><code>[agents.&lt;a&gt;.scopes.&lt;tool&gt;]</code><small>Restrict on: folders, hosts, env vars, deny by default per field.</small></div>
     <div class="kind" style="--kc: var(--brain)"><span class="one">many</span><b>skill</b><code>agents.&lt;a&gt;.skill_packages</code><small>Any <code>SKILL.md</code> found from the working folder.</small></div>
@@ -429,7 +429,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

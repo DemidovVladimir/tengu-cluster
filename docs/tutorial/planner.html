@@ -388,7 +388,7 @@ Example queries:
   <ul class="states">
     <li><span class="chip hands">plan</span><span><b>PlanCreated</b>orch: plan created (1 step). Also after every replan.</span></li>
     <li><span class="chip hands">start</span><span><b>StepStarted</b>orch: ▶ s1 [crypto_researcher]</span></li>
-    <li><span class="chip ok">ok</span><span><b>StepSucceeded</b>orch: ✓ s1</span></li>
+    <li><span class="chip ok">ok</span><span><b>StepSucceeded</b>orch: ✓ s1. Alone, with no <code>StepStarted</code>, for a step a replan reuses (finished earlier, unchanged).</span></li>
     <li><span class="chip warn">fail</span><span><b>StepFailed</b>orch: ✗ s1 (attempt 1): the error. One per failed attempt; <code>retry_in_ms</code> = the wait before the next one, none on the last.</span></li>
     <li><span class="chip bad">out</span><span><b>StepExhausted</b>orch: ⊘ s1 exhausted: the last error.</span></li>
     <li><span class="chip heart">again</span><span><b>ReplanTriggered</b>orch: ↻ replan — the error.</span></li>
@@ -462,7 +462,7 @@ Example queries:
       <tbody>
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>RagPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
         <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, plan state, <code>TENGU_PLAN.md</code></td></tr>
-        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop; per-session plan guard</td></tr>
+        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt); per-session plan guard</td></tr>
         <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus (records before it broadcasts)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code></td><td>the bridge: each event as a trace event; a step's cause</td></tr>
         <tr><td><code>src/application/orchestrator/wiring.rs</code></td><td>the planner's chat port</td></tr>
@@ -477,7 +477,7 @@ Example queries:
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

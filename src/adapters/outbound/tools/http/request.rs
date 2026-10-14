@@ -153,7 +153,7 @@ impl PreparedRequest {
         let method = Method::from_bytes(method_str.trim().to_uppercase().as_bytes())
             .context("http_request: invalid HTTP method")?;
 
-        let file = match args.get("file_path").and_then(|v| v.as_str()) {
+        let file = match opt_arg(args, "file_path").filter(|fp| !matches!(*fp, "." | "./")) {
             Some(fp) => {
                 let validated = validate_path(ctx.workspace, fp)?;
                 ctx.scope.check_fs_read(&validated)?;
@@ -171,21 +171,19 @@ impl PreparedRequest {
         let headers_json = arg_to_string(args, "headers");
         let headers = parse_headers(headers_json.as_deref().unwrap_or("{}"), ctx)?;
         let auth = resolve_auth(
-            args.get("auth_bearer_env").and_then(|v| v.as_str()),
-            args.get("auth_basic_user_env").and_then(|v| v.as_str()),
-            args.get("auth_basic_pass_env").and_then(|v| v.as_str()),
+            opt_arg(args, "auth_bearer_env"),
+            opt_arg(args, "auth_basic_user_env"),
+            opt_arg(args, "auth_basic_pass_env"),
             ctx,
         )?;
 
         Ok(Self {
             url,
             method,
-            body: arg_to_string(args, "body"),
+            body: arg_to_string(args, "body").filter(|b| !b.is_empty()),
             file,
-            file_field_name: args
-                .get("file_field_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
+            file_field_name: opt_arg(args, "file_field_name")
+                .unwrap_or("file")
                 .to_string(),
             headers,
             auth,
@@ -474,6 +472,16 @@ impl HopAudit<'_> {
 // Helpers (lift-and-shift from http_tool_executor.rs)
 // ---------------------------------------------------------------------------
 
+/// An optional string argument; empty or blank counts as absent. Models
+/// often send every optional field, unused ones as `""` (and `file_path` as
+/// `"."`, a directory, which `from_args` also treats as absent).
+fn opt_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
 fn arg_to_string(args: &Value, key: &str) -> Option<String> {
     args.get(key).and_then(|v| match v {
         Value::String(s) => Some(s.clone()),
@@ -671,6 +679,46 @@ mod tests {
                 call_id: None,
             }
         }
+    }
+
+    /// The arguments a model sent on 2026-10-14 (every optional field, unused
+    /// ones empty, `file_path: "."`) build a plain GET; a real file with no
+    /// field name uploads as `file`, as the schema says.
+    #[test]
+    fn unused_optional_args_are_absent() {
+        let tmp = TempDir::new().unwrap();
+        let scope = ToolScope {
+            fs_roots: vec![tmp.path().to_path_buf()],
+            ..Default::default()
+        };
+        let harness = HttpHarness::with_scope(tmp.path(), scope);
+        let args = json!({
+            "auth_basic_pass_env": "", "auth_basic_user_env": "", "auth_bearer_env": "",
+            "body": "", "file_field_name": "file", "file_path": ".",
+            "headers": "{\"User-Agent\":\"web-scout\"}", "method": "GET", "return_body": true,
+            "url": "https://hn.algolia.com/api/v1/search?query=x",
+        });
+        let req = PreparedRequest::from_args(
+            &args,
+            "https://hn.algolia.com/api/v1/search?query=x",
+            "GET",
+            &harness.ctx(),
+        )
+        .expect("a model's empty optional fields must not fail the call");
+        assert!(req.file.is_none() && req.body.is_none());
+        assert!(matches!(req.auth, ResolvedAuth::None));
+
+        std::fs::write(tmp.path().join("report.txt"), b"x").unwrap();
+        let upload =
+            json!({ "url": "https://example.com/u", "method": "POST", "file_path": "report.txt" });
+        let req =
+            PreparedRequest::from_args(&upload, "https://example.com/u", "POST", &harness.ctx())
+                .unwrap();
+        assert!(
+            req.is_multipart(),
+            "a file with no field name uploads as `file`"
+        );
+        assert_eq!(req.file_field_name, "file");
     }
 
     #[tokio::test]

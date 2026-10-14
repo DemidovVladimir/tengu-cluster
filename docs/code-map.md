@@ -173,8 +173,8 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | Tool loop | `limits.max_tool_rounds`, `max_tool_result_chars`, `compact_result_limit`, `max_mcp_result_chars` | 70 / 300_000 / 200 / 50_000 |
 | Flow budget | `limits.max_tokens_per_flow`, `[agents.<a>.flow]` compaction | 100_000 |
 | Subagent step | `limits.max_tool_rounds`, `limits.step_timeout_secs` | 70 / 600 |
-| Claude Code | `[claude_code] cli_path`, `timeout_secs`; `[agents.<a>.claude_code] builtin_tools_profile` (`none`/`read_only`/`editor`/`editor_shell`) | `claude` / 120 / `editor_shell` |
-| Codex (ChatGPT subscription) | `[agents.<a>.codex] sandbox` (`read-only` / `workspace-write`), `cli_path`; `codex login` first; refused in a hardened sandbox | `read-only` / `codex` |
+| Claude Code | `[claude_code] cli_path`, `timeout_secs`; `[agents.<a>.claude_code] builtin_tools_profile` (`none`/`read_only`/`research`/`editor`/`editor_shell`, `config::CLAUDE_CODE_PROFILES`) | `claude` / 120 / `editor_shell` |
+| Codex (ChatGPT subscription) | `[agents.<a>.codex] sandbox` (`read-only` / `workspace-write`), `web_search` (`disabled` / `cached` / `live`), `cli_path`; `codex login` first; refused in a hardened sandbox | `read-only` / `disabled` / `codex` |
 | Planner | `[orchestrator] agent`, `max_attempts_per_step`, `max_replans` (use an OpenRouter agent) | — / 3 / 2 |
 | LLM traffic over Tor | `[egress] route_llm_api` | true under `network = "tor"` |
 | Embeddings | `[memory] embedding_model` — pinned: Postgres column is `vector(1536)` | `text-embedding-3-small` |

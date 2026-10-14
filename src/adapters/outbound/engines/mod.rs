@@ -137,7 +137,8 @@ pub(crate) fn build_step_engine(
                 let profile = crate::adapters::outbound::engines::claude_code::BuiltinToolsProfile::parse(profile)
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "agents.{agent_id}.claude_code.builtin_tools_profile: unknown profile '{profile}' (none | read_only | editor | editor_shell)"
+                            "agents.{agent_id}.claude_code.builtin_tools_profile: unknown profile '{profile}' ({})",
+                            crate::config::CLAUDE_CODE_PROFILES.join(" | ")
                         )
                     })?;
                 let model_opt = if agent_config.model.is_empty() {
@@ -179,12 +180,20 @@ pub(crate) fn build_step_engine(
         "codex" => {
             #[cfg(feature = "codex")]
             {
-                use crate::adapters::outbound::engines::codex::{CodexEngine, CodexSandbox};
+                use crate::adapters::outbound::engines::codex::{
+                    CodexEngine, CodexSandbox, CodexWebSearch,
+                };
                 let cx = agent_config.codex.clone().unwrap_or_default();
                 let sandbox = CodexSandbox::parse(&cx.sandbox).ok_or_else(|| {
                     anyhow::anyhow!(
                         "agents.{agent_id}.codex.sandbox: unknown value '{}' (read-only | workspace-write)",
                         cx.sandbox
+                    )
+                })?;
+                let web_search = CodexWebSearch::parse(&cx.web_search).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "agents.{agent_id}.codex.web_search: unknown value '{}' (disabled | cached | live)",
+                        cx.web_search
                     )
                 })?;
                 // The bridge loads `[agents.<agent_id>]` of this file, as
@@ -202,6 +211,7 @@ pub(crate) fn build_step_engine(
                     .with_scopes(agent_config.scopes.clone())
                     .with_bridge_agent(agent_id, &config_file)
                     .with_forward_env(cx.forward_env.clone())
+                    .with_web_search(web_search)
                     .with_step_bridge(
                         crate::adapters::outbound::bridge_env::StepBridge {
                             grant_workspace: step.grant_workspace,

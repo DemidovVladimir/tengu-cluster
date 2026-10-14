@@ -14,15 +14,36 @@ use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
 use crate::application::orchestrator::retry::{run_step_with_retry, RetryPolicy, StepOutcome};
 use crate::domain::plan::{Plan, StepId};
 
+/// Steps that finished in an earlier attempt of the same request: the step
+/// as it was planned, and its output.
+pub type Finished = HashMap<StepId, (Step, String)>;
+
 pub enum ExecResult {
-    Done { final_output: String },
-    NeedsReplan { failed: StepId, error: String },
+    Done {
+        final_output: String,
+    },
+    /// `finished` = every step of this attempt that completed (reused ones
+    /// included), for the next attempt ([`DagExecutor::run_reusing`]).
+    NeedsReplan {
+        failed: StepId,
+        error: String,
+        finished: Finished,
+    },
     Cancelled,
 }
 
 pub struct DagExecutor;
 
+/// A replanned step is the same work when everything the planner wrote for
+/// it is equal (id, agent, goal, dependencies, compose).
+fn same_step(a: &Step, b: &Step) -> bool {
+    serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
+}
+
 impl DagExecutor {
+    /// [`Self::run_reusing`] with nothing to reuse (tests; `replan::drive`
+    /// always passes what earlier attempts finished).
+    #[cfg(test)]
     pub async fn run(
         plan: &Plan,
         worker: Arc<dyn WorkerHandle>,
@@ -30,7 +51,60 @@ impl DagExecutor {
         events: &EventBus,
         cancel: Arc<AtomicBool>,
     ) -> ExecResult {
+        Self::run_reusing(plan, worker, policy, events, cancel, &Finished::new()).await
+    }
+
+    /// [`Self::run`], but a step identical to one that finished in an earlier
+    /// attempt ([`same_step`]), whose dependencies are all reused too, keeps
+    /// that output instead of running again — a replan used to re-run every
+    /// finished step (and pay for it) when only a later one had failed. A
+    /// reused step sends `StepSucceeded` (no `StepStarted`: nothing runs).
+    pub async fn run_reusing(
+        plan: &Plan,
+        worker: Arc<dyn WorkerHandle>,
+        policy: &RetryPolicy,
+        events: &EventBus,
+        cancel: Arc<AtomicBool>,
+        reuse: &Finished,
+    ) -> ExecResult {
         let mut completed_outputs: HashMap<StepId, String> = HashMap::new();
+        loop {
+            let mut added = false;
+            for step in &plan.steps {
+                if completed_outputs.contains_key(&step.id) {
+                    continue;
+                }
+                let Some((prev, output)) = reuse.get(&step.id) else {
+                    continue;
+                };
+                if same_step(prev, step)
+                    && step
+                        .depends_on
+                        .iter()
+                        .all(|d| completed_outputs.contains_key(d))
+                {
+                    info!(step = %step.id.0, agent = %step.agent, "step reused from the previous attempt");
+                    let _ = events.send(OrchestratorEvent::StepSucceeded {
+                        step_id: step.id.clone(),
+                        output: output.clone(),
+                    });
+                    completed_outputs.insert(step.id.clone(), output.clone());
+                    added = true;
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        let finished = |done: &HashMap<StepId, String>| -> Finished {
+            plan.steps
+                .iter()
+                .filter_map(|s| {
+                    done.get(&s.id)
+                        .map(|o| (s.id.clone(), (s.clone(), o.clone())))
+                })
+                .collect()
+        };
         let mut in_flight: HashSet<StepId> = HashSet::new();
         // Every way out — an early return, this future dropped unfinished —
         // aborts the steps still in flight ([`InFlight`]).
@@ -92,6 +166,7 @@ impl DagExecutor {
                     return ExecResult::NeedsReplan {
                         failed: id,
                         error: err,
+                        finished: finished(&completed_outputs),
                     };
                 }
                 Some(Err(join_err)) => {
@@ -100,6 +175,7 @@ impl DagExecutor {
                     return ExecResult::NeedsReplan {
                         failed: StepId::new("<panicked>"),
                         error: format!("task panic: {}", join_err),
+                        finished: finished(&completed_outputs),
                     };
                 }
                 None => break,
@@ -126,6 +202,7 @@ impl DagExecutor {
                     "step {} never became ready: its depends_on names an unknown step or forms a cycle",
                     stuck.id.0
                 ),
+                finished: finished(&completed_outputs),
             };
         }
 
@@ -136,6 +213,7 @@ impl DagExecutor {
             [] => ExecResult::NeedsReplan {
                 failed: StepId::new("<no-leaf>"),
                 error: "plan has no steps".into(),
+                finished: Finished::new(),
             },
             [leaf] => ExecResult::Done {
                 final_output: completed_outputs.get(&leaf.id).cloned().unwrap_or_default(),
@@ -325,6 +403,79 @@ mod tests {
         });
         DagExecutor::run(&linear_plan(), worker, &policy, &new_bus(), no_cancel()).await;
         assert!(untraced.lock().await.iter().all(|(_, c)| c.is_none()));
+    }
+
+    #[tokio::test]
+    async fn replan_reuses_identical_finished_steps() {
+        struct FailS2;
+        #[async_trait]
+        impl WorkerHandle for FailS2 {
+            async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+                if step.id.0 == "s2" {
+                    anyhow::bail!("s2 broke")
+                }
+                Ok(format!("out-{}", step.id.0))
+            }
+        }
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        let first = DagExecutor::run(
+            &linear_plan(),
+            Arc::new(FailS2),
+            &policy,
+            &new_bus(),
+            no_cancel(),
+        )
+        .await;
+        let ExecResult::NeedsReplan {
+            failed, finished, ..
+        } = first
+        else {
+            panic!("s2 must fail the attempt")
+        };
+        assert_eq!(failed.0, "s2");
+        assert_eq!(
+            finished.keys().map(|k| k.0.as_str()).collect::<Vec<_>>(),
+            ["s1"]
+        );
+
+        // Same s1 in the new plan: only s2 runs; s1's output still feeds it.
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let worker = Arc::new(OrderRecordingWorker {
+            order: order.clone(),
+        });
+        let again = DagExecutor::run_reusing(
+            &linear_plan(),
+            worker,
+            &policy,
+            &new_bus(),
+            no_cancel(),
+            &finished,
+        )
+        .await;
+        assert!(matches!(again, ExecResult::Done { .. }));
+        assert_eq!(*order.lock().await, vec!["s2".to_string()]);
+
+        // A changed s1 (other goal) is new work: both run.
+        let mut changed = linear_plan();
+        changed.steps[0].goal = "one, differently".into();
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let worker = Arc::new(OrderRecordingWorker {
+            order: order.clone(),
+        });
+        DagExecutor::run_reusing(
+            &changed,
+            worker,
+            &policy,
+            &new_bus(),
+            no_cancel(),
+            &finished,
+        )
+        .await;
+        assert_eq!(
+            *order.lock().await,
+            vec!["s1".to_string(), "s2".to_string()]
+        );
     }
 
     #[tokio::test]

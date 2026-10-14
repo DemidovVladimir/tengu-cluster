@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::application::orchestrator::executor::{DagExecutor, ExecResult};
+use crate::application::orchestrator::executor::{DagExecutor, ExecResult, Finished};
 use crate::application::orchestrator::retry::RetryPolicy;
 use crate::domain::plan::Plan;
 use crate::ports::orchestration::WorkerHandle;
@@ -59,17 +59,21 @@ pub async fn drive(
         rendered: None,
     };
     let mut replans_left = max_replans;
+    // Steps that finished in any attempt so far: an identical step in the
+    // replanned DAG keeps its output (`DagExecutor::run_reusing`).
+    let mut finished = Finished::new();
     loop {
         let plan = plan_opt.as_ref().unwrap().clone();
         active_plan.register(&plan);
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
-        match DagExecutor::run(
+        match DagExecutor::run_reusing(
             &plan,
             Arc::clone(&worker),
             policy,
             events,
             Arc::clone(&cancel),
+            &finished,
         )
         .await
         {
@@ -89,7 +93,12 @@ pub async fn drive(
                 });
                 return "Stopped by user.".into();
             }
-            ExecResult::NeedsReplan { failed, error } => {
+            ExecResult::NeedsReplan {
+                failed,
+                error,
+                finished: done,
+            } => {
+                finished.extend(done);
                 if replans_left == 0 {
                     let msg = format!(
                         "Unable to complete the request after {} replans. Last error: {}",

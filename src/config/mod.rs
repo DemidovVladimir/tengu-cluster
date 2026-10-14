@@ -941,9 +941,24 @@ fn default_claude_timeout_secs() -> u64 {
     120
 }
 
+/// `[agents.<a>.claude_code] builtin_tools_profile` values — the Claude
+/// Code CLI's own tools (`engines/claude_code.rs::BuiltinToolsProfile`; a
+/// test keeps the two equal).
+///
+/// | Profile | Built-ins |
+/// |---|---|
+/// | `none` | none: tengu tools only (the only value a hardened sandbox allows) |
+/// | `read_only` | Read, Glob, Grep |
+/// | `research` | Read, Glob, Grep, WebSearch — the search runs at Anthropic on the subscription; pages are fetched with tengu's `http_request` (scopes + egress), never WebFetch |
+/// | `editor` | + Edit, Write, MultiEdit |
+/// | `editor_shell` | + Bash (default) |
+pub const CLAUDE_CODE_PROFILES: &[&str] =
+    &["none", "read_only", "research", "editor", "editor_shell"];
+
 /// Per-agent Claude Code configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentClaudeCodeConfig {
+    /// One of [`CLAUDE_CODE_PROFILES`], read trimmed; default `editor_shell`.
     #[serde(default = "default_builtin_tools_profile")]
     pub builtin_tools_profile: String,
 }
@@ -986,6 +1001,10 @@ impl Default for AgentLocalConfig {
 /// its own built-in shell and file edits (`engines/codex.rs`).
 pub(crate) const CODEX_SANDBOXES: &[&str] = &["read-only", "workspace-write"];
 
+/// `[agents.<a>.codex] web_search` values (`engines/codex.rs::CodexWebSearch`;
+/// a test keeps the two equal).
+pub(crate) const CODEX_WEB_SEARCH: &[&str] = &["disabled", "cached", "live"];
+
 /// Per-agent OpenAI Codex CLI (`engine = "codex"`, `engines/codex.rs`): the
 /// operator's ChatGPT subscription (`codex login`), never an API key — the
 /// engine removes `OPENAI_API_KEY` / `CODEX_API_KEY` from the CLI's env.
@@ -1016,6 +1035,12 @@ pub struct AgentCodexConfig {
     /// every `[keys.env]` name, `OPENAI_API_KEY`, `CODEX_*`.
     #[serde(default)]
     pub forward_env: Vec<String>,
+    /// OpenAI's hosted web search for the CLI (`codex exec -c web_search`):
+    /// `disabled` (default), `cached` (OpenAI's index) or `live`. It runs at
+    /// OpenAI on the subscription, not from this machine; pages the agent
+    /// must read still come through tengu's `http_request` (scopes, egress).
+    #[serde(default = "default_codex_web_search")]
+    pub web_search: String,
 }
 
 impl Default for AgentCodexConfig {
@@ -1024,8 +1049,13 @@ impl Default for AgentCodexConfig {
             sandbox: default_codex_sandbox(),
             cli_path: default_codex_cli_path(),
             forward_env: Vec::new(),
+            web_search: default_codex_web_search(),
         }
     }
+}
+
+fn default_codex_web_search() -> String {
+    "disabled".to_string()
 }
 
 /// Why `name` may not be in `[agents.<a>.codex] forward_env` (`None`: it
@@ -1626,7 +1656,7 @@ impl Config {
             errors.require_one_of(
                 &format!("agents.{agent_id}.claude_code.builtin_tools_profile"),
                 &cc.builtin_tools_profile,
-                &["none", "read_only", "editor", "editor_shell"],
+                CLAUDE_CODE_PROFILES,
             );
         }
         if let Some(ref cx) = agent.codex {
@@ -1636,6 +1666,11 @@ impl Config {
                 CODEX_SANDBOXES,
             );
             errors.require_nonempty(&format!("agents.{agent_id}.codex.cli_path"), &cx.cli_path);
+            errors.require_one_of(
+                &format!("agents.{agent_id}.codex.web_search"),
+                cx.web_search.trim(),
+                CODEX_WEB_SEARCH,
+            );
         }
         errors.require_one_of(
             &format!("agents.{agent_id}.default_lens"),
@@ -2174,6 +2209,7 @@ ttl_days = 7
         };
         assert!(with("claude_code", " none").is_ok());
         assert!(with("claude_code", "editor\n").is_ok());
+        assert!(with("claude_code", "research").is_ok());
         for engine in ["claude_code", "openrouter"] {
             let err = with(engine, "nnone").expect_err(engine).to_string();
             assert!(

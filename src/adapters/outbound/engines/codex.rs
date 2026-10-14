@@ -12,7 +12,8 @@
 //! | `--ignore-user-config` `--ignore-rules` | no `$CODEX_HOME/config.toml` (the operator's MCP servers, profiles, hooks, notify) and no execpolicy rules; the ChatGPT login (`$CODEX_HOME/auth.json`) still works |
 //! | `--ephemeral` `--skip-git-repo-check` | no session files; runs in any workspace |
 //! | `-s <sandbox>` (`[agents.<a>.codex] sandbox`, default `read-only`) `-c approval_policy="never"` | the CLI's built-in shell / patch tool: read-only or workspace-write, no network, never asks |
-//! | `-c web_search="disabled"` · `-c features.<f>=false` ([`OFF_FEATURES`]) | Codex integrations that run outside tengu scopes and egress (apps, plugins, browser / computer use, image generation, sub-agents, memories, hooks); `features.*` overrides tolerate a name this CLI version lacks |
+//! | `-c web_search="<mode>"` (`[agents.<a>.codex] web_search`, default `disabled`) | OpenAI's hosted web search on the subscription: `cached` (OpenAI's index) or `live`; it runs at OpenAI, not from this machine, so it needs no tengu egress — pages the agent must read come through tengu's `http_request` |
+//! | `-c features.<f>=false` ([`OFF_FEATURES`]) | Codex integrations that run outside tengu scopes and egress (apps, plugins, browser / computer use, image generation, sub-agents, memories, hooks); `features.*` overrides tolerate a name this CLI version lacks |
 //! | `-m <model>` · `-C <workspace>` · `-c developer_instructions=…` | the agent's model; its workspace; the system prompt (once — not repeated in stdin, `cli_run::format_prompt`) |
 //! | `-c mcp_servers.tengu-tools.{command,args,env.*,env_vars,default_tools_approval_mode="approve",required=true,startup_timeout_sec,tool_timeout_sec}` | the bridge; no secret value on the command line — Codex starts MCP servers with a minimal env, so `env_vars` forwards the NAMES the CLI itself holds (the base set + `forward_env`, below): a bridged tool reads only those; every bridged call is pre-approved (tengu scopes gate them in the bridge) |
 //!
@@ -26,6 +27,7 @@
 //! |---|---|
 //! | `compress_and_store` succeeded (a `run-agent` step's bridge stored the summary) | the CLI is stopped once no other call is open, as the in-process loop stops after its round |
 //! | `max_tool_rounds` | counts tool calls (MCP + built-in) of the run: past it the CLI is killed with an error |
+//! | silence | `--json` reports nothing while the model reasons (minutes at high effort): every [`KEEPALIVE_SECS`] of silence the engine sends an empty `ThinkingDelta` so the caller's `stream_event_timeout_secs` does not fire, and kills the CLI only after [`idle_limit_secs`] (the configured timeout, at least [`REASONING_IDLE_FLOOR_SECS`]) |
 //! | `turn.failed` · a non-zero exit with no answer | `StreamEvent::Error` with the CLI's message (last `error` event, else stderr's tail) |
 //! | hardened sandbox | refused at load (`config/hardening.rs`): the built-in shell ignores tengu scopes |
 
@@ -106,11 +108,53 @@ impl CodexSandbox {
     }
 }
 
+/// `[agents.<a>.codex] web_search` → `codex exec -c web_search=…`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CodexWebSearch {
+    #[default]
+    Disabled,
+    Cached,
+    Live,
+}
+
+impl CodexWebSearch {
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        match s.trim() {
+            "disabled" => Some(Self::Disabled),
+            "cached" => Some(Self::Cached),
+            "live" => Some(Self::Live),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Cached => "cached",
+            Self::Live => "live",
+        }
+    }
+}
+
+/// Seconds of CLI silence between keepalives to the caller (module table).
+pub(crate) const KEEPALIVE_SECS: u64 = 30;
+
+/// The least silence that kills the CLI: a reasoning model says nothing
+/// over `--json` until it finishes thinking.
+pub(crate) const REASONING_IDLE_FLOOR_SECS: u64 = 900;
+
+/// Silence that kills the CLI: the configured timeout, at least
+/// [`REASONING_IDLE_FLOOR_SECS`].
+pub(crate) fn idle_limit_secs(configured: u64) -> u64 {
+    configured.max(REASONING_IDLE_FLOOR_SECS)
+}
+
 pub(crate) struct CodexEngine {
     cli_path: PathBuf,
     sandbox: CodexSandbox,
+    web_search: CodexWebSearch,
     model: String,
-    /// Idle timeout: no output for this long kills the CLI.
+    /// Configured idle timeout; the CLI dies after [`idle_limit_secs`] of it.
     timeout_secs: u64,
     /// The agent's scopes for the bridge's fallback (`TENGU_BRIDGE_SCOPES`).
     scopes: HashMap<String, ToolScope>,
@@ -132,6 +176,7 @@ impl CodexEngine {
         Self {
             cli_path,
             sandbox,
+            web_search: CodexWebSearch::Disabled,
             model,
             timeout_secs,
             scopes: HashMap::new(),
@@ -165,6 +210,11 @@ impl CodexEngine {
         self.forward_env = names;
         self
     }
+
+    pub(crate) fn with_web_search(mut self, mode: CodexWebSearch) -> Self {
+        self.web_search = mode;
+        self
+    }
 }
 
 /// The bridge as `-c` overrides ([`cli_args`]).
@@ -185,6 +235,7 @@ fn toml_str(s: &str) -> String {
 pub(crate) fn cli_args(
     model: &str,
     sandbox: CodexSandbox,
+    web_search: CodexWebSearch,
     workspace: Option<&Path>,
     system_prompt: Option<&str>,
     bridge: Option<&McpBridge<'_>>,
@@ -200,12 +251,14 @@ pub(crate) fn cli_args(
         sandbox.as_str(),
         "-c",
         "approval_policy=\"never\"",
-        "-c",
-        "web_search=\"disabled\"",
     ]
     .into_iter()
     .map(Into::into)
     .collect();
+    args.extend([
+        "-c".into(),
+        format!("web_search={}", toml_str(web_search.as_str())).into(),
+    ]);
     for f in OFF_FEATURES {
         args.extend(["-c".into(), format!("features.{f}=false").into()]);
     }
@@ -726,6 +779,7 @@ impl Engine for CodexEngine {
         cmd.args(cli_args(
             &self.model,
             self.sandbox,
+            self.web_search,
             workspace.as_deref(),
             system_prompt,
             bridge.as_ref(),
@@ -774,12 +828,15 @@ impl Engine for CodexEngine {
             let mut transcript = transcript;
             let mut lines = tokio::io::BufReader::new(stdout).lines();
             let mut st = RunState::default();
-            let idle = Duration::from_secs(timeout_secs);
+            let idle = Duration::from_secs(idle_limit_secs(timeout_secs));
+            let tick = Duration::from_secs(KEEPALIVE_SECS).min(idle);
+            let mut silent = Duration::ZERO;
             let (mut timed_out, mut tool_limit_hit, mut step_done) = (false, false, false);
             let mut summary_stored = false;
             loop {
-                match tokio::time::timeout(idle, lines.next_line()).await {
+                match tokio::time::timeout(tick, lines.next_line()).await {
                     Ok(Ok(Some(line))) => {
+                        silent = Duration::ZERO;
                         if line.trim().is_empty() {
                             continue;
                         }
@@ -810,8 +867,22 @@ impl Engine for CodexEngine {
                         break;
                     }
                     Err(_) => {
-                        timed_out = true;
-                        break;
+                        silent += tick;
+                        if silent >= idle {
+                            timed_out = true;
+                            break;
+                        }
+                        // Alive but quiet: the model is reasoning. An empty
+                        // ThinkingDelta keeps the caller's idle clock at 0.
+                        if tx
+                            .send(StreamEvent::ThinkingDelta {
+                                text: String::new(),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             }
@@ -847,9 +918,10 @@ impl Engine for CodexEngine {
                     ),
                 })
             } else if timed_out {
-                error!(timeout_secs, "Codex CLI idle timeout — killing subprocess");
+                let idle_secs = idle.as_secs();
+                error!(idle_secs, "Codex CLI idle timeout — killing subprocess");
                 Some(StreamEvent::Error {
-                    message: format!("Codex CLI idle timeout — no output for {timeout_secs}s"),
+                    message: format!("Codex CLI idle timeout — no output for {idle_secs}s"),
                 })
             } else if st.failed {
                 None // the `turn.failed` error is already out
@@ -922,6 +994,36 @@ mod tests {
         o.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
+    /// `web_search` reaches the CLI as given (default off); the config's
+    /// values and the engine's parser agree; silence floors at 900 s.
+    #[test]
+    fn web_search_mode_and_reasoning_idle_floor() {
+        for (name, mode) in [
+            ("disabled", CodexWebSearch::Disabled),
+            ("cached", CodexWebSearch::Cached),
+            ("live", CodexWebSearch::Live),
+        ] {
+            assert_eq!(CodexWebSearch::parse(name), Some(mode));
+            let args = strings(cli_args(
+                "m",
+                CodexSandbox::ReadOnly,
+                mode,
+                None,
+                None,
+                None,
+            ));
+            let o = overrides(&args);
+            assert_eq!(get(&o, "web_search").unwrap().as_str(), Some(name));
+        }
+        for name in crate::config::CODEX_WEB_SEARCH {
+            assert!(CodexWebSearch::parse(name).is_some(), "{name}");
+        }
+        assert_eq!(CodexWebSearch::parse("on"), None);
+        assert_eq!(idle_limit_secs(120), REASONING_IDLE_FLOOR_SECS);
+        assert_eq!(idle_limit_secs(3_000), 3_000);
+        assert!(KEEPALIVE_SECS < REASONING_IDLE_FLOOR_SECS);
+    }
+
     /// Every run: isolated from the operator's Codex config, never asks,
     /// no web search or desktop integrations, the prompt from stdin last.
     #[test]
@@ -929,6 +1031,7 @@ mod tests {
         let args = strings(cli_args(
             "gpt-5.5",
             CodexSandbox::ReadOnly,
+            CodexWebSearch::Disabled,
             Some(Path::new("/srv/ws")),
             None,
             None,
@@ -964,6 +1067,7 @@ mod tests {
         let write = strings(cli_args(
             "m",
             CodexSandbox::WorkspaceWrite,
+            CodexWebSearch::Disabled,
             None,
             None,
             None,
@@ -977,7 +1081,14 @@ mod tests {
     #[test]
     fn system_prompt_is_developer_instructions() {
         let sp = "You are \"tengu\".\nUse '.' for the root \\ and \u{1F600}.";
-        let args = strings(cli_args("m", CodexSandbox::ReadOnly, None, Some(sp), None));
+        let args = strings(cli_args(
+            "m",
+            CodexSandbox::ReadOnly,
+            CodexWebSearch::Disabled,
+            None,
+            Some(sp),
+            None,
+        ));
         let o = overrides(&args);
         assert_eq!(
             get(&o, "developer_instructions").unwrap().as_str(),
@@ -986,6 +1097,7 @@ mod tests {
         let none = strings(cli_args(
             "m",
             CodexSandbox::ReadOnly,
+            CodexWebSearch::Disabled,
             None,
             Some("  "),
             None,
@@ -1027,6 +1139,7 @@ mod tests {
         let args = strings(cli_args(
             "m",
             CodexSandbox::ReadOnly,
+            CodexWebSearch::Disabled,
             None,
             None,
             Some(&bridge),

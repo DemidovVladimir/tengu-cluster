@@ -814,7 +814,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md)
+# builtin_tools_profile = "editor_shell"  # none | read_only | research | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; "none" also runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md; "research" = Read/Glob/Grep + WebSearch, run at Anthropic on the subscription, never WebFetch — pages go through http_request)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"
@@ -827,18 +827,23 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # Run agents on your ChatGPT subscription through the OpenAI Codex CLI
 # (feature `codex`, on by default). Requires: `npm i -g @openai/codex` and
 # `codex login` (ChatGPT). Tengu tools reach Codex through `tengu mcp-bridge`;
-# your ~/.codex/config.toml (MCP servers, profiles, hooks) is not loaded, and
-# Codex's web search, apps, plugins and browser / computer use are off.
+# your ~/.codex/config.toml (MCP servers, profiles, hooks, model, effort) is
+# not loaded, and Codex's apps, plugins and browser / computer use are off;
+# its web search is off unless `web_search` below says otherwise.
 # Refused in a hardened sandbox ([risk], [soe], a Solana signer).
 # See docs/engine-backends.md § Codex.
 #
 # [agents.coder]
 # engine = "codex"
-# model = "gpt-5.5"                         # bare OpenAI model id the CLI accepts
+# model = "gpt-5.5"                         # bare OpenAI model id; a ChatGPT login refuses some
+#                                           # ("not supported when using Codex with a ChatGPT
+#                                           # account") — use one your login serves
 # workspace = "~/projects/my-app"
 #
 # [agents.coder.codex]
 # sandbox = "read-only"                     # read-only | workspace-write (Codex's own shell / patch tool; never network)
+# web_search = "disabled"                   # disabled | cached | live: OpenAI's hosted search, run at
+#                                           # OpenAI on the subscription; pages still via http_request
 # cli_path = "codex"                        # default: `codex` on PATH
 # forward_env = ["OPENROUTER_API_KEY"]      # default []: the CLI starts from an EMPTY
 #                                           # env (no vault secret, .env key or seal-proxy

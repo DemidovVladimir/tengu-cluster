@@ -45,6 +45,10 @@ use crate::ports::engine::{Engine, EngineDiagnostics};
 pub(crate) enum BuiltinToolsProfile {
     None,
     ReadOnly,
+    /// Read-only + WebSearch (server-side at Anthropic, on the
+    /// subscription). No WebFetch: it would fetch from this machine outside
+    /// tengu's egress and scopes — pages go through `http_request`.
+    Research,
     Editor,
     EditorShell,
 }
@@ -58,6 +62,7 @@ impl BuiltinToolsProfile {
         match s.trim() {
             "none" => Some(Self::None),
             "read_only" => Some(Self::ReadOnly),
+            "research" => Some(Self::Research),
             "editor" => Some(Self::Editor),
             "editor_shell" => Some(Self::EditorShell),
             _ => None,
@@ -68,6 +73,7 @@ impl BuiltinToolsProfile {
         match self {
             Self::None => String::new(),
             Self::ReadOnly => "Read,Glob,Grep".into(),
+            Self::Research => "Read,Glob,Grep,WebSearch".into(),
             Self::Editor => "Read,Glob,Grep,Edit,Write,MultiEdit".into(),
             Self::EditorShell => "Read,Glob,Grep,Edit,Write,MultiEdit,Bash".into(),
         }
@@ -1477,6 +1483,18 @@ mod tests {
         for bad in ["", "None", "shell", "editor-shell"] {
             assert_eq!(BuiltinToolsProfile::parse(bad), None, "{bad:?}");
         }
+    }
+
+    /// Config validation (`config::CLAUDE_CODE_PROFILES`) and the engine
+    /// accept the same names; `research` adds WebSearch and never WebFetch.
+    #[test]
+    fn profiles_match_config_and_research_has_no_fetch() {
+        for name in crate::config::CLAUDE_CODE_PROFILES {
+            assert!(BuiltinToolsProfile::parse(name).is_some(), "{name}");
+        }
+        let research = BuiltinToolsProfile::Research.cli_tools_arg();
+        assert_eq!(research, "Read,Glob,Grep,WebSearch");
+        assert!(!research.contains("WebFetch") && !research.contains("Bash"));
     }
 
     fn msg(role: Role, content: &str) -> Message {
