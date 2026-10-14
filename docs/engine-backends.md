@@ -133,6 +133,7 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 - Idle timeout between stream events = `[agents.<id>.limits] stream_event_timeout_secs`; `[claude_code] cli_path` locates the binary
 - `model` is the bare slug (`claude-sonnet-4-6`), not the OpenRouter form
 - Uses Claude subscription, no per-token cost
+- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner turn gets no bridge tools and no `[[mcp_servers]]` (`bootstrap::orchestrator::run_turn_inner`, test `planner_turn_gets_no_bridge_tools`), so the CLI has no tool and writes plan JSON; another profile keeps its built-ins. Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
 
 ### Builtin Tools Profiles
 
@@ -205,6 +206,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 |---|---|
 | `run-agent` step | `bridge_tools` + workspace grant + the summary file the bridge serves `compress_and_store` into (`engines::bridges_tools`); a stored summary ends the CLI run |
 | `max_tool_rounds` | counts tool calls (MCP + built-in) of the run |
+| planner turn | no bridge, no `[[mcp_servers]]` (2026-10-14, as Claude Code); its built-in shell stays (`-s read-only` by default) |
 | silence | `--json` reports nothing while the model reasons (minutes at high effort), which used to trip `stream_event_timeout_secs` (120 s: "Engine stream timed out — no data for 120s"); now every `KEEPALIVE_SECS` (30) of silence the engine sends an empty `ThinkingDelta` (resets the caller's idle clock) and kills the CLI only after `idle_limit_secs` = max(configured timeout, `REASONING_IDLE_FLOOR_SECS` 900) — "Codex CLI idle timeout — no output for <n>s" |
 | failure | `turn.failed`, or a non-zero exit with no answer → an error naming the CLI's reason (last `error` event, else stderr) |
 | `[egress]` | the CLI's own API traffic gets `HTTPS_PROXY` (HTTP CONNECT on the proxy port) when `route_llm_api`; its shell has no network in either sandbox mode |

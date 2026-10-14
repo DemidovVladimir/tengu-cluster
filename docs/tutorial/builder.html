@@ -442,7 +442,7 @@
     ["agent", "skill", "loads", "agents.<agent>.skill_packages", "a skill loaded twice warns"],
     ["agent", "workspace", "works in", "agents.<agent>.workspace", "one workspace per agent"],
     ["agent", "agent", "delegates to", "agents.<to>.description", "only the planner delegates; the target needs a description"],
-    ["orchestrator", "agent", "plans with", "orchestrator.agent", "one planner; a CLI engine there warns"],
+    ["orchestrator", "agent", "plans with", "orchestrator.agent", "one planner; Claude Code there warns unless its built-in tools are none, Codex always warns (its own shell)"],
     ["secret", "agent", "key for", "the engine's key (local: local.api_key_env)", "OpenRouter reads OPENROUTER_API_KEY; Claude / Codex use their CLI login"],
     ["secret", "tool", "readable by", "agents.<agent>.scopes.<tool>.env_reads", "only a restricted tool; else a warning"],
     ["secret", "seal_proxy", "served by", "keys.env · keys.strip", "the secret must be stored in Cloudflare"],

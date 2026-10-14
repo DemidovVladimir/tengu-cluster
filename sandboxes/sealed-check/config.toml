@@ -55,10 +55,13 @@ max_queued_per_loop = 4
 # Private (no description, not default): never chats, never routable. engine + model
 # are required by the schema, never called.
 [agents.checker]
-engine = "openrouter"
-model = "anthropic/claude-haiku-4-5"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 workspace = "~/tengu-sealed-check/ws"
 tools = ["hex_to_uint256"]
+
+[agents.checker.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 [agents.checker.scopes]
 hex_to_uint256 = {}                   # grants nothing: no fs / net / env / shell / wallet

@@ -48,10 +48,13 @@ max_queued_per_loop = 4
 # `description` → not routable, not default). Jev is not a chat engine — the loop
 # calls it. `tools` is the allow-list on every surface (keeps run_command out).
 [agents.lab]
-engine = "openrouter"
-model = "anthropic/claude-haiku-4-5"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 workspace = "~/tengu-lab/control-loop-lab"
 tools = ["read_file", "write_file", "list_directory"]
+
+[agents.lab.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 # A loop / feed executor adds the workspace to every configured scope
 # (bootstrap/tools.rs grant_workspace_root), so the out/ root documents intent;

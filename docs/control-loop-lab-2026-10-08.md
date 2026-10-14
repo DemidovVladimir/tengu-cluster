@@ -10,20 +10,21 @@
 | actions | `hold` · `write_marker` · `read_probe` | terminal · `write_file` `out/marker.txt` = `scenario=<event.scenario>` (bound from the event, no question) · `read_file` `in/absent.txt` (never exists ⇒ fails; `read_only`) |
 | scenario → choice | `goal` | `normal` → hold · `act` → write_marker, hold · `tool-error` → read_probe, hold · `uncertain` → no clear action |
 | feeds (`tengu run`) | `[feeds.tick]` · `[feeds.probe]` | tick: event `{scenario = "normal", source = "tick"}` every 20 s + at start, required, stale 60 s · probe: `read_file in/absent.txt` every 30 s, optional ⇒ `down` (fatal) |
-| agent | `[agents.lab]` | private (no `description`, not default) · `tools = ["read_file", "write_file", "list_directory"]` · scopes = fs roots inside `~/tengu-lab/control-loop-lab` only |
+| agent | `[agents.lab]` | private (no `description`, not default) · `engine = "claude_code"`, `claude-haiku-5-5`, `builtin_tools_profile = "none"` (2026-10-14; was OpenRouter) — the engine only has to build, Jev picks and tools execute · `tools = ["read_file", "write_file", "list_directory"]` · scopes = fs roots inside `~/tengu-lab/control-loop-lab` only |
 | runtime | `[runtime]` | beat 2 s · stale 10 s · grace 10 s · 1 event in flight · 4 queued |
 | egress | `[egress]` | `open` (Jev only; no tool host) |
 | events | `scenarios/{normal,act,tool-error}.json` | `{"scenario": …}` |
 | maps | `scenarios/uncertain.map.json` · `scenarios/act-dry.map.json` | `act_at 1.0` + dry-run on · dry-run on (`ExecutionMap::apply` narrows only) |
 | studio | `[studio]` | `control = true`: `tengu studio` may Play / Stop this runtime and send `scenarios/<name>.json` events (`config/studio.rs`; the only sandbox that sets it) |
-| never | — | `[risk]` · signer · `[generation]` · `run_command` · network tool · write outside `out/marker.txt` |
+| never | — | `[risk]` · signer · `[generation]` · `run_command` · network tool · write outside `out/marker.txt` · a `codex` agent · Claude Code built-ins (profile other than `none`) |
 
 ## Setup (both paths)
 
 | Env var (names only) | Need | Why |
 |---|---|---|
 | `TENGU_HOME` | **required** = `$HOME/tengu-lab/home`, exported **first** | isolates `logs/decisions.jsonl`, `logs/maps/`, `state/` from `~/.tengu` (the weekend run). tengu loads the nearest `.env` up from the cwd (dotenvy walks parent dirs): a worktree under `.claude/worktrees/` reads the main checkout's `.env`, which sets `TENGU_HOME=~/.tengu`. An exported value wins (dotenv never overrides) |
-| `OPENROUTER_API_KEY` | required | Jev decisions + the `lab` engine build (`doctor`). Export it; a parent `.env` may also supply it (see `TENGU_HOME`) — never print it |
+| `OPENROUTER_API_KEY` | required | Jev decisions only (the `lab` engine is `claude_code` since 2026-10-14). Export it; a parent `.env` may also supply it (see `TENGU_HOME`) — never print it |
+| — (no env var) | required | the `lab` engine: a `--features claude_code` build + the `claude` CLI on `PATH`, logged in (the Claude subscription) — `doctor` builds every agent's engine |
 | `OPENROUTER_BASE_URL` | optional | default `https://openrouter.ai/api` |
 | `RUST_LOG` | optional | `tengu run` and the `tengu studio` server log to stderr + `$TENGU_HOME/logs/tengu.log` (`RUST_LOG` replaces their default `tengu=info`); `decide` / `doctor` / `studio graph` / `trace` log to **stderr** (since ST-11; stdout = the JSON / report alone, the server's stdout = its URL alone) — there `tengu=info` is always added, so `RUST_LOG` cannot silence them |
 
@@ -31,7 +32,7 @@
 cd <repo or worktree root>               # --sandbox is cwd-relative
 export TENGU_HOME="$HOME/tengu-lab/home"   # never ~/.tengu
 mkdir -p "$HOME/tengu-lab/control-loop-lab/in" "$HOME/tengu-lab/control-loop-lab/out" "$TENGU_HOME"
-cargo build --release                      # default features include `studio` (S1–S7); `cargo build` (debug, ST-03) behaves the same
+cargo build --release --features claude_code   # `lab` engine; default features include `studio` (S1–S7); `cargo build` (debug, ST-03) behaves the same
 T=target/release/tengu                     # $CARGO_TARGET_DIR/release/tengu when that is set
 S=sandboxes/control-loop-lab; W="$HOME/tengu-lab/control-loop-lab"
 J() { sed -n '/^{/,$p'; }                  # only for a binary before ST-11 (logs on stdout): $T decide … | J | jq …
@@ -51,7 +52,7 @@ Jev answers vary per call: A1–A4 pass when the expected result wins ≥ 2 of 3
 
 | # | Scenario | Command | Expected |
 |---|---|---|---|
-| A0 | config + engines | `$T doctor --sandbox control-loop-lab` | exit 0 · `lab: engine=openrouter model=anthropic/claude-haiku-4-5 …` · `network: open` · `proxy: none (direct)` |
+| A0 | config + engines | `$T doctor --sandbox control-loop-lab` | exit 0 · `lab: engine=claude_code model=claude-haiku-5-5 …` · `network: open` · `proxy: none (direct)` |
 | A1 | normal | `$T decide --sandbox control-loop-lab --loop demo --event $S/scenarios/normal.json` | exit 0 · `outcomes = [{"outcome":"stopped","action":"hold"}]` · `history = [{"t":1,"action":"hold"}]` · `session_id = decide-demo-<uuid>` · `audit = $TENGU_HOME/logs/decisions.jsonl` · `out/marker.txt` not written (absent on a fresh lab; after the quick start its mtime stays unchanged) |
 | A2 | act | `echo '{"scenario":"act"}' \| $T decide --sandbox control-loop-lab --loop demo --event -` | `outcomes = [{"outcome":"executed","action":"write_marker"},{"outcome":"stopped","action":"hold"}]` · `history[0] = {"t":1,"action":"write_marker","args":{"content":"scenario=act","path":"out/marker.txt"},"ok":true,"result":"File 'out/marker.txt' written (12 bytes)"}` · `cat $W/out/marker.txt` → `scenario=act` |
 | A3 | tool-error | `$T decide --sandbox control-loop-lab --loop demo --event $S/scenarios/tool-error.json` | exit 0 (a tool failure is not a loop failure) · `outcomes = [{"outcome":"executed","action":"read_probe"},{"outcome":"stopped","action":"hold"}]` · `history[0]`: `"args":{"path":"in/absent.txt"}`, `"ok":false`, `result` starts `Cannot read file 'in/absent.txt'` |
@@ -104,7 +105,8 @@ Recorded: `docs/studio-trace-evidence-2026-10-08.md` § ST-20, § ST-21 / ST-22.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Failed to load sandbox 'control-loop-lab' from sandboxes/control-loop-lab/config.toml` | cwd is not the repo / worktree root | `cd` there (`--sandbox` is cwd-relative) |
-| `lab: backend init error: OPENROUTER_API_KEY is required` · `OPENROUTER_API_KEY is required for the decision model` | key not exported in this terminal | export it (name only in notes and transcripts) |
+| `OPENROUTER_API_KEY is required for the decision model` | key not exported in this terminal (Jev) | export it (name only in notes and transcripts) |
+| `lab: backend init error: claude_code engine requires --features claude_code` | binary built without `claude_code` | `cargo build --release --features claude_code`; `claude` on `PATH` and logged in |
 | lines land in `~/.tengu/logs/decisions.jsonl` | `TENGU_HOME` not exported in that terminal (a parent `.env` may set `~/.tengu`) | stop; export; never clean `~/.tengu` |
 | `jq: parse error` on `decide` output | a binary before ST-11: stdout starts with `tengu=info` log lines | `… \| sed -n '/^{/,$p' \| jq …` (`J` above) |
 | first log lines show `proxy="socks5h://127.0.0.1:9050"` | base defaults (no `$TENGU_HOME/config.toml`) install Tor, then `--sandbox` installs `proxy="direct"` before any call | nothing — the doctor's `Egress` block is the truth |

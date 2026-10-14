@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "sandbox": "lping",
-  "config_hash": "05501cb28a4a702f07069902867919927a2e334bf1ebe2f32510152e4a71c816",
+  "config_hash": "3609eb38918ebfaf9cbc9638f314d96b66e1bde43650bbdb9fc5d55c4cd666c0",
   "nodes": [
     {
       "id": "runtime:lping",
@@ -97,8 +97,8 @@
       "layer": 2,
       "order": 1,
       "attrs": {
-        "engine": "openrouter",
-        "model": "anthropic/claude-sonnet-4-6",
+        "engine": "claude_code",
+        "model": "claude-haiku-5-5",
         "workspace": "~/lping-workspace"
       },
       "narrowed_out": false,
@@ -200,10 +200,10 @@
       "order": 5,
       "attrs": {
         "agent": "lping",
-        "engine": "openrouter",
+        "engine": "claude_code",
         "max_attempts_per_step": 3,
         "max_replans": 2,
-        "model": "anthropic/claude-sonnet-4-6"
+        "model": "claude-sonnet-5-5"
       },
       "narrowed_out": false,
       "facets": {
@@ -217,8 +217,8 @@
       "layer": 2,
       "order": 6,
       "attrs": {
-        "engine": "openrouter",
-        "model": "anthropic/claude-sonnet-4-6",
+        "engine": "claude_code",
+        "model": "claude-sonnet-5-5",
         "workspace": "~/lping-workspace"
       },
       "narrowed_out": false,

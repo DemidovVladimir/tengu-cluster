@@ -91,11 +91,14 @@ exists to evaluate it."""
 # engine + model are required by the schema but unused (no `description` → not
 # routable, not default). Jev is not a chat engine — the loop calls it.
 [agents.executor]
-engine = "openrouter"
-model = "anthropic/claude-haiku-4-5"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 role = "executor"
 workspace = "~/jev-exec-workspace"
 tools = ["http_request", "list_directory"]
+
+[agents.executor.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 [agents.executor.scopes]
 http_request = { net_hosts = ["api.coinbase.com", "api.frankfurter.dev"] }

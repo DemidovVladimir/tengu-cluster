@@ -344,9 +344,12 @@ env_reads = [<span class="s">"SOLANA_RPC_URL"</span>]
 fs_roots  = [<span class="s">"~/lping-workspace"</span>]
 
 <span class="k">[agents.lp_executor]</span>                        <span class="c"># no description: not planner-routable</span>
-engine = <span class="s">"openrouter"</span>
+engine = <span class="s">"claude_code"</span>
 workspace = <span class="s">"~/lping-workspace"</span>
-tools = [<span class="s">"lp_snapshot"</span>, <span class="s">"hedge_decide"</span>, <span class="s">"dlmm_open_position"</span>, <span class="c">…</span>]</pre></div>
+tools = [<span class="s">"lp_snapshot"</span>, <span class="s">"hedge_decide"</span>, <span class="s">"dlmm_open_position"</span>, <span class="c">…</span>]
+
+<span class="k">[agents.lp_executor.claude_code]</span>
+builtin_tools_profile = <span class="s">"none"</span>               <span class="c"># required once a signer makes the sandbox hardened</span></pre></div>
     <div class="tabpanel" id="tab-sign" hidden><pre><span class="c"># the steps written at the end of sandboxes/lping/config.toml</span>
 <span class="k">[solana]</span>
 privy_wallet_id = <span class="s">"&lt;Privy Solana wallet id&gt;"</span>   <span class="c"># not a secret: 1-64 chars A-Z a-z 0-9 _ -</span>
@@ -440,7 +443,7 @@ wallets   = [<span class="s">"&lt;the Privy wallet's full address&gt;"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

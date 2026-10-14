@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-10-14 (later): every sandbox LLM agent on the subscriptions — branch `fix/subscription-agents-everywhere`, one PR
+
+| Change | Where | Tests / evidence |
+|---|---|---|
+| A planner call gets no bridge tools and no `[[mcp_servers]]` (it already got no tools / executor / memory) — a CLI-engine planner that is also the chat agent could call tools | `bootstrap/orchestrator.rs::run_turn_inner` | `planner_turn_gets_no_bridge_tools`; live `a2a-lab` planner (claude-haiku-5-5, `none`) → helper step → "Astana", 6.6 s, no prose fallback |
+| OpenRouter LLM agents → `engine = "claude_code"` + `builtin_tools_profile = "none"` | `a2a-lab` (planner, helper, liaison), `lping` (lping, crypto_researcher, lp_executor), `jev-exec` (executor), `control-loop-lab` (lab), `sealed-check` (checker), `tor-check` (probe) | doctor: all engines build; Studio goldens regenerated |
+| Lab safety test: claude_code only with profile `none`, never codex | `config/decision_loop.rs` | `control_loop_lab_has_no_dangerous_surface` |
+
+| Item | State |
+|---|---|
+| Still on OpenRouter | Jev loops (by rule); `xmarket-weekend` (W1-pinned agent model — new generation = operator step; its LLM never runs); `unlimited` (left as is) |
+| Needs | `--features claude_code` builds + `claude` login for those six sandboxes (Docker images too) |
+
 ## 2026-10-14: findings of the venture-scan research run — branch `fix/subscription-research-and-step-output`, one PR
 
 Operator rule (CLAUDE.md gotcha "Model spend"): frontier models only on the Claude / ChatGPT subscriptions (`claude_code`, `codex`); OpenRouter for Jev alone. The run that found these spent $12 of OpenRouter on Grok / GPT `:online` + a Sonnet planner — the sandbox now runs on the subscriptions only.

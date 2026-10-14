@@ -15,12 +15,13 @@
 # /a2a/agents/helper/.well-known/agent-card.json, with
 # `Authorization: Bearer $TENGU_A2A_LAB_TOKEN`. To call a real remote, add an
 # [a2a.remotes.<name>] block and its host to [default_scopes.a2a].
-# OPENROUTER_API_KEY comes from the env.
+# Every agent runs on the Claude subscription (`claude` logged in; build with
+# --features claude_code); nothing here uses OpenRouter.
 
 runtime_profile = "auto"
 
 # Open: the self-call is loopback (a loopback A2A peer goes direct under Tor
-# too; OpenRouter often blocks Tor exits). Flip to "tor" for real remotes.
+# too). Flip to "tor" for real remotes.
 [egress]
 network = "open"
 
@@ -30,25 +31,34 @@ engine = "rag"
 
 [agents.planner]
 default = true
-engine = "openrouter"
-model = "anthropic/claude-haiku-4.5"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
+
+[agents.planner.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 [agents.helper]
-engine = "openrouter"
-model = "anthropic/claude-haiku-4.5"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 description = "Answers short factual and arithmetic questions directly, in one sentence."
 example_queries = ["What is 2 + 2?", "What is the capital of France?"]
 tools = ["read_file"]
 
+[agents.helper.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
+
 [agents.liaison]
-engine = "openrouter"
-model = "anthropic/claude-haiku-4.5"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 description = """
 Talks to other agent harnesses over A2A with the a2a tool: lists the remotes,
 reads a remote's card, sends it the question and reports its answer. Use when
 the user asks to ask, consult or delegate to another agent, harness or the
 helper "over A2A"."""
 tools = ["a2a"]
+
+[agents.liaison.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 # The remote harnesses `a2a` may call. `self` = this sandbox's own helper,
 # served by `tengu a2a serve --sandbox a2a-lab`.

@@ -209,7 +209,7 @@
         <li><code>tengu chat --sandbox lping</code> loads <code>sandboxes/lping/config.toml</code>: validates it, folds scopes, pins <code>TENGU_CONFIG</code>, signs a seal-proxy session when it has <code>[keys]</code>, installs the <code>[egress]</code> policy.</li>
         <li>With an <code>[orchestrator]</code> section the message goes to the planner. Without one (the default) the default agent answers in one in-process chat turn.</li>
         <li>The planner prompt: the registry of described agents, skills and tools, recalled memory, recent messages, then your message.</li>
-        <li>One LLM call with tools, memory and grounding stripped. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
+        <li>One LLM call with tools, bridge, memory and grounding stripped. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
         <li>The DAG executor registers the plan for this session and mirrors it to <code>TENGU_PLAN.md</code>. Every step whose <code>depends_on</code> are done starts at once.</li>
         <li>Per step, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and writes one JSON request to its stdin.</li>
         <li>The child reloads the same sandbox, takes <code>[agents.&lt;step.agent&gt;]</code> and loops: model turn, tool calls, results. At most 70 turns by default.</li>
@@ -281,12 +281,15 @@ max_replans = <span class="n">2</span>
 
 <span class="k">[agents.lping]</span>                  <span class="c"># planner + chat agent: no description, never a step</span>
 default = <span class="n">true</span>
-engine = <span class="s">"openrouter"</span>
-model = <span class="s">"anthropic/claude-sonnet-4-6"</span>
+engine = <span class="s">"claude_code"</span>           <span class="c"># the Claude subscription</span>
+model = <span class="s">"claude-sonnet-5-5"</span>
+
+<span class="k">[agents.lping.claude_code]</span>
+builtin_tools_profile = <span class="s">"none"</span>  <span class="c"># no CLI built-ins: the planner turn is text only</span>
 
 <span class="k">[agents.crypto_researcher]</span>      <span class="c"># has a description: routable, runs as run-agent</span>
-engine = <span class="s">"openrouter"</span>
-model = <span class="s">"anthropic/claude-sonnet-4-6"</span>
+engine = <span class="s">"claude_code"</span>
+model = <span class="s">"claude-sonnet-5-5"</span>
 workspace = <span class="s">"~/lping-workspace"</span>
 tools = [<span class="s">"http_request"</span>, <span class="s">"read_file"</span>, <span class="s">"sol_price"</span>, <span class="s">"dlmm_pools"</span>, <span class="c">…</span>]
 description = <span class="s">"Researches crypto assets and Solana DeFi …"</span>
@@ -383,7 +386,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
   </div>
   <ul class="checks">
     <li><span><b>One session id per run.</b> The planner and the runner get the same string, so step summaries are found again on later turns.</span></li>
-    <li><span><b>The planner cannot act.</b> Its call runs with no tools, no tool executor and no memory recall.</span></li>
+    <li><span><b>The planner cannot act.</b> Its call runs with no tools, no tool executor, no bridge tools, no <code>[[mcp_servers]]</code> and no memory recall. A CLI's own built-ins are separate: a Claude Code planner sets <code>builtin_tools_profile = "none"</code>.</span></li>
     <li><span><b>Only described agents run steps.</b> The runner checks before spawning; the child checks again.</span></li>
     <li><span><b>A child cannot be started by hand by accident.</b> Without <code>TENGU_AGENT_IPC=1</code> it exits with an error.</span></li>
     <li><span><b>Same fences in the child.</b> It reloads the same sandbox file and the parent's resolved egress policy; a bad policy aborts it.</span></li>
@@ -396,7 +399,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Watch one turn</h2>
-    <p>Needs <code>OPENROUTER_API_KEY</code>. <code>lping</code> is the sandbox with an <code>[orchestrator]</code> section. The TUI shows the <code>orch:</code> lines as system bubbles.</p>
+    <p>Needs a <code>--features claude_code</code> build and <code>claude</code> logged in: every <code>lping</code> agent runs on the Claude subscription. <code>OPENROUTER_API_KEY</code> only for workspace memory and the Jev loops. <code>lping</code> is the sandbox with an <code>[orchestrator]</code> section. The TUI shows the <code>orch:</code> lines as system bubbles.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>

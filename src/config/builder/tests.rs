@@ -395,3 +395,35 @@ fn unknown_tool_and_bad_names_are_card_errors() {
     assert_eq!(c.status.nodes["t"].state, State::Error);
     assert_eq!(c.status.nodes["s"].state, State::Error);
 }
+
+/// A Claude Code planner is fine with no built-ins (its turn gets no tengu
+/// tools or bridge); with built-ins it is warned, and a Codex planner always
+/// is (its own shell stays).
+#[test]
+fn cli_planner_warning_follows_its_builtins() {
+    let warned = |extra: Value| {
+        let b = bp(
+            json!([
+                sandbox_node(),
+                {"id":"o","kind":"orchestrator","fields":{}},
+                agent_node("p", "planner", extra)
+            ]),
+            json!([{"id":"plans","from":"o","to":"p"}]),
+        );
+        let c = compile(&b, &facts(), None);
+        c.status.nodes["p"]
+            .issues
+            .iter()
+            .any(|i| i.message.contains("planner"))
+    };
+    let cc = |tools: &str| json!({"default": true, "engine": "claude_code", "model": "claude-haiku-5-5", "claude_tools": tools});
+    assert!(!warned(cc("none")), "no built-ins: plan JSON only");
+    assert!(warned(cc("read_only")));
+    assert!(warned(
+        json!({"default": true, "engine": "codex", "model": "gpt-5.6-sol"})
+    ));
+    assert!(
+        !warned(json!({"default": true})),
+        "openrouter planner: no CLI built-ins"
+    );
+}

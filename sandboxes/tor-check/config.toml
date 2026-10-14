@@ -9,10 +9,13 @@ enabled = false
 
 [agents.probe]
 default = true
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 role = "probe"
 workspace = "~/tor-check-workspace"
+
+[agents.probe.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 [agents.probe.identity]
 name = "Probe"
