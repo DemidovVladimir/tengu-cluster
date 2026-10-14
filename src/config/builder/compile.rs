@@ -764,10 +764,24 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                             .field("context_window"),
                     );
                 }
-                if planner == Some(c.id()) && (engine == "claude_code" || engine == "codex") {
+                // A planner turn gets no tengu tools or bridge
+                // (`bootstrap::orchestrator::run_turn_inner`); what is left is
+                // the CLI's own: Claude Code's built-ins (off with `none`),
+                // Codex's shell (always there).
+                let tools = c.s("claude_tools").unwrap_or_else(|| "read_only".into());
+                if planner == Some(c.id()) && engine == "claude_code" && tools.trim() != "none" {
                     issues.push(
                         Issue::warn(
-                            "a CLI engine as planner may call tools instead of writing plan JSON — use OpenRouter for the planner",
+                            "a Claude Code planner needs Claude built-in tools = none, or it may run them instead of writing plan JSON",
+                        )
+                        .node(c.id())
+                        .field("claude_tools"),
+                    );
+                }
+                if planner == Some(c.id()) && engine == "codex" {
+                    issues.push(
+                        Issue::warn(
+                            "Codex keeps its own shell on a planner turn — prefer Claude Code with built-in tools = none for the planner",
                         )
                         .node(c.id())
                         .field("engine"),

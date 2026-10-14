@@ -419,8 +419,8 @@ ufw: allow 22/tcp and 7080/tcp
 <span class="ln o">    proxy port: 127.0.0.1:9050 reachable</span>
 <span class="ln o">    tor: IsTor=true exit=<span class="hl">&lt;exit ip&gt;</span></span>
 <span class="ln cmd"><span class="p">$ </span>tengu doctor --sandbox jev-exec --engines</span>
-<span class="ln o">    architect  claude_code  claude-opus-5-5  skipped (list_directory, read_file denied by its own scopes)</span>
-<span class="ln o">    executor   openrouter   anthropic/claude-haiku-4-5  <span class="hl">&lt;ok|FAIL&gt;</span>  list_directory, read_file  <span class="hl">&lt;secs&gt;</span></span>
+<span class="ln o">    architect  claude_code  claude-opus-5-5   skipped (list_directory, read_file denied by its own scopes)</span>
+<span class="ln o">    executor   claude_code  claude-haiku-5-5  <span class="hl">&lt;ok|FAIL&gt;</span>  list_directory, read_file  <span class="hl">&lt;secs&gt;</span></span>
 <span class="ln cmd"><span class="p">$ </span>make up SANDBOX=unlimited &amp;&amp; make doctor SANDBOX=unlimited</span>
 <span class="ln cmd"><span class="p">$ </span>tengu prune --sandbox lping</span>
 <span class="ln o">Will remove:</span>
@@ -457,7 +457,7 @@ ufw: allow 22/tcp and 7080/tcp
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

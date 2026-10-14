@@ -248,8 +248,20 @@ impl RuntimeChatServiceFactory {
             max_recall_tokens: inputs.max_recall_tokens,
             tool_observer: observer_ref,
             cancel: inputs.cancel.as_deref(),
-            bridge_tools: inputs.bridge_tools.as_deref(),
-            mcp_servers: &inputs.mcp_servers,
+            // A planner call gets no bridge either: a Claude Code / Codex CLI
+            // takes its tools from `bridge_tools` per run, so the chat agent's
+            // list (planner = chat agent) would let the planner call tools
+            // instead of writing plan JSON.
+            bridge_tools: if system_override.is_some() {
+                None
+            } else {
+                inputs.bridge_tools.as_deref()
+            },
+            mcp_servers: if system_override.is_some() {
+                &[]
+            } else {
+                &inputs.mcp_servers
+            },
             suppress_grounding_nudge: system_override.is_some(),
         };
 
@@ -561,6 +573,95 @@ mod tests {
 
     fn cfg(toml: &str) -> Config {
         toml::from_str(toml).expect("config")
+    }
+
+    /// A planner call (system override) reaches the engine with no bridge
+    /// tools and no MCP servers, even when the planner is the chat agent and
+    /// its snapshot carries them; a normal turn still gets them. A Claude
+    /// Code / Codex CLI takes its tools from the bridge per run, so this is
+    /// what keeps a CLI-engine planner to plan JSON.
+    #[tokio::test]
+    async fn planner_turn_gets_no_bridge_tools() {
+        use crate::domain::message::{Message, ModelInfo, StreamEvent};
+        use crate::ports::engine::EngineContext;
+        use crate::ports::orchestration::ChatServiceFactory;
+        use std::sync::Mutex;
+
+        #[derive(Default)]
+        struct Recording(Mutex<Vec<usize>>);
+        #[async_trait]
+        impl Engine for Recording {
+            fn id(&self) -> &str {
+                "recording"
+            }
+            fn context_window(&self) -> usize {
+                100_000
+            }
+            fn supports_tool_use(&self) -> bool {
+                false
+            }
+            fn manages_own_workspace(&self) -> bool {
+                true
+            }
+            fn available_models(&self) -> Vec<ModelInfo> {
+                Vec::new()
+            }
+            async fn run(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolDef],
+                context: &EngineContext,
+            ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>>
+            {
+                let bridged = context.bridge_tools.iter().flatten().count();
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(bridged + context.mcp_servers.len());
+                Ok(Box::pin(futures::stream::iter(vec![
+                    StreamEvent::TextDelta { text: "{}".into() },
+                    StreamEvent::Done,
+                ])))
+            }
+        }
+
+        let engine = Arc::new(Recording::default());
+        let agent = Config::default().agents.get("main").unwrap().clone();
+        let inputs = ChatTurnInputs {
+            engine: engine.clone(),
+            agent_id: "main".into(),
+            agent_config: Arc::new(agent.clone()),
+            history_turn_limit: 10,
+            compaction_policy: crate::application::chat::flow::resolve_flow_compaction_policy(
+                &agent.flow,
+                agent.limits.max_tokens_per_flow,
+                100_000,
+                4_096,
+            ),
+            system_prompt: "sys".into(),
+            tools: Vec::new(),
+            tool_executor: None,
+            memory_manager: None,
+            max_recall_entries: 0,
+            max_recall_tokens: 0,
+            bridge_tools: Some(vec![ToolDef::new("read_file", "d", serde_json::json!({}))]),
+            mcp_servers: Vec::new(),
+            tool_observer: None,
+            cancel: None,
+        };
+        let snapshots: OrchestratorSnapshots = Arc::default();
+        snapshots.write().unwrap().insert("main".into(), inputs);
+        let factory = RuntimeChatServiceFactory::new(snapshots_inputs_fn(snapshots));
+        factory
+            .run_turn_with_system("main", "plan only", "hi")
+            .await
+            .unwrap();
+        factory.run_turn("main", "hi").await.unwrap();
+        assert_eq!(
+            *engine.0.lock().unwrap(),
+            [0, 1],
+            "planner: no bridge; chat: its bridge"
+        );
     }
 
     #[test]

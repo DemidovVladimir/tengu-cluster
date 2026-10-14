@@ -725,10 +725,18 @@ slots = { both = { from = "fetch", items = "/a/*", value = "x", path = "/b" }, h
                 assert!(TOOLS.contains(&t.as_str()), "{name}: tool `{t}`");
                 assert!(a.scopes.contains_key(t), "{name}: `{t}` has no own scope");
             }
-            assert_ne!(
-                a.engine, "claude_code",
-                "{name}: CLI built-ins ignore scopes"
-            );
+            // A CLI's own built-ins ignore tengu scopes: Claude Code only
+            // with no built-ins, never Codex (its shell).
+            assert_ne!(a.engine, "codex", "{name}: Codex's shell ignores scopes");
+            if a.engine == "claude_code" {
+                assert_eq!(
+                    a.claude_code
+                        .as_ref()
+                        .map(|c| c.builtin_tools_profile.trim()),
+                    Some("none"),
+                    "{name}: CLI built-ins ignore scopes"
+                );
+            }
             assert!(a.description.is_none() && !a.default, "{name}: private");
             let ws = expand_tilde(a.workspace.as_deref().expect("a lab workspace"));
             for (tool, s) in &a.scopes {

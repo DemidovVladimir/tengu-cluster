@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "sandbox": "control-loop-lab",
-  "config_hash": "6b52fc14d7212ed029da0f2bc2eb0f2a8e12e14ddd04c7465f1bc91be65dea2f",
+  "config_hash": "f5c2ae92364cda98550bfc253ff82beabe5594bb3abe751abcf79465ada53a73",
   "nodes": [
     {
       "id": "runtime:control-loop-lab",
@@ -111,8 +111,8 @@
       "layer": 2,
       "order": 1,
       "attrs": {
-        "engine": "openrouter",
-        "model": "anthropic/claude-haiku-4-5",
+        "engine": "claude_code",
+        "model": "claude-haiku-5-5",
         "workspace": "~/tengu-lab/control-loop-lab"
       },
       "narrowed_out": false,

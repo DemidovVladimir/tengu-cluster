@@ -151,15 +151,19 @@ engine = "rag"
 max_attempts_per_step = 3
 max_replans = 2
 
-# Planner + in-process chat agent. OpenRouter per doctrine (never claude_code
-# in the planner role).
+# Planner + in-process chat agent, on the Claude subscription. A planner turn
+# gets no tools and no bridge (bootstrap::orchestrator::run_turn_inner), and
+# `builtin_tools_profile = "none"` leaves the CLI no built-ins: plan JSON only.
 [agents.lping]
 default = true
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-sonnet-5-5"
 role = "lping"
 workspace = "~/lping-workspace"
 tools = ["http_request", "read_file", "list_directory"]
+
+[agents.lping.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 [agents.lping.identity]
 name = "LPing"
@@ -174,8 +178,8 @@ signatures in full, never shortened."""
 # the tool / scope / workspace owner of both decision loops below. The eleven
 # observe/plan tool names plus five write names are workspace-tool opt-ins.
 [agents.crypto_researcher]
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-sonnet-5-5"
 role = "researcher"
 workspace = "~/lping-workspace"
 tools = [
@@ -206,6 +210,9 @@ example_queries = [
     "simulate a 0.5 SOL spot position in the best SOL/USDC pool",
 ]
 
+[agents.crypto_researcher.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
+
 [agents.crypto_researcher.identity]
 name = "Crypto Researcher"
 instructions = """You research crypto markets and Solana DeFi. Prefer the typed
@@ -232,8 +239,8 @@ max_tool_result_chars = 50_000
 # Signing needs a per-agent wallet grant + [solana] privy_wallet_id (see
 # "Signing" at the end); without them its write tools only simulate.
 [agents.lp_executor]
-engine = "openrouter"
-model = "anthropic/claude-sonnet-4-6"
+engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
+model = "claude-haiku-5-5"
 workspace = "~/lping-workspace"
 tools = [
     "sol_price", "dlmm_pools", "dlmm_pool", "dlmm_positions", "jup_perps",
@@ -241,6 +248,9 @@ tools = [
     "solana_close_token_accounts", "jupiter_swap", "dlmm_open_position",
     "dlmm_close_position", "jup_perps_order",
 ]
+
+[agents.lp_executor.claude_code]
+builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins
 
 [agents.lp_executor.identity]
 name = "LP Executor"

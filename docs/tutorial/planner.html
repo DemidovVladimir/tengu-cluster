@@ -60,7 +60,7 @@
 <header class="hero">
   <div class="eyebrow"><span class="stamp" aria-hidden="true">核</span> Core loop · plan JSON</div>
   <h1>Planner</h1>
-  <p class="lede">One LLM call per turn, with tools, memory and grounding stripped. It reads a generated roster of agents, skills and tools, and must answer JSON: a direct reply, or a plan of steps for subagents.</p>
+  <p class="lede">One LLM call per turn, with tools, bridge, memory and grounding stripped. It reads a generated roster of agents, skills and tools, and must answer JSON: a direct reply, or a plan of steps for subagents.</p>
   <ul class="facts">
     <li>engine <b>rag</b>, the only value</li>
     <li>last <b>10</b> user messages in the prompt</li>
@@ -168,7 +168,7 @@
           <text x="685" y="142" text-anchor="middle" class="t-kanji k">心</text>
           <text x="685" y="163" text-anchor="middle" class="t-title">Planner LLM</text>
           <text x="685" y="181" text-anchor="middle" class="t-small">[orchestrator] agent</text>
-          <text x="685" y="198" text-anchor="middle" class="t-small">tools [] · no memory</text>
+          <text x="685" y="198" text-anchor="middle" class="t-small">tools [] · no bridge</text>
         </g>
         <g class="n guard" data-at="7-8">
           <rect x="610" y="248" width="150" height="56" rx="8"/>
@@ -196,7 +196,7 @@
         <g class="pop badge" data-at="2"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">rewritten every planner turn</text></g>
         <g class="pop badge" data-at="3"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">top_k 0 = lane off (default)</text></g>
         <g class="pop badge" data-at="4"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">SKILL.md body = system prompt</text></g>
-        <g class="pop badge" data-at="5"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">tools [] · memory off</text></g>
+        <g class="pop badge" data-at="5"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">tools, bridge, memory: off</text></g>
         <g class="pop badge" data-at="6"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">agent planner/&lt;agent&gt;</text></g>
         <g class="pop badge" data-at="7"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">raw → fenced → {…} → prose</text></g>
         <g class="pop badge" data-at="8"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">direct ends the turn</text></g>
@@ -227,7 +227,7 @@
         <li><code>TENGU_PLANNER_REGISTRY.md</code> is rendered and written to the working directory every planner turn. A failed write is only logged.</li>
         <li>With <code>postgres_memory</code>: earlier messages and this session's step outputs, by vector search, both off by default. Recent messages come from an in-memory ring.</li>
         <li>The system prompt is the body of <code>skills/orchestrator/SKILL.md</code>; a short built-in prompt if it is missing. Your message goes last.</li>
-        <li>One call on the <code>[orchestrator] agent</code>'s engine and model: tool list empty, no executor, no memory recall, no grounding nudge. In <code>tengu chat</code> that agent may differ from the default chat agent.</li>
+        <li>One call on the <code>[orchestrator] agent</code>'s engine and model: no tools, executor, bridge tools, <code>[[mcp_servers]]</code>, memory recall or grounding nudge. That agent may differ from the default chat agent.</li>
         <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer) and a <code>RagQueried</code> event naming the registry entries.</li>
         <li><code>parse_verdict</code> tries raw JSON, fenced JSON, the first balanced object, then wraps prose as <code>direct</code>. Only empty output is an error.</li>
         <li><code>direct</code> ends the turn with its text. <code>plan</code> goes to the DAG executor.</li>
@@ -315,8 +315,8 @@ This file is generated from the `[agents.*]` blocks of the active config that ca
 
 <span class="k">### crypto_researcher</span>
 
-- engine: `openrouter`
-- model: `anthropic/claude-sonnet-4-6`
+- engine: `claude_code`
+- model: `claude-sonnet-5-5`
 - tools: `http_request, read_file, list_directory, sol_price, dlmm_pools, dlmm_pool, dlmm_positions, jup_perps, solana_wallet, solana_tx, lp_snapshot, lp_swap_plan, hedge_decide, lp_decide, solana_close_token_accounts, jupiter_swap, dlmm_open_position, dlmm_close_position, jup_perps_order`
 - skills: `-`
 
@@ -426,7 +426,7 @@ Example queries:
     <h2 id="s-rules">Guarantees</h2>
   </div>
   <ul class="checks">
-    <li><span><b>The planner cannot call tools.</b> With a system-prompt override the turn gets an empty tool list, no executor and no memory recall.</span></li>
+    <li><span><b>The planner cannot call tools.</b> With a system-prompt override the turn gets an empty tool list, no executor, no bridge tools, no <code>[[mcp_servers]]</code> and no memory recall. A CLI's own built-ins are not bridge tools: a Claude Code planner sets <code>builtin_tools_profile = "none"</code> and is then a pure text turn.</span></li>
     <li><span><b>Only one engine.</b> <code>[orchestrator] engine</code> other than <code>"rag"</code> fails the config load.</span></li>
     <li><span><b>Private agents stay private.</b> A block without a <code>description</code> never appears in the registry.</span></li>
     <li><span><b>Memory trouble never blocks a turn.</b> A Postgres or embedding error leaves its block empty and the call goes on.</span></li>

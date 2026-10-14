@@ -11,7 +11,7 @@ Sandbox `sandboxes/sealed-check/` · guard test `config::keys::tests::sealed_che
 | The web UI: graph, Play / Send / Stop, timeline, replay | `tengu studio --allow-control` |
 | No garbage | own root `~/tengu-sealed-check`; nothing in `~/.tengu`; one `rm -rf` |
 
-Harmless by construction: one tool `hex_to_uint256` (pure compute) with a deny-all scope; no money, signer, memory, skills, MCP, planner, Telegram, webhooks, `[generation]`.
+Harmless by construction: one tool `hex_to_uint256` (pure compute) with a deny-all scope; no money, signer, memory, skills, MCP, planner, Telegram, webhooks, `[generation]`. The private `checker` agent is `claude_code` (`claude-haiku-5-5`, `builtin_tools_profile = "none"`, 2026-10-14; was OpenRouter): its engine only has to build (`doctor`), never called — OpenRouter (through the Worker) is Jev's alone.
 
 ## Set up (once, after the Worker is deployed)
 
@@ -26,7 +26,7 @@ R="$HOME/tengu-sealed-check"; export TENGU_HOME="$R/home"         # never ~/.ten
 mkdir -p "$R/home" "$R/ws" && touch "$R/.t0"
 unset OPENROUTER_API_KEY OPENROUTER_BASE_URL TENGU_KEYS_PROXY TENGU_KEYS_SESSION_TOKEN TENGU_KEYS_SESSION_EXP_MS
 export SSH_AUTH_SOCK="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
-cargo build --release && T=target/release/tengu; SC=sandboxes/sealed-check/scenarios
+cargo build --release --features claude_code && T=target/release/tengu; SC=sandboxes/sealed-check/scenarios   # + `claude` on PATH, logged in
 ```
 
 ## Terminal
@@ -38,7 +38,7 @@ Jev answers vary call to call: a scenario passes on 2 of 3 tries.
 | K0 | `$T keys status --sandbox sealed-check` | routes listed; `session: ok · label tengu-unattended · … · granted openrouter` (the session asks only for the routes `[keys.env]` uses) |
 | K1 | `$T keys check openrouter --path v1/models --sandbox sealed-check` | `200 OK · application/json` |
 | K2 | `$T keys check telegram --path botTENGU_SECRET/getMe --sandbox sealed-check` | exit 1: `seal proxy refused the session (403 Forbidden): this client key may use none of the requested routes` |
-| A0 | `$T doctor --sandbox sealed-check` | `[keys] seal-proxy session started … exported=["OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"]`; `checker: … endpoint=<proxy>/openrouter` |
+| A0 | `$T doctor --sandbox sealed-check` | `[keys] seal-proxy session started … exported=["OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"]`; `checker: engine=claude_code model=claude-haiku-5-5 …` (Jev's calls to `<proxy>/openrouter`: A1) |
 | A1 | `$T decide --sandbox sealed-check --loop check --event $SC/normal.json` | `hold · stopped` |
 | A2 | `… --event $SC/convert.json` | `convert` `{"hex":"0xff"}` → `"255"`, then `hold` |
 | A3 | `… --event $SC/tool-error.json` | `convert_bad` `ok:false` `invalid hex`, then `hold` |
