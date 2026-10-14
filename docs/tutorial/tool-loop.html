@@ -400,7 +400,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
     <li><span class="chip guard">cap</span><span><b>round cap</b>After <code>max_tool_rounds</code>, one more call with no tools offered forces an answer.</span></li>
     <li><span class="chip data">more</span><span><b>auto-continue</b>Output ends in <code>[OUTPUT_TRUNCATED]</code>: the loop asks the model to continue, if rounds remain.</span></li>
     <li><span class="chip warn">stop</span><span><b>cancelled</b>Telegram <code>/stop</code>. Checked before each round, before each tool, and every 2 s of stream.</span></li>
-    <li><span class="chip bad">err</span><span><b>stream idle</b>No event for 120 s: "Engine stream timed out".</span></li>
+    <li><span class="chip bad">err</span><span><b>stream idle</b>No event for 120 s: "Engine stream timed out". Codex sends an empty thinking event every 30 s while it reasons, so its silence does not trip this.</span></li>
     <li><span class="chip bad">err</span><span><b>engine error</b>An error event before any text fails the turn.</span></li>
     <li><span class="chip data">full</span><span><b>flow limit</b>Flow tokens reach <code>max_tokens_per_flow</code>: "Flow token limit reached. Use /reset". A notice from 80 %.</span></li>
     <li><span class="chip data">full</span><span><b>no room</b>Nothing fits the input budget: "Context budget exhausted. Use /reset to continue."</span></li>
@@ -466,7 +466,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

@@ -52,17 +52,24 @@ summary only travels back to the parent over IPC.
 
 ### Phase 5c — middle-ground protocol *(graceful degradation)*
 
-`adapters/inbound/cli/run_agent.rs:642` decides the IPC verdict:
+`adapters/inbound/cli/run_agent.rs:684` decides the IPC verdict; `step_output`
+picks the IPC `output` (what the DAG forwards to later steps and the plan's answer):
 
-| `compress_and_store` called? | final_text non-empty? | Verdict |
-|---|---|---|
-| ✓ | * | **Ok** — canonical good path |
-| ✗ | ✓ | **Ok** — graceful (warn logged, summary = final_text) |
-| ✗ | ✗ | **Failed** — DagExecutor retries / replans |
+| `compress_and_store` called? | final_text non-empty? | Verdict | `output` |
+|---|---|---|---|
+| ✓ | * | **Ok** — canonical good path | the longer of final_text and the summary |
+| ✗ | ✓ | **Ok** — graceful (warn logged, summary = final_text) | final_text |
+| ✗ | ✗ | **Failed** — DagExecutor retries / replans | empty |
 
 Strict original-spec doctrine would fail row 2 too; we deliberately stay
 pragmatic because many models (Claude Code subagents in particular) don't
 reliably call protocol tools but do produce useful text.
+
+`output` = the longer one (2026-10-14): it used to be final_text whenever
+non-empty, so a Codex step that wrote a 181-char preamble and stored a
+19 225-char dossier through `compress_and_store` answered the plan with the
+preamble only; a model that answers in full and stores a shorter note keeps
+its answer.
 
 ### Read path
 `RagPlanner::replan` (legacy planner type name) reads prior step outputs from

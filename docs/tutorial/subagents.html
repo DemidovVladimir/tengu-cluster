@@ -240,7 +240,7 @@
         <li>Prompt: a fixed base, the agent's identity (name, role, instructions), its skill bodies, the plan, a "call <code>compress_and_store</code>" suffix. Tools: the agent's list plus <code>compress_and_store</code>.</li>
         <li>Loop: model turn, tool calls through the redacting executor, capped results; older rounds shrink to 200 chars. At most the agent's <code>max_tool_rounds</code> (default 70).</li>
         <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary (on <code>claude_code</code> and <code>codex</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and stops.</li>
-        <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code> is the last model text, else the summary. A temp workspace is deleted after printing.</li>
+        <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code>: the longer of the last model text and the <code>compress_and_store</code> summary; without that call, the text. A temp workspace is deleted after printing.</li>
         <li>The parent parses it. Ok: metrics re-emitted, the step's <code>tool.*</code> trace events written into its own run (when it records), output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
       </ol>
     </div>
@@ -274,7 +274,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: worst case for one failing step</span>
     <h2 id="s-retry">Retries, then replans</h2>
-    <p>Each replan restarts the new plan from scratch. Assume the planner keeps returning the same failing step.</p>
+    <p>A replan reuses every step that finished and comes back unchanged (same id, agent, goal, <code>depends_on</code>, <code>compose</code>; its dependencies reused too); only new, changed or failed steps run. Assume the planner keeps returning the same failing step.</p>
   </div>
   <div class="widget" id="retry">
     <div class="widget-row">
@@ -350,7 +350,7 @@
   <span class="k">"trace"</span>: { <span class="k">"run_id"</span>: <span class="s">"&lt;run id&gt;"</span>, <span class="k">"parent_event_id"</span>: <span class="s">"&lt;run id&gt;:&lt;seq&gt;"</span> }   <span class="c"># only when the parent records: its step.started</span>
 }</pre></div>
     <div class="tabpanel" id="tab-ok" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"ok"</span>,
-  <span class="k">"output"</span>: <span class="s">"&lt;last model text, else the summary&gt;"</span>,
+  <span class="k">"output"</span>: <span class="s">"&lt;the longer of last model text and summary; the text without compress_and_store&gt;"</span>,
   <span class="k">"summary"</span>: <span class="s">"&lt;compress_and_store text, else the last model text&gt;"</span>,
   <span class="k">"metrics"</span>: [ { <span class="k">"kind"</span>: <span class="s">"subagent"</span>, <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>, <span class="k">"step_id"</span>: <span class="s">"s2"</span>, <span class="c">… one per engine turn</span> } ],
   <span class="k">"tools"</span>: [ { <span class="k">"name"</span>: <span class="s">"sol_price"</span>, <span class="k">"ok"</span>: <span class="n">true</span> },
@@ -396,7 +396,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <h2 id="s-out">How a step ends</h2>
   </div>
   <ul class="states">
-    <li><span class="chip ok">ok</span><span><b>compress_and_store called</b>The canonical path. Its summary is the step summary.</span></li>
+    <li><span class="chip ok">ok</span><span><b>compress_and_store called</b>The canonical path. Its summary is the step summary; <code>output</code> is the longer of it and the last text, so a short preamble never hides the result.</span></li>
     <li><span class="chip warn">ok</span><span><b>text, no compress_and_store</b>Still ok, with a warn line. The text becomes the summary (stored with <code>postgres_memory</code>).</span></li>
     <li><span class="chip bad">failed</span><span><b>no text, no call</b>Status <code>failed</code>; the parent retries.</span></li>
     <li><span class="chip bad">exit</span><span><b>run-agent exited with non-zero status</b>Before or during the loop: guard, bad JSON, unknown agent, widening compose, engine error.</span></li>
@@ -420,6 +420,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span><b>Same network rules.</b> The child installs the parent's resolved egress policy; an invalid one aborts it.</span></li>
     <li><span><b>One trace writer.</b> A child never opens the run file: it hands its tool events back over IPC and the parent writes them under the step (an old parent or child sends no <code>trace</code> field and nothing changes).</span></li>
     <li><span><b>One log.</b> The parent reads the child's stderr into its own log (target <code>tengu::run_agent</code>); a failed exit carries its last 40 lines.</span></li>
+    <li><span><b>A replan never re-runs finished work.</b> A step identical to one that finished earlier in the same request, its dependencies reused too, keeps its output: <code>StepSucceeded</code> with no <code>StepStarted</code>, no child (log: <code>step reused from the previous attempt</code>).</span></li>
     <li><span><b>No orphans.</b> A replan, a cancel, a panic — or the turn itself dropped (aborted at the shutdown deadline, an eval row's timeout) — aborts every step still in flight; its child is killed.</span></li>
   </ul>
 </section>
@@ -451,10 +452,10 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
-        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output; exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
-        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, <code>&lt;step-input&gt;</code>, leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
+        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), <code>&lt;step-input&gt;</code>, leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
         <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
-        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans, plan per session</td></tr>
+        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans (finished steps carried over), plan per session</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>WorkerHandle</code></td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>workspace, scope grant, <code>compose_agent</code>, the step's tools</td></tr>
         <tr><td><code>src/application/chat/tool_loop.rs</code></td><td>one engine turn, result caps, compaction</td></tr>
@@ -466,7 +467,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

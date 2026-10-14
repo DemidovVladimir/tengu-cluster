@@ -549,6 +549,7 @@ fn kinds() -> Vec<KindSpec> {
                     .options(&[
                         ("none", "none — tengu tools only"),
                         ("read_only", "read_only — Read/Grep/Glob"),
+                        ("research", "research — + WebSearch (subscription)"),
                         ("editor", "editor — + Edit/Write"),
                         ("editor_shell", "editor_shell — + Bash"),
                     ])
@@ -564,6 +565,16 @@ fn kinds() -> Vec<KindSpec> {
                     .show_if("engine", vec![json!("codex")])
                     .help("Codex's own shell ignores tengu scopes; read-only keeps it from writing.")
                     .writes("agents.<name>.codex.sandbox"),
+                field("codex_web_search", "Codex web search", Select)
+                    .default(json!("disabled"))
+                    .options(&[
+                        ("disabled", "disabled — no web search"),
+                        ("cached", "cached — OpenAI's index (subscription)"),
+                        ("live", "live — live search (subscription)"),
+                    ])
+                    .show_if("engine", vec![json!("codex")])
+                    .help("Runs at OpenAI on your ChatGPT plan; pages are read through http_request.")
+                    .writes("agents.<name>.codex.web_search"),
             ],
         },
         KindSpec {

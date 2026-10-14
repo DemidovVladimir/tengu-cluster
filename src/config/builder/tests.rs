@@ -116,7 +116,8 @@ fn every_field_round_trips_through_the_config_structs() {
                 "display_name": "D", "instructions": "I", "description": "Does X, not Y.",
                 "example_queries": ["q"], "max_tool_rounds": 7, "step_timeout_secs": 90,
                 "context_window": 32768, "local_base_url": "http://127.0.0.1:11434/v1",
-                "local_api_key_env": "LOCAL_KEY", "claude_tools": "none", "codex_sandbox": "read-only"
+                "local_api_key_env": "LOCAL_KEY", "claude_tools": "none", "codex_sandbox": "read-only",
+                "codex_web_search": "live"
             }),
         ));
         if i == 0 {

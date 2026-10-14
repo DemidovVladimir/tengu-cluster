@@ -440,7 +440,7 @@
           </ul>
         </li>
       </ul>
-      <p class="note">A replan: <code>plan.replanned</code> hangs under the last <code>step.failed</code>, the next <code>plan.created</code> under it. A step's tool calls run in its <code>run-agent</code> child; the child hands them back over IPC and the parent writes them under <code>step.started</code>. A turn dropped unfinished (aborted at the shutdown deadline, an eval row's timeout) aborts its steps and writes <code>plan.completed</code> dropped, <code>cancelled: true</code>.</p>
+      <p class="note">A replan: <code>plan.replanned</code> hangs under the last <code>step.failed</code>, the next <code>plan.created</code> under it. A step the replan reuses (finished in an earlier attempt, unchanged) runs nothing: one <code>step.completed</code> right under the new <code>plan.created</code>, no <code>step.started</code>, node or duration. A step's tool calls run in its <code>run-agent</code> child; the child hands them back over IPC and the parent writes them under <code>step.started</code>. A turn dropped unfinished (aborted at the shutdown deadline, an eval row's timeout) aborts its steps and writes <code>plan.completed</code> dropped, <code>cancelled: true</code>.</p>
     </div></div>
   </div>
 </section>
@@ -577,7 +577,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>

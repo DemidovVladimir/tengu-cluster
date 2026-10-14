@@ -1133,7 +1133,13 @@ fn emit(
             }
             "codex" => {
                 let m = s("codex_sandbox").unwrap_or_else(|| "read-only".into());
-                let _ = writeln!(o, "\n[agents.{name}.codex]\nsandbox = {}", q(&m));
+                let w = s("codex_web_search").unwrap_or_else(|| "disabled".into());
+                let _ = writeln!(
+                    o,
+                    "\n[agents.{name}.codex]\nsandbox = {}\nweb_search = {}",
+                    q(&m),
+                    q(&w)
+                );
             }
             _ => {}
         }

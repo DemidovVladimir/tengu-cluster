@@ -63,7 +63,7 @@
     <li><b>engine</b> = openrouter · local · claude_code · codex</li>
     <li>window <b>1 000 000</b> by default; claude_code, codex <b>200 000</b></li>
     <li>local result ≤ <b>1/8</b> of the window</li>
-    <li>HTTP call <b>600 s</b> · CLI idle <b>120 s</b></li>
+    <li>HTTP call <b>600 s</b> · CLI idle <b>120 s</b>, Codex <b>900 s</b></li>
   </ul>
   <ul class="legend" aria-label="Colour key">
     <li><span class="chip heart"><span class="k">心</span> heart</span> engine</li>
@@ -216,7 +216,8 @@
         <tr><td><code>max_tool_rounds</code></td><td>engine rounds</td><td>engine rounds</td><td>tool calls; CLI killed past it</td><td>tool calls (MCP + built-in); CLI killed past it</td></tr>
         <tr><td>Result cap</td><td>300 000 chars</td><td>min(window ÷ 8 × 4, 300 000)</td><td>50 000 chars per bridge result</td><td>50 000 chars per bridge result</td></tr>
         <tr><td>Retry</td><td>failed turn, once</td><td>none</td><td>none</td><td>none</td></tr>
-        <tr><td>Model slug</td><td class="wrap"><code>anthropic/claude-haiku-4-5</code></td><td class="wrap"><code>unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></td><td class="wrap"><code>claude-opus-5-5</code> (bare)</td><td class="wrap"><code>gpt-5.5</code> (bare)</td></tr>
+        <tr><td>Web search</td><td>none: pages via <code>http_request</code></td><td>none: pages via <code>http_request</code></td><td class="wrap">profile <code>research</code>: WebSearch at Anthropic; no WebFetch</td><td class="wrap"><code>web_search</code> <code>cached</code> | <code>live</code> at OpenAI; default <code>disabled</code></td></tr>
+        <tr><td>Model slug</td><td class="wrap"><code>anthropic/claude-haiku-4-5</code></td><td class="wrap"><code>unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_XL</code></td><td class="wrap"><code>claude-opus-5-5</code> (bare)</td><td class="wrap"><code>gpt-5.5</code> (bare; a ChatGPT login refuses some ids)</td></tr>
       </tbody>
     </table>
   </div>
@@ -233,6 +234,7 @@
       <div class="seg-group" role="group" aria-label="builtin_tools_profile">
         <button type="button" class="btn" data-prof="none" aria-pressed="true">none</button>
         <button type="button" class="btn" data-prof="read_only" aria-pressed="false">read_only</button>
+        <button type="button" class="btn" data-prof="research" aria-pressed="false">research</button>
         <button type="button" class="btn" data-prof="editor" aria-pressed="false">editor</button>
         <button type="button" class="btn" data-prof="editor_shell" aria-pressed="false">editor_shell</button>
       </div>
@@ -263,12 +265,14 @@
         <tr><td class="wrap"><code>--json</code></td><td><code>item.completed</code> (<code>agent_message</code>, <code>mcp_tool_call</code>, <code>command_execution</code>, <code>file_change</code>), <code>turn.completed</code> (usage), <code>turn.failed</code></td></tr>
         <tr><td class="wrap"><code>--ignore-user-config --ignore-rules --ephemeral --skip-git-repo-check</code></td><td>none of your <code>~/.codex</code> MCP servers, profiles, hooks or rules; no session files; any workspace. The login still works.</td></tr>
         <tr><td class="wrap"><code>-s read-only</code> | <code>workspace-write</code> · <code>-c approval_policy="never"</code></td><td>Codex's own shell and patch tool: no network either way, never asks</td></tr>
-        <tr><td class="wrap"><code>-c web_search="disabled"</code> · <code>-c features.&lt;f&gt;=false</code></td><td>apps, plugins, browser and computer use, image generation, sub-agents, memories, hooks: off (they run outside Tengu scopes and egress)</td></tr>
+        <tr><td class="wrap"><code>-c web_search="&lt;mode&gt;"</code></td><td><code>[agents.&lt;a&gt;.codex] web_search</code>: <code>disabled</code> (default), <code>cached</code> (OpenAI's index) or <code>live</code>. OpenAI's hosted search on the subscription: it runs at OpenAI, not from this machine; pages the agent reads still go through <code>http_request</code></td></tr>
+        <tr><td class="wrap"><code>-c features.&lt;f&gt;=false</code></td><td>apps, plugins, browser and computer use, image generation, sub-agents, memories, hooks: off (they run outside Tengu scopes and egress)</td></tr>
         <tr><td class="wrap"><code>-c mcp_servers.tengu-tools.*</code></td><td>the bridge: <code>env_vars</code> forwards env NAMES only (the base set + <code>forward_env</code>; no value on the command line); calls pre-approved, scopes gate them in the bridge (<a href="mcp-bridge.html">MCP bridge</a>)</td></tr>
         <tr><td class="wrap"><code>-m</code> · <code>-C</code> · <code>-c developer_instructions=…</code></td><td>the model, the agent workspace, the system prompt once</td></tr>
       </tbody>
     </table>
   </div>
+  <p class="note">A ChatGPT login refuses some model ids (2026-10-14: <code>gpt-5.5</code>, <q>not supported when using Codex with a ChatGPT account</q>): set one your login serves. <code>--ignore-user-config</code> means the model and effort in <code>~/.codex/config.toml</code> never apply. <code>--json</code> says nothing while the model reasons, so every 30 s of silence the engine sends an empty thinking event (the tool loop's 120 s idle clock restarts) and kills the CLI only after max(<code>stream_event_timeout_secs</code>, 900 s).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-win">
@@ -353,8 +357,9 @@ model     = <span class="s">"gpt-5.5"</span>                 <span class="c"># b
 workspace = <span class="s">"~/projects/my-app"</span>
 
 <span class="k">[agents.coder.codex]</span>
-sandbox  = <span class="s">"read-only"</span>             <span class="c"># read-only | workspace-write: Codex's own shell, never network</span>
-cli_path = <span class="s">"codex"</span>                 <span class="c"># default: codex on PATH; refused in a hardened sandbox</span></pre></div>
+sandbox    = <span class="s">"read-only"</span>           <span class="c"># read-only | workspace-write: Codex's own shell, never network</span>
+web_search = <span class="s">"disabled"</span>            <span class="c"># disabled | cached | live: OpenAI's search, on the subscription</span>
+cli_path   = <span class="s">"codex"</span>               <span class="c"># default: codex on PATH; refused in a hardened sandbox</span></pre></div>
   </div>
 </section>
 
@@ -368,7 +373,7 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
     <li><span class="chip bad">http</span><span><b>status error</b><code>OpenRouter error 429: …</code> or <code>Local LLM error …</code>: the body is shown.</span></li>
     <li><span class="chip bad">down</span><span><b>unreachable</b><code>Local LLM at … unreachable (is the server running?)</code></span></li>
     <li><span class="chip warn">empty</span><span><b>empty twice</b>OpenRouter retried once and still got nothing: chat shows nothing, a <code>run-agent</code> step fails.</span></li>
-    <li><span class="chip bad">idle</span><span><b>CLI idle</b>No CLI output for 120 s (<code>stream_event_timeout_secs</code>): <code>Claude CLI idle timeout</code> or <code>Codex CLI idle timeout</code>, process killed.</span></li>
+    <li><span class="chip bad">idle</span><span><b>CLI idle</b>No CLI output for 120 s (<code>stream_event_timeout_secs</code>): <code>Claude CLI idle timeout</code>, process killed. Codex: a keepalive every 30 s, killed after max(that, 900 s): <code>Codex CLI idle timeout</code>.</span></li>
     <li><span class="chip guard">cap</span><span><b>tool cap</b><code>Max tool rounds exceeded (71 calls, limit 70)</code>, process killed.</span></li>
     <li><span class="chip data">done</span><span><b>step stored</b><code>compress_and_store</code> succeeded in a step: the CLI is stopped on purpose, usage kept.</span></li>
   </ul>
@@ -387,6 +392,7 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
     <li><span><b>Codex starts from an empty env.</b> Only the base set (<code>PATH</code>, <code>HOME</code>, locale, temp, <code>CODEX_HOME</code>, non-secret <code>TENGU_*</code>) and the names in <code>[agents.&lt;a&gt;.codex] forward_env</code>: no vault secret, <code>.env</code> key, master password or seal-proxy session reaches its built-in shell (<code>engines/codex.rs::child_env</code>). A forwarded name is readable by that shell — list only what the bridged tools need; the master password, <code>TENGU_KEYS_*</code> and <code>[keys.env]</code> names are refused at load.</span></li>
     <li><span><b>The CLI sees only the Tengu bridge.</b> <code>--strict-mcp-config</code> on every run: the operator's own MCP servers never load.</span></li>
     <li><span><b>Built-in Bash never bypasses the proxy.</b> Under an egress proxy, <code>editor_shell</code> launches as <code>editor</code>.</span></li>
+    <li><span><b>No built-in fetch.</b> No profile enables WebFetch: <code>research</code> adds only WebSearch, which runs at Anthropic; pages come through <code>http_request</code> (scopes, egress, audit). Codex web search stays <code>disabled</code> unless <code>web_search</code> says <code>cached</code> or <code>live</code>.</span></li>
     <li><span><b>No secret in the temp MCP config.</b> It holds names and paths; the bridge inherits values from the CLI's env (under Codex: only the base set + <code>forward_env</code>).</span></li>
     <li><span><b>Local stays local.</b> The local client ignores every proxy, env ones included.</span></li>
     <li><span><b>Claude Code's tool count is capped.</b> One call past <code>max_tool_rounds</code> kills the CLI with an error.</span></li>
@@ -427,9 +433,9 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
         <tr><td><code>src/adapters/outbound/engines/openrouter.rs</code></td><td>HTTP JSON, retry once, truncation marker</td></tr>
         <tr><td><code>src/adapters/outbound/engines/local.rs</code></td><td>OpenAI-compatible server, no proxy, result cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI args, env strip, NDJSON, transcript, tool cap</td></tr>
-        <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td><code>codex exec</code> args, env strip, JSONL events, tool cap</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td><code>codex exec</code> args, <code>web_search</code>, env strip, JSONL events, keepalive, tool cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/cli_run.rs</code></td><td>what the two CLI engines share: run dir, stdin prompt, transcript</td></tr>
-        <tr><td><code>src/config/mod.rs</code></td><td><code>ENGINES</code>, <code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, <code>AgentCodexConfig</code>, validation</td></tr>
+        <tr><td><code>src/config/mod.rs</code></td><td><code>ENGINES</code>, <code>CLAUDE_CODE_PROFILES</code>, <code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, <code>AgentCodexConfig</code>, validation</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>profile <code>none</code> in hardened sandboxes; no <code>codex</code> there</td></tr>
         <tr><td><code>src/domain/engine_smoke.rs</code></td><td>smoke prompt and verdict</td></tr>
         <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor --engines</code></td></tr>
@@ -439,7 +445,7 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-13.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
 </article>
 </main>
 </div>
@@ -447,7 +453,7 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
 <script>
 /* page-only: the argv builder (cli_args) and the window calculator */
 (function () {
-  var TOOLS = { none: "", read_only: "Read,Glob,Grep", editor: "Read,Glob,Grep,Edit,Write,MultiEdit", editor_shell: "Read,Glob,Grep,Edit,Write,MultiEdit,Bash" };
+  var TOOLS = { none: "", read_only: "Read,Glob,Grep", research: "Read,Glob,Grep,WebSearch", editor: "Read,Glob,Grep,Edit,Write,MultiEdit", editor_shell: "Read,Glob,Grep,Edit,Write,MultiEdit,Bash" };
   var prof = "none";
   var proxy = document.getElementById("a-proxy"), bridge = document.getElementById("a-bridge"), hard = document.getElementById("a-hard");
   var out = document.getElementById("argv"), verdict = document.getElementById("argv-verdict"), envAdd = document.getElementById("env-add");
@@ -485,6 +491,9 @@ cli_path = <span class="s">"codex"</span>                 <span class="c"># defa
     } else if (eff === "none") {
       verdict.className = "verdict ok";
       verdict.textContent = "No built-ins, no settings files, hooks, plugins, skills or CLAUDE.md";
+    } else if (eff === "research") {
+      verdict.className = "verdict warn";
+      verdict.textContent = "Read/Glob/Grep act outside Tengu scopes; WebSearch runs at Anthropic; no WebFetch: pages go through http_request";
     } else {
       verdict.className = "verdict warn";
       verdict.textContent = "Built-ins (" + TOOLS[eff] + ") act outside Tengu scopes";

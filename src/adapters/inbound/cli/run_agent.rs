@@ -663,17 +663,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         }
     }
 
-    // Choose the user-visible `output` text. Models that only emit tool
-    // calls (no inline assistant text) leave `final_text` empty; in that
-    // case the summary the model produced via compress_and_store is the
-    // most useful thing to show.
-    let output = if !final_text.is_empty() {
-        final_text.clone()
-    } else if !summary.is_empty() {
-        summary.clone()
-    } else {
-        String::new()
-    };
+    // The step's `output` — what the DAG hands to later steps and the
+    // plan's answer (`step_output`).
+    let output = step_output(&final_text, &summary, compress_called);
 
     // Phase 5c — middle-ground protocol enforcement.
     // Pass:    compress_and_store called              → Ok (the canonical good path)
@@ -856,9 +848,46 @@ fn identity_block(spec: &crate::config::AgentConfig) -> String {
     parts.join("\n\n")
 }
 
+/// The step's `output` (the text the DAG forwards to later steps and to the
+/// plan's answer), from the final assistant text and the `compress_and_store`
+/// summary.
+///
+/// | `compress_and_store` called? | Output |
+/// |---|---|
+/// | no | the final text (the summary is the same text then) |
+/// | yes | whichever of text and summary is longer: a model that writes a short preamble before handing its result to `compress_and_store` (Codex does) must not lose the result; a model that answers in full and stores a shorter note keeps its answer |
+fn step_output(final_text: &str, summary: &str, compress_called: bool) -> String {
+    if compress_called && summary.trim().chars().count() > final_text.trim().chars().count() {
+        summary.to_string()
+    } else if !final_text.is_empty() {
+        final_text.to_string()
+    } else {
+        summary.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A preamble before compress_and_store no longer replaces the stored
+    /// result (Codex lost a 19k-char dossier this way); a full answer with a
+    /// shorter stored note keeps the answer; no protocol call = the text.
+    #[test]
+    fn step_output_keeps_the_longer_of_text_and_summary() {
+        let dossier = "## Verdict\n".to_string() + &"row\n".repeat(200);
+        let preamble = "I'm treating leaderboard earnings as selection-biased evidence.";
+        assert_eq!(step_output(preamble, &dossier, true), dossier);
+        let answer = "full answer ".repeat(100);
+        assert_eq!(step_output(&answer, "short note", true), answer);
+        assert_eq!(
+            step_output("", "only the summary", true),
+            "only the summary"
+        );
+        assert_eq!(step_output("text", "", true), "text");
+        assert_eq!(step_output("text", "a much longer summary", false), "text");
+        assert_eq!(step_output("", "", false), "");
+    }
 
     /// A step's prompt carries the agent's identity (name, role,
     /// instructions); nothing when none is set.

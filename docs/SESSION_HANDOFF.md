@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-10-14: findings of the venture-scan research run — branch `fix/subscription-research-and-step-output`, one PR
+
+Operator rule (CLAUDE.md gotcha "Model spend"): frontier models only on the Claude / ChatGPT subscriptions (`claude_code`, `codex`); OpenRouter for Jev alone. The run that found these spent $12 of OpenRouter on Grok / GPT `:online` + a Sonnet planner — the sandbox now runs on the subscriptions only.
+
+| Finding | Fix | Where | Tests |
+|---|---|---|---|
+| A step's output lost its `compress_and_store` result when the model wrote a short preamble first (Codex: 19,225-char dossier → 181-char answer) | `step_output`: with `compress_and_store`, the longer of text and summary | `adapters/inbound/cli/run_agent.rs` | `step_output_keeps_the_longer_of_text_and_summary` |
+| A replan re-ran (and re-paid) every finished step | `DagExecutor::run_reusing` + `ExecResult::NeedsReplan { finished }`: an identical finished step (id, agent, goal, deps, compose) with reused deps keeps its output | `application/orchestrator/{executor,replan}.rs` | `replan_reuses_identical_finished_steps` |
+| Codex silent while reasoning → "Engine stream timed out — no data for 120s" | keepalive `ThinkingDelta` every 30 s; CLI killed after max(timeout, 900 s) | `engines/codex.rs` | `web_search_mode_and_reasoning_idle_floor` |
+| No web research on the subscriptions (Codex search forced off; Claude Code profiles without WebSearch) | Claude Code profile `research` (+ WebSearch, never WebFetch; one list `config::CLAUDE_CODE_PROFILES`); `[agents.<a>.codex] web_search` = disabled / cached / live; builder field | `engines/{claude_code,codex,mod}.rs`, `config/mod.rs`, `config/builder/` | `profiles_match_config_and_research_has_no_fetch`, `every_field_round_trips…` |
+| `http_request` failed on a model's empty optional args (`file_path: "."` → "Is a directory"; `auth_*: ""`) and dropped a file with no field name | empty / blank optional args = absent, `.` ignored, field name defaults to `file` | `tools/http/request.rs` | `unused_optional_args_are_absent` |
+| Notes only | ChatGPT-login Codex refuses `gpt-5.5` (use a model the login serves; `--ignore-user-config`); A2A agent endpoints keep the config loaded at start — restart `tengu a2a serve` after an edit | docs | — |
+
+| Item | State |
+|---|---|
+| `sandboxes/venture-scan` | Claude Code `web_scout` / `social_scout` (`research`) + Codex `critic` (`web_search = "live"`); `[a2a.server] orchestrator = false`; driver, private brief and dossiers in `~/tengu-lab/venture-scan/` (outside the repo). Live-checked: scout WebSearch + `http_request` fetch 45 s, critic live search 15 s, $0 OpenRouter |
+| Not changed | other sandboxes' OpenRouter agents (operator decides) |
+
 ## 2026-10-13: review fixes (`handoff_review.md` 2026-10-13T11:06:01Z) — branch `fix/review-2026-10-13`, one PR
 
 | Finding | Fix | Where | Tests |
