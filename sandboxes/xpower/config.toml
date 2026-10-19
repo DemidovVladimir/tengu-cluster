@@ -364,7 +364,12 @@ min_abs_signal_bps = 10
 # Forward test, pre-registered 22:50 CEST 2026-10-19 — before the 21:00Z break
 # that evening: energy_break_fade (holdout +9.11 bps, lane 06b) without HO (stale
 # prints). Judge it only on bars from 2026-10-19T21:00:00Z on (`--from`); every
-# earlier bar was seen.
+# earlier bar was seen. Primary metric (fixed 00:55 CEST 2026-10-20, after 1 forward
+# trade): its Mon-Thu rows (`days` can't say Mon-Thu, so filter the trade rows by
+# `period`); Friday rows reported apart. Kill after 30 Mon-Thu trades if the net mean
+# is ≤ 0, the 95 % CI still includes -5 bps, or the best two days exceed 50 % of the
+# total (Codex critic, notes/07-verdict). History-first: HL keeps ~52 days of 15m
+# bars, so backfill + rerun weekly — no live recording needed.
 [backtest.strategies.break_fade_ng_cl]
 kind = "daily_window"
 universe = "@ng_cl"
