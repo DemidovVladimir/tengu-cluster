@@ -166,6 +166,7 @@ power_proxies = [
 gas = ["hyperliquid:xyz:NATGAS"]
 power_equity = ["hyperliquid:para:VST", "hyperliquid:xyz:GEV", "hyperliquid:xyz:BE"]
 cme_energy = ["hyperliquid:xyz:NATGAS", "hyperliquid:xyz:CL", "hyperliquid:xyz:HO"]   # NYMEX hours: Sun 18:00 - Fri 17:00 NY, break 17-18
+ng_cl = ["hyperliquid:xyz:NATGAS", "hyperliquid:xyz:CL"]   # the two that really trade through the break (lane 06b)
 
 # The EIA weekly gas storage report (Thursday 10:30 New York: 15:30 UTC before
 # the 2026-03-08 DST change, 14:30 UTC after) — the one scheduled US gas event.
@@ -358,6 +359,22 @@ anchor = "17:00"
 entry = "17:45"
 exit = "18:30"
 direction = "follow"
+min_abs_signal_bps = 10
+
+# Forward test, pre-registered 22:50 CEST 2026-10-19 — before the 21:00Z break
+# that evening: energy_break_fade (holdout +9.11 bps, lane 06b) without HO (stale
+# prints). Judge it only on bars from 2026-10-19T21:00:00Z on (`--from`); every
+# earlier bar was seen.
+[backtest.strategies.break_fade_ng_cl]
+kind = "daily_window"
+universe = "@ng_cl"
+interval = "15m"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "17:00"
+entry = "17:45"
+exit = "18:30"
+direction = "fade"
 min_abs_signal_bps = 10
 
 # Pre-registered 22:42 CEST 2026-10-19 before any run of them: NATGAS longs pay
