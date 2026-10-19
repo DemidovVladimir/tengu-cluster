@@ -6,6 +6,24 @@
 
 ---
 
+## 2026-10-19 → 20: `sandboxes/xpower` — electricity for a crypto-only trader (overnight run), branch `feature/xpower-sandbox`, no `src/` change
+
+Operator ask: a YouTube episode said EU power can be traded on Hyperliquid / Robinhood — find a DEX route (Solana first), check last week's history and news vs moves, run overnight like xmarket / xlab. All agents on the subscriptions (`claude_code`, `codex`), $0 OpenRouter. Driver, data, notes and `REPORT.md` in `~/tengu-lab/xpower/` (outside the repo).
+
+| Result | Evidence |
+|---|---|
+| No wallet-tradable power product anywhere (HL HIP-3, Solana perps, gTrade, Ostium, Aster, Lighter); Kalshi ERCOT / PJM binaries = KYC; Robinhood = KYC brokerage | `out/01-venues.md`, `out/01b-venue-gaps.md` |
+| EU power moved (DE DA 87.5–303.4 €/MWh; perfect-foresight ceiling ≈ €2,913 / MW / 8 days) but every rule on public info loses; HL proxies don't track DE power (abs corr ≤ 0.24, n 35) | `out/04-power-quant.md`, `ws/quant/q1_*` |
+| News → proxies: −1.1 bps / trade, n 16, half wrong; forecasts lead power, not news | `out/05-news-vs-moves.md`, `ws/quant/q2_*` |
+| Backtests (split 2026-08-01, one holdout read each): EIA follow weak, proxy fade / funding carry / weekend fade no-go; **NYMEX daily-break fade** holdout +9.11 bps n 51 (CI spans 0); first forward night +10.28 bps n 1 | `out/06*.md`, `out/10-break-tonight.md` |
+| Codex critic: break fade = TEST, everything else AVOID / PARK | `out/07-verdict.md` |
+
+| Item | State |
+|---|---|
+| Forward spec `break_fade_ng_cl` | registered 2026-10-19 22:47 CEST before the break (d47c4bf0bf292787cb36f7b7b20e30e48513c3f8); kill criterion fixed in 8afda3c58172381218b29009f34e0219777fc708 — rerun weekly from HL history, no live recording needed |
+| Tengu findings (not fixed) | `~/tengu-lab/xpower/TENGU_FINDINGS.md`: A2A task cut by `max_tool_rounds` settles COMPLETED; `claude_code` `max_tool_rounds` counts built-ins; **holdout leak — a `read_only` Claude Code Architect can Read `<TENGU_HOME>/state/*/backtests/` directly**; `daily_window` can't say Mon–Thu; Codex plan 5-h usage limit |
+| Left running | `tengu run --sandbox xpower` (recorder), `tengu a2a serve --sandbox xpower` (port 8730), driver → morning lanes 08 / 09 at 08:40 CEST; an older `tengu a2a serve --sandbox venture-scan` (pid 99042, since 10-14) is not this session's |
+
 ## 2026-10-14 (later): every sandbox LLM agent on the subscriptions — branch `fix/subscription-agents-everywhere`, one PR
 
 | Change | Where | Tests / evidence |

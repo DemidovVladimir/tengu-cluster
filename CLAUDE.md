@@ -452,7 +452,9 @@ These are not preferences. They're load-bearing.
   `holdout: true` shows both halves and appends to
   `<state dir>/backtests/holdout-reads.jsonl` (`holdout read #n for this spec`) —
   never show the model a holdout uncounted; its runs are read by run id
-  (`backtest` `run_id`), never by path (the state dir is outside every fs root).
+  (`backtest` `run_id`), never by path (the state dir is outside every fs root —
+  bridged tools only: a Claude Code Architect on any profile but `none` can Read it
+  with its built-ins, as xpower's `read_only` one did on 2026-10-19; keep it on `none`).
   The operator's `tengu backtest --split` counts its reads too (`via = "cli"`).
   Every report records `data_through_ms` (the newest row it read); `tengu backtest
   --data-through <it>` reruns on the same data after `market.db` grew.

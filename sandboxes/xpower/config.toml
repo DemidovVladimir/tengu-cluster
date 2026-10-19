@@ -507,7 +507,7 @@ placebos — with run ids for every number. Reads and backtests only."""
 example_queries = ["Backtest following the EIA storage report on xyz:NATGAS, with its placebo."]
 
 [agents.architect.claude_code]
-builtin_tools_profile = "read_only"   # Read/Glob/Grep over the workspace; backtests through the bridge
+builtin_tools_profile = "none"   # bridge tools only, as in xlab: a read_only Read reached the state dir (holdout runs) — finding 5 of the 2026-10-19 run
 
 [agents.architect.identity]
 name = "xpower architect"
