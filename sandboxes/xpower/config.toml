@@ -11,7 +11,7 @@
 #   news_scout   (Claude Code, research)     timestamped energy news (UTC) for a window — events JSON
 #   quant        (Claude Code, editor_shell) sqlite3 / jq over the data the driver fetched (power.db,
 #                                            market.db copy): DA vs intraday, forecast error, outages
-#   architect    (Claude Code, read_only)    strategy specs on the tradable proxies → `backtest`
+#   architect    (Claude Code, none)         strategy specs on the tradable proxies → `backtest`
 #   critic       (Codex, live web search)    challenges every load-bearing number, writes the verdict
 #   xp_recorder  (private) feeds: hl_ctx / hl_book of the proxies (HIP-3 books are in no archive)
 #   xp_fetch     (private) http_request for the driver's data pulls (tengu tool call)
