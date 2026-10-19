@@ -360,6 +360,26 @@ exit = "18:30"
 direction = "follow"
 min_abs_signal_bps = 10
 
+# Pre-registered 22:42 CEST 2026-10-19 before any run of them: NATGAS longs pay
+# shorts (+40 % APR in-sample, +74 % in the holdout — lane 06). Carry = short while
+# |funding| APR ≥ 30, out under 10 or after 72 h. Parameters copied from xlab's
+# crypto_funding_carry, not tuned here.
+[backtest.strategies.natgas_funding_carry]
+kind = "funding_carry"
+universe = "@gas"
+interval = "1h"
+min_apr_pct = 30
+exit_apr_pct = 10
+hold_hours = 72
+
+[backtest.strategies.energy_funding_carry]        # the same over NATGAS, CL, HO
+kind = "funding_carry"
+universe = "@cme_energy"
+interval = "1h"
+min_apr_pct = 30
+exit_apr_pct = 10
+hold_hours = 72
+
 # --- Scouts: Claude Code on the Claude subscription --------------------------
 [agents.venue_scout]
 default = true
