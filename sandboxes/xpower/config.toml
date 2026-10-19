@@ -16,7 +16,7 @@
 #   xp_recorder  (private) feeds: hl_ctx / hl_book of the proxies (HIP-3 books are in no archive)
 #   xp_fetch     (private) http_request for the driver's data pulls (tengu tool call)
 #
-# Tradable proxies on Hyperliquid (checked live 2026-10-19 21:53 UTC+5): no power
+# Tradable proxies on Hyperliquid (checked live 2026-10-19 21:53 CEST): no power
 # perp anywhere on HL; xyz:TTF (Dutch gas, sets most EU power prices) is listed
 # with an empty book and no candles; xyz:NATGAS (Henry Hub) trades ~$115M/week at
 # a 1.5 bps spread; para:VST (Vistra, ERCOT generator) ~$2.8M/week at ~15 bps.
@@ -132,7 +132,7 @@ seed = 7
 
 # Costs per side, longest id prefix wins. Fees: HIP-3 taker unknown per dex
 # (growth mode or not) — 2.0 bps on xyz and 9.0 bps on para, both on the high
-# side; half-spreads = half the live spread at 21:53 UTC+5, rounded up.
+# side; half-spreads = half the live spread at 21:53 CEST, rounded up.
 [backtest.costs."hyperliquid:xyz:"]
 taker_fee_bps = 2.0
 half_spread = { model = "fixed", bps = 2.0 }
@@ -298,7 +298,7 @@ hold_bars = 12
 cooldown_bars = 12
 
 # --- Closed-market gap (operator 2026-10-19: the perps trade while the exchange is shut) ---
-# Pre-registered 22:40 UTC+5 before any run of them. NYMEX (Henry Hub, WTI, heating
+# Pre-registered 22:35 CEST (commit 5b0f46a4) before any run of them. NYMEX (Henry Hub, WTI, heating
 # oil) closes Fri 17:00 NY, reopens Sun 18:00 NY, and breaks 17:00-18:00 NY daily;
 # Hyperliquid keeps trading. Rule W's window (anchor Fri 20:00, entry Sun 18:00,
 # exit Mon 09:00 NY) shifted by offsets: anchor Fri 17:00 (the close), entry Sun 17:00
