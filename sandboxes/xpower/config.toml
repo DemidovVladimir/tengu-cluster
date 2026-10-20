@@ -456,6 +456,51 @@ exit = "18:30"
 direction = "fade"
 min_abs_signal_bps = 10
 
+# 30m bars (operator 2026-10-20: "добавь 30m и прогони на 104 днях"). Pre-registered 11:31
+# CEST 2026-10-20 before any 30m bar was fetched. HL keeps 5 000 bars = ~104 days of 30m
+# (from ~2026-07-08), twice the 15m reach. 17:45 is off the 30m grid: the nearest rule
+# keeps the 15m one's anchor (17:00, the CME close), an entry inside the break (17:30) and
+# its exit (18:30, 30 min after the reopen). Mon-Thu rows only (Friday apart, by `period`).
+# Judged on rows before 2026-08-28 (the 15m test never had them; the 1h test saw that span
+# at other instants): NG+CL net mean ≥ +5 bps with 95 % CI low > 0 (CI over per-day means),
+# metals mean > 0, both above break_follow_30m (placebo) and midday_fade_30m (control).
+# Costs as configured (2 bps a side); a column at HL's growth-mode fees is reported apart.
+[backtest.strategies.break_fade_30m]
+kind = "daily_window"
+universe = "@cme_break"
+interval = "30m"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "17:00"
+entry = "17:30"
+exit = "18:30"
+direction = "fade"
+min_abs_signal_bps = 10
+
+[backtest.strategies.break_follow_30m]            # its placebo
+kind = "daily_window"
+universe = "@cme_break"
+interval = "30m"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "17:00"
+entry = "17:30"
+exit = "18:30"
+direction = "follow"
+min_abs_signal_bps = 10
+
+[backtest.strategies.midday_fade_30m]             # control: the same fade, CME open
+kind = "daily_window"
+universe = "@cme_break"
+interval = "30m"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "12:00"
+entry = "12:30"
+exit = "13:30"
+direction = "fade"
+min_abs_signal_bps = 10
+
 # Pre-registered 22:42 CEST 2026-10-19 before any run of them: NATGAS longs pay
 # shorts (+40 % APR in-sample, +74 % in the holdout — lane 06). Carry = short while
 # |funding| APR ≥ 30, out under 10 or after 72 h. Parameters copied from xlab's
