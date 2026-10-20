@@ -8,7 +8,7 @@
 //! |---|---|
 //! | Base | `https://api.geckoterminal.com/api/v2`; `$GECKO_API_URL` overrides (tests, a proxy) |
 //! | Network | the instrument's venue: `solana` → `solana`, `robinhood` → `robinhood` (others refused) |
-//! | Timeframe | `1m` minute/1 · `5m` minute/5 · `15m` minute/15 · `1h` hour/1 · `4h` hour/4 · `1d` day/1 |
+//! | Timeframe | `1m` minute/1 · `5m` minute/5 · `15m` minute/15 · `1h` hour/1 · `4h` hour/4 · `1d` day/1; `30m` refused before any request (no such aggregate) |
 //! | `token` | the instrument's own address (its native id): the pool's price of that token in USD, whichever side of the pool it is on |
 //! | Gate | `egress::policy().check_url` (`[egress] allow_hosts`) + the client's scope `net_hosts`, on every request; a denial is `Fatal`, nothing is sent |
 //! | Budget | `[rate_limits.geckoterminal]` (`outbound/rate_limit.rs`; weight 1 per request; xlab: 25 / min, the free API allows ~30); a 429 drains it for `Retry-After`; no section = unlimited |
@@ -18,7 +18,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use reqwest::Url;
 use serde_json::{json, Value};
 
@@ -77,16 +77,18 @@ pub(crate) fn network_of(venue: &str) -> Result<&'static str, String> {
     }
 }
 
-/// `(timeframe, aggregate)` of an interval.
-pub(crate) fn timeframe(interval: Interval) -> (&'static str, u32) {
-    match interval {
+/// `(timeframe, aggregate)` of an interval; GeckoTerminal aggregates minutes
+/// by 1, 5 or 15 only, so `30m` is refused.
+pub(crate) fn timeframe(interval: Interval) -> Result<(&'static str, u32)> {
+    Ok(match interval {
         Interval::M1 => ("minute", 1),
         Interval::M5 => ("minute", 5),
         Interval::M15 => ("minute", 15),
+        Interval::M30 => bail!("GeckoTerminal has no 30m bars (minute aggregates 1, 5, 15)"),
         Interval::H1 => ("hour", 1),
         Interval::H4 => ("hour", 4),
         Interval::D1 => ("day", 1),
-    }
+    })
 }
 
 /// The OHLCV endpoint with its scope and budget.
@@ -166,7 +168,7 @@ impl GeckoClient {
         before_s: i64,
         token: &str,
     ) -> Result<Url> {
-        let (tf, aggregate) = timeframe(interval);
+        let (tf, aggregate) = timeframe(interval)?;
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow!("GeckoTerminal base cannot take a path"))?
@@ -362,6 +364,7 @@ async fn fetch(
     if plan.pool.is_empty() || plan.pool.contains(&['/', '?', '#'][..]) {
         return Err(anyhow!("pool `{}` is not a pool address", plan.pool));
     }
+    timeframe(plan.interval)?;
     let (interval, iv) = (plan.interval, plan.interval.ms());
     let from = grid_ceil(plan.from_ms, iv);
     // Only closed bars: the open one (from grid_floor(now)) is never asked for.
@@ -535,9 +538,13 @@ mod tests {
 
     #[tokio::test]
     async fn timeframes_errors_and_refusals() {
-        assert_eq!(timeframe(Interval::M15), ("minute", 15));
-        assert_eq!(timeframe(Interval::H4), ("hour", 4));
-        assert_eq!(timeframe(Interval::D1), ("day", 1));
+        assert_eq!(timeframe(Interval::M15).unwrap(), ("minute", 15));
+        assert_eq!(timeframe(Interval::H4).unwrap(), ("hour", 4));
+        assert_eq!(timeframe(Interval::D1).unwrap(), ("day", 1));
+        assert!(timeframe(Interval::M30)
+            .unwrap_err()
+            .to_string()
+            .contains("no 30m"));
         assert_eq!(network_of("robinhood"), Ok("robinhood"));
         assert!(network_of("hyperliquid")
             .unwrap_err()

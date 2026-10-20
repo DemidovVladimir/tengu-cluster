@@ -286,7 +286,7 @@
   </div>
   <div class="grid">
     <div class="card hands kind"><h3><code>weekend_window</code></h3><p>Rule W on any calendar: s = ln(entry / anchor), <code>fade</code> or <code>follow</code>, optional <code>top_n</code>. <code>weekend_fade</code>, <code>weekend_fade_top4</code>. Optional <code>labels</code>: each name NEWS / UNCERTAIN / NOISE from what was published in [anchor − 240 min, decision]; <code>skip</code> drops a class before <code>top_n</code> (<code>label_skipped</code>). <code>weekend_fade_noise_only</code> in <code>sandboxes/xlab-w2</code>. Optional <code>stop_loss_bps</code>: leave at the first 1h close that far against the trade. Optional <code>rank_by = "net_of_cost"</code>: rank <code>top_n</code> by |s| minus the round-trip cost.</p></div>
-    <div class="card hands kind"><h3><code>daily_window</code></h3><p>Anchor, entry, exit as local <code>HH:MM</code>. <code>xyz_overnight_follow</code>: 16:00 → 20:00 → 09:00 New York.</p></div>
+    <div class="card hands kind"><h3><code>daily_window</code></h3><p>Anchor, entry, exit as local <code>HH:MM</code>. Bars of 1m, 5m, 15m, 30m or 1h; each instant on that bar grid. <code>xyz_overnight_follow</code>: 16:00 → 20:00 → 09:00 New York.</p></div>
     <div class="card hands kind"><h3><code>move_trigger</code></h3><p>|move over a lookback| ≥ threshold, optional volume ratio, hold / TP / SL. <code>crypto_move_fade</code>: 4 bars, 300 bps.</p></div>
     <div class="card hands kind"><h3><code>funding_carry</code></h3><p>Take the side funding pays when APR ≥ min; exit below <code>exit_apr_pct</code> or after <code>hold_hours</code>. <code>xyz_funding_carry</code>.</p></div>
     <div class="card hands kind"><h3><code>pair_spread</code></h3><p>z of ln(a / b) over a lookback: enter at |z| ≥ <code>entry_z</code>, leave at ≤ <code>exit_z</code>. <code>sol_eth_spread</code>.</p></div>
@@ -415,7 +415,7 @@ holdout-reads.jsonl  <span class="c"># append-only ledger of holdout reads (tool
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-20.</p>
 </article>
 </main>
 </div>

@@ -33,16 +33,18 @@ pub enum Interval {
     M1,
     M5,
     M15,
+    M30,
     H1,
     H4,
     D1,
 }
 
 impl Interval {
-    pub const ALL: [Interval; 6] = [
+    pub const ALL: [Interval; 7] = [
         Interval::M1,
         Interval::M5,
         Interval::M15,
+        Interval::M30,
         Interval::H1,
         Interval::H4,
         Interval::D1,
@@ -54,18 +56,20 @@ impl Interval {
             Interval::M1 => 60_000,
             Interval::M5 => 300_000,
             Interval::M15 => 900_000,
+            Interval::M30 => 1_800_000,
             Interval::H1 => 3_600_000,
             Interval::H4 => 14_400_000,
             Interval::D1 => 86_400_000,
         }
     }
 
-    /// `1m 5m 15m 1h 4h 1d`.
+    /// `1m 5m 15m 30m 1h 4h 1d`.
     pub fn as_str(self) -> &'static str {
         match self {
             Interval::M1 => "1m",
             Interval::M5 => "5m",
             Interval::M15 => "15m",
+            Interval::M30 => "30m",
             Interval::H1 => "1h",
             Interval::H4 => "4h",
             Interval::D1 => "1d",
@@ -76,7 +80,7 @@ impl Interval {
         Interval::ALL
             .into_iter()
             .find(|i| i.as_str() == s.trim())
-            .ok_or_else(|| format!("interval `{s}` is not one of 1m, 5m, 15m, 1h, 4h, 1d"))
+            .ok_or_else(|| format!("interval `{s}` is not one of 1m, 5m, 15m, 30m, 1h, 4h, 1d"))
     }
 }
 
@@ -531,6 +535,7 @@ mod tests {
             assert_eq!(serde_json::from_str::<Interval>(&json).unwrap(), i);
         }
         assert_eq!(Interval::H1.ms(), H);
+        assert_eq!(Interval::M30.ms(), H / 2);
         assert!(Interval::parse("2h").unwrap_err().contains("not one of"));
     }
 

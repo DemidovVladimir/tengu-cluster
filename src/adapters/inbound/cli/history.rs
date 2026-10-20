@@ -80,7 +80,7 @@ pub(super) enum HistoryAction {
         instruments: String,
         #[arg(long, value_enum, default_value_t = BackfillSource::Hl)]
         source: BackfillSource,
-        /// 1m 5m 15m 1h 4h 1d (HL keeps the newest 5000 bars per interval).
+        /// 1m 5m 15m 30m 1h 4h 1d (HL keeps the newest 5000 bars per interval; GeckoTerminal has no 30m).
         #[arg(long, default_value = "1h")]
         interval: String,
         /// Start, inclusive: epoch ms, RFC 3339 or a UTC date (2026-03-01).

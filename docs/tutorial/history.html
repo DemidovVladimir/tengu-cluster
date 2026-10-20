@@ -171,7 +171,7 @@
         <li><code>tengu history backfill</code> names full ids or <code>@&lt;universe&gt;</code>. Source <code>hl</code> (default) or <code>gecko</code>, <code>--interval</code> default <code>1h</code>, <code>--funding</code> for funding too.</li>
         <li>Every request passes the egress policy (<code>allow_hosts</code>), the client's host, a <code>[rate_limits.*]</code> budget and one audit line. 429, 5xx and timeouts retry: up to 5 times, 1 s to 60 s apart.</li>
         <li>Hyperliquid serves only the newest 5 000 bars per interval. An older start is clamped and the report says so. Funding comes ≤ 500 rows a reply.</li>
-        <li>GeckoTerminal: pool OHLCV of <code>solana:</code> and <code>robinhood:</code> tokens, ≤ 1 000 bars a reply, paged backwards from the newest.</li>
+        <li>GeckoTerminal: pool OHLCV of <code>solana:</code> and <code>robinhood:</code> tokens, ≤ 1 000 bars a reply, paged backwards from the newest. It has no <code>30m</code> (minute bars come in 1, 5, 15): refused before any request.</li>
         <li>Offline: HL S3 <code>asset_ctxs</code> files (requester pays, main-dex perps only) and JSON dataset files. One bad JSON row and nothing is imported.</li>
         <li>Decoders check every row: prices &gt; 0, high and low bound open and close, open time on the UTC grid. A bar still open is dropped.</li>
         <li>Rows land in <code>market.db</code>: <code>bars</code>, <code>funding</code>, <code>ctx</code>. The same key replaces its row. A rerun resumes: only what is not stored is fetched.</li>
@@ -392,7 +392,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-20.</p>
 </article>
 </main>
 </div>
@@ -402,7 +402,7 @@
    hyperliquid/info.rs: candleSnapshot weight 20 + 1 per 60 bars) */
 (function () {
   function $(id) { return document.getElementById(id); }
-  var IV = [["1m", 1], ["5m", 5], ["15m", 15], ["1h", 60], ["4h", 240], ["1d", 1440]];
+  var IV = [["1m", 1], ["5m", 5], ["15m", 15], ["30m", 30], ["1h", 60], ["4h", 240], ["1d", 1440]];
   var HL_MAX_BARS = 5000, CLOSED = HL_MAX_BARS - 1, BUDGET = 600, NAMES = 75;
   var cur = "1h";
   var seg = $("iv");

@@ -10,7 +10,7 @@
 //! | `name` | `[a-z0-9_]{1,48}`: the strategies key, or the JSON's own (both given ⇒ equal) |
 //! | `kind` | one of the six below |
 //! | `universe` | `"@<name>"` or full ids (one string or a list, ≤ 1000, distinct); required by `weekend_window` `daily_window` `move_trigger` `funding_carry`, refused by `pair_spread` / `event_window` (they name their instruments) |
-//! | `interval` | `1m 5m 15m 1h 4h 1d`; window kinds ≤ 1h (their instants are local wall-clock times) |
+//! | `interval` | `1m 5m 15m 30m 1h 4h 1d`; window kinds ≤ 1h (their instants are local wall-clock times) |
 //! | `notional_usd` | per trade, 0 < x ≤ 1 000 000 (default `[backtest] notional_usd`) |
 //! | `exclude` | full ids never traded (≤ 1000) |
 //! | `min_entry_trades` | optional, 1..=1 000 000: a candidate whose entry bar (the bar ending at the decision) counts fewer trades is skipped (`thin_entry`); a bar without a trade count passes |
@@ -932,7 +932,7 @@ fn check_zone(e: &mut Vec<String>, field: &str, tz: &str) {
 fn check_window_interval(e: &mut Vec<String>, kind: &str, iv: Interval) {
     if iv.ms() > HOUR_MS {
         e.push(format!(
-            "interval {iv}: {kind} instants are local wall-clock times — use 1m, 5m, 15m or 1h"
+            "interval {iv}: {kind} instants are local wall-clock times — use 1m, 5m, 15m, 30m or 1h"
         ));
     }
 }
@@ -1218,6 +1218,12 @@ mod tests {
                        "calendar": "us_equity", "tz": "UTC", "anchor": "00:00", "entry": "01:00",
                        "exit": "02:00", "direction": "fade"}),
                 &["calendar is read only"],
+            ),
+            (
+                json!({"kind": "daily_window", "universe": "@x", "interval": "30m", "days": "weekdays",
+                       "tz": "America/New_York", "anchor": "17:00", "entry": "17:45",
+                       "exit": "18:30", "direction": "fade"}),
+                &["entry `17:45` is not on the 30m bar grid"],
             ),
             (
                 json!({"kind": "move_trigger", "universe": "@x", "interval": "1h", "lookback_bars": 0,

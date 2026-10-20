@@ -58,7 +58,7 @@ fn market_history() -> ToolDef {
                 },
                 "interval": {
                     "type": "string",
-                    "enum": ["1m", "5m", "15m", "1h", "4h", "1d"],
+                    "enum": ["1m", "5m", "15m", "30m", "1h", "4h", "1d"],
                     "description": "Bar interval. Default 1h.",
                 },
                 "from": {
@@ -112,7 +112,7 @@ fn backtest() -> ToolDef {
                 },
                 "spec": {
                     "type": "object",
-                    "description": "Your own strategy spec instead of strategy (JSON object): name ([a-z0-9_], default architect_spec), kind (weekend_window, daily_window, move_trigger, funding_carry, pair_spread, event_window), universe (\"@<name>\" or full ids; pair_spread / event_window name theirs), interval (1m 5m 15m 1h 4h 1d), the kind's parameters (move_trigger: lookback_bars, threshold_bps, direction fade|follow, hold_bars), optional notional_usd, exclude, costs. Unknown fields are refused; each error names its field.",
+                    "description": "Your own strategy spec instead of strategy (JSON object): name ([a-z0-9_], default architect_spec), kind (weekend_window, daily_window, move_trigger, funding_carry, pair_spread, event_window), universe (\"@<name>\" or full ids; pair_spread / event_window name theirs), interval (1m 5m 15m 30m 1h 4h 1d), the kind's parameters (move_trigger: lookback_bars, threshold_bps, direction fade|follow, hold_bars), optional notional_usd, exclude, costs. Unknown fields are refused; each error names its field.",
                 },
                 "from": {
                     "type": "string",
