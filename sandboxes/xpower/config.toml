@@ -382,7 +382,9 @@ min_abs_signal_bps = 10
 # `period`); Friday rows reported apart. Kill after 30 Mon-Thu trades if the net mean
 # is ≤ 0, the 95 % CI still includes -5 bps, or the best two days exceed 50 % of the
 # total (Codex critic, notes/07-verdict). History-first: HL keeps ~52 days of 15m
-# bars, so backfill + rerun weekly — no live recording needed.
+# bars, so backfill + rerun weekly — no live recording needed. Superseded 2026-10-20 by
+# history (the specs below, ~/tengu-lab/xpower/out/11-break-history.md): NG+CL 1h on
+# 5 unseen months -4.6 bps (n 113) — fails; no forward month.
 [backtest.strategies.break_fade_ng_cl]
 kind = "daily_window"
 universe = "@ng_cl"
@@ -395,7 +397,7 @@ exit = "18:30"
 direction = "fade"
 min_abs_signal_bps = 10
 
-# History instead of a month of forward (operator 2026-10-20). Pre-registered 08:25 CEST
+# History instead of a month of forward (operator 2026-10-20). Pre-registered 08:17 CEST
 # 2026-10-20 before any price of the new names was read. The 15m result (n 51) used
 # 2026-08-28 → 10-19 for NATGAS / CL / HO; unseen and judged here:
 #   A. NATGAS + CL on 1h bars 2026-03-25 → 08-27 (5 months the 15m test never had);
