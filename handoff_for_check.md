@@ -2,6 +2,64 @@
 
 > For the operator's architecture agent. Newest session first; earlier sessions below, unchanged. Ids and hashes are full. Everything is verifiable from git, GitHub and the commands in each session's last section.
 
+# Session 2026-10-19 → 2026-10-20: `sandboxes/xpower` — electricity for a crypto-only trader (overnight), branch `feature/xpower-sandbox`, local, not pushed
+
+## T1. What was asked → what was delivered
+
+| Ask (operator) | Delivered | Where |
+|---|---|---|
+| Find a DEX (Solana first) to trade electricity for crypto; is the YouTube "Hyperliquid / Robinhood" claim true | none exists (HL HIP-3, Solana perps, gTrade, Ostium, Aster, Lighter checked); Kalshi / DFlow / Robinhood = KYC | `~/tengu-lab/xpower/REPORT.md` § 1 |
+| Last week's history, news vs moves, detectable longs / shorts | power moved with forecasts, not news; public-info rules lose; news bot −1.1 bps n 16 | REPORT § 2, § 4 |
+| Sandbox like xmarket / xlab, run overnight, results in files | `sandboxes/xpower` (scouts, quant, Architect, Codex critic over `tengu a2a serve`; `tengu run` recorder); driver + lanes 01–10 | `~/tengu-lab/xpower/{driver.sh,out/,ws/}` |
+| Side note: perps trade while the exchange is closed | weekend gap no-go; daily CME break: 15m +9.11 bps n 51 → history test (below) fails on 5 unseen months | REPORT § 3, § 5, § 5b |
+| "No month of forward — use history" (2026-10-20) | 1h + every CME-break perp, pre-registered, run the same morning | `out/11-break-history.md`, commit `4af719baeae8c532bb56fed6148df75091ef2001` |
+
+## T2. Commits on `feature/xpower-sandbox` (merge base `fdfdc2eb1961964b33f154a829550ded52acb279`; no `src/` change)
+
+| Commit | What |
+|---|---|
+| `c6d98734338612e63cd587a6a342a22c8216a11d` | sandbox created |
+| `5b0f46a432fadebcfa4b7efef142cef40b4ef77f` | closed-market gap specs, denser recording around the break |
+| `85a4fca5bdb9e1e3b3c04a11913a3684567117e1` | funding-carry specs |
+| `d47c4bf0bf292787cb36f7b7b20e30e48513c3f8` | forward spec `break_fade_ng_cl` |
+| `1e036326350a4a5b56e599a0c07535064e018628` | CEST labels |
+| `8afda3c58172381218b29009f34e0219777fc708` | kill criterion (superseded) |
+| `00eaacdd745418b42888eafb59280225e3df0b62` | Architect → profile `none`; gotcha (built-in Read reaches the backtest state dir) in CLAUDE.md + AGENTS.md; handoff entry |
+| `b1be1d3f3442d8482ae06099f72099f58d9b1d58` | header profile |
+| `4af719baeae8c532bb56fed6148df75091ef2001` | history specs: `break_fade_1h`, `break_follow_1h`, `midday_fade_1h`, `break_fade_15m_all`, universe `cme_break` |
+| `4068e0ed67e6c662b925f43adad5477787c4842c` | forward spec superseded by history |
+
+## T3. Results that carry the conclusion
+
+| Test | n | Net bps / trade | Run id |
+|---|---|---|---|
+| break fade 15m, NG+CL+HO, holdout | 51 | +9.11, CI [−4.5, +21.7] | `20261019T204055Z-energy_break_fade` |
+| break fade 1h, NG+CL, 5 unseen months, Mon–Thu | 113 | **−4.6 (fails the pre-registered bar)** | `20261020T062842Z-break_fade_1h` |
+| same, metals (unseen) | 235 | +2.7, CI spans 0 | `20261020T062842Z-break_fade_1h` |
+| 15m rule on unseen metals, same 52 days | 51 | +6.3, CI [+1.5, +10.4] | `20261020T062842Z-break_fade_15m_all` |
+| placebo (follow) / control (12–14 NY) | — | negative everywhere | `20261020T062842Z-break_follow_1h`, `20261020T062842Z-midday_fade_1h` |
+
+Costs: xyz growth-mode markets cost 0.45–0.9 bps / side all-in (HL fee docs); the backtests charged 2.0 — conservative. `xyz:GOLD` is not in growth mode (≈ 9 bps / side).
+
+## T4. Tengu findings (not fixed; `~/tengu-lab/xpower/TENGU_FINDINGS.md`)
+
+| # | Finding |
+|---|---|
+| 1 | A2A task cut by `max_tool_rounds` settles COMPLETED |
+| 2 | `claude_code` `max_tool_rounds` counts built-ins (Read / Grep / WebSearch) |
+| 5 | holdout leak: a non-`none` Claude Code Architect can Read `<TENGU_HOME>/state/*/backtests/` — fixed for xpower by config; gotcha in CLAUDE.md / AGENTS.md |
+| 6 | `daily_window` `days` can't say Mon–Thu |
+| 7 | Codex ChatGPT plan 5-hour limit: the driver should wait for the reset |
+| 8 | no 30m bar interval (HL 30m ≈ 104 days vs 15m ≈ 52) |
+
+## T5. Left running / verify
+
+| What | State |
+|---|---|
+| `tengu run --sandbox xpower`, `tengu a2a serve --sandbox xpower` (port 8730) | running — the operator's to stop |
+| `tengu a2a serve --sandbox venture-scan` (pid 99042, since 2026-10-14) | not this session's |
+| Verify | `TENGU_HOME=~/tengu-lab/home ~/tengu-lab/xpower/break_history.sh` reruns T3 (new run ids); `git log fdfdc2eb1961964b33f154a829550ded52acb279..feature/xpower-sandbox` |
+
 # Session 2026-10-12 → 2026-10-13: weekend #2 stop + grade, PRs #50–#54 merged, cleanup, docs sweep, review fixes
 
 ## T1. What was asked → what was delivered
