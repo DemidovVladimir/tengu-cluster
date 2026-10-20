@@ -153,6 +153,10 @@ half_spread = { model = "fixed", bps = 0.5 }
 taker_fee_bps = 2.0
 half_spread = { model = "fixed", bps = 5.5 }
 
+[backtest.costs."hyperliquid:xyz:GBP"]           # live spread 5.99 bps at 06:16Z 2026-10-20
+taker_fee_bps = 2.0
+half_spread = { model = "fixed", bps = 3.0 }
+
 [backtest.costs."hyperliquid:para:"]
 taker_fee_bps = 9.0
 half_spread = { model = "fixed", bps = 7.5 }
@@ -167,6 +171,15 @@ gas = ["hyperliquid:xyz:NATGAS"]
 power_equity = ["hyperliquid:para:VST", "hyperliquid:xyz:GEV", "hyperliquid:xyz:BE"]
 cme_energy = ["hyperliquid:xyz:NATGAS", "hyperliquid:xyz:CL", "hyperliquid:xyz:HO"]   # NYMEX hours: Sun 18:00 - Fri 17:00 NY, break 17-18
 ng_cl = ["hyperliquid:xyz:NATGAS", "hyperliquid:xyz:CL"]   # the two that really trade through the break (lane 06b)
+# Every xyz perp whose underlying breaks 17:00-18:00 NY on CME Globex: NYMEX energy,
+# COMEX / NYMEX metals, CME equity index and FX futures (spot FX keeps trading — read apart).
+cme_break = [
+    "hyperliquid:xyz:NATGAS", "hyperliquid:xyz:CL", "hyperliquid:xyz:HO",
+    "hyperliquid:xyz:GOLD", "hyperliquid:xyz:SILVER", "hyperliquid:xyz:COPPER",
+    "hyperliquid:xyz:PLATINUM", "hyperliquid:xyz:PALLADIUM",
+    "hyperliquid:xyz:SP500", "hyperliquid:xyz:XYZ100",
+    "hyperliquid:xyz:JPY", "hyperliquid:xyz:EUR", "hyperliquid:xyz:GBP",
+]
 
 # The EIA weekly gas storage report (Thursday 10:30 New York: 15:30 UTC before
 # the 2026-03-08 DST change, 14:30 UTC after) — the one scheduled US gas event.
@@ -373,6 +386,65 @@ min_abs_signal_bps = 10
 [backtest.strategies.break_fade_ng_cl]
 kind = "daily_window"
 universe = "@ng_cl"
+interval = "15m"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "17:00"
+entry = "17:45"
+exit = "18:30"
+direction = "fade"
+min_abs_signal_bps = 10
+
+# History instead of a month of forward (operator 2026-10-20). Pre-registered 08:25 CEST
+# 2026-10-20 before any price of the new names was read. The 15m result (n 51) used
+# 2026-08-28 → 10-19 for NATGAS / CL / HO; unseen and judged here:
+#   A. NATGAS + CL on 1h bars 2026-03-25 → 08-27 (5 months the 15m test never had);
+#   B. metals GOLD SILVER COPPER PLATINUM PALLADIUM, 1h + 15m (never tested);
+#   C. SP500 XYZ100 / JPY EUR GBP — exploratory, reported apart.
+# 1h: anchor 17:00 = the last price at the CME close, entry 18:00 = the last price
+# before the reopen (close of the 17-18 bar), exit 19:00. Mon-Thu rows only (Friday
+# has no reopen: rows by `period`). Pass = A's net mean ≥ +5 bps with 95 % CI low > 0,
+# B's mean > 0, and both beat break_follow_1h (placebo) and midday_fade_1h (the same
+# fade at 12-13-14 NY, market open: is it the break or any hourly reversion?).
+[backtest.strategies.break_fade_1h]
+kind = "daily_window"
+universe = "@cme_break"
+interval = "1h"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "17:00"
+entry = "18:00"
+exit = "19:00"
+direction = "fade"
+min_abs_signal_bps = 10
+
+[backtest.strategies.break_follow_1h]             # its placebo
+kind = "daily_window"
+universe = "@cme_break"
+interval = "1h"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "17:00"
+entry = "18:00"
+exit = "19:00"
+direction = "follow"
+min_abs_signal_bps = 10
+
+[backtest.strategies.midday_fade_1h]              # control: the same fade, CME open
+kind = "daily_window"
+universe = "@cme_break"
+interval = "1h"
+days = "weekdays"
+tz = "America/New_York"
+anchor = "12:00"
+entry = "13:00"
+exit = "14:00"
+direction = "fade"
+min_abs_signal_bps = 10
+
+[backtest.strategies.break_fade_15m_all]          # energy_break_fade over every CME-break name
+kind = "daily_window"
+universe = "@cme_break"
 interval = "15m"
 days = "weekdays"
 tz = "America/New_York"
