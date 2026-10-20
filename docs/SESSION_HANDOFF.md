@@ -6,7 +6,7 @@
 
 ---
 
-## 2026-10-19 → 20: `sandboxes/xpower` — electricity for a crypto-only trader (overnight run), branch `feature/xpower-sandbox`, no `src/` change
+## 2026-10-19 → 20: `sandboxes/xpower` — electricity for a crypto-only trader (overnight run), branch `feature/xpower-sandbox`; one `src/` change: the 30m bar interval
 
 Operator ask: a YouTube episode said EU power can be traded on Hyperliquid / Robinhood — find a DEX route (Solana first), check last week's history and news vs moves, run overnight like xmarket / xlab. All agents on the subscriptions (`claude_code`, `codex`), $0 OpenRouter. Driver, data, notes and `REPORT.md` in `~/tengu-lab/xpower/` (outside the repo).
 
@@ -19,11 +19,12 @@ Operator ask: a YouTube episode said EU power can be traded on Hyperliquid / Rob
 | Codex critic: break fade = TEST, everything else AVOID / PARK | `out/07-verdict.md` |
 | **History, not a month of forward (operator 2026-10-20):** break fade on 1h bars (HL keeps ~208 days) + every CME-break perp, pre-registered (4af719baeae8c532bb56fed6148df75091ef2001): NG+CL on 5 unseen months **−4.6 bps** n 113 — **fails** (bar: ≥ +5, CI > 0); metals +2.7 n 235; 15m rule on unseen metals +6.3 n 51 (same 52 days); placebo loses everywhere | `out/11-break-history.md` |
 | Morning: scout made 0 calls in 7 pulses (nothing to grade); final Codex verdict unchanged. Its fee point (4.5 bps / side) is wrong for xyz growth-mode markets: 0.45–0.9 bps / side all-in (HL fee docs); GOLD is not in growth mode (≈ 9 bps / side) | `out/08-forward-grade.md`, `out/09-final-verdict.md` |
+| **30m bar interval** (`Interval::M30`, 3bf0e9201cb7bcc59ecb42b37c1d3e88552b4925: HL backfill, `market_history`, window kinds on the 30m grid; GeckoTerminal refuses 30m before any request). HL 30m reaches ~104 days. Break fade 17:00 → 17:30 → 18:30 NY, pre-registered (2b9acb6c66479bc08ad11ae8a524584d278cb8fc): NG+CL before 2026-08-28 **+1.7 bps** n 41 — **fails** again; metals +5.7 n 100, CI [+1.4, +9.9] (all 104 days) | `out/12-break-30m.md`, REPORT § 5c |
 
 | Item | State |
 |---|---|
 | Forward spec `break_fade_ng_cl` | registered 2026-10-19 22:47 CEST (d47c4bf0bf292787cb36f7b7b20e30e48513c3f8), kill criterion 8afda3c58172381218b29009f34e0219777fc708 — **superseded** by the history test (4068e0ed67e6c662b925f43adad5477787c4842c): no forward month |
-| Tengu findings (not fixed) | `~/tengu-lab/xpower/TENGU_FINDINGS.md`: A2A task cut by `max_tool_rounds` settles COMPLETED; `claude_code` `max_tool_rounds` counts built-ins; **holdout leak — a `read_only` Claude Code Architect can Read `<TENGU_HOME>/state/*/backtests/` directly** (xpower fixed: architect → `none`, 00eaacdd745418b42888eafb59280225e3df0b62); `daily_window` can't say Mon–Thu; Codex plan 5-h usage limit; no 30m bar interval (HL 30m = ~104 days, would double the 15m rule's history) |
+| Tengu findings (8 fixed, rest open) | `~/tengu-lab/xpower/TENGU_FINDINGS.md`: A2A task cut by `max_tool_rounds` settles COMPLETED; `claude_code` `max_tool_rounds` counts built-ins; **holdout leak — a `read_only` Claude Code Architect can Read `<TENGU_HOME>/state/*/backtests/` directly** (xpower fixed: architect → `none`, 00eaacdd745418b42888eafb59280225e3df0b62); `daily_window` can't say Mon–Thu; Codex plan 5-h usage limit; no 30m bar interval — **fixed** 3bf0e9201cb7bcc59ecb42b37c1d3e88552b4925 |
 | Left running | `tengu run --sandbox xpower` (recorder), `tengu a2a serve --sandbox xpower` (port 8730), driver finished 08:53 CEST; an older `tengu a2a serve --sandbox venture-scan` (pid 99042, since 10-14) is not this session's |
 
 ## 2026-10-14 (later): every sandbox LLM agent on the subscriptions — branch `fix/subscription-agents-everywhere`, one PR

@@ -465,6 +465,8 @@ min_abs_signal_bps = 10
 # at other instants): NG+CL net mean ≥ +5 bps with 95 % CI low > 0 (CI over per-day means),
 # metals mean > 0, both above break_follow_30m (placebo) and midday_fade_30m (control).
 # Costs as configured (2 bps a side); a column at HL's growth-mode fees is reported apart.
+# Result 2026-10-20 (~/tengu-lab/xpower/out/12-break-30m.md): NG+CL before 08-28 +1.7 bps (n 41) — fails;
+# metals +6.6 (n 60) there, +5.7 (n 100, CI [+1.4, +9.9]) over all 104 days.
 [backtest.strategies.break_fade_30m]
 kind = "daily_window"
 universe = "@cme_break"

@@ -13,8 +13,9 @@
 | Sandbox like xmarket / xlab, run overnight, results in files | `sandboxes/xpower` (scouts, quant, Architect, Codex critic over `tengu a2a serve`; `tengu run` recorder); driver + lanes 01–10 | `~/tengu-lab/xpower/{driver.sh,out/,ws/}` |
 | Side note: perps trade while the exchange is closed | weekend gap no-go; daily CME break: 15m +9.11 bps n 51 → history test (below) fails on 5 unseen months | REPORT § 3, § 5, § 5b |
 | "No month of forward — use history" (2026-10-20) | 1h + every CME-break perp, pre-registered, run the same morning | `out/11-break-history.md`, commit `4af719baeae8c532bb56fed6148df75091ef2001` |
+| "Add 30m and run it on 104 days" (2026-10-20) | `Interval::M30` in tengu (HL backfill, `market_history`, backtests; GeckoTerminal refuses it); 30m specs pre-registered before any 30m fetch, run on 2026-07-08 → 10-20 | `out/12-break-30m.md`, REPORT § 5c, commits `3bf0e9201cb7bcc59ecb42b37c1d3e88552b4925`, `2b9acb6c66479bc08ad11ae8a524584d278cb8fc` |
 
-## T2. Commits on `feature/xpower-sandbox` (merge base `fdfdc2eb1961964b33f154a829550ded52acb279`; no `src/` change)
+## T2. Commits on `feature/xpower-sandbox` (merge base `fdfdc2eb1961964b33f154a829550ded52acb279`; one `src/` change: the 30m interval)
 
 | Commit | What |
 |---|---|
@@ -28,6 +29,9 @@
 | `b1be1d3f3442d8482ae06099f72099f58d9b1d58` | header profile |
 | `4af719baeae8c532bb56fed6148df75091ef2001` | history specs: `break_fade_1h`, `break_follow_1h`, `midday_fade_1h`, `break_fade_15m_all`, universe `cme_break` |
 | `4068e0ed67e6c662b925f43adad5477787c4842c` | forward spec superseded by history |
+| `376c78fab65c1b147a0a126b9e66515a4dc8cdb5` | handoffs: history test, morning lanes, fee correction |
+| `2b9acb6c66479bc08ad11ae8a524584d278cb8fc` | 30m specs `break_fade_30m`, `break_follow_30m`, `midday_fade_30m`, pre-registered |
+| `3bf0e9201cb7bcc59ecb42b37c1d3e88552b4925` | **`src/`:** `Interval::M30` (`domain/marketdata.rs`), GeckoTerminal refuses 30m (`backfill/gecko.rs`), `market_history` enum, spec / CLI docs; tutorial pages history, backtest, observations; xlab + typed-observations docs. Tests: `intervals_round_trip_their_wire_names`, `timeframes_errors_and_refusals`, `bounds_name_their_field` (30m grid), `config::risk::tests` (every sandbox loads), `tutorial_map` |
 
 ## T3. Results that carry the conclusion
 
@@ -38,10 +42,13 @@
 | same, metals (unseen) | 235 | +2.7, CI spans 0 | `20261020T062842Z-break_fade_1h` |
 | 15m rule on unseen metals, same 52 days | 51 | +6.3, CI [+1.5, +10.4] | `20261020T062842Z-break_fade_15m_all` |
 | placebo (follow) / control (12–14 NY) | — | negative everywhere | `20261020T062842Z-break_follow_1h`, `20261020T062842Z-midday_fade_1h` |
+| break fade 30m (17:00 → 17:30 → 18:30 NY), NG+CL, days before 2026-08-28, Mon–Thu | 41 | **+1.7, CI [−11.1, +20.4] (fails the pre-registered bar)** | `20261020T093433Z-break_fade_30m` |
+| same, metals, before 2026-08-28 / all 104 days | 60 / 100 | +6.6 / **+5.7, CI [+1.4, +9.9]** | `20261020T093433Z-break_fade_30m` |
+| 30m placebo / control | — | below the fade in every group | `20261020T093433Z-break_follow_30m`, `20261020T093433Z-midday_fade_30m` |
 
 Costs: xyz growth-mode markets cost 0.45–0.9 bps / side all-in (HL fee docs); the backtests charged 2.0 — conservative. `xyz:GOLD` is not in growth mode (≈ 9 bps / side).
 
-## T4. Tengu findings (not fixed; `~/tengu-lab/xpower/TENGU_FINDINGS.md`)
+## T4. Tengu findings (`~/tengu-lab/xpower/TENGU_FINDINGS.md`; only 8 fixed)
 
 | # | Finding |
 |---|---|
@@ -50,7 +57,7 @@ Costs: xyz growth-mode markets cost 0.45–0.9 bps / side all-in (HL fee docs); 
 | 5 | holdout leak: a non-`none` Claude Code Architect can Read `<TENGU_HOME>/state/*/backtests/` — fixed for xpower by config; gotcha in CLAUDE.md / AGENTS.md |
 | 6 | `daily_window` `days` can't say Mon–Thu |
 | 7 | Codex ChatGPT plan 5-hour limit: the driver should wait for the reset |
-| 8 | no 30m bar interval (HL 30m ≈ 104 days vs 15m ≈ 52) |
+| 8 | no 30m bar interval (HL 30m ≈ 104 days vs 15m ≈ 52) — **fixed** `3bf0e9201cb7bcc59ecb42b37c1d3e88552b4925` |
 
 ## T5. Left running / verify
 
@@ -58,7 +65,7 @@ Costs: xyz growth-mode markets cost 0.45–0.9 bps / side all-in (HL fee docs); 
 |---|---|
 | `tengu run --sandbox xpower`, `tengu a2a serve --sandbox xpower` (port 8730) | running — the operator's to stop |
 | `tengu a2a serve --sandbox venture-scan` (pid 99042, since 2026-10-14) | not this session's |
-| Verify | `TENGU_HOME=~/tengu-lab/home ~/tengu-lab/xpower/break_history.sh` reruns T3 (new run ids); `git log fdfdc2eb1961964b33f154a829550ded52acb279..feature/xpower-sandbox` |
+| Verify | `TENGU_HOME=~/tengu-lab/home ~/tengu-lab/xpower/break_history.sh` reruns T3 (new run ids); `~/tengu-lab/xpower/break_history_30m.sh` reruns the 30m rows; `git log fdfdc2eb1961964b33f154a829550ded52acb279..feature/xpower-sandbox` |
 
 # Session 2026-10-12 → 2026-10-13: weekend #2 stop + grade, PRs #50–#54 merged, cleanup, docs sweep, review fixes
 
