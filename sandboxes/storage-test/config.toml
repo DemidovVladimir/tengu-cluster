@@ -51,6 +51,8 @@ skill_packages = ["telegram-rag-ingest"]
 # persistent_store; pasted text → write_file → persistent_store. Scopes: the
 # [default_scopes] above.
 tools = ["persistent_store", "read_file", "http_request", "write_file"]
+# No [agents.storage.claude_code] block: profile "none" (the default since
+# 2026-10-22) — no built-in Bash / Read / Write; only the tools above.
 # Planner-facing description (used when an [orchestrator] routes a step here).
 description = """
 Stores files and searches them by semantic query. Best for: ingesting a set \

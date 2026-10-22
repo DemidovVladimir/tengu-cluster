@@ -546,7 +546,7 @@ fn kinds() -> Vec<KindSpec> {
                     .help("Env var with the server's bearer key (empty env = no key). A wired secret sets it.")
                     .writes("agents.<name>.local.api_key_env"),
                 field("claude_tools", "Claude built-in tools", Select)
-                    .default(json!("read_only"))
+                    .default(json!("none"))
                     .options(&[
                         ("none", "none — tengu tools only"),
                         ("read_only", "read_only — Read/Grep/Glob"),

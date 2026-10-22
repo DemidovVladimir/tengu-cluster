@@ -768,7 +768,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                 // (`orchestrator::planner::PlannerLlm::call`); what is left is
                 // the CLI's own: Claude Code's built-ins (off with `none`),
                 // Codex's shell (always there).
-                let tools = c.s("claude_tools").unwrap_or_else(|| "read_only".into());
+                let tools = c.s("claude_tools").unwrap_or_else(|| "none".into());
                 if planner == Some(c.id()) && engine == "claude_code" && tools.trim() != "none" {
                     issues.push(
                         Issue::warn(
@@ -1138,7 +1138,7 @@ fn emit(
                 }
             }
             "claude_code" => {
-                let p = s("claude_tools").unwrap_or_else(|| "read_only".into());
+                let p = s("claude_tools").unwrap_or_else(|| "none".into());
                 let _ = writeln!(
                     o,
                     "\n[agents.{name}.claude_code]\nbuiltin_tools_profile = {}",

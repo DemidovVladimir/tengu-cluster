@@ -815,7 +815,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # workspace_tools = ["shared_cache"]
 #
 # [agents.editor.claude_code]
-# builtin_tools_profile = "editor_shell"  # none | read_only | research | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; every profile runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md; "research" = WebSearch only, run at Anthropic on the subscription, no Read/Glob/Grep, never WebFetch — files and pages go through bridged tools)
+# builtin_tools_profile = "editor_shell"  # none (default) | read_only | research | editor | editor_shell ("none" required with a [solana] signer, [risk] or [soe]; every profile runs the CLI without settings files, hooks, plugins, skills, CLAUDE.md; "research" = WebSearch only, run at Anthropic on the subscription, no Read/Glob/Grep, never WebFetch — files and pages go through bridged tools)
 #
 # [agents.editor.identity]
 # name = "Editor Agent"

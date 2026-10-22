@@ -841,8 +841,8 @@ These are not preferences. They're load-bearing.
   privy_wallet_id` signer, a `[risk]` or an `[soe]` section: no `engine = "codex"` agent (its
   own shell ignores tengu scopes — load error); every `claude_code` agent must set
   `[agents.<a>.claude_code] builtin_tools_profile = "none"` (no block =
-  `editor_shell` = load error; the value is read trimmed, an unknown one is a
-  load error), and `fold_default_scopes` sets `no_shell_fallback` on every
+  `none`, the default since 2026-10-22; the value is read trimmed, an unknown
+  one is a load error), and `fold_default_scopes` sets `no_shell_fallback` on every
   agent (in-process and bridge fallbacks run no shell; no shell skill loads —
   `SkillRegistry::with_shell_skills`). Every `claude_code` agent's CLI (any
   profile since 2026-10-22) runs with

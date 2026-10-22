@@ -74,7 +74,7 @@ pub(crate) fn build_step_engine(
                     .claude_code
                     .as_ref()
                     .map(|c| c.builtin_tools_profile.trim())
-                    .unwrap_or("editor_shell");
+                    .unwrap_or("none");
                 // `[egress]`: builtin Bash has no egress control — dropped
                 // while a proxy is set. The CLI's own API traffic follows
                 // `claude_cli_env` (HTTPS_PROXY) inside the engine.

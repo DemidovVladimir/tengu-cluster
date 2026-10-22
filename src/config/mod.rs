@@ -947,18 +947,20 @@ fn default_claude_timeout_secs() -> u64 {
 ///
 /// | Profile | Built-ins |
 /// |---|---|
-/// | `none` | none: tengu tools only (the only value a hardened sandbox allows) |
+/// | `none` | none: tengu tools only (default; the only value a hardened sandbox allows) |
 /// | `read_only` | Read, Glob, Grep |
 /// | `research` | WebSearch — the search runs at Anthropic on the subscription; no Read / Glob / Grep (not workspace-bound); files and pages through bridged tools (`read_file`, `http_request`: scopes + egress), never WebFetch |
 /// | `editor` | + Edit, Write, MultiEdit |
-/// | `editor_shell` | + Bash (default) |
+/// | `editor_shell` | + Bash |
 pub const CLAUDE_CODE_PROFILES: &[&str] =
     &["none", "read_only", "research", "editor", "editor_shell"];
 
 /// Per-agent Claude Code configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentClaudeCodeConfig {
-    /// One of [`CLAUDE_CODE_PROFILES`], read trimmed; default `editor_shell`.
+    /// One of [`CLAUDE_CODE_PROFILES`], read trimmed; default `none` (no
+    /// built-ins: every file, page and command through bridged, scoped
+    /// tools; was `editor_shell` until 2026-10-22).
     #[serde(default = "default_builtin_tools_profile")]
     pub builtin_tools_profile: String,
 }
@@ -1104,7 +1106,7 @@ fn default_local_api_key_env() -> String {
 }
 
 fn default_builtin_tools_profile() -> String {
-    "editor_shell".to_string()
+    "none".to_string()
 }
 
 /// Persistent vector memory configuration.

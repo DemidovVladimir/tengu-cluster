@@ -1165,7 +1165,7 @@ mod tests {
     fn claude_code_needs_profile_none() {
         let text = SOE.replacen(
             "        [agents.soe_architect.claude_code]\n        builtin_tools_profile = \"none\"\n",
-            "",
+            "        [agents.soe_architect.claude_code]\n        builtin_tools_profile = \"editor_shell\"\n",
             1,
         );
         let errs = soe(&text).validation_errors();
