@@ -885,7 +885,8 @@ These are not preferences. They're load-bearing.
   strip` removes local key copies at load, success or failure. No session → every
   `[keys.env]` var unset, and `tengu telegram` with `TELEGRAM_API_URL` refuses to start
   (never a local token). `run-agent` / `mcp-bridge` children reuse the session and strip
-  again; the redaction registry is extended after the export (`registry_after_keys`).
+  again; the redaction registry is extended after the export (`registry_after_keys`, via
+  `cli::sandbox_ctx` for every command that takes a registry).
   Replies masked fail-closed (2026-10-13): every header and every body byte, any
   size / content type, streamed with a cross-chunk tail (`tengu-seal::mask`). Sessions are not
   refreshed in-process: restart a long `tengu run` before `session_hours` (≤ 168 h).

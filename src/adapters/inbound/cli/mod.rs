@@ -709,8 +709,7 @@ pub(crate) async fn run() -> Result<()> {
 
     match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
         Commands::Chat { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             tokio::task::block_in_place(|| {
                 crate::adapters::inbound::tui::run_tui(config, profile, secret_registry)
             })
@@ -730,8 +729,7 @@ pub(crate) async fn run() -> Result<()> {
         }
         #[cfg(feature = "telegram")]
         Commands::Telegram { sandbox } => tokio::task::block_in_place(|| {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             crate::adapters::inbound::telegram::run_telegram(config, secret_registry)
         }),
         #[cfg(not(feature = "telegram"))]
@@ -740,8 +738,7 @@ pub(crate) async fn run() -> Result<()> {
         }
         #[cfg(feature = "webhooks")]
         Commands::Webhooks { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             crate::adapters::inbound::webhooks::run_webhooks(config, secret_registry).await
         }
         #[cfg(not(feature = "webhooks"))]
@@ -749,12 +746,11 @@ pub(crate) async fn run() -> Result<()> {
             anyhow::bail!("webhook listener requires: cargo build --features webhooks")
         }
         Commands::Run { sandbox } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             crate::adapters::inbound::run::run_runtime(config, secret_registry).await
         }
         Commands::A2a { sandbox, action } => {
-            let config = load_sandbox_or(sandbox, config)?;
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             a2a::run_a2a(config, action, secret_registry).await
         }
         Commands::Decide {
@@ -763,8 +759,7 @@ pub(crate) async fn run() -> Result<()> {
             event,
             map,
         } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             decide::run_decide(
                 &config,
                 loop_name.as_deref(),
@@ -779,8 +774,7 @@ pub(crate) async fn run() -> Result<()> {
             serve,
             action,
         } => {
-            let config = load_sandbox_or(sandbox, config)?;
-            let secret_registry = registry_after_keys(secret_registry, &config);
+            let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             studio::run_studio(config, serve, action, secret_registry).await
         }
         Commands::History { sandbox, action } => {
@@ -1019,6 +1013,23 @@ fn stdout_is_data(command: &Option<Commands>) -> bool {
     )
 }
 
+/// Load the sandbox (`load_sandbox_or`) and the redaction registry that
+/// goes with it (`registry_after_keys`) in one call: every command that
+/// takes a registry uses this, so none can skip the extension (`tengu a2a
+/// serve` did, 2026-10-22: its seal-proxy session token went unmasked).
+fn sandbox_ctx(
+    sandbox: Option<String>,
+    config: Config,
+    registry: std::sync::Arc<crate::domain::secrets::SecretRegistry>,
+) -> Result<(
+    Config,
+    std::sync::Arc<crate::domain::secrets::SecretRegistry>,
+)> {
+    let config = load_sandbox_or(sandbox, config)?;
+    let registry = registry_after_keys(registry, &config);
+    Ok((config, registry))
+}
+
 /// The startup redaction registry, extended when `[keys]` exported a
 /// seal-proxy session after it was made (`load_sandbox_or` runs later), so
 /// the session token is masked on this process's surfaces too. Extended,
@@ -1050,6 +1061,31 @@ fn loads_vault_at_startup(command: &Option<Commands>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// S12: an arm that loads a sandbox with `load_sandbox_or` and then
+    /// hands `secret_registry` on skipped the `[keys]` extension (`tengu a2a
+    /// serve`); such arms must use `sandbox_ctx`.
+    #[test]
+    fn registry_commands_load_through_sandbox_ctx() {
+        let src = include_str!("mod.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if !line.contains("load_sandbox_or(sandbox, config)") {
+                continue;
+            }
+            let next = lines[i + 1..]
+                .iter()
+                .take(4)
+                .copied()
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !next.contains("secret_registry"),
+                "line {}: use sandbox_ctx so the registry gets the [keys] session\n{next}",
+                i + 1
+            );
+        }
+    }
 
     fn command(args: &[&str]) -> Option<Commands> {
         Cli::try_parse_from(args).expect("parse").command
