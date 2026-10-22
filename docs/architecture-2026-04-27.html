@@ -1123,7 +1123,7 @@ const SUBSYSTEMS = [
       ["skills/xlab-research/SKILL.md", "the xlab Architect's protocol: split first, tune in-sample, one holdout read"],
       ["skills/execution-map/SKILL.md", "teaches the execution-map JSON (tengu decide --map)"],
       ["application/skills/registry.rs::skill_directories", "the list every reader shares"],
-      ["application/orchestrator/shared_files.rs::scan_skill_summaries", "the planner registry's scan (first found wins)"],
+      ["application/orchestrator/shared_files.rs::scan_skill_names", "the planner registry's scan (skill names only)"],
       ["adapters/inbound/cli/run_agent.rs::load_skill_body_three_tier", "called by run_agent_subprocess"],
     ],
     deep: "Each SKILL.md has YAML frontmatter (name, description). skill_directories is the one order for the planner registry, the run-agent loader, view_skill, skill_resource and apply_improver_proposal (the registry used to scan project first, so it could describe another skill than agents loaded). The body of each SKILL.md becomes part of the subagent's system prompt (assembled in run_agent_subprocess after the base template). Shell skills become tools; a hardened sandbox loads none.",
@@ -1489,7 +1489,7 @@ const FILE_MAP = [
   ["src/application/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop: Plan::validate each plan, replan-on-invalid / exhausted"],
   ["src/application/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, MetricsRecorded, …), EventBus"],
   ["src/application/orchestrator/trace.rs", "orchestrator", "OrchestratorTrace + TraceBridge: plan.created / step.started / step.completed / step.retrying / step.failed / plan.replanned / plan.completed / metrics.recorded (Studio)"],
-  ["src/application/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_summaries); per-session active plan (set_active_plan / active_plan → IPC plan_state); TENGU_PLAN.md debug artifact"],
+  ["src/application/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_names); per-session active plan (set_active_plan / active_plan → IPC plan_state); TENGU_PLAN.md debug artifact"],
   ["src/ports/orchestration.rs", "orchestrator", "Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn — tengu evolve), TurnTelemetry, PlannerVerdict"],
   // ── metrics ──
   ["src/domain/metrics.rs", "metrics", "MetricsRecord, MetricsKind (Planner, Subagent, Embedding, WikiCompiler, Decision), MetricsLayer, AggregatorState"],

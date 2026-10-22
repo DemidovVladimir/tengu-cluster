@@ -188,8 +188,9 @@ Two sides, different knobs (`[memory]`, `MemoryConfig`, `config/mod.rs:1042`):
 | planner | `cross_plan_top_k` | 5 | replan recall over prior step outputs |
 
 Planner registry context comes from root `TENGU_PLANNER_REGISTRY.md`,
-regenerated from the `[agents.*]` blocks that carry a `description`, skills,
-and core + MCP tools before planner calls. Builds with
+regenerated from the `[agents.*]` blocks that carry a `description` (each
+with its own tools and skills), then skill and core + MCP tool names only,
+before planner calls. Builds with
 `postgres_memory` use Postgres `agentic_memory` for planner user-message
 persistence, cross-session message recall, within-session step-output
 recall, and replan cross-plan recall. Without `postgres_memory`, these
@@ -401,8 +402,8 @@ and FTS fallback. No TTL / cleanup pass.
 ### 25. Karpathy LLM Wiki + planner files
 
 Root `TENGU_PLANNER_REGISTRY.md` is regenerated from the `[agents.*]` blocks
-with a `description`, skill frontmatter, and core + MCP tool definitions before
-planner calls. It is loaded
+with a `description`, then one line of skill names and one of core + MCP tool
+names (no descriptions, no file paths: 2026-10-22) before planner calls. It is loaded
 directly into the planner prompt, so planner routing no longer depends on
 old registry search or registry fingerprints. Stable promoted knowledge
 is compiled into `.tengu/agentic-memory/wiki/*.md`.

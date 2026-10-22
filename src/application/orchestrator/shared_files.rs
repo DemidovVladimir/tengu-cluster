@@ -167,10 +167,10 @@ fn render_registry(
     agents: &[(String, AgentConfig)],
     tools: &[ToolDef],
 ) -> Result<String> {
-    let skills = scan_skill_summaries(workspace);
+    let skills = scan_skill_names(workspace);
 
     let mut out = String::from("# Tengu Planner Registry\n\n");
-    out.push_str("This file is generated from the `[agents.*]` blocks of the active config that carry a `description`, skills, core tool definitions, and the tools of every configured MCP server (`<server>__<tool>`). The planner loads it into every planner turn.\n\n");
+    out.push_str("This file is generated from the `[agents.*]` blocks of the active config that carry a `description`; `## Skills` and `## Tools` list names only (skills on disk, catalog tools and every configured MCP server's `<server>__<tool>`) for a `compose`. The planner loads it into every planner turn.\n\n");
 
     out.push_str("## Agents\n\n");
     if agents.is_empty() {
@@ -180,7 +180,7 @@ fn render_registry(
         out.push_str(&format!("### {}\n\n", name));
         out.push_str(&format!("- engine: `{}`\n", agent.engine));
         out.push_str(&format!("- model: `{}`\n", agent.model));
-        out.push_str(&format!("- tools: `{}`\n", join_or_dash(&agent.tools)));
+        out.push_str(&format!("- tools: {}\n", agent_tools_line(agent)));
         out.push_str(&format!(
             "- skills: `{}`\n",
             join_or_dash(&agent.skill_packages)
@@ -199,36 +199,37 @@ fn render_registry(
     }
 
     out.push_str("## Skills\n\n");
-    if skills.is_empty() {
-        out.push_str("_No skills found._\n\n");
-    }
-    for skill in skills {
-        out.push_str(&format!(
-            "- `{}`: {} _(source: `{}`)_\n",
-            skill.name, skill.description, skill.source
-        ));
-    }
-    out.push('\n');
-
+    out.push_str(&names_line(skills.iter().map(String::as_str)));
     out.push_str("## Tools\n\n");
-    if tools.is_empty() {
-        out.push_str("_No tools found._\n");
-    }
-    for tool in tools {
-        out.push_str(&format!(
-            "- `{}`: {}\n",
-            tool.name,
-            first_line(&tool.description)
-        ));
-    }
+    out.push_str(&names_line(tools.iter().map(|t| t.name.as_str())));
     Ok(out)
 }
 
-#[derive(Debug)]
-struct SkillSummary {
-    name: String,
-    description: String,
-    source: String,
+/// One line of backticked names, or `_None._`.
+fn names_line<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let names: Vec<String> = names.map(|n| format!("`{n}`")).collect();
+    if names.is_empty() {
+        "_None._\n\n".to_string()
+    } else {
+        format!("{}\n\n", names.join(", "))
+    }
+}
+
+/// An agent's tool list as `agent_base_tools` reads it: an empty `tools`
+/// means every default tool (plus its `workspace_tools`).
+fn agent_tools_line(agent: &AgentConfig) -> String {
+    let ticked = |items: &[String]| {
+        items
+            .iter()
+            .map(|n| format!("`{n}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match (agent.tools.is_empty(), agent.workspace_tools.is_empty()) {
+        (false, _) => ticked(&agent.tools),
+        (true, true) => "every default tool".to_string(),
+        (true, false) => format!("every default tool + {}", ticked(&agent.workspace_tools)),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -239,21 +240,21 @@ struct SkillFrontmatter {
     description: Option<String>,
 }
 
-fn scan_skill_summaries(workspace: &Path) -> Vec<SkillSummary> {
+/// Names of the skills the loader would find, sorted, first root wins. A
+/// skill without a `name` and a `description` in its front matter is skipped.
+fn scan_skill_names(workspace: &Path) -> Vec<String> {
     // The skill loader's directories and order (managed first; was project
     // first, so the registry could describe another skill than agents load).
     let roots = crate::application::skills::registry::skill_directories(workspace);
 
-    let mut by_name = std::collections::BTreeMap::new();
+    let mut names = std::collections::BTreeSet::new();
     for root in roots {
-        for skill in scan_one_skill_root(&root) {
-            by_name.entry(skill.name.clone()).or_insert(skill);
-        }
+        names.extend(scan_one_skill_root(&root));
     }
-    by_name.into_values().collect()
+    names.into_iter().collect()
 }
 
-fn scan_one_skill_root(root: &Path) -> Vec<SkillSummary> {
+fn scan_one_skill_root(root: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
@@ -261,11 +262,11 @@ fn scan_one_skill_root(root: &Path) -> Vec<SkillSummary> {
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path().join("SKILL.md"))
         .filter(|path| path.is_file())
-        .filter_map(|path| parse_skill_summary(&path).ok().flatten())
+        .filter_map(|path| parse_skill_name(&path).ok().flatten())
         .collect()
 }
 
-fn parse_skill_summary(path: &Path) -> Result<Option<SkillSummary>> {
+fn parse_skill_name(path: &Path) -> Result<Option<String>> {
     let content = std::fs::read_to_string(path)?;
     let Some(frontmatter) = parse_frontmatter(&content) else {
         return Ok(None);
@@ -273,14 +274,14 @@ fn parse_skill_summary(path: &Path) -> Result<Option<SkillSummary>> {
     let Some(name) = frontmatter.name.filter(|s| !s.trim().is_empty()) else {
         return Ok(None);
     };
-    let Some(description) = frontmatter.description.filter(|s| !s.trim().is_empty()) else {
+    if frontmatter
+        .description
+        .filter(|s| !s.trim().is_empty())
+        .is_none()
+    {
         return Ok(None);
-    };
-    Ok(Some(SkillSummary {
-        name,
-        description,
-        source: path.to_string_lossy().to_string(),
-    }))
+    }
+    Ok(Some(name))
 }
 
 fn parse_frontmatter(content: &str) -> Option<SkillFrontmatter> {
@@ -298,10 +299,6 @@ fn join_or_dash(items: &[String]) -> String {
     } else {
         items.join(", ")
     }
-}
-
-fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or("").trim().to_string()
 }
 
 #[cfg(test)]
@@ -376,8 +373,11 @@ mod tests {
             },
         ];
         let block = ensure_planner_registry(dir.path(), &[], &tools).unwrap();
-        assert!(block.contains("- `notes__search_posts`: Search notes posts."));
-        assert!(block.contains("- `http_request`: Make an HTTP request."));
+        assert!(
+            block.contains("## Tools\n\n`http_request`, `notes__search_posts`\n"),
+            "{block}"
+        );
+        assert!(!block.contains("Search notes posts"), "names only: {block}");
         assert!(dir.path().join(PLANNER_REGISTRY_FILE).is_file());
     }
 
@@ -403,11 +403,41 @@ mod tests {
         );
         let block = ensure_planner_registry(dir.path(), &list, &[]).unwrap();
         assert!(block.contains("### researcher"), "{block}");
-        assert!(block.contains("- tools: `http_request`"), "{block}");
+        assert!(block.contains("- tools: `http_request`\n"), "{block}");
         assert!(block.contains("- skills: `web-research`"), "{block}");
         assert!(block.contains("Fetches prices from the web."), "{block}");
         assert!(block.contains("- what is the BTC price?"), "{block}");
         assert!(!block.contains("### planner"), "{block}");
+    }
+
+    /// Skills are listed by name: no description, no absolute path (the
+    /// registry used to send `_(source: /Users/…/SKILL.md)_` per skill). An
+    /// agent with no `tools` line holds every default tool.
+    #[test]
+    fn registry_lists_skill_names_without_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("skills").join("demo-skill");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: demo-skill\ndescription: A long description.\n---\nbody\n",
+        )
+        .unwrap();
+        let mut agent = crate::config::Config::default()
+            .agents
+            .remove("main")
+            .unwrap();
+        agent.tools.clear();
+        agent.description = Some("Does things.".into());
+        let block = ensure_planner_registry(dir.path(), &[("main".into(), agent)], &[]).unwrap();
+        assert!(block.contains("`demo-skill`"), "{block}");
+        assert!(!block.contains("A long description."), "{block}");
+        assert!(!block.contains("SKILL.md"), "{block}");
+        assert!(
+            !block.contains(&dir.path().display().to_string()),
+            "{block}"
+        );
+        assert!(block.contains("- tools: every default tool"), "{block}");
     }
 
     #[test]
@@ -419,7 +449,6 @@ mod tests {
         std::fs::write(&not_a_dir, "x").unwrap();
         let tools = [ToolDef::new("http_request", "d", serde_json::json!({}))];
         let block = ensure_planner_registry(&not_a_dir, &[], &tools).unwrap();
-        assert!(block.contains("## Tools"));
-        assert!(block.contains("- `http_request`: d"));
+        assert!(block.contains("## Tools\n\n`http_request`\n"), "{block}");
     }
 }

@@ -6,7 +6,7 @@
 
 ## TL;DR — the entire system in five sentences
 
-A user message arrives at a channel (TUI / Telegram / webhook). The harness builds an `Orchestrator`, which holds `RegistryPlanner` (legacy name for the LLM planner) and a `SubprocessRunner` (which executes plan steps as child processes). The planner regenerates and loads root `TENGU_PLANNER_REGISTRY.md` (`[agents.*]` with a `description` · skills · tools) into the planner prompt, then asks an LLM to emit either a direct response or a plan referencing that roster. Each plan step spawns `tengu run-agent` as a subprocess, which re-loads the parent's config (`sandboxes/<name>/config.toml`), takes its `[agents.<name>]` block, receives the accepted plan via `AgentIpcInput.plan_state`, builds a tool executor, and runs an LLM-with-tools loop until the model calls `compress_and_store` (the implicit "I'm done" tool). Every network path — tools, LLM APIs, the Claude Code and Codex CLIs, Telegram, the seal proxy — goes through the `[egress]` policy (`egress.rs`), which is Tor by default. Step output flows back to the executor; on failure the executor calls `RegistryPlanner::replan`, which uses Open Brain-style Postgres `agentic_memory` cross-plan recall when `postgres_memory` is enabled.
+A user message arrives at a channel (TUI / Telegram / webhook). The harness builds an `Orchestrator`, which holds `RegistryPlanner` (the LLM planner) and a `SubprocessRunner` (which executes plan steps as child processes). The planner regenerates and loads root `TENGU_PLANNER_REGISTRY.md` (`[agents.*]` with a `description` · skills · tools) into the planner prompt, then asks an LLM to emit either a direct response or a plan referencing that roster. Each plan step spawns `tengu run-agent` as a subprocess, which re-loads the parent's config (`sandboxes/<name>/config.toml`), takes its `[agents.<name>]` block, receives the accepted plan via `AgentIpcInput.plan_state`, builds a tool executor, and runs an LLM-with-tools loop until the model calls `compress_and_store` (the implicit "I'm done" tool). Every network path — tools, LLM APIs, the Claude Code and Codex CLIs, Telegram, the seal proxy — goes through the `[egress]` policy (`egress.rs`), which is Tor by default. Step output flows back to the executor; on failure the executor calls `RegistryPlanner::replan`, which uses Open Brain-style Postgres `agentic_memory` cross-plan recall when `postgres_memory` is enabled.
 
 That is the chat turn. Since 2026-09-24 the same binary also runs work with no chat turn at all:
 
@@ -53,7 +53,7 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 `src/application/orchestrator/planner.rs`. This is where the doctrine lives ("LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands"). For each user message:
 
 1. **Embed once** — only with a `RecallStore` (`postgres_memory`) and `OPENROUTER_API_KEY`; the vector is reused by every recall lane below.
-2. **Load the planner registry** — regenerate root `TENGU_PLANNER_REGISTRY.md` (`shared_files::ensure_planner_registry`) from the `[agents.*]` blocks that carry a `description` (`routable_agents`, with `example_queries`), skills, and core + MCP tool definitions, then inject it into the planner prompt.
+2. **Load the planner registry** — regenerate root `TENGU_PLANNER_REGISTRY.md` (`shared_files::ensure_planner_registry`) from the `[agents.*]` blocks that carry a `description` (`routable_agents`: description, `example_queries`, its own tools and skills), then one names-only line of skills and one of core + MCP tools (for a `compose`; no descriptions, no file paths), and inject it into the planner prompt.
 3. **Open Brain recall (opt-in)** — if `memory.cross_session_msg_top_k > 0`, retrieve prior user questions from Postgres `agentic_memory` and inject them as a "Cross-session message recall" block. **This happens BEFORE persisting the current message** so the just-written message can never appear in its own recall block.
 4. **Persist the user message** — `persist_user_message` writes keyed by `session_id` to Postgres `agentic_memory` with `postgres_memory`.
 5. **Push to in-memory buffer** — Phase 6.4 lite (`update_and_format_history`): the "Recent user messages this session" block.
@@ -233,7 +233,7 @@ Skill directories, highest priority first (a name found earlier shadows later on
 3. `<workspace>/skills/` (project)
 4. the repo's `skills/` in the cwd, when it is another dir
 
-One list for every reader: `application/skills/registry.rs::skill_directories` — the planner registry (`orchestrator/shared_files.rs::scan_skill_summaries`, frontmatter `name` + `description`, first found wins), `run-agent`'s `load_skill_body_three_tier`, `view_skill`, `skill_resource`, `apply_improver_proposal`.
+One list for every reader: `application/skills/registry.rs::skill_directories` — the planner registry (`orchestrator/shared_files.rs::scan_skill_names`: a skill needs frontmatter `name` + `description`, listed by name only), `run-agent`'s `load_skill_body_three_tier`, `view_skill`, `skill_resource`, `apply_improver_proposal`.
 
 `skills/orchestrator/SKILL.md` is special — used as the planner system prompt (Phase 4c). Its companion `plan_schema.json` is the JSON shape the prompt asks the planner for. `skills/xlab-research/SKILL.md` (2026-10-01) is the xlab Architect's protocol (split first, tune in-sample, one holdout read); `skills/execution-map/SKILL.md` teaches an Architect the execution-map JSON (§2.8).
 
@@ -250,7 +250,7 @@ One list for every reader: `application/skills/registry.rs::skill_directories` �
 | `events.rs` | `OrchestratorEvent` enum + `EventBus` (PlanCreated, StepStarted, **MetricsRecorded**, etc.; `StepFailed.retry_in_ms`, `PlanCompleted.failed`); a traced bus records each event before it broadcasts |
 | `trace.rs` | `OrchestratorTrace` + `TraceBridge`: each event → `plan.*` / `step.*` / `metrics.recorded` in the surface's execution trace (chat, telegram, eval, webhook agent endpoints, escalations); a step's cause handed to its `run-agent` child |
 | `ports/orchestration.rs` | Traits `Planner`, `WorkerHandle` (`known_agents` for `Plan::validate`), `ChatServiceFactory` (`run_turn` only — `tengu evolve`); `TurnTelemetry`. (`wiring.rs` / `ChatOrchestratorPortImpl` / `OrchestratorChatPort` removed 2026-10-22) |
-| `shared_files.rs` | `routable_agents` + `render_registry` → `TENGU_PLANNER_REGISTRY.md` (`ensure_planner_registry`, tool list from the `ToolDirectory` port), per-session `set_active_plan` / `active_plan` (IPC `plan_state`), `TENGU_PLAN.md` debug artifact, `scan_skill_summaries` |
+| `shared_files.rs` | `routable_agents` + `render_registry` → `TENGU_PLANNER_REGISTRY.md` (`ensure_planner_registry`, tool list from the `ToolDirectory` port), per-session `set_active_plan` / `active_plan` (IPC `plan_state`), `TENGU_PLAN.md` debug artifact, `scan_skill_names` |
 
 ### 2.5 `domain/metrics.rs` + `application/metrics.rs` — context/token observability (added 2026-04-28)
 
@@ -544,7 +544,7 @@ No provider key on this machine: keys are secrets of the `tengu-seal` Cloudflare
 
 | Store | What it holds | Written by | Read by | TTL? |
 |---|---|---|---|---|
-| `TENGU_PLANNER_REGISTRY.md` | `[agents.*]` blocks with a `description` + skills + core & MCP tool defs | `shared_files::ensure_planner_registry` before planner calls | `RegistryPlanner::plan/replan` prompt context | NO |
+| `TENGU_PLANNER_REGISTRY.md` | `[agents.*]` blocks with a `description` + skill names + core & MCP tool names | `shared_files::ensure_planner_registry` before planner calls | `RegistryPlanner::plan/replan` prompt context | NO |
 | `TENGU_PLAN.md` | current accepted plan/replan (debug artifact; IPC `plan_state` is the source of truth) | `replan.rs::drive` | humans; old-parent fallback in `run_agent_subprocess` | overwritten |
 | Postgres `agentic_memory` | Open Brain live memory: user messages + step outputs + source chunks | planner + `run-agent` + `agentic_memory` tool when `postgres_memory` is enabled | planner recall + agents via tool | none yet |
 | `.tengu/agentic-memory/wiki/` | Karpathy LLM Wiki compiled Markdown | `agentic_memory compile_wiki` | agents, humans, future MCP surface | Git/history |

@@ -66,7 +66,7 @@ Concrete scenario driving every batch below:
 | Rolling `metrics.json` + `metrics/history.jsonl` + per-run reports | Shipped | `src/application/skills/lifecycle/storage.rs` |
 | Approval gate (diff + delta + y/n/d/o) | Shipped | `src/application/skills/lifecycle/approval_gate.rs` |
 | Scratch git-worktree with stale-sweep | Shipped | `src/application/skills/lifecycle/scratch_worktree.rs` |
-| Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_summaries` (planner registry) |
+| Three-tier skill scanner (managed → workspace → project, first wins) | Shipped | `src/application/skills/registry.rs::skill_directories` (loader) · `src/adapters/outbound/tools/view_skill/mod.rs` (in-chat) · `src/application/orchestrator/shared_files.rs::scan_skill_names` (planner registry) |
 | Planner registry regenerated on every planner turn (no reindex step) | Shipped | `shared_files::ensure_planner_registry` |
 | Cache-discipline invariant (`loaded_in_current_conversation: false`) | Shipped | `distill.rs:226` |
 | `[skill_lifecycle]` config block | Sample only | commented sample in `config.example.toml` (no sandbox ships one) |
@@ -93,7 +93,7 @@ Concrete scenario driving every batch below:
 | G5 | No description-triggering eval — **closed** (`description_trigger`) | Hardest-to-debug skill failure | D2 | Batch 4 |
 | G6 | No human qualitative review | Subjective skills can't be gated | D2 | Batch 5 |
 | G7 | No variance in `MetricRollup` (only pass_rate) — **closed** (`stddev/min/max`) | Hides flaky metrics | D2 | Batch 6 |
-| G8 | Conditional skill activation not enforced at planner-selection — **partly closed** 2026-10-08: the agent-side loader skips a skill missing a prereq (`SkillGate`); `scan_skill_summaries` (planner registry) does not | Skill chosen, then fails on prereq | D2 | Batch 7 |
+| G8 | Conditional skill activation not enforced at planner-selection — **partly closed** 2026-10-08: the agent-side loader skips a skill missing a prereq (`SkillGate`); `scan_skill_names` (planner registry) does not | Skill chosen, then fails on prereq | D2 | Batch 7 |
 | G9 | No in-chat trigger phrase for `skill_distill` ("create skill from our dialog") — **closed** (`learning-agent` + `manage_skill`) | Tool exists but only fires by LLM discretion | D1 (SKILL.md only) | Batch 8 |
 | G10 | No in-chat trigger for evaluate-current-dialog ("evaluate") — **closed** | CLI-only — operator must drop to terminal mid-flow | D2 | Batch 8 |
 | G11 | No reflective eval — `tengu eval` requires a pre-existing `evals/prompts.yaml`, can't use the current dialog — **closed** (`dialog_replay`) | Forces user to pre-author fixtures | D2 | Batch 8 |
@@ -371,7 +371,7 @@ tengu skill evolve skill-creator --max-cycles 1   # inspect the gate render
 | Audit log (`skills/.audit.jsonl`) | `src/application/skills/lifecycle/audit.rs` |
 | Per-learner sidecar state | `src/application/skills/lifecycle/learner_state.rs` |
 | In-chat read / write tools | `src/adapters/outbound/tools/view_skill/mod.rs` · `src/adapters/outbound/tools/manage_skill/mod.rs` |
-| Skill scan for the planner registry | `src/application/orchestrator/shared_files.rs::scan_skill_summaries` |
+| Skill scan for the planner registry | `src/application/orchestrator/shared_files.rs::scan_skill_names` |
 | In-process three-tier loader (`skill_packages`) | `src/application/skills/registry.rs::skill_directories` |
 | Cowork reference | `/var/folders/.../skills/skill-creator/{SKILL.md,scripts/,agents/,eval-viewer/}` |
 | Hermes reference | `/Users/vladimirdemidov/development/hermes-agent/{hermes_cli,tools}/skills_hub.py` + `tools/skills_guard.py` |
