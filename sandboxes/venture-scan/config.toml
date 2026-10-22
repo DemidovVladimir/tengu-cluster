@@ -45,7 +45,7 @@ example_queries = ["Research the market for independent Solana smart-contract au
 tools = ["http_request"]
 
 [agents.web_scout.claude_code]
-builtin_tools_profile = "research"   # Read/Glob/Grep + WebSearch; pages via http_request
+builtin_tools_profile = "research"   # WebSearch only; pages via http_request
 
 [agents.web_scout.identity]
 name = "web scout"

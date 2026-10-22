@@ -550,7 +550,7 @@ fn kinds() -> Vec<KindSpec> {
                     .options(&[
                         ("none", "none — tengu tools only"),
                         ("read_only", "read_only — Read/Grep/Glob"),
-                        ("research", "research — + WebSearch (subscription)"),
+                        ("research", "research — WebSearch only (subscription)"),
                         ("editor", "editor — + Edit/Write"),
                         ("editor_shell", "editor_shell — + Bash"),
                     ])

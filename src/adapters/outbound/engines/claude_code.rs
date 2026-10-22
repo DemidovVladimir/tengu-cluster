@@ -45,9 +45,11 @@ use crate::ports::engine::{Engine, EngineDiagnostics};
 pub(crate) enum BuiltinToolsProfile {
     None,
     ReadOnly,
-    /// Read-only + WebSearch (server-side at Anthropic, on the
-    /// subscription). No WebFetch: it would fetch from this machine outside
-    /// tengu's egress and scopes — pages go through `http_request`.
+    /// WebSearch only (server-side at Anthropic, on the subscription).
+    /// No Read / Glob / Grep: they are not workspace-bound (an xpower
+    /// research agent read the state dir with them, 2026-10-19); no
+    /// WebFetch: it would fetch from this machine outside tengu's egress and
+    /// scopes — files and pages go through bridged tools.
     Research,
     Editor,
     EditorShell,
@@ -73,7 +75,7 @@ impl BuiltinToolsProfile {
         match self {
             Self::None => String::new(),
             Self::ReadOnly => "Read,Glob,Grep".into(),
-            Self::Research => "Read,Glob,Grep,WebSearch".into(),
+            Self::Research => "WebSearch".into(),
             Self::Editor => "Read,Glob,Grep,Edit,Write,MultiEdit".into(),
             Self::EditorShell => "Read,Glob,Grep,Edit,Write,MultiEdit,Bash".into(),
         }
@@ -247,9 +249,8 @@ fn parent_session_env<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<&'a s
         .collect()
 }
 
-/// The settings a `builtin_tools_profile = "none"` run adds through
-/// `--settings` (which still applies under `--setting-sources ""`):
-/// no auto-memory, no hooks from any source.
+/// The settings every run adds through `--settings` (which still applies
+/// under `--setting-sources ""`): no auto-memory, no hooks from any source.
 const ISOLATED_SETTINGS: &str = r#"{"autoMemoryEnabled":false,"disableAllHooks":true}"#;
 
 /// `claude` arguments for one run — all but the prompt (stdin), the working
@@ -259,7 +260,7 @@ const ISOLATED_SETTINGS: &str = r#"{"autoMemoryEnabled":false,"disableAllHooks":
 /// |---|---|
 /// | `--strict-mcp-config` | always: only the `--mcp-config` servers (the tengu bridge), never the operator's user / project / plugin MCP servers — they run outside tengu scopes and egress. No bridge = no MCP server |
 /// | `--tools <profile>` | built-in tools; `""` = none (`builtin_tools_profile = "none"`) |
-/// | profile `none` (the hardened one, `config/hardening.rs`): `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
+/// | every profile (2026-10-22; was `none` only): `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
 /// | `--mcp-config <file>` `--allowedTools mcp__tengu-tools__<name>…` | the bridge; `--tools` covers built-ins only, so each bridged tool is allowed by name |
 fn cli_args(
     profile: BuiltinToolsProfile,
@@ -286,18 +287,16 @@ fn cli_args(
         args.extend(["--system-prompt".into(), sp.into()]);
     }
     args.extend(["--tools".into(), profile.cli_tools_arg().into()]);
-    if profile == BuiltinToolsProfile::None {
-        args.extend(
-            [
-                "--setting-sources",
-                "",
-                "--disable-slash-commands",
-                "--settings",
-                ISOLATED_SETTINGS,
-            ]
-            .map(Into::into),
-        );
-    }
+    args.extend(
+        [
+            "--setting-sources",
+            "",
+            "--disable-slash-commands",
+            "--settings",
+            ISOLATED_SETTINGS,
+        ]
+        .map(Into::into),
+    );
     if let Some((config, tools)) = bridge {
         args.extend(["--mcp-config".into(), config.as_os_str().to_owned()]);
         // Variadic flag: last, and never bare (the CLI rejects a value-less one).
@@ -1170,12 +1169,11 @@ mod tests {
         );
     }
 
-    /// Profile `none` (the hardened one) runs the CLI without settings
-    /// files, CLAUDE.md / AGENTS.md discovery, skills, auto-memory and
-    /// hooks — with the bridge still last; every other profile keeps the
-    /// operator's settings.
+    /// Every profile runs the CLI without settings files, CLAUDE.md /
+    /// AGENTS.md discovery, skills, auto-memory and hooks — with the bridge
+    /// still last (2026-10-22; was profile `none` only).
     #[test]
-    fn cli_args_isolate_the_none_profile() {
+    fn cli_args_isolate_every_profile() {
         let tools = vec![ToolDef::new("read_file", "d", serde_json::json!({}))];
         let cfg = std::path::Path::new("/tmp/tengu-mcp.json");
         let none = strings(cli_args(
@@ -1210,14 +1208,19 @@ mod tests {
 
         for profile in [
             BuiltinToolsProfile::ReadOnly,
+            BuiltinToolsProfile::Research,
             BuiltinToolsProfile::Editor,
             BuiltinToolsProfile::EditorShell,
         ] {
             let args = strings(cli_args(profile, None, None, Some((cfg, &tools))));
+            assert_eq!(value_after(&args, "--setting-sources"), "", "{profile:?}");
+            assert_eq!(
+                value_after(&args, "--settings"),
+                ISOLATED_SETTINGS,
+                "{profile:?}"
+            );
             assert!(
-                !args.iter().any(|a| a == "--setting-sources"
-                    || a == "--settings"
-                    || a == "--disable-slash-commands"),
+                args.iter().any(|a| a == "--disable-slash-commands"),
                 "{profile:?}: {args:?}"
             );
         }
@@ -1498,15 +1501,15 @@ mod tests {
     }
 
     /// Config validation (`config::CLAUDE_CODE_PROFILES`) and the engine
-    /// accept the same names; `research` adds WebSearch and never WebFetch.
+    /// accept the same names; `research` is WebSearch alone: no file reads
+    /// outside the workspace, never WebFetch.
     #[test]
     fn profiles_match_config_and_research_has_no_fetch() {
         for name in crate::config::CLAUDE_CODE_PROFILES {
             assert!(BuiltinToolsProfile::parse(name).is_some(), "{name}");
         }
         let research = BuiltinToolsProfile::Research.cli_tools_arg();
-        assert_eq!(research, "Read,Glob,Grep,WebSearch");
-        assert!(!research.contains("WebFetch") && !research.contains("Bash"));
+        assert_eq!(research, "WebSearch");
     }
 
     fn msg(role: Role, content: &str) -> Message {

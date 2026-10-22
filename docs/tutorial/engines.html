@@ -395,7 +395,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
     <li><span><b>A CLI planner gets no Tengu tool.</b> A planner turn passes no bridge tools and no <code>[[mcp_servers]]</code> (<code>bootstrap/orchestrator.rs</code>), so a Claude Code planner with profile <code>none</code> can only write plan JSON.</span></li>
     <li><span><b>The CLI sees only the Tengu bridge.</b> <code>--strict-mcp-config</code> on every run: the operator's own MCP servers never load.</span></li>
     <li><span><b>Built-in Bash never bypasses the proxy.</b> Under an egress proxy, <code>editor_shell</code> launches as <code>editor</code>.</span></li>
-    <li><span><b>No built-in fetch.</b> No profile enables WebFetch: <code>research</code> adds only WebSearch, which runs at Anthropic; pages come through <code>http_request</code> (scopes, egress, audit). Codex web search stays <code>disabled</code> unless <code>web_search</code> says <code>cached</code> or <code>live</code>.</span></li>
+    <li><span><b>No built-in fetch.</b> No profile enables WebFetch: <code>research</code> is WebSearch alone, which runs at Anthropic; pages come through <code>http_request</code> (scopes, egress, audit). Codex web search stays <code>disabled</code> unless <code>web_search</code> says <code>cached</code> or <code>live</code>.</span></li>
     <li><span><b>No secret in the temp MCP config.</b> It holds names and paths; the bridge inherits values from the CLI's env (under Codex: only the base set + <code>forward_env</code>).</span></li>
     <li><span><b>Local stays local.</b> The local client ignores every proxy, env ones included.</span></li>
     <li><span><b>Claude Code's tool count is capped.</b> One call past <code>max_tool_rounds</code> kills the CLI with an error.</span></li>
@@ -456,7 +456,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
 <script>
 /* page-only: the argv builder (cli_args) and the window calculator */
 (function () {
-  var TOOLS = { none: "", read_only: "Read,Glob,Grep", research: "Read,Glob,Grep,WebSearch", editor: "Read,Glob,Grep,Edit,Write,MultiEdit", editor_shell: "Read,Glob,Grep,Edit,Write,MultiEdit,Bash" };
+  var TOOLS = { none: "", read_only: "Read,Glob,Grep", research: "WebSearch", editor: "Read,Glob,Grep,Edit,Write,MultiEdit", editor_shell: "Read,Glob,Grep,Edit,Write,MultiEdit,Bash" };
   var prof = "none";
   var proxy = document.getElementById("a-proxy"), bridge = document.getElementById("a-bridge"), hard = document.getElementById("a-hard");
   var out = document.getElementById("argv"), verdict = document.getElementById("argv-verdict"), envAdd = document.getElementById("env-add");
@@ -478,10 +478,8 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
       ['  --system-prompt "<system prompt>"', ""],
       ['  --tools "' + TOOLS[eff] + '"', eff !== prof ? "drop" : ""]
     ];
-    if (eff === "none") {
-      L.push(['  --setting-sources "" --disable-slash-commands', "add"]);
-      L.push(["  --settings '{\"autoMemoryEnabled\":false,\"disableAllHooks\":true}'", "add"]);
-    }
+    L.push(['  --setting-sources "" --disable-slash-commands', "add"]);
+    L.push(["  --settings '{\"autoMemoryEnabled\":false,\"disableAllHooks\":true}'", "add"]);
     if (bridge.checked) {
       L.push(["  --mcp-config <temp file: tengu-tools → tengu mcp-bridge>", "add"]);
       L.push(["  --allowedTools mcp__tengu-tools__read_file mcp__tengu-tools__list_directory", "add"]);
@@ -496,10 +494,10 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
       verdict.textContent = "No built-ins, no settings files, hooks, plugins, skills or CLAUDE.md";
     } else if (eff === "research") {
       verdict.className = "verdict warn";
-      verdict.textContent = "Read/Glob/Grep act outside Tengu scopes; WebSearch runs at Anthropic; no WebFetch: pages go through http_request";
+      verdict.textContent = "WebSearch only, run at Anthropic; no file built-ins, no WebFetch: files and pages go through bridged tools";
     } else {
       verdict.className = "verdict warn";
-      verdict.textContent = "Built-ins (" + TOOLS[eff] + ") act outside Tengu scopes";
+      verdict.textContent = "Built-ins (" + TOOLS[eff] + ") act outside Tengu scopes; settings files, hooks, plugins, skills and CLAUDE.md stay off";
     }
   }
   Array.prototype.forEach.call(document.querySelectorAll("#argvw [data-prof]"), function (b) {

@@ -949,7 +949,7 @@ fn default_claude_timeout_secs() -> u64 {
 /// |---|---|
 /// | `none` | none: tengu tools only (the only value a hardened sandbox allows) |
 /// | `read_only` | Read, Glob, Grep |
-/// | `research` | Read, Glob, Grep, WebSearch — the search runs at Anthropic on the subscription; pages are fetched with tengu's `http_request` (scopes + egress), never WebFetch |
+/// | `research` | WebSearch — the search runs at Anthropic on the subscription; no Read / Glob / Grep (not workspace-bound); files and pages through bridged tools (`read_file`, `http_request`: scopes + egress), never WebFetch |
 /// | `editor` | + Edit, Write, MultiEdit |
 /// | `editor_shell` | + Bash (default) |
 pub const CLAUDE_CODE_PROFILES: &[&str] =

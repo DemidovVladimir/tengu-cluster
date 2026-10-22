@@ -55,7 +55,7 @@ messages into a TUI / Telegram chat. The harness:
 | `sandboxes/xlab-w2` · `tengu ranking run\|show` | W2 research (unbound) + scheduled strategy ranking: sealed `lineage/rankings/` contracts, deterministic ranker, no LLM — both contracts unsealed (G-SR1) | `docs/strategy-ranking-automation-2026-10-08.md` |
 | `sandboxes/soe` · `tengu soe` · `tengu sources` | Software Opportunity Engine: a weekly evidence-backed ranking of software opportunities (`HOLD` is a valid week), offline until G-O0; source layer: SEC EDGAR + EU TED records in `sources.db`, as-of view, operator-only fetch | `docs/soe-2026-10-08.md` · `docs/source-evidence-2026-10-08.md` |
 | `tengu a2a serve` · tool `a2a` · `sandboxes/a2a-lab` | A2A (Agent2Agent 1.0.1): agents call other agent harnesses (`[a2a.remotes.<name>]`, opt-in tool `a2a`); other harnesses call the planner / chosen agents (`[a2a.server]`, JSON-RPC 1.0 + 0.3, SSE, bearer token) | `docs/a2a-2026-10-10.md` |
-| `sandboxes/venture-scan` | business-opportunity research on the subscriptions only: Claude Code scouts (`research` profile: WebSearch + `http_request`) and a Codex critic (live web search), served by `tengu a2a serve` (agents, no planner) and driven from outside the repo; no OpenRouter | gotcha "Model spend" |
+| `sandboxes/venture-scan` | business-opportunity research on the subscriptions only: Claude Code scouts (`research` profile: WebSearch only + `http_request`) and a Codex critic (live web search), served by `tengu a2a serve` (agents, no planner) and driven from outside the repo; no OpenRouter | gotcha "Model spend" |
 | `tengu keys setup\|status\|check` · `[keys]` · `sandboxes/sealed-check` | seal proxy: provider keys are secrets of the `tengu-seal` Cloudflare Worker (`cloudflare/seal-worker`), never on this machine; a route-scoped ssh-agent session calls them; the Solana write tools sign with a Privy wallet through it (`[solana] privy_wallet_id`). Worker not deployed yet (operator step) | `docs/sealed-keys-2026-10-09.md` · `docs/cloudflare-secrets-setup.html` · `docs/sealed-check-2026-10-09.md` |
 | `lineage/` · `tengu lineage` · `tengu evidence` | research lineage: experiments, variants, Experience, capabilities, generations (W1 frozen; a sandbox binds one with `[generation]`), ranking contracts, evidence vault + forward grading | `docs/lineage-2026-10-06.md` |
 
@@ -684,7 +684,8 @@ These are not preferences. They're load-bearing.
   is silent while the model reasons, so the engine sends a keepalive every
   30 s and kills the CLI only after max(timeout, 900 s). Claude Code
   `builtin_tools_profile` is one of `config::CLAUDE_CODE_PROFILES` (`none`,
-  `read_only`, `research` = + WebSearch, `editor`, `editor_shell`).
+  `read_only`, `research` = WebSearch only, `editor`, `editor_shell`); every
+  profile runs the CLI isolated (gotcha "Hardened sandboxes", 2026-10-22).
 - **`engine = "local"` = any OpenAI-compatible server on this host
   (2026-09-23)** — Unsloth (`unsloth run`, default `http://127.0.0.1:8888`,
   key in `$UNSLOTH_API_KEY`), Ollama, llama.cpp, vLLM. Optional
@@ -843,7 +844,8 @@ These are not preferences. They're load-bearing.
   `editor_shell` = load error; the value is read trimmed, an unknown one is a
   load error), and `fold_default_scopes` sets `no_shell_fallback` on every
   agent (in-process and bridge fallbacks run no shell; no shell skill loads —
-  `SkillRegistry::with_shell_skills`). A `none` agent's CLI runs with
+  `SkillRegistry::with_shell_skills`). Every `claude_code` agent's CLI (any
+  profile since 2026-10-22) runs with
   `--setting-sources "" --disable-slash-commands --settings
   {"autoMemoryEnabled":false,"disableAllHooks":true}` (`claude_code.rs::cli_args`):
   no settings files, hooks, installed plugins, skills, CLAUDE.md / AGENTS.md
