@@ -130,7 +130,7 @@
           <rect x="210" y="140" width="150" height="100" rx="10"/>
           <text x="285" y="167" text-anchor="middle" class="t-kanji k">心</text>
           <text x="285" y="189" text-anchor="middle" class="t-title">Chat turn</text>
-          <text x="285" y="207" text-anchor="middle" class="t-small">[Relevant memories]</text>
+          <text x="285" y="207" text-anchor="middle" class="t-small">fenced memories in user turn</text>
           <text x="285" y="222" text-anchor="middle" class="t-small">+ recent history</text>
         </g>
         <g class="n brain" data-at="1,4-7,9">
@@ -199,7 +199,7 @@
         <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>[memory] store_path</code> or <code>&lt;TENGU_HOME&gt;/memory/</code>. No key: memory stays off, with a warning.</li>
         <li>The system prompt loads <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code> from the agent's workspace: up to 2000 tokens each, 32000 in total.</li>
         <li>A message about the last, latest, newest, previous or most recent thing skips recall. A system note tells the model to verify instead.</li>
-        <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>) join the prompt as <code>[Relevant memories]</code>.</li>
+        <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>), capped at <code>max_recall_tokens</code> (600), join the head of the user message inside a <code>&lt;memory-context&gt;</code> fence, never as a system message and never stored in history.</li>
         <li><code>memory_ingest</code>: secrets are redacted, the text embedded, one entry appended. Under a lock file the store re-reads the file, applies the change and rewrites it through a temp file and a rename, so two processes keep each other's rows.</li>
         <li><code>memory_search</code>: a query plus optional <code>agent</code>, <code>source</code> or <code>kind</code> filters. Returns JSON hits with text, score and metadata.</li>
         <li><code>persistent_store</code> (opt-in): the source path must pass the tool's read scope; the file is copied under <code>.tengu/storage/</code>, its text extracted (PDF, docx, xlsx or UTF-8), chunked, one entry per chunk.</li>
@@ -348,7 +348,7 @@
       <tbody>
         <tr><td><code>src/bootstrap/memory.rs</code></td><td>store path, <code>MemoryManager</code> build, key check</td></tr>
         <tr><td><code>src/application/memory/manager.rs</code></td><td>the vector backend (embedder + store): ingest, search, delete, purge</td></tr>
-        <tr><td><code>src/application/memory/fencing.rs</code></td><td>the <code>&lt;memory-context&gt;</code> fence (not called yet)</td></tr>
+        <tr><td><code>src/application/memory/fencing.rs</code></td><td>the <code>&lt;memory-context&gt;</code> fence around chat recall; cleaner runs to a fixpoint</td></tr>
         <tr><td><code>src/adapters/outbound/memory/disk_vector.rs</code></td><td><code>vectors.bin</code>, cosine scan, metadata filters</td></tr>
         <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>OpenRouter embeddings client (<code>{OPENROUTER_BASE_URL}/v1/embeddings</code>)</td></tr>
         <tr><td><code>src/adapters/outbound/tools/memory/</code></td><td><code>memory_ingest</code>, <code>memory_search</code>, <code>persistent_store</code></td></tr>
@@ -400,7 +400,7 @@
       gd.innerHTML = "Marker <code>" + esc(hits[0]) + "</code> found as a whole word. No memory search; a system note asks the model to verify against the conversation and tools.";
     } else {
       gv.className = "verdict ok"; gv.textContent = "recall runs";
-      gd.innerHTML = "The last message is embedded; the 5 nearest entries (<code>max_recall_entries</code>) join as <code>[Relevant memories]</code>." + (inside ? " A marker sits inside a longer word only, which does not count." : "");
+      gd.innerHTML = "The last message is embedded; the 5 nearest entries (<code>max_recall_entries</code>) join the user message, capped and fenced in <code>&lt;memory-context&gt;</code>." + (inside ? " A marker sits inside a longer word only, which does not count." : "");
     }
   }
   gq.addEventListener("input", ground);

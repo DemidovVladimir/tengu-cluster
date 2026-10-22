@@ -134,7 +134,7 @@
           <text x="305" y="172" text-anchor="middle" class="zone-label">Prompt</text>
           <text x="305" y="196" text-anchor="middle" class="t-title">assembled</text>
           <text x="305" y="222" text-anchor="middle" class="t-small">system prompt</text>
-          <text x="305" y="242" text-anchor="middle" class="t-small">[Relevant memories]</text>
+          <text x="305" y="242" text-anchor="middle" class="t-small">fenced memories (user turn)</text>
           <text x="305" y="262" text-anchor="middle" class="t-small">newest history that fits</text>
           <text x="305" y="282" text-anchor="middle" class="t-small">≤ 20 messages</text>
         </g>
@@ -206,7 +206,7 @@
     <div class="stage-side">
       <ol class="captions">
         <li>A message arrives from the TUI, Telegram or a webhook. It joins the flow; turns beyond the history limit drop out (20 user turns by default).</li>
-        <li>With a memory manager, the top 5 hits for the message become a <code>[Relevant memories]</code> system block. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
+        <li>With a memory manager, the top 5 hits, capped at <code>max_recall_tokens</code>, go fenced in <code>&lt;memory-context&gt;</code> at the head of the user message. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
         <li>The prompt: system prompt, memories, then the newest history that fits the input budget, at most 20 messages. Nothing fits: "Context budget exhausted".</li>
         <li>One engine round gets every message plus the tool definitions. No stream event for <code>stream_event_timeout_secs</code> (120 s) fails the turn.</li>
         <li>Each tool call goes to the executor with its own call id. The tool gets the scope configured for it and checks it before it acts.</li>

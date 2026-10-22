@@ -180,8 +180,8 @@ Two sides, different knobs (`[memory]`, `MemoryConfig`, `config/mod.rs:1042`):
 
 | Side | field | default | what |
 |---|---|---|---|
-| chat (`service.rs:352`) | `max_recall_entries` | 5 | top-K hits of the in-process `MemoryManager` (disk bincode store), sent as one System message `[Relevant memories]\n- …` |
-| chat | `max_recall_tokens` | 600 | **not enforced** — `ChatRuntimeService.max_recall_tokens` is reserved (`#[allow(dead_code)]`) |
+| chat (`service.rs`) | `max_recall_entries` | 5 | top-K hits of the in-process `MemoryManager` (disk bincode store) as `[Relevant memories]\n- …`, fenced (#10) at the head of the current user message — never a System message, never stored in history |
+| chat | `max_recall_tokens` | 600 | caps that block (`truncate_to_token_budget`, ~4 chars / token) before fencing; 0 = no recall block. Webhook / eval turns read the same `[memory]` values (were hard-coded 10 / 2000) |
 | planner | `session_recent_n` | 10 | recent user messages of this session (in-memory ring, lost on restart; no vector search) |
 | planner | `cross_session_msg_top_k` (#9) | 0 | semantic match across sessions; 0 = disabled |
 | planner | `within_session_output_top_k` | 0 | this session's step outputs on `plan()`; 0 = disabled |
@@ -196,10 +196,11 @@ recall, and replan cross-plan recall. Without `postgres_memory`, these
 durable planner-memory lanes are empty.
 
 **#10 `<memory-context>` fencing** (`application/memory/fencing.rs::build_memory_context_block`):
-wraps text in `<memory-context>…</memory-context>` with a system note. Nothing
-calls it yet: its only caller, the memory injector, was deleted 2026-10-22
-with the planner-side chat-service path (the planner never injected memory).
-The chat recall block above is **not** fenced.
+wraps the chat recall block (#8) in `<memory-context>…</memory-context>` with
+a system note. `sanitize_context` runs to a fixpoint (one pass let
+`<memory-<memory-context>context>` rebuild a closing tag) and drops control
+characters but `\n` / `\t`, so recalled text cannot close the fence or forge
+the note (2026-10-22).
 
 ### 11. Grounding nudge
 
@@ -522,9 +523,9 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 5 | 1 | `max_tokens_per_flow` hard stop | application/chat/service.rs:337 | 100 000 |
 | 6 | 2 | `compute_total_input_budget` | prompt_budget.rs:82 | derived |
 | 7 | 2 | `assemble_recent_history` | prompt_budget.rs:8 | 20 msgs |
-| 8 | 2 | memory recall block (chat) | application/chat/service.rs:352 | top-5 (`max_recall_tokens` not enforced) |
+| 8 | 2 | memory recall block (chat) | application/chat/service.rs | top-5, ≤ `max_recall_tokens` (600), in the user turn |
 | 9 | 2 | `cross_session_msg_top_k` | orchestrator/planner.rs:332 (planner side) | 0 (off) |
-| 10 | 2 | `<memory-context>` fencing | application/memory/fencing.rs | no live caller |
+| 10 | 2 | `<memory-context>` fencing | application/memory/fencing.rs | wraps #8; fixpoint cleaner |
 | 11 | 2 | grounding nudge (chat only) | application/chat/service.rs:250 · :395 | trigger words (whole) |
 | 12 | 2 | identity / skill / prompt caps | application/skills/registry.rs:1253 | 2K / 16K / 32K |
 | 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |

@@ -13,8 +13,11 @@ use anyhow::Result;
 use crate::application::chat::flow::{
     enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
 };
-use crate::application::chat::prompt_budget::{assemble_recent_history, compute_base_input_budget};
+use crate::application::chat::prompt_budget::{
+    assemble_recent_history, compute_base_input_budget, truncate_to_token_budget,
+};
 use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts, ToolResultObserver};
+use crate::application::memory::fencing::build_memory_context_block;
 use crate::application::memory::manager::MemoryManager;
 use crate::config::AgentConfig;
 use crate::domain::message::{Lens, Message, Recipient, Role, ToolDef};
@@ -233,7 +236,8 @@ pub(crate) struct ChatRuntimeService<'a> {
     pub tool_executor: Option<&'a dyn ToolExecutor>,
     pub memory_manager: Option<&'a MemoryManager>,
     pub max_recall_entries: usize,
-    #[allow(dead_code)] // reserved for future token-budget-based trimming of recall results
+    /// Cap on the recalled-memory block (`[memory] max_recall_tokens`,
+    /// ~4 chars / token); 0 = no recall block.
     pub max_recall_tokens: usize,
     pub tool_observer: Option<ToolResultObserver<'a>>,
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
@@ -354,12 +358,15 @@ impl<'a> ChatRuntimeService<'a> {
                 .map(|m| m.content.as_str())
                 .unwrap_or("");
             match mgr.search(query, self.max_recall_entries, None).await {
-                Ok(hits) if !hits.is_empty() => {
-                    let mut block = String::from("[Relevant memories]\n");
+                Ok(hits) if !hits.is_empty() && self.max_recall_tokens > 0 => {
+                    let mut raw = String::from("[Relevant memories]\n");
                     for h in &hits {
-                        block.push_str(&format!("- {}\n", h.text));
+                        raw.push_str(&format!("- {}\n", h.text));
                     }
-                    Some(block)
+                    // Capped, then fenced: recalled text is data the user's
+                    // turn carries, never a system instruction.
+                    let raw = truncate_to_token_budget(&raw, self.max_recall_tokens);
+                    Some(build_memory_context_block(&raw)).filter(|b| !b.is_empty())
                 }
                 Ok(_) => None,
                 Err(e) => {
@@ -400,15 +407,25 @@ impl<'a> ChatRuntimeService<'a> {
                 tool_calls: None,
             });
         }
-        if let Some(ref block) = memory_block {
-            prompt_messages.push(Message {
-                role: Role::System,
-                content: block.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            });
-        }
         prompt_messages.extend(history_assembly.messages.clone());
+        if let Some(ref block) = memory_block {
+            // Prepended to the current user message (never persisted): a
+            // separate message would break strict user / assistant
+            // alternation on some local chat templates.
+            match prompt_messages
+                .iter_mut()
+                .rev()
+                .find(|m| matches!(m.role, Role::User))
+            {
+                Some(user) => user.content = format!("{block}\n\n{}", user.content),
+                None => prompt_messages.push(Message {
+                    role: Role::User,
+                    content: block.clone(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                }),
+            }
+        }
         if prompt_messages.is_empty() {
             return Ok(ChatTurnResult {
                 assistant_text: None,

@@ -127,8 +127,8 @@
       <text x="28" y="33" text-anchor="middle" class="badge">8</text>
       <text x="52" y="32" class="mech">Memory recall block</text>
       <text x="20" y="56" class="small mono">application/chat/service.rs:352 · MemoryConfig</text>
-      <text x="20" y="76" class="small">chat: top-K hits as one [Relevant memories] msg</text>
-      <text x="20" y="92" class="small mono">max_recall_entries=5 · max_recall_tokens: not enforced</text>
+      <text x="20" y="76" class="small">chat: top-K hits, fenced, head of the user msg</text>
+      <text x="20" y="92" class="small mono">max_recall_entries=5 · max_recall_tokens=600</text>
       <text x="20" y="108" class="small mono">planner: session_recent_n=10 · cross_plan_top_k=5</text>
       <text x="20" y="124" class="tiny">cross_session_msg_top_k=0 (off) · not fenced (#10)</text>
     </g>
@@ -140,10 +140,10 @@
       <text x="28" y="33" text-anchor="middle" class="badge">10</text>
       <text x="52" y="32" class="mech">&lt;memory-context&gt; fencing</text>
       <text x="20" y="56" class="small mono">fencing.rs::build_memory_context_block</text>
-      <text x="20" y="76" class="small">Wraps text in fence + system note.</text>
-      <text x="20" y="92" class="small">No caller yet (memory injector</text>
-      <text x="20" y="108" class="small">deleted 2026-10-22).</text>
-      <text x="20" y="124" class="tiny">chat recall (#8) is sent unfenced</text>
+      <text x="20" y="76" class="small">Wraps chat recall (#8) in fence + note.</text>
+      <text x="20" y="92" class="small">Cleaner runs to a fixpoint: no tag</text>
+      <text x="20" y="108" class="small">or note survives inside.</text>
+      <text x="20" y="124" class="tiny">control chars dropped (\n \t kept)</text>
     </g>
 
     <g transform="translate(405,170)">
