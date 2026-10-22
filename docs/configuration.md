@@ -113,7 +113,7 @@ example_queries = ["what is the BTC price?"]
 | Field | Grants (empty = none) |
 |---|---|
 | `fs_roots` | filesystem roots (`~` expanded; paths resolved, symlinks followed) |
-| `net_hosts` | hosts: exact, `*.suffix` (subdomains only), `*` |
+| `net_hosts` | hosts: exact, `*.suffix` (subdomains only), `*` — which never matches `localhost`, `*.localhost`, `*.local` or a loopback / private / CGNAT / link-local / unique-local IP literal (`domain::scope::is_local_host`, 2026-10-22: name such a host to reach it; written hosts only, not DNS answers) |
 | `env_reads` | env vars a tool may read (`$VAR` headers, `HL_API_URL`, `SOLANA_RPC_URL`, …); `*` = any. An `http_request` carrying one (`$VAR` in the URL or a header, `auth_*_env`) goes only to a host `net_hosts` names without `*` |
 | `shell_bins` | `run_command` / shell skills: the command's first word only (leading `NAME=value` skipped) — a guard rail, not a sandbox |
 | `wallets` | Privy wallet labels; Solana write tools: full pubkeys |

@@ -231,7 +231,7 @@
   </div>
   <div class="fields" data-inview>
     <div class="fld"><b>fs_roots</b><code class="fn">check_fs_read · check_fs_write</code><small>The resolved path (symlinks, <code>..</code>) must sit under a root.</small><span class="wild">no wildcard</span></div>
-    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>. A request carrying an env value needs a host named without <code>*</code> (<code>check_named_host</code>).</small><span class="wild">"*" = any host</span></div>
+    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>, which skips loopback, LAN, link-local and <code>localhost</code> / <code>.local</code> hosts. A request carrying an env value needs a host named without <code>*</code> (<code>check_named_host</code>).</small><span class="wild">"*" = any host</span></div>
     <div class="fld"><b>env_reads</b><code class="fn">check_env_read</code><small>Exact var name. Gates <code>$VAR</code> in <code>http_request</code>, <code>SOLANA_RPC_URL</code>, <code>HL_API_URL</code>, <code>PRIVY_API_URL</code>.</small><span class="wild">"*" = any var</span></div>
     <div class="fld"><b>shell_bins</b><code class="fn">check_shell_bin</code><small>Basename of the command's first word. <code>run_command</code> and shell skills.</small><span class="wild">"*" = any binary</span></div>
     <div class="fld"><b>wallets</b><code class="fn">check_wallet</code><small>Exact label. Privy tools; Solana writes use the full pubkey.</small><span class="wild">no wildcard</span></div>
@@ -506,8 +506,20 @@
     return words;
   }
   function isAssignment(w) { var k = w.indexOf("="); return k > 0 && /^[A-Za-z_][A-Za-z0-9_]*$/.test(w.slice(0, k)); }
+  /* domain::scope::is_local_host: "*" never matches these (2026-10-22) */
+  function isLocalHost(host) {
+    var h = host.replace(/^\[|\]$/g, "").toLowerCase().replace(/\.$/, "");
+    if (h === "localhost" || /\.localhost$/.test(h) || /\.local$/.test(h)) return true;
+    var m = h.replace(/^::ffff:/, "").match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (m) {
+      var a = +m[1], b = +m[2];
+      return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b < 128);
+    }
+    return h === "::1" || h === "::" || /^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]?:/.test(h);
+  }
   function hostMatches(pat, host) {
-    if (pat === "*" || pat === host) return true;
+    if (pat === "*") return !isLocalHost(host);
+    if (pat === host) return true;
     if (pat.indexOf("*.") !== 0) return false;
     var suf = pat.slice(2);
     if (host.length < suf.length || host.slice(host.length - suf.length) !== suf) return false;
@@ -530,7 +542,7 @@
   var EX = {
     write: ["out/report.md", "new/../../outside.txt", "notes/../.tengu/cache.db", "state/observations.db", "Skills/evil/SKILL.md", "docs/claude.md", "MEMORY.md", "inbox/x.txt", "dangling"],
     read: ["notes/today.md", "../secrets.txt", "inbox/report.pdf", "state/observations.db", "dangling"],
-    host: ["api.hyperliquid.xyz", "api.anthropic.com", "anthropic.com", "evil.example"],
+    host: ["api.hyperliquid.xyz", "api.anthropic.com", "anthropic.com", "evil.example", "127.0.0.1", "192.168.1.20", "localhost"],
     env: ["HL_API_URL", "OPENROUTER_API_KEY", "SOLANA_RPC_URL"],
     cmd: ["git status", "/usr/bin/git log", "DEK='k' node -e 1", "NOW=$(date +%s) && echo $NOW", "PY=1 python3 -c 1", "echo hi; rm -rf x", "'node' -e 1"],
     wallet: ["default", "research-wallet"]
@@ -605,7 +617,7 @@
       var host = v.trim(); try { if (/^[a-z]+:\/\//i.test(host)) host = new URL(host).hostname; } catch (x) {}
       var hit = s.net_hosts.filter(function (pt) { return hostMatches(pt, host); })[0];
       if (hit !== undefined) row("ok", "scope", "<b>check_net_host</b>: matches <code>" + esc(JSON.stringify(hit)) + "</code>");
-      else { fail = "host '" + host + "' not in allowed net_hosts " + dbg(s.net_hosts); row("no", "scope", "<b>check_net_host</b>: no pattern matches <code>" + esc(host) + "</code>"); }
+      else { var local = isLocalHost(host) && s.net_hosts.indexOf("*") >= 0; fail = "host '" + host + "' not in allowed net_hosts " + dbg(s.net_hosts) + (local ? ' ("*" never matches a loopback / LAN / link-local host: name it)' : ""); row("no", "scope", "<b>check_net_host</b>: no pattern matches <code>" + esc(host) + "</code>" + (local ? " (a local host: <code>*</code> skips it)" : "")); }
       note = "http_request also checks [egress] first, on every redirect hop: see egress.";
     } else if (kind === "env") {
       var name = v.trim();

@@ -53,6 +53,43 @@ pub(crate) fn host_matches(pattern: &str, host: &str) -> bool {
         .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
 }
 
+/// A host `"*"` never matches in a tool scope (2026-10-22): `localhost`,
+/// `*.localhost`, `*.local` and IP literals that are loopback, private
+/// (RFC 1918), CGNAT, link-local, unique-local or unspecified, IPv4-mapped
+/// ones included — the operator's Studio, A2A servers, Ollama, a LAN PC.
+/// Name such a host in `net_hosts` to reach it. A guard on the written host,
+/// not on DNS answers: a public name that resolves to a LAN address still
+/// matches `"*"`.
+pub(crate) fn is_local_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let lower = host.to_ascii_lowercase();
+    let name = lower.trim_end_matches('.');
+    if name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") {
+        return true;
+    }
+    let local_v4 = |ip: std::net::Ipv4Addr| {
+        let [a, b, ..] = ip.octets();
+        ip.is_loopback()
+            || ip.is_private()
+            || ip.is_link_local()
+            || ip.is_unspecified()
+            || a == 0
+            || (a == 100 && (64..128).contains(&b))
+    };
+    match name.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => local_v4(ip),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let first = ip.segments()[0];
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+                || ip.to_ipv4_mapped().is_some_and(local_v4)
+        }
+        Err(_) => false,
+    }
+}
+
 /// `path` as the OS resolves it once the missing directories are created:
 /// the longest existing ancestor canonicalized (symlinks followed), the rest
 /// applied lexically — `..` pops a component. A `..` after a directory that
@@ -269,15 +306,20 @@ impl ToolScope {
     }
 
     pub(crate) fn check_net_host(&self, host: &str) -> anyhow::Result<()> {
-        if self
-            .net_hosts
-            .iter()
-            .any(|pattern| host_matches(pattern, host))
-        {
+        let local = is_local_host(host);
+        if self.net_hosts.iter().any(|pattern| match pattern.as_str() {
+            "*" => !local,
+            _ => host_matches(pattern, host),
+        }) {
             return Ok(());
         }
+        let hint = if local && self.net_hosts.iter().any(|p| p == "*") {
+            " (\"*\" never matches a loopback / LAN / link-local host: name it)"
+        } else {
+            ""
+        };
         anyhow::bail!(
-            "host '{}' not in allowed net_hosts {:?}",
+            "host '{}' not in allowed net_hosts {:?}{hint}",
             host,
             self.net_hosts
         )
@@ -648,6 +690,55 @@ mod tests {
         assert!(scope.check_shell_bin("any").is_err());
         assert!(scope.check_wallet("any").is_err());
         assert!(scope.is_deny_all());
+    }
+
+    #[test]
+    fn wildcard_skips_local_hosts() {
+        let wild = ToolScope {
+            net_hosts: vec!["*".into()],
+            ..Default::default()
+        };
+        for host in [
+            "localhost",
+            "LOCALHOST.",
+            "studio.localhost",
+            "gaming-pc.local",
+            "127.0.0.1",
+            "127.9.9.9",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.20",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "[::1]",
+            "::",
+            "fe80::1",
+            "fd00::1",
+            "[::ffff:127.0.0.1]",
+            "::ffff:192.168.0.1",
+        ] {
+            let err = wild.check_net_host(host).unwrap_err().to_string();
+            assert!(err.contains("name it"), "{host}: {err}");
+        }
+        for host in [
+            "api.example.com",
+            "8.8.8.8",
+            "172.32.0.1",
+            "100.128.0.1",
+            "2606:4700::1111",
+            "local.example.com",
+        ] {
+            assert!(wild.check_net_host(host).is_ok(), "{host}");
+        }
+        let named = ToolScope {
+            net_hosts: vec!["*".into(), "127.0.0.1".into(), "*.local".into()],
+            ..Default::default()
+        };
+        assert!(named.check_net_host("127.0.0.1").is_ok());
+        assert!(named.check_net_host("gaming-pc.local").is_ok());
+        assert!(named.check_net_host("10.0.0.1").is_err());
     }
 
     #[test]

