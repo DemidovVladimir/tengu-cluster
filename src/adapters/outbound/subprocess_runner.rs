@@ -231,6 +231,19 @@ impl SubprocessRunner {
 }
 
 impl SubprocessRunner {
+    /// `[agents.*]` names with a `description` (the ones a plan step may
+    /// use), sorted.
+    fn routable_agents(&self) -> Vec<String> {
+        let mut known: Vec<String> = self
+            .agents
+            .iter()
+            .filter(|(_, a)| a.description.is_some())
+            .map(|(n, _)| n.clone())
+            .collect();
+        known.sort();
+        known
+    }
+
     /// Run the subagent to completion and return its output.
     pub async fn run(&self, input: AgentIpcInput) -> Result<AgentIpcOutput> {
         self.run_with_timeout(input, self.timeout_secs).await
@@ -362,14 +375,21 @@ fn strip_ansi(line: &str) -> String {
 
 #[async_trait::async_trait]
 impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
+    /// Only blocks with a `description` run as plan steps (the child checks
+    /// too).
+    fn known_agents(&self) -> Option<Vec<String>> {
+        Some(self.routable_agents())
+    }
+
     async fn run_step(
         &self,
         step: &crate::domain::plan::Step,
         step_inputs: &str,
     ) -> anyhow::Result<String> {
         // Fail fast when the planner picked a name with no `[agents.<name>]`
-        // block: no subprocess is spawned. (The retry policy still runs its
-        // attempts and waits around this error before the replan.) The most common cause is
+        // block: no subprocess is spawned. `replan::drive` already rejects
+        // such a plan before any step runs (`known_agents`, `Plan::validate`);
+        // this is the backstop for direct callers. The most common cause is
         // the planner LLM putting a SKILL or TOOL name in the `agent` field
         // (the orchestrator SKILL.md forbids it but enforcement is still useful).
         // Composed plans (C→B B-half) resolve `compose.base_agent` instead.
@@ -383,13 +403,7 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             .get(spec_name)
             .filter(|a| a.description.is_some())
         else {
-            let mut known: Vec<&str> = self
-                .agents
-                .iter()
-                .filter(|(_, a)| a.description.is_some())
-                .map(|(n, _)| n.as_str())
-                .collect();
-            known.sort();
+            let known = self.routable_agents();
             anyhow::bail!(
                 "no agent '{}' in the active config — the planner picked '{}' but there is \
                  no `[agents.{}]` block (routable agents: {:?}). Likely cause: a SKILL or \

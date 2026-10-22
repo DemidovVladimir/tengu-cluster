@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
 use crate::application::orchestrator::executor::{DagExecutor, ExecResult, Finished};
 use crate::application::orchestrator::retry::RetryPolicy;
-use crate::domain::plan::Plan;
+use crate::domain::plan::{Plan, StepId};
 use crate::ports::orchestration::WorkerHandle;
 use crate::ports::orchestration::{Planner, PlannerVerdict};
 
@@ -55,8 +55,21 @@ pub async fn drive(
         active_plan.register(&plan);
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
-        match DagExecutor::run_reusing(&plan, Arc::clone(&worker), policy, events, &finished).await
-        {
+        // A plan that cannot run (unknown agent, unknown dependency, cycle,
+        // no steps) goes straight back to the planner: no step runs, no
+        // retry waits.
+        let result = match plan.validate(worker.known_agents().as_deref()) {
+            Err(e) => ExecResult::NeedsReplan {
+                failed: e.step().cloned().unwrap_or_else(|| StepId::new("<plan>")),
+                error: format!("invalid plan: {e}"),
+                finished: Finished::new(),
+            },
+            Ok(()) => {
+                DagExecutor::run_reusing(&plan, Arc::clone(&worker), policy, events, &finished)
+                    .await
+            }
+        };
+        match result {
             ExecResult::Done { final_output } => {
                 let _ = events.send(OrchestratorEvent::PlanCompleted {
                     final_response: final_output.clone(),
@@ -157,7 +170,7 @@ impl Drop for ActivePlanGuard {
 mod tests {
     use super::*;
     use crate::application::orchestrator::events::new_bus;
-    use crate::domain::plan::{Step, StepId};
+    use crate::domain::plan::Step;
     use async_trait::async_trait;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -199,6 +212,77 @@ mod tests {
             }
             Ok(format!("ok-{}", step.id.0))
         }
+    }
+
+    /// Knows one agent `x` and counts the steps it runs.
+    struct KnownAgentsWorker {
+        ran: Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl WorkerHandle for KnownAgentsWorker {
+        async fn run_step(&self, step: &Step, _: &str) -> anyhow::Result<String> {
+            self.ran.lock().unwrap().push(step.id.0.clone());
+            Ok(format!("ok-{}", step.id.0))
+        }
+        fn known_agents(&self) -> Option<Vec<String>> {
+            Some(vec!["x".into()])
+        }
+    }
+
+    /// A plan naming an unknown agent goes straight back to the planner:
+    /// no step of it runs and no retry backoff is waited (10 s here).
+    #[tokio::test]
+    async fn invalid_plan_replans_before_any_step_runs() {
+        let bus = new_bus();
+        let mut rx = bus.subscribe();
+        let plan = |agent: &str| Plan {
+            steps: vec![
+                Step {
+                    id: StepId::new("first"),
+                    agent: "x".into(),
+                    goal: "g".into(),
+                    depends_on: vec![],
+                    compose: None,
+                },
+                Step {
+                    id: StepId::new("second"),
+                    agent: agent.into(),
+                    goal: "g".into(),
+                    depends_on: vec![StepId::new("first")],
+                    compose: None,
+                },
+            ],
+        };
+        let planner = Arc::new(ScriptedPlanner {
+            verdicts: Mutex::new(vec![
+                PlannerVerdict::Plan {
+                    plan: plan("web_search"),
+                },
+                PlannerVerdict::Plan { plan: plan("x") },
+            ]),
+        });
+        let worker = Arc::new(KnownAgentsWorker {
+            ran: Mutex::new(vec![]),
+        });
+        let mut policy = RetryPolicy::new(3);
+        policy.backoff = vec![Duration::from_secs(10); 3];
+        let out = tokio::time::timeout(
+            Duration::from_secs(2),
+            drive(planner, "msg", worker.clone(), &policy, 1, &bus),
+        )
+        .await
+        .expect("no retry wait");
+        assert!(out.contains("ok-second"), "{out}");
+        assert_eq!(*worker.ran.lock().unwrap(), ["first", "second"]);
+        let mut reason = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let OrchestratorEvent::ReplanTriggered { reason: r } = ev {
+                reason = Some(r);
+            }
+        }
+        let reason = reason.expect("a replan");
+        assert!(reason.starts_with("invalid plan: step"), "{reason}");
+        assert!(reason.contains("\"web_search\""), "{reason}");
     }
 
     #[tokio::test]

@@ -503,6 +503,9 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   function renderShape() {
     var steps = SHAPES[radio("shape")], r = schedule(steps), box = $("waves");
     box.innerHTML = "";
+    // Plan::validate runs before any step: a plan with a step that can never
+    // be ready (unknown dependency, cycle) runs nothing.
+    if (r.never.length) r.waves = [];
     r.waves.forEach(function (w, i) {
       if (i) { var a = document.createElement("span"); a.className = "wave-arrow"; a.textContent = "→"; box.appendChild(a); }
       var d = document.createElement("div"); d.className = "wave";
@@ -513,16 +516,16 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       box.appendChild(d);
     });
     if (r.never.length) {
-      var a2 = document.createElement("span"); a2.className = "wave-arrow"; a2.textContent = "·"; box.appendChild(a2);
       var n = document.createElement("div"); n.className = "wave";
-      n.innerHTML = "<small>never ready</small>" + r.never.map(function (id) { return '<span class="st never">' + id + "</span>"; }).join("");
+      n.innerHTML = "<small>rejected before any step runs</small>" + steps.map(function (s) { return '<span class="st never">' + s[0] + "</span>"; }).join("");
       box.appendChild(n);
     }
     var v = $("shape-verdict"), kids = r.waves.reduce(function (a, w) { return a + w.length; }, 0);
     var ran = kids + " child process" + (kids === 1 ? "" : "es");
     if (r.never.length) {
       v.className = "verdict bad";
-      v.textContent = ran + ", then NeedsReplan: step " + r.never[0] + " never became ready";
+      var bad = steps.filter(function (s) { return s[2].some(function (d) { return !steps.some(function (t) { return t[0] === d; }); }); })[0];
+      v.textContent = ran + ": invalid plan (step " + bad[0] + " depends on unknown step " + bad[2][0] + "), straight back to the planner";
     } else if (r.leaves.length === 1) {
       v.className = "verdict ok";
       v.textContent = ran + " · reply = " + r.leaves[0] + "'s output";
@@ -555,6 +558,9 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     $("att-out").textContent = att; $("rep-out").textContent = rep; $("tmo-out").textContent = tmo;
     var runs = rep + 1, waits = 0;
     for (var k = 1; k < att; k++) waits += BACKOFF[k - 1] !== undefined ? BACKOFF[k - 1] : 9;
+    // An unknown agent fails Plan::validate before any step runs: no child,
+    // no retry, no wait — the next planner call comes at once.
+    if (how === "ghost") waits = 0;
     var per = (how === "timeout" ? att * tmo : 0) + waits;
     $("r-spawn").textContent = how === "timeout" ? att * runs : 0;
     $("r-wait").textContent = fmt(waits * runs);
@@ -565,7 +571,8 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       var row = document.createElement("div"); row.className = "run";
       var cells = [];
       if (r) cells.push('<span class="plan" title="planner replan call">↻<em> replan</em></span>');
-      for (var a = 1; a <= att; a++) {
+      if (how === "ghost") cells.push('<span class="try" style="flex:0 1 30px">✗<em> invalid plan</em></span>');
+      else for (var a = 1; a <= att; a++) {
         cells.push('<span class="try" style="flex:' + (how === "timeout" ? 4 : 0) + ' 1 30px">' + (how === "timeout" ? "✗" + a + "<em> · " + tmo + " s</em>" : "✗" + a) + "</span>");
         if (a < att) cells.push('<span class="wait">' + (BACKOFF[a - 1] !== undefined ? BACKOFF[a - 1] : 9) + " s</span>");
       }
@@ -574,8 +581,8 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       box.appendChild(row);
     }
     $("r-final").innerHTML = "Reply: <code>Unable to complete the request after " + rep + " replans. Last error: " +
-      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : "no agent 'ghost' in the active config …") + "</code>" +
-      (how === "ghost" ? " The runner fails before spawning, so only the waits cost time." : "");
+      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : "invalid plan: step \"s1\" names agent \"ghost\", which is not a routable agent …") + "</code>" +
+      (how === "ghost" ? " The plan is checked before any step runs: no child, no retry, no wait." : "");
   }
   ["att", "rep", "tmo"].forEach(function (id) { $(id).addEventListener("input", renderRetry); });
   Array.prototype.forEach.call(document.querySelectorAll('input[name="how"]'), function (x) { x.addEventListener("change", renderRetry); });

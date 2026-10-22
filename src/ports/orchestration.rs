@@ -97,6 +97,13 @@ pub trait WorkerHandle: Send + Sync {
     /// `step_inputs` is the rendered `<step-input>` blocks from upstream
     /// completed steps.
     async fn run_step(&self, step: &Step, step_inputs: &str) -> anyhow::Result<String>;
+
+    /// The agent names a step may use, sorted — `replan::drive` checks each
+    /// plan against them before any step runs (`Plan::validate`). `None`
+    /// (default): any name.
+    fn known_agents(&self) -> Option<Vec<String>> {
+        None
+    }
 }
 
 /// Pure-data telemetry returned alongside an LLM-call response so the caller

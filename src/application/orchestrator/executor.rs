@@ -175,8 +175,9 @@ impl DagExecutor {
         }
 
         // Nothing in flight, nothing ready: a step that never ran depends on
-        // an unknown step or sits in a cycle (plans are not validated up
-        // front). Its section of the reply would be empty — replan instead.
+        // an unknown step or sits in a cycle. `replan::drive` validates every
+        // plan first (`Plan::validate`), so this is a backstop for direct
+        // callers. Its section of the reply would be empty — replan instead.
         if let Some(stuck) = plan
             .steps
             .iter()

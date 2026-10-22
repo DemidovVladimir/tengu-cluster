@@ -368,7 +368,10 @@ These are not preferences. They're load-bearing.
    Planner output is parsed tolerantly (`planner.rs::parse_verdict`: raw
    JSON → fenced → embedded JSON → non-empty prose becomes a `Direct` reply
    with a warn); an empty reply fails the turn — the planner call is not
-   retried. A failing plan step runs up to `max_attempts_per_step` times
+   retried. A plan that cannot run (`Plan::validate`: no steps, a duplicate
+   id, an agent that is not routable, an unknown `depends_on`, a cycle) goes
+   straight back to the planner before any step runs; it counts as a
+   replan. A failing plan step runs up to `max_attempts_per_step` times
    (default 3; it waits 1 s, then 3 s, 9 s for any later attempt), then
    the plan is replanned up to `max_replans` times (default 2). The split
    is deliberate: memory degradation should not break a session, but a plan

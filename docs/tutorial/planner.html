@@ -291,7 +291,7 @@
       </ol>
     </div>
     <pre id="verdict-out" aria-live="polite"></pre>
-    <p class="note">One parse, no retry: <code>SKILL.md</code> says so, and <code>plan_schema.json</code> only documents the shape. A plan step with an unknown agent fails later, at the runner; one whose <code>depends_on</code> names a missing step replans.</p>
+    <p class="note">One parse, no retry: <code>SKILL.md</code> says so, and <code>plan_schema.json</code> only documents the shape. Every plan is checked before any step runs (<code>Plan::validate</code>): no steps, a duplicate id, an agent that is not routable, a <code>depends_on</code> naming a missing step or a cycle sends it straight back to the planner as a replan — no child, no retry wait.</p>
   </div>
 </section>
 
