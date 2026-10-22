@@ -24,7 +24,6 @@ pub mod wiring;
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::application::memory::manager::MemoryManager;
@@ -43,7 +42,6 @@ pub struct Orchestrator {
     /// Phase 6.4 (full) will read from this for cross-session message recall.
     #[allow(dead_code)]
     memory: Arc<MemoryManager>,
-    cancel_flag: Arc<AtomicBool>,
     /// The metrics forwarder onto `bus` (`bootstrap::orchestrator`); it
     /// ends with this orchestrator. `None`: no forwarder (tests).
     metrics: Option<MetricsBarrier>,
@@ -70,7 +68,6 @@ impl Orchestrator {
             max_replans,
             bus,
             memory,
-            cancel_flag: Arc::new(AtomicBool::new(false)),
             metrics: None,
         }
     }
@@ -96,26 +93,13 @@ impl Orchestrator {
         self.bus.subscribe()
     }
 
-    /// Request cancellation of the in-flight plan. The DAG executor observes
-    /// the flag at dispatch boundaries and returns `ExecResult::Cancelled`,
-    /// which the replan driver translates into a terminal
-    /// `PlanCompleted { cancelled: true }` event. Channel-side wiring
-    /// (`/stop` for Telegram, Ctrl-C for CLI) is deferred until the
-    /// full dispatch path routes through `Orchestrator::handle`.
-    #[allow(dead_code)]
-    pub fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
-    }
-
     /// One turn: plan, run, replan; every way out sends `PlanCompleted`.
-    /// Dropped unfinished (aborted at a shutdown deadline, an eval row's
-    /// timeout) it sends `PlanCompleted { cancelled: true }` as it drops —
-    /// after its steps were aborted — so the trace closes the turn
-    /// (`plan.completed`, dropped) instead of leaving it running.
+    /// Cancelling a turn = dropping this future (Telegram `/stop`, a
+    /// shutdown deadline, an eval row's timeout): the steps still running
+    /// are aborted, their `run-agent` children killed, and it sends
+    /// `PlanCompleted { cancelled: true }` as it drops, so the trace closes
+    /// the turn (`plan.completed`, dropped) instead of leaving it running.
     pub async fn handle(&self, user_message: String) -> String {
-        // Reset the flag each turn so a stale cancellation from a previous
-        // turn does not short-circuit this one.
-        self.cancel_flag.store(false, Ordering::SeqCst);
         let mut unfinished = Unfinished(Some(&self.bus));
         let reply = replan::drive(
             Arc::clone(&self.planner),
@@ -124,7 +108,6 @@ impl Orchestrator {
             &self.policy,
             self.max_replans,
             &self.bus,
-            Arc::clone(&self.cancel_flag),
         )
         .await;
         unfinished.0 = None;
@@ -156,7 +139,6 @@ mod e2e_tests {
     //! the crate has no `[lib]` target — external integration tests
     //! cannot reach crate-private types.
 
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -227,7 +209,6 @@ mod e2e_tests {
         let mut policy = RetryPolicy::new(1);
         policy.backoff = vec![];
         let bus = new_bus();
-        let cancel = Arc::new(AtomicBool::new(false));
         let out = replan::drive(
             Arc::new(StaticPlanner { plan }),
             "user question",
@@ -235,7 +216,6 @@ mod e2e_tests {
             &policy,
             0,
             &bus,
-            cancel,
         )
         .await;
         assert!(out.contains("out(c)")); // synthesizer output

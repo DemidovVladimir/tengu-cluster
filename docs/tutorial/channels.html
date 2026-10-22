@@ -330,7 +330,7 @@
     <h2 id="s-cmd">What a slash does in Telegram</h2>
   </div>
   <ul class="states">
-    <li><span class="chip bad">stop</span><span><b>/stop</b>Cancels the running turn: "⏹ Stop requested."</span></li>
+    <li><span class="chip bad">stop</span><span><b>/stop</b>Stops the running turn at once: its plan steps are aborted and their <code>run-agent</code> children killed. Replies "⏹ Stopping current operation...", then "⏹ Stopped."</span></li>
     <li><span class="chip data">list</span><span><b>/agents</b>Reachable agents with role, tool count and [default].</span></li>
     <li><span class="chip data">reset</span><span><b>/reset · /purge</b>Clear your conversations; purge also wipes vector memory and saved attachments.</span></li>
     <li><span class="chip hands">skills</span><span><b>/reload</b>Re-scan the skill files and rebuild the tools.</span></li>
@@ -404,7 +404,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
 </article>
 </main>
 </div>

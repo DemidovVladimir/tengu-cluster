@@ -327,7 +327,7 @@ export TELEGRAM_BOT_TOKEN=...
 
 Same log expectations as §5.2 but with `Telegram orchestrator constructed with per-message snapshot factory`.
 
-Send the sequential prompt from §5.4 via Telegram. Verify the `/stop` command actually interrupts a mid-run plan: send a long multi-step prompt, wait for the first step-started status message, then send `/stop`. Expect `Stopped by user.` reply within 5 seconds.
+Send the sequential prompt from §5.4 via Telegram. Verify the `/stop` command actually interrupts a mid-run plan: send a long multi-step prompt, wait for the first step-started status message, then send `/stop`. Expect `⏹ Stopped.` reply within 1 second; the step's `run-agent` child is killed.
 
 ---
 

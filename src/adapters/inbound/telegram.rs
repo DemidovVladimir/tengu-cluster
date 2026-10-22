@@ -1647,7 +1647,13 @@ impl TelegramSession {
             }
         });
 
-        let final_output = orchestrator.handle(user_content.to_string()).await;
+        // `/stop` sets `turn_cancel` from the dispatcher while this turn
+        // runs: dropping the turn future aborts the plan's steps and kills
+        // their `run-agent` children (`Orchestrator::handle`).
+        let final_output = tokio::select! {
+            out = orchestrator.handle(user_content.to_string()) => out,
+            () = cancel_requested(&self.turn_cancel) => "⏹ Stopped.".to_string(),
+        };
         typing_handle.abort();
 
         let reply = self.secret_registry.redact(&final_output);
@@ -2214,6 +2220,14 @@ fn log_orchestrator_events(orch: &crate::application::orchestrator::Orchestrator
     });
 }
 
+/// Resolves once `/stop` set `flag`. The dispatcher sets it from its own
+/// task while a turn runs; polled every 200 ms.
+async fn cancel_requested(flag: &AtomicBool) {
+    while !flag.load(Ordering::Relaxed) {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
 /// Where plain messages go: the `default = true` agent, else the first
 /// reachable one by id; `None` when no agent is reachable.
 fn telegram_default_agent<'a>(
@@ -2280,6 +2294,27 @@ mod tests {
         let mut keys: Vec<&str> = keys.map(String::as_str).collect();
         keys.sort_unstable();
         keys
+    }
+
+    /// `/stop` mid-turn: the flag set from another task ends the race, and
+    /// the turn future (here one that never finishes) is dropped.
+    #[tokio::test]
+    async fn stop_flag_ends_a_running_turn() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&flag);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            setter.store(true, Ordering::Relaxed);
+        });
+        let out = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::select! {
+                () = std::future::pending::<()>() => "finished",
+                () = cancel_requested(&flag) => "stopped",
+            }
+        })
+        .await
+        .expect("the stop flag ends the turn");
+        assert_eq!(out, "stopped");
     }
 
     #[test]

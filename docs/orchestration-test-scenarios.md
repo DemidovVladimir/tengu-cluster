@@ -239,8 +239,8 @@ Force the tier-2 replan path. Validates `max_replans` and context propagation fr
 | **Category** | Cancellation |
 | **Channel** | Telegram |
 | **Procedure** | 1. Send `Research the complete history of the Linux kernel over its entire 30+ years of development.` (a long-running multi-step task). 2. Wait until you see the first `StepStarted` in logs. 3. Send `/stop`. |
-| **Expected log sequence** | `StepStarted …` → `/stop` received → cancel flag set → no further `StepStarted` events fire → `PlanCompleted { cancelled: true }`. |
-| **Pass** | Bot replies `Stopped by user.` within 5s of the `/stop`. In-flight step is allowed to finish its current LLM call (not torn down mid-request). |
+| **Expected log sequence** | `StepStarted …` → `/stop` received → the turn future is dropped → no further `StepStarted` events fire → `orch PlanCompleted cancelled=true`; the step's `run-agent` child is gone from `ps`. |
+| **Pass** | Bot replies `⏹ Stopped.` within 1 s of the `/stop`. The in-flight step is torn down (its child killed). |
 | **Fail markers** | Bot continues dispatching new steps after `/stop`. No `PlanCompleted` event at all. |
 
 ### S-13 — Ctrl-C in TUI
@@ -251,7 +251,7 @@ Force the tier-2 replan path. Validates `max_replans` and context propagation fr
 | **Channel** | TUI |
 | **Procedure** | 1. Type a multi-step prompt. 2. Wait for `StepStarted`. 3. Press Ctrl-C. |
 | **Expected behavior** | TUI quits cleanly. Any in-flight spawned workers are dropped when the runtime shuts down. |
-| **Known gap** | TUI doesn't yet map Ctrl-C → `Orchestrator::cancel()` — it just drops the runtime. This is **acceptable** but flag it if the TUI hangs for >5s after Ctrl-C. |
+| **Known gap** | TUI has no stop key — Ctrl-C quits and drops the runtime. This is **acceptable** but flag it if the TUI hangs for >5s after Ctrl-C. |
 
 ---
 

@@ -421,7 +421,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span><b>One trace writer.</b> A child never opens the run file: it hands its tool events back over IPC and the parent writes them under the step (an old parent or child sends no <code>trace</code> field and nothing changes).</span></li>
     <li><span><b>One log.</b> The parent reads the child's stderr into its own log (target <code>tengu::run_agent</code>); a failed exit carries its last 40 lines.</span></li>
     <li><span><b>A replan never re-runs finished work.</b> A step identical to one that finished earlier in the same request, its dependencies reused too, keeps its output: <code>StepSucceeded</code> with no <code>StepStarted</code>, no child (log: <code>step reused from the previous attempt</code>).</span></li>
-    <li><span><b>No orphans.</b> A replan, a cancel, a panic — or the turn itself dropped (aborted at the shutdown deadline, an eval row's timeout) — aborts every step still in flight; its child is killed.</span></li>
+    <li><span><b>No orphans.</b> A replan, a panic — or the turn itself dropped (Telegram <code>/stop</code>, aborted at the shutdown deadline, an eval row's timeout) — aborts every step still in flight; its child is killed.</span></li>
   </ul>
 </section>
 
@@ -467,7 +467,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
 </article>
 </main>
 </div>

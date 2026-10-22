@@ -391,7 +391,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
     <li><span><b>A child cannot be started by hand by accident.</b> Without <code>TENGU_AGENT_IPC=1</code> it exits with an error.</span></li>
     <li><span><b>Same fences in the child.</b> It reloads the same sandbox file and the parent's resolved egress policy; a bad policy aborts it.</span></li>
     <li><span><b>Steps cannot hang the turn.</b> The child is killed after the agent's <code>step_timeout_secs</code> (default 600).</span></li>
-    <li><span><b>A dropped turn leaves nothing running.</b> Dropped unfinished (aborted at a shutdown deadline, an eval row's timeout), a turn aborts its steps — their children are killed — and reports itself cancelled (<code>PlanCompleted</code>).</span></li>
+    <li><span><b>A dropped turn leaves nothing running.</b> Dropped unfinished (Telegram <code>/stop</code>, aborted at a shutdown deadline, an eval row's timeout), a turn aborts its steps — their children are killed — and reports itself cancelled (<code>PlanCompleted</code>).</span></li>
   </ul>
 </section>
 
@@ -436,7 +436,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
 </article>
 </main>
 </div>

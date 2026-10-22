@@ -183,7 +183,7 @@ and draft a reply to legal."
 └── Channel renders PlanCompleted.final_response to user
 ```
 
-**Cancel (`/stop`):** Channel calls `Orchestrator.cancel()` → AtomicBool flips → executor checks between dispatches → `ExecResult::Cancelled` → `PlanCompleted{cancelled:true, final_response:"Stopped by user."}`.
+**Cancel (`/stop`):** the Telegram dispatcher sets `turn_cancel` → the session's turn races `Orchestrator::handle` against it and drops the turn future → steps in flight aborted (`InFlight`), their `run-agent` children killed (`kill_on_drop`), `PlanCompleted{cancelled:true}` sent by the drop guard → reply `⏹ Stopped.`.
 
 ---
 
@@ -396,20 +396,13 @@ Executor                Worker                RetryPolicy               Replan  
 ```
 User         Channel         Orchestrator      Executor         Worker
   │            │                   │                │               │
-  │─/stop ────▶│                   │                │               │
-  │            │── cancel() ───────▶ (flag=true)    │               │
-  │            │                   │                │ (in-flight    │
-  │            │                   │                │  worker keeps │
-  │            │                   │                │  running until│
-  │            │                   │                │  LLM returns) │
-  │            │                   │◀── check flag ─│               │
-  │            │                   │                │← skip dispatch│
-  │            │                   │  (ExecResult::Cancelled)       │
-  │            │◀── "Stopped by user." ────────────                 │
-  │◀── reply ──│                                                    │
+  │─/stop ────▶│ turn_cancel=true  │                │               │
+  │            │── drop handle() ─▶│── drop ───────▶│── abort ─────▶│ (child killed)
+  │            │                   │ PlanCompleted{cancelled:true}  │
+  │◀ ⏹ Stopped.│                                                    │
 ```
 
-Note: AtomicBool is checked between step dispatches, NOT mid-step. A worker already running an LLM call finishes that call and its output is discarded.
+Note: the turn future is dropped mid-step: a running `run-agent` child is killed, its output is lost. Only Telegram has `/stop`; the TUI has no stop key.
 
 ---
 
