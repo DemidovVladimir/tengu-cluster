@@ -401,7 +401,7 @@ ufw: allow 22/tcp and 7080/tcp
     <li><span><b>Bridges only.</b> Arti's <code>[bridges] enabled = true</code>: it never dials a guard or relay directly.</span></li>
     <li><span><b>Healthy means Tor.</b> The proxy is healthy only after <code>"IsTor":true</code>; tengu does not start before.</span></li>
     <li><span><b>Config is read-only.</b> The sandbox config is mounted <code>:ro</code>; secrets come from <code>.env</code>.</span></li>
-    <li><span><b>Prune keeps what matters.</b> Never <code>&lt;TENGU_HOME&gt;/state</code> beyond <code>state/flows</code>, the vault, the config or the managed skills; <code>--hard</code> empties a workspace but keeps the folder.</span></li>
+    <li><span><b>Prune keeps what matters.</b> Never <code>&lt;TENGU_HOME&gt;/state</code>, the vault, the config or the managed skills; <code>--sandbox &lt;s&gt;</code> touches only <code>&lt;s&gt;</code>'s traces, workspaces and own memory store; <code>--hard</code> empties a workspace but keeps the folder.</span></li>
   </ul>
 </section>
 
@@ -424,7 +424,8 @@ ufw: allow 22/tcp and 7080/tcp
 <span class="ln cmd"><span class="p">$ </span>make up SANDBOX=unlimited &amp;&amp; make doctor SANDBOX=unlimited</span>
 <span class="ln cmd"><span class="p">$ </span>tengu prune --sandbox lping</span>
 <span class="ln o">Will remove:</span>
-<span class="ln o">  ✓ conversation flows (<span class="hl">&lt;TENGU_HOME&gt;</span>/state/flows)</span>
+<span class="ln o">  ✓ execution traces of lping (<span class="hl">&lt;TENGU_HOME&gt;</span>/logs/trace/lping)</span>
+<span class="ln o">  ✓ workspace memory (<span class="hl">&lt;workspace&gt;</span>) (<span class="hl">&lt;workspace&gt;</span>/memory)</span>
 <span class="ln o">Proceed? [y/N]</span></pre>
   </div>
 </section>
@@ -582,19 +583,22 @@ ufw: allow 22/tcp and 7080/tcp
   var WS = { lping: "~/lping-workspace", unlimited: "~/unlimited-workspace", "jev-exec": "~/jev-exec-workspace", xlab: "~/xlab-ws" };
   function prune() {
     var sb = $("p-sb").value, hard = $("p-hard").checked, ws = WS[sb];
-    var rm = ["<code>&lt;TENGU_HOME&gt;/state/flows</code> conversation flows", "<code>&lt;TENGU_HOME&gt;/memory</code> global memory vectors", "<code>&lt;TENGU_HOME&gt;/logs</code> log files, the audit trails (<code>decisions</code>, <code>risk</code>, <code>egress</code>) and the execution traces included"];
-    if (ws && !hard) ["memory", ".tengu-tasks", ".tengu-attachments", ".tengu/storage"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
-    if (ws && hard) rm.push("every entry inside <code>" + ws + "</code>: <code>.tengu/</code> (cache, observations, workspace skills), output folders, <code>TENGU_PLAN.md</code> …");
-    var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code> beyond <code>flows</code>: the xmarket, xlab and SOE state dirs, <code>solana-writes.db</code>",
+    /* prune.rs plan_prune: --sandbox = that sandbox only; none = the shared logs + memory */
+    var rm = sb ? ["<code>&lt;TENGU_HOME&gt;/logs/trace/" + sb + "/</code> the execution traces of " + sb]
+      : ["<code>&lt;TENGU_HOME&gt;/memory</code> global memory vectors", "<code>&lt;TENGU_HOME&gt;/logs</code> log files, the audit trails (<code>decisions</code>, <code>risk</code>, <code>egress</code>) and every sandbox's traces"];
+    if (ws && !hard) ["memory", ".tengu-attachments", ".tengu/storage"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
+    if (ws && hard) rm.push("every entry inside <code>" + ws + "</code>: <code>.tengu/</code> (cache, observations, workspace skills), output folders …");
+    var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code>: the xmarket, xlab and SOE state dirs, <code>solana-writes.db</code>",
       "<code>&lt;TENGU_HOME&gt;/secrets.vault</code>", "<code>&lt;TENGU_HOME&gt;/config.toml</code>", "<code>&lt;TENGU_HOME&gt;/skills</code> (managed skills)",
       "the repo: <code>sandboxes/</code>, <code>skills/</code>"];
+    if (sb) keep.unshift("the shared <code>&lt;TENGU_HOME&gt;/logs</code> (the audit logs, other sandboxes' traces) and <code>&lt;TENGU_HOME&gt;/memory</code>");
     if (ws && hard) keep.push("the folder <code>" + ws + "</code> itself (emptied, kept)");
     if (ws && !hard) keep.push("<code>" + ws + "/.tengu/</code> and other files (soft mode)");
     $("p-rm").innerHTML = rm.map(function (x) { return '<li class="rm"><span>' + x + "</span></li>"; }).join("");
     $("p-keep").innerHTML = keep.map(function (x) { return '<li class="keep"><span>' + x + "</span></li>"; }).join("");
     var n;
     if (hard && !ws) n = "<b>--hard has no effect without --sandbox</b> (no workspace to reset); pruning global state only.";
-    else if (!ws) n = "<b>Global only.</b> Without <code>--sandbox</code> no workspace is known.";
+    else if (!ws) n = "<b>Shared state only.</b> Without <code>--sandbox</code> no workspace is known, and every sandbox's traces go with <code>logs/</code>.";
     else if (hard) n = "<b>Hard reset.</b> Every child of the workspace root goes, so arbitrary agent output goes too.";
     else n = "<b>Soft.</b> A fixed allow-list per workspace, plus <code>[scaffold.project] directories</code> when set (none of these sandboxes sets it).";
     $("p-note").innerHTML = n + " Missing targets print as <code>[not found]</code>; nothing at all → <code>Nothing to prune.</code>";

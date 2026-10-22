@@ -626,16 +626,16 @@ tengu sources --sandbox soe list                          # the source registry;
 ## Reset
 
 ```bash
-tengu prune                              # <TENGU_HOME>/state/flows, memory/, logs/ (keeps config, secrets, skills)
-tengu prune --sandbox <name>             # + each workspace's memory/, .tengu-tasks/, .tengu-attachments/, storage/, scaffold project dirs
-tengu prune --sandbox <name> --hard      # empties each workspace root (every child), keeps the root
+tengu prune                              # the shared <TENGU_HOME>/memory/ and logs/ (every sandbox's traces, the audit logs)
+tengu prune --sandbox <name>             # only <name>: logs/trace/<name>/, each workspace's memory/, .tengu-attachments/, .tengu/storage/, scaffold project dirs, the vectors.bin of its own [memory] store_path
+tengu prune --sandbox <name> --hard      # the same, each workspace root emptied (every child) instead, the root kept
 ```
 
 | Fact | Detail |
 |---|---|
-| Never pruned | `<TENGU_HOME>/state` beyond `state/flows` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`, `strategy-rankings/`), the `[sources]` state dir (`sources.db`; with `[soe]` the SOE state root: `operator.toml`, `cycles/`, `replays/`, the state logs) and `solana-writes.db`; the sandbox config, secrets, managed skills |
+| Never pruned | `<TENGU_HOME>/state` — the xmarket state dirs (`ledger.db`, `runtime.db`, `history/`, `market.db`, `backtests/`, `strategy-rankings/`), the `[sources]` state dir (`sources.db`; with `[soe]` the SOE state root: `operator.toml`, `cycles/`, `replays/`, the state logs) and `solana-writes.db`; the sandbox config, secrets, managed skills |
 | `--hard` | needs `--sandbox` (without it: global state only, with a note); the workspaces are the agents' `workspace` dirs — an xmarket workspace loses its `.tengu/observations.db`; does not clear the Postgres `agentic_memory` store — `make clean` does (global, destructive) |
-| Logs | every prune deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts —, `maps/`, the execution traces `trace/<sandbox>/`) |
+| Logs | `tengu prune` deletes `<TENGU_HOME>/logs/` (`tengu.log`, `egress.jsonl`, `decisions.jsonl`, `risk.jsonl` — `ledger.db` keeps the canonical verdicts —, `maps/`, every sandbox's traces `trace/<sandbox>/`); `--sandbox <s>` deletes only `trace/<s>/` |
 | Manual | `rm -rf ~/.tengu` wipes everything, the paper ledgers and `market.db` included |
 
 ## Related

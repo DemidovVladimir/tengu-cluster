@@ -452,7 +452,7 @@
         <td>network audit · Jev calls · risk verdict mirror</td>
         <td><code>egress.rs</code> · decision loops · <code>paper_store.rs</code></td>
         <td>operators</td>
-        <td><code>tengu prune</code> deletes <code>logs/</code></td>
+        <td><code>tengu prune</code> (no <code>--sandbox</code>) deletes <code>logs/</code></td>
       </tr>
       <tr>
         <td>&lt;TENGU_HOME&gt;/state/solana-writes.db</td>
@@ -539,14 +539,14 @@
         <td>one recording per <code>tengu run</code> / <code>tengu decide</code> process: correlated events, payloads redacted + bounded, first line <code>run.opened</code></td>
         <td><code>JsonlTraceSink</code> (<code>bootstrap/trace.rs::open_sink</code>)</td>
         <td><code>tengu trace runs</code> / <code>show</code>, <code>tengu studio</code></td>
-        <td><code>tengu prune</code> deletes <code>logs/</code></td>
+        <td><code>tengu prune</code> deletes <code>logs/</code>; <code>--sandbox &lt;s&gt;</code> only <code>trace/&lt;s&gt;/</code></td>
       </tr>
       <tr>
         <td>&lt;TENGU_HOME&gt;/logs/maps/&lt;sha256&gt;.json</td>
         <td>the execution maps <code>tengu decide --map</code> ran (canonical JSON)</td>
         <td><code>cli/decide.rs</code></td>
         <td><code>tengu studio</code> (<code>/api/v1/graph?map=&lt;sha256&gt;</code>, re-hashed, re-applied)</td>
-        <td><code>tengu prune</code> deletes <code>logs/</code></td>
+        <td><code>tengu prune</code> (no <code>--sandbox</code>) deletes <code>logs/</code></td>
       </tr>
       <tr><td class="grp" colspan="5">Builder + seal proxy (2026-10-10 → 2026-10-13)</td></tr>
       <tr>
@@ -567,7 +567,7 @@
   </table>
   </div>
   <p style="margin-top: 18px;">
-    <code>&lt;state dir&gt;</code> = <code>&lt;TENGU_HOME&gt;/state/&lt;[xmarket] state&gt;</code> (else <code>&lt;TENGU_HOME&gt;/state</code>): outside every fs root and workspace; <code>tengu prune</code> never deletes <code>&lt;TENGU_HOME&gt;/state</code> beyond <code>state/flows</code>.
+    <code>&lt;state dir&gt;</code> = <code>&lt;TENGU_HOME&gt;/state/&lt;[xmarket] state&gt;</code> (else <code>&lt;TENGU_HOME&gt;/state</code>): outside every fs root and workspace; <code>tengu prune</code> never deletes <code>&lt;TENGU_HOME&gt;/state</code>.
     Without <code>postgres_memory</code> the planner still routes from <code>TENGU_PLANNER_REGISTRY.md</code>; it just has no durable memory.
   </p>
 </div>

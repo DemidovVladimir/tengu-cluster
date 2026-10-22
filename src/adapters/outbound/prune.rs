@@ -1,11 +1,20 @@
-//! `tengu prune` — wipe all cached/ephemeral state while preserving config,
-//! secrets, skills, and project files. `<TENGU_HOME>/state` is never a
-//! target beyond `state/flows`: it holds the install-wide stores (the
-//! xmarket state dirs — `config/xmarket.rs` layout — and
+//! `tengu prune` — wipe cached/ephemeral state while preserving config,
+//! secrets, skills, and project files.
+//!
+//! | Run | Targets |
+//! |---|---|
+//! | `tengu prune` | the shared `<TENGU_HOME>/memory` and `<TENGU_HOME>/logs` (every sandbox's traces, the audit logs) |
+//! | `tengu prune --sandbox <s>` | only `<s>`'s: its traces `logs/trace/<s>/`, its workspaces' state, the `vectors.bin` of its own `[memory] store_path` |
+//! | `… --hard` | each workspace root of `<s>` emptied instead of the allow-list |
+//!
+//! `<TENGU_HOME>/state` is never a target: it holds the install-wide stores
+//! (the xmarket state dirs — `config/xmarket.rs` layout — and
 //! `solana-writes.db`), so a target that is it, holds it (a `--hard`
 //! workspace around `TENGU_HOME`) or lies inside it is left out.
 
 use std::path::{Path, PathBuf};
+
+use crate::adapters::outbound::trace_store::{check_sandbox_name, trace_root};
 
 /// A single item that can be pruned.
 pub struct PruneTarget {
@@ -27,8 +36,15 @@ pub struct PruneTarget {
 /// workspace root dir itself is kept (only emptied), so it can be reused.
 pub struct PruneOptions<'a> {
     pub tengu_home: &'a Path,
+    /// `Some(name)`: prune only this sandbox's state (module table) — the
+    /// shared logs and memory stay. `None`: the shared logs and memory.
+    pub sandbox: Option<&'a str>,
     pub workspaces: &'a [PathBuf],
     pub project_dirs: &'a [String],
+    /// The sandbox's own `[memory] store_path`, when it sets one: its
+    /// `vectors.bin` goes with the sandbox (never the dir — it may hold
+    /// anything), unless it is the shared `<TENGU_HOME>/memory`.
+    pub memory_store: Option<&'a Path>,
     /// Hard reset: empty each workspace root entirely (every child, including
     /// `.tengu/`, arbitrary agent output dirs, and root runtime artifacts),
     /// instead of pruning only the known allow-list.
@@ -36,12 +52,9 @@ pub struct PruneOptions<'a> {
 }
 
 /// True when removing `path` would remove `<tengu_home>/state` or anything
-/// in it but `state/flows` — compared as written and, when both exist, with
-/// symlinks resolved.
+/// in it — compared as written and, when both exist, with symlinks resolved.
 fn touches_state(path: &Path, tengu_home: &Path) -> bool {
-    let hits = |p: &Path, state: &Path| {
-        state.starts_with(p) || (p.starts_with(state) && !p.starts_with(state.join("flows")))
-    };
+    let hits = |p: &Path, state: &Path| state.starts_with(p) || p.starts_with(state);
     let state = tengu_home.join("state");
     hits(path, &state)
         || matches!(
@@ -51,7 +64,7 @@ fn touches_state(path: &Path, tengu_home: &Path) -> bool {
 }
 
 /// Scan `tengu_home` and workspace directories, returning every prunable
-/// target — never `<tengu_home>/state` beyond `state/flows` (module doc).
+/// target — never `<tengu_home>/state` (module doc).
 pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
     let mut targets: Vec<PruneTarget> = Vec::new();
 
@@ -67,16 +80,31 @@ pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
         });
     };
 
-    // Global state
-    push(
-        opts.tengu_home.join("state/flows"),
-        "conversation flows".to_string(),
-    );
-    push(
-        opts.tengu_home.join("memory"),
-        "global memory vectors".to_string(),
-    );
-    push(opts.tengu_home.join("logs"), "log files".to_string());
+    let shared_memory = opts.tengu_home.join("memory");
+    match opts.sandbox {
+        None => {
+            push(shared_memory, "global memory vectors".to_string());
+            push(
+                opts.tengu_home.join("logs"),
+                "log files, audit logs and every sandbox's traces".to_string(),
+            );
+        }
+        Some(name) => {
+            // A name that is not a trace dir name has no trace dir.
+            if check_sandbox_name(name).is_ok() {
+                push(
+                    trace_root(opts.tengu_home).join(name),
+                    format!("execution traces of {name}"),
+                );
+            }
+            if let Some(store) = opts.memory_store.filter(|s| *s != shared_memory) {
+                push(
+                    store.join("vectors.bin"),
+                    format!("memory vectors of {name}"),
+                );
+            }
+        }
+    }
 
     // Per-workspace state
     for ws in opts.workspaces {
@@ -108,10 +136,6 @@ pub fn plan_prune(opts: &PruneOptions) -> Vec<PruneTarget> {
         push(
             ws.join("memory"),
             format!("workspace memory ({ws_display})"),
-        );
-        push(
-            ws.join(".tengu-tasks"),
-            format!("task outcomes ({ws_display})"),
         );
         push(
             ws.join(".tengu-attachments"),
@@ -215,8 +239,10 @@ mod tests {
         // Soft prune leaves everything except the known allow-list alone.
         let soft = plan_prune(&PruneOptions {
             tengu_home: home.path(),
+            sandbox: Some("s"),
             workspaces: &[ws.clone()],
             project_dirs: &[],
+            memory_store: None,
             hard: false,
         });
         let soft_paths = existing_paths(&soft);
@@ -227,8 +253,10 @@ mod tests {
         // Hard prune targets every direct child of the workspace root.
         let hard = plan_prune(&PruneOptions {
             tengu_home: home.path(),
+            sandbox: Some("s"),
             workspaces: &[ws.clone()],
             project_dirs: &[],
+            memory_store: None,
             hard: true,
         });
         let hard_paths = existing_paths(&hard);
@@ -252,8 +280,10 @@ mod tests {
         std::fs::create_dir_all(ws.join("storage")).unwrap();
         let soft = plan_prune(&PruneOptions {
             tengu_home: home.path(),
+            sandbox: Some("s"),
             workspaces: &[ws.clone()],
             project_dirs: &[],
+            memory_store: None,
             hard: false,
         });
         let paths = existing_paths(&soft);
@@ -262,8 +292,9 @@ mod tests {
     }
 
     /// The xmarket state dir survives every mode and workspace — even a
-    /// `--hard` workspace around `TENGU_HOME` or the state dir itself as a
-    /// workspace — while `state/flows` goes.
+    /// `--hard` workspace around `TENGU_HOME`, the state dir itself as a
+    /// workspace or a `[memory] store_path` inside it; nothing in `state/`
+    /// goes (`state/flows` was a target with no writer).
     #[test]
     fn never_deletes_the_xmarket_state_dir() {
         use crate::config::xmarket::{
@@ -320,8 +351,10 @@ mod tests {
             let workspaces = [root.path().join(ws)];
             let targets = plan_prune(&PruneOptions {
                 tengu_home: &home,
+                sandbox: Some("xmarket-weekend"),
                 workspaces: &workspaces,
                 project_dirs: &[],
+                memory_store: Some(&home.join("state")),
                 hard,
             });
             for t in &targets {
@@ -339,11 +372,79 @@ mod tests {
             }
             assert!(xm.join("memory").exists(), "{label}: inside the state dir");
             assert!(home.join("state/solana-writes.db").exists(), "{label}");
-            assert!(!home.join("state/flows").exists(), "{label}: flows pruned");
+            assert!(home.join("state/flows/f.json").exists(), "{label}: flows");
             if ws == "ws" {
                 assert!(!root.path().join("ws/memory").exists(), "{label}");
             }
         }
+    }
+
+    /// `--sandbox s` prunes only `s`: its traces and its own store's
+    /// vectors — never another sandbox's traces, the shared audit logs or
+    /// the shared memory. Without `--sandbox` the shared dirs go.
+    #[test]
+    fn sandbox_prune_keeps_other_sandboxes_and_shared_logs() {
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        for f in [
+            "logs/trace/lab/r1.jsonl",
+            "logs/trace/xmarket/r2.jsonl",
+            "logs/decisions.jsonl",
+            "logs/risk.jsonl",
+            "logs/maps/m.json",
+            "memory/vectors.bin",
+        ] {
+            std::fs::create_dir_all(home.join(f).parent().unwrap()).unwrap();
+            std::fs::write(home.join(f), b"x").unwrap();
+        }
+        let own = tempfile::tempdir().unwrap();
+        std::fs::write(own.path().join("vectors.bin"), b"x").unwrap();
+        std::fs::write(own.path().join("notes.md"), b"keep").unwrap();
+        let plan = |sandbox, memory_store| {
+            plan_prune(&PruneOptions {
+                tengu_home: home,
+                sandbox,
+                workspaces: &[],
+                project_dirs: &[],
+                memory_store,
+                hard: false,
+            })
+        };
+
+        let scoped = existing_paths(&plan(Some("lab"), Some(own.path())));
+        assert_eq!(
+            scoped,
+            [home.join("logs/trace/lab"), own.path().join("vectors.bin")]
+        );
+        // The shared store is never "the sandbox's own".
+        let shared_store = home.join("memory");
+        let shared = existing_paths(&plan(Some("lab"), Some(&shared_store)));
+        assert_eq!(shared, [home.join("logs/trace/lab")]);
+        // A name that is no trace dir name names no dir.
+        assert!(existing_paths(&plan(Some("../logs"), None)).is_empty());
+
+        let global = existing_paths(&plan(None, None));
+        assert_eq!(global, [home.join("memory"), home.join("logs")]);
+    }
+
+    /// Nothing writes `.tengu-tasks` any more: a soft prune leaves a folder
+    /// of that name alone.
+    #[test]
+    fn soft_prune_skips_the_dead_task_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let ws_dir = tempfile::tempdir().unwrap();
+        let ws = ws_dir.path().to_path_buf();
+        std::fs::create_dir_all(ws.join(".tengu-tasks")).unwrap();
+        std::fs::create_dir_all(ws.join(".tengu-attachments")).unwrap();
+        let paths = existing_paths(&plan_prune(&PruneOptions {
+            tengu_home: home.path(),
+            sandbox: Some("s"),
+            workspaces: &[ws.clone()],
+            project_dirs: &[],
+            memory_store: None,
+            hard: false,
+        }));
+        assert_eq!(paths, [ws.join(".tengu-attachments")]);
     }
 
     #[test]
@@ -355,8 +456,10 @@ mod tests {
 
         let targets = plan_prune(&PruneOptions {
             tengu_home: home.path(),
+            sandbox: Some("s"),
             workspaces: &[ws.clone()],
             project_dirs: &["mint".to_string(), "mint/metadata".to_string()],
+            memory_store: None,
             hard: false,
         });
         let paths = existing_paths(&targets);

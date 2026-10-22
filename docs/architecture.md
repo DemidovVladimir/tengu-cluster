@@ -199,7 +199,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 | `adapters/outbound/secrets.rs` | Encrypted secrets vault (AES-256-GCM) + `SanitizedToolExecutor` redaction |
 | `adapters/outbound/egress.rs` | Network policy: Tor by default, host allowlist, shell sandbox, JSONL audit |
 | `adapters/outbound/scaffold.rs` | Workspace directory scaffolding |
-| `adapters/outbound/prune.rs` | State/cache cleanup (never `<TENGU_HOME>/state` beyond `state/flows`) |
+| `adapters/outbound/prune.rs` | State/cache cleanup: shared logs + memory, or one sandbox's traces + workspaces (never `<TENGU_HOME>/state`) |
 
 ### Added since 2026-09-24 (pointers only)
 | Subsystem | Entry points | Read |

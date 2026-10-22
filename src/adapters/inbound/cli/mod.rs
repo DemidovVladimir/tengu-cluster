@@ -23,7 +23,7 @@ mod trace;
 use clap::{Parser, Subcommand};
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use crate::adapters::outbound::secrets;
@@ -302,19 +302,23 @@ enum Commands {
         #[command(subcommand)]
         action: keys::KeysAction,
     },
-    /// Remove all cached/ephemeral state (conversations, memory, tasks, logs).
+    /// Remove cached/ephemeral state. Without --sandbox: the shared
+    /// <TENGU_HOME>/memory and <TENGU_HOME>/logs (every sandbox's traces and
+    /// the audit logs). <TENGU_HOME>/state, the vault, the config and the
+    /// skills always stay.
     Prune {
-        /// Also prune workspace-local state for this sandbox
+        /// Prune only this sandbox: its execution traces, its workspaces'
+        /// state and the vectors of its own `[memory] store_path`; the shared
+        /// logs and memory stay
         #[arg(long)]
         sandbox: Option<String>,
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
-        /// Hard reset: empty each workspace root — every file and directory in
-        /// it (its `.tengu/` cache and workspace skills, agent output, anything
-        /// else) — plus the top-level scaffold directories and the root
-        /// TENGU_PLAN.md / TENGU_PLANNER_REGISTRY.md. The workspace roots, the
-        /// sandbox config and `<TENGU_HOME>/state` stay. Requires --sandbox.
+        /// Hard reset: empty each workspace root of the sandbox — every file
+        /// and directory in it (its `.tengu/` cache and workspace skills,
+        /// agent output, anything else). The workspace roots, the sandbox
+        /// config and `<TENGU_HOME>/state` stay. Requires --sandbox.
         #[arg(long)]
         hard: bool,
     },
@@ -863,9 +867,20 @@ pub(crate) async fn run() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Prune { sandbox, yes, hard } => {
+            // `--sandbox`: that sandbox's workspaces, scaffold dirs, trace dir
+            // name and own `[memory] store_path` (`prune.rs` module table).
+            let mut scope: Option<(String, Option<PathBuf>)> = None;
             let (workspaces, project_dirs): (Vec<PathBuf>, Vec<String>) =
                 if let Some(ref name) = sandbox {
                     let config = load_sandbox_or(Some(name.clone()), config)?;
+                    scope = Some((
+                        crate::bootstrap::runtime::runner_name(&config),
+                        config
+                            .memory
+                            .store_path
+                            .as_deref()
+                            .map(|p| crate::config::paths::expand_tilde(Path::new(p))),
+                    ));
                     let ws = config
                         .agents
                         .values()
@@ -896,8 +911,10 @@ pub(crate) async fn run() -> Result<()> {
             let targets = crate::adapters::outbound::prune::plan_prune(
                 &crate::adapters::outbound::prune::PruneOptions {
                     tengu_home: &tengu_home,
+                    sandbox: scope.as_ref().map(|(name, _)| name.as_str()),
                     workspaces: &workspaces,
                     project_dirs: &project_dirs,
+                    memory_store: scope.as_ref().and_then(|(_, store)| store.as_deref()),
                     hard,
                 },
             );

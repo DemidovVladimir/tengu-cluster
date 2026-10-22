@@ -284,14 +284,14 @@
       <dl class="kv"><dt>holds</dt><dd>every entry: id, text, 1536 floats, metadata</dd>
       <dt>writers</dt><dd><code>memory_ingest</code>, <code>persistent_store</code></dd>
       <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>&lt;TENGU_HOME&gt;/memory/</code></dd>
-      <dt>cleared by</dt><dd><code>/purge</code>, <code>tengu prune</code></dd></dl>
+      <dt>cleared by</dt><dd><code>/purge</code>, <code>tengu prune --sandbox &lt;s&gt;</code> (a workspace's, or its own <code>store_path</code>), <code>tengu prune</code> (the shared one)</dd></dl>
     </div>
     <div class="card data">
       <h3>.tengu/storage/&lt;file_id&gt;/</h3>
       <dl class="kv"><dt>holds</dt><dd>the raw file + <code>manifest.json</code> with its chunk ids</dd>
       <dt>writer</dt><dd><code>persistent_store</code> <code>store</code></dd>
       <dt>search</dt><dd>kind <code>persistent_store</code> only, one hit per file</dd>
-      <dt>cleared by</dt><dd><code>delete</code> (its vectors too), <code>tengu prune</code></dd></dl>
+      <dt>cleared by</dt><dd><code>delete</code> (its vectors too), <code>tengu prune --sandbox &lt;s&gt;</code></dd></dl>
     </div>
     <div class="card data">
       <h3>.tengu/cache.db</h3>

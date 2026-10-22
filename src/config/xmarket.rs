@@ -126,7 +126,8 @@ pub struct XmarketConfig {
     /// Directory name under `<TENGU_HOME>/state/` that holds the install-wide
     /// stores (`ledger.db`, `runtime.db`, `history/`, …): `xmarket` for the
     /// main sandbox, `xmarket-weekend` for the weekend run. One path segment;
-    /// `tengu prune` never deletes `state/` (only `state/flows`).
+    /// `tengu prune` never deletes `state/`. `flows` stays refused: binaries
+    /// built before 2026-10-22 prune `state/flows`.
     #[serde(default = "default_state")]
     pub state: String,
     /// `[xmarket.calendars.<id>]` — session calendars by id (module doc).
@@ -174,6 +175,7 @@ impl XmarketConfig {
     pub fn validation_errors(&self) -> Vec<String> {
         let mut errors = Vec::new();
         let s = self.state.as_str();
+        // `flows`: an older binary's `tengu prune` deletes `state/flows`.
         let ok = !s.is_empty()
             && s != "."
             && s != ".."

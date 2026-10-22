@@ -973,7 +973,7 @@ These are not preferences. They're load-bearing.
   `decisions.jsonl` lines carry the recording's `runtime_id` / `run_id`. `tengu
   trace runs` · `show --run <id> [--after <seq>] [--follow]` read it in every
   build, no config (`--sandbox default` for a `-c` config); only `tengu prune`
-  deletes runs (all of `<TENGU_HOME>/logs`).
+  deletes runs (`--sandbox <s>`: `trace/<s>/`; without: all of `<TENGU_HOME>/logs`).
 - **Worktrees inherit the main checkout's `.env` (2026-10-09)** — `main` calls
   `dotenvy::dotenv()` (`adapters/inbound/cli/mod.rs`): the nearest `.env` up from
   the cwd, never overriding an exported var. A `tengu` started under

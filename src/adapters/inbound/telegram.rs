@@ -1725,13 +1725,11 @@ impl TelegramSession {
             .filter_map(|s| s.workspace.clone())
             .collect();
         for ws in &ws_set {
-            for subdir in &[".tengu-tasks", ".tengu-attachments"] {
-                let p = ws.join(subdir);
-                if p.exists() {
-                    match std::fs::remove_dir_all(&p) {
-                        Ok(()) => lines.push(format!("Cleaned {}", p.display())),
-                        Err(e) => lines.push(format!("Failed to clean {}: {}", p.display(), e)),
-                    }
+            let p = ws.join(".tengu-attachments");
+            if p.exists() {
+                match std::fs::remove_dir_all(&p) {
+                    Ok(()) => lines.push(format!("Cleaned {}", p.display())),
+                    Err(e) => lines.push(format!("Failed to clean {}: {}", p.display(), e)),
                 }
             }
         }
