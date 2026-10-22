@@ -765,7 +765,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
                     );
                 }
                 // A planner turn gets no tengu tools or bridge
-                // (`bootstrap::orchestrator::run_turn_inner`); what is left is
+                // (`orchestrator::planner::PlannerLlm::call`); what is left is
                 // the CLI's own: Claude Code's built-ins (off with `none`),
                 // Codex's shell (always there).
                 let tools = c.s("claude_tools").unwrap_or_else(|| "read_only".into());

@@ -1,7 +1,8 @@
 //! Orchestration ports — what the orchestrator needs from the outside world:
-//! a `Planner` that emits plan JSON, an `OrchestratorChatPort` /
-//! `ChatServiceFactory` to run one LLM turn, and a `WorkerHandle` that runs a
-//! plan step (impl: `SubprocessRunner`).
+//! a `Planner` that emits plan JSON, a `WorkerHandle` that runs a plan step
+//! (impl: `SubprocessRunner`), and a `ChatServiceFactory` that runs one agent
+//! turn for a CLI command (the skill improver). The planner's own LLM call is
+//! `application::orchestrator::planner::PlannerLlm` (an engine, no port).
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -44,53 +45,8 @@ pub trait Planner: Send + Sync {
     }
 }
 
-/// Minimal port the planner needs from the chat runtime (avoids cyclic deps).
-#[async_trait]
-pub trait OrchestratorChatPort: Send + Sync {
-    /// Run a single LLM conversation turn and return the final message
-    /// (JSON string). The port handles system-prompt assembly, tool
-    /// loop (memory_search), and memory injection.
-    async fn run_orchestrator_turn(
-        &self,
-        agent: &str,
-        user_message: &str,
-    ) -> anyhow::Result<String>;
-
-    /// Phase 4c — like `run_orchestrator_turn` but with `system_prompt`
-    /// replacing the agent's `identity.instructions` for this single call.
-    /// Used by the RAG planner to inject `skills/orchestrator/SKILL.md`
-    /// as the planner system prompt. Default impl falls back to the
-    /// override-less call.
-    async fn run_orchestrator_turn_with_system(
-        &self,
-        agent: &str,
-        _system_prompt: &str,
-        user_message: &str,
-    ) -> anyhow::Result<String> {
-        self.run_orchestrator_turn(agent, user_message).await
-    }
-
-    /// Metered variant — returns `(reply, telemetry)` so callers can build
-    /// a `MetricsRecord` with prompt/completion tokens and wall-clock
-    /// latency. Default impl falls back to `run_orchestrator_turn_with_system`
-    /// and returns zeroed telemetry. The runtime impl
-    /// (`ChatOrchestratorPortImpl`) overrides this to plumb real numbers.
-    async fn run_orchestrator_turn_with_system_metered(
-        &self,
-        agent: &str,
-        system_prompt: &str,
-        user_message: &str,
-    ) -> anyhow::Result<(String, crate::ports::orchestration::TurnTelemetry)> {
-        let reply = self
-            .run_orchestrator_turn_with_system(agent, system_prompt, user_message)
-            .await?;
-        Ok((reply, crate::ports::orchestration::TurnTelemetry::default()))
-    }
-}
-
-/// Abstracts "how to run a worker step." The real impl calls
-/// `ChatRuntimeService::process_user_text` under the hood. Tests
-/// inject fake impls.
+/// Runs one plan step. The real impl (`SubprocessRunner`) spawns `tengu
+/// run-agent` for it; tests inject fakes.
 #[async_trait]
 pub trait WorkerHandle: Send + Sync {
     /// Run `step.agent` with `step.goal + step_inputs` as the user turn.
@@ -106,15 +62,11 @@ pub trait WorkerHandle: Send + Sync {
     }
 }
 
-/// Pure-data telemetry returned alongside an LLM-call response so the caller
-/// can construct a [`crate::domain::metrics::MetricsRecord`]. Defaults to
-/// all-zero so trait impls that don't (yet) wire telemetry stay valid.
-///
-/// Token counts come from the engine's `StreamEvent::Usage` frame; latency is
-/// wall-clock around the full `process_user_text` call (which includes
-/// memory recall + the engine round trip). For the planner path this is the
-/// only telemetry available — the planner itself attributes the prompt to
-/// per-context-layer breakdown separately.
+/// What one planner LLM call cost (`PlannerLlm::call`), for its
+/// [`crate::domain::metrics::MetricsRecord`]. Token counts come from the
+/// engine's `StreamEvent::Usage` frame; latency is wall-clock around the
+/// engine call. The planner attributes the prompt to its context layers
+/// separately.
 #[derive(Debug, Clone, Default)]
 pub struct TurnTelemetry {
     pub prompt_tokens: u32,
@@ -124,56 +76,12 @@ pub struct TurnTelemetry {
     pub response_chars: u32,
 }
 
-/// Abstracts "run a conversation turn against a named agent." Implementors
-/// construct the agent-scoped `ChatRuntimeService<'a>` per call with a fresh
-/// `ChatLoopState::default()` and extract the final assistant text.
-///
-/// Implementation lives in `bootstrap/` where all the borrowed
-/// dependencies (engine, agent_config, tools, ...) are rooted. Trait lives
-/// here so `ChatOrchestratorPortImpl` (the planner-side LLM turn) can take
-/// `Arc<dyn ChatServiceFactory>` without dragging `ChatRuntimeService`'s
-/// lifetime parameter through the whole orchestrator graph.
-///
-/// Per-step state is **ephemeral**: each call gets a fresh `ChatLoopState`.
+/// Runs one turn of a named agent: its engine, system prompt and tools.
+/// Used by CLI commands that need an agent's answer (`tengu skill evolve`
+/// asks the skill-improver agent); the impl (`bootstrap::orchestrator::
+/// RuntimeChatServiceFactory`) builds a `ChatRuntimeService` per call with a
+/// fresh `ChatLoopState`.
 #[async_trait]
 pub trait ChatServiceFactory: Send + Sync {
     async fn run_turn(&self, agent: &str, text: &str) -> anyhow::Result<String>;
-
-    /// Like `run_turn`, but with the supplied `system_prompt` replacing the
-    /// agent's configured `identity.instructions` for this single call.
-    ///
-    /// Phase 4c of the redesign: the RAG planner loads
-    /// `skills/orchestrator/SKILL.md` and uses it as the planner system
-    /// prompt, so the orchestrator agent's "run the whole pipeline"-style
-    /// identity does not leak into the planning turn.
-    ///
-    /// Default impl delegates to `run_turn`, ignoring the override — so
-    /// existing implementations stay valid without changes. The runtime impl
-    /// (`RuntimeChatServiceFactory`) overrides this to actually swap.
-    async fn run_turn_with_system(
-        &self,
-        agent: &str,
-        _system_prompt: &str,
-        text: &str,
-    ) -> anyhow::Result<String> {
-        self.run_turn(agent, text).await
-    }
-
-    /// Like `run_turn_with_system` but additionally returns [`TurnTelemetry`]
-    /// (token counts, latency, model slug) so the caller — typically the
-    /// planner — can build a full `MetricsRecord`. Default impl falls back
-    /// to `run_turn_with_system` and returns zeroed telemetry; the runtime
-    /// impl (`RuntimeChatServiceFactory`) overrides this to wire real numbers.
-    async fn run_turn_with_system_metered(
-        &self,
-        agent: &str,
-        system_prompt: Option<&str>,
-        text: &str,
-    ) -> anyhow::Result<(String, TurnTelemetry)> {
-        let reply = match system_prompt {
-            Some(s) => self.run_turn_with_system(agent, s, text).await?,
-            None => self.run_turn(agent, text).await?,
-        };
-        Ok((reply, TurnTelemetry::default()))
-    }
 }

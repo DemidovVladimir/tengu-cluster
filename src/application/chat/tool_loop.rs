@@ -9,14 +9,19 @@
 //!
 //! Older rounds (from round 1 on): every earlier tool result keeps its
 //! first line, ≤ `limits.compact_result_limit` (`compact_older_tool_results`).
-//! `run-agent` applies both rules the same way, for every engine.
+//! A `run-agent` step runs this same loop (`LoopHooks`: its
+//! `compress_and_store` and per-turn metrics), for every engine.
+//!
+//! At `max_tool_rounds` the engine gets one last call with no tools, so a
+//! loop always ends in an answer.
 //!
 //! Activity: `EngineResponse.tool_runs` lists every call with its outcome —
 //! the ones run here and the ones the engine ran itself
 //! (`StreamEvent::ToolRan`, Claude Code through `tengu mcp-bridge`).
 //!
-//! Call ids: the executor sees `chat:<turn nonce>:<round>:<i>:<provider id>`
-//! (`chat_call_id` → `ToolCtx.call_id`, an exec tool's default
+//! Call ids: the executor sees `<prefix>:<loop nonce>:<round>:<i>:<provider id>`
+//! (`LoopOpts::call_ids`: `chat` in-process, `step:<session>:<step>` in
+//! `run-agent`; `loop_call_id` → `ToolCtx.call_id`, an exec tool's default
 //! `client_order_id`); the messages keep the provider's id.
 
 use anyhow::Result;
@@ -61,6 +66,60 @@ pub(crate) struct EngineTurn {
 /// Optional callback invoked after each tool execution.
 pub type ToolResultObserver<'a> = &'a (dyn Fn(&ToolCall, &str) + Send + Sync);
 
+/// One loop's knobs: an agent's `[limits]` (`from_limits`), the call-id
+/// prefix, and the optional observer, cancel flag and hooks.
+pub struct LoopOpts<'a> {
+    pub max_tool_rounds: u32,
+    pub max_tool_result_chars: u32,
+    pub stream_event_timeout_secs: u64,
+    pub compact_result_limit: u32,
+    /// First part of every `ToolCtx.call_id` the loop mints
+    /// (`loop_call_id`): `chat`, or `step:<session>:<step>` in `run-agent`.
+    pub call_ids: String,
+    pub observer: Option<ToolResultObserver<'a>>,
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    pub hooks: Option<&'a dyn LoopHooks>,
+}
+
+impl LoopOpts<'_> {
+    /// The agent's limits, `chat` call ids, no observer, cancel or hooks.
+    pub fn from_limits(limits: &crate::config::LimitsConfig) -> Self {
+        Self {
+            max_tool_rounds: limits.max_tool_rounds,
+            max_tool_result_chars: limits.max_tool_result_chars,
+            stream_event_timeout_secs: limits.stream_event_timeout_secs,
+            compact_result_limit: limits.compact_result_limit,
+            call_ids: "chat".into(),
+            observer: None,
+            cancel: None,
+            hooks: None,
+        }
+    }
+}
+
+/// One engine turn of the loop, as `LoopHooks::on_turn` sees it.
+pub struct TurnStats<'t> {
+    /// The turn's text (empty when it only called tools).
+    pub text: &'t str,
+    /// Size of the messages the turn was sent (chars, UTF-8 bytes).
+    pub prompt_chars: u32,
+    pub prompt_bytes: u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub latency_ms: u64,
+}
+
+/// A `run-agent` step's two seams in the loop.
+pub trait LoopHooks: Send + Sync {
+    /// A call the loop answers itself, without the executor: `Some(result)`.
+    /// The loop then ends after this round (the step's `compress_and_store`).
+    fn intercept(&self, _call: &ToolCall) -> Option<String> {
+        None
+    }
+    /// After every engine turn (the step's per-turn metrics).
+    fn on_turn(&self, _turn: &TurnStats<'_>) {}
+}
+
 /// Execute one or more engine rounds, handling tool calls automatically.
 pub async fn collect_engine_response(
     engine: &dyn Engine,
@@ -68,19 +127,13 @@ pub async fn collect_engine_response(
     tools: &[ToolDef],
     context: &EngineContext,
     tool_executor: Option<&dyn ToolExecutor>,
-    tool_observer: Option<ToolResultObserver<'_>>,
-    cancel: Option<&std::sync::atomic::AtomicBool>,
-    token_budget: Option<u32>,
-    max_tool_rounds: u32,
-    max_tool_result_chars: u32,
-    stream_event_timeout_secs: u64,
-    compact_result_limit: u32,
+    opts: &LoopOpts<'_>,
 ) -> Result<EngineResponse> {
-    let tool_rounds = max_tool_rounds as usize;
-    let result_chars_limit = max_tool_result_chars as usize;
+    let tool_rounds = opts.max_tool_rounds as usize;
+    let result_chars_limit = opts.max_tool_result_chars as usize;
     let engine_result_cap = engine.tool_result_char_cap();
-    let stream_timeout = stream_event_timeout_secs;
-    let compact_limit = compact_result_limit as usize;
+    let compact_limit = opts.compact_result_limit as usize;
+    let (tool_observer, cancel, hooks) = (opts.observer, opts.cancel, opts.hooks);
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
@@ -102,35 +155,15 @@ pub async fn collect_engine_response(
             });
         }
 
-        let turn =
-            run_single_engine_turn(engine, &messages, tools, context, cancel, stream_timeout)
-                .await?;
+        let turn = reported_turn(engine, &messages, tools, context, opts).await?;
         let (response_text, tool_calls) = (turn.text, turn.tool_calls);
         tool_runs.extend(turn.engine_runs);
 
         total_input_delta += turn.input_tokens;
         total_output_delta += turn.output_tokens;
 
-        if let Some(budget) = token_budget {
-            let total = total_input_delta + total_output_delta;
-            if total > budget {
-                tracing::warn!(
-                    total_tokens = total,
-                    budget,
-                    round,
-                    "Token budget exceeded — stopping tool loop"
-                );
-                return Ok(EngineResponse {
-                    text: response_text,
-                    input_tokens_delta: total_input_delta,
-                    output_tokens_delta: total_output_delta,
-                    tool_outcomes,
-                    tool_runs,
-                });
-            }
-        }
-
-        if tool_calls.is_empty() || tool_executor.is_none() || tools.is_empty() {
+        if tool_calls.is_empty() || tools.is_empty() || (tool_executor.is_none() && hooks.is_none())
+        {
             // Auto-continue on truncated output.
             if tool_calls.is_empty()
                 && !tools.is_empty()
@@ -166,10 +199,10 @@ pub async fn collect_engine_response(
             });
         }
 
-        let executor = tool_executor.unwrap();
         debug!(round, tool_count = tool_calls.len(), "Executing tool calls");
 
         let compact_cutoff = messages.len();
+        let mut stop = false;
 
         messages.push(Message {
             role: Role::Assistant,
@@ -191,13 +224,30 @@ pub async fn collect_engine_response(
             }
 
             let call = ToolCall {
-                id: chat_call_id(&turn_nonce, round, i, &tc.id),
+                id: loop_call_id(&opts.call_ids, &turn_nonce, round, i, &tc.id),
                 name: tc.name.clone(),
                 arguments: tc.arguments.clone(),
             };
-            let (result, observation, ok) = match executor.execute_typed(&call, &messages).await {
-                Ok(output) => (output.text, output.observation, true),
-                Err(e) => (format!("ERROR: {}", e), None, false),
+            let intercepted = hooks.and_then(|h| h.intercept(tc));
+            stop |= intercepted.is_some();
+            let (result, observation, ok) = match (intercepted, tool_executor) {
+                (Some(result), _) => (result, None, true),
+                (None, Some(executor)) => match executor.execute_typed(&call, &messages).await {
+                    Ok(output) => (output.text, output.observation, true),
+                    Err(e) => {
+                        // Redacted when the executor is a `SanitizedToolExecutor`.
+                        let args = tc.arguments.to_string();
+                        let args = truncate_at_boundary(&args, 300)
+                            .map_or(args.as_str(), |(prefix, _)| prefix);
+                        tracing::warn!(tool = %tc.name, error = %e, arguments = %args, "tool call failed");
+                        (format!("ERROR: {}", e), None, false)
+                    }
+                },
+                (None, None) => (
+                    format!("ERROR: tool '{}' is not available to this agent", tc.name),
+                    None,
+                    false,
+                ),
             };
             tool_runs.push(ToolRun {
                 name: tc.name.clone(),
@@ -225,11 +275,24 @@ pub async fn collect_engine_response(
         if round >= 1 {
             compact_older_tool_results(&mut messages[..compact_cutoff], compact_limit);
         }
+        if stop {
+            debug!(round, "an intercepted call ends the loop");
+            return Ok(EngineResponse {
+                text: response_text,
+                input_tokens_delta: total_input_delta,
+                output_tokens_delta: total_output_delta,
+                tool_outcomes,
+                tool_runs,
+            });
+        }
     }
 
     // Exhaust all rounds — force a text response.
-    let turn =
-        run_single_engine_turn(engine, &messages, &[], context, cancel, stream_timeout).await?;
+    tracing::warn!(
+        rounds = tool_rounds,
+        "tool loop hit max_tool_rounds: one last call without tools"
+    );
+    let turn = reported_turn(engine, &messages, &[], context, opts).await?;
     total_input_delta += turn.input_tokens;
     total_output_delta += turn.output_tokens;
     tool_runs.extend(turn.engine_runs);
@@ -241,6 +304,46 @@ pub async fn collect_engine_response(
         tool_outcomes,
         tool_runs,
     })
+}
+
+/// `run_single_engine_turn`, reported to `opts.hooks` (`LoopHooks::on_turn`).
+async fn reported_turn(
+    engine: &dyn Engine,
+    messages: &[Message],
+    tools: &[ToolDef],
+    context: &EngineContext,
+    opts: &LoopOpts<'_>,
+) -> Result<EngineTurn> {
+    let sizes = opts.hooks.map(|_| {
+        (
+            messages
+                .iter()
+                .map(|m| m.content.chars().count() as u32)
+                .sum::<u32>(),
+            messages.iter().map(|m| m.content.len() as u32).sum::<u32>(),
+        )
+    });
+    let started = std::time::Instant::now();
+    let turn = run_single_engine_turn(
+        engine,
+        messages,
+        tools,
+        context,
+        opts.cancel,
+        opts.stream_event_timeout_secs,
+    )
+    .await?;
+    if let (Some(h), Some((prompt_chars, prompt_bytes))) = (opts.hooks, sizes) {
+        h.on_turn(&TurnStats {
+            text: &turn.text,
+            prompt_chars,
+            prompt_bytes,
+            input_tokens: turn.input_tokens,
+            output_tokens: turn.output_tokens,
+            latency_ms: started.elapsed().as_millis() as u64,
+        });
+    }
+    Ok(turn)
 }
 
 /// Run a single engine turn and collect text, tool calls, usage and the
@@ -361,7 +464,8 @@ pub(crate) async fn run_single_engine_turn(
 }
 
 /// `ToolCtx.call_id` of the model's `index`-th call in `round` of one loop:
-/// `chat:<turn nonce>:<round>:<index>`, then `:<provider id>` when it has
+/// `<prefix>:<turn nonce>:<round>:<index>` (prefix `chat`, or
+/// `step:<session>:<step>` in `run-agent`), then `:<provider id>` when it has
 /// one. The provider's id is unique only as far as its provider makes it (a
 /// local server may number every response's calls `call_0`, `call_1`, …), so
 /// an exec tool keying its order on it could replay an older order's fill.
@@ -369,11 +473,17 @@ pub(crate) async fn run_single_engine_turn(
 /// rounds or calls — an exec call from chat places its own order unless the
 /// model passes a `client_order_id`. Loops, feeds and the bridge mint their
 /// own (`ports::tool::ToolCtx::call_id`).
-fn chat_call_id(turn_nonce: &str, round: usize, index: usize, provider_id: &str) -> String {
+fn loop_call_id(
+    prefix: &str,
+    turn_nonce: &str,
+    round: usize,
+    index: usize,
+    provider_id: &str,
+) -> String {
     if provider_id.is_empty() {
-        format!("chat:{turn_nonce}:{round}:{index}")
+        format!("{prefix}:{turn_nonce}:{round}:{index}")
     } else {
-        format!("chat:{turn_nonce}:{round}:{index}:{provider_id}")
+        format!("{prefix}:{turn_nonce}:{round}:{index}:{provider_id}")
     }
 }
 
@@ -518,6 +628,21 @@ fn flush_pending_tool_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 5 rounds, results ≤ 300 000 chars, 30 s stream idle, older results
+    /// compacted to 200: the knobs the loop tests run with.
+    fn test_opts() -> LoopOpts<'static> {
+        LoopOpts {
+            max_tool_rounds: 5,
+            max_tool_result_chars: 300_000,
+            stream_event_timeout_secs: 30,
+            compact_result_limit: 200,
+            call_ids: "chat".into(),
+            observer: None,
+            cancel: None,
+            hooks: None,
+        }
+    }
     use crate::domain::message::ModelInfo;
     use crate::domain::observation::{ObsSource, ObsStatus};
     use crate::domain::token::tool_result_char_budget;
@@ -650,13 +775,7 @@ mod tests {
             &tools,
             &context,
             Some(&Tools),
-            None,
-            None,
-            None,
-            5,
-            300_000,
-            30,
-            200,
+            &test_opts(),
         )
         .await
         .unwrap();
@@ -795,13 +914,7 @@ mod tests {
             &tools,
             &context,
             Some(&Boom),
-            None,
-            None,
-            None,
-            5,
-            300_000,
-            30,
-            200,
+            &test_opts(),
         )
         .await
         .unwrap();
@@ -910,13 +1023,7 @@ mod tests {
                 &tools,
                 &context,
                 Some(&ids),
-                None,
-                None,
-                None,
-                5,
-                300_000,
-                30,
-                200,
+                &test_opts(),
             )
             .await
             .unwrap();
@@ -938,7 +1045,217 @@ mod tests {
         assert!(ids.iter().all(|i| shape.is_match(i)), "{ids:?}");
         let unique: std::collections::HashSet<&String> = ids.iter().collect();
         assert_eq!(unique.len(), 4, "{ids:?}");
-        assert_eq!(chat_call_id("n", 2, 1, ""), "chat:n:2:1", "no provider id");
+        assert_eq!(
+            loop_call_id("chat", "n", 2, 1, ""),
+            "chat:n:2:1",
+            "no provider id"
+        );
+    }
+
+    /// Calls `order` (and, with `compress`, `compress_and_store` first) on
+    /// every turn that offers tools, with the text "working"; answers
+    /// "final" when offered none. Records how many tools each turn got.
+    struct Looping {
+        compress: bool,
+        offered: Mutex<Vec<usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Engine for Looping {
+        fn id(&self) -> &str {
+            "looping"
+        }
+        fn context_window(&self) -> usize {
+            16_384
+        }
+        fn supports_tool_use(&self) -> bool {
+            true
+        }
+        fn manages_own_workspace(&self) -> bool {
+            false
+        }
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+        async fn run(
+            &self,
+            _messages: &[Message],
+            tools: &[ToolDef],
+            _context: &EngineContext,
+        ) -> Result<Pin<Box<dyn Stream<Item = StreamEvent> + Send>>> {
+            self.offered.lock().unwrap().push(tools.len());
+            let mut events = Vec::new();
+            if tools.is_empty() {
+                events.push(StreamEvent::TextDelta {
+                    text: "final".into(),
+                });
+            } else {
+                events.push(StreamEvent::TextDelta {
+                    text: "working".into(),
+                });
+                let names: &[&str] = if self.compress {
+                    &["compress_and_store", "order"]
+                } else {
+                    &["order"]
+                };
+                for (i, name) in names.iter().enumerate() {
+                    let id = format!("call_{i}");
+                    events.push(StreamEvent::ToolCallStart {
+                        id: id.clone(),
+                        name: (*name).into(),
+                    });
+                    events.push(StreamEvent::ToolCallEnd { id });
+                }
+            }
+            events.push(StreamEvent::Done);
+            Ok(Box::pin(futures::stream::iter(events)))
+        }
+    }
+
+    /// Records each call's name and id; answers "placed".
+    struct Seen(Mutex<Vec<(String, String)>>);
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for Seen {
+        async fn execute(&self, call: &ToolCall, _m: &[Message]) -> Result<String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((call.name.clone(), call.id.clone()));
+            Ok("placed".into())
+        }
+    }
+
+    /// A step's hooks: answers `compress_and_store`, counts turns.
+    #[derive(Default)]
+    struct StepLike {
+        turns: Mutex<Vec<String>>,
+    }
+
+    impl LoopHooks for StepLike {
+        fn intercept(&self, call: &ToolCall) -> Option<String> {
+            (call.name == "compress_and_store").then(|| "stored".to_string())
+        }
+        fn on_turn(&self, turn: &TurnStats<'_>) {
+            assert!(turn.prompt_chars > 0 && turn.prompt_bytes >= turn.prompt_chars);
+            self.turns.lock().unwrap().push(turn.text.to_string());
+        }
+    }
+
+    fn loop_tools() -> [ToolDef; 2] {
+        [
+            ToolDef::new("order", "d", serde_json::json!({"type": "object"})),
+            ToolDef::new(
+                "compress_and_store",
+                "d",
+                serde_json::json!({"type": "object"}),
+            ),
+        ]
+    }
+
+    fn bare_context() -> EngineContext {
+        EngineContext {
+            workspace: None,
+            system_prompt: None,
+            bridge_tools: None,
+            max_tool_rounds: None,
+            max_mcp_result_chars: None,
+            mcp_servers: Vec::new(),
+        }
+    }
+
+    fn go() -> [Message; 1] {
+        [Message {
+            role: Role::User,
+            content: "go".into(),
+            tool_call_id: None,
+            tool_calls: None,
+        }]
+    }
+
+    /// At the round cap the engine gets one more call with no tools: the
+    /// loop ends in an answer, and the hooks see every turn. Step call ids
+    /// carry the step's prefix.
+    #[tokio::test]
+    async fn the_cap_ends_in_a_tool_less_answer_call() {
+        let engine = Looping {
+            compress: false,
+            offered: Mutex::new(Vec::new()),
+        };
+        let exec = Seen(Mutex::new(Vec::new()));
+        let hooks = StepLike::default();
+        let opts = LoopOpts {
+            max_tool_rounds: 2,
+            call_ids: "step:sess:s1".into(),
+            hooks: Some(&hooks),
+            ..test_opts()
+        };
+        let resp = collect_engine_response(
+            &engine,
+            &go(),
+            &loop_tools(),
+            &bare_context(),
+            Some(&exec),
+            &opts,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.text, "final");
+        assert_eq!(
+            *engine.offered.lock().unwrap(),
+            [2, 2, 0],
+            "last call: no tools"
+        );
+        assert_eq!(
+            *hooks.turns.lock().unwrap(),
+            ["working", "working", "final"]
+        );
+        let ran = exec.0.lock().unwrap();
+        assert_eq!(ran.len(), 2);
+        let shape = regex::Regex::new(r"^step:sess:s1:[0-9a-f]{32}:[01]:0:call_0$").unwrap();
+        assert!(ran.iter().all(|(_, id)| shape.is_match(id)), "{ran:?}");
+    }
+
+    /// An intercepted call never reaches the executor, the other calls of
+    /// its round still run, and the loop ends after that round.
+    #[tokio::test]
+    async fn an_intercepted_call_ends_the_loop_after_its_round() {
+        let engine = Looping {
+            compress: true,
+            offered: Mutex::new(Vec::new()),
+        };
+        let exec = Seen(Mutex::new(Vec::new()));
+        let hooks = StepLike::default();
+        let opts = LoopOpts {
+            hooks: Some(&hooks),
+            ..test_opts()
+        };
+        let resp = collect_engine_response(
+            &engine,
+            &go(),
+            &loop_tools(),
+            &bare_context(),
+            Some(&exec),
+            &opts,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.text, "working");
+        assert_eq!(engine.offered.lock().unwrap().len(), 1, "one engine turn");
+        let ran: Vec<String> = exec
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        assert_eq!(ran, ["order"]);
+        let runs: Vec<(&str, bool)> = resp
+            .tool_runs
+            .iter()
+            .map(|r| (r.name.as_str(), r.ok))
+            .collect();
+        assert_eq!(runs, [("compress_and_store", true), ("order", true)]);
     }
 
     #[tokio::test]

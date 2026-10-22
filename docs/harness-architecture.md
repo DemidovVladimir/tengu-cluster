@@ -1,13 +1,14 @@
 # Harness-Owned Orchestration + Memory — Architecture
 
 > **Historical snapshot (PR #6–#8, 2026-04) — banner refreshed 2026-10-09.** Current architecture: `docs/architecture-2026-04-27.md` (+ `.svg` picture, `.html` explorer); every file: `docs/code-map.md`; config: `docs/configuration.md`.
-> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). The flow below no longer runs as written. Corrected in place on 2026-10-02 and 2026-10-08: the file tables in § 3, the `build_orchestrator` signature in § 5, the eval dispatch in § 14.1. Still as of PR #8: the `tengu.toml` examples (§ 7, § 12), the line numbers in § 11, the sequence diagrams and cancel semantics (§ 4, § 10).
+> Doctrine here was replaced by "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" (`CLAUDE.md`). The flow below no longer runs as written. Corrected in place on 2026-10-02, 2026-10-08 and 2026-10-22: the file tables in § 3, the channel wiring in § 5, the eval dispatch in § 14.1. Still as of PR #8: the `tengu.toml` examples (§ 7, § 12), the line numbers in § 11, the sequence diagrams and cancel semantics (§ 2, § 4, § 10) — their `ChatWorker`, `MemoryInjector` / `MemoryWriter`, `prefetch_all` / `sync_all` steps are history (removed; the last of them 2026-10-22).
 
 | Then (this doc) | Now | Where |
 |---|---|---|
-| `OrchestratorAgentPlanner`: an orchestrator agent with one `memory_search` tool | `RagPlanner`: file registry `TENGU_PLANNER_REGISTRY.md` + `skills/orchestrator/SKILL.md`; the planner call gets no tools | `src/application/orchestrator/planner.rs` |
+| `OrchestratorAgentPlanner`: an orchestrator agent with one `memory_search` tool | `RagPlanner`: file registry `TENGU_PLANNER_REGISTRY.md` + `skills/orchestrator/SKILL.md`; `PlannerLlm::call` sends one message to the `[orchestrator] agent`'s engine — no tools, executor, bridge, `[[mcp_servers]]` or memory | `src/application/orchestrator/planner.rs` |
 | `ChatWorker` runs each step in-process | `SubprocessRunner` spawns `tengu run-agent` per step (IPC JSON over stdin / stdout) | `src/adapters/outbound/subprocess_runner.rs` → `src/adapters/inbound/cli/run_agent.rs` |
-| `MemoryInjector` / `MemoryWriter` around every step | only the planner-side `ChatOrchestratorPortImpl` uses them; durable memory = Postgres `agentic_memory` (feature `postgres_memory`) | `src/application/memory/`, `src/adapters/outbound/tools/agentic_memory/` |
+| `MemoryInjector` / `MemoryWriter` around every step | removed 2026-10-22 (with `MemoryProvider`, `BuiltinMemoryProvider`, `ChatOrchestratorPortImpl`); `MemoryManager` = the workspace vector store behind the memory tools; durable memory = Postgres `agentic_memory` (feature `postgres_memory`) | `src/application/memory/`, `src/adapters/outbound/tools/agentic_memory/` |
+| channel snapshot factory (`OrchestratorSnapshots`) feeds the planner turn | removed 2026-10-22: `bootstrap::orchestrator::planner_llm(config)` builds the planner's engine; `build_orchestrator(config, llm, session_id, trace)` | `src/bootstrap/orchestrator.rs` |
 | `tengu.toml` | one config per sandbox: `sandboxes/<name>/config.toml` (else `<TENGU_HOME>/config.toml`) | `docs/configuration.md` |
 | `workspace_tools = ["memory_search"]` | fails validation — `memory_search` is a base tool; subagents use `tools` + `description` | `src/domain/tools.rs::WORKSPACE_TOOLS` |
 | Qdrant vector backend | removed 2026-05-14; `DiskVectorStore` is the only `VectorStore` | `src/adapters/outbound/memory/disk_vector.rs` |
@@ -94,12 +95,12 @@ Each step dispatch:
 | `mod.rs` | `Orchestrator` struct. Public API: `new`, `handle`, `subscribe`, `cancel`. |
 | `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/mod.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
-| `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `leaves` (the executor joins parallel leaves). `single_leaf` is test-only; `validate` (cycles, single-leaf, known agents) is dead code since Phase 7.1 (`#[allow(dead_code)]`). |
+| `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `leaves` (the executor joins parallel leaves). `single_leaf` is test-only; `validate` (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles) runs in `replan::drive` before any step — an invalid plan replans. |
 | `planner.rs` | `RagPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
 | `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Waits 1 s, 3 s, then 9 s between attempts; emits `StepFailed` per attempt, `StepExhausted` at the end. |
 | `executor.rs` | `DagExecutor`. Parallel ready-set scheduling via `tokio::spawn`. Cancel or an exhausted step aborts every in-flight step (`abort_in_flight`). (`WorkerHandle` trait: `src/ports/orchestration.rs`.) |
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
-| `wiring.rs` | `ChatOrchestratorPortImpl` (planner LLM port). The `ChatServiceFactory` trait lives in `src/ports/orchestration.rs`. `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`src/adapters/outbound/subprocess_runner.rs`) is the only `WorkerHandle`. |
+| `wiring.rs` | Removed 2026-10-22 (`ChatOrchestratorPortImpl`); the planner calls its engine through `PlannerLlm` (`planner.rs`). `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`src/adapters/outbound/subprocess_runner.rs`) is the only `WorkerHandle`. |
 | `roster.rs` | Removed (Phase 7.1) — roster is rendered to `TENGU_PLANNER_REGISTRY.md` by `shared_files.rs`. |
 | `telemetry.rs` | Removed — see `src/domain/metrics.rs`. |
 
@@ -108,12 +109,12 @@ Each step dispatch:
 | File | What it does |
 |---|---|
 | `mod.rs` | Module root. |
-| `provider.rs` | Moved: the `MemoryProvider` trait (Hermes-shaped: `is_available`, `initialize`, `system_prompt_block`, `prefetch(agent, query)`, `sync_turn(agent, user, asst)`, `shutdown`) lives in `src/ports/memory.rs`. |
-| `builtin.rs` | Moved to `src/adapters/outbound/memory/builtin.rs`: `BuiltinMemoryProvider` — always-registered; vector-searches on prefetch (top 5 for the agent). Its AGENTS.md + MEMORY.md + identity files + daily-log loader runs only from `initialize`, which only tests call. |
-| `manager.rs` | `MemoryManager` — holds one builtin + at most one external. Exposes `prefetch_all`, `sync_all`, `ingest_one`, `ingest_batch`, `search`, `set_vector_backend`, `clear_all`, `stats`. |
-| `injector.rs` | `for_turn(mgr, agent, query) -> PinnedMemoryBlock`. Since Phase 7.1 only the planner-side `ChatOrchestratorPortImpl` calls it. |
-| `writer.rs` | `sync_turn` — spawns a detached task for post-turn writes. Never blocks the user reply. Same Phase 7.1 note. |
-| `fencing.rs` | `<memory-context>` block building + sanitization (nested fences stripped defensively). |
+| `provider.rs` | Removed 2026-10-22: the `MemoryProvider` trait (moved to `src/ports/memory.rs` earlier) is gone. |
+| `builtin.rs` | Removed 2026-10-22: `BuiltinMemoryProvider` (`src/adapters/outbound/memory/builtin.rs`), incl. its never-wired AGENTS.md / MEMORY.md / daily-log loader. |
+| `manager.rs` | `MemoryManager` — the workspace vector backend (embedder + `DiskVectorStore`) behind the memory tools: `ingest_one`, `ingest_batch`, `search`, `delete_entry`, `set_vector_backend`, `clear_all`, `stats`. |
+| `injector.rs` | Removed 2026-10-22 (`MemoryInjector` / `for_turn`). |
+| `writer.rs` | Removed 2026-10-22 (`MemoryWriter` / `sync_turn`). |
+| `fencing.rs` | `<memory-context>` block building + sanitization (nested fences stripped defensively). Kept, not called yet. |
 | `context_block.rs` | Moved: `PinnedMemoryBlock`, `ChunkMetadata`, `MemoryHit` live in `src/domain/memory.rs`. |
 | `vector.rs` | Moved: the `VectorStore` trait lives in `src/ports/memory.rs`. |
 | `vector/disk.rs` | Moved to `src/adapters/outbound/memory/disk_vector.rs`: `DiskVectorStore` — bincode on disk, the only `VectorStore`. |
@@ -128,7 +129,7 @@ LLM-callable memory tools live in `src/adapters/outbound/tools/memory/` and go t
 | `memory_search` | `outbound/tools/memory/search.rs` | Targeted vector read mid-turn. |
 | `persistent_store` | `outbound/tools/memory/persistent_store.rs` | Chunked file storage with vector semantic search (files under `<workspace>/.tengu/storage/`; opt-in). |
 
-Pre-turn retrieval and post-turn writes were ALSO automatic through `MemoryInjector` / `MemoryWriter` in this design — the LLM-callable tools are a complement, not the only path. Today plan steps run in `tengu run-agent` subprocesses and only the planner-side port uses the injector / writer.
+Pre-turn retrieval and post-turn writes were ALSO automatic through `MemoryInjector` / `MemoryWriter` in this design — the LLM-callable tools are a complement, not the only path. Today plan steps run in `tengu run-agent` subprocesses and the injector / writer are gone (2026-10-22); in-process chat still prepends `[Relevant memories]` (`application/chat/service.rs`).
 
 ---
 
@@ -187,11 +188,22 @@ and draft a reply to legal."
 
 ---
 
-## 5. Channel wiring (the `ChatServiceFactory` shared-snapshot pattern)
+## 5. Channel wiring
 
-The problem: `ChatRuntimeService<'a>` is lifetime-parameterized with 14 borrowed fields and bound to one agent at construction. It can't live behind `Arc`, and the orchestrator needs to dispatch to any agent per step.
+> **Now (2026-10-22):** the snapshot pattern below is history. The planner holds an engine, not a chat service: `bootstrap::orchestrator::planner_llm(config) -> anyhow::Result<Option<PlannerLlm>>` builds the `[orchestrator] agent`'s engine (`None` without `[orchestrator]`; an error for a missing agent block or an engine that does not build), and `build_orchestrator(config, llm, session_id, trace) -> Option<Orchestrator>` wires `RagPlanner` + `SubprocessRunner` (`session_id` from `resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — `tengu webhooks` mints `webhook-<name>-<uuid>` per request instead; shared by `RagPlanner` and `SubprocessRunner`). Steps are `tengu run-agent` children, so no channel builds per-agent inputs for them.
+>
+> | Surface | Builds `PlannerLlm` | On error |
+> |---|---|---|
+> | TUI, Telegram | once at startup | refuses to start |
+> | webhook planner endpoint, decision-loop escalation | per turn | warn, skip; the listener never fails |
+> | eval | per orchestrated row | — |
+> | A2A | per planner turn | — |
+>
+> Removed 2026-10-22: `OrchestratorSnapshots`, `snapshots_inputs_fn`, `clone_chat_turn_inputs`, `planner_inputs_if_other`, the webhook / eval / A2A chat-service factories. `ChatServiceFactory` (`src/ports/orchestration.rs`, `run_turn(agent, text)`) stays for `tengu evolve` only (`RuntimeChatServiceFactory`, `build_cli_chat_factory`).
 
-The solution in `bootstrap/`:
+The old problem: `ChatRuntimeService<'a>` is lifetime-parameterized with 14 borrowed fields and bound to one agent at construction. It can't live behind `Arc`, and the orchestrator needed to dispatch to any agent per step.
+
+The old solution in `bootstrap/` (history):
 
 ```
 OrchestratorSnapshots = Arc<RwLock<HashMap<agent, ChatTurnInputs>>>
@@ -212,16 +224,15 @@ OrchestratorSnapshots = Arc<RwLock<HashMap<agent, ChatTurnInputs>>>
                              borrowing into the snapshot, calls process_user_text.
 ```
 
-Helpers in `bootstrap/`:
+Helpers in `bootstrap/` today:
 
-- `ChatInputsFn = Arc<dyn Fn(&str) -> Result<ChatTurnInputs> + Send + Sync>` — the closure shape.
-- `RuntimeChatServiceFactory::new(inputs_fn)` — impl of the `ChatServiceFactory` trait.
-- `snapshots_inputs_fn(snapshots: OrchestratorSnapshots) -> ChatInputsFn` — returns a closure that reads from the shared map.
-- `build_orchestrator(config, factory, memory, session_id) -> Option<Orchestrator>` — builds the full stack (`session_id` from `resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — `tengu webhooks` mints `webhook-<name>-<uuid>` per request instead; shared by `RagPlanner` and `SubprocessRunner`).
+- `planner_llm(config)` — the planner's `PlannerLlm { engine, agent }`.
+- `build_orchestrator(config, llm, session_id, trace) -> Option<Orchestrator>` — builds the full stack.
+- `RuntimeChatServiceFactory` (`build_cli_chat_factory`) — the `ChatServiceFactory` impl `tengu evolve` uses.
 
-**Telegram** (`adapters/inbound/telegram.rs`): `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. Writes snapshots for every agent, awaits `handle`, sends the reply chunked + secret-redacted.
+**Telegram** (`adapters/inbound/telegram.rs`): holds `planner_llm: Option<PlannerLlm>`; `execute_orchestrator_turn` is called when orchestrator is configured AND the user did NOT `@role:`-route explicitly. It gets the sender's orchestrator (`orchestrator_for`, built on first use), awaits `handle`, sends the reply chunked + secret-redacted. No snapshots, no per-message skill reload on this path (the plain chat path still reloads skills).
 
-**TUI** (`tui/mod.rs`): engine thread promotes `Box<dyn Engine>` → `Arc<dyn Engine>`. The `ChatRequest::UserMessage` branch writes snapshots, runs `rt.block_on(orch.handle(text))`, marks `tools_dirty = true` so the next direct-dispatch turn rebuilds its executor.
+**TUI** (`tui/mod.rs`): builds the orchestrator at startup from `planner_llm`; the `ChatRequest::UserMessage` branch runs `rt.block_on(orch.handle(text))`.
 
 **Known gap:** `@role:` explicit routing bypasses the orchestrator and goes direct-dispatch. Multi-agent "Recent Team Activity" injection is preserved only on the direct path.
 
@@ -254,7 +265,7 @@ max_replans = 2                  # tier 2: planner re-invocation budget
 [agents.orchestrator]
 engine = "openrouter"
 model = "anthropic/claude-haiku-4-5"
-# planner turn: tools are stripped (bootstrap::orchestrator::run_turn_with_system)
+# planner call has no tools (application::orchestrator::planner::PlannerLlm::call)
 [agents.orchestrator.identity]
 instructions = """
 You decompose user requests into plans of steps dispatched to specialist agents.
@@ -336,7 +347,7 @@ All six limitations originally noted at the time of the four-PR merge have been 
 
 5. **`@role:` explicit routing.** ✅ Configurable. New `OrchestratorConfig.route_explicit_agents` (default `false`) preserves the direct-dispatch escape hatch; set `true` to route explicit targets through the orchestrator so the planner sees the request and can honor or override.
 
-6. **Cross-agent Recent Team Activity.** ✅ Fixed. `execute_orchestrator_turn` injects `build_activity_context(&self.activity_log, agent_id)` into each per-agent snapshot's system prompt — same as the direct dispatch path.
+6. **Cross-agent Recent Team Activity.** ✅ Fixed then (`execute_orchestrator_turn` injected `build_activity_context` into each per-agent snapshot). Snapshots removed 2026-10-22: plan steps are `run-agent` children; the activity block stays on the direct dispatch path.
 
 ---
 
@@ -410,7 +421,7 @@ Note: the turn future is dropped mid-step: a running `run-agent` child is killed
 
 When the TL;DR isn't enough. Follow these paths in order.
 
-> Stale as of 2026-10-02: the line numbers below are from the PR #8 tree, and `ChatWorker` / `OrchestratorAgentPlanner` no longer exist. The functions `route_and_chat`, `execute_chat_turn` and `execute_orchestrator_turn` are still in `src/adapters/inbound/telegram.rs`. Current end-to-end trace: `docs/architecture-2026-04-27.md` § 5.
+> Stale as of 2026-10-02: the line numbers below are from the PR #8 tree, and `ChatWorker` / `OrchestratorAgentPlanner` no longer exist; `OrchestratorChatPort`, `ChatOrchestratorPortImpl`, the per-agent snapshots, `injector` / `writer` and `prefetch_all` / `sync_all` were removed 2026-10-22 (the planner calls `PlannerLlm::call`). The functions `route_and_chat`, `execute_chat_turn` and `execute_orchestrator_turn` are still in `src/adapters/inbound/telegram.rs`. Current end-to-end trace: `docs/architecture-2026-04-27.md` § 5.
 
 ### 11.1 A user message arrives in Telegram
 
@@ -484,8 +495,8 @@ Explicit ingest path (if the LLM calls `memory_ingest`):
 2. Ensure `OPENROUTER_API_KEY` (or equivalent for your engine) is set.
 3. Ensure a default agent exists (`default = true` on one of `[agents.*]`).
 4. Restart the binary. On startup logs:
-   - `"TUI orchestrator constructed with per-turn snapshot factory"` — TUI.
-   - `"Telegram orchestrator constructed with per-message snapshot factory"` — Telegram.
+   - `"TUI orchestrator constructed"` — TUI.
+   - `"Telegram orchestration on: one orchestrator per sender, built on first message"` — Telegram (then `"Telegram orchestrator built for sender"` per sender).
 5. Send a user message. First-turn overhead is ~1 extra LLM call (the planner).
 
 ### 12.2 Disabling orchestration
@@ -501,7 +512,7 @@ Checklist:
 - Channel is Telegram or TUI? Other adapters (if any) don't yet wire orchestrator.
 
 Logs to grep for:
-- `"TUI orchestrator constructed"` / `"Telegram orchestrator constructed"` — confirms construction at startup.
+- `"TUI orchestrator constructed"` / `"Telegram orchestration on"` — confirms construction at startup.
 - `"orch: plan created"` — confirms a plan was built on a message.
 - `"orch: ▶ <step> [<agent>]"` — confirms a step fired.
 - `"orch: ↻ replan — <reason>"` (TUI bubble) / `"orch ReplanTriggered"` (Telegram log) — step exhausted, planner re-invoked.
@@ -510,7 +521,7 @@ Logs to grep for:
 
 Memory is automatic IF `build_memory_manager` returned `Some` at startup. Preconditions:
 - `[memory] enabled = true` in `tengu.toml` (default yes).
-- `OPENROUTER_API_KEY` set (the embedder needs it — even the BuiltinMemoryProvider requires it for `prefetch`).
+- `OPENROUTER_API_KEY` set (the embedder needs it for the memory tools and the chat `[Relevant memories]` recall).
 - `<workspace>/memory/` is writable. Disk store creates it on first write.
 
 Logs:
@@ -547,12 +558,11 @@ For future work, the harness is explicitly designed to accept extensions at thes
 
 | Extension | Interface | Typical use |
 |---|---|---|
-| New channel (Slack, Discord, HTTP API) | Implement `ChatInputsFn` closure + call `build_orchestrator` | Wiring a new IM/API endpoint into the same orchestration flow |
+| New channel (Slack, Discord, HTTP API) | `planner_llm(config)` + `build_orchestrator(config, llm, session_id, trace)` | Wiring a new IM/API endpoint into the same orchestration flow |
 | New memory backend | `impl VectorStore` (and register via `MemoryManager::set_vector_backend`) | Swap legacy vector DB for Pinecone, or add an in-memory mock for tests |
-| External memory provider (LangMem, Letta, Mem0) | `impl MemoryProvider` + `MemoryManager::add_provider` | Layer semantic-memory products over the builtin store |
-| Custom orchestrator (rules-based, cheaper) | `impl Planner` instead of `OrchestratorAgentPlanner` | Skip LLM planner calls for recognized patterns |
+| Custom orchestrator (rules-based, cheaper) | `impl Planner` instead of `RagPlanner` | Skip LLM planner calls for recognized patterns |
 | Custom worker handle (delegate to remote cluster, Modal, etc.) | `impl WorkerHandle` | Fan work out to hosted inference instead of local engine |
-| Replay / deterministic test | `impl ChatServiceFactory` with scripted responses | Golden-test orchestration flows without live LLM calls |
+| Replay / deterministic test | `PlannerLlm` over a scripted `impl Engine` | Golden-test orchestration flows without live LLM calls |
 
 Each interface is ≤10 methods and documented in its defining file.
 
@@ -576,7 +586,7 @@ All pass under `cargo test --bin tengu <filter>` with narrow filters (per projec
 `tengu eval <skill>` has two dispatch paths in `src/adapters/inbound/eval.rs::run_row`:
 
 - **Direct** (default): row prompt → default agent's `collect_engine_response`. Used by config files without an `[orchestrator]` block — `skills/<name>/evals/config.toml`.
-- **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle` (`run_row_via_orchestrator`). `build_orchestrator` wires `SubprocessRunner`, so each worker step runs as a real `tengu run-agent` child; `EvalChatServiceFactory` serves the planner turn only, so the row's stubs and observer tap reach the planner, not the steps (steps' metrics cross the IPC boundary). Used by `skills/orchestration-e2e/evals/config.toml`.
+- **Orchestrator** (when `cfg.orchestrator.is_some()`): row prompt → `Orchestrator::handle` (`run_row_via_orchestrator`), with a `PlannerLlm` built per row. `build_orchestrator` wires `SubprocessRunner`, so each worker step runs as a real `tengu run-agent` child; row stubs do not reach the steps. The judge's observations are the orchestrator's events (plan, steps, replans) via `RowObserver`; tokens are the row session's `metrics.recorded` records. Used by `skills/orchestration-e2e/evals/config.toml`.
 
 Both paths produce the same `RowResult` shape for the judge; the final text is the plan's leaf output (parallel leaves joined).
 

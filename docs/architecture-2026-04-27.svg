@@ -107,9 +107,9 @@
   <g transform="translate(260, 150)">
     <rect width="240" height="66" rx="6" class="lane-orch" />
     <text x="10" y="18" class="h3">2. Bootstrap → Orchestrator</text>
-    <text x="10" y="34" class="body">build_orchestrator(.., session_id)</text>
+    <text x="10" y="34" class="body">planner_llm + build_orchestrator</text>
     <text x="10" y="48" class="file">bootstrap/orchestrator.rs</text>
-    <text x="10" y="60" class="file">  ChatOrchestratorPortImpl</text>
+    <text x="10" y="60" class="file">  PlannerLlm → engine</text>
   </g>
   <path d="M 505 183 L 535 183" class="arrow" marker-end="url(#ah)" />
 
@@ -192,21 +192,21 @@
     <rect x="0" y="0" width="224" height="22" rx="6" class="pill-mem" />
     <text x="10" y="15" class="pt">memory  -  across layers</text>
     <text x="10" y="40" class="file">ports/memory.rs</text>
-    <text x="10" y="52" class="small">VectorStore, MemoryProvider, Embedding,</text>
-    <text x="10" y="64" class="small">MemoryService, RecallStore traits</text>
+    <text x="10" y="52" class="small">VectorStore, Embedding, MemoryService,</text>
+    <text x="10" y="64" class="small">RecallStore traits</text>
     <text x="10" y="86" class="file">domain/memory.rs</text>
     <text x="10" y="98" class="small">RecallHit, DEFAULT_EMBEDDING_MODEL</text>
     <text x="10" y="120" class="file">application/memory/manager.rs</text>
-    <text x="10" y="132" class="small">MemoryManager - provider holder</text>
-    <text x="10" y="154" class="file">application/memory/</text>
-    <text x="10" y="166" class="small">injector · writer · fencing</text>
-    <text x="10" y="178" class="small">used by ChatOrchestratorPortImpl only</text>
+    <text x="10" y="132" class="small">MemoryManager - vector backend</text>
+    <text x="10" y="154" class="file">application/memory/fencing.rs</text>
+    <text x="10" y="166" class="small">&lt;memory-context&gt; helpers</text>
+    <text x="10" y="178" class="small">(not called yet)</text>
     <text x="10" y="200" class="file">outbound/memory/disk_vector.rs</text>
     <text x="10" y="212" class="small">DiskVectorStore - the only VectorStore</text>
     <text x="10" y="234" class="file">outbound/memory/embedder.rs</text>
     <text x="10" y="246" class="small">OpenRouter text-embedding-3-small</text>
-    <text x="10" y="268" class="file">outbound/memory/builtin.rs</text>
-    <text x="10" y="280" class="small">BuiltinMemoryProvider (vector prefetch)</text>
+    <text x="10" y="268" class="file">application/chat/service.rs</text>
+    <text x="10" y="280" class="small">chat [Relevant memories] recall</text>
     <text x="10" y="302" class="file">bootstrap/memory.rs</text>
     <text x="10" y="314" class="small">builds the MemoryManager</text>
   </g>
@@ -290,9 +290,9 @@
     <rect x="0" y="0" width="224" height="22" rx="6" class="pill-orc" />
     <text x="10" y="15" class="pt">application/orchestrator/</text>
     <text x="10" y="40" class="file">mod.rs</text>
-    <text x="10" y="52" class="small">Orchestrator: handle / cancel</text>
+    <text x="10" y="52" class="small">Orchestrator: handle / subscribe</text>
     <text x="10" y="72" class="file">planner.rs</text>
-    <text x="10" y="84" class="small">RagPlanner (the only Planner impl)</text>
+    <text x="10" y="84" class="small">RagPlanner + PlannerLlm (no hands)</text>
     <text x="10" y="96" class="small">parse_verdict (4-path cascade)</text>
     <text x="10" y="108" class="small">cross-session + session-output recall</text>
     <text x="10" y="128" class="file">domain/plan.rs</text>
@@ -302,12 +302,12 @@
     <text x="10" y="192" class="file">retry.rs</text>
     <text x="10" y="204" class="small">RetryPolicy (3 attempts default)</text>
     <text x="10" y="224" class="file">replan.rs</text>
-    <text x="10" y="236" class="small">drive() loop - replan on exhausted</text>
+    <text x="10" y="236" class="small">drive(): validate, replan on fail</text>
     <text x="10" y="256" class="file">events.rs</text>
     <text x="10" y="268" class="small">OrchestratorEvent + EventBus:</text>
     <text x="10" y="280" class="small">PlanCreated, StepStarted, RagQueried,</text>
     <text x="10" y="292" class="small">MetricsRecorded</text>
-    <text x="10" y="312" class="file">shared_files.rs · wiring.rs · trace.rs</text>
+    <text x="10" y="312" class="file">shared_files.rs · trace.rs</text>
   </g>
 
   <!-- ===================== SECTION 3 — stores ===================== -->
@@ -398,9 +398,9 @@
     <rect width="575" height="115" rx="6" class="panel" />
     <text x="10" y="18" class="h3">A. Doctrine: LLM = heart, Open Brain + LLM Wiki = brain, tools = hands</text>
     <text x="10" y="36" class="small">Planner does ONE thing - pick the right agent. It uses the orchestrator SKILL.md as its system prompt;</text>
-    <text x="10" y="50" class="small">tools, tool executor, memory and grounding are stripped on this call. Subagents do the actual work in</text>
+    <text x="10" y="50" class="small">PlannerLlm::call sends one message: no tools, executor, bridge or memory. Subagents do the work in</text>
     <text x="10" y="64" class="small">their own subprocess. Strict boundary: the planner reasons over a roster, a subagent executes a step.</text>
-    <text x="10" y="98" class="file">bootstrap/orchestrator.rs::RuntimeChatServiceFactory::run_turn_inner  (planner-side strip)</text>
+    <text x="10" y="98" class="file">application/orchestrator/planner.rs::PlannerLlm::call  (nothing to strip)</text>
   </g>
 
   <g transform="translate(605, 1332)">

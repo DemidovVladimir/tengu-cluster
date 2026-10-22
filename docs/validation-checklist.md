@@ -38,7 +38,7 @@ ls src/application/memory/
 ls src/adapters/outbound/memory/
 ```
 
-**Expect:** `fencing.rs`, `injector.rs`, `manager.rs`, `mod.rs`, `writer.rs` + `outbound/memory/{builtin.rs,disk_vector.rs,embedder.rs,mod.rs}` (ports in `src/ports/memory.rs`). No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/outbound/tools/agentic_memory/`).
+**Expect:** `fencing.rs`, `manager.rs`, `mod.rs` + `outbound/memory/{disk_vector.rs,embedder.rs,mod.rs}` (ports in `src/ports/memory.rs`). No `qdrant.rs` (removed Phase 6; Postgres `agentic_memory` lives in `src/adapters/outbound/tools/agentic_memory/`). No `injector.rs`, `writer.rs`, `builtin.rs` (removed 2026-10-22).
 
 ### 1.2 Orchestrator subsystem files exist
 
@@ -46,7 +46,7 @@ ls src/adapters/outbound/memory/
 ls src/application/orchestrator/
 ```
 
-**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `wiring.rs` (the plan types live in `src/domain/plan.rs`). No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1). The worker lives outside the module: `src/adapters/outbound/subprocess_runner.rs` (`SubprocessRunner`).
+**Expect:** `events.rs`, `executor.rs`, `mod.rs`, `planner.rs`, `replan.rs`, `retry.rs`, `shared_files.rs`, `trace.rs` (the plan types live in `src/domain/plan.rs`). No `config.rs`, `roster.rs`, `telemetry.rs` (removed Phase 7.1), no `wiring.rs` (removed 2026-10-22: the planner calls its engine through `PlannerLlm` in `planner.rs`). The worker lives outside the module: `src/adapters/outbound/subprocess_runner.rs` (`SubprocessRunner`).
 
 ### 1.3 Legacy files are gone
 
@@ -84,7 +84,7 @@ ls src/adapters/outbound/tools/memory/
 rg -n 'LLM = heart' CLAUDE.md docs/architecture-2026-04-27.md
 ```
 
-**Expect:** hits. The doctrine is "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — enforced in `bootstrap::orchestrator::run_turn_with_system` (planner turn strips tools/memory/grounding).
+**Expect:** hits. The doctrine is "LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" — enforced by structure: the planner holds an engine, not a chat service (`application/orchestrator/planner.rs::PlannerLlm::call` — one message, no tools, executor, bridge, `[[mcp_servers]]` or memory; test `planner_call_has_no_hands_and_reports_usage`).
 
 ### 1.7 No legacy types leak into production code
 
@@ -224,7 +224,7 @@ git check-ignore -v skills/skill-creator/metrics/runs/ 2>&1
 
 ## 5. TUI smoke — channel wiring (manual, ~10 minutes, ~$0.20)
 
-The eval path has its own `EvalChatServiceFactory`. This tests the real TUI path through `RuntimeChatServiceFactory` + `snapshots_inputs_fn`.
+This tests the real TUI path: `planner_llm` + `build_orchestrator` at startup, then `orchestrator.handle` per message (the planner calls its engine through `PlannerLlm`; steps are `tengu run-agent` children).
 
 ### 5.1 Setup
 
@@ -248,10 +248,10 @@ mkdir -p sandboxes/smoke && cp config.example.toml sandboxes/smoke/config.toml
 
 **Expected log lines (`RUST_LOG=tengu=info`, from a separate terminal):**
 - `orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner`
-- `TUI orchestrator constructed with per-turn snapshot factory`
+- `TUI orchestrator constructed`
 - `DiskVectorStore loaded` with `entries=0` on first boot (`[memory] enabled = true`)
 
-**If missing:** orchestrator didn't construct. Check `[orchestrator]` block (`agent` names an `[agents.*]` block, `engine = "rag"`) + default agent present.
+**If missing:** orchestrator didn't construct. Check `[orchestrator]` block (`engine = "rag"`) + default agent present. An `agent` with no `[agents.*]` block, or an engine that does not build, stops `tengu chat` at startup (`planner_llm`).
 
 ### 5.3 Sanity prompts
 
@@ -305,7 +305,7 @@ What's my favorite HTTP status code?
 
 **Pass:** reply contains `418`.
 
-**Fail:** reply says "I don't have that information" → `DiskVectorStore` isn't persisting (check `<workspace>/memory/vectors.bin` exists and has non-zero size between sessions), or nothing searched it: in orchestrated mode the planner turn skips disk-memory injection (`ChatOrchestratorPortImpl::run_orchestrator_turn_with_system`), so recall needs a worker step calling `memory_search`, or Postgres `agentic_memory` (`--features postgres_memory`, `[memory] within_session_output_top_k`).
+**Fail:** reply says "I don't have that information" → `DiskVectorStore` isn't persisting (check `<workspace>/memory/vectors.bin` exists and has non-zero size between sessions), or nothing searched it: in orchestrated mode the planner never reads disk memory (`PlannerLlm::call` has no memory), so recall needs a worker step calling `memory_search`, or Postgres `agentic_memory` (`--features postgres_memory`, `[memory] within_session_output_top_k`).
 
 ---
 
@@ -325,7 +325,7 @@ export TELEGRAM_BOT_TOKEN=...
 ./target/release/tengu telegram --sandbox smoke
 ```
 
-Same log expectations as §5.2 but with `Telegram orchestrator constructed with per-message snapshot factory`.
+Same log expectations as §5.2 but with `Telegram orchestration on: one orchestrator per sender, built on first message` (then `Telegram orchestrator built for sender` on the first message).
 
 Send the sequential prompt from §5.4 via Telegram. Verify the `/stop` command actually interrupts a mid-run plan: send a long multi-step prompt, wait for the first step-started status message, then send `/stop`. Expect `⏹ Stopped.` reply within 1 second; the step's `run-agent` child is killed.
 
@@ -362,7 +362,7 @@ Known gaps (documented in `docs/harness-architecture.md` §9):
 - **Concurrent multi-user sessions** — only one orchestrator session per test.
 - **Postgres `agentic_memory`** — needs `--features postgres_memory` + `TENGU_MEMORY_DATABASE_URL`; not exercised here (ignored `postgres_*_smoke` tests cover it).
 - **Tor egress** — sections above run with `make tor` or `[egress] network = "open"`; `tengu doctor --tor` is the only live exit check.
-- **Eval stubs vs subprocess workers** — row `stubs` reach the planner turn (`EvalChatServiceFactory`) only; worker steps are real `tengu run-agent` children.
+- **Eval stubs vs subprocess workers** — in an orchestrated row, `stubs` reach neither the planner (`PlannerLlm`, no tools) nor the steps (real `tengu run-agent` children); the judge sees the orchestrator's events via `RowObserver`.
 - **5+ step plans** — `prompts.yaml` tops out at 4 steps (diamond).
 - **Mid-step LLM streaming cancellation** — `/stop` between steps is tested; mid-LLM-call cancel is not.
 - **Live `local` engine legs** — run only on the operator's PC (`TENGU_MATRIX_LOCAL_BASE_URL`); never start a local model on the dev Mac.

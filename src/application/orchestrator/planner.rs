@@ -2,10 +2,69 @@
 
 use async_trait::async_trait;
 
+use crate::config::AgentConfig;
+use crate::domain::message::{Message, Role};
 use crate::domain::plan::Plan;
-use crate::ports::orchestration::{OrchestratorChatPort, Planner, PlannerVerdict};
+use crate::ports::engine::{Engine, EngineContext};
+use crate::ports::orchestration::{Planner, PlannerVerdict, TurnTelemetry};
 
 use std::sync::Arc;
+
+/// The planner's one LLM call: the `[orchestrator] agent`'s engine, the
+/// planner prompt as system prompt, the assembled planner message as the
+/// only message — and nothing else: no tools, no tool executor, no bridge,
+/// no `[[mcp_servers]]`, no memory, no history. The planner holds an engine,
+/// not a chat service, so "the planner has no hands" (doctrine 1) is
+/// structural, and every surface (chat, Telegram, webhooks, eval, A2A) runs
+/// the same call with the same telemetry.
+#[derive(Clone)]
+pub struct PlannerLlm {
+    pub engine: Arc<dyn Engine>,
+    /// `[agents.<orchestrator.agent>]`: its model, workspace and limits.
+    pub agent: Arc<AgentConfig>,
+}
+
+impl PlannerLlm {
+    pub async fn call(
+        &self,
+        system_prompt: &str,
+        text: &str,
+    ) -> anyhow::Result<(String, TurnTelemetry)> {
+        let started = std::time::Instant::now();
+        let limits = &self.agent.limits;
+        let context = EngineContext {
+            workspace: self.agent.workspace.clone(),
+            system_prompt: Some(system_prompt.to_string()),
+            bridge_tools: None,
+            max_tool_rounds: Some(limits.max_tool_rounds),
+            max_mcp_result_chars: Some(limits.max_mcp_result_chars),
+            mcp_servers: Vec::new(),
+        };
+        let messages = [Message {
+            role: Role::User,
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+        }];
+        let resp = crate::application::chat::tool_loop::collect_engine_response(
+            self.engine.as_ref(),
+            &messages,
+            &[],
+            &context,
+            None,
+            &crate::application::chat::tool_loop::LoopOpts::from_limits(limits),
+        )
+        .await?;
+        let telemetry = TurnTelemetry {
+            prompt_tokens: resp.input_tokens_delta,
+            completion_tokens: resp.output_tokens_delta,
+            model: self.agent.model.clone(),
+            latency_ms: started.elapsed().as_millis() as u64,
+            response_chars: resp.text.chars().count() as u32,
+        };
+        Ok((resp.text, telemetry))
+    }
+}
 
 /// Parse the orchestrator LLM's response into a [`PlannerVerdict`].
 ///
@@ -150,7 +209,7 @@ struct RegistryHit {
 
 pub struct RagPlanner {
     orchestrator_agent: String,
-    chat: Arc<dyn OrchestratorChatPort>,
+    llm: PlannerLlm,
     memory_config: crate::config::MemoryConfig,
     /// Routable subagents (`[agents.*]` blocks with a `description`),
     /// rendered into `TENGU_PLANNER_REGISTRY.md` every planner turn.
@@ -194,7 +253,7 @@ pub struct RagPlanner {
 impl RagPlanner {
     pub fn new(
         orchestrator_agent: String,
-        chat: Arc<dyn OrchestratorChatPort>,
+        llm: PlannerLlm,
         memory_config: crate::config::MemoryConfig,
         agents: Vec<(String, crate::config::AgentConfig)>,
         tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
@@ -217,7 +276,7 @@ impl RagPlanner {
         });
         Self {
             orchestrator_agent,
-            chat,
+            llm,
             memory_config,
             agents,
             workspace: std::env::current_dir().unwrap_or_default(),
@@ -579,14 +638,7 @@ impl Planner for RagPlanner {
             crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
-        let (raw, telemetry) = self
-            .chat
-            .run_orchestrator_turn_with_system_metered(
-                &self.orchestrator_agent,
-                &self.system_prompt,
-                &combined,
-            )
-            .await?;
+        let (raw, telemetry) = self.llm.call(&self.system_prompt, &combined).await?;
         emit_planner_metrics(
             "plan",
             &self.session_id,
@@ -700,14 +752,7 @@ impl Planner for RagPlanner {
             crate::domain::metrics::MetricsLayer::from_text("user_message", user_message),
         ];
 
-        let (raw, telemetry) = self
-            .chat
-            .run_orchestrator_turn_with_system_metered(
-                &self.orchestrator_agent,
-                &self.system_prompt,
-                &context,
-            )
-            .await?;
+        let (raw, telemetry) = self.llm.call(&self.system_prompt, &context).await?;
         emit_planner_metrics(
             "replan",
             &self.session_id,
@@ -734,7 +779,7 @@ fn emit_planner_metrics(
     combined_prompt: &str,
     system_prompt: &str,
     layers: Vec<crate::domain::metrics::MetricsLayer>,
-    telemetry: &crate::ports::orchestration::TurnTelemetry,
+    telemetry: &TurnTelemetry,
     raw_response: &str,
 ) {
     let prompt_chars = (combined_prompt.chars().count() + system_prompt.chars().count()) as u32;
@@ -855,6 +900,30 @@ fn emit_rag_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The planner's call has no hands on any surface: no tools, no bridge,
+    /// no `[[mcp_servers]]`; the planner prompt is the system prompt, the
+    /// assembled message the only message, and the engine's usage is the
+    /// telemetry (webhook and eval planner turns used to drop both).
+    #[tokio::test]
+    async fn planner_call_has_no_hands_and_reports_usage() {
+        let engine = testkit::TextEngine::new("{\"kind\":\"direct\",\"response\":\"hi\"}", 0);
+        let llm = testkit::llm(engine.clone());
+        let (text, telemetry) = llm.call("PLANNER PROMPT", "the message").await.unwrap();
+        assert!(text.contains("\"direct\""));
+        assert_eq!(
+            (telemetry.prompt_tokens, telemetry.completion_tokens),
+            (100, 7)
+        );
+        assert_eq!(telemetry.model, "stub/planner");
+        let seen = engine.calls.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        let s = &seen[0];
+        assert_eq!((s.tools, s.bridge_tools, s.mcp_servers), (0, None, 0));
+        assert_eq!(s.system_prompt.as_deref(), Some("PLANNER PROMPT"));
+        assert_eq!(s.messages.len(), 1);
+        assert_eq!(s.messages[0].content, "the message");
+    }
     use crate::domain::plan::StepId;
 
     #[test]
@@ -937,6 +1006,104 @@ mod tests {
         match v {
             PlannerVerdict::Direct { response } => assert_eq!(response, r#"{"embedded": true}"#),
             _ => panic!(),
+        }
+    }
+}
+
+/// A stub planner engine for tests on any surface.
+#[cfg(test)]
+pub(crate) mod testkit {
+    use super::PlannerLlm;
+    use crate::domain::message::{Message, ModelInfo, StreamEvent, ToolDef};
+    use crate::ports::engine::{Engine, EngineContext};
+    use std::sync::{Arc, Mutex};
+
+    /// What one call was given.
+    #[derive(Debug, Clone)]
+    pub(crate) struct Seen {
+        pub tools: usize,
+        pub bridge_tools: Option<usize>,
+        pub mcp_servers: usize,
+        pub system_prompt: Option<String>,
+        pub messages: Vec<Message>,
+    }
+
+    /// Answers every call with `text` (usage 100 in / 7 out) after
+    /// `delay_ms`, recording what it was given.
+    pub(crate) struct TextEngine {
+        pub text: String,
+        pub delay_ms: u64,
+        pub calls: Mutex<Vec<Seen>>,
+    }
+
+    impl TextEngine {
+        pub(crate) fn new(text: &str, delay_ms: u64) -> Arc<Self> {
+            Arc::new(Self {
+                text: text.to_string(),
+                delay_ms,
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// Whether a call was entered (before its delay).
+        pub(crate) fn called(&self) -> bool {
+            !self.calls.lock().unwrap().is_empty()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Engine for TextEngine {
+        fn id(&self) -> &str {
+            "text-stub"
+        }
+        fn context_window(&self) -> usize {
+            100_000
+        }
+        fn supports_tool_use(&self) -> bool {
+            true
+        }
+        fn manages_own_workspace(&self) -> bool {
+            true
+        }
+        fn available_models(&self) -> Vec<ModelInfo> {
+            Vec::new()
+        }
+        async fn run(
+            &self,
+            messages: &[Message],
+            tools: &[ToolDef],
+            context: &EngineContext,
+        ) -> anyhow::Result<std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>>
+        {
+            self.calls.lock().unwrap().push(Seen {
+                tools: tools.len(),
+                bridge_tools: context.bridge_tools.as_ref().map(Vec::len),
+                mcp_servers: context.mcp_servers.len(),
+                system_prompt: context.system_prompt.clone(),
+                messages: messages.to_vec(),
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
+            Ok(Box::pin(futures::stream::iter(vec![
+                StreamEvent::TextDelta {
+                    text: self.text.clone(),
+                },
+                StreamEvent::Usage {
+                    input_tokens: 100,
+                    output_tokens: 7,
+                },
+                StreamEvent::Done,
+            ])))
+        }
+    }
+
+    /// `engine` as the planner's call, with a default agent block.
+    pub(crate) fn llm(engine: Arc<TextEngine>) -> PlannerLlm {
+        PlannerLlm {
+            engine,
+            agent: Arc::new(
+                toml::from_str("engine = \"openrouter\"\nmodel = \"stub/planner\"")
+                    .expect("agent block"),
+            ),
         }
     }
 }

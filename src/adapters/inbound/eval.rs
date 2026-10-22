@@ -1042,7 +1042,7 @@ pub async fn judge_row(
 // Per-row driver
 // ---------------------------------------------------------------------------
 use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
-use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
+use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts, ToolResultObserver};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::AgentConfig;
 use crate::ports::tool_activity::ToolActivityPort;
@@ -1474,11 +1474,11 @@ pub async fn run_skill(
 ///   PR #6), and it still runs for configs without an `[orchestrator]` block.
 ///
 /// - **Orchestrator dispatch**: when `cfg.orchestrator.is_some()`, the row
-///   goes through `Orchestrator::handle` — the orchestrator agent plans,
-///   the DAG executor spawns worker steps, each worker step runs
-///   `collect_engine_response` inside an `EvalChatServiceFactory` closure
-///   that threads this row's stubs + observation tap + token accumulator.
-///   This is the path the `skills/orchestration-e2e` evals rely on.
+///   goes through `Orchestrator::handle` — the planner plans, the DAG
+///   executor runs each step as a `run-agent` child. The judge sees the
+///   orchestrator's events (plan, steps, replans) as observations; tokens are
+///   the row session's `metrics.recorded`. Per-row stubs do not reach the
+///   children. This is the path the `skills/orchestration-e2e` evals rely on.
 pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     let started = Instant::now();
 
@@ -1508,7 +1508,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
 
     // 2b. Branch: orchestrator vs direct dispatch.
     if cfg.orchestrator.is_some() {
-        return run_row_via_orchestrator(ctx, started, ws, ws_path, cfg, bridge_config).await;
+        return run_row_via_orchestrator(ctx, started, ws, ws_path, cfg).await;
     }
 
     // 3. Build the engine.
@@ -1645,19 +1645,17 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
         mcp_servers,
     };
 
+    let opts = LoopOpts {
+        observer: Some(observer),
+        ..LoopOpts::from_limits(&agent.limits)
+    };
     let driver_fut = collect_engine_response(
         &*engine,
         &messages,
         &tool_defs,
         &engine_context,
         Some(&stubbed),
-        Some(observer),
-        None, // cancel
-        None, // token_budget
-        agent.limits.max_tool_rounds,
-        agent.limits.max_tool_result_chars,
-        agent.limits.stream_event_timeout_secs,
-        agent.limits.compact_result_limit,
+        &opts,
     );
 
     let (timed_out, engine_response) = match tokio::time::timeout(
@@ -1836,203 +1834,18 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
 //
 // When an eval config declares `[orchestrator]`, rows are run through
 // `Orchestrator::handle` instead of directly against the default agent's
-// engine. Each worker step dispatched by the orchestrator goes through
-// `EvalChatServiceFactory::run_turn`, which rebuilds that agent's engine +
-// tools + system prompt and drives `collect_engine_response` — the SAME
-// code path the direct eval uses — but with per-row stubs and an observer
-// tap that accumulates tool calls across all worker steps.
-//
-// This keeps the stubbed_executor + observation machinery intact: stubs
-// fire inside worker steps, tool calls all land in one observations vec
-// regardless of which worker made them, and token counts aggregate.
+// engine: the planner (`PlannerLlm`, the `[orchestrator]` agent's engine)
+// plans and every step is a `run-agent` child (`SubprocessRunner`).
+// `RowObserver` turns the bus's events into the judge's observations and
+// sums the row session's token records.
 
+/// What an orchestrated row collects while it runs.
 struct EvalRowAccum {
     observations: Arc<std::sync::Mutex<Vec<Observation>>>,
     seq: Arc<AtomicU32>,
-    tokens: Arc<std::sync::Mutex<(u32, u32)>>, // cumulative (input, output) across worker steps
-    stubs: Vec<StubSpec>,
-    engine_id: Arc<std::sync::Mutex<String>>, // captured from the first worker step for transcript
-}
-
-struct EvalChatServiceFactory {
-    cfg: Arc<Config>,
-    ws_path: PathBuf,
-    accum: Arc<EvalRowAccum>,
-    /// The eval config file a `claude_code` worker's MCP bridge loads
-    /// (`bridge_config_file`; the row keeps it alive).
-    bridge_config: Option<PathBuf>,
-}
-
-#[async_trait]
-impl crate::ports::orchestration::ChatServiceFactory for EvalChatServiceFactory {
-    async fn run_turn(&self, agent_name: &str, text: &str) -> anyhow::Result<String> {
-        let agent = self
-            .cfg
-            .agents
-            .get(agent_name)
-            .ok_or_else(|| anyhow::anyhow!("unknown agent: {}", agent_name))?;
-
-        // Per-step engine + tools + system prompt. Mirrors the direct
-        // eval path (run_row steps 3–5), parameterized by agent name.
-        let engine: Arc<dyn Engine> = Arc::from(build_eval_engine(
-            agent_name,
-            agent,
-            &self.cfg,
-            self.bridge_config.as_deref(),
-        )?);
-        {
-            let mut eid = self.accum.engine_id.lock().unwrap();
-            if eid.is_empty() {
-                *eid = engine.id().to_string();
-            }
-        }
-
-        // Tilde expansion required — see the sibling site above.
-        let workspace_path: PathBuf = agent
-            .workspace
-            .as_ref()
-            .map(|p| crate::config::paths::expand_tilde(p))
-            .unwrap_or_else(|| self.ws_path.clone());
-
-        // Redacted like the direct path (`process_secret_registry`).
-        let secret_registry = Arc::new(process_secret_registry(None));
-        let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
-
-        // Orchestrator agent gets NO tools — its job is to emit JSON only.
-        // `compute_base_tools` otherwise unconditionally includes workspace +
-        // http + crypto, which causes the planner LLM to use them to answer
-        // the user's question directly instead of planning.
-        let is_orchestrator_agent = self
-            .cfg
-            .orchestrator
-            .as_ref()
-            .map(|o| o.agent == agent_name)
-            .unwrap_or(false);
-
-        let base_tools = if is_orchestrator_agent {
-            Vec::new()
-        } else {
-            crate::bootstrap::tools::agent_base_tools(
-                agent, true, false, // memory off in v1 eval runs
-            )
-        };
-
-        let skill_source = FileSystemSkillSource::new(workspace_path.clone());
-        let base_reserved: Vec<String> = base_tools.iter().map(|t| t.name.clone()).collect();
-        let mut skill_registry = SkillRegistry::new(base_reserved)
-            .with_allowlist(Some(agent.skill_packages.clone()))
-            .with_shell_skills(!agent.no_shell_fallback);
-        skill_registry.reload(&skill_source);
-
-        let current_tools = if is_orchestrator_agent {
-            Vec::new()
-        } else {
-            crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry)
-        };
-        let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
-            agent,
-            true,
-            &skill_registry,
-            &current_tools,
-        );
-
-        let mut tool_defs = current_tools.clone();
-        let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =
-            match crate::bootstrap::tools::build_tool_executor(
-                &workspace_path,
-                &current_tools,
-                &skill_registry,
-                &None,
-                &secret_registry,
-                log_activity,
-                None,
-                Some(&self.cfg.memory),
-                agent,
-                &self.cfg.mcp_servers,
-            ) {
-                Some(executor) => {
-                    let extra = executor.additional_tool_defs(&tool_defs);
-                    if !extra.is_empty() {
-                        tool_defs.extend(extra);
-                    }
-                    Arc::new(SanitizedToolExecutor::new(
-                        Arc::new(executor),
-                        Arc::clone(&secret_registry),
-                    )) as Arc<dyn crate::ports::engine::ToolExecutor>
-                }
-                None => {
-                    Arc::new(NoopRuntimeToolExecutor) as Arc<dyn crate::ports::engine::ToolExecutor>
-                }
-            };
-
-        let stubbed = StubbedExecutor::new(&*inner_executor, &self.accum.stubs);
-
-        let obs = Arc::clone(&self.accum.observations);
-        let seq = Arc::clone(&self.accum.seq);
-        let observer_closure: Box<dyn Fn(&ToolCall, &str) + Send + Sync> =
-            Box::new(move |tc: &ToolCall, _result: &str| {
-                let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                obs.lock().unwrap().push(Observation {
-                    seq: n,
-                    name: tc.name.clone(),
-                    args_preview: truncate(&tc.arguments.to_string(), 2048),
-                });
-            });
-        let observer: ToolResultObserver<'_> = &*observer_closure;
-
-        let messages = vec![
-            Message {
-                role: Role::System,
-                content: system_prompt.clone(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-            Message {
-                role: Role::User,
-                content: text.to_string(),
-                tool_call_id: None,
-                tool_calls: None,
-            },
-        ];
-
-        let (bridge_tools, mcp_servers) = crate::bootstrap::tools::bridge_inputs(
-            engine.manages_own_workspace(),
-            &tool_defs,
-            &self.cfg.mcp_servers,
-        );
-        let engine_context = EngineContext {
-            workspace: Some(workspace_path.clone()),
-            system_prompt: Some(system_prompt.clone()),
-            bridge_tools,
-            max_tool_rounds: Some(agent.limits.max_tool_rounds),
-            max_mcp_result_chars: Some(agent.limits.max_mcp_result_chars),
-            mcp_servers,
-        };
-
-        let response = crate::application::chat::tool_loop::collect_engine_response(
-            &*engine,
-            &messages,
-            &tool_defs,
-            &engine_context,
-            Some(&stubbed),
-            Some(observer),
-            None,
-            None,
-            agent.limits.max_tool_rounds,
-            agent.limits.max_tool_result_chars,
-            agent.limits.stream_event_timeout_secs,
-            agent.limits.compact_result_limit,
-        )
-        .await?;
-
-        {
-            let mut tok = self.accum.tokens.lock().unwrap();
-            tok.0 = tok.0.saturating_add(response.input_tokens_delta);
-            tok.1 = tok.1.saturating_add(response.output_tokens_delta);
-        }
-
-        Ok(response.text)
-    }
+    /// (input, output) tokens of the row's planner calls and steps: every
+    /// `metrics.recorded` of its session ([`RowObserver`]).
+    tokens: Arc<std::sync::Mutex<(u32, u32)>>,
 }
 
 /// An orchestrated row's event observer: each `OrchestratorEvent` as a
@@ -2045,14 +1858,27 @@ struct RowObserver {
 }
 
 impl RowObserver {
+    /// `tokens` sums the records of `session` (other sessions' records
+    /// reach this bus too: the metrics sink is process-wide).
     fn start(
         mut events: crate::application::orchestrator::EventReceiver,
         observations: Arc<std::sync::Mutex<Vec<Observation>>>,
         seq: Arc<AtomicU32>,
+        tokens: Arc<std::sync::Mutex<(u32, u32)>>,
+        session: String,
     ) -> Self {
         use tokio::sync::broadcast::error::{RecvError, TryRecvError};
         let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
         let push = move |ev| {
+            if let crate::application::orchestrator::OrchestratorEvent::MetricsRecorded { record } =
+                &ev
+            {
+                if record.session_id == session {
+                    let mut t = tokens.lock().unwrap();
+                    t.0 = t.0.saturating_add(record.prompt_tokens);
+                    t.1 = t.1.saturating_add(record.completion_tokens);
+                }
+            }
             if let Some((name, detail)) = event_observation(ev) {
                 let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 observations.lock().unwrap().push(Observation {
@@ -2236,32 +2062,20 @@ async fn run_row_via_orchestrator(
     _ws: tempfile::TempDir,
     ws_path: PathBuf,
     cfg: Config,
-    // `run_row` refused stubs on a `claude_code` worker and wrote this file
-    // for one; it stays alive until the row ends.
-    bridge_config: Option<tempfile::NamedTempFile>,
 ) -> anyhow::Result<RowResult> {
-    // Shared state threaded through every worker step the orchestrator
-    // spawns for this row.
     let accum = Arc::new(EvalRowAccum {
         observations: Arc::new(std::sync::Mutex::new(Vec::new())),
         seq: Arc::new(AtomicU32::new(0)),
         tokens: Arc::new(std::sync::Mutex::new((0, 0))),
-        stubs: ctx.row.stubs.clone(),
-        engine_id: Arc::new(std::sync::Mutex::new(String::new())),
     });
 
     let cfg_arc = Arc::new(cfg);
-    let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
-        Arc::new(EvalChatServiceFactory {
-            cfg: Arc::clone(&cfg_arc),
-            ws_path: ws_path.clone(),
-            accum: Arc::clone(&accum),
-            bridge_config: bridge_config.as_ref().map(|f| f.path().to_path_buf()),
-        });
-
-    // Evals run without a live memory backend — register an empty
-    // MemoryManager so the orchestrator doesn't choke on missing deps.
-    let memory_manager = Arc::new(crate::application::memory::manager::MemoryManager::new());
+    // The planner calls its own engine (no tools); each step is a
+    // `run-agent` child.
+    let llm = crate::bootstrap::orchestrator::planner_llm(&cfg_arc)?
+        .ok_or_else(|| anyhow::anyhow!("eval row via orchestrator without [orchestrator]"))?;
+    let engine_id_str = llm.engine.id().to_string();
+    let session = crate::bootstrap::orchestrator::resolve_session_id();
 
     // One recording per orchestrated row (`RunKind::Eval`): its plans,
     // steps and their `run-agent` tool calls; `run.closed` at the end. The
@@ -2279,9 +2093,8 @@ async fn run_row_via_orchestrator(
         .map(|s| crate::application::trace_exec::GatedTrace::new(Arc::clone(s)));
     let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
         &cfg_arc,
-        Arc::clone(&factory),
-        Arc::clone(&memory_manager),
-        crate::bootstrap::orchestrator::resolve_session_id(),
+        llm,
+        session.clone(),
         gate.as_ref().and_then(|g| {
             let sink: Arc<dyn TraceSink> = Arc::clone(g) as Arc<dyn TraceSink>;
             crate::application::orchestrator::trace::OrchestratorTrace::of(&sink, None)
@@ -2302,6 +2115,8 @@ async fn run_row_via_orchestrator(
         orchestrator.subscribe(),
         Arc::clone(&accum.observations),
         Arc::clone(&accum.seq),
+        Arc::clone(&accum.tokens),
+        session,
     );
 
     // Drive with the row's timeout.
@@ -2328,7 +2143,6 @@ async fn run_row_via_orchestrator(
     // Snapshot results from the accumulator.
     let obs_snapshot = accum.observations.lock().unwrap().clone();
     let (input_tokens, output_tokens) = *accum.tokens.lock().unwrap();
-    let engine_id_str = accum.engine_id.lock().unwrap().clone();
 
     // Judge.
     let (verdict, judge_input_tokens, judge_output_tokens) = if timed_out {
@@ -3537,16 +3351,6 @@ metrics:
         );
     }
 
-    /// Never called: the barrier test runs no turn.
-    struct NoTurns;
-
-    #[async_trait]
-    impl crate::ports::orchestration::ChatServiceFactory for NoTurns {
-        async fn run_turn(&self, _agent: &str, _text: &str) -> anyhow::Result<String> {
-            anyhow::bail!("no turn in this test")
-        }
-    }
-
     /// Finding P2 (trace closure): a metric put on the process sink just
     /// before the row ends is in the trace (and with the judge's observer)
     /// before `run.closed` — the metrics barrier, no timed sleep. On a
@@ -3567,19 +3371,23 @@ metrics:
         let gate = GatedTrace::new(Arc::clone(&trace));
         let via: Arc<dyn TraceSink> = gate.clone();
         let session = format!("eval-barrier-{}", uuid::Uuid::new_v4());
+        // Never called: the barrier test runs no turn.
+        use crate::application::orchestrator::planner::testkit;
         let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
             &cfg,
-            Arc::new(NoTurns),
-            Arc::new(crate::application::memory::manager::MemoryManager::new()),
+            testkit::llm(testkit::TextEngine::new("", 0)),
             session.clone(),
             crate::application::orchestrator::trace::OrchestratorTrace::of(&via, None),
         )
         .unwrap();
         let observations = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let tokens = Arc::new(std::sync::Mutex::new((0, 0)));
         let observer = RowObserver::start(
             orchestrator.subscribe(),
             Arc::clone(&observations),
             Arc::new(AtomicU32::new(0)),
+            Arc::clone(&tokens),
+            session.clone(),
         );
         crate::application::metrics::record(MetricsRecord {
             ts_unix: 0,
@@ -3612,6 +3420,8 @@ metrics:
             .map(|o| o.name.clone())
             .collect::<Vec<_>>();
         assert_eq!(seen, ["orchestrator:metrics_recorded"]);
+        // The row's tokens are its own session's records only.
+        assert_eq!(*tokens.lock().unwrap(), (10, 2));
         let late = crate::domain::trace::EventDraft::new(
             crate::domain::trace::Component::Orchestrator,
             "plan.completed",

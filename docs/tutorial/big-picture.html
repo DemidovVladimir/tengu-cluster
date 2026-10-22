@@ -209,7 +209,7 @@
         <li><code>tengu chat --sandbox lping</code> loads <code>sandboxes/lping/config.toml</code>: validates it, folds scopes, pins <code>TENGU_CONFIG</code>, signs a seal-proxy session when it has <code>[keys]</code>, installs the <code>[egress]</code> policy.</li>
         <li>With an <code>[orchestrator]</code> section the message goes to the planner. Without one (the default) the default agent answers in one in-process chat turn.</li>
         <li>The planner prompt: the registry of described agents, skills and tools, recalled memory, recent messages, then your message.</li>
-        <li>One LLM call with tools, bridge, memory and grounding stripped. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
+        <li>One LLM call straight to the planner agent's engine: no tools, bridge or memory. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
         <li>The DAG executor registers the plan for this session and mirrors it to <code>TENGU_PLAN.md</code>. Every step whose <code>depends_on</code> are done starts at once.</li>
         <li>Per step, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and writes one JSON request to its stdin.</li>
         <li>The child reloads the same sandbox, takes <code>[agents.&lt;step.agent&gt;]</code> and loops: model turn, tool calls, results. At most 70 turns by default.</li>
@@ -425,7 +425,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
         <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td>the <code>tengu</code> commands; config path, logs, egress</td></tr>
         <tr><td><code>src/bootstrap/sandbox.rs</code></td><td><code>--sandbox</code>: load, pin <code>TENGU_CONFIG</code>, egress</td></tr>
         <tr><td><code>src/adapters/inbound/tui/mod.rs</code></td><td>the chat screen; orchestrator or direct turn</td></tr>
-        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>build_orchestrator</code>, session id, the stripped planner turn</td></tr>
+        <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>planner_llm</code> (the planner's engine), <code>build_orchestrator</code>, session id</td></tr>
         <tr><td><code>src/application/orchestrator/</code></td><td>planner, executor, retry, replan, events, plan files</td></tr>
         <tr><td><code>src/application/chat/service.rs</code></td><td>one chat turn (<code>process_user_text</code>)</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>spawns the child, IPC types, timeout</td></tr>

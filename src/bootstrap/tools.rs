@@ -1197,7 +1197,6 @@ mod golden_tests {
             cancel: None,
             bridge_tools: Some(&bridge),
             mcp_servers: &servers,
-            suppress_grounding_nudge: true,
         };
         let mut state = create_chat_loop_state(&agent);
         service.process_user_text(&mut state, "hi").await.unwrap();

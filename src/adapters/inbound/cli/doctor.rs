@@ -468,13 +468,10 @@ async fn smoke_agent(
             &tools,
             &context,
             Some(&executor),
-            None,
-            None,
-            None,
-            rounds,
-            limits.max_tool_result_chars,
-            limits.stream_event_timeout_secs,
-            limits.compact_result_limit,
+            &crate::application::chat::tool_loop::LoopOpts {
+                max_tool_rounds: rounds,
+                ..crate::application::chat::tool_loop::LoopOpts::from_limits(limits)
+            },
         ),
     )
     .await

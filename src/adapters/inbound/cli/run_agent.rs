@@ -64,17 +64,18 @@ async fn try_persist_agentic_step_summary(
 /// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪
 ///    {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools` plus a
 ///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`).
-/// 7. Drives a multi-turn loop: per turn, drain stream → if tool_calls,
-///    dispatch each → append assistant + tool messages → repeat. Results
-///    enter as in-process chat feeds them (`tool_loop::tool_result_content`:
-///    `limits.max_tool_result_chars`, local models fitted to the window),
-///    older rounds compacted to line 1 from turn 1 on. Stop on:
+/// 7. Runs in-process chat's tool loop (`tool_loop::collect_engine_response`)
+///    with the step's `StepHooks` and call ids
+///    `step:<session>:<step>:<loop nonce>:<round>:<i>:<provider id>`.
+///    Results are capped and older rounds compacted as in chat. Stop on:
 ///    - empty tool_calls (model done; a Claude Code turn ends here — its
 ///      bridged `compress_and_store` summary is read from the summary file,
 ///      and the engine ends the CLI run right after that call)
-///    - `compress_and_store` invoked (capture summary, exit clean)
-///    - the agent's `limits.max_tool_rounds` exceeded (Ok when the model wrote
-///      any text — it becomes the summary — else Failed)
+///    - `compress_and_store` invoked (the hook captures the summary; the
+///      loop ends after that round)
+///    - `limits.max_tool_rounds` reached: one last call with no tools, so
+///      the model answers (Ok when it wrote any text — the last non-empty
+///      text becomes the summary — else Failed)
 /// 8. Emit one `AgentIpcOutput` JSON line on stdout and exit — with the
 ///    per-turn `metrics` and the tool activity `tools` (every call and its
 ///    outcome, bridged Claude Code calls included).
@@ -314,13 +315,6 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         model = %model,
         "subprocess engine built"
     );
-    let stream_event_timeout_secs = spec.limits.stream_event_timeout_secs;
-    // Every result enters capped and older rounds are compacted to line 1,
-    // as `collect_engine_response` does in-process (`tool_loop` module
-    // table): `limits.max_tool_result_chars`, and for local models
-    // (`Engine::tool_result_char_cap`) the window fit.
-    let engine_result_cap = engine.tool_result_char_cap();
-    let max_tool_result_chars = spec.limits.max_tool_result_chars as usize;
 
     // ----- Build tool stack (Phase 5b) -----
     // The parent's vault values (inherited, never prompts): tool output is
@@ -404,7 +398,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     );
 
     // ----- Build messages + context -----
-    let mut messages = vec![
+    let messages = vec![
         Message {
             role: Role::System,
             content: system_prompt.clone(),
@@ -445,174 +439,37 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         mcp_servers: parent_config.mcp_servers.clone(),
     };
 
-    // ----- Multi-turn loop (Phase 5b) -----
-    let mut final_text = String::new();
-    let mut summary: Option<String> = None;
-    let mut compress_called = false;
-    // Per-turn metrics records — shipped back to the parent in the IPC
-    // output so they can be re-emitted on the parent's metrics bus.
-    let mut subagent_metrics: Vec<crate::domain::metrics::MetricsRecord> = Vec::new();
-    // Tool activity in call order (IPC `tools`): calls dispatched below and
-    // the ones a Claude Code engine ran through its bridge.
-    let mut tool_runs: Vec<crate::domain::message::ToolRun> = Vec::new();
-
-    for turn in 0..input.max_turns {
-        // Compute the prompt size BEFORE the engine call so the metric
-        // record reflects what we sent. UTF-8-aware char count + byte len.
-        let prompt_chars: u32 = messages
-            .iter()
-            .map(|m| m.content.chars().count() as u32)
-            .sum();
-        let prompt_bytes: u32 = messages.iter().map(|m| m.content.len() as u32).sum();
-        let turn_started = std::time::Instant::now();
-
-        let drained = crate::application::chat::tool_loop::run_single_engine_turn(
-            engine.as_ref(),
-            &messages,
-            &tools,
-            &context,
-            None,
-            stream_event_timeout_secs,
-        )
-        .await
-        .context("engine turn failed")?;
-        tool_runs.extend(drained.engine_runs);
-        let (text, tool_calls, input_delta, output_delta) = (
-            drained.text,
-            drained.tool_calls,
-            drained.input_tokens,
-            drained.output_tokens,
-        );
-
-        // Record one metric per engine turn. `input_delta`/`output_delta`
-        // come from `StreamEvent::Usage` frames (OpenRouter + Claude Code
-        // both supply them); they're 0 when the engine doesn't return usage.
-        let rec = crate::domain::metrics::MetricsRecord {
-            ts_unix: crate::domain::metrics::now_unix(),
-            session_id: input.session_id.clone(),
-            kind: crate::domain::metrics::MetricsKind::Subagent,
-            agent: input.agent_name.clone(),
-            model: model.clone(),
-            prompt_tokens: input_delta,
-            completion_tokens: output_delta,
-            total_tokens: input_delta.saturating_add(output_delta),
-            prompt_chars,
-            prompt_bytes,
-            response_chars: text.chars().count() as u32,
-            latency_ms: turn_started.elapsed().as_millis() as u64,
-            layers: Vec::new(),
-            step_id: Some(input.step_id.clone()),
-        };
-        // Emit into the subprocess's own tracing log too (the parent forwards
-        // stderr — Phase 7.5) so the user sees the same line whether they
-        // grep the parent log or a future subprocess log file.
-        crate::application::metrics::record(rec.clone());
-        subagent_metrics.push(rec);
-
-        // If no tool calls, the model produced its final answer. Save the
-        // text and exit the loop.
-        if tool_calls.is_empty() {
-            final_text = text;
-            break;
-        }
-
-        // Append the assistant message carrying the tool_calls so the next
-        // engine turn sees the full call/result history.
-        let compact_cutoff = messages.len();
-        messages.push(Message {
-            role: Role::Assistant,
-            content: text.clone(),
-            tool_call_id: None,
-            tool_calls: Some(tool_calls.clone()),
-        });
-        if !text.is_empty() {
-            final_text = text;
-        }
-
-        // Dispatch each tool call.
-        for call in &tool_calls {
-            let (result, observation, ok) = if call.name == "compress_and_store" {
-                // Out-of-band handling: capture the summary here; with
-                // `postgres_memory` it is persisted to Postgres `agentic_memory`.
-                let extracted_summary = call
-                    .arguments
-                    .get("summary")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                summary = Some(extracted_summary.clone());
-                compress_called = true;
-                #[cfg(feature = "postgres_memory")]
-                {
-                    let _ = try_persist_agentic_step_summary(
-                        &input.session_id,
-                        &input.step_id,
-                        &extracted_summary,
-                    )
-                    .await;
-                }
-                ("stored".to_string(), None, true)
-            } else if let Some(ref exec) = executor {
-                match exec.execute_typed(call, &messages).await {
-                    Ok(out) => (out.text, out.observation, true),
-                    Err(e) => {
-                        // The error is redacted by `SanitizedToolExecutor`;
-                        // in the step's log with the model's arguments so a
-                        // failed call is diagnosable (the parent forwards
-                        // stderr).
-                        let args = call.arguments.to_string();
-                        let args = crate::domain::token::truncate_at_boundary(&args, 300)
-                            .map_or(args.as_str(), |(prefix, _)| prefix);
-                        tracing::warn!(tool = %call.name, error = %e, arguments = %args, "subagent tool call failed");
-                        (format!("tool error: {}", e), None, false)
-                    }
-                }
-            } else {
-                (
-                    format!("tool '{}' is not available in this subprocess", call.name),
-                    None,
-                    false,
-                )
-            };
-            tool_runs.push(crate::domain::message::ToolRun {
-                name: call.name.clone(),
-                ok,
-            });
-            let content = crate::application::chat::tool_loop::tool_result_content(
-                &result,
-                observation.as_ref(),
-                engine_result_cap,
-                max_tool_result_chars,
-            );
-
-            messages.push(Message {
-                role: Role::Tool,
-                content,
-                tool_call_id: Some(call.id.clone()),
-                tool_calls: None,
-            });
-        }
-        if turn >= 1 {
-            crate::application::chat::tool_loop::compact_older_tool_results(
-                &mut messages[..compact_cutoff],
-                spec.limits.compact_result_limit as usize,
-            );
-        }
-
-        if compress_called {
-            tracing::info!(
-                turn,
-                "compress_and_store invoked; exiting subagent loop cleanly"
-            );
-            break;
-        }
-
-        if turn + 1 >= input.max_turns {
-            tracing::warn!(
-                turn,
-                max_turns = input.max_turns,
-                "subagent loop hit max_turns without compress_and_store"
-            );
+    // ----- The tool loop: in-process chat's, with the step's hooks -----
+    // `compress_and_store` is answered here and ends the loop after its
+    // round; every engine turn leaves a `Subagent` metrics record. At the
+    // round cap the engine gets one last call with no tools.
+    let hooks = StepHooks::new(&input, &model);
+    let opts = crate::application::chat::tool_loop::LoopOpts {
+        max_tool_rounds: input.max_turns,
+        call_ids: format!("step:{}:{}", input.session_id, input.step_id),
+        hooks: Some(&hooks),
+        ..crate::application::chat::tool_loop::LoopOpts::from_limits(&spec.limits)
+    };
+    let resp = crate::application::chat::tool_loop::collect_engine_response(
+        engine.as_ref(),
+        &messages,
+        &tools,
+        &context,
+        executor.as_deref(),
+        &opts,
+    )
+    .await
+    .context("engine turn failed")?;
+    // Tool activity in call order (IPC `tools`): calls run here and the ones
+    // a Claude Code engine ran through its bridge.
+    let tool_runs = resp.tool_runs;
+    let (final_text, mut summary, subagent_metrics) = hooks.finish();
+    let mut compress_called = summary.is_some();
+    if compress_called {
+        tracing::info!("compress_and_store invoked; exiting subagent loop cleanly");
+        #[cfg(feature = "postgres_memory")]
+        if let Some(text) = &summary {
+            let _ = try_persist_agentic_step_summary(&input.session_id, &input.step_id, text).await;
         }
     }
 
@@ -708,6 +565,91 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // The temp workspace of a step without one goes now, not earlier.
     drop(step_dir);
     Ok(())
+}
+
+/// A step's seams in the shared tool loop (`tool_loop::LoopHooks`): its
+/// `compress_and_store` summary, the last text the model wrote, and one
+/// `Subagent` metrics record per engine turn (shipped back over IPC).
+struct StepHooks {
+    session_id: String,
+    step_id: String,
+    agent: String,
+    model: String,
+    summary: std::sync::Mutex<Option<String>>,
+    last_text: std::sync::Mutex<String>,
+    metrics: std::sync::Mutex<Vec<crate::domain::metrics::MetricsRecord>>,
+}
+
+impl StepHooks {
+    fn new(
+        input: &crate::adapters::outbound::subprocess_runner::AgentIpcInput,
+        model: &str,
+    ) -> Self {
+        Self {
+            session_id: input.session_id.clone(),
+            step_id: input.step_id.clone(),
+            agent: input.agent_name.clone(),
+            model: model.to_string(),
+            summary: Default::default(),
+            last_text: Default::default(),
+            metrics: Default::default(),
+        }
+    }
+
+    /// (last non-empty text, `compress_and_store` summary, metrics).
+    fn finish(
+        self,
+    ) -> (
+        String,
+        Option<String>,
+        Vec<crate::domain::metrics::MetricsRecord>,
+    ) {
+        (
+            self.last_text.into_inner().unwrap_or_default(),
+            self.summary.into_inner().unwrap_or_default(),
+            self.metrics.into_inner().unwrap_or_default(),
+        )
+    }
+}
+
+impl crate::application::chat::tool_loop::LoopHooks for StepHooks {
+    fn intercept(&self, call: &crate::domain::message::ToolCall) -> Option<String> {
+        (call.name == "compress_and_store").then(|| {
+            let text = call
+                .arguments
+                .get("summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            *self.summary.lock().unwrap() = Some(text);
+            "stored".to_string()
+        })
+    }
+
+    fn on_turn(&self, turn: &crate::application::chat::tool_loop::TurnStats<'_>) {
+        let rec = crate::domain::metrics::MetricsRecord {
+            ts_unix: crate::domain::metrics::now_unix(),
+            session_id: self.session_id.clone(),
+            kind: crate::domain::metrics::MetricsKind::Subagent,
+            agent: self.agent.clone(),
+            model: self.model.clone(),
+            prompt_tokens: turn.input_tokens,
+            completion_tokens: turn.output_tokens,
+            total_tokens: turn.input_tokens.saturating_add(turn.output_tokens),
+            prompt_chars: turn.prompt_chars,
+            prompt_bytes: turn.prompt_bytes,
+            response_chars: turn.text.chars().count() as u32,
+            latency_ms: turn.latency_ms,
+            layers: Vec::new(),
+            step_id: Some(self.step_id.clone()),
+        };
+        // In the step's own log too (the parent forwards stderr).
+        crate::application::metrics::record(rec.clone());
+        self.metrics.lock().unwrap().push(rec);
+        if !turn.text.is_empty() {
+            *self.last_text.lock().unwrap() = turn.text.to_string();
+        }
+    }
 }
 
 /// The summary a Claude Code step's bridge wrote for `compress_and_store`

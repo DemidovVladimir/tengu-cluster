@@ -66,8 +66,8 @@ Arti + lyrebird-rs proxy from `make tor`); a sandbox opts out with
 The doctrine is **LLM = heart, Open Brain + Karpathy LLM Wiki = brain,
 tools = hands**. Open Brain is live agent memory; the Karpathy LLM Wiki is
 compiled, reviewed knowledge. The planner picks; subagents execute. The
-boundary is enforced in code (`run_turn_with_system` strips
-tools/memory/grounding on the planner-side LLM call).
+boundary is enforced in code (`PlannerLlm::call` sends the planner's engine
+one message with no tools, bridge or memory).
 
 ## Code layout — hexagonal (2026-09-23)
 
@@ -345,7 +345,7 @@ These are not preferences. They're load-bearing.
 
 1. **LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands.**
    The planner LLM has exactly one job: emit plan JSON. Tools, memory,
-   grounding all stripped on its turn (see `bootstrap::orchestrator::run_turn_with_system`).
+   grounding are absent from its turn by construction (`orchestrator::planner::PlannerLlm::call`).
    Open Brain stores live events/context in Postgres; the Karpathy LLM Wiki
    compiles stable knowledge into Markdown. Subagents do the actual work in
    their own subprocess with their own tools.
@@ -586,10 +586,14 @@ These are not preferences. They're load-bearing.
   non-zero with the anyhow chain on stderr and empty stdout.
 - **`compress_and_store` is appended IMPLICITLY** — never list it in an
   agent's `tools`. The runner appends it itself for every subagent.
-- **Planner LLM call strips tools/memory/grounding** —
-  `run_turn_with_system` in `bootstrap/` sets `tools = []`,
-  `tool_executor = None`, `memory_manager = None`,
-  `suppress_grounding_nudge = true` when `system_override.is_some()`.
+- **The planner calls its engine directly (2026-10-22)** —
+  `PlannerLlm` (`orchestrator/planner.rs`) = the `[orchestrator]` agent's
+  engine + block, built by `bootstrap::orchestrator::planner_llm`; each call
+  is one user message + SKILL.md as the system prompt through
+  `collect_engine_response` with no tools, executor, bridge, `[[mcp_servers]]`
+  or memory, and returns its usage (planner metrics on every surface). TUI and
+  Telegram refuse to start when it does not build; webhooks, escalations, eval
+  rows and A2A build it per turn.
 - **`engine = "rag"` is the only orchestrator engine and now the default.**
   `OrchestratorConfig.engine` defaults to `"rag"` (was `"static"`, which
   silently disabled orchestration); any other value fails config validation.
@@ -701,11 +705,11 @@ These are not preferences. They're load-bearing.
   base config run over Tor.
 - **A Claude Code planner needs `builtin_tools_profile = "none"` (2026-10-14)** —
   a CLI engine takes its tools from the bridge per run; a planner call
-  (`run_turn_inner` with a system override) now gets no bridge tools and no
-  `[[mcp_servers]]` as well as no tools / executor / memory — before, a planner
-  that was also the chat agent (`lping`) got the chat agent's bridge and could
-  call tools instead of writing plan JSON. With profile `none` the CLI has no
-  built-ins either: plan JSON only (`planner_turn_gets_no_bridge_tools`; live:
+  (`PlannerLlm::call`) gets no bridge tools and no `[[mcp_servers]]` as well as
+  no tools / executor / memory — before 2026-10-14, a planner that was also the
+  chat agent (`lping`) got the chat agent's bridge and could call tools instead
+  of writing plan JSON. With profile `none` the CLI has no built-ins either:
+  plan JSON only (`planner_call_has_no_hands_and_reports_usage`; live:
   `a2a-lab` planner on claude-haiku-5-5 → helper step, 6.6 s). Planners and
   subagents both run on the subscriptions (gotcha "Model spend").
 - **`parse_verdict` has a Phase 7.4 prose-fallback** — when the planner LLM
@@ -809,8 +813,9 @@ These are not preferences. They're load-bearing.
   with none. A `run-agent` step always has a workspace — the agent's, else a
   temp dir per step (webhook / `tool turn` one-shots: per turn;
   `bootstrap::tools::workspace_or_temp`) — for its executor, the CLI's cwd
-  and the bridge; its
-  results are capped and older rounds compacted as in chat, every engine;
+  and the bridge; it runs chat's own tool loop (`collect_engine_response`
+  + `StepHooks`, 2026-10-22): results capped and older rounds compacted,
+  one last tool-less call at the cap, every engine;
   `limits.max_tool_rounds` counts tool calls on `claude_code`, engine turns
   elsewhere. The temp `--mcp-config`
   holds no secret value (`[[mcp_servers]]` by name) — the CLI merges its `env` over the inherited env
@@ -819,7 +824,8 @@ These are not preferences. They're load-bearing.
   `CLAUDE_PID`, `CLAUDE_EFFORT`) and passes `--strict-mcp-config`. Every
   surface honours `tools` (`bootstrap::tools::agent_base_tools`; empty = every
   base tool; `[[mcp_servers]]` tools too); in-process chat call ids are
-  `chat:<turn nonce>:<round>:<i>:<provider id>`. Still open: the live `local`
+  `chat:<turn nonce>:<round>:<i>:<provider id>`, a step's
+  `step:<session>:<step>:<loop nonce>:<round>:<i>:<provider id>`. Still open: the live `local`
   legs (the operator's PC), `agentic_memory` live (Postgres), Privy signing /
   Solana `send` legs (never run), the live legs of the sets `xlab_rank`
   (`strategy_ranking`), `sources` (`source_evidence`) and `soe` (`soe_view`,
@@ -1001,7 +1007,7 @@ These are not preferences. They're load-bearing.
   `auth_header_env`, not HMAC), `tengu decide` or `tengu run`. History is
   in-process; tool-call ids are `{loop}:{session_id}:{t}` (→ `ToolCtx.call_id`;
   exec tools key idempotency on a `client_order_id` arg, else `call_id`; an
-  arg never starts with `exit:` `fade:` `fade-shadow:` `feed:` `mcp:` `chat:`,
+  arg never starts with `exit:` `fade:` `fade-shadow:` `feed:` `mcp:` `chat:` `step:`,
   and a replay asking for another order is refused — `client_order_id_conflict`).
   Jev retries once on 429 / 5xx and has a 30 s circuit breaker. Audit in
   `<TENGU_HOME>/logs/decisions.jsonl` — one `write_all` per line, a line for a

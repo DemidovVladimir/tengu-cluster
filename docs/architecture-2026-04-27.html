@@ -415,7 +415,7 @@
         <td>&lt;workspace&gt;/memory/vectors.bin</td>
         <td>disk vector store (bincode) behind <code>memory_ingest</code> / <code>memory_search</code> / <code>persistent_store</code>; without a workspace <code>[memory] store_path</code> (default <code>~/.tengu/memory/</code>)</td>
         <td><code>MemoryPlugin</code> tools</td>
-        <td>same tools + <code>BuiltinMemoryProvider</code></td>
+        <td>same tools + chat <code>[Relevant memories]</code> recall</td>
         <td>no sweep</td>
       </tr>
       <tr><td class="grp" colspan="5">Typed tools, loops, tengu run (2026-09-24 →)</td></tr>
@@ -580,8 +580,8 @@
     <div class="mech-card">
       <div class="label">Doctrine</div>
       <h3>A. LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands</h3>
-      <p>RagPlanner (legacy name) does ONE thing — pick the right agent. Its LLM call gets no tools, no tool executor, no memory manager and no grounding nudge, so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
-      <div class="ref">bootstrap/orchestrator.rs::RuntimeChatServiceFactory::run_turn_inner (via run_turn_with_system)</div>
+      <p>RagPlanner (legacy name) does ONE thing — pick the right agent. It holds an engine, not a chat service: PlannerLlm::call sends one message with no tools, no tool executor, no bridge, no [[mcp_servers]] and no memory — nothing to strip — so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
+      <div class="ref">application/orchestrator/planner.rs::PlannerLlm::call · test planner_call_has_no_hands_and_reports_usage</div>
     </div>
     <div class="mech-card">
       <div class="label">Fix B</div>
@@ -755,11 +755,11 @@ const STEPS = [
   },
   {
     num: 2, title: "Bootstrap — build_orchestrator", lane: "orch",
-    what: "bootstrap/orchestrator.rs::build_orchestrator(config, chat_factory, memory, session_id) constructs the Orchestrator wrapping the planner + worker. Returns None when [orchestrator] is missing — channels then fall back to direct default-agent dispatch.",
+    what: "bootstrap/orchestrator.rs::planner_llm(config) builds the planner's engine (PlannerLlm) from [agents.<[orchestrator] agent>]; build_orchestrator(config, llm, session_id, trace) constructs the Orchestrator wrapping the planner + worker. planner_llm returns None when [orchestrator] is missing — channels then fall back to direct default-agent dispatch.",
     files: [
+      { path: "src/bootstrap/orchestrator.rs::planner_llm", desc: "the planner's engine + agent block; an error for a missing block or an engine that does not build. TUI / Telegram: at startup (refuse to start); webhook planner endpoints, loop escalations: per turn (warn, skip); eval: per row; A2A: per planner turn" },
       { path: "src/bootstrap/orchestrator.rs::build_orchestrator", desc: "the wiring: RagPlanner + SubprocessRunner share config.agents and the caller's session_id" },
       { path: "src/bootstrap/orchestrator.rs::resolve_session_id", desc: "TENGU_SESSION_ID, else a fresh UUID (per process for chat / Telegram, per row for tengu eval); tengu webhooks mints webhook-<name>-<uuid> per request instead" },
-      { path: "src/application/orchestrator/wiring.rs::ChatOrchestratorPortImpl", desc: "the planner-side LLM-call abstraction" },
       { path: "src/application/orchestrator/events.rs", desc: "EventBus minted here, shared with planner; the global metrics sink is bridged onto it" },
     ],
     deep: "engine = \"rag\" is the only orchestrator engine (Phase 7.1) — any other value fails config validation (orchestrator.engine must be one of); build_orchestrator keeps a defensive warn + None. The old static-mode planner (OrchestratorAgentPlanner + ChatWorker) is deleted."
@@ -771,20 +771,20 @@ const STEPS = [
       { path: "src/application/orchestrator/planner.rs::RagPlanner::plan", desc: "the orchestration of all the steps below" },
       { path: "TENGU_PLANNER_REGISTRY.md", desc: "root file-backed roster loaded into the planner prompt" },
       { path: "skills/orchestrator/SKILL.md", desc: "the planner's system prompt (no Rust code)" },
-      { path: "skills/orchestrator/plan_schema.json", desc: "the plan JSON shape the prompt asks for (not validated in Rust)" },
+      { path: "skills/orchestrator/plan_schema.json", desc: "the plan JSON shape the prompt asks for (no JSON-schema check in Rust; Plan::validate checks the plan)" },
     ],
-    deep: "The planner LLM call uses run_turn_with_system_metered — same as run_turn_with_system but additionally returns TurnTelemetry with prompt/completion tokens, model slug, latency. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / session_recall / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after it. parse_verdict (4-path cascade: raw JSON, fenced, JSON inside prose, prose → Direct) gives PlannerVerdict::Direct { response } or PlannerVerdict::Plan { plan }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
+    deep: "The planner LLM call is PlannerLlm::call: one user message through collect_engine_response with no tools, executor, observer, memory, bridge or [[mcp_servers]]; it returns (text, TurnTelemetry) with prompt/completion tokens, model slug, latency — the same usage on every surface. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / session_recall / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after it. parse_verdict (4-path cascade: raw JSON, fenced, JSON inside prose, prose → Direct) gives PlannerVerdict::Direct { response } or PlannerVerdict::Plan { plan }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
   },
   {
     num: 4, title: "DagExecutor", lane: "exec",
     what: "Standard topological DAG with retry. Plan::ready_steps returns every step whose deps are satisfied; each is tokio::spawn'd on the SubprocessRunner. On step exhaustion, calls RagPlanner::replan with failure context + cross-plan recall.",
     files: [
       { path: "src/application/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel; abort_in_flight on cancel / exhaustion" },
-      { path: "src/application/orchestrator/replan.rs::drive", desc: "the outer loop — replan-on-exhausted; stores the rendered plan per session (plan_state)" },
+      { path: "src/application/orchestrator/replan.rs::drive", desc: "the outer loop — Plan::validate (empty, duplicate ids, unknown agents / dependencies, cycles) then replan-on-invalid / exhausted; stores the rendered plan per session (plan_state)" },
       { path: "src/application/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts: at once, then 1 s, 3 s (9 s for any later one)" },
       { path: "src/domain/plan.rs::Plan::ready_steps · leaves", desc: "topology check · the steps that make the reply" },
     ],
-    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn; the retry policy still runs its attempts, then the replan) on an agent name with no routable [agents.*] block — composed agents use Step.compose to declare a transient roster, NOT a renamed agent name. Cancel or an exhausted step aborts every step still in flight (its run-agent child is kill_on_drop); a step that never becomes ready (unknown dependency, cycle) is a replan; parallel leaves with no join step are joined in plan order, one ### <id> (<agent>) section each."
+    deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn; the retry policy still runs its attempts, then the replan) on an agent name with no routable [agents.*] block — composed agents use Step.compose to declare a transient roster, NOT a renamed agent name. Cancel or an exhausted step aborts every step still in flight (its run-agent child is kill_on_drop); an unknown dependency or a cycle fails Plan::validate before any step (a replan), and a step that still never becomes ready is a replan; parallel leaves with no join step are joined in plan order, one ### <id> (<agent>) section each."
   },
   {
     num: 5, title: "SubprocessRunner — spawn tengu run-agent", lane: "sub",
@@ -807,9 +807,9 @@ const STEPS = [
       { path: "src/adapters/outbound/engines/mod.rs::build_step_engine", desc: "a Claude Code or Codex step's bridge gets the workspace grant + a summary file for compress_and_store (engines::bridges_tools)" },
       { path: "src/adapters/outbound/egress.rs", desc: "tool_client (proxy, redirects off) / llm_api_client / shell_command — the network policy every tool call goes through" },
       { path: "src/adapters/outbound/tools/ + src/adapters/outbound/mcp_client/", desc: "the actual tools (catalog) + [[mcp_servers]] proxies" },
-      { path: "src/application/chat/tool_loop.rs::run_single_engine_turn", desc: "one LLM turn; tool_result_content caps results" },
+      { path: "src/application/chat/tool_loop.rs::collect_engine_response", desc: "chat's loop with the step's StepHooks (compress_and_store, per-turn metrics); one last tool-less call at the cap; tool_result_content caps results" },
     ],
-    deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Each run_single_engine_turn emits a MetricsRecord with kind=Subagent; records are packed into AgentIpcOutput.metrics and re-emitted by SubprocessRunner::run_step on the parent's global metrics sink."
+    deep: "The middle-ground protocol (Phase 5c): a step is only Failed when NO text was emitted AND no compress_and_store was called. Otherwise it's Ok with a tracing warn if the model didn't compress_and_store. Each engine turn emits a MetricsRecord with kind=Subagent (StepHooks::on_turn); records are packed into AgentIpcOutput.metrics and re-emitted by SubprocessRunner::run_step on the parent's global metrics sink."
   },
   {
     num: 7, title: "compress_and_store → durable summary", lane: "mem",
@@ -1074,20 +1074,17 @@ const SUBSYSTEM_GROUPS = [
 const SUBSYSTEMS = [
   {
     key: "memory", title: "memory — ports, application/memory, outbound stores",
-    subtitle: "the in-process disk vector store behind memory_ingest / memory_search / persistent_store, plus planner-side memory glue.",
+    subtitle: "the in-process disk vector store behind remember / memory_ingest / memory_search / persistent_store and the chat [Relevant memories] recall.",
     files: [
-      ["ports/memory.rs", "traits — VectorStore, MemoryProvider, Embedding, MemoryService, RecallStore"],
+      ["ports/memory.rs", "traits — VectorStore, Embedding, MemoryService, RecallStore"],
       ["domain/memory.rs", "shared types — MemoryHit, ChunkMetadata, RecallHit, DEFAULT_EMBEDDING_MODEL"],
-      ["application/memory/manager.rs", "MemoryManager — provider holder, impl MemoryService"],
-      ["application/memory/injector.rs", "pre-turn fenced context injection (only ChatOrchestratorPortImpl uses it post-7.1)"],
-      ["application/memory/writer.rs", "post-turn spawned non-blocking memory writes (same Phase 7.1 note)"],
-      ["application/memory/fencing.rs", "<memory-context> block helpers"],
+      ["application/memory/manager.rs", "MemoryManager — the workspace vector backend (embedder + DiskVectorStore), impl MemoryService"],
+      ["application/memory/fencing.rs", "<memory-context> block helpers (not called yet)"],
       ["adapters/outbound/memory/disk_vector.rs", "DiskVectorStore — the only VectorStore impl (bincode)"],
       ["adapters/outbound/memory/embedder.rs", "OpenRouter text-embedding-3-small client, impl Embedding"],
-      ["adapters/outbound/memory/builtin.rs", "BuiltinMemoryProvider — vector prefetch + sync_turn (its MEMORY.md / identity / daily-log loader runs only in tests)"],
       ["bootstrap/memory.rs", "builds the MemoryManager for a workspace"],
     ],
-    deep: "memory/ is the in-process disk vector store used by memory_ingest/memory_search and the BuiltinMemoryProvider. Durable, cross-session memory is adapters/outbound/tools/agentic_memory/ (Postgres + pgvector, postgres_memory feature).",
+    deep: "memory/ is the in-process disk vector store used by the memory tools and the in-process chat [Relevant memories] recall (application/chat/service.rs); the planner neither injects nor writes it. Removed 2026-10-22: MemoryProvider, BuiltinMemoryProvider, injector.rs (MemoryInjector), writer.rs (MemoryWriter). Durable, cross-session memory is adapters/outbound/tools/agentic_memory/ (Postgres + pgvector, postgres_memory feature).",
   },
   {
     key: "rag", title: "agentic_memory — Open Brain + LLM Wiki (postgres_memory)",
@@ -1135,15 +1132,15 @@ const SUBSYSTEMS = [
     key: "orchestrator", title: "application/orchestrator/ — planner + executor",
     subtitle: "the harness brain. Heart of the v2 redesign.",
     files: [
-      ["mod.rs", "Orchestrator — top-level handle (handle, subscribe, cancel)"],
-      ["planner.rs", "RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
+      ["mod.rs", "Orchestrator — top-level handle: new(planner, worker, policy, max_replans, bus), handle, subscribe"],
+      ["planner.rs", "PlannerLlm { engine, agent } — call = the planner's one engine call, no hands; RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
       ["domain/plan.rs", "Plan, Step, AgentCompose (C→B B-half), StepId, ready_steps, leaves"],
       ["executor.rs", "DagExecutor — parallel ready_steps with cancel; aborts in-flight steps on cancel / exhaustion; parallel leaves joined"],
       ["retry.rs", "RetryPolicy"],
-      ["replan.rs", "drive() loop — replan-on-exhausted"],
+      ["replan.rs", "drive() loop — Plan::validate each plan, replan-on-invalid / exhausted"],
       ["events.rs", "OrchestratorEvent enum + EventBus (incl. MetricsRecorded); a traced bus records each event before it broadcasts"],
       ["trace.rs", "TraceBridge — each OrchestratorEvent as plan.* / step.* / metrics.recorded in the execution trace; a step's cause for its run-agent child"],
-      ["wiring.rs", "ChatOrchestratorPortImpl; traits Planner, OrchestratorChatPort, WorkerHandle, ChatServiceFactory, TurnTelemetry in ports/orchestration.rs"],
+      ["ports/orchestration.rs", "traits Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn only — tengu evolve); TurnTelemetry. wiring.rs / ChatOrchestratorPortImpl / OrchestratorChatPort removed 2026-10-22"],
       ["shared_files.rs", "TENGU_PLANNER_REGISTRY.md, per-session plan state, TENGU_PLAN.md debug copy"],
     ],
     deep: "Phase 7.1 deleted OrchestratorAgentPlanner, ChatWorker, and the engine = \"static\" branches. RagPlanner is the only Planner impl now. SubprocessRunner (adapters/outbound/subprocess_runner.rs) is the only WorkerHandle.",
@@ -1157,7 +1154,7 @@ const SUBSYSTEMS = [
       ["application/orchestrator/events.rs::MetricsRecorded", "bus variant — re-broadcast of the global sink onto the orchestrator bus"],
       ["bootstrap/orchestrator.rs::build_orchestrator", "installs the global sink, spawns the bridge task onto the orchestrator bus"],
       ["application/orchestrator/planner.rs::emit_planner_metrics", "per-layer breakdown — plan: system, roster, cross_session, history, session_recall, user_message; replan: + recall, failure"],
-      ["adapters/inbound/cli/run_agent.rs", "one record per run_single_engine_turn, packed into AgentIpcOutput.metrics"],
+      ["adapters/inbound/cli/run_agent.rs", "one record per engine turn (StepHooks::on_turn), packed into AgentIpcOutput.metrics"],
       ["adapters/outbound/subprocess_runner.rs::SubprocessRunner::run_step", "re-emits output.metrics on the parent's global sink (Ok and Failed)"],
       ["adapters/outbound/memory/embedder.rs", "embed_batch_openrouter reads usage.total_tokens → kind=Embedding"],
       ["application/decision_loop/mod.rs", "one kind=Decision record per successful decisions call"],
@@ -1471,7 +1468,7 @@ const FILE_MAP = [
   ["src/adapters/inbound/cli/tool.rs", "parity", "hidden tengu tool list / call / turn — catalog names, calls through a run-agent executor, one engine turn as any agent"],
   ["src/adapters/inbound/run.rs", "runtime", "tengu run [--sandbox <s>] — loops, feeds, webhook routes, lease, graceful shutdown"],
   // ── bootstrap ──
-  ["src/bootstrap/orchestrator.rs", "bootstrap", "ChatTurnInputs, RuntimeChatServiceFactory (run_turn_inner: the planner-side strip), snapshots_inputs_fn, resolve_session_id, build_orchestrator, build_cli_chat_factory"],
+  ["src/bootstrap/orchestrator.rs", "bootstrap", "planner_llm (the planner's PlannerLlm), build_orchestrator(config, llm, session_id, trace), resolve_session_id; ChatTurnInputs, RuntimeChatServiceFactory, build_cli_chat_factory (tengu evolve)"],
   ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor (catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, agent_base_tools, compose_agent, workspace_or_temp, resolve_tool_scopes, grant_workspace_root, permissive_scope, with_mcp_bridge_tools, within_generation"],
   ["src/bootstrap/memory.rs", "bootstrap", "build_memory_manager(_async), resolve_memory_store_path"],
   ["src/bootstrap/sandbox.rs", "bootstrap", "load_sandbox_or — sandboxes/<name>/config.toml + egress install"],
@@ -1484,28 +1481,24 @@ const FILE_MAP = [
   ["src/application/chat/service.rs", "chat", "ChatRuntimeService::process_user_text, handle_chat_command, slash-command routing"],
   ["src/application/chat/tool_loop.rs", "chat", "collect_engine_response / run_single_engine_turn — the inner tool loop; tool_result_content caps results"],
   ["src/adapters/outbound/subprocess_runner.rs", "orchestrator", "SubprocessRunner::new(sandbox, session_id, agents) — fail-fast on unknown [agents.*], per-step max_tool_rounds / step_timeout_secs, run_with_timeout, TENGU_EGRESS to the child; AgentIpcInput, AgentIpcOutput"],
-  ["src/application/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle (handle, subscribe, cancel)"],
-  ["src/application/orchestrator/planner.rs", "orchestrator", "RagPlanner::new(.., agents, tool directory, recall, embedder, bus, session_id), parse_verdict (free fn), persist_user_message, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
+  ["src/application/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle: new(planner, worker, policy, max_replans, bus), handle, subscribe"],
+  ["src/application/orchestrator/planner.rs", "orchestrator", "PlannerLlm::call (one engine call: SKILL.md + one message, no tools / executor / bridge / [[mcp_servers]] / memory → (text, TurnTelemetry)), RagPlanner::new(.., llm, .., agents, tool directory, recall, embedder, bus, session_id), parse_verdict (free fn), persist_user_message, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
   ["src/domain/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7), ready_steps, leaves"],
   ["src/application/orchestrator/executor.rs", "orchestrator", "DagExecutor — abort_in_flight on cancel / exhaustion, never-ready step ⇒ replan, parallel leaves joined (WorkerHandle trait → ports/orchestration.rs)"],
   ["src/application/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
-  ["src/application/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop with replan-on-exhausted"],
+  ["src/application/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop: Plan::validate each plan, replan-on-invalid / exhausted"],
   ["src/application/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
   ["src/application/orchestrator/trace.rs", "orchestrator", "OrchestratorTrace + TraceBridge: plan.created / step.started / step.completed / step.retrying / step.failed / plan.replanned / plan.completed / metrics.recorded (Studio)"],
-  ["src/application/orchestrator/wiring.rs", "orchestrator", "ChatOrchestratorPortImpl (traits in ports/orchestration.rs)"],
   ["src/application/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_summaries); per-session active plan (set_active_plan / active_plan → IPC plan_state); TENGU_PLAN.md debug artifact"],
-  ["src/ports/orchestration.rs", "orchestrator", "Planner, OrchestratorChatPort, WorkerHandle, ChatServiceFactory, TurnTelemetry, PlannerVerdict"],
+  ["src/ports/orchestration.rs", "orchestrator", "Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn — tengu evolve), TurnTelemetry, PlannerVerdict"],
   // ── metrics ──
   ["src/domain/metrics.rs", "metrics", "MetricsRecord, MetricsKind (Planner, Subagent, Embedding, WikiCompiler, Decision), MetricsLayer, AggregatorState"],
   ["src/application/metrics.rs", "metrics", "install_global_sink / record / subscribe — process-global broadcast bus"],
   // ── memory ──
   ["src/application/memory/mod.rs", "memory", "module preamble: memory/ (disk vector store) vs adapters/outbound/tools/agentic_memory (Postgres)"],
-  ["src/application/memory/manager.rs", "memory", "MemoryManager — provider holder, prefetch_all, sync_all"],
-  ["src/ports/memory.rs", "memory", "traits — VectorStore, MemoryProvider, Embedding, MemoryService, RecallStore"],
-  ["src/adapters/outbound/memory/builtin.rs", "memory", "BuiltinMemoryProvider — vector prefetch + sync_turn; its MEMORY.md / identity / daily-log loader runs only in tests"],
-  ["src/application/memory/injector.rs", "memory", "for_turn — pre-turn fenced context injection (planner-side only post-7.1)"],
-  ["src/application/memory/writer.rs", "memory", "sync_turn — post-turn spawned non-blocking writes"],
-  ["src/application/memory/fencing.rs", "memory", "<memory-context> block helpers"],
+  ["src/application/memory/manager.rs", "memory", "MemoryManager — the workspace vector backend (embedder + DiskVectorStore) behind the memory tools"],
+  ["src/ports/memory.rs", "memory", "traits — VectorStore, Embedding, MemoryService, RecallStore"],
+  ["src/application/memory/fencing.rs", "memory", "<memory-context> block helpers (not called yet)"],
   ["src/domain/memory.rs", "memory", "MemoryHit, ChunkMetadata, RecallHit, DEFAULT_EMBEDDING_MODEL"],
   ["src/adapters/outbound/memory/disk_vector.rs", "memory", "DiskVectorStore — the only VectorStore impl (bincode <workspace>/memory/vectors.bin, else [memory] store_path)"],
   ["src/adapters/outbound/memory/embedder.rs", "memory", "Embedder — OpenRouter text-embedding-3-small client (impl Embedding); kind=Embedding records"],

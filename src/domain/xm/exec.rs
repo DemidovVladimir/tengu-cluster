@@ -8,7 +8,7 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | `client_order_id` | the tool's arg, else `ToolCtx.call_id` — never a random id (a retry must deduplicate); 1–[`MAX_CLIENT_ORDER_ID`] chars, no whitespace or control chars; an arg never starts with a reserved prefix ([`RESERVED_CLIENT_ORDER_ID_PREFIXES`]: `exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:`) |
+//! | `client_order_id` | the tool's arg, else `ToolCtx.call_id` — never a random id (a retry must deduplicate); 1–[`MAX_CLIENT_ORDER_ID`] chars, no whitespace or control chars; an arg never starts with a reserved prefix ([`RESERVED_CLIENT_ORDER_ID_PREFIXES`]: `exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:`, `step:`) |
 //! | Fingerprint ([`order_fingerprint`]) | tool, account, full instrument id, `close` or side + notional — stored with the order; a replay asking for something else is refused |
 //! | Exit bound | an exit's IOC bound ≤ [`MAX_EXIT_SLIPPAGE_BPS`] (500 bps from mid) |
 //! | Underlying | the instrument's ledger position's (a close always matches it); none yet ⇒ the instrument id itself until the catalog maps underlyings (M1) — asset exposure then nets per instrument |
@@ -42,11 +42,18 @@ use crate::domain::xm::risk::{Check, HaltReason, OrderClass, RiskVerdict};
 pub(crate) const MAX_CLIENT_ORDER_ID: usize = 256;
 
 /// Prefixes of the ids the tools and the call paths make themselves: exit
-/// attempts, the weekend fade's entries, feed / bridge / chat call ids. A
+/// attempts, the weekend fade's entries, feed / bridge / chat / step call ids. A
 /// `client_order_id` argument may not start with one (review #11): it would
 /// replay, or block, an order it did not place.
-pub(crate) const RESERVED_CLIENT_ORDER_ID_PREFIXES: [&str; 6] =
-    ["exit:", "fade:", "fade-shadow:", "feed:", "mcp:", "chat:"];
+pub(crate) const RESERVED_CLIENT_ORDER_ID_PREFIXES: [&str; 7] = [
+    "exit:",
+    "fade:",
+    "fade-shadow:",
+    "feed:",
+    "mcp:",
+    "chat:",
+    "step:",
+];
 
 /// Hard ceiling of an exit's IOC bound (every reduce-only order: `xm_exits`,
 /// `paper_close`, a reduce-only `paper_order`, the shadow exits), bps from
@@ -82,7 +89,7 @@ pub(crate) fn client_order_id_arg_error(id: &str) -> Option<String> {
             .map(|p| {
                 format!(
                     "client_order_id `{id}` starts with the reserved prefix `{p}` (ids the exit \
-                     rules, the weekend fade and the feed / bridge / chat call paths make)"
+                     rules, the weekend fade and the feed / bridge / chat / step call paths make)"
                 )
             })
     })

@@ -21,8 +21,7 @@ use async_trait::async_trait;
 use crate::adapters::outbound::engines::build_engine;
 use crate::adapters::outbound::noop::{NoopActivity, NoopRuntimeToolExecutor};
 use crate::application::a2a::{A2aService, Limits};
-use crate::application::chat::tool_loop::collect_engine_response;
-use crate::application::memory::manager::MemoryManager;
+use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::a2a::A2aServerConfig;
 use crate::config::Config;
@@ -32,7 +31,6 @@ use crate::domain::message::{Message, Role};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::a2a::{A2aRunner, A2aTarget, A2aTurn};
 use crate::ports::engine::{Engine, EngineContext, ToolExecutor};
-use crate::ports::orchestration::ChatServiceFactory;
 use crate::ports::tool_activity::ToolActivityPort;
 
 /// Longest earlier turn text handed back to the planner (chars).
@@ -150,7 +148,6 @@ pub(crate) fn build_service(config: &Config, secrets: Arc<SecretRegistry>) -> Re
     let server = server_config(config)?;
     let runner = Arc::new(TurnRunner {
         config: Arc::new(config.clone()),
-        memory: Arc::new(MemoryManager::new()),
         secrets,
     });
     Ok(A2aService::new(
@@ -168,7 +165,6 @@ pub(crate) fn build_service(config: &Config, secrets: Arc<SecretRegistry>) -> Re
 /// Answers an inbound turn (module table).
 struct TurnRunner {
     config: Arc<Config>,
-    memory: Arc<MemoryManager>,
     secrets: Arc<SecretRegistry>,
 }
 
@@ -178,7 +174,7 @@ impl A2aRunner for TurnRunner {
         let out = match target {
             A2aTarget::Planner => self.planner_turn(&turn).await,
             A2aTarget::Agent(name) => {
-                agent_turn(&self.config, name, None, &turn.history, &turn.text).await
+                agent_turn(&self.config, name, &turn.history, &turn.text).await
             }
         };
         out.map(|text| self.secrets.redact(&text))
@@ -188,20 +184,16 @@ impl A2aRunner for TurnRunner {
 
 impl TurnRunner {
     async fn planner_turn(&self, turn: &A2aTurn) -> Result<String> {
-        let factory: Arc<dyn ChatServiceFactory> = Arc::new(A2aChatServiceFactory {
-            cfg: Arc::clone(&self.config),
-        });
+        // The planner calls its own engine (no tools); steps are
+        // `run-agent` children.
+        let llm = crate::bootstrap::orchestrator::planner_llm(&self.config)?
+            .ok_or_else(|| anyhow!("the planner is not available (no [orchestrator])"))?;
         let session_id = format!("a2a-{}", turn.context_id);
-        let orchestrator = crate::bootstrap::orchestrator::build_orchestrator(
-            &self.config,
-            factory,
-            Arc::clone(&self.memory),
-            session_id,
-            None,
-        )
-        .ok_or_else(|| {
-            anyhow!("the planner is not available ([orchestrator] engine must be \"rag\")")
-        })?;
+        let orchestrator =
+            crate::bootstrap::orchestrator::build_orchestrator(&self.config, llm, session_id, None)
+                .ok_or_else(|| {
+                    anyhow!("the planner is not available ([orchestrator] engine must be \"rag\")")
+                })?;
         Ok(orchestrator.handle(planner_message(turn)).await)
     }
 }
@@ -236,36 +228,13 @@ fn planner_message(turn: &A2aTurn) -> String {
     out
 }
 
-/// The planner's `ChatServiceFactory`: the planner call (a system prompt
-/// override: no tools) and any agent turn it asks for.
-struct A2aChatServiceFactory {
-    cfg: Arc<Config>,
-}
-
-#[async_trait]
-impl ChatServiceFactory for A2aChatServiceFactory {
-    async fn run_turn(&self, agent: &str, text: &str) -> Result<String> {
-        agent_turn(&self.cfg, agent, None, &[], text).await
-    }
-
-    async fn run_turn_with_system(
-        &self,
-        agent: &str,
-        system_prompt: &str,
-        text: &str,
-    ) -> Result<String> {
-        agent_turn(&self.cfg, agent, Some(system_prompt), &[], text).await
-    }
-}
-
 /// One in-process turn of `agent_name`: its engine, workspace (or a temp
-/// dir for the turn), tools, skills and scopes — or, with
-/// `system_override` (the planner call) or for the `[orchestrator]` agent,
-/// no tools. `history` = earlier `(user, assistant)` pairs.
+/// dir for the turn), tools, skills and scopes — or, for the
+/// `[orchestrator]` agent, no tools. `history` = earlier `(user, assistant)`
+/// pairs.
 pub(crate) async fn agent_turn(
     cfg: &Config,
     agent_name: &str,
-    system_override: Option<&str>,
     history: &[(String, String)],
     text: &str,
 ) -> Result<String> {
@@ -281,11 +250,10 @@ pub(crate) async fn agent_turn(
         None,
     ));
     let log_activity: Arc<dyn ToolActivityPort> = Arc::new(NoopActivity);
-    let no_tools = system_override.is_some()
-        || cfg
-            .orchestrator
-            .as_ref()
-            .is_some_and(|o| o.agent == agent_name);
+    let no_tools = cfg
+        .orchestrator
+        .as_ref()
+        .is_some_and(|o| o.agent == agent_name);
     let base_tools = if no_tools {
         Vec::new()
     } else {
@@ -302,15 +270,12 @@ pub(crate) async fn agent_turn(
     } else {
         crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry)
     };
-    let system_prompt = match system_override {
-        Some(s) => s.to_string(),
-        None => crate::bootstrap::tools::rebuild_system_prompt(
-            agent,
-            true,
-            &skill_registry,
-            &current_tools,
-        ),
-    };
+    let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
+        agent,
+        true,
+        &skill_registry,
+        &current_tools,
+    );
     let mut tool_defs = current_tools.clone();
     let executor: Option<Arc<dyn ToolExecutor>> = if no_tools {
         None
@@ -372,13 +337,7 @@ pub(crate) async fn agent_turn(
         &tool_defs,
         &engine_context,
         executor.as_deref(),
-        None,
-        None,
-        None,
-        agent.limits.max_tool_rounds,
-        agent.limits.max_tool_result_chars,
-        agent.limits.stream_event_timeout_secs,
-        agent.limits.compact_result_limit,
+        &LoopOpts::from_limits(&agent.limits),
     )
     .await?;
     Ok(response.text)

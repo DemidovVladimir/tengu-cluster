@@ -152,7 +152,7 @@ max_attempts_per_step = 3
 max_replans = 2
 
 # Planner + in-process chat agent, on the Claude subscription. A planner turn
-# gets no tools and no bridge (bootstrap::orchestrator::run_turn_inner), and
+# gets no tools and no bridge (orchestrator::planner::PlannerLlm::call), and
 # `builtin_tools_profile = "none"` leaves the CLI no built-ins: plan JSON only.
 [agents.lping]
 default = true

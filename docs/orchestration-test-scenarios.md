@@ -60,12 +60,12 @@ You should see (in the first few lines, via `RUST_LOG=tengu=info`):
 
 ```
 orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner
-TUI orchestrator constructed with per-turn snapshot factory
+TUI orchestrator constructed
 DiskVectorStore loaded
 ```
 
 If either is missing, **stop** — the orchestrator won't fire on any scenario below. Likely causes:
-- `[orchestrator]` block missing, `engine` not `"rag"`, or the `agent` name doesn't match one in `[agents.*]`.
+- `[orchestrator]` block missing or `engine` not `"rag"`. (An `agent` name with no `[agents.*]` block, or an engine that does not build, makes `tengu chat` refuse to start — `planner_llm`.)
 - `OPENROUTER_API_KEY` unset (memory fails silently, but orchestrator needs embeddings too).
 - Default agent missing (`default = true` on one `[agents.*]`).
 - `egress: network = "tor" but the proxy is not reachable` warn → `make tor` or `[egress] network = "open"`.
@@ -312,10 +312,10 @@ The orchestrator can emit a plan with two leaves (two terminal steps; `skills/or
 
 | | |
 |---|---|
-| **Category** | Memory, pre-turn inject |
+| **Category** | Memory, planner recall lane |
 | **Channel** | TUI |
 | **Procedure** | Requires `--features postgres_memory`, `TENGU_MEMORY_DATABASE_URL`, and `[memory] within_session_output_top_k = 3` (default 0 = off). 1. Scenario S-07 (fan-out) — each `tengu run-agent` child writes its step summary to Postgres `agentic_memory` (`compress_and_store` / summary backstop). 2. After S-07, ask: `What was the last thing you researched?` |
-| **Expected behavior** | `RagPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner turn does not inject disk memory — `ChatOrchestratorPortImpl::run_orchestrator_turn_with_system` skips `MemoryInjector`.) |
+| **Expected behavior** | `RagPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner never reads disk memory — `PlannerLlm::call` sends one message with no memory.) |
 | **Pass** | Reply references content from S-07 correctly. |
 | **Fail markers** | Reply says "I don't have context about previous conversations" — recall lane off, no Postgres, or `session_id` mismatch between planner and runner. |
 
@@ -353,7 +353,7 @@ tengu eval orchestration-e2e
 
 This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2025`) → `bootstrap::orchestrator::build_orchestrator` (`RagPlanner` + `SubprocessRunner`) → `Orchestrator::handle`. The planner turn goes through `EvalChatServiceFactory` (row stubs + observer tap); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Orchestrator events become synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec. Worker `[agents.*]` blocks need a `description` to be routable.
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2059`) → `bootstrap::orchestrator::planner_llm` + `build_orchestrator` (`RagPlanner` + `SubprocessRunner`, one per row) → `Orchestrator::handle`. The planner calls its own engine (`PlannerLlm`, no tools); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Row stubs reach neither. `RowObserver` turns orchestrator events into synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec; the row's tokens are its session's `metrics.recorded` records (planner calls + steps). Worker `[agents.*]` blocks need a `description` to be routable.
 
 **Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
 

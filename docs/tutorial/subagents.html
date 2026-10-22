@@ -238,8 +238,8 @@
         <li>The child checks the guard, reloads <code>sandboxes/&lt;name&gt;/config.toml</code> from <code>sandbox_config</code> (with <code>[keys]</code> it reuses the parent's seal-proxy session), and checks the <code>description</code> again. A <code>compose</code> applies here.</li>
         <li>Workspace: the agent's <code>workspace</code>, else a fresh <code>tengu-step-*</code> temp dir. Every inherited scope gains that root, except a deny-all scope.</li>
         <li>Prompt: a fixed base, the agent's identity (name, role, instructions), its skill bodies, the plan, a "call <code>compress_and_store</code>" suffix. Tools: the agent's list plus <code>compress_and_store</code>.</li>
-        <li>Loop: model turn, tool calls through the redacting executor, capped results; older rounds shrink to 200 chars. At most the agent's <code>max_tool_rounds</code> (default 70).</li>
-        <li><code>compress_and_store</code> never reaches a tool: the loop keeps the summary (on <code>claude_code</code> and <code>codex</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and stops.</li>
+        <li>Loop: in-process chat's own loop. Model turn, tool calls through the redacting executor with call ids <code>step:&lt;session&gt;:&lt;step&gt;:&lt;nonce&gt;:&lt;round&gt;:&lt;i&gt;</code>, capped results; older rounds shrink to 200 chars. At the agent's <code>max_tool_rounds</code> (default 70) one last call offers no tools, so the model answers.</li>
+        <li><code>compress_and_store</code> never reaches a tool: the step's hook keeps the summary (on <code>claude_code</code> and <code>codex</code>, the bridge's summary file), writes it to <code>agentic_memory</code> with <code>postgres_memory</code>, and the loop stops after that round.</li>
         <li>One <code>AgentIpcOutput</code> line on stdout. <code>output</code>: the longer of the last model text and the <code>compress_and_store</code> summary; without that call, the text. A temp workspace is deleted after printing.</li>
         <li>The parent parses it. Ok: metrics re-emitted, the step's <code>tool.*</code> trace events written into its own run (when it records), output passed on. Failed, crashed or timed out: retried, then the planner replans; steps still running are aborted and their children killed.</li>
       </ol>
@@ -401,7 +401,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span class="chip bad">failed</span><span><b>no text, no call</b>Status <code>failed</code>; the parent retries.</span></li>
     <li><span class="chip bad">exit</span><span><b>run-agent exited with non-zero status</b>Before or during the loop: guard, bad JSON, unknown agent, widening compose, engine error.</span></li>
     <li><span class="chip bad">time</span><span><b>run-agent timed out after 600s</b>The child is killed; the parent retries.</span></li>
-    <li><span class="chip data">cap</span><span><b>max turns reached</b>The loop just ends: ok if the model wrote any text, else failed.</span></li>
+    <li><span class="chip data">cap</span><span><b>max turns reached</b>One last call with no tools asks for the answer: ok if the model wrote any text, else failed.</span></li>
   </ul>
 </section>
 

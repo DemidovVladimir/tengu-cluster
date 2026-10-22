@@ -59,7 +59,7 @@ api_key_env = "UNSLOTH_API_KEY" # unset/empty env → no Authorization header
 |---|---|
 | Network | Direct connection (`no_proxy`), not part of `[egress]` — works with Tor on or down. Keep `base_url` on this host / LAN |
 | Tool calling | model/server dependent — needs a tool-capable chat template (llama.cpp: `--jinja`) |
-| Planner role | OK (plain chat completions, tools stripped like OpenRouter) — small models may emit bad plan JSON: it is parsed once, never retried (`planner.rs::parse_verdict`: prose becomes a direct reply, an empty reply fails the turn) |
+| Planner role | OK (plain chat completions; `PlannerLlm::call` sends no tools, like OpenRouter) — small models may emit bad plan JSON: it is parsed once, never retried (`planner.rs::parse_verdict`: prose becomes a direct reply, an empty reply fails the turn) |
 | `unsloth start <agent>` | Not used — that launches *external* agent CLIs (Claude Code, Codex, Hermes…) against Unsloth. Tengu talks to the server directly |
 | Verified | 2026-09-23: `run-agent` step on Ollama `gemma4:latest`, Tor-default policy with Tor down → `compress_and_store` called, `status=ok` |
 
@@ -133,7 +133,7 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 - Idle timeout between stream events = `[agents.<id>.limits] stream_event_timeout_secs`; `[claude_code] cli_path` locates the binary
 - `model` is the bare slug (`claude-sonnet-4-6`), not the OpenRouter form
 - Uses Claude subscription, no per-token cost
-- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner turn gets no bridge tools and no `[[mcp_servers]]` (`bootstrap::orchestrator::run_turn_inner`, test `planner_turn_gets_no_bridge_tools`), so the CLI has no tool and writes plan JSON; another profile keeps its built-ins. Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
+- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner call gets no bridge tools and no `[[mcp_servers]]` (`application/orchestrator/planner.rs::PlannerLlm::call`, test `planner_call_has_no_hands_and_reports_usage`), so the CLI has no tool and writes plan JSON; another profile keeps its built-ins. Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
 
 ### Builtin Tools Profiles
 

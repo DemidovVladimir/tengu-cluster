@@ -8,7 +8,6 @@
 //! - `events`       — OrchestratorEvent enum + the event bus (broadcast + optional trace bridge)
 //! - `trace`        — the bridge: each OrchestratorEvent as an execution-trace event (Studio)
 //! - `shared_files` — `TENGU_PLANNER_REGISTRY.md` (from `[agents.*]` blocks with a `description`) + per-session plan state for subagents
-//! - `wiring`       — channel-side glue
 
 pub mod events;
 pub mod executor;
@@ -17,16 +16,12 @@ pub mod replan;
 pub mod retry;
 pub mod shared_files;
 pub(crate) mod trace;
-// Phase 7.1 (partial) — `pub mod roster` removed; the only runtime caller
-// (crate::bootstrap::orchestrator::build_orchestrator) now uses an inlined helper.
-pub mod wiring;
 
 // Public API re-exports
 pub use events::{EventBus, EventReceiver, OrchestratorEvent};
 
 use std::sync::Arc;
 
-use crate::application::memory::manager::MemoryManager;
 use crate::application::metrics::MetricsBarrier;
 use crate::application::orchestrator::retry::RetryPolicy;
 use crate::ports::orchestration::Planner;
@@ -38,10 +33,6 @@ pub struct Orchestrator {
     policy: RetryPolicy,
     max_replans: u32,
     bus: EventBus,
-    /// Held to keep the manager alive for the lifetime of the orchestrator;
-    /// Phase 6.4 (full) will read from this for cross-session message recall.
-    #[allow(dead_code)]
-    memory: Arc<MemoryManager>,
     /// The metrics forwarder onto `bus` (`bootstrap::orchestrator`); it
     /// ends with this orchestrator. `None`: no forwarder (tests).
     metrics: Option<MetricsBarrier>,
@@ -58,7 +49,6 @@ impl Orchestrator {
         worker: Arc<dyn WorkerHandle>,
         policy: RetryPolicy,
         max_replans: u32,
-        memory: Arc<MemoryManager>,
         bus: EventBus,
     ) -> Self {
         Self {
@@ -67,7 +57,6 @@ impl Orchestrator {
             policy,
             max_replans,
             bus,
-            memory,
             metrics: None,
         }
     }

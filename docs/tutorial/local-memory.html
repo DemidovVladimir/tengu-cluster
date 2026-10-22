@@ -204,7 +204,7 @@
         <li><code>memory_search</code>: a query plus optional <code>agent</code>, <code>source</code> or <code>kind</code> filters. Returns JSON hits with text, score and metadata.</li>
         <li><code>persistent_store</code> (opt-in): the source path must pass the tool's read scope; the file is copied under <code>.tengu/storage/</code>, its text extracted (PDF, docx, xlsx or UTF-8), chunked, one entry per chunk.</li>
         <li><code>shared_cache</code> (opt-in): <code>get</code>, <code>put</code>, <code>delete</code>, <code>list</code> by namespace and key in <code>.tengu/cache.db</code>. Non-JSON values are stored as JSON strings.</li>
-        <li>Planner calls are not saved here: their prompt is the whole assembled planner context, which recall would hand back as a memory. Cross-plan recall reads Postgres <code>agentic_memory</code> (<a href="memory.html">memory</a>).</li>
+        <li>Planner calls never touch this store: the planner's engine gets one message and no memory manager. Cross-plan recall reads Postgres <code>agentic_memory</code> (<a href="memory.html">memory</a>).</li>
       </ol>
     </div>
   </figure>
@@ -233,7 +233,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: type a message</span>
     <h2 id="s-ground">Will this turn recall?</h2>
-    <p>The check looks for seven markers as whole words, case ignored. It runs on every in-process chat turn; the planner turns it off.</p>
+    <p>The check looks for seven markers as whole words, case ignored. It runs on every in-process chat turn; the planner's call never reaches it.</p>
   </div>
   <div class="widget">
     <label for="gq">message <input id="gq" type="text" value="Summarize my LP notes" spellcheck="false" autocomplete="off"></label>
@@ -301,7 +301,7 @@
       <dt>cleared by</dt><dd><code>delete</code> per key, <code>tengu prune --hard</code></dd></dl>
     </div>
   </div>
-  <p class="note warn"><b>Present in code, not wired.</b> The builtin provider can also load <code>AGENTS.md</code>, <code>MEMORY.md</code>, <code>USER.md</code> and daily logs (<code>.tengu/memory/&lt;date&gt;.md</code>), and a <code>&lt;memory-context&gt;</code> fence exists. No live path calls either, and nothing writes daily logs.</p>
+  <p class="note warn"><b>Not loaded anywhere.</b> No prompt reads <code>AGENTS.md</code>, <code>MEMORY.md</code>, <code>USER.md</code> or daily logs; their unwired loader was deleted on 2026-10-22. A <code>&lt;memory-context&gt;</code> fence helper exists, but no live path calls it.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -347,14 +347,13 @@
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/bootstrap/memory.rs</code></td><td>store path, <code>MemoryManager</code> build, key check</td></tr>
-        <tr><td><code>src/application/memory/manager.rs</code></td><td>one builtin + one external provider; ingest, search, delete, purge</td></tr>
-        <tr><td><code>src/application/memory/injector.rs</code>, <code>writer.rs</code>, <code>fencing.rs</code></td><td>pre-turn fence, post-turn Q/A write</td></tr>
+        <tr><td><code>src/application/memory/manager.rs</code></td><td>the vector backend (embedder + store): ingest, search, delete, purge</td></tr>
+        <tr><td><code>src/application/memory/fencing.rs</code></td><td>the <code>&lt;memory-context&gt;</code> fence (not called yet)</td></tr>
         <tr><td><code>src/adapters/outbound/memory/disk_vector.rs</code></td><td><code>vectors.bin</code>, cosine scan, metadata filters</td></tr>
         <tr><td><code>src/adapters/outbound/memory/embedder.rs</code></td><td>OpenRouter embeddings client (<code>{OPENROUTER_BASE_URL}/v1/embeddings</code>)</td></tr>
-        <tr><td><code>src/adapters/outbound/memory/builtin.rs</code></td><td>the builtin provider: prefetch, Q/A sync, file loader</td></tr>
         <tr><td><code>src/adapters/outbound/tools/memory/</code></td><td><code>memory_ingest</code>, <code>memory_search</code>, <code>persistent_store</code></td></tr>
         <tr><td><code>src/adapters/outbound/tools/cache/</code></td><td><code>shared_cache</code> and <code>cache.db</code></td></tr>
-        <tr><td><code>src/ports/memory.rs</code></td><td><code>MemoryProvider</code>, <code>VectorStore</code>, <code>Embedding</code>, <code>MemoryService</code></td></tr>
+        <tr><td><code>src/ports/memory.rs</code></td><td><code>VectorStore</code>, <code>Embedding</code>, <code>MemoryService</code>, <code>RecallStore</code></td></tr>
         <tr><td><code>src/application/chat/service.rs</code></td><td><code>[Relevant memories]</code> recall, grounding check</td></tr>
         <tr><td><code>src/application/skills/registry.rs</code></td><td>system prompt with profile files</td></tr>
       </tbody>
@@ -363,7 +362,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-08.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
 </article>
 </main>
 </div>

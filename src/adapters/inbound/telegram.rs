@@ -546,25 +546,14 @@ struct TelegramSession {
     memory_manager_handle: Option<Arc<crate::application::memory::manager::MemoryManager>>,
     secret_registry: Arc<SecretRegistry>,
 
-    // Harness-owned orchestration. Constructed when
-    // `config.orchestrator.is_some()`.
+    // Harness-owned orchestration. `planner_llm` is `Some` when
+    // `[orchestrator]` is configured; `orchestrators` holds one orchestrator
+    // per sender id, each with its own session id (`orchestrator_for`),
+    // dropped with the sender's idle state (`evict_idle_users`).
     //
-    // `orchestrator_snapshots` is the shared state the per-message factory
-    // closure reads from. `execute_chat_turn` populates it with fresh
-    // per-agent `ChatTurnInputs` after hot-reload fires, then calls
-    // `orchestrator.handle`. The factory (embedded in the orchestrator)
-    // looks up agent inputs by name through the same `Arc<RwLock<...>>`.
-    //
-    // `_memory_manager` is held so it stays alive for the lifetime of the
-    // orchestrators (each holds an `Arc<MemoryManager>` internally).
-    //
-    // `orchestrator_factory` is `Some` when `[orchestrator]` is configured;
-    // `orchestrators` holds one orchestrator per sender id, each with its
-    // own session id (`orchestrator_for`), dropped with the sender's idle
-    // state (`evict_idle_users`).
-    orchestrator_factory: Option<Arc<dyn crate::ports::orchestration::ChatServiceFactory>>,
+    // `_memory_manager` is held so it stays alive for the session.
+    planner_llm: Option<crate::application::orchestrator::planner::PlannerLlm>,
     orchestrators: HashMap<String, Arc<crate::application::orchestrator::Orchestrator>>,
-    orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots,
     /// This process's recording of every sender's plans (`RunKind::Telegram`,
     /// `run_telegram`); `None` without `[orchestrator]`.
     trace: Option<Arc<dyn crate::ports::trace::TraceSink>>,
@@ -816,39 +805,13 @@ impl TelegramSession {
 
         info!("Telegram bot started — waiting for messages (Ctrl+C to stop)");
 
-        // Harness-owned orchestration (Track A — factory-closure wiring).
-        //
-        // `MemoryManager` is currently left empty — see Track B (memory
-        // vector port) for the provider wiring. Empty manager just means
-        // no memory injection; orchestration dispatch still works.
-        //
-        // `orchestrator_snapshots` is an `Arc<RwLock<HashMap<agent,
-        // ChatTurnInputs>>>` shared between this session and the factory
-        // closure. Before each `orchestrator.handle(...)` call we populate
-        // the map with fresh per-agent snapshots (after hot-reload fires);
-        // the factory reads back from the same map when the DAG executor
-        // spawns a step for a given agent.
-        //
-        // `memory_manager_early` comes from Track B's `build_memory_manager`
-        // which registers `BuiltinMemoryProvider` and installs the vector
-        // backend. Reusing it here means orchestrator turns get real memory
-        // injection/writes through the same provider the LLM-callable tools
-        // use.
         let memory_manager = memory_manager_early;
-        let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
-            Arc::new(std::sync::RwLock::new(HashMap::new()));
         // One orchestrator per sender, built on first use (`orchestrator_for`):
         // each has its own session id, so one sender's planner messages and
-        // recall never reach another's prompt.
-        let orchestrator_factory: Option<Arc<dyn crate::ports::orchestration::ChatServiceFactory>> =
-            config.orchestrator.is_some().then(|| {
-                let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
-                    &orchestrator_snapshots,
-                ));
-                Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn))
-                    as Arc<dyn crate::ports::orchestration::ChatServiceFactory>
-            });
-        if orchestrator_factory.is_some() {
+        // recall never reach another's prompt. The planner calls its own
+        // engine (`planner_llm`); steps are `run-agent` children.
+        let planner_llm = crate::bootstrap::orchestrator::planner_llm(&config)?;
+        if planner_llm.is_some() {
             info!("Telegram orchestration on: one orchestrator per sender, built on first message");
         }
 
@@ -871,9 +834,8 @@ impl TelegramSession {
                 None
             },
             secret_registry,
-            orchestrator_factory,
+            planner_llm,
             orchestrators: HashMap::new(),
-            orchestrator_snapshots,
             trace: None,
             _memory_manager: memory_manager,
             user_states: HashMap::new(),
@@ -1214,9 +1176,8 @@ impl TelegramSession {
 
         // Orchestrator dispatch path. When orchestration is configured we
         // route the user message through `Orchestrator::handle` instead of a
-        // single-agent `ChatRuntimeService` turn. The orchestrator's DAG
-        // executor spawns each step and calls our factory closure to resolve
-        // per-agent inputs via `orchestrator_snapshots`.
+        // single-agent `ChatRuntimeService` turn: the planner calls its own
+        // engine, each step is a `run-agent` child.
         //
         // Orchestrator dispatch:
         //   - default agent message → always through the orchestrator
@@ -1226,7 +1187,7 @@ impl TelegramSession {
         //     directly"), UNLESS `orchestrator.route_explicit_agents = true`
         //     which flips the toggle so the planner sees everything.
         let explicit_route = target_agent_id != self.default_agent_id;
-        let route_through_orchestrator = self.orchestrator_factory.is_some()
+        let route_through_orchestrator = self.planner_llm.is_some()
             && (!explicit_route
                 || self
                     .config
@@ -1367,7 +1328,6 @@ impl TelegramSession {
                 Some(&agent.current_bridge_tools)
             },
             mcp_servers: &self.config.mcp_servers,
-            suppress_grounding_nudge: false,
         };
 
         let _ = self.pipe.send_chat_action(sender).await;
@@ -1474,13 +1434,9 @@ impl TelegramSession {
     }
 
     // -------------------------------------------------------------------
-    // Orchestrator dispatch (per-message snapshot factory)
+    // Orchestrator dispatch
     // -------------------------------------------------------------------
 
-    /// Populate `orchestrator_snapshots` with fresh per-agent inputs and
-    /// dispatch `user_content` through `Orchestrator::handle`. Hot-reload is
-    /// performed for every agent here so the planner can delegate to agents
-    /// other than the initial target without stale skill/tool state.
     /// `sender`'s orchestrator, built on first use; `None` when no
     /// `[orchestrator]` is configured. Each sender gets its own session id
     /// (`telegram_session_id`), so planner messages and recall stay per
@@ -1492,12 +1448,11 @@ impl TelegramSession {
         if let Some(o) = self.orchestrators.get(sender) {
             return Some(Arc::clone(o));
         }
-        let factory = Arc::clone(self.orchestrator_factory.as_ref()?);
+        let llm = self.planner_llm.clone()?;
         let session_id = telegram_session_id(sender);
         let orch = Arc::new(crate::bootstrap::orchestrator::build_orchestrator(
             &self.config,
-            factory,
-            Arc::clone(&self._memory_manager),
+            llm,
             session_id.clone(),
             self.trace.as_ref().and_then(|s| {
                 crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
@@ -1516,126 +1471,7 @@ impl TelegramSession {
             None => return,
         };
 
-        // Hot-reload every agent's skill registry so snapshots capture the
-        // latest tools / system prompt.
-        for agent in self.agent_states.values_mut() {
-            if let Some(ref src) = agent.skill_source {
-                if agent.skill_registry.reload(src) {
-                    agent.current_tools = crate::bootstrap::tools::rebuild_tools(
-                        &agent.base_tools,
-                        &agent.skill_registry,
-                    );
-                    agent.rebuild_bridge_tools();
-                    agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
-                        &agent.agent_config,
-                        agent.advertise_workspace_tools,
-                        &agent.skill_registry,
-                        &agent.current_tools,
-                    );
-                }
-            }
-        }
-
         self.turn_cancel.store(false, Ordering::Relaxed);
-
-        // Build a snapshot for every agent. Snapshots own all the inputs the
-        // factory closure returns — so once the map is populated, the
-        // orchestrator's DAG executor can spawn tasks that look up any agent
-        // by name without borrowing from `self`.
-        let mut snapshot_map: HashMap<String, crate::bootstrap::orchestrator::ChatTurnInputs> =
-            HashMap::new();
-        for (agent_id, agent) in &self.agent_states {
-            let activity_adapter = make_tool_activity_adapter(
-                agent
-                    .agent_config
-                    .identity
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| agent.agent_id.clone()),
-            );
-            let current_executor: Option<Arc<dyn ToolExecutor>> =
-                agent.workspace.as_ref().and_then(|ws| {
-                    crate::bootstrap::tools::build_tool_executor(
-                        ws,
-                        &agent.current_tools,
-                        &agent.skill_registry,
-                        &self.memory_manager_handle,
-                        &self.secret_registry,
-                        activity_adapter,
-                        Some(Arc::clone(&self.turn_cancel)),
-                        Some(&self.memory_config),
-                        &agent.agent_config,
-                        &self.config.mcp_servers,
-                    )
-                    .map(|e| {
-                        let inner: Arc<dyn ToolExecutor> = Arc::new(e);
-                        let sanitized: Arc<dyn ToolExecutor> = Arc::new(
-                            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry)),
-                        );
-                        sanitized
-                    })
-                });
-
-            let bridge_tools = if agent.current_bridge_tools.is_empty() {
-                None
-            } else {
-                Some(agent.current_bridge_tools.clone())
-            };
-
-            // Cross-agent Recent Team Activity — preserved on the
-            // orchestrator path (addresses limitation #6). Each snapshot
-            // gets its own agent-scoped view (build_activity_context
-            // filters out the target agent's own entries).
-            let mut snapshot_system_prompt = agent.current_system_prompt.clone();
-            if self.is_multi_agent {
-                let activity_ctx = crate::adapters::inbound::channel::build_activity_context(
-                    &self.activity_log,
-                    agent_id,
-                );
-                if !activity_ctx.is_empty() {
-                    snapshot_system_prompt.push_str(&activity_ctx);
-                }
-            }
-
-            let inputs = crate::bootstrap::orchestrator::ChatTurnInputs {
-                engine: Arc::clone(&agent.engine),
-                agent_id: agent.agent_id.clone(),
-                agent_config: Arc::new(agent.agent_config.clone()),
-                history_turn_limit: agent.history_turn_limit,
-                compaction_policy: agent.compaction_policy,
-                system_prompt: snapshot_system_prompt,
-                tools: agent.current_tools.clone(),
-                tool_executor: current_executor,
-                memory_manager: self.memory_manager_handle.clone(),
-                max_recall_entries: self.memory_config.max_recall_entries,
-                max_recall_tokens: self.memory_config.max_recall_tokens,
-                bridge_tools,
-                mcp_servers: self.config.mcp_servers.clone(),
-                tool_observer: None,
-                cancel: Some(Arc::clone(&self.turn_cancel)),
-            };
-            snapshot_map.insert(agent_id.clone(), inputs);
-        }
-
-        // Publish snapshots atomically.
-        {
-            let mut guard = match self.orchestrator_snapshots.write() {
-                Ok(g) => g,
-                Err(e) => {
-                    error!(error = %e, "orchestrator snapshots lock poisoned");
-                    let _ = self
-                        .pipe
-                        .send_text(
-                            sender,
-                            "Internal error: orchestrator state unavailable.",
-                            &self.delivery_opts,
-                        )
-                        .await;
-                    return;
-                }
-            };
-            *guard = snapshot_map;
-        }
 
         let _ = self.pipe.send_chat_action(sender).await;
         let typing_pipe = Arc::clone(&self.pipe);
@@ -2059,7 +1895,6 @@ impl TelegramSession {
                 Some(&agent.current_bridge_tools)
             },
             mcp_servers: &self.config.mcp_servers,
-            suppress_grounding_nudge: false,
         };
 
         let result = chat_runtime.process_user_text(state, &injected).await;

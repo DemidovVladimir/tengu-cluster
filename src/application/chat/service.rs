@@ -14,7 +14,7 @@ use crate::application::chat::flow::{
     enforce_history_turn_limit, maybe_compact_flow, resolve_flow_key,
 };
 use crate::application::chat::prompt_budget::{assemble_recent_history, compute_base_input_budget};
-use crate::application::chat::tool_loop::{collect_engine_response, ToolResultObserver};
+use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts, ToolResultObserver};
 use crate::application::memory::manager::MemoryManager;
 use crate::config::AgentConfig;
 use crate::domain::message::{Lens, Message, Recipient, Role, ToolDef};
@@ -242,11 +242,6 @@ pub(crate) struct ChatRuntimeService<'a> {
     /// `[[mcp_servers]]` behind any `{server}__{tool}` entry in
     /// `bridge_tools` — handed to the engine so its bridge can proxy them.
     pub mcp_servers: &'a [crate::config::McpServerConfig],
-    /// Phase 4c: when `true`, the "last/latest/most recent" fresh-grounding
-    /// system message at the top of `process_user_text` is skipped. Set by
-    /// the planner path (`run_turn_with_system`) so the grounding nudge does
-    /// not compete with the SKILL.md "emit JSON only" instruction.
-    pub suppress_grounding_nudge: bool,
 }
 
 /// The message asks about the latest history ("last", "most recent", …).
@@ -346,8 +341,7 @@ impl<'a> ChatRuntimeService<'a> {
             });
         }
 
-        let needs_fresh_grounding =
-            !self.suppress_grounding_nudge && needs_fresh_history_grounding(text);
+        let needs_fresh_grounding = needs_fresh_history_grounding(text);
 
         // Recall relevant memories if a memory manager with a vector
         // backend is available.
@@ -439,13 +433,11 @@ impl<'a> ChatRuntimeService<'a> {
             self.tools,
             &context,
             self.tool_executor,
-            self.tool_observer,
-            self.cancel,
-            None, // chat runtime has its own flow-level budget enforcement
-            self.agent_config.limits.max_tool_rounds,
-            self.agent_config.limits.max_tool_result_chars,
-            self.agent_config.limits.stream_event_timeout_secs,
-            self.agent_config.limits.compact_result_limit,
+            &LoopOpts {
+                observer: self.tool_observer,
+                cancel: self.cancel,
+                ..LoopOpts::from_limits(&self.agent_config.limits)
+            },
         )
         .await?;
 

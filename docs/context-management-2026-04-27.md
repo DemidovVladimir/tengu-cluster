@@ -46,8 +46,11 @@ prior-round tool results to first-line-only mid-loop).
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-A user message hits Layers 1→2→3 (potentially →4) on the planner-side
-turn, then Layers 5→3 (→4) on each subagent step. Layers 0, 6, 7 are
+An in-process chat turn hits Layers 1→2→3 (potentially →4). On an
+orchestrated surface the planner builds its own prompt (`RagPlanner`) and
+`PlannerLlm::call` sends it through Layer 3's `collect_engine_response`
+with no tools (no Layer 1/2 chat flow, no →4); then Layers 5→3 (→4) run on
+each subagent step. Layers 0, 6, 7 are
 infrastructure consumed by the others. Layer 6 is Open Brain live memory
 (Postgres `agentic_memory`) plus Karpathy LLM Wiki compiled state.
 **Layer 8 is orthogonal** — it
@@ -193,14 +196,14 @@ recall, and replan cross-plan recall. Without `postgres_memory`, these
 durable planner-memory lanes are empty.
 
 **#10 `<memory-context>` fencing** (`application/memory/fencing.rs::build_memory_context_block`):
-wraps text in `<memory-context>…</memory-context>` with a system note. Its
-only caller is `injector::for_turn` on `ChatOrchestratorPortImpl::run_orchestrator_turn`,
-which no live path calls — the planner uses `run_orchestrator_turn_with_system_metered`
-(no injection). The chat recall block above is **not** fenced.
+wraps text in `<memory-context>…</memory-context>` with a system note. Nothing
+calls it yet: its only caller, the memory injector, was deleted 2026-10-22
+with the planner-side chat-service path (the planner never injected memory).
+The chat recall block above is **not** fenced.
 
-### 11. Grounding nudge + `suppress_grounding_nudge`
+### 11. Grounding nudge
 
-`application/chat/service.rs:255` (`needs_fresh_history_grounding`) and `:349`.
+`application/chat/service.rs:250` (`needs_fresh_history_grounding`) and `:395`.
 When the user message contains *"last", "latest", "most recent", "newest",
 "previous", "recently", "before that"* (whole words — "Elasticsearch" no
 longer counts), the chat layer prepends a system message:
@@ -214,11 +217,12 @@ When triggered, **memory recall is also skipped** for that turn —
 recalled summaries from older turns would compete with the freshness
 instruction.
 
-The planner-side LLM call sets `suppress_grounding_nudge = true` so the
-nudge doesn't compete with the SKILL.md "emit JSON only" instruction.
-This is set inside `bootstrap/orchestrator.rs::run_turn_inner` (`:253`,
-`suppress_grounding_nudge: system_override.is_some()`), reached through
-`run_turn_with_system` / `run_turn_with_system_metered`.
+The nudge lives in the chat layer only. The planner never goes through it:
+`PlannerLlm::call` (`application/orchestrator/planner.rs`) sends the SKILL.md
+system prompt + one user message straight to the engine (no tools, no
+memory, no nudge), so nothing competes with the "emit JSON only"
+instruction. (`suppress_grounding_nudge` and the `run_turn_with_system`
+path that set it were deleted 2026-10-22.)
 
 ### 12. Skill body assembly (+ #13)
 
@@ -448,8 +452,11 @@ OpenRouter response (was previously discarded). Falls back to
 row per planner-prompt section — `plan`: `system`, `roster`, `cross_session`,
 `history`, `session_recall`, `user_message`; `replan`: `system`, `roster`,
 `cross_session`, `history`, `recall`, `failure`, `user_message`
-(`orchestrator/planner.rs:570`, `:693`). Emitted by `emit_planner_metrics`
-(`:730`) from the same strings the planner just composed for the LLM call.
+(`orchestrator/planner.rs` `RagPlanner::plan` / `replan`). Emitted by
+`emit_planner_metrics` from the same strings the planner just composed for
+the LLM call, with the usage `PlannerLlm::call` returns (`TurnTelemetry`) —
+the same on every surface (webhook and eval planner turns reported zero
+tokens before 2026-10-22).
 
 **Approximate by design.** The layer measures only what the planner
 built — it does not see engine-side framing (Anthropic `<thinking>`
@@ -475,8 +482,8 @@ load-bearing surface.
 
 Subagent records cross the subprocess boundary in
 `AgentIpcOutput::{Ok,Failed}.metrics: Vec<MetricsRecord>` (new field
-added 2026-04-28). `run_agent_subprocess` records one per
-`run_single_engine_turn` and packs them into the IPC payload.
+added 2026-04-28). `run_agent_subprocess` records one per engine turn
+(`StepHooks::on_turn` in chat's loop) and packs them into the IPC payload.
 `SubprocessRunner::run_step` re-emits each via `metrics::forward()`
 on the parent's global sink (bus only — the child's own `record()` line
 already reached the parent log through forwarded stderr) — so the TUI sees
@@ -518,7 +525,7 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 8 | 2 | memory recall block (chat) | application/chat/service.rs:352 | top-5 (`max_recall_tokens` not enforced) |
 | 9 | 2 | `cross_session_msg_top_k` | orchestrator/planner.rs:332 (planner side) | 0 (off) |
 | 10 | 2 | `<memory-context>` fencing | application/memory/fencing.rs | no live caller |
-| 11 | 2 | grounding nudge / suppress | application/chat/service.rs:255 · :349 | trigger words (whole) |
+| 11 | 2 | grounding nudge (chat only) | application/chat/service.rs:250 · :395 | trigger words (whole) |
 | 12 | 2 | identity / skill / prompt caps | application/skills/registry.rs:1253 | 2K / 16K / 32K |
 | 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |
 | 14 | 3 | `truncate_tool_result` (local: `fit_tool_result`) | application/chat/tool_loop.rs:406 | 300 000 chars (local: window / 8 × 4) |

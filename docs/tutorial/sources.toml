@@ -45,7 +45,6 @@ sources = [
   "src/application/orchestrator/replan.rs",
   "src/application/orchestrator/events.rs",
   "src/application/orchestrator/trace.rs",
-  "src/application/orchestrator/wiring.rs",
   "src/application/orchestrator/mod.rs",
   "src/bootstrap/orchestrator.rs",
   "src/bootstrap/a2a.rs",

@@ -177,7 +177,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 ### Memory
 | Module | Purpose |
 |--------|---------|
-| `application/memory/` + `ports/memory.rs` + `adapters/outbound/memory/` | `MemoryManager` + providers, `<memory-context>` fencing, `disk_vector.rs` (bincode store), `embedder.rs` (OpenRouter `text-embedding-3-small`) |
+| `application/memory/` + `ports/memory.rs` + `adapters/outbound/memory/` | `MemoryManager` (the workspace vector backend behind the memory tools; providers removed 2026-10-22), `<memory-context>` fencing, `disk_vector.rs` (bincode store), `embedder.rs` (OpenRouter `text-embedding-3-small`) |
 | `adapters/outbound/tools/agentic_memory/` | Open Brain — Postgres + pgvector `agentic_memory` tool + recall lanes (feature `postgres_memory`) |
 
 ### Channel Adapters
@@ -190,7 +190,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 ### Orchestration
 | Module | Purpose |
 |--------|---------|
-| `application/orchestrator/` | `RagPlanner` (`planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state), `wiring.rs` (planner LLM port); `Plan` types in `domain/plan.rs` |
+| `application/orchestrator/` | `RagPlanner` + `PlannerLlm` (the planner's engine call, `planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `trace.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state); `Plan` types in `domain/plan.rs` |
 | `adapters/outbound/subprocess_runner.rs` | `SubprocessRunner` — spawns `tengu run-agent` per plan step (IPC JSON over stdin/stdout) |
 
 ### Infrastructure

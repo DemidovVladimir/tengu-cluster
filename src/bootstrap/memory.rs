@@ -1,5 +1,5 @@
-//! Memory wiring — builds the `MemoryManager` (builtin provider + disk vector
-//! store + embedder) for an agent workspace.
+//! Memory wiring — builds the `MemoryManager` (disk vector store + embedder)
+//! for an agent workspace.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -36,15 +36,11 @@ pub(crate) fn resolve_memory_store_path(
 // `resolve_qdrant_collection` was removed in Phase 6 along with the Qdrant
 // backend — the disk-backed `VectorStore` does not use collection names.
 
-/// Build a `MemoryManager` populated with a `BuiltinMemoryProvider` that
-/// uses the new `Embedder` + `VectorStore` pair.
+/// Build a `MemoryManager` holding the `Embedder` + `VectorStore` pair.
 ///
-/// Returns a freshly-constructed manager (possibly empty) when memory is
-/// disabled or the vector stack fails to initialize, so channels can
-/// always hand a valid `Arc<MemoryManager>` to the orchestrator.
-/// Workspace defaults to the current directory when `None` so the
-/// `BuiltinMemoryProvider` has a real path to read AGENTS.md / MEMORY.md
-/// / daily logs from.
+/// Returns a manager without a backend when memory is disabled or the
+/// vector stack fails to initialize, so channels can always hand a valid
+/// `Arc<MemoryManager>` to the tool executor.
 /// Phase 7.6 — async sibling of `build_memory_manager` for callers that
 /// already live inside a tokio context (notably `run_agent_subprocess`,
 /// which can't take a `&Runtime` arg without re-entrant block-on hazards).
@@ -54,7 +50,6 @@ pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> Arc<crate::application::memory::manager::MemoryManager> {
-    use crate::adapters::outbound::memory::builtin::BuiltinMemoryProvider;
     use crate::application::memory::manager::MemoryManager;
 
     let manager = Arc::new(MemoryManager::new());
@@ -63,16 +58,6 @@ pub(crate) async fn build_memory_manager_async(
         return manager;
     };
 
-    let ws = workspace
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    let provider = Box::new(BuiltinMemoryProvider::new(
-        ws,
-        Arc::clone(&store),
-        Arc::clone(&embedder),
-    ));
-
-    manager.add_provider(provider).await;
     manager.set_vector_backend(embedder, store).await;
     manager
 }
@@ -111,9 +96,8 @@ async fn build_vector_stack_async(
 }
 
 /// Phase 7.7 refactor #4 — sync wrapper around `build_memory_manager_async`.
-/// Pre-7.7 this duplicated the BuiltinMemoryProvider construction + the
-/// `add_provider` / `set_vector_backend` call sequence. Now those live in
-/// the async function exclusively; this wrapper just block_on's it.
+/// The backend wiring lives in the async function; this wrapper just
+/// block_on's it.
 pub(crate) fn build_memory_manager(
     memory_config: &crate::config::MemoryConfig,
     rt: &tokio::runtime::Runtime,

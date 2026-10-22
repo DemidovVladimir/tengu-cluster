@@ -228,31 +228,9 @@ pub fn run_tui(
     let memory_config = config.memory.clone();
     let mcp_servers = config.mcp_servers.clone();
 
-    // Harness-owned orchestration (Track A — factory-closure wiring).
-    //
-    // `MemoryManager` stays empty (no providers) — Track B owns the port
-    // wiring that registers `BuiltinMemoryProvider`. An empty manager is a
-    // no-op for `prefetch_all` / `sync_all`, which is correct for now.
-    //
-    // `orchestrator_snapshots` is shared between this main thread (where
-    // the orchestrator + factory are constructed) and the engine thread
-    // (where snapshots are written before each user-message dispatch).
-    // The engine thread runs `rt.block_on(orchestrator.handle(...))` and the
-    // orchestrator spawns step tasks that call our factory closure, which
-    // reads inputs back from the same map.
-    let _memory_manager: Arc<crate::application::memory::manager::MemoryManager> =
-        Arc::new(crate::application::memory::manager::MemoryManager::new());
-    let orchestrator_snapshots: crate::bootstrap::orchestrator::OrchestratorSnapshots =
-        Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
-    // The engine thread publishes a snapshot for this chat agent only; when
-    // `[orchestrator] agent` is another agent its planner turn needs its own.
-    if let Some(planner) =
-        crate::bootstrap::orchestrator::planner_inputs_if_other(&config, &agent_id)?
-    {
-        if let Ok(mut guard) = orchestrator_snapshots.write() {
-            guard.insert(planner.agent_id.clone(), planner);
-        }
-    }
+    // Harness-owned orchestration: with `[orchestrator]`, the planner calls
+    // its own engine (`planner_llm`) and each plan step runs as a `tengu
+    // run-agent` child; the engine thread runs `orchestrator.handle(...)`.
     // With `[orchestrator]`, this process records its plans and steps
     // (`RunKind::Chat`; Studio, `tengu trace show`).
     let trace = crate::bootstrap::trace::open_orchestration(
@@ -260,25 +238,21 @@ pub fn run_tui(
         crate::domain::trace::RunKind::Chat,
         &secret_registry,
     );
-    let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> = {
-        let inputs_fn = crate::bootstrap::orchestrator::snapshots_inputs_fn(Arc::clone(
-            &orchestrator_snapshots,
-        ));
-        let factory: Arc<dyn crate::ports::orchestration::ChatServiceFactory> =
-            Arc::new(crate::bootstrap::orchestrator::RuntimeChatServiceFactory::new(inputs_fn));
-        crate::bootstrap::orchestrator::build_orchestrator(
-            &config,
-            factory,
-            Arc::clone(&_memory_manager),
-            crate::bootstrap::orchestrator::resolve_session_id(),
-            trace.as_ref().and_then(|s| {
-                crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
-            }),
-        )
-        .map(Arc::new)
-    };
+    let orchestrator: Option<Arc<crate::application::orchestrator::Orchestrator>> =
+        match crate::bootstrap::orchestrator::planner_llm(&config)? {
+            Some(llm) => crate::bootstrap::orchestrator::build_orchestrator(
+                &config,
+                llm,
+                crate::bootstrap::orchestrator::resolve_session_id(),
+                trace.as_ref().and_then(|s| {
+                    crate::application::orchestrator::trace::OrchestratorTrace::of(s, None)
+                }),
+            )
+            .map(Arc::new),
+            None => None,
+        };
     if orchestrator.is_some() {
-        tracing::info!("TUI orchestrator constructed with per-turn snapshot factory");
+        tracing::info!("TUI orchestrator constructed");
     }
 
     // Task 5.4 — verbose event rendering for CLI. Subscribe to the
@@ -420,7 +394,6 @@ pub fn run_tui(
     let engine_agent_config = agent_config.clone();
     let secret_registry_clone = Arc::clone(&secret_registry);
     let engine_orchestrator = orchestrator.clone();
-    let engine_orchestrator_snapshots = Arc::clone(&orchestrator_snapshots);
 
     std::thread::spawn(move || {
         let secret_registry = secret_registry_clone;
@@ -747,7 +720,6 @@ pub fn run_tui(
                                     Some(&current_bridge_tools)
                                 },
                                 mcp_servers: &mcp_servers,
-                                suppress_grounding_nudge: false,
                             };
 
                             match chat_runtime
@@ -867,57 +839,10 @@ pub fn run_tui(
                     // Orchestrator dispatch path. When orchestration is
                     // configured we route the user message through
                     // `Orchestrator::handle` instead of a single
-                    // `ChatRuntimeService` turn. The snapshot map is shared
-                    // with the factory closure; we publish a fresh entry for
-                    // this agent each turn so hot-reloaded tools / system
-                    // prompt / owned executor are visible when the DAG
-                    // executor spawns a step.
+                    // `ChatRuntimeService` turn: the planner calls its own
+                    // engine, each step is a `run-agent` child that reloads
+                    // the sandbox config itself.
                     if let Some(ref orch) = engine_orchestrator {
-                        // Move the current executor into an `Arc` and wrap
-                        // with the owned sanitizer. Because the executor is
-                        // rebuilt whenever `tools_dirty` fires, this snapshot
-                        // is safe to share across spawned orchestrator tasks.
-                        let sanitized_exec_arc: Option<Arc<dyn ToolExecutor>> =
-                            current_executor.take().map(|exec| {
-                                let inner: Arc<dyn ToolExecutor> = exec as Arc<dyn ToolExecutor>;
-                                let wrapped: Arc<dyn ToolExecutor> = Arc::new(
-                                    crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-                                        Arc::clone(&inner),
-                                        Arc::clone(&secret_registry),
-                                    ),
-                                );
-                                wrapped
-                            });
-
-                        let bridge_tools_opt = if current_bridge_tools.is_empty() {
-                            None
-                        } else {
-                            Some(current_bridge_tools.clone())
-                        };
-
-                        let snapshot = crate::bootstrap::orchestrator::ChatTurnInputs {
-                            engine: Arc::clone(&engine),
-                            agent_id: engine_agent_id.clone(),
-                            agent_config: Arc::new(engine_agent_config.clone()),
-                            history_turn_limit,
-                            compaction_policy,
-                            system_prompt: current_system_prompt.clone(),
-                            tools: current_tools.clone(),
-                            tool_executor: sanitized_exec_arc,
-                            memory_manager: memory_manager_handle.clone(),
-                            max_recall_entries: memory_config.max_recall_entries,
-                            max_recall_tokens: memory_config.max_recall_tokens,
-                            bridge_tools: bridge_tools_opt,
-                            mcp_servers: mcp_servers.clone(),
-                            tool_observer: None,
-                            cancel: None,
-                        };
-                        if let Ok(mut guard) = engine_orchestrator_snapshots.write() {
-                            guard.insert(engine_agent_id.clone(), snapshot);
-                        } else {
-                            tracing::error!("orchestrator snapshots lock poisoned");
-                        }
-
                         let final_output = rt.block_on(orch.handle(text.clone()));
 
                         let redacted = secret_registry.redact(&final_output);
@@ -934,11 +859,6 @@ pub fn run_tui(
                             }
                         }));
 
-                        // The orchestrator took ownership of the executor
-                        // (via the sanitized Arc). Mark tools dirty so the
-                        // next direct or orchestrator turn rebuilds a fresh
-                        // one against the latest skill registry.
-                        tools_dirty = true;
                         continue;
                     }
 
@@ -973,7 +893,6 @@ pub fn run_tui(
                                 Some(&current_bridge_tools)
                             },
                             mcp_servers: &mcp_servers,
-                            suppress_grounding_nudge: false,
                         };
 
                         match chat_runtime

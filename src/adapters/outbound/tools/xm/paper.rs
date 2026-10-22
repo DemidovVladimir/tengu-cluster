@@ -11,7 +11,7 @@
 //! Arguments parse strictly — an unknown key, a wrong type, a short id or
 //! `null` for a required key is a tool error naming it; nothing is placed.
 //! A `client_order_id` argument never starts with a reserved prefix
-//! (`exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:` — ids the
+//! (`exit:`, `fade:`, `fade-shadow:`, `feed:`, `mcp:`, `chat:`, `step:` — ids the
 //! tools and call paths make, review #11); an exit's `max_slippage_bps`
 //! (`paper_close`, a reduce-only `paper_order`) is ≤ 500 bps
 //! (`exec::MAX_EXIT_SLIPPAGE_BPS`, review #9).

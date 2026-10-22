@@ -58,20 +58,17 @@ pub(crate) async fn start_session(
     config: &Config,
     secrets: Arc<SecretRegistry>,
 ) -> Result<RunSession> {
-    #[cfg(feature = "webhooks")]
-    let webhook_memory = Arc::new(crate::application::memory::manager::MemoryManager::new());
     // The escalator records into the runtime's run and its turns are the
     // runtime's (drained on shutdown); `start` hands both before any loop runs.
     #[cfg(feature = "webhooks")]
-    let escalator: runtime::MakeEscalator<'_> = Box::new(|trace, turns| {
-        super::webhooks::orchestrator_escalator(config, &webhook_memory, trace, turns)
-    });
+    let escalator: runtime::MakeEscalator<'_> =
+        Box::new(|trace, turns| super::webhooks::orchestrator_escalator(config, trace, turns));
     #[cfg(not(feature = "webhooks"))]
     let escalator: runtime::MakeEscalator<'_> = Box::new(|_, _| None);
 
     let mut rt = runtime::start(config, Arc::clone(&secrets), escalator).await?;
     #[cfg(feature = "webhooks")]
-    let mounted = mount_webhooks(config, &mut rt, secrets, webhook_memory).await;
+    let mounted = mount_webhooks(config, &mut rt, secrets).await;
     #[cfg(not(feature = "webhooks"))]
     let mounted = webhooks_off(config, &mut rt);
     if let Err(e) = mounted {
@@ -164,7 +161,6 @@ async fn mount_webhooks(
     config: &Config,
     rt: &mut Runtime,
     secrets: Arc<SecretRegistry>,
-    memory_manager: Arc<crate::application::memory::manager::MemoryManager>,
 ) -> Result<()> {
     use super::webhooks;
     use anyhow::Context;
@@ -175,13 +171,7 @@ async fn mount_webhooks(
     }
     // Each request's `trigger.webhook` root and its work go into the
     // runtime's run.
-    let state = webhooks::app_state(
-        config.clone(),
-        memory_manager,
-        rt.loops(),
-        secrets,
-        rt.trace(),
-    )?;
+    let state = webhooks::app_state(config.clone(), rt.loops(), secrets, rt.trace())?;
     let addr = webhooks::bind_addr(config)?;
     let listener = tokio::net::TcpListener::bind(addr)
         .await
