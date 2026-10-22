@@ -196,7 +196,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>~/.tengu/memory/</code>. No key: memory stays off, with a warning.</li>
+        <li>On start, <code>[memory] enabled</code> plus <code>OPENROUTER_API_KEY</code> opens the store: <code>&lt;workspace&gt;/memory/vectors.bin</code>, else <code>[memory] store_path</code> or <code>&lt;TENGU_HOME&gt;/memory/</code>. No key: memory stays off, with a warning.</li>
         <li>The system prompt loads <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code> from the agent's workspace: up to 2000 tokens each, 32000 in total.</li>
         <li>A message about the last, latest, newest, previous or most recent thing skips recall. A system note tells the model to verify instead.</li>
         <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>) join the prompt as <code>[Relevant memories]</code>.</li>
@@ -283,7 +283,7 @@
       <h3>memory/vectors.bin</h3>
       <dl class="kv"><dt>holds</dt><dd>every entry: id, text, 1536 floats, metadata</dd>
       <dt>writers</dt><dd><code>memory_ingest</code>, <code>persistent_store</code></dd>
-      <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>~/.tengu/memory/</code></dd>
+      <dt>no workspace</dt><dd><code>[memory] store_path</code>, default <code>&lt;TENGU_HOME&gt;/memory/</code></dd>
       <dt>cleared by</dt><dd><code>/purge</code>, <code>tengu prune</code></dd></dl>
     </div>
     <div class="card data">

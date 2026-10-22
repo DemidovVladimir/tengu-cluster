@@ -515,29 +515,24 @@ pub struct SkillUnderTest {
     pub skill_dir: PathBuf,
 }
 
+/// The skill tiers (`config::paths::skill_tiers`) with the cwd as the
+/// workspace — `tengu eval` runs outside any sandbox.
 pub fn default_skill_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = dirs_next::home_dir() {
-        roots.push(home.join(".tengu").join("skills"));
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd.join(".tengu").join("skills"));
-        roots.push(cwd.join("skills"));
-    }
-    roots
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::config::paths::skill_tiers(&cwd)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .collect()
 }
 
 fn tier_for_root(root: &Path) -> SkillTier {
-    let s = root.to_string_lossy();
-    if s.contains("/.tengu/skills") {
-        if let Some(home) = dirs_next::home_dir() {
-            if root.starts_with(home.join(".tengu").join("skills")) {
-                return SkillTier::Managed;
-            }
-        }
-        return SkillTier::Workspace;
+    if root.starts_with(crate::config::paths::resolve_tengu_home().join("skills")) {
+        SkillTier::Managed
+    } else if root.to_string_lossy().contains("/.tengu/skills") {
+        SkillTier::Workspace
+    } else {
+        SkillTier::Project
     }
-    SkillTier::Project
 }
 
 pub fn discover_skills(
@@ -2541,9 +2536,8 @@ fixtures:
 
     #[test]
     fn tier_for_root_classifies_tenu_skills_as_workspace_when_home_unknown() {
-        // When a path contains .tengu/skills but doesn't start with $HOME,
-        // it MUST be Workspace, never Project. This guards against a silent
-        // misclassification if home_dir() ever returns None.
+        // A `.tengu/skills` dir outside the managed tier
+        // (`<TENGU_HOME>/skills`) MUST be Workspace, never Project.
         let root = std::path::PathBuf::from("/tmp/unrelated/.tengu/skills");
         let tier = tier_for_root(&root);
         assert_eq!(tier, SkillTier::Workspace);

@@ -110,7 +110,7 @@
         <g class="n data" data-at="1-2">
           <rect x="20" y="24" width="165" height="52" rx="8"/>
           <text x="102" y="46" text-anchor="middle" class="t-title">managed</text>
-          <text x="102" y="64" text-anchor="middle" class="t-small t-mono">~/.tengu/skills</text>
+          <text x="102" y="64" text-anchor="middle" class="t-small t-mono">&lt;TENGU_HOME&gt;/skills</text>
         </g>
         <g class="n data" data-at="1-2">
           <rect x="20" y="92" width="165" height="52" rx="8"/>
@@ -209,7 +209,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>Tengu looks in four folders, always in this order: <code>~/.tengu/skills</code>, the workspace's <code>.tengu/skills</code> and <code>skills/</code>, then <code>skills/</code> in the folder tengu runs from.</li>
+        <li>Tengu looks in four folders, always in this order: <code>&lt;TENGU_HOME&gt;/skills</code>, the workspace's <code>.tengu/skills</code> and <code>skills/</code>, then <code>skills/</code> in the folder tengu runs from.</li>
         <li>Every sub-folder holding a <code>SKILL.md</code> is a skill. A folder name already seen in an earlier tier wins; later copies are skipped.</li>
         <li><code>---</code> frontmatter with a <code>name</code> makes a documentation skill, or an API skill with <code>base_url</code>. A <code># name</code> heading plus an <code>## Execution</code> code block makes a shell skill.</li>
         <li>Only names in the agent's <code>skill_packages</code> stay; an empty list loads none. A name equal to a built-in tool is skipped. An agent that runs no shell drops shell skills.</li>
@@ -231,7 +231,7 @@
   </div>
   <div class="widget">
     <div class="ctrls">
-      <label for="has-m"><input type="checkbox" id="has-m"> <code>~/.tengu/skills/research</code></label>
+      <label for="has-m"><input type="checkbox" id="has-m"> <code>&lt;TENGU_HOME&gt;/skills/research</code></label>
       <label for="has-w"><input type="checkbox" id="has-w" checked> <code>.tengu/skills/research</code></label>
       <label for="has-p"><input type="checkbox" id="has-p" checked> <code>skills/research</code></label>
     </div>
@@ -499,7 +499,7 @@ You are Tengu. Use tools to execute actions. Never fabricate data.
   var hm = document.getElementById("has-m"), hw = document.getElementById("has-w"), hp = document.getElementById("has-p");
   var tiers = document.getElementById("tiers"), tnote = document.getElementById("tier-note");
   var T = {
-    m: { path: "~/.tengu/skills/research", label: "managed" },
+    m: { path: "&lt;TENGU_HOME&gt;/skills/research", label: "managed" },
     w: { path: ".tengu/skills/research", label: "workspace" },
     p: { path: "skills/research", label: "project" }
   };

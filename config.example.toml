@@ -119,7 +119,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # embedding_model = "text-embedding-3-small"  # must be 1536-dim (Postgres schema hardcodes vector(1536))
 # max_recall_entries = 5
 # max_recall_tokens = 600
-# store_path = "~/.tengu/memory/"
+# store_path = "~/tengu-memory/"             # agents without a workspace; unset = <TENGU_HOME>/memory/
 # session_recent_n = 10                       # last-N messages reloaded each orchestrator turn for dialogue coherence
 # cross_plan_top_k = 5                        # fuzzy recall breadth during replan (recall over agentic_memory step outputs)
 # cross_session_msg_top_k = 0                 # prior user messages recalled across sessions (0 = off)

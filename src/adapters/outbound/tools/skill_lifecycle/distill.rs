@@ -242,15 +242,12 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// `name` in each tier of `config::paths::skill_tiers`.
 fn collision_candidates(workspace: &Path, name: &str) -> Vec<PathBuf> {
-    let mut out = vec![
-        workspace.join("skills").join(name),
-        workspace.join(".tengu").join("skills").join(name),
-    ];
-    if let Some(home) = dirs_next::home_dir() {
-        out.push(home.join(".tengu").join("skills").join(name));
-    }
-    out
+    crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .map(|(_, dir)| dir.join(name))
+        .collect()
 }
 
 fn validate_metrics_structural(specs: &[MetricSpec]) -> Result<()> {

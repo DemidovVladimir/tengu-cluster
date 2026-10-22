@@ -394,9 +394,10 @@ pub(crate) fn secret_backends() -> Vec<SecretBackend> {
             id: "vault",
             label: "Local encrypted vault",
             available: true,
-            note: "~/.tengu/secrets.vault (AES-256-GCM, master password): `tengu secret set NAME \
+            note:
+                "<TENGU_HOME>/secrets.vault (AES-256-GCM, master password): `tengu secret set NAME \
                    <value>`. Loaded into the process env at start; never written to TOML."
-                .into(),
+                    .into(),
         },
         SecretBackend {
             id: "env",
@@ -644,7 +645,7 @@ fn kinds() -> Vec<KindSpec> {
             deletable: true,
             title_field: Some("skill"),
             subtitle_fields: vec![],
-            help: "A SKILL.md package (skills/, ~/.tengu/skills/, <workspace>/.tengu/skills/).",
+            help: "A SKILL.md package (skills/, <TENGU_HOME>/skills/, <workspace>/.tengu/skills/).",
             fields: vec![field("skill", "Skill", String)
                 .required()
                 .readonly()

@@ -202,7 +202,7 @@ impl Tool for ManageSkillTool {
         let hardened = ctx.agent_config.is_some_and(|a| a.hardened());
 
         // The directory this action writes may be outside the workspace (the
-        // managed tier, `~/.tengu/skills`): it needs its own write grant.
+        // managed tier, `<TENGU_HOME>/skills`): it needs its own write grant.
         // Only the workspace was checked, so any agent could rewrite a
         // managed skill every sandbox loads.
         if let Some(dir) = target_skill_dir(&args, &workspace)? {
@@ -958,17 +958,9 @@ fn validate_skill_name(name: &str) -> Result<()> {
 }
 
 fn tier_root(workspace: &Path, tier: &str) -> Result<PathBuf> {
-    match tier {
-        "project" => Ok(workspace.join("skills")),
-        "workspace" => Ok(workspace.join(".tengu").join("skills")),
-        "managed" => dirs_next::home_dir()
-            .map(|h| h.join(".tengu").join("skills"))
-            .ok_or_else(|| anyhow!("manage_skill: cannot resolve managed-tier root (no $HOME)")),
-        other => bail!(
-            "manage_skill: unknown tier '{}' (expected project | workspace | managed)",
-            other
-        ),
-    }
+    crate::config::paths::skill_tier_root(workspace, tier).ok_or_else(|| {
+        anyhow!("manage_skill: unknown tier '{tier}' (expected project | workspace | managed)")
+    })
 }
 
 /// The skill directory `args` writes: `create` and a tiered `delete` name
@@ -987,27 +979,20 @@ fn target_skill_dir(args: &Args, workspace: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
+/// `name` in each tier of `config::paths::skill_tiers`, managed first.
 fn collision_candidates(workspace: &Path, name: &str) -> Vec<PathBuf> {
-    let mut out = vec![
-        workspace.join("skills").join(name),
-        workspace.join(".tengu").join("skills").join(name),
-    ];
-    if let Some(home) = dirs_next::home_dir() {
-        out.push(home.join(".tengu").join("skills").join(name));
-    }
-    out
+    crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .map(|(_, dir)| dir.join(name))
+        .collect()
 }
 
-/// Three-tier walk: managed → workspace → project, first match wins. Mirrors
-/// `apply_improver_proposal::locate_skill_dir` and `application/skills/registry.rs::skill_directories`.
+/// Three-tier walk (`config::paths::skill_tiers`): managed → workspace →
+/// project, first match wins.
 fn locate_skill_dir(name: &str, workspace: &Path) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::with_capacity(3);
-    if let Some(home) = dirs_next::home_dir() {
-        candidates.push(home.join(".tengu").join("skills").join(name));
-    }
-    candidates.push(workspace.join(".tengu").join("skills").join(name));
-    candidates.push(workspace.join("skills").join(name));
-    candidates.into_iter().find(|p| p.is_dir())
+    collision_candidates(workspace, name)
+        .into_iter()
+        .find(|p| p.is_dir())
 }
 
 fn atomic_write(target: &Path, content: &str) -> Result<()> {
@@ -1076,7 +1061,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Writing the managed tier needs a write grant for `~/.tengu/skills`:
+    /// Writing the managed tier needs a write grant for `<TENGU_HOME>/skills`:
     /// a scope that grants only the workspace is refused before anything is
     /// written (it used to pass on the workspace check alone).
     #[tokio::test]

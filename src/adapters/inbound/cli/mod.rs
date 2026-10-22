@@ -291,7 +291,7 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         max_runs: u32,
     },
-    /// Manage encrypted secrets vault in ~/.tengu/secrets.vault
+    /// Manage encrypted secrets vault in <TENGU_HOME>/secrets.vault
     Secret {
         #[command(subcommand)]
         action: SecretAction,

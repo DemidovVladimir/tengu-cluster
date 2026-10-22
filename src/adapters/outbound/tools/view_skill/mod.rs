@@ -16,7 +16,7 @@
 //!
 //! ### Three-tier walk
 //!
-//! Mirrors `application/skills/registry.rs::skill_directories` precedence: managed (`~/.tengu/skills`)
+//! Mirrors `application/skills/registry.rs::skill_directories` precedence: managed (`<TENGU_HOME>/skills`)
 //! → workspace (`<workspace>/.tengu/skills`) → project (`<workspace>/skills`, then
 //! the repo's `skills/` where tengu runs). First match wins; the winning tier
 //! is reported in `list` and `read` outputs.
@@ -74,7 +74,7 @@ impl ViewSkillTool {
                 VIEW_SKILL_TOOL_NAME,
                 "Inspect tengu skills: list every available skill, read a \
                  skill's frontmatter + body, or read a specific resource \
-                 file from a skill. Walks managed (~/.tengu/skills) → \
+                 file from a skill. Walks managed (<TENGU_HOME>/skills) → \
                  workspace (.tengu/skills) → project (skills/) tiers; \
                  first match wins. Read-only — does NOT modify files. Use \
                  manage_skill for writes.",
@@ -111,7 +111,7 @@ impl Tool for ViewSkillTool {
     async fn execute(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<ToolOutput> {
         // Coarse fs_read gate at the workspace root. All three-tier scanner
         // outputs (`<workspace>/skills`, `<workspace>/.tengu/skills`,
-        // `~/.tengu/skills`) are read-only browses below this point.
+        // `<TENGU_HOME>/skills`) are read-only browses below this point.
         ctx.scope.check_fs_read(ctx.workspace)?;
 
         let action = require_str(args, VIEW_SKILL_TOOL_NAME, "action")?;
@@ -237,12 +237,11 @@ fn locate_skill_dir(skill: &str, workspace: &Path) -> Option<(PathBuf, Tier)> {
 /// for `workspace`, each with its tier — the tool used the process cwd in
 /// place of the agent's workspace.
 fn tier_roots(workspace: &Path) -> Vec<(Tier, PathBuf)> {
-    let managed = dirs_next::home_dir().map(|h| h.join(".tengu").join("skills"));
-    let dotdir = workspace.join(".tengu").join("skills");
+    let [(_, managed), (_, dotdir), _] = crate::config::paths::skill_tiers(workspace);
     crate::application::skills::registry::skill_directories(workspace)
         .into_iter()
         .map(|dir| {
-            let tier = if Some(&dir) == managed.as_ref() {
+            let tier = if dir == managed {
                 Tier::Managed
             } else if dir == dotdir {
                 Tier::Workspace

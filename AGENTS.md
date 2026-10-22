@@ -335,7 +335,7 @@ per step), `limits.step_timeout_secs` (wall clock per step, default 600),
 
 ## How to add a new skill
 
-1. Drop a directory under `skills/<name>/` (or `~/.tengu/skills/<name>/`, or `<workspace>/.tengu/skills/<name>/` — three-tier scanner with shadowing).
+1. Drop a directory under `skills/<name>/` (or `<TENGU_HOME>/skills/<name>/`, or `<workspace>/.tengu/skills/<name>/` — three-tier scanner with shadowing).
 2. Add `SKILL.md` with YAML frontmatter (`name`, `description`).
 3. Restart `tengu chat` — `TENGU_PLANNER_REGISTRY.md` is regenerated on planner turns.
 

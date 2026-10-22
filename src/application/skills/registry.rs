@@ -1131,21 +1131,18 @@ impl SkillCommandRouter {
 // ===========================================================================
 
 /// Where an agent's skills live, highest priority first (a name found in an
-/// earlier directory shadows later ones):
-///   1. managed — `~/.tengu/skills/` (`tengu skill install --tier managed`)
-///   2. workspace dotdir — `<workspace>/.tengu/skills/`
-///   3. project — `<workspace>/skills/`
-///   4. the repo's `skills/` where tengu runs, when it is another dir
+/// earlier directory shadows later ones): the three tiers of
+/// `config::paths::skill_tiers` (managed `<TENGU_HOME>/skills/`, workspace
+/// `<workspace>/.tengu/skills/`, project `<workspace>/skills/`), then the
+/// repo's `skills/` where tengu runs, when it is another dir.
 /// The skill loader, `view_skill`, `skill_resource` and
 /// `apply_improver_proposal` all search this list (the tools used the
 /// process cwd in place of the workspace).
 pub(crate) fn skill_directories(workspace: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = dirs_next::home_dir() {
-        dirs.push(home.join(".tengu/skills"));
-    }
-    dirs.push(workspace.join(".tengu/skills"));
-    dirs.push(workspace.join("skills"));
+    let mut dirs: Vec<PathBuf> = crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .map(|(_, dir)| dir)
+        .collect();
     if let Ok(cwd) = std::env::current_dir() {
         let global = cwd.join("skills");
         if global != workspace.join("skills") {

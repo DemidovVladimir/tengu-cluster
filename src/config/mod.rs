@@ -1118,8 +1118,11 @@ pub struct MemoryConfig {
     pub max_recall_entries: usize,
     #[serde(default = "default_max_recall_tokens")]
     pub max_recall_tokens: usize,
-    #[serde(default = "default_store_path")]
-    pub store_path: String,
+    /// Vector store dir of agents without a workspace (an agent with one
+    /// keeps `<workspace>/memory`). Unset = `<TENGU_HOME>/memory/`, so a lab
+    /// `TENGU_HOME` never writes the operator's store; `~` is expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_path: Option<String>,
     /// Persistent store: chunk size in characters for file vectorization.
     #[serde(default = "default_persistent_store_chunk_size")]
     pub persistent_store_chunk_size: usize,
@@ -1172,7 +1175,7 @@ impl Default for MemoryConfig {
             embedding_model: default_embedding_model(),
             max_recall_entries: default_max_recall_entries(),
             max_recall_tokens: default_max_recall_tokens(),
-            store_path: default_store_path(),
+            store_path: None,
             persistent_store_chunk_size: default_persistent_store_chunk_size(),
             persistent_store_chunk_overlap: default_persistent_store_chunk_overlap(),
             session_recent_n: default_session_recent_n(),
@@ -1205,10 +1208,6 @@ fn default_max_recall_entries() -> usize {
 fn default_max_recall_tokens() -> usize {
     600
 }
-fn default_store_path() -> String {
-    "~/.tengu/memory/".to_string()
-}
-
 fn default_persistent_store_chunk_size() -> usize {
     1000
 }

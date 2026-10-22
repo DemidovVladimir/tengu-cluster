@@ -586,7 +586,7 @@ ufw: allow 22/tcp and 7080/tcp
     if (ws && !hard) ["memory", ".tengu-tasks", ".tengu-attachments", ".tengu/storage"].forEach(function (d) { rm.push("<code>" + ws + "/" + d + "</code>"); });
     if (ws && hard) rm.push("every entry inside <code>" + ws + "</code>: <code>.tengu/</code> (cache, observations, workspace skills), output folders, <code>TENGU_PLAN.md</code> …");
     var keep = ["<code>&lt;TENGU_HOME&gt;/state/</code> beyond <code>flows</code>: the xmarket, xlab and SOE state dirs, <code>solana-writes.db</code>",
-      "<code>&lt;TENGU_HOME&gt;/secrets.vault</code>", "<code>&lt;TENGU_HOME&gt;/config.toml</code>", "<code>~/.tengu/skills</code> (managed skills)",
+      "<code>&lt;TENGU_HOME&gt;/secrets.vault</code>", "<code>&lt;TENGU_HOME&gt;/config.toml</code>", "<code>&lt;TENGU_HOME&gt;/skills</code> (managed skills)",
       "the repo: <code>sandboxes/</code>, <code>skills/</code>"];
     if (ws && hard) keep.push("the folder <code>" + ws + "</code> itself (emptied, kept)");
     if (ws && !hard) keep.push("<code>" + ws + "/.tengu/</code> and other files (soft mode)");

@@ -263,7 +263,7 @@ cargo build --all-features
 
 ## Skills
 
-`skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`). Scan with shadowing (first wins): `~/.tengu/skills/` → `<workspace>/.tengu/skills/` → `<workspace>/skills/` → the cwd's `skills/`. Load per agent with `skill_packages = [...]` (`skills = [...]` is accepted too). Inventory + lifecycle: `docs/skills.md`.
+`skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`). Scan with shadowing (first wins): `<TENGU_HOME>/skills/` → `<workspace>/.tengu/skills/` → `<workspace>/skills/` → the cwd's `skills/`. Load per agent with `skill_packages = [...]` (`skills = [...]` is accepted too). Inventory + lifecycle: `docs/skills.md`.
 
 ## Sandboxes
 

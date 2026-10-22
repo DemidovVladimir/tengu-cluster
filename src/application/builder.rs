@@ -132,7 +132,7 @@ fn how(env: &str, backend: &str) -> (String, &'static str) {
         ),
         _ => (
             format!("tengu secret set {env} <value>"),
-            "the encrypted vault ~/.tengu/secrets.vault",
+            "the encrypted vault <TENGU_HOME>/secrets.vault",
         ),
     }
 }

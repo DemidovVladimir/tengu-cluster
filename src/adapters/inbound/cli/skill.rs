@@ -18,58 +18,37 @@ use crate::config::Config;
 
 use crate::application::skills::lifecycle::{audit, scanner};
 
-/// Resolve a skill directory for the given tier. `project` -> `<ws>/skills/<name>`,
-/// `workspace` -> `<ws>/.tengu/skills/<name>`, `managed` -> `~/.tengu/skills/<name>`.
+/// Resolve a skill directory for the given tier (`config::paths::skill_tiers`):
+/// `project` -> `<ws>/skills/<name>`, `workspace` -> `<ws>/.tengu/skills/<name>`,
+/// `managed` -> `<TENGU_HOME>/skills/<name>`.
 fn skill_dir_for_tier(workspace: &Path, tier: &str, name: &str) -> Result<PathBuf> {
-    match tier {
-        "project" => Ok(workspace.join("skills").join(name)),
-        "workspace" => Ok(workspace.join(".tengu").join("skills").join(name)),
-        "managed" => {
-            let home = dirs_next::home_dir()
-                .context("could not resolve home directory for managed tier")?;
-            Ok(home.join(".tengu").join("skills").join(name))
-        }
-        other => anyhow::bail!(
+    match crate::config::paths::skill_tier_root(workspace, tier) {
+        Some(root) => Ok(root.join(name)),
+        None => anyhow::bail!(
             "invalid --tier '{}' (expected: project | workspace | managed)",
-            other
+            tier
         ),
     }
 }
 
-/// Walk all three tiers and collect (tier_label, skill_dir) pairs.
+/// Walk all three tiers (project, workspace, managed) and collect
+/// (tier_label, skill_dir) pairs.
 fn enumerate_all_tiers(workspace: &Path) -> Vec<(&'static str, PathBuf)> {
     let mut out = Vec::new();
-    let project = workspace.join("skills");
-    if project.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(&project) {
-            for e in rd.flatten() {
-                if e.path().join("SKILL.md").is_file() {
-                    out.push(("project", e.path()));
-                }
-            }
-        }
-    }
-    let ws = workspace.join(".tengu").join("skills");
-    if ws.is_dir() {
-        if let Ok(rd) = std::fs::read_dir(&ws) {
-            for e in rd.flatten() {
-                if e.path().join("SKILL.md").is_file() {
-                    out.push(("workspace", e.path()));
-                }
-            }
-        }
-    }
-    if let Some(home) = dirs_next::home_dir() {
-        let managed = home.join(".tengu").join("skills");
-        if managed.is_dir() {
-            if let Ok(rd) = std::fs::read_dir(&managed) {
-                for e in rd.flatten() {
-                    if e.path().join("SKILL.md").is_file() {
-                        out.push(("managed", e.path()));
-                    }
-                }
-            }
-        }
+    for (tier, dir) in crate::config::paths::skill_tiers(workspace)
+        .into_iter()
+        .rev()
+    {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut found: Vec<PathBuf> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.join("SKILL.md").is_file())
+            .collect();
+        found.sort();
+        out.extend(found.into_iter().map(|p| (tier, p)));
     }
     out
 }

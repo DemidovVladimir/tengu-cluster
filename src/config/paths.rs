@@ -1,5 +1,5 @@
 //! Filesystem locations the config layer resolves: `TENGU_HOME`, the default
-//! config file, and `~` expansion for configured paths.
+//! config file, the skill tiers and `~` expansion for configured paths.
 
 use std::path::{Path, PathBuf};
 
@@ -71,6 +71,35 @@ pub fn sandbox_of_config_file(path: &Path) -> Option<String> {
     (dir.parent()?.file_name()? == "sandboxes" && !name.is_empty()).then(|| name.to_string())
 }
 
+/// The skill tiers of `workspace`, highest priority first — a skill name
+/// in an earlier tier shadows the same name in a later one:
+///
+/// | Tier | Dir |
+/// |---|---|
+/// | `managed` | `<TENGU_HOME>/skills` (`tengu skill install --tier managed`) |
+/// | `workspace` | `<workspace>/.tengu/skills` |
+/// | `project` | `<workspace>/skills` |
+///
+/// The skill loader (`skills::registry::skill_directories`, which adds the
+/// repo's `skills/` where tengu runs), `view_skill`, `manage_skill`,
+/// `skill_distill`, `tengu skill` and `tengu eval` all walk this list.
+pub fn skill_tiers(workspace: &Path) -> [(&'static str, PathBuf); 3] {
+    [
+        ("managed", resolve_tengu_home().join("skills")),
+        ("workspace", workspace.join(".tengu").join("skills")),
+        ("project", workspace.join("skills")),
+    ]
+}
+
+/// The dir of skill tier `tier` (`managed` | `workspace` | `project`) for
+/// `workspace` ([`skill_tiers`]); `None` for any other name.
+pub fn skill_tier_root(workspace: &Path, tier: &str) -> Option<PathBuf> {
+    skill_tiers(workspace)
+        .into_iter()
+        .find(|(name, _)| *name == tier)
+        .map(|(_, dir)| dir)
+}
+
 pub(crate) fn resolve_tengu_home() -> PathBuf {
     if let Ok(home) = std::env::var("TENGU_HOME") {
         if home.starts_with('~') {
@@ -113,6 +142,21 @@ mod tests {
     }
 
     /// `--sandbox <name>` and the same file by absolute path (the bridge's
+    /// The managed skill tier sits under `TENGU_HOME`, never a hard-coded
+    /// `~/.tengu`: a lab home reads and writes its own managed skills.
+    #[test]
+    fn skill_tiers_are_rooted_at_tengu_home() {
+        let ws = Path::new("/ws");
+        let tiers = skill_tiers(ws);
+        let names: Vec<&str> = tiers.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, ["managed", "workspace", "project"]);
+        assert_eq!(tiers[0].1, resolve_tengu_home().join("skills"));
+        assert_eq!(tiers[1].1, ws.join(".tengu/skills"));
+        assert_eq!(tiers[2].1, ws.join("skills"));
+        assert_eq!(skill_tier_root(ws, "project"), Some(ws.join("skills")));
+        assert_eq!(skill_tier_root(ws, "global"), None);
+    }
+
     /// `TENGU_CONFIG`) name one sandbox; any other file names none.
     #[test]
     fn a_config_file_names_its_sandbox() {

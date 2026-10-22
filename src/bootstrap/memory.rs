@@ -15,21 +15,18 @@ use crate::ports::memory::VectorStore;
 // Memory subsystem initialization
 // ---------------------------------------------------------------------------
 
-/// Resolve the memory store path: workspace-local if a workspace is provided,
-/// otherwise fall back to the global path from config (with tilde expansion).
+/// Resolve the memory store path: `<workspace>/memory` when a workspace is
+/// provided, else `[memory] store_path` (`~` expanded), else
+/// `<TENGU_HOME>/memory`.
 pub(crate) fn resolve_memory_store_path(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
 ) -> std::path::PathBuf {
-    match workspace {
-        Some(ws) => ws.join("memory"),
-        None => {
-            let store_path_str = memory_config.store_path.replace(
-                "~",
-                &dirs_next::home_dir().unwrap_or_default().to_string_lossy(),
-            );
-            std::path::PathBuf::from(store_path_str)
-        }
+    use crate::config::paths::{expand_tilde, resolve_tengu_home};
+    match (workspace, memory_config.store_path.as_deref()) {
+        (Some(ws), _) => ws.join("memory"),
+        (None, Some(path)) => expand_tilde(Path::new(path)),
+        (None, None) => resolve_tengu_home().join("memory"),
     }
 }
 
@@ -104,4 +101,32 @@ pub(crate) fn build_memory_manager(
     workspace: Option<&Path>,
 ) -> Arc<crate::application::memory::manager::MemoryManager> {
     rt.block_on(build_memory_manager_async(memory_config, workspace))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An agent without a workspace keeps its vectors under `TENGU_HOME`
+    /// unless `[memory] store_path` names another dir; a workspace wins.
+    #[test]
+    fn memory_store_defaults_under_tengu_home() {
+        let mut memory = crate::config::MemoryConfig::default();
+        let home = crate::config::paths::resolve_tengu_home();
+        assert_eq!(
+            resolve_memory_store_path(&memory, None),
+            home.join("memory")
+        );
+        let ws = Path::new("/ws");
+        assert_eq!(
+            resolve_memory_store_path(&memory, Some(ws)),
+            ws.join("memory")
+        );
+        memory.store_path = Some("~/elsewhere/mem".into());
+        assert_eq!(
+            resolve_memory_store_path(&memory, None),
+            crate::config::paths::expand_tilde(Path::new("~/elsewhere/mem"))
+        );
+        assert!(!resolve_memory_store_path(&memory, None).starts_with("~"));
+    }
 }

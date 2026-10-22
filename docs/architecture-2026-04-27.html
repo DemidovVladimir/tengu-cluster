@@ -413,7 +413,7 @@
       </tr>
       <tr>
         <td>&lt;workspace&gt;/memory/vectors.bin</td>
-        <td>disk vector store (bincode) behind <code>memory_ingest</code> / <code>memory_search</code> / <code>persistent_store</code>; without a workspace <code>[memory] store_path</code> (default <code>~/.tengu/memory/</code>)</td>
+        <td>disk vector store (bincode) behind <code>memory_ingest</code> / <code>memory_search</code> / <code>persistent_store</code>; without a workspace <code>[memory] store_path</code> (default <code>&lt;TENGU_HOME&gt;/memory/</code>)</td>
         <td><code>MemoryPlugin</code> tools</td>
         <td>same tools + chat <code>[Relevant memories]</code> recall</td>
         <td>no sweep</td>
@@ -1114,7 +1114,7 @@ const SUBSYSTEMS = [
     key: "skills", title: "skills/ — prompt fragments",
     subtitle: "one list of skill directories, highest priority first — a name found earlier shadows later ones.",
     files: [
-      ["~/.tengu/skills/", "1 — managed (highest priority)"],
+      ["<TENGU_HOME>/skills/", "1 — managed (highest priority)"],
       ["<workspace>/.tengu/skills/", "2 — workspace dotdir"],
       ["<workspace>/skills/", "3 — project"],
       ["skills/ (cwd)", "4 — the repo's skills/ where tengu runs, when it is another dir"],

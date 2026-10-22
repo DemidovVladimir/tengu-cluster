@@ -265,7 +265,7 @@
     <rect x="0" y="0" width="224" height="22" rx="6" class="pill-skl" />
     <text x="10" y="15" class="pt">skills/  -  prompt fragments</text>
     <text x="10" y="40" class="h3">Skill dirs, first wins:</text>
-    <text x="10" y="56" class="small">1. ~/.tengu/skills/   (managed)</text>
+    <text x="10" y="56" class="small">1. &lt;TENGU_HOME&gt;/skills/   (managed)</text>
     <text x="10" y="70" class="small">2. .tengu/skills/   (workspace dot)</text>
     <text x="10" y="84" class="small">3. skills/ (project) · 4. cwd skills/</text>
     <text x="10" y="98" class="small">an earlier dir shadows a later one</text>

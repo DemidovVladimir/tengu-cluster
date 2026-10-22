@@ -537,7 +537,7 @@ Status:
 
 - Telegram: `/purge` — clears conversations + calls `MemoryManager::clear_all()`.
 - TUI: `/purge` — same.
-- CLI file-level: delete `<store_path>/vectors.bin` (`[memory] store_path`, default `~/.tengu/memory/`) manually. Still supported as a fallback (safe to do when the harness isn't running).
+- CLI file-level: delete `<store_path>/vectors.bin` (`[memory] store_path`, default `<TENGU_HOME>/memory/`) manually. Still supported as a fallback (safe to do when the harness isn't running).
 
 ### 12.6 Adding a new worker agent
 

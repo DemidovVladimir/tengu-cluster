@@ -34,7 +34,7 @@ An agent that runs no shell (`[risk]`, `[soe]` or a `[solana]` signer sandbox: `
 
 | Order (first match wins) | Directory |
 |---|---|
-| 1 Managed | `~/.tengu/skills/` — the home dir's, even when `TENGU_HOME` points elsewhere (`tengu skill install --tier managed`) |
+| 1 Managed | `<TENGU_HOME>/skills/` (`tengu skill install --tier managed`) |
 | 2 Workspace dotdir | `<workspace>/.tengu/skills/` |
 | 3 Project | `<workspace>/skills/` |
 | 4 Cwd | `<cwd>/skills/` when it differs from 3 — the repo's `skills/` when tengu runs from the repo root |

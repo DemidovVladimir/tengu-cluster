@@ -348,7 +348,7 @@ pub(crate) fn compile(bp: &Blueprint, facts: &Facts, current: Option<&str>) -> C
             if !facts.skills.iter().any(|(n, _)| *n == s) {
                 issues.push(
                     Issue::warn(format!(
-                        "no skill '{s}' found on this machine (skills/, ~/.tengu/skills/)"
+                        "no skill '{s}' found on this machine (skills/, <TENGU_HOME>/skills/)"
                     ))
                     .node(c.id())
                     .field("skill"),
