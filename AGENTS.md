@@ -549,7 +549,9 @@ These are not preferences. They're load-bearing.
   field empty, e.g. xmarket's `[default_scopes.write_file]`), which stays a
   deny (`tengu doctor --engines` skips an agent whose own scopes deny the
   smoke tools — jev-exec's architect). `ToolScope::check_env_read` honours
-  the `"*"` wildcard like `net_hosts` / `shell_bins`. `shell_bins` gates a
+  the `"*"` wildcard like `net_hosts` / `shell_bins`; an `http_request`
+  carrying an env value (`$VAR` in URL / header, `auth_*_env`) goes only to a
+  host `net_hosts` names without `*` (`check_named_host`, 2026-10-22). `shell_bins` gates a
   command's first command word only (`domain::scope::shell_command_binary`:
   leading `NAME=value` skipped, so `DEK=… node` checks `node`) — a guard
   rail, not a sandbox: `;`, pipes, `$( )` and `node -e` run unchecked.

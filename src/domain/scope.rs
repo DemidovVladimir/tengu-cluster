@@ -283,6 +283,26 @@ impl ToolScope {
         )
     }
 
+    /// Check that `host` is named by a `net_hosts` pattern other than `"*"`
+    /// (exact or `*.suffix`). A request that carries an env value (a `$VAR`
+    /// in `http_request`'s URL or a header, an auth env) goes only to such a
+    /// host, so `["*"]` next to an `env_reads` grant cannot ship the secret
+    /// to any host (2026-10-22).
+    pub(crate) fn check_named_host(&self, host: &str) -> anyhow::Result<()> {
+        if self
+            .net_hosts
+            .iter()
+            .any(|pattern| pattern != "*" && host_matches(pattern, host))
+        {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "host '{}' gets an env value only when net_hosts names it (\"*\" does not count): {:?}",
+            host,
+            self.net_hosts
+        )
+    }
+
     /// Check whether `var` is allowed by this scope's `env_reads` list.
     ///
     /// `"*"` is an allow-any wildcard, honoured when a configured scope
@@ -628,6 +648,23 @@ mod tests {
         assert!(scope.check_shell_bin("any").is_err());
         assert!(scope.check_wallet("any").is_err());
         assert!(scope.is_deny_all());
+    }
+
+    #[test]
+    fn named_host_ignores_the_wildcard() {
+        let scope = ToolScope {
+            net_hosts: vec!["*".into(), "rpc.example.com".into(), "*.helius.xyz".into()],
+            ..Default::default()
+        };
+        assert!(scope.check_named_host("rpc.example.com").is_ok());
+        assert!(scope.check_named_host("mainnet.helius.xyz").is_ok());
+        assert!(scope.check_named_host("evil.example").is_err());
+        assert!(scope.check_net_host("evil.example").is_ok());
+        let wild = ToolScope {
+            net_hosts: vec!["*".into()],
+            ..Default::default()
+        };
+        assert!(wild.check_named_host("rpc.example.com").is_err());
     }
 
     /// Any one field set makes a scope something other than a deny.

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "sandbox": "lping",
-  "config_hash": "3609eb38918ebfaf9cbc9638f314d96b66e1bde43650bbdb9fc5d55c4cd666c0",
+  "config_hash": "05ceaf69759ccd1eab2bc85b3c10334107199b0344c1aa6794ef5035af6279a4",
   "nodes": [
     {
       "id": "runtime:lping",
@@ -1417,7 +1417,8 @@
           "~/lping-workspace"
         ],
         "net_hosts": [
-          "*"
+          "*",
+          "api.mainnet-beta.solana.com"
         ]
       },
       "narrowed_out": false,

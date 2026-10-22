@@ -114,7 +114,7 @@ example_queries = ["what is the BTC price?"]
 |---|---|
 | `fs_roots` | filesystem roots (`~` expanded; paths resolved, symlinks followed) |
 | `net_hosts` | hosts: exact, `*.suffix` (subdomains only), `*` |
-| `env_reads` | env vars a tool may read (`$VAR` headers, `HL_API_URL`, `SOLANA_RPC_URL`, …); `*` = any |
+| `env_reads` | env vars a tool may read (`$VAR` headers, `HL_API_URL`, `SOLANA_RPC_URL`, …); `*` = any. An `http_request` carrying one (`$VAR` in the URL or a header, `auth_*_env`) goes only to a host `net_hosts` names without `*` |
 | `shell_bins` | `run_command` / shell skills: the command's first word only (leading `NAME=value` skipped) — a guard rail, not a sandbox |
 | `wallets` | Privy wallet labels; Solana write tools: full pubkeys |
 

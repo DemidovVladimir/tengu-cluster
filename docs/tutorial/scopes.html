@@ -231,7 +231,7 @@
   </div>
   <div class="fields" data-inview>
     <div class="fld"><b>fs_roots</b><code class="fn">check_fs_read · check_fs_write</code><small>The resolved path (symlinks, <code>..</code>) must sit under a root.</small><span class="wild">no wildcard</span></div>
-    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>.</small><span class="wild">"*" = any host</span></div>
+    <div class="fld"><b>net_hosts</b><code class="fn">check_net_host</code><small>Exact host, <code>*.suffix</code> (subdomains only, not the apex) or <code>*</code>. A request carrying an env value needs a host named without <code>*</code> (<code>check_named_host</code>).</small><span class="wild">"*" = any host</span></div>
     <div class="fld"><b>env_reads</b><code class="fn">check_env_read</code><small>Exact var name. Gates <code>$VAR</code> in <code>http_request</code>, <code>SOLANA_RPC_URL</code>, <code>HL_API_URL</code>, <code>PRIVY_API_URL</code>.</small><span class="wild">"*" = any var</span></div>
     <div class="fld"><b>shell_bins</b><code class="fn">check_shell_bin</code><small>Basename of the command's first word. <code>run_command</code> and shell skills.</small><span class="wild">"*" = any binary</span></div>
     <div class="fld"><b>wallets</b><code class="fn">check_wallet</code><small>Exact label. Privy tools; Solana writes use the full pubkey.</small><span class="wild">no wildcard</span></div>
@@ -337,7 +337,7 @@
   </div>
   <ul class="states">
     <li><span class="chip hands">run</span><span><b>allowed</b>Every check passed; the tool runs with its resolved path.</span></li>
-    <li><span class="chip bad">no</span><span><b>scope denied</b><code>… not in allowed net_hosts [...]</code>, or <code>no fs_roots configured (default-deny)</code>.</span></li>
+    <li><span class="chip bad">no</span><span><b>scope denied</b><code>… not in allowed net_hosts [...]</code>, <code>… gets an env value only when net_hosts names it</code>, or <code>no fs_roots configured (default-deny)</code>.</span></li>
     <li><span class="chip bad">out</span><span><b>escapes workspace</b>The resolved path is not under the workspace: <code>Path escapes workspace</code>.</span></li>
     <li><span class="chip guard">name</span><span><b>protected</b><code>Writing '…' is not allowed</code>, or <code>Writing to skill directories is not allowed</code>.</span></li>
     <li><span class="chip bad">link</span><span><b>cannot resolve</b>A dangling symlink: writing through it would create its target.</span></li>

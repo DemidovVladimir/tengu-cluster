@@ -61,8 +61,10 @@ goal_template = "A Solana on-chain event arrived. Summarise what happened (pool,
 # writes its cache (`<workspace>/.tengu/observations.db`) → fs_roots. RPC tools
 # read $SOLANA_RPC_URL when set (else the public mainnet endpoint): if you set
 # it, add that URL's host to their net_hosts too.
+# http_request: any host, but $SOLANA_RPC_URL expands only toward a host named
+# here ("*" does not count): set it to another RPC → add that host too.
 [default_scopes.http_request]
-net_hosts = ["*"]
+net_hosts = ["*", "api.mainnet-beta.solana.com"]
 env_reads = ["SOLANA_RPC_URL"]   # explicit: "*" would expand any $SECRET into a URL (review H1)
 fs_roots = ["~/lping-workspace"]
 
