@@ -902,6 +902,7 @@ impl Engine for ClaudeCodeEngine {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from Claude CLI"))?;
+        let stderr_task = super::cli_run::drain_stderr(&mut child);
 
         let timeout_secs = self.timeout_secs;
         let max_tool_rounds = context.max_tool_rounds.unwrap_or(70);
@@ -923,6 +924,8 @@ impl Engine for ClaudeCodeEngine {
 
             let mut timed_out = false;
             let mut tool_limit_hit = false;
+            // The stream already carried an error (a failed `result` line).
+            let mut sent_error = false;
             // `compress_and_store` succeeded (a run-agent step's bridge stored
             // the summary): the run ends once the round's calls are answered.
             let mut summary_stored = false;
@@ -949,6 +952,9 @@ impl Engine for ClaudeCodeEngine {
                         summary_stored |= events.iter().any(|e| {
                             matches!(e, StreamEvent::ToolRan { name, ok: true } if name == compress_and_store::NAME)
                         });
+                        sent_error |= events
+                            .iter()
+                            .any(|e| matches!(e, StreamEvent::Error { .. }));
                         for event in events {
                             if tx.send(event).await.is_err() {
                                 break;
@@ -976,12 +982,20 @@ impl Engine for ClaudeCodeEngine {
                 }
             }
 
-            if step_done {
+            if step_done || tool_limit_hit || timed_out {
+                let _ = child.kill().await;
+            }
+            let status = child.wait().await;
+            let stderr = super::cli_run::stderr_tail(stderr_task).await;
+            if !stderr.is_empty() {
+                warn!(stderr = %stderr, "Claude CLI stderr");
+            }
+
+            let last = if step_done {
                 info!(
                     tool_call_count,
                     "Claude Code: compress_and_store stored the step summary — ending the CLI run"
                 );
-                let _ = child.kill().await;
                 // What the `result` line would have carried: the run's usage
                 // so far (the turn takes the last `Usage` frame).
                 if let Some((input_tokens, output_tokens)) = usage.total() {
@@ -992,55 +1006,53 @@ impl Engine for ClaudeCodeEngine {
                         })
                         .await;
                 }
-                let _ = tx.send(StreamEvent::Done).await;
+                Some(StreamEvent::Done)
             } else if tool_limit_hit {
                 error!(
                     tool_call_count,
                     max_tool_rounds, "Claude Code max tool rounds exceeded — killing subprocess"
                 );
-                let _ = child.kill().await;
-                let _ = tx
-                    .send(StreamEvent::Error {
-                        message: format!(
-                            "Max tool rounds exceeded ({} calls, limit {}). \
-                             The agent may be stuck in a retry loop.",
-                            tool_call_count, max_tool_rounds
-                        ),
-                    })
-                    .await;
+                Some(StreamEvent::Error {
+                    message: format!(
+                        "Max tool rounds exceeded ({} calls, limit {}). \
+                         The agent may be stuck in a retry loop.",
+                        tool_call_count, max_tool_rounds
+                    ),
+                })
             } else if timed_out {
                 error!(timeout_secs, "Claude CLI idle timeout — killing subprocess");
-                let _ = child.kill().await;
-                let _ = tx
-                    .send(StreamEvent::Error {
-                        message: format!(
-                            "Claude CLI idle timeout — no output for {}s",
-                            timeout_secs
-                        ),
-                    })
-                    .await;
+                Some(StreamEvent::Error {
+                    message: format!("Claude CLI idle timeout — no output for {}s", timeout_secs),
+                })
+            } else if sent_error {
+                None // the `result` error is already out
             } else {
-                let _ = tx.send(StreamEvent::Done).await;
-            }
-
-            // Wait for subprocess to exit and log any stderr
-            match child.wait_with_output().await {
-                Ok(output) => {
-                    let stderr_str = String::from_utf8_lossy(&output.stderr);
-                    if !stderr_str.is_empty() {
-                        warn!(stderr = %stderr_str, "Claude CLI stderr");
+                match status {
+                    // A failed run that said nothing: its stderr says why
+                    // (not logged in, a bad flag, …).
+                    Ok(s) if !s.success() && !emitted_text => {
+                        error!(exit_code = s.code(), stderr = %stderr, "Claude CLI failed");
+                        Some(StreamEvent::Error {
+                            message: format!("Claude CLI exited with {s}: {stderr}"),
+                        })
                     }
-                    // A step ended after `compress_and_store` was killed on purpose.
-                    if !output.status.success() && !step_done {
-                        warn!(
-                            exit_code = output.status.code(),
-                            "Claude CLI exited with non-zero status"
-                        );
+                    Ok(s) => {
+                        if !s.success() {
+                            warn!(
+                                exit_code = s.code(),
+                                "Claude CLI exited with non-zero status after answering"
+                            );
+                        }
+                        Some(StreamEvent::Done)
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Failed to wait for Claude CLI process");
+                        Some(StreamEvent::Done)
                     }
                 }
-                Err(e) => {
-                    warn!(error = %e, "Failed to wait for Claude CLI process");
-                }
+            };
+            if let Some(event) = last {
+                let _ = tx.send(event).await;
             }
         });
 
@@ -1675,6 +1687,34 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// A CLI that fails without a word ends the turn in an error carrying
+    /// its stderr; one that floods stderr is not stalled by the pipe.
+    #[tokio::test]
+    async fn a_silent_failed_exit_is_an_error_and_stderr_never_stalls_the_cli() {
+        let (events, _) = run_stub("echo 'Not logged in · Please run /login' >&2\nexit 1\n").await;
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Error { message }) if message.contains("Not logged in")),
+            "{events:?}"
+        );
+
+        const TEXT: &str = r#"echo '{"type":"assistant","message":{"id":"msg_0","content":[{"type":"text","text":"answer"}]}}'"#;
+        let (events, took) = run_stub(&format!(
+            "head -c 300000 /dev/zero | tr '\\0' x >&2\n{TEXT}\n"
+        ))
+        .await;
+        assert!(took < Duration::from_secs(10), "stalled: {took:?}");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::TextDelta { text } if text == "answer")),
+            "{events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(StreamEvent::Done)),
+            "{events:?}"
+        );
     }
 
     /// A successful `compress_and_store` ends the run (the CLI is stopped,

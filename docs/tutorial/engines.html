@@ -376,6 +376,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
     <li><span class="chip warn">empty</span><span><b>empty twice</b>OpenRouter retried once and still got nothing: chat shows nothing, a <code>run-agent</code> step fails.</span></li>
     <li><span class="chip bad">idle</span><span><b>CLI idle</b>No CLI output for 120 s (<code>stream_event_timeout_secs</code>): <code>Claude CLI idle timeout</code>, process killed. Codex: a keepalive every 30 s, killed after max(that, 900 s): <code>Codex CLI idle timeout</code>.</span></li>
     <li><span class="chip guard">cap</span><span><b>tool cap</b><code>Max tool rounds exceeded (71 calls, limit 70)</code>, process killed.</span></li>
+    <li><span class="chip bad">exit</span><span><b>CLI failed silently</b>A non-zero exit with no answer: <code>Claude CLI exited with exit status: 1: &lt;stderr tail&gt;</code> (Codex the same, or its last <code>error</code> event). Both CLIs' stderr is drained while they run, so a chatty one never stalls on a full pipe.</span></li>
     <li><span class="chip data">done</span><span><b>step stored</b><code>compress_and_store</code> succeeded in a step: the CLI is stopped on purpose, usage kept.</span></li>
   </ul>
 </section>
@@ -447,7 +448,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-14.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
 </article>
 </main>
 </div>

@@ -41,7 +41,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Map, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -80,8 +80,6 @@ pub(crate) const OFF_FEATURES: &[&str] = &[
 const BRIDGE_STARTUP_SECS: u64 = 30;
 /// One bridged call's ceiling (Codex's default is shorter than a backtest).
 const TOOL_TIMEOUT_SECS: u64 = 600;
-/// Bytes of stderr kept for an error message.
-const STDERR_TAIL: usize = 4096;
 
 /// `[agents.<a>.codex] sandbox` → `codex exec -s`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -619,12 +617,6 @@ pub(crate) fn absorb_event(messages: &mut Vec<Message>, streamed_from: usize, li
     }
 }
 
-/// The last `max` bytes of `buf`, on a char boundary, lossy UTF-8.
-fn tail(buf: &[u8], max: usize) -> String {
-    let start = buf.len().saturating_sub(max);
-    String::from_utf8_lossy(&buf[start..]).trim().to_string()
-}
-
 #[async_trait]
 impl Engine for CodexEngine {
     fn id(&self) -> &str {
@@ -809,14 +801,7 @@ impl Engine for CodexEngine {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from the Codex CLI"))?;
-        // Drained on its own task: a full stderr pipe would stall the CLI.
-        let stderr_task = child.stderr.take().map(|mut err| {
-            tokio::spawn(async move {
-                let mut buf = Vec::new();
-                let _ = err.read_to_end(&mut buf).await;
-                buf
-            })
-        });
+        let stderr_task = super::cli_run::drain_stderr(&mut child);
 
         let timeout_secs = self.timeout_secs;
         let max_tool_rounds = context.max_tool_rounds.unwrap_or(70);
@@ -891,11 +876,7 @@ impl Engine for CodexEngine {
                 let _ = child.kill().await;
             }
             let status = child.wait().await;
-            let stderr = match stderr_task {
-                Some(task) => task.await.unwrap_or_default(),
-                None => Vec::new(),
-            };
-            let stderr = tail(&stderr, STDERR_TAIL);
+            let stderr = super::cli_run::stderr_tail(stderr_task).await;
             if !stderr.is_empty() {
                 debug!(stderr = %stderr, "Codex CLI stderr");
             }

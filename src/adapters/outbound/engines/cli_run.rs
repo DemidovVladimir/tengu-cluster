@@ -1,7 +1,8 @@
 //! What the CLI engines share (`claude_code.rs`, `codex.rs`): the run's
-//! working directory, the stdin prompt, and the transcript file the bridge
-//! reads per call (`TENGU_BRIDGE_TRANSCRIPT_FILE`). Each engine parses its
-//! own stream into the transcript ([`Transcript::update`]).
+//! working directory, the stdin prompt, the stderr drain ([`drain_stderr`])
+//! and the transcript file the bridge reads per call
+//! (`TENGU_BRIDGE_TRANSCRIPT_FILE`). Each engine parses its own stream into
+//! the transcript ([`Transcript::update`]).
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +31,42 @@ pub(crate) fn run_workspace(
     // Canonical: scope checks compare resolved paths (macOS /var → /private/var).
     let path = std::fs::canonicalize(dir.path())?;
     Ok((Some(path), Some(dir)))
+}
+
+/// Bytes of a CLI's stderr kept for the log and an error message.
+pub(crate) const STDERR_TAIL: usize = 4096;
+
+/// Drain the CLI's stderr on a task of its own while it runs: a full stderr
+/// pipe would stall the CLI until the idle kill. Resolves, once the CLI
+/// closes it, to its last [`STDERR_TAIL`] bytes (lossy UTF-8, trimmed).
+pub(crate) fn drain_stderr(
+    child: &mut tokio::process::Child,
+) -> Option<tokio::task::JoinHandle<String>> {
+    use tokio::io::AsyncReadExt;
+    let mut err = child.stderr.take()?;
+    Some(tokio::spawn(async move {
+        let mut kept: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = err.read(&mut chunk).await {
+            if n == 0 {
+                break;
+            }
+            kept.extend_from_slice(&chunk[..n]);
+            if kept.len() > 2 * STDERR_TAIL {
+                kept.drain(..kept.len() - STDERR_TAIL);
+            }
+        }
+        let start = kept.len().saturating_sub(STDERR_TAIL);
+        String::from_utf8_lossy(&kept[start..]).trim().to_string()
+    }))
+}
+
+/// What the drain kept (`""` without one).
+pub(crate) async fn stderr_tail(drain: Option<tokio::task::JoinHandle<String>>) -> String {
+    match drain {
+        Some(task) => task.await.unwrap_or_default(),
+        None => String::new(),
+    }
 }
 
 /// The conversation history as one stdin prompt. A system message equal to
