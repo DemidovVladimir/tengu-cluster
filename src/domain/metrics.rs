@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 pub struct MetricsRecord {
     /// Unix epoch seconds at the time of recording.
     pub ts_unix: u64,
-    /// `RagPlanner.session_id` for planner records, `SubprocessRunner.session_id`
+    /// `RegistryPlanner.session_id` for planner records, `SubprocessRunner.session_id`
     /// for subagent records, `"-"` for embeddings (no session attribution).
     pub session_id: String,
     pub kind: MetricsKind,
@@ -95,7 +95,7 @@ pub struct MetricsRecord {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricsKind {
-    /// `RagPlanner::plan/replan` LLM call. One per user turn (or per replan).
+    /// `RegistryPlanner::plan/replan` LLM call. One per user turn (or per replan).
     Planner,
     /// One iteration of the subagent's tool loop. Multiple per step in
     /// agents that call tools.

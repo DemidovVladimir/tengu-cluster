@@ -115,7 +115,7 @@
 
   <g transform="translate(540, 150)">
     <rect width="280" height="66" rx="6" class="lane-plan" />
-    <text x="10" y="18" class="h3">3. Planner (legacy RagPlanner)</text>
+    <text x="10" y="18" class="h3">3. Planner (RegistryPlanner)</text>
     <text x="10" y="34" class="body">loads the registry, runs the planner LLM</text>
     <text x="10" y="48" class="file">application/orchestrator/planner.rs</text>
     <text x="10" y="60" class="file">+ skills/orchestrator/SKILL.md</text>
@@ -167,11 +167,11 @@
     <text x="10" y="18" class="h3">Memory writes happen alongside steps 3, 5, 7</text>
     <line x1="10" y1="26" x2="610" y2="26" stroke="#e2e8f0" />
     <text x="10" y="46" class="body" font-weight="600">At step 3 (planner.plan), BEFORE the write:</text>
-    <text x="10" y="62" class="file">RagPlanner::cross_session_recall_block (Phase 6.4 read-back)</text>
+    <text x="10" y="62" class="file">RegistryPlanner::cross_session_recall_block (Phase 6.4 read-back)</text>
     <text x="10" y="76" class="small">if memory.cross_session_msg_top_k is more than 0: semantic search over Open Brain memory,</text>
     <text x="10" y="90" class="small">injected as a "Cross-session message recall" block</text>
     <text x="10" y="116" class="body" font-weight="600">At step 3 (planner.plan):</text>
-    <text x="10" y="132" class="file">RagPlanner::persist_user_message</text>
+    <text x="10" y="132" class="file">RegistryPlanner::persist_user_message</text>
     <text x="10" y="146" class="small">writes the user message to Open Brain Postgres with session_id</text>
     <text x="10" y="160" class="small">also pushes to the in-memory ring buffer (lite, this process only)</text>
     <text x="10" y="174" class="small">within_session_output_top_k more than 0: recall of this session's step outputs</text>
@@ -292,7 +292,7 @@
     <text x="10" y="40" class="file">mod.rs</text>
     <text x="10" y="52" class="small">Orchestrator: handle / subscribe</text>
     <text x="10" y="72" class="file">planner.rs</text>
-    <text x="10" y="84" class="small">RagPlanner + PlannerLlm (no hands)</text>
+    <text x="10" y="84" class="small">RegistryPlanner + PlannerLlm (no hands)</text>
     <text x="10" y="96" class="small">parse_verdict (4-path cascade)</text>
     <text x="10" y="108" class="small">cross-session + session-output recall</text>
     <text x="10" y="128" class="file">domain/plan.rs</text>
@@ -305,7 +305,7 @@
     <text x="10" y="236" class="small">drive(): validate, replan on fail</text>
     <text x="10" y="256" class="file">events.rs</text>
     <text x="10" y="268" class="small">OrchestratorEvent + EventBus:</text>
-    <text x="10" y="280" class="small">PlanCreated, StepStarted, RagQueried,</text>
+    <text x="10" y="280" class="small">PlanCreated, StepStarted, StepFailed,</text>
     <text x="10" y="292" class="small">MetricsRecorded</text>
     <text x="10" y="312" class="file">shared_files.rs · trace.rs</text>
   </g>
@@ -325,7 +325,7 @@
     <text x="10" y="114" class="small">  regenerated before planner calls</text>
     <text x="10" y="128" class="small">  from [agents.*] with description, skills, tools</text>
     <text x="10" y="148" class="h3">read by:</text>
-    <text x="10" y="164" class="file">RagPlanner::plan/replan</text>
+    <text x="10" y="164" class="file">RegistryPlanner::plan/replan</text>
     <text x="10" y="178" class="small">  injected as system prompt context</text>
     <text x="10" y="198" class="h3">notable:</text>
     <text x="10" y="214" class="small">no vector DB dependency for routing</text>
@@ -340,10 +340,10 @@
     <text x="10" y="46" class="body">stores user messages keyed by session_id</text>
     <text x="10" y="60" class="small">survives restart; durable across sessions</text>
     <text x="10" y="84" class="h3">written by:</text>
-    <text x="10" y="100" class="file">RagPlanner::persist_user_message</text>
+    <text x="10" y="100" class="file">RegistryPlanner::persist_user_message</text>
     <text x="10" y="114" class="small">  on every plan() call</text>
     <text x="10" y="134" class="h3">read by:</text>
-    <text x="10" y="150" class="file">RagPlanner::cross_session_recall_block</text>
+    <text x="10" y="150" class="file">RegistryPlanner::cross_session_recall_block</text>
     <text x="10" y="164" class="small">  agentic_memory::recall_user_messages_with_vec</text>
     <text x="10" y="178" class="small">  gated on memory.cross_session_msg_top_k</text>
     <text x="10" y="192" class="small">  (default 0 = off, opt-in)</text>
@@ -363,7 +363,7 @@
     <text x="10" y="126" class="small">  compress_and_store is IMPLICIT on every subagent</text>
     <text x="10" y="140" class="small">  child writes when the LLM calls it (or at exit)</text>
     <text x="10" y="160" class="h3">read by:</text>
-    <text x="10" y="176" class="file">RagPlanner::replan</text>
+    <text x="10" y="176" class="file">RegistryPlanner::replan</text>
     <text x="10" y="190" class="small">  Postgres with postgres_memory</text>
     <text x="10" y="204" class="small">  gated on memory.cross_plan_top_k (default 5)</text>
     <text x="10" y="228" class="small">also within-session recall on the next turn</text>
@@ -408,9 +408,9 @@
     <text x="10" y="18" class="h3">B. One shared session_id (Fix B, 2026-05-09)</text>
     <text x="10" y="36" class="small">The caller resolves the id once (resolve_session_id: TENGU_SESSION_ID env override or a fresh UUID;</text>
     <text x="10" y="50" class="small">tengu webhooks mints webhook-&lt;name&gt;-&lt;uuid&gt; per request) and build_orchestrator hands the same</text>
-    <text x="10" y="64" class="small">string to RagPlanner AND SubprocessRunner, so planner messages and subagent step summaries share</text>
+    <text x="10" y="64" class="small">string to RegistryPlanner AND SubprocessRunner, so planner messages and subagent step summaries share</text>
     <text x="10" y="78" class="small">one key; run-agent exports it as TENGU_SESSION_ID for memory writes.</text>
-    <text x="10" y="98" class="file">resolve_session_id  -  RagPlanner.session_id  -  SubprocessRunner.session_id</text>
+    <text x="10" y="98" class="file">resolve_session_id  -  RegistryPlanner.session_id  -  SubprocessRunner.session_id</text>
   </g>
 
   <g transform="translate(20, 1457)">
@@ -1291,7 +1291,7 @@
     <rect width="1160" height="110" rx="6" fill="#f8fafc" stroke="#e2e8f0" />
     <text x="10" y="20" class="h3">Where to start when you open the codebase tomorrow</text>
     <text x="10" y="40" class="small">Trace ONE turn end-to-end before changing anything: cargo run --release --features postgres_memory -- chat --sandbox lping, type "what is the BTC price?", and follow it:</text>
-    <text x="10" y="54" class="small">tui/mod.rs - build_orchestrator - RagPlanner::plan - SubprocessRunner::run_step - run_agent_subprocess - http_request - compress_and_store. That is the chat turn.</text>
+    <text x="10" y="54" class="small">tui/mod.rs - build_orchestrator - RegistryPlanner::plan - SubprocessRunner::run_step - run_agent_subprocess - http_request - compress_and_store. That is the chat turn.</text>
     <text x="10" y="68" class="small">Other flows: tengu backtest --sandbox xlab --strategy weekend_fade (no LLM) → cli/backtest.rs → application/backtest/ → domain/backtest/engine.rs → the run dir; tengu ranking run → application/ranking/;</text>
     <text x="10" y="82" class="small">tengu run --sandbox xmarket (runbook at the top of its config) → inbound/run.rs → bootstrap/runtime.rs → application/runtime/feeds.rs → tools/xm/exec_common.rs · tengu lineage verify --pins.</text>
     <text x="10" y="96" class="small">Trace + Studio (isolated TENGU_HOME): tengu decide --sandbox control-loop-lab --loop demo --event sandboxes/control-loop-lab/scenarios/act.json → tengu trace runs → tengu studio (default build).</text>

@@ -190,7 +190,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 ### Orchestration
 | Module | Purpose |
 |--------|---------|
-| `application/orchestrator/` | `RagPlanner` + `PlannerLlm` (the planner's engine call, `planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `trace.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state); `Plan` types in `domain/plan.rs` |
+| `application/orchestrator/` | `RegistryPlanner` + `PlannerLlm` (the planner's engine call, `planner.rs`), `DagExecutor` (`executor.rs`), `replan.rs`, `retry.rs`, `events.rs`, `trace.rs`, `shared_files.rs` (`TENGU_PLANNER_REGISTRY.md` + per-session plan state); `Plan` types in `domain/plan.rs` |
 | `adapters/outbound/subprocess_runner.rs` | `SubprocessRunner` — spawns `tengu run-agent` per plan step (IPC JSON over stdin/stdout) |
 
 ### Infrastructure

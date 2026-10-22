@@ -732,7 +732,7 @@ pub struct OrchestratorConfig {
 
     /// Planner engine. `"rag"` (default) is the only supported value — the
     /// name is historical (Phase 4 of the redesign); the current planner is
-    /// `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`) + the
+    /// `RegistryPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`) + the
     /// `SubprocessRunner` worker. The legacy `"static"` roster engine was
     /// removed in Phase 7.1; any other value fails config validation.
     #[serde(default = "default_orchestrator_engine")]

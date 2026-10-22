@@ -6,7 +6,7 @@
 
 ## TL;DR — the entire system in five sentences
 
-A user message arrives at a channel (TUI / Telegram / webhook). The harness builds an `Orchestrator`, which holds `RagPlanner` (legacy name for the LLM planner) and a `SubprocessRunner` (which executes plan steps as child processes). The planner regenerates and loads root `TENGU_PLANNER_REGISTRY.md` (`[agents.*]` with a `description` · skills · tools) into the planner prompt, then asks an LLM to emit either a direct response or a plan referencing that roster. Each plan step spawns `tengu run-agent` as a subprocess, which re-loads the parent's config (`sandboxes/<name>/config.toml`), takes its `[agents.<name>]` block, receives the accepted plan via `AgentIpcInput.plan_state`, builds a tool executor, and runs an LLM-with-tools loop until the model calls `compress_and_store` (the implicit "I'm done" tool). Every network path — tools, LLM APIs, the Claude Code and Codex CLIs, Telegram, the seal proxy — goes through the `[egress]` policy (`egress.rs`), which is Tor by default. Step output flows back to the executor; on failure the executor calls `RagPlanner::replan`, which uses Open Brain-style Postgres `agentic_memory` cross-plan recall when `postgres_memory` is enabled.
+A user message arrives at a channel (TUI / Telegram / webhook). The harness builds an `Orchestrator`, which holds `RegistryPlanner` (legacy name for the LLM planner) and a `SubprocessRunner` (which executes plan steps as child processes). The planner regenerates and loads root `TENGU_PLANNER_REGISTRY.md` (`[agents.*]` with a `description` · skills · tools) into the planner prompt, then asks an LLM to emit either a direct response or a plan referencing that roster. Each plan step spawns `tengu run-agent` as a subprocess, which re-loads the parent's config (`sandboxes/<name>/config.toml`), takes its `[agents.<name>]` block, receives the accepted plan via `AgentIpcInput.plan_state`, builds a tool executor, and runs an LLM-with-tools loop until the model calls `compress_and_store` (the implicit "I'm done" tool). Every network path — tools, LLM APIs, the Claude Code and Codex CLIs, Telegram, the seal proxy — goes through the `[egress]` policy (`egress.rs`), which is Tor by default. Step output flows back to the executor; on failure the executor calls `RegistryPlanner::replan`, which uses Open Brain-style Postgres `agentic_memory` cross-plan recall when `postgres_memory` is enabled.
 
 That is the chat turn. Since 2026-09-24 the same binary also runs work with no chat turn at all:
 
@@ -43,24 +43,23 @@ The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Teleg
 `src/bootstrap/orchestrator.rs::build_orchestrator(config, llm, session_id, trace)` is the function that wires everything together. It:
 - Takes `llm: PlannerLlm` from `planner_llm(config)` — the `[agents.<[orchestrator] agent>]` engine + agent block (`None` without `[orchestrator]`; an error for a missing block or an engine that does not build). TUI and Telegram build it at startup (refuse to start on error); webhook planner endpoints and loop escalations per turn (warn and skip); eval per orchestrated row; A2A per planner turn.
 - Mints an `EventBus` (so the TUI can subscribe to plan progress events), installs the global metrics sink and bridges it onto the bus.
-- Builds `RagPlanner` (legacy name; planner side) with its ports injected — `ToolDirectory` (`CatalogDirectory`: tool catalog + MCP `tools/list`), `RecallStore` + `Embedding` (only with `postgres_memory`) — and `SubprocessRunner` (worker side). Both receive `config.agents` (the planner renders the registry, the runner fails fast on unknown agents and reads per-step `limits.max_tool_rounds` / `limits.step_timeout_secs`) and the caller's `session_id` (`resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — once per process for chat / Telegram, per row for `tengu eval`; `tengu webhooks` mints `webhook-<name>-<uuid>` per request).
+- Builds `RegistryPlanner` (legacy name; planner side) with its ports injected — `ToolDirectory` (`CatalogDirectory`: tool catalog + MCP `tools/list`), `RecallStore` + `Embedding` (only with `postgres_memory`) — and `SubprocessRunner` (worker side). Both receive `config.agents` (the planner renders the registry, the runner fails fast on unknown agents and reads per-step `limits.max_tool_rounds` / `limits.step_timeout_secs`) and the caller's `session_id` (`resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — once per process for chat / Telegram, per row for `tengu eval`; `tengu webhooks` mints `webhook-<name>-<uuid>` per request).
 - Returns an `Orchestrator` that wraps them.
 
 The default-agent dispatch (no orchestrator at all) is the fallback when `[orchestrator]` is missing from the sandbox config. `engine = "rag"` is the only orchestrator engine (Phase 7.1) — any other value fails config validation; `build_orchestrator` keeps a defensive warn + `None`. The name is historical: file-registry planner + Open Brain memory.
 
-### 3. Planner — `RagPlanner::plan`
+### 3. Planner — `RegistryPlanner::plan`
 
 `src/application/orchestrator/planner.rs`. This is where the doctrine lives ("LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands"). For each user message:
 
 1. **Embed once** — only with a `RecallStore` (`postgres_memory`) and `OPENROUTER_API_KEY`; the vector is reused by every recall lane below.
 2. **Load the planner registry** — regenerate root `TENGU_PLANNER_REGISTRY.md` (`shared_files::ensure_planner_registry`) from the `[agents.*]` blocks that carry a `description` (`routable_agents`, with `example_queries`), skills, and core + MCP tool definitions, then inject it into the planner prompt.
-3. **Emit `RagQueried` event** — registry entries go to the event bus + a tracing line. The TUI debug panel renders these when `TENGU_TUI_RAG_DEBUG=1`.
-4. **Open Brain recall (opt-in)** — if `memory.cross_session_msg_top_k > 0`, retrieve prior user questions from Postgres `agentic_memory` and inject them as a "Cross-session message recall" block. **This happens BEFORE persisting the current message** so the just-written message can never appear in its own recall block.
-5. **Persist the user message** — `persist_user_message` writes keyed by `session_id` to Postgres `agentic_memory` with `postgres_memory`.
-6. **Push to in-memory buffer** — Phase 6.4 lite (`update_and_format_history`): the "Recent user messages this session" block.
-7. **Within-session output recall (opt-in)** — if `memory.within_session_output_top_k > 0`, prior step outputs of this `session_id` (`session_output_recall_block`).
-8. **LLM call with `skills/orchestrator/SKILL.md` as system prompt** — `PlannerLlm::call` (`planner.rs`) sends ONE user message to the engine through `collect_engine_response` with no tools, no tool executor, no observer, no memory, no bridge tools and no `[[mcp_servers]]` — there is nothing to strip, so the LLM has exactly one job: emit plan JSON in the shape `plan_schema.json` describes. It returns `(text, TurnTelemetry)`; `emit_planner_metrics` turns that usage into the planner `MetricsRecord` with the per-layer breakdown — the same on every surface.
-9. **Parse verdict** — `parse_verdict` (4-path cascade: raw JSON, fenced, JSON inside prose, prose → `Direct`) gives `PlannerVerdict::Direct { response }` (return it to user) or `PlannerVerdict::Plan { plan }`. No JSON-schema validator runs in Rust, but `replan.rs::drive` runs `Plan::validate` before any step (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles — an invalid plan replans); an empty output ends the turn with `System error: orchestrator initial call failed: …`.
+3. **Open Brain recall (opt-in)** — if `memory.cross_session_msg_top_k > 0`, retrieve prior user questions from Postgres `agentic_memory` and inject them as a "Cross-session message recall" block. **This happens BEFORE persisting the current message** so the just-written message can never appear in its own recall block.
+4. **Persist the user message** — `persist_user_message` writes keyed by `session_id` to Postgres `agentic_memory` with `postgres_memory`.
+5. **Push to in-memory buffer** — Phase 6.4 lite (`update_and_format_history`): the "Recent user messages this session" block.
+6. **Within-session output recall (opt-in)** — if `memory.within_session_output_top_k > 0`, prior step outputs of this `session_id` (`session_output_recall_block`).
+7. **LLM call with `skills/orchestrator/SKILL.md` as system prompt** — `PlannerLlm::call` (`planner.rs`) sends ONE user message to the engine through `collect_engine_response` with no tools, no tool executor, no observer, no memory, no bridge tools and no `[[mcp_servers]]` — there is nothing to strip, so the LLM has exactly one job: emit plan JSON in the shape `plan_schema.json` describes. It returns `(text, TurnTelemetry)`; `emit_planner_metrics` turns that usage into the planner `MetricsRecord` with the per-layer breakdown — the same on every surface.
+8. **Parse verdict** — `parse_verdict` (4-path cascade: raw JSON, fenced, JSON inside prose, prose → `Direct`) gives `PlannerVerdict::Direct { response }` (return it to user) or `PlannerVerdict::Plan { plan }`. No JSON-schema validator runs in Rust, but `replan.rs::drive` runs `Plan::validate` before any step (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles — an invalid plan replans); an empty output ends the turn with `System error: orchestrator initial call failed: …`.
 
 ### 4. Executor — DagExecutor
 
@@ -68,7 +67,7 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 - `Plan::ready_steps` (`domain/plan.rs`) returns every step whose `depends_on` is satisfied.
 - Each ready step is `tokio::spawn`'d on the worker (`SubprocessRunner`).
 - Retries follow `RetryPolicy::new(max_attempts_per_step)` from `retry.rs` (default 3 attempts: at once, then after 1 s, 3 s; 9 s before any later one).
-- On exhaustion, `replan.rs::drive` calls `RagPlanner::replan` with the failed step + error context. With `postgres_memory`, replan also pulls `cross_plan_top_k` hits from Postgres `agentic_memory`.
+- On exhaustion, `replan.rs::drive` calls `RegistryPlanner::replan` with the failed step + error context. With `postgres_memory`, replan also pulls `cross_plan_top_k` hits from Postgres `agentic_memory`.
 - Cancel or an exhausted step aborts every step still in flight (`abort_in_flight`; the dropped `run-agent` child is `kill_on_drop`). An unknown dependency or a cycle is caught by `Plan::validate` before the executor runs (a replan); a step that still never becomes ready is a replan too, not an empty reply. Parallel leaves with no join step are joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`).
 - Every accepted plan/replan is rendered once: stored per session (`shared_files::set_active_plan`) so `SubprocessRunner` can pass it as `AgentIpcInput.plan_state`, and written to root `TENGU_PLAN.md` as a human-readable debug artifact (fallback for old parents only).
 
@@ -243,12 +242,12 @@ One list for every reader: `application/skills/registry.rs::skill_directories` �
 | File | What it owns |
 |---|---|
 | `mod.rs` | `Orchestrator` (top-level handle: `new(planner, worker, policy, max_replans, bus)`, `handle`, `subscribe`) |
-| `planner.rs` | `PlannerLlm` (`{ engine, agent }`; `call` = the planner's one engine call, no hands), `RagPlanner` legacy type name (only `Planner` impl since 7.1), free fn `parse_verdict`, `cross_session_recall_block`, `session_output_recall_block`, `emit_planner_metrics` |
+| `planner.rs` | `PlannerLlm` (`{ engine, agent }`; `call` = the planner's one engine call, no hands), `RegistryPlanner` legacy type name (only `Planner` impl since 7.1), free fn `parse_verdict`, `cross_session_recall_block`, `session_output_recall_block`, `emit_planner_metrics` |
 | `domain/plan.rs` | `Plan`, `Step`, `AgentCompose` (C→B B-half), `StepId`, `ready_steps`, `leaves` |
 | `executor.rs` | `DagExecutor` — parallel `ready_steps` with cancel; aborts in-flight steps on cancel / exhaustion; a never-ready step ⇒ replan; parallel leaves joined |
 | `retry.rs` | `RetryPolicy` |
 | `replan.rs` | `drive()` loop — `Plan::validate` each plan, replan-on-invalid / exhausted |
-| `events.rs` | `OrchestratorEvent` enum + `EventBus` (PlanCreated, StepStarted, RagQueried legacy event name, **MetricsRecorded**, etc.; `StepFailed.retry_in_ms`, `PlanCompleted.failed`); a traced bus records each event before it broadcasts |
+| `events.rs` | `OrchestratorEvent` enum + `EventBus` (PlanCreated, StepStarted, **MetricsRecorded**, etc.; `StepFailed.retry_in_ms`, `PlanCompleted.failed`); a traced bus records each event before it broadcasts |
 | `trace.rs` | `OrchestratorTrace` + `TraceBridge`: each event → `plan.*` / `step.*` / `metrics.recorded` in the surface's execution trace (chat, telegram, eval, webhook agent endpoints, escalations); a step's cause handed to its `run-agent` child |
 | `ports/orchestration.rs` | Traits `Planner`, `WorkerHandle` (`known_agents` for `Plan::validate`), `ChatServiceFactory` (`run_turn` only — `tengu evolve`); `TurnTelemetry`. (`wiring.rs` / `ChatOrchestratorPortImpl` / `OrchestratorChatPort` removed 2026-10-22) |
 | `shared_files.rs` | `routable_agents` + `render_registry` → `TENGU_PLANNER_REGISTRY.md` (`ensure_planner_registry`, tool list from the `ToolDirectory` port), per-session `set_active_plan` / `active_plan` (IPC `plan_state`), `TENGU_PLAN.md` debug artifact, `scan_skill_summaries` |
@@ -545,7 +544,7 @@ No provider key on this machine: keys are secrets of the `tengu-seal` Cloudflare
 
 | Store | What it holds | Written by | Read by | TTL? |
 |---|---|---|---|---|
-| `TENGU_PLANNER_REGISTRY.md` | `[agents.*]` blocks with a `description` + skills + core & MCP tool defs | `shared_files::ensure_planner_registry` before planner calls | `RagPlanner::plan/replan` prompt context | NO |
+| `TENGU_PLANNER_REGISTRY.md` | `[agents.*]` blocks with a `description` + skills + core & MCP tool defs | `shared_files::ensure_planner_registry` before planner calls | `RegistryPlanner::plan/replan` prompt context | NO |
 | `TENGU_PLAN.md` | current accepted plan/replan (debug artifact; IPC `plan_state` is the source of truth) | `replan.rs::drive` | humans; old-parent fallback in `run_agent_subprocess` | overwritten |
 | Postgres `agentic_memory` | Open Brain live memory: user messages + step outputs + source chunks | planner + `run-agent` + `agentic_memory` tool when `postgres_memory` is enabled | planner recall + agents via tool | none yet |
 | `.tengu/agentic-memory/wiki/` | Karpathy LLM Wiki compiled Markdown | `agentic_memory compile_wiki` | agents, humans, future MCP surface | Git/history |
@@ -588,11 +587,11 @@ The subagent's per-turn records cross the IPC boundary in `AgentIpcOutput.metric
 
 ### A. The doctrine is real
 
-"LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" isn't just a mantra. The planner in `RagPlanner::plan` / `replan` holds an engine, not a chat service: `PlannerLlm::call` (`application/orchestrator/planner.rs`) sends one message with no tools, no tool executor, no bridge, no `[[mcp_servers]]` and no memory, because the planner has exactly one job: emit plan JSON. There is nothing to strip — the boundary is structural (test `planner_call_has_no_hands_and_reports_usage`).
+"LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands" isn't just a mantra. The planner in `RegistryPlanner::plan` / `replan` holds an engine, not a chat service: `PlannerLlm::call` (`application/orchestrator/planner.rs`) sends one message with no tools, no tool executor, no bridge, no `[[mcp_servers]]` and no memory, because the planner has exactly one job: emit plan JSON. There is nothing to strip — the boundary is structural (test `planner_call_has_no_hands_and_reports_usage`).
 
 ### B. Planner and runner share one `session_id`
 
-The caller resolves the id once (`bootstrap::orchestrator::resolve_session_id`: `TENGU_SESSION_ID` env override or fresh UUID; `tengu webhooks` mints `webhook-<name>-<uuid>` per request) and `build_orchestrator` hands the same string to both `RagPlanner` and `SubprocessRunner`, so planner messages and subagent step summaries share the same session key.
+The caller resolves the id once (`bootstrap::orchestrator::resolve_session_id`: `TENGU_SESSION_ID` env override or fresh UUID; `tengu webhooks` mints `webhook-<name>-<uuid>` per request) and `build_orchestrator` hands the same string to both `RegistryPlanner` and `SubprocessRunner`, so planner messages and subagent step summaries share the same session key.
 
 ### C. Sandbox config crosses the IPC boundary (Phase 7.2)
 
@@ -716,8 +715,8 @@ Follow the call chain:
 
 1. `adapters/inbound/tui/mod.rs` — captures the input, dispatches to the engine thread
 2. `bootstrap::orchestrator::planner_llm` + `build_orchestrator` — the planner's engine, then `Orchestrator`
-3. `application/orchestrator/mod.rs::Orchestrator::handle` — calls `replan::drive` → `RagPlanner::plan`
-4. `application/orchestrator/planner.rs::RagPlanner::plan` — load planner registry file, `PlannerLlm::call`, parse verdict
+3. `application/orchestrator/mod.rs::Orchestrator::handle` — calls `replan::drive` → `RegistryPlanner::plan`
+4. `application/orchestrator/planner.rs::RegistryPlanner::plan` — load planner registry file, `PlannerLlm::call`, parse verdict
 5. `application/orchestrator/replan.rs::drive` — runs the plan, handles retry/replan
 6. `adapters/outbound/subprocess_runner.rs::SubprocessRunner::run_step` — spawns child, pipes IPC
 7. `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` — child entry: load sandbox config → `egress::install` → `[agents.<name>]`, build tools, multi-turn loop

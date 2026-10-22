@@ -1034,7 +1034,7 @@ fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 /// Construct an embedder from the environment, mirroring `main.rs` and
-/// `RagPlanner::embedder`. Returns `None` when `OPENROUTER_API_KEY` is unset
+/// `RegistryPlanner::embedder`. Returns `None` when `OPENROUTER_API_KEY` is unset
 /// so callers fall back to FTS / text-only paths. The model is pinned to
 /// `DEFAULT_EMBEDDING_MODEL` because the Postgres schema hardcodes
 /// `vector(1536)` — see `ensure_schema` and `pgvector_literal`.

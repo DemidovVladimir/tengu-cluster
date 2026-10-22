@@ -591,7 +591,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | `SSH_AUTH_SOCK` | `outbound/keys/mod.rs` | — | the SSH agent that signs the session request (`[keys] agent_socket` overrides) |
 | `TENGU_BRIDGE_*` (`AGENT`, `TOOLS`, `WORKSPACE`, `GRANT_WORKSPACE`, `SCOPES`, `MCP_SERVERS`, `SUMMARY_FILE`, `TRANSCRIPT_FILE`, `MAX_RESULT_CHARS`) | `inbound/mcp_bridge.rs` (names: `outbound/bridge_env.rs`) | set by the Claude Code and Codex engines | engine → bridge contract — `docs/mcp-bridge.md` |
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE` · `_OVERLAP` | forwarded by `engines/claude_code.rs` | unset | read by nothing — the bridge takes `[memory]` from its config |
-| `TENGU_TUI_METRICS` · `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | metrics line · planner recall hits as System bubbles |
+| `TENGU_TUI_METRICS` | `tui/mod.rs` | off | metrics line as a System bubble |
 | `TENGU_GPU_HINT` · `CUDA_VISIBLE_DEVICES` | `config/mod.rs::detect_gpu` | auto-detect | `none\|cpu\|off\|false` or `gpu\|cuda\|metal\|mps\|on\|true` for `runtime_profile = "auto"` |
 | `NO_COLOR` | `inbound/eval.rs` | unset | plain eval table |
 | `RUST_LOG` | `cli/mod.rs::init_logging` | `tengu=info` (`tengu sandbox`: `tengu=warn`) | log filter, replaces the default whole (`tengu=debug` works); one `metrics` line per LLM call at info. Sinks: TUI → `tengu.log`; telegram / webhooks / run / studio / `a2a serve` → `tengu.log` + stderr; protocol and data commands → stderr; the rest → stdout. Colours only on a terminal; an unopenable `tengu.log` → stderr (TUI: no log) with one line saying why |

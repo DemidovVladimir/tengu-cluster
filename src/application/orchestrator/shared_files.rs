@@ -2,7 +2,7 @@
 //!
 //! | Artifact | Writer | Reader | Role |
 //! |---|---|---|---|
-//! | `TENGU_PLANNER_REGISTRY.md` | `ensure_planner_registry` (every planner turn) | `RagPlanner` (in-memory snapshot) | Roster of agents / skills / tools (core + MCP). The file is a debug mirror — the snapshot is built from the in-memory render even when the write fails. |
+//! | `TENGU_PLANNER_REGISTRY.md` | `ensure_planner_registry` (every planner turn) | `RegistryPlanner` (in-memory render) | Roster of agents / skills / tools (core + MCP). The file is a debug mirror — the prompt block is built from the in-memory render even when the write fails. |
 //! | `AgentIpcInput.plan_state` | `SubprocessRunner::run_step` via `active_plan(session_id)` | `tengu run-agent` | **Source of truth** for the plan a subagent sees. Per-session, set by `replan::drive` on every accepted plan. |
 //! | `TENGU_PLAN.md` | `write_plan_state` (every accepted plan, any session) | `run-agent` fallback only (old parents that send no `plan_state`) | Human-readable debug artifact. One global file under cwd — concurrent sessions overwrite each other, which is why it is no longer the IPC path. |
 //!
@@ -60,28 +60,16 @@ pub(crate) fn clear_active_plan(session_id: &str, rendered: &str) {
     });
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PlannerRegistryEntry {
-    pub kind: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PlannerRegistrySnapshot {
-    pub prompt_block: String,
-    pub entries: Vec<PlannerRegistryEntry>,
-}
-
 /// Render the roster (agents + skills + core tools + `mcp_tools`) and return
 /// it as a prompt block. Fail-soft on the file write: the planner must never
-/// lose its roster because the workspace is read-only — the snapshot is
+/// lose its roster because the workspace is read-only — the block is
 /// built from the in-memory render either way and the write failure is
 /// only logged.
 pub(crate) fn ensure_planner_registry(
     workspace: &Path,
     agents: &[(String, AgentConfig)],
     tools: &[ToolDef],
-) -> Result<PlannerRegistrySnapshot> {
+) -> Result<String> {
     let content = render_registry(workspace, agents, tools)?;
     let path = workspace.join(PLANNER_REGISTRY_FILE);
     if let Err(e) = std::fs::write(&path, &content) {
@@ -91,13 +79,10 @@ pub(crate) fn ensure_planner_registry(
             "failed to write planner registry file; planner continues with in-memory roster"
         );
     }
-    Ok(PlannerRegistrySnapshot {
-        prompt_block: format!(
-            "\n## Planner registry (loaded from `{}`)\n\n{}",
-            PLANNER_REGISTRY_FILE, content
-        ),
-        entries: registry_entries_from_content(&content),
-    })
+    Ok(format!(
+        "\n## Planner registry (loaded from `{}`)\n\n{}",
+        PLANNER_REGISTRY_FILE, content
+    ))
 }
 
 /// Wrap rendered plan markdown in the system-prompt block header the
@@ -237,47 +222,6 @@ fn render_registry(
         ));
     }
     Ok(out)
-}
-
-fn registry_entries_from_content(content: &str) -> Vec<PlannerRegistryEntry> {
-    let mut entries = Vec::new();
-    let mut section = "";
-    for line in content.lines() {
-        if line == "## Agents" {
-            section = "agent";
-            continue;
-        }
-        if line == "## Skills" {
-            section = "skill";
-            continue;
-        }
-        if line == "## Tools" {
-            section = "tool";
-            continue;
-        }
-        if line.starts_with("## ") {
-            section = "";
-            continue;
-        }
-        if section == "agent" {
-            if let Some(name) = line.strip_prefix("### ") {
-                entries.push(PlannerRegistryEntry {
-                    kind: "agent".to_string(),
-                    name: name.trim().to_string(),
-                });
-            }
-        } else if section == "skill" || section == "tool" {
-            if let Some(rest) = line.strip_prefix("- `") {
-                if let Some((name, _)) = rest.split_once('`') {
-                    entries.push(PlannerRegistryEntry {
-                        kind: section.to_string(),
-                        name: name.to_string(),
-                    });
-                }
-            }
-        }
-    }
-    entries
 }
 
 #[derive(Debug)]
@@ -431,18 +375,9 @@ mod tests {
                 parameters: serde_json::json!({"type": "object"}),
             },
         ];
-        let snapshot = ensure_planner_registry(dir.path(), &[], &tools).unwrap();
-        assert!(snapshot
-            .prompt_block
-            .contains("- `notes__search_posts`: Search notes posts."));
-        assert!(snapshot
-            .entries
-            .iter()
-            .any(|e| e.kind == "tool" && e.name == "notes__search_posts"));
-        assert!(snapshot
-            .entries
-            .iter()
-            .any(|e| e.kind == "tool" && e.name == "http_request"));
+        let block = ensure_planner_registry(dir.path(), &[], &tools).unwrap();
+        assert!(block.contains("- `notes__search_posts`: Search notes posts."));
+        assert!(block.contains("- `http_request`: Make an HTTP request."));
         assert!(dir.path().join(PLANNER_REGISTRY_FILE).is_file());
     }
 
@@ -466,30 +401,25 @@ mod tests {
             list.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
             ["researcher"]
         );
-        let snapshot = ensure_planner_registry(dir.path(), &list, &[]).unwrap();
-        let block = &snapshot.prompt_block;
+        let block = ensure_planner_registry(dir.path(), &list, &[]).unwrap();
         assert!(block.contains("### researcher"), "{block}");
         assert!(block.contains("- tools: `http_request`"), "{block}");
         assert!(block.contains("- skills: `web-research`"), "{block}");
         assert!(block.contains("Fetches prices from the web."), "{block}");
         assert!(block.contains("- what is the BTC price?"), "{block}");
         assert!(!block.contains("### planner"), "{block}");
-        assert!(snapshot
-            .entries
-            .iter()
-            .any(|e| e.kind == "agent" && e.name == "researcher"));
     }
 
     #[test]
     fn registry_survives_unwritable_workspace() {
         // A regular file as "workspace": `<file>/TENGU_PLANNER_REGISTRY.md`
-        // cannot be written, but the snapshot must still carry the roster.
+        // cannot be written, but the block must still carry the roster.
         let dir = tempfile::tempdir().unwrap();
         let not_a_dir = dir.path().join("file");
         std::fs::write(&not_a_dir, "x").unwrap();
         let tools = [ToolDef::new("http_request", "d", serde_json::json!({}))];
-        let snapshot = ensure_planner_registry(&not_a_dir, &[], &tools).unwrap();
-        assert!(snapshot.prompt_block.contains("## Tools"));
-        assert!(!snapshot.entries.is_empty());
+        let block = ensure_planner_registry(&not_a_dir, &[], &tools).unwrap();
+        assert!(block.contains("## Tools"));
+        assert!(block.contains("- `http_request`: d"));
     }
 }

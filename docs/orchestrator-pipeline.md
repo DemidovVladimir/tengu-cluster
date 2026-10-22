@@ -4,7 +4,7 @@ Precise map of how orchestration was built, how it runs, and where every piece l
 
 Covers: construction history, runtime pipeline, parallel + sequential + diamond execution, retention.
 
-Current shape (post-#13): planner = `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), step memory = Postgres `agentic_memory` (`postgres_memory`). `OrchestratorAgentPlanner`, in-process `ChatWorker`, `roster.rs`, `telemetry.rs`, `orchestrator/config.rs`, `vector/qdrant.rs` are gone. Paths are under `src/` (hexagonal layout); line numbers as of 2026-10-08 (`main` at bc9bc12a038654ac4941c714abcfa777c99af631), the planner-call rows as of 2026-10-22 (`PlannerLlm`; the planner-side chat-service chain, `MemoryWriter` and the channel snapshots were deleted that day). Only the chat turn's orchestration is covered here — `tengu run`, backtests, rankings, lineage and sources run without a planner: `docs/architecture-2026-04-27.md` §1b, §2.7–2.17.
+Current shape (post-#13): planner = `RegistryPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), step memory = Postgres `agentic_memory` (`postgres_memory`). `OrchestratorAgentPlanner`, in-process `ChatWorker`, `roster.rs`, `telemetry.rs`, `orchestrator/config.rs`, `vector/qdrant.rs` are gone. Paths are under `src/` (hexagonal layout); line numbers as of 2026-10-08 (`main` at bc9bc12a038654ac4941c714abcfa777c99af631), the planner-call rows as of 2026-10-22 (`PlannerLlm`; the planner-side chat-service chain, `MemoryWriter` and the channel snapshots were deleted that day). Only the chat turn's orchestration is covered here — `tengu run`, backtests, rankings, lineage and sources run without a planner: `docs/architecture-2026-04-27.md` §1b, §2.7–2.17.
 
 ---
 
@@ -34,7 +34,7 @@ gitGraph
 | #11 | `1002957` | +~500 | 20-scenario runbook + eval orchestrator dispatch + prose-JSON parser |
 | #12 | `f14bfc6` | +~1200 | Skill lifecycle (metrics + distill + evolve) |
 | #13 | `695f19d` | +~600 | Retention, `--no-persist`, TUI memory config, validation checklist |
-| post-#13 | see `docs/SESSION_HANDOFF.md` | — | Phases 4–7: `RagPlanner` + `SubprocessRunner` (`tengu run-agent`) replaced `OrchestratorAgentPlanner` + `ChatWorker`; single sandbox config (`agents/*.toml` removed); Tor-by-default egress |
+| post-#13 | see `docs/SESSION_HANDOFF.md` | — | Phases 4–7: `RegistryPlanner` + `SubprocessRunner` (`tengu run-agent`) replaced `OrchestratorAgentPlanner` + `ChatWorker`; single sandbox config (`agents/*.toml` removed); Tor-by-default egress |
 
 ---
 
@@ -52,7 +52,7 @@ flowchart TB
     subgraph Orchestration["Orchestrator subsystem<br/><code>src/application/orchestrator/</code>"]
         Handle["Orchestrator::handle<br/><code>mod.rs:86</code>"]
         Replan["replan::drive<br/><code>replan.rs:13</code>"]
-        Planner["RagPlanner<br/><code>planner.rs:151</code><br/>TENGU_PLANNER_REGISTRY.md"]
+        Planner["RegistryPlanner<br/><code>planner.rs:151</code><br/>TENGU_PLANNER_REGISTRY.md"]
         Executor["DagExecutor::run<br/><code>executor.rs:26</code>"]
         Retry["RetryPolicy<br/><code>retry.rs:13</code>"]
         Events["EventBus<br/><code>events.rs</code>"]
@@ -107,7 +107,7 @@ flowchart TB
 ┌────────────────────────────────────────┐
 │   Orchestrator::handle                 │   orchestrator/mod.rs:86
 │    └─▶ replan::drive                   │   orchestrator/replan.rs:13
-│         ├─▶ RagPlanner::plan           │   orchestrator/planner.rs:518
+│         ├─▶ RegistryPlanner::plan           │   orchestrator/planner.rs:518
 │         │    ├ ensure_planner_registry │   orchestrator/shared_files.rs:80
 │         │    ├ PlannerLlm::call → engine   orchestrator/planner.rs:28 (no tools)
 │         │    └ parse_verdict           │   orchestrator/planner.rs:26
@@ -131,7 +131,7 @@ sequenceDiagram
     participant User
     participant Channel as Channel<br/>(TG/TUI/Webhook/Eval)
     participant Orch as Orchestrator
-    participant Plan as RagPlanner
+    participant Plan as RegistryPlanner
     participant LLM as PlannerLlm → engine<br/>(no tools, no memory)
     participant Exec as DagExecutor
     participant Retry as RetryPolicy
@@ -193,7 +193,7 @@ sequenceDiagram
 | `planner_llm` / `build_orchestrator` | `bootstrap/orchestrator.rs` | 123 / 212 |
 | `Orchestrator::handle` | `application/orchestrator/mod.rs` | 86 |
 | `replan::drive` | `application/orchestrator/replan.rs` | 13 |
-| `RagPlanner::plan` / `parse_verdict` | `application/orchestrator/planner.rs` | 518 / 26 |
+| `RegistryPlanner::plan` / `parse_verdict` | `application/orchestrator/planner.rs` | 518 / 26 |
 | Registry + active plan | `application/orchestrator/shared_files.rs` | `ensure_planner_registry` 80, `routable_agents` 168, `set_active_plan` 39, `write_plan_state` 128 |
 | `DagExecutor::run` | `application/orchestrator/executor.rs` | 26 |
 | `ready_steps` | `domain/plan.rs` | 91 |
@@ -621,7 +621,7 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 |---|---|---|
 | **Orchestrator public API** | `src/application/orchestrator/mod.rs` | `Orchestrator::new(planner, worker, policy, max_replans, bus)`, `::handle`, `::subscribe` |
 | **Replan loop** | `src/application/orchestrator/replan.rs` | `drive(planner, msg, worker, policy, max_replans, events)` — `Plan::validate` each plan, then the executor |
-| **Planner** | `src/application/orchestrator/planner.rs` | `PlannerLlm::call` (the planner's one engine call), `RagPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` (trait `Planner`: `src/ports/orchestration.rs`) |
+| **Planner** | `src/application/orchestrator/planner.rs` | `PlannerLlm::call` (the planner's one engine call), `RegistryPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` (trait `Planner`: `src/ports/orchestration.rs`) |
 | **Planner registry + plan state** | `src/application/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry` (tool list from the `ToolDirectory` port), `set_active_plan` / `active_plan`, `write_plan_state`, `scan_skill_summaries` |
 | **DAG executor** | `src/application/orchestrator/executor.rs` | `DagExecutor::run`, `ExecResult`, `render_step_inputs`, `abort_in_flight` (trait `WorkerHandle`: `src/ports/orchestration.rs`) |
 | **Worker (subprocess)** | `src/adapters/outbound/subprocess_runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput`, `forward_child_log` |

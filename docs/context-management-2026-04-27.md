@@ -47,7 +47,7 @@ prior-round tool results to first-line-only mid-loop).
 ```
 
 An in-process chat turn hits Layers 1→2→3 (potentially →4). On an
-orchestrated surface the planner builds its own prompt (`RagPlanner`) and
+orchestrated surface the planner builds its own prompt (`RegistryPlanner`) and
 `PlannerLlm::call` sends it through Layer 3's `collect_engine_response`
 with no tools (no Layer 1/2 chat flow, no →4); then Layers 5→3 (→4) run on
 each subagent step. Layers 0, 6, 7 are
@@ -359,7 +359,7 @@ with embeddings when available and text-only fallback otherwise
 | **B — Bridge** | Claude Code and Codex subagents — the step's bridge (`mcp_bridge.rs::StepSummary`) writes the summary to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the summary (`:619`) |
 | **C — Backstop** | a subagent that never calls it — `compress_called` stays false and `run-agent` writes the final assistant text via `try_persist_agentic_step_summary` (`:648`) |
 
-**Read side** — cross-plan recall: `RagPlanner::replan` (legacy planner type
+**Read side** — cross-plan recall: `RegistryPlanner::replan` (legacy planner type
 name) surfaces past step summaries to the planner LLM. With
 `postgres_memory`, it queries Postgres `agentic_memory` step outputs
 (`RecallStore::recall_step_outputs`) via pgvector first and FTS fallback.
@@ -453,7 +453,7 @@ OpenRouter response (was previously discarded). Falls back to
 row per planner-prompt section — `plan`: `system`, `roster`, `cross_session`,
 `history`, `session_recall`, `user_message`; `replan`: `system`, `roster`,
 `cross_session`, `history`, `recall`, `failure`, `user_message`
-(`orchestrator/planner.rs` `RagPlanner::plan` / `replan`). Emitted by
+(`orchestrator/planner.rs` `RegistryPlanner::plan` / `replan`). Emitted by
 `emit_planner_metrics` from the same strings the planner just composed for
 the LLM call, with the usage `PlannerLlm::call` returns (`TurnTelemetry`) —
 the same on every surface (webhook and eval planner turns reported zero

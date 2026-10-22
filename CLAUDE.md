@@ -34,7 +34,7 @@ messages into a TUI / Telegram chat. The harness:
 1. Loads `sandboxes/<name>/config.toml` — **the one config file**: every
    agent (`[agents.<name>]`), which one is the planner, models, MCP servers,
    scope rules, `[egress]` network policy.
-2. Builds `RagPlanner` (legacy name) — an LLM planner that picks which agent
+2. Builds `RegistryPlanner` — an LLM planner that picks which agent
    should handle the message from root `TENGU_PLANNER_REGISTRY.md` (generated
    from the `[agents.*]` blocks that carry a `description`, plus skills/tools,
    and loaded into the planner prompt).
@@ -607,7 +607,7 @@ These are not preferences. They're load-bearing.
   silently disabled orchestration); any other value fails config validation.
   The name is historical; current routing is file-registry + Open Brain
   memory, not retrieval-first memory.
-- **Planner registry is file-backed** — `RagPlanner` regenerates root
+- **Planner registry is file-backed** — `RegistryPlanner` regenerates root
   `TENGU_PLANNER_REGISTRY.md` from the `[agents.*]` blocks with a
   `description` (`shared_files::routable_agents`), skills, and core tool
   definitions before planner calls (`orchestrator/shared_files.rs`).
@@ -620,9 +620,6 @@ These are not preferences. They're load-bearing.
   child re-resolves the same `sandboxes/<name>/config.toml` and inherits the
   parent's scopes/secrets/MCP servers. Without this, `http_request`
   scope-denies in the child even when the parent's sandbox allows it.
-- **TUI debug panel is opt-in via `TENGU_TUI_RAG_DEBUG=1`** — when on,
-  `OrchestratorEvent::RagQueried` renders as a compact System bubble showing
-  top-3 hits per planner call.
 - **TUI metrics panel is opt-in via `TENGU_TUI_METRICS=1`** — when on,
   every `OrchestratorEvent::MetricsRecorded` updates the in-process
   `AggregatorState` and a compact one-liner is pushed as a System bubble
@@ -648,16 +645,16 @@ These are not preferences. They're load-bearing.
   process, `tengu telegram` once per sender (override + `-<sender>`), `tengu
   eval` once per row; `tengu webhooks`
   mints `webhook-<name>-<uuid>` per request) and hands it to `build_orchestrator`,
-  which passes the same string to `RagPlanner::new(...)` AND
+  which passes the same string to `RegistryPlanner::new(...)` AND
   `SubprocessRunner::new(sandbox_name, session_id, agents)`.
   Planner messages and subagent step summaries share the same session key,
-  so `RagPlanner::session_output_recall_block` can filter to it on the next
+  so `RegistryPlanner::session_output_recall_block` can filter to it on the next
   turn. `SubprocessRunner::default()` still mints a fresh UUID for standalone
   test / CLI use.
 - **Within-session output recall is opt-in via a config knob** —
   `[memory] within_session_output_top_k = N` in `sandboxes/<name>/config.toml`.
   Default 0 = off (back-compat — the planner prompt is unchanged). With
-  `postgres_memory`, `RagPlanner::plan` injects a `## Recent step outputs
+  `postgres_memory`, `RegistryPlanner::plan` injects a `## Recent step outputs
   (this session)` block from Postgres `agentic_memory` filtered by the shared
   `session_id`. Recommended `3–5`.
 - **`[agents.<name>].engine` selects the subagent engine (Phase 7.3)** —

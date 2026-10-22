@@ -62,10 +62,10 @@
 Three stores (2026-09-18 state — the 2026-04-26 Qdrant collections are gone):
 
 - `TENGU_PLANNER_REGISTRY.md` — Markdown roster rendered from the `[agents.<name>]` blocks that carry a `description` (+ `example_queries`), skills, core + MCP tools. Regenerated every planner turn (`shared_files::render_registry`); no embeddings, no reindex step.
-- Postgres `agentic_memory` (pgvector + FTS, feature `postgres_memory`) — user messages (`RagPlanner::persist_user_message` on every `plan()`), step summaries (`compress_and_store` + the `run-agent` backstop), `promote` → `compile_wiki` for the Karpathy LLM Wiki. Read back by three planner lanes: cross-session (`[memory] cross_session_msg_top_k`), within-session (`within_session_output_top_k`), cross-plan on `replan()` (`cross_plan_top_k`).
+- Postgres `agentic_memory` (pgvector + FTS, feature `postgres_memory`) — user messages (`RegistryPlanner::persist_user_message` on every `plan()`), step summaries (`compress_and_store` + the `run-agent` backstop), `promote` → `compile_wiki` for the Karpathy LLM Wiki. Read back by three planner lanes: cross-session (`[memory] cross_session_msg_top_k`), within-session (`within_session_output_top_k`), cross-plan on `replan()` (`cross_plan_top_k`).
 - Disk bincode vector store (`adapters/outbound/memory/disk_vector.rs`) — in-process `memory_ingest` / `memory_search` / `persistent_store`; the only built-in `VectorStore`.
 
-Plus an in-memory ring buffer in `RagPlanner` for within-session "recent user messages" (`session_recent_n`). Lost on restart.
+Plus an in-memory ring buffer in `RegistryPlanner` for within-session "recent user messages" (`session_recent_n`). Lost on restart.
 
 **What's missing**: LLM summarisation of old sessions; a Postgres-native inspect CLI (`tengu memory inspect` was removed with Qdrant).
 
@@ -108,7 +108,7 @@ PI/Cowork takes a different path: rather than autonomous evolution, it leans on 
 - `compute_base_tools` returns workspace + memory + http + crypto + `skill_resource` + `view_skill` plus the opt-ins named in `domain/tools.rs::WORKSPACE_TOOLS` (38 names: memory / skill lifecycle, Solana read + write, Hyperliquid, xmarket risk / paper, xlab incl. `strategy_ranking`, `source_evidence`, SOE `soe_view` / `soe_propose` / `soe_challenge`, `a2a`); `[agents.<name>].tools` narrows it on every surface (`bootstrap::tools::agent_base_tools`).
 - Every catalog tool works under `openrouter`, `local`, `claude_code` and `codex` (the last two through `tengu mcp-bridge`): schema lint, bridge conformance, live engine matrix — § Trading runtime axes.
 - `compress_and_store` is implicitly appended to every subagent — never list it in `[agents.<name>].tools`.
-- Real MCP bridge via `outbound/mcp_client/client.rs::tools/list`; the planner registry lists core tool defs plus enumerated MCP server tools (`<server>__<tool>`, once per `RagPlanner`). Item 6.6 closed 2026-09-12.
+- Real MCP bridge via `outbound/mcp_client/client.rs::tools/list`; the planner registry lists core tool defs plus enumerated MCP server tools (`<server>__<tool>`, once per `RegistryPlanner`). Item 6.6 closed 2026-09-12.
 - Every network path goes through `egress.rs`: Tor by default (`socks5h://127.0.0.1:9050`, fail-closed), `allow_hosts` / `deny_hosts` / `https_only` re-checked on each redirect hop, JSONL audit; children inherit the resolved policy via `TENGU_EGRESS`.
 
 ### Hermes
@@ -130,7 +130,7 @@ PI/Cowork takes a different path: rather than autonomous evolution, it leans on 
 
 The biggest architectural difference. All three solve the same problem (which tool/skill/agent should run for this user message) very differently.
 
-- **Tengu** — file-registry-first. `RagPlanner` (historical name) regenerates `TENGU_PLANNER_REGISTRY.md` from the `[agents.<name>]` blocks with a `description`, skills and core + MCP tools, prepends Open Brain recall blocks, and asks a "planner" LLM (using `skills/orchestrator/SKILL.md` as system prompt, no tools/memory/grounding) to emit plan JSON. No similarity score or gate — the LLM reads each description + `example_queries` and picks; C→B `compose` fallback when nothing fits; unknown agent names fail fast in `SubprocessRunner`.
+- **Tengu** — file-registry-first. `RegistryPlanner` (historical name) regenerates `TENGU_PLANNER_REGISTRY.md` from the `[agents.<name>]` blocks with a `description`, skills and core + MCP tools, prepends Open Brain recall blocks, and asks a "planner" LLM (using `skills/orchestrator/SKILL.md` as system prompt, no tools/memory/grounding) to emit plan JSON. No similarity score or gate — the LLM reads each description + `example_queries` and picks; C→B `compose` fallback when nothing fits; unknown agent names fail fast in `SubprocessRunner`.
 - **Hermes** — single-agent loop with rich tool choice. The model decides which tool to call; subagents are spawned by the model itself when parallelism helps. No upstream router.
 - **PI / Cowork** — two-tier: the orchestration model picks slash-commands / skills via description-match; the `Agent` tool spawns subagents. `AskUserQuestion` is used to gate ambiguity rather than guess.
 
@@ -166,8 +166,8 @@ Historical — `src/adapters/rag/` was deleted 2026-05-14; per-example vectors a
 | # | Item | Files | Purpose |
 |---|---|---|---|
 | 1 | Per-example vectors | `src/adapters/rag/indexer.rs`, `src/adapters/rag/query.rs` | Each `agents/*.toml::example_queries` entry indexed as its own vector. Embed bare query text (tight cosine), store snippet = full description (planner sees full context after dedup). Over-fetch margin in `query::search_registry` bumped 4× → 6× for the wider per-agent vector count. Expected score lift on BTC query: 0.355 → 0.5+. |
-| 2 | TUI debug panel | `src/adapters/inbound/tui/mod.rs` | Renders `OrchestratorEvent::RagQueried` as a single compact System bubble: `rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) ...`. Top-3 of top-10 hits. Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`. |
-| 3 | Durable user-message persistence | `src/application/orchestrator/planner.rs`, `src/adapters/rag/{mod.rs,query.rs}` | `RagPlanner` mints `session_id` (`TENGU_SESSION_ID` override or fresh UUID). `plan()` writes the user message to `agentic_memory user events` with `MemoryKind::Message` via `RagStore::store_memory`. Fail-soft on errors. New `RagStore::search_messages` is forward-compat for the next commit (prompt-side read-back). |
+| 2 | TUI debug panel (removed 2026-10-22: the registry is a file, nothing is scored) | `src/adapters/inbound/tui/mod.rs` | Rendered `OrchestratorEvent::RagQueried` as a single compact System bubble: `rag-{phase} "{query}" → researcher(0.55) tool/http_request(0.32) ...`. Top-3 of top-10 hits. Off by default; opt in via `TENGU_TUI_RAG_DEBUG=1`. |
+| 3 | Durable user-message persistence | `src/application/orchestrator/planner.rs`, `src/adapters/rag/{mod.rs,query.rs}` | `RegistryPlanner` mints `session_id` (`TENGU_SESSION_ID` override or fresh UUID). `plan()` writes the user message to `agentic_memory user events` with `MemoryKind::Message` via `RagStore::store_memory`. Fail-soft on errors. New `RagStore::search_messages` is forward-compat for the next commit (prompt-side read-back). |
 
 Carryover from earlier this session (already committed):
 
@@ -191,7 +191,7 @@ The smaller-effort polish items are at the top; structural work below.
 
 4. **6.6 real MCP tool indexing** — **Done 2026-09-12**: registry TOOLS section = core tool defs + MCP server tools. Original note: Replace `placeholder_tools()` (6 hardcoded) with `compute_base_tools()` for real compiled-in tools plus enumerated MCP server tools via `outbound/mcp_client/client.rs::tools/list`. Touches the registry CLI subcommand.
 5. **6.7 C→B unknown-agent fallback (B half)** — **Done**: `Step.compose` (`plan.rs`, `plan_schema.json`, SKILL.md "C → B fallback"). Original note: REDESIGN.md §11 (file removed 2026-10-07; in git history). When all Open Brain / Karpathy LLM Wiki hits score below the threshold, today the SKILL.md tells the planner to ask the user. The B half — compose generic agent on user confirmation, run for one turn — isn't implemented. Multi-turn UX, deserves its own session.
-6. **session_id sharing with `SubprocessRunner`** — **Done 2026-05-09** (Fix B): `build_orchestrator` resolves one id for `RagPlanner` + `SubprocessRunner`. Original note: The open question from the original handoff is still open. Today the planner and child subprocess each mint their own UUID. Pass via IPC env or stdin payload to unify the conversation across the entire orchestration.
+6. **session_id sharing with `SubprocessRunner`** — **Done 2026-05-09** (Fix B): `build_orchestrator` resolves one id for `RegistryPlanner` + `SubprocessRunner`. Original note: The open question from the original handoff is still open. Today the planner and child subprocess each mint their own UUID. Pass via IPC env or stdin payload to unify the conversation across the entire orchestration.
 
 ### Cleanup (do last)
 

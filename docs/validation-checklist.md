@@ -1,6 +1,6 @@
 # Validation Checklist
 
-End-to-end acceptance check for the work landed across PRs #6 → #13, updated 2026-09-18 for the current shape: planner = `RagPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), single sandbox config (`sandboxes/<name>/config.toml`), Tor-by-default egress. Work top-to-bottom. Each section states **what to do**, **what to expect**, and **what a failure looks like**.
+End-to-end acceptance check for the work landed across PRs #6 → #13, updated 2026-09-18 for the current shape: planner = `RegistryPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`), worker = `SubprocessRunner` (one `tengu run-agent` child per step), single sandbox config (`sandboxes/<name>/config.toml`), Tor-by-default egress. Work top-to-bottom. Each section states **what to do**, **what to expect**, and **what a failure looks like**.
 
 Runs in ~30 minutes of your time. Automated parts cost ~$0.50–$1.00 in OpenRouter API fees.
 
@@ -160,7 +160,7 @@ orchestration-e2e  (9 rows, ~350s)
 
 | Row fails with rationale | Likely cause |
 |---|---|
-| "Orchestrator errored out ..." | The planner LLM call itself failed (non-JSON output no longer errors — Phase 7.4 wraps it as `kind=direct` with a warn log). Planner prompt = `skills/orchestrator/SKILL.md` (`RagPlanner` loads it; `identity.instructions` is bypassed for the planning turn). |
+| "Orchestrator errored out ..." | The planner LLM call itself failed (non-JSON output no longer errors — Phase 7.4 wraps it as `kind=direct` with a warn log). Planner prompt = `skills/orchestrator/SKILL.md` (`RegistryPlanner` loads it; `identity.instructions` is bypassed for the planning turn). |
 | "Agent made direct HTTP calls" | Orchestrator didn't fire at all (eval path bypassed). Verify `[orchestrator]` block parses in the config (`tengu eval --sandbox <name>` overrides the skill-local `evals/config.toml`). |
 | `step sN: agent "X" has no [agents.X] block` | Planner invented a name (`skills/orchestrator/SKILL.md` forbids this), or the worker `[agents.X]` lacks a `description` — only those reach `TENGU_PLANNER_REGISTRY.md` (`shared_files::routable_agents`); `SubprocessRunner::run_step` fails fast without spawning. |
 | "step inputs not threaded" | `executor.rs` `render_step_inputs` bug — check the `<step-input from="...">` block format. |
@@ -247,7 +247,7 @@ mkdir -p sandboxes/smoke && cp config.example.toml sandboxes/smoke/config.toml
 ```
 
 **Expected log lines (`RUST_LOG=tengu=info`, from a separate terminal):**
-- `orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner`
+- `orchestrator: engine=rag, planner=RegistryPlanner(file-registry), worker=SubprocessRunner`
 - `TUI orchestrator constructed`
 - `DiskVectorStore loaded` with `entries=0` on first boot (`[memory] enabled = true`)
 

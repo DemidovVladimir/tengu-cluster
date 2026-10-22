@@ -387,8 +387,8 @@
       <li><strong>No LLM-driven auto-compact pass.</strong> The model never sees an LLM-written summary of its own history. Old turns drop off via the sliding window or fold into <code>maybe_compact_flow</code>'s truncated concatenation (Layer 1, before this loop).</li>
       <li><strong>No <code>/compact</code> slash-command equivalent</strong> in the TUI. The user cannot manually trigger a compaction pass.</li>
       <li><strong>No semantic dedupe</strong> of repeated tool calls. If the model calls <code>http_request</code> with the same URL twice in one turn, both full responses sit in context.</li>
-      <li><strong>No retrieval over prior turns of the current session</strong> for the chat loop. Postgres <code>agentic_memory</code> user messages exist but <code>RagPlanner::cross_session_recall_block</code> is the only consumer (planner-side, opt-in <code>cross_session_msg_top_k</code>).</li>
-      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RagPlanner::replan</code> (cross-plan) / <code>plan</code> (within-session, opt-in <code>within_session_output_top_k</code>) read it — not the per-turn chat history.</li>
+      <li><strong>No retrieval over prior turns of the current session</strong> for the chat loop. Postgres <code>agentic_memory</code> user messages exist but <code>RegistryPlanner::cross_session_recall_block</code> is the only consumer (planner-side, opt-in <code>cross_session_msg_top_k</code>).</li>
+      <li><strong>Subagent step traces are NEVER fed back into the planner's history.</strong> Only the <code>compress_and_store</code> summary survives, and only <code>RegistryPlanner::replan</code> (cross-plan) / <code>plan</code> (within-session, opt-in <code>within_session_output_top_k</code>) read it — not the per-turn chat history.</li>
       <li><strong>Claude Code engine has no in-loop compaction at all.</strong> That's why <code>max_mcp_result_chars</code> exists as a hard cap on bridge-routed tool results — it's the only context governor on that path.</li>
     </ul>
   </div>

@@ -241,7 +241,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `SEC_USER_AGENT` | the `User-Agent` of every SEC EDGAR request (`tengu history events`, `outbound/backfill/sec.rs`; a `[sources]` `sec_edgar` row names its variable in `auth = "user_agent_env:<VAR>"`, `outbound/sources/sec.rs`; required — "Name email"; never logged or stored) |
 | `UNSLOTH_API_KEY` | default `api_key_env` of `engine = "local"` (`[agents.<n>.local]`) |
 | `TENGU_RISK_RESUME_SECRET_FILE` | 0600 file whose content `tengu risk resume` asks for |
-| `TENGU_TUI_METRICS`, `TENGU_TUI_RAG_DEBUG`, `TENGU_GPU_HINT`, `RUST_LOG` | TUI panels / runtime profile / logging |
+| `TENGU_TUI_METRICS`, `TENGU_GPU_HINT`, `RUST_LOG` | TUI panels / runtime profile / logging |
 | `ANTHROPIC_API_KEY` | removed from the Claude CLI child env (it uses its own login) |
 | `OPENAI_API_KEY`, `CODEX_*` (but `CODEX_HOME`, `CODEX_CA_CERTIFICATE`) | removed from the Codex CLI child env (it bills the ChatGPT login, `engines/codex.rs::stripped_env`) |
 
@@ -521,7 +521,7 @@ No Rust: HTTP API → a skill that teaches `http_request`; existing tool server 
 | `src/application/runtime/feeds.rs` | 1970 | Feed runner — one task per `[feeds.<n>]` on a `Clock`: tool calls (`feed:<name>:<slot ms>:<i>` call ids, fan-out), loop ticks or a job run (`RuntimeJob`, settled like one call), one run in flight, backoff on error rows (an at-tick slot retries any failure for 15 min), `feed/1` health; `FeedEnv::trace`: `feed.fired` → calls / tick / job caused by it → `feed.completed / retrying / failed / tick_sent / dropped / skipped`. |
 | `src/application/orchestrator/executor.rs` | 456 | DAG executor: parallel step dispatch with retry escalation. |
 | `src/application/orchestrator/mod.rs` | 214 | Harness-owned orchestration. |
-| `src/application/orchestrator/planner.rs` | 1115 | Planner — `PlannerLlm` (the `[orchestrator]` agent's engine, called with no tools, bridge or memory) + `RagPlanner`: returns a Plan or a direct response. |
+| `src/application/orchestrator/planner.rs` | 1115 | Planner — `PlannerLlm` (the `[orchestrator]` agent's engine, called with no tools, bridge or memory) + `RegistryPlanner`: returns a Plan or a direct response. |
 | `src/application/orchestrator/replan.rs` | 314 | Replan outer loop: on step exhaustion, re-invoke the planner. |
 | `src/application/orchestrator/retry.rs` | 159 | Per-step retry policy. |
 | `src/application/orchestrator/shared_files.rs` | 495 | Planner context shared by planner and subagents. |

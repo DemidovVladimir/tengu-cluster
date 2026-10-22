@@ -17,7 +17,7 @@
 //! | `ReplanTriggered` | `plan.replanned` (pending) | `planner` | the last `step.failed`, else the `plan.created` | `reason` (line 1), `plans` |
 //! | `PlanCompleted` | `plan.completed` (ok · failed when `failed` · dropped when `cancelled`) | `planner` | the turn's last `plan.created`, else the root | `direct` (no plan: the planner answered itself), `cancelled`, `failed`, `response_chars`, `error` (line 1, failed only); `duration_ms` = the turn |
 //! | `MetricsRecorded` of this session, a planner / subagent record | `metrics.recorded` (ok) | none | the step's `step.started` (subagent — also when the record reaches the bus after its turn's `plan.completed`), else the running turn's `plan.created`, else the root | `kind`, `agent`, `model`, `step`, token / char counts; `duration_ms` = `latency_ms` |
-//! | `StepExhausted` · `StepProgress` · `RagQueried` | not written (the last `step.failed` says it · never sent · the query is the user's text) | | | |
+//! | `StepExhausted` | not written (the last `step.failed` says it) | | | |
 //!
 //! A turn = one `Orchestrator::handle` (its first event to its
 //! `plan.completed`); session = the surface's (`resolve_session_id`,
@@ -135,12 +135,7 @@ impl TraceBridge {
         if let OrchestratorEvent::MetricsRecorded { record } = ev {
             return self.metrics(record);
         }
-        if matches!(
-            ev,
-            OrchestratorEvent::StepExhausted { .. }
-                | OrchestratorEvent::StepProgress { .. }
-                | OrchestratorEvent::RagQueried { .. }
-        ) {
+        if matches!(ev, OrchestratorEvent::StepExhausted { .. }) {
             return None;
         }
         let mut guard = self.turn.lock().unwrap_or_else(|p| p.into_inner());
@@ -300,10 +295,9 @@ impl TraceBridge {
                 turn.ended = true;
                 id
             }
-            OrchestratorEvent::StepExhausted { .. }
-            | OrchestratorEvent::StepProgress { .. }
-            | OrchestratorEvent::RagQueried { .. }
-            | OrchestratorEvent::MetricsRecorded { .. } => None,
+            OrchestratorEvent::StepExhausted { .. } | OrchestratorEvent::MetricsRecorded { .. } => {
+                None
+            }
         }
     }
 
@@ -406,11 +400,6 @@ mod tests {
             ],
         };
         let evs = [
-            OrchestratorEvent::RagQueried {
-                phase: "plan",
-                query: "the user's words".into(),
-                hits: vec![],
-            },
             OrchestratorEvent::PlanCreated { plan: plan.clone() },
             OrchestratorEvent::StepStarted {
                 step_id: StepId::new("a"),
@@ -451,8 +440,7 @@ mod tests {
             },
         ];
         let ids: Vec<Option<String>> = evs.iter().map(|e| b.record(e)).collect();
-        assert_eq!(ids[0], None, "a recall query is user text: not written");
-        assert_eq!(ids[7], None, "StepExhausted = the last step.failed");
+        assert_eq!(ids[6], None, "StepExhausted = the last step.failed");
         let d = sink.all();
         let got: Vec<(&str, Option<&str>, Status)> = d
             .iter()

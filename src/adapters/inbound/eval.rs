@@ -1874,14 +1874,13 @@ impl RowObserver {
                     t.1 = t.1.saturating_add(record.completion_tokens);
                 }
             }
-            if let Some((name, detail)) = event_observation(ev) {
-                let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                observations.lock().unwrap().push(Observation {
-                    seq: n,
-                    name,
-                    args_preview: detail,
-                });
-            }
+            let (name, detail) = event_observation(ev);
+            let n = seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            observations.lock().unwrap().push(Observation {
+                seq: n,
+                name,
+                args_preview: detail,
+            });
         };
         let task = tokio::spawn(async move {
             loop {
@@ -1944,13 +1943,10 @@ async fn close_row(
     }
 }
 
-/// One `OrchestratorEvent` as the judge's observation `(name, detail)`;
-/// `None`: not observed (`StepProgress`).
-fn event_observation(
-    ev: crate::application::orchestrator::OrchestratorEvent,
-) -> Option<(String, String)> {
+/// One `OrchestratorEvent` as the judge's observation `(name, detail)`.
+fn event_observation(ev: crate::application::orchestrator::OrchestratorEvent) -> (String, String) {
     use crate::application::orchestrator::OrchestratorEvent;
-    let (name, detail) = match ev {
+    match ev {
         OrchestratorEvent::PlanCreated { plan } => {
             let steps: Vec<String> = plan
                 .steps
@@ -2010,27 +2006,6 @@ fn event_observation(
             "orchestrator:plan_completed".to_string(),
             format!("cancelled={} final_len={}", cancelled, final_response.len()),
         ),
-        OrchestratorEvent::StepProgress { .. } => return None,
-        // Phase 6.1 (full) — record planner RAG queries so the judge
-        // sees what roster the planner LLM was given. Top-5 hits is
-        // enough signal to reproduce ranking decisions without
-        // ballooning the trace.
-        OrchestratorEvent::RagQueried { phase, query, hits } => {
-            let top: Vec<String> = hits
-                .iter()
-                .take(5)
-                .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
-                .collect();
-            (
-                "orchestrator:rag_queried".to_string(),
-                format!(
-                    "phase={} query={} hits=[{}]",
-                    phase,
-                    truncate(&query, 200),
-                    top.join(",")
-                ),
-            )
-        }
         // Metrics — record one observation per LLM/embedding call so
         // eval rows can compare token consumption across runs. The
         // canonical analysis surface is the tracing log + global
@@ -2047,8 +2022,7 @@ fn event_observation(
                 record.latency_ms,
             ),
         ),
-    };
-    Some((name, detail))
+    }
 }
 
 async fn run_row_via_orchestrator(

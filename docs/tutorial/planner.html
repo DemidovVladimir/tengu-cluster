@@ -228,7 +228,7 @@
         <li>With <code>postgres_memory</code>: earlier messages and this session's step outputs, by vector search, both off by default. Recent messages come from an in-memory ring.</li>
         <li>The system prompt is the body of <code>skills/orchestrator/SKILL.md</code>; a short built-in prompt if it is missing. Your message goes last.</li>
         <li>One call on the <code>[orchestrator] agent</code>'s engine and model (<code>PlannerLlm</code>): a single message, no tools, executor, bridge tools, <code>[[mcp_servers]]</code>, memory recall or grounding nudge. That agent may differ from the default chat agent. Its token usage comes back with the reply on every surface.</li>
-        <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer) and a <code>RagQueried</code> event naming the registry entries.</li>
+        <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer).</li>
         <li><code>parse_verdict</code> tries raw JSON, fenced JSON, the first balanced object, then wraps prose as <code>direct</code>. Only empty output is an error.</li>
         <li><code>direct</code> ends the turn with its text. <code>plan</code> goes to the DAG executor.</li>
         <li>The accepted plan is stored for this session, sent to every step over IPC, and mirrored to <code>TENGU_PLAN.md</code>. Cleared when the turn ends.</li>
@@ -393,7 +393,7 @@ Example queries:
     <li><span class="chip bad">out</span><span><b>StepExhausted</b>orch: ⊘ s1 exhausted: the last error.</span></li>
     <li><span class="chip heart">again</span><span><b>ReplanTriggered</b>orch: ↻ replan — the error.</span></li>
     <li><span class="chip data">end</span><span><b>PlanCompleted</b>orch: plan completed. Every path ends with one; <code>failed</code> when the answer is a system error (planner or replan call failed, replans ran out).</span></li>
-    <li><span class="chip data">opt-in</span><span><b>RagQueried · MetricsRecorded</b>Shown with <code>TENGU_TUI_RAG_DEBUG=1</code> / <code>TENGU_TUI_METRICS=1</code>.</span></li>
+    <li><span class="chip data">opt-in</span><span><b>MetricsRecorded</b>Shown with <code>TENGU_TUI_METRICS=1</code>.</span></li>
   </ul>
 </section>
 
@@ -417,7 +417,7 @@ Example queries:
       </tbody>
     </table>
   </div>
-  <p class="note">A webhook turn hangs under its <code>trigger.webhook</code>; a step's <code>run-agent</code> tool calls hang under its <code>step.started</code> (<a href="subagents.html">Subagents</a>). <code>StepExhausted</code>, <code>RagQueried</code> and <code>StepProgress</code> are not written.</p>
+  <p class="note">A webhook turn hangs under its <code>trigger.webhook</code>; a step's <code>run-agent</code> tool calls hang under its <code>step.started</code> (<a href="subagents.html">Subagents</a>). <code>StepExhausted</code> is not written: the last <code>step.failed</code> says it.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">
@@ -442,7 +442,7 @@ Example queries:
     <p>Both files land in the directory you start <code>tengu</code> from. Per-layer sizes are debug log lines.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_RAG_DEBUG=1 tengu chat --sandbox lping</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>rg '^### ' TENGU_PLANNER_REGISTRY.md</span>
 <span class="ln"><span class="hl">### crypto_researcher</span></span>
 <span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md</span>
@@ -460,7 +460,7 @@ Example queries:
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>PlannerLlm</code> (the engine call); <code>RagPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
+        <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>PlannerLlm</code> (the engine call); <code>RegistryPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
         <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, plan state, <code>TENGU_PLAN.md</code></td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt); per-session plan guard</td></tr>
         <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus (records before it broadcasts)</td></tr>

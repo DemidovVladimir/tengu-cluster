@@ -12,17 +12,6 @@ use crate::application::trace_exec::Cause;
 use crate::domain::metrics::MetricsRecord;
 use crate::domain::plan::{Plan, StepId};
 
-/// Phase 6.1 (full) — flat projection of a single RAG search hit attached
-/// to `OrchestratorEvent::RagQueried`. We deliberately don't ship the full
-/// `RagResult` (which carries the embedding vector + payload) on the event
-/// bus — subscribers that want richer detail can hit the registry directly.
-#[derive(Debug, Clone)]
-pub struct RagQueriedHit {
-    pub kind: String,
-    pub name: String,
-    pub score: f32,
-}
-
 #[derive(Debug, Clone)]
 pub enum OrchestratorEvent {
     PlanCreated {
@@ -31,13 +20,6 @@ pub enum OrchestratorEvent {
     StepStarted {
         step_id: StepId,
         agent: String,
-    },
-    /// Reserved for future streaming-progress wiring (Phase 6.1 full event
-    /// bus); the SubprocessRunner does not emit incremental chunks today.
-    #[allow(dead_code)]
-    StepProgress {
-        step_id: StepId,
-        chunk: String,
     },
     /// One attempt failed. `retry_in_ms` = the wait before the next attempt
     /// (`retry.rs`, the policy's backoff); `None` = this was the last one
@@ -67,21 +49,11 @@ pub enum OrchestratorEvent {
         cancelled: bool,
         failed: bool,
     },
-    /// Phase 6.1 (full) — emitted by `RagPlanner` on every `plan()` and
-    /// `replan()` call, carrying the top-K registry hits the planner LLM
-    /// saw. `phase` is `"plan"` or `"replan"`. Subscribers (TUI debug
-    /// panel, future eval recorders) get the same data the existing
-    /// `tracing::info!` line surfaces, but in structured form.
-    RagQueried {
-        phase: &'static str,
-        query: String,
-        hits: Vec<RagQueriedHit>,
-    },
     /// Metrics — context/token consumption for one LLM or embedding call.
     /// Carried inline so subscribers (the TUI bottom bar, future eval
     /// recorders) get the same record as the global metrics bus and the
     /// `tracing::info!` baseline. Emitted by:
-    /// - `RagPlanner::plan/replan` after the planner LLM returns,
+    /// - `RegistryPlanner::plan/replan` after the planner LLM returns,
     /// - `SubprocessRunner::run_step` once per IPC-returned subagent record,
     /// - `Embedder::embed_batch` after every API call (re-broadcast from the
     ///   global sink onto the orchestrator bus when an aggregator is wired).

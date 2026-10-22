@@ -1,6 +1,6 @@
 # Orchestration Test Scenarios
 
-First live smoke test of the harness-owned orchestration after PRs #6/#7/#8/#10; updated 2026-09-18 for the current shape (planner = `RagPlanner`, worker = `SubprocessRunner` — one `tengu run-agent` child per step, single sandbox config, Tor-by-default egress). Expect at least one scenario to surface a real bug — the architecture is unit-tested but the planner prompt and integration timings are not.
+First live smoke test of the harness-owned orchestration after PRs #6/#7/#8/#10; updated 2026-09-18 for the current shape (planner = `RegistryPlanner`, worker = `SubprocessRunner` — one `tengu run-agent` child per step, single sandbox config, Tor-by-default egress). Expect at least one scenario to surface a real bug — the architecture is unit-tested but the planner prompt and integration timings are not.
 
 The document is organized as a runbook. Work top-to-bottom on first execution: prerequisites → sanity → sequential → parallel → mixed → edge cases → cleanup. Write down any deviation; every `FAIL` row is a ticket.
 
@@ -59,7 +59,7 @@ tengu chat --sandbox smoke
 You should see (in the first few lines, via `RUST_LOG=tengu=info`):
 
 ```
-orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner
+orchestrator: engine=rag, planner=RegistryPlanner(file-registry), worker=SubprocessRunner
 TUI orchestrator constructed
 DiskVectorStore loaded
 ```
@@ -315,7 +315,7 @@ The orchestrator can emit a plan with two leaves (two terminal steps; `skills/or
 | **Category** | Memory, planner recall lane |
 | **Channel** | TUI |
 | **Procedure** | Requires `--features postgres_memory`, `TENGU_MEMORY_DATABASE_URL`, and `[memory] within_session_output_top_k = 3` (default 0 = off). 1. Scenario S-07 (fan-out) — each `tengu run-agent` child writes its step summary to Postgres `agentic_memory` (`compress_and_store` / summary backstop). 2. After S-07, ask: `What was the last thing you researched?` |
-| **Expected behavior** | `RagPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner never reads disk memory — `PlannerLlm::call` sends one message with no memory.) |
+| **Expected behavior** | `RegistryPlanner::plan` injects a `## Recent step outputs (this session)` block filtered by the shared `session_id`. The answer references 200/404/503 from S-07. (The planner never reads disk memory — `PlannerLlm::call` sends one message with no memory.) |
 | **Pass** | Reply references content from S-07 correctly. |
 | **Fail markers** | Reply says "I don't have context about previous conversations" — recall lane off, no Postgres, or `session_id` mismatch between planner and runner. |
 
@@ -353,11 +353,11 @@ tengu eval orchestration-e2e
 
 This runs `skills/orchestration-e2e/evals/prompts.yaml` (9 rows).
 
-**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2059`) → `bootstrap::orchestrator::planner_llm` + `build_orchestrator` (`RagPlanner` + `SubprocessRunner`, one per row) → `Orchestrator::handle`. The planner calls its own engine (`PlannerLlm`, no tools); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Row stubs reach neither. `RowObserver` turns orchestrator events into synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec; the row's tokens are its session's `metrics.recorded` records (planner calls + steps). Worker `[agents.*]` blocks need a `description` to be routable.
+**Under the hood:** when `skills/orchestration-e2e/evals/config.toml` (or `--sandbox <name>`) declares `[orchestrator]`, `src/adapters/inbound/eval.rs::run_row` branches to `run_row_via_orchestrator` (`:2059`) → `bootstrap::orchestrator::planner_llm` + `build_orchestrator` (`RegistryPlanner` + `SubprocessRunner`, one per row) → `Orchestrator::handle`. The planner calls its own engine (`PlannerLlm`, no tools); each worker step is a real `tengu run-agent` child whose metrics cross the IPC boundary (`AgentIpcOutput.metrics`). Row stubs reach neither. `RowObserver` turns orchestrator events into synthetic observations (`orchestrator:plan_created`, `step_started`, …) in the same per-row vec; the row's tokens are its session's `metrics.recorded` records (planner calls + steps). Worker `[agents.*]` blocks need a `description` to be routable.
 
 **Expected output:** a 9-row table with `verdict: pass|fail|error` per row. **Not all will pass on first run** — the orchestrator prompt is an unverified first draft. Use judge rationales to classify:
 
-- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning — `skills/orchestrator/SKILL.md` (`RagPlanner` loads it; `agents.orchestrator.identity.instructions` is bypassed for the planning turn)
+- `fail` with rationale like "tool observations don't show fan-out" → planner prompt needs tuning — `skills/orchestrator/SKILL.md` (`RegistryPlanner` loads it; `agents.orchestrator.identity.instructions` is bypassed for the planning turn)
 - `fail` with rationale like "final text lacks content from step inputs" → step_input threading bug in `executor.rs` OR writer agent not reading its step-inputs (agent prompt issue)
 - `fail` with rationale like "agent ran tools directly instead of emitting a plan" → orchestrator didn't fire at all; check `[orchestrator]` block parses; check `eval_builder::run_row` took the orchestrator branch (the transcript's first system message reads `[orchestrator dispatch — actual prompts per-step; default agent was ...]` — absent means direct path)
 - `error` → harness crash; read logs

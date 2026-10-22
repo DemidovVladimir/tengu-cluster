@@ -1,5 +1,5 @@
 //! Orchestrator wiring — `planner_llm` (the planner's engine from
-//! `[orchestrator] agent`), `build_orchestrator` (RagPlanner +
+//! `[orchestrator] agent`), `build_orchestrator` (RegistryPlanner +
 //! SubprocessRunner), session-id resolution, and the `ChatServiceFactory`
 //! a CLI command uses to run one agent turn (`build_cli_chat_factory`).
 
@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use crate::application::chat::service::ChatRuntimeService;
 use crate::application::chat::tool_loop::ToolResultObserver;
 use crate::application::memory::manager::MemoryManager;
-use crate::application::orchestrator::planner::{PlannerLlm, RagPlanner};
+use crate::application::orchestrator::planner::{PlannerLlm, RegistryPlanner};
 use crate::application::orchestrator::retry::RetryPolicy;
 use crate::application::orchestrator::Orchestrator;
 use crate::config::Config;
@@ -202,7 +202,7 @@ fn open_brain_embedding_model(configured: &str) -> (&'static str, Option<String>
     (pinned, warning)
 }
 
-/// The harness-owned `Orchestrator`: `RagPlanner` (calling `llm`, from
+/// The harness-owned `Orchestrator`: `RegistryPlanner` (calling `llm`, from
 /// [`planner_llm`]) + `SubprocessRunner`. `None` without `[orchestrator]`
 /// (channels fall back to the default agent) or when its `engine` is not
 /// `"rag"` (warned). `trace` = the recording its plans and steps go to
@@ -226,11 +226,10 @@ pub(crate) fn build_orchestrator(
         return None;
     }
 
-    // Phase 6.1 (full) — mint the orchestrator event bus *before* the
-    // planner so we can hand the same bus to both. RagPlanner emits
-    // `OrchestratorEvent::RagQueried` on it; Orchestrator emits
-    // `PlanCreated`/`StepStarted`/etc. on the same channel; subscribers
-    // (TUI, Telegram adapter) see one unified event stream.
+    // The orchestrator event bus: the Orchestrator emits
+    // `PlanCreated`/`StepStarted`/etc. on it and the metrics forwarder
+    // below adds `MetricsRecorded`; subscribers (TUI, eval, the trace
+    // bridge) see one unified event stream.
     let step_sink = trace.as_ref().map(|t| Arc::clone(&t.sink));
     let bus = match trace {
         Some(t) => crate::application::orchestrator::events::new_bus().traced(
@@ -241,7 +240,7 @@ pub(crate) fn build_orchestrator(
 
     // Metrics — install the process-global metrics sink and bridge it
     // onto the orchestrator event bus so a single subscriber can render
-    // PlanCreated / RagQueried / MetricsRecorded uniformly. Idempotent;
+    // PlanCreated / StepStarted / MetricsRecorded uniformly. Idempotent;
     // subsequent `build_orchestrator` calls reuse the already-installed
     // sink. The forwarder holds a weak bus handle and ends with the
     // orchestrator (it owns the barrier; a webhook turn's orchestrator used
@@ -266,14 +265,14 @@ pub(crate) fn build_orchestrator(
     };
 
     // Fix B (2026-05-09) — session_id is resolved by the caller and
-    // passed in. Single value shared between RagPlanner (recall reads)
+    // passed in. Single value shared between RegistryPlanner (recall reads)
     // and SubprocessRunner (compress_and_store writes via IPC).
     // Logged at info-level so users can stitch tracing output back
     // to a specific persisted thread.
     tracing::info!(
         session_id = %session_id,
         sandbox = ?config.sandbox_name,
-        "orchestrator: engine=rag, planner=RagPlanner(file-registry), worker=SubprocessRunner"
+        "orchestrator: engine=rag, planner=RegistryPlanner(file-registry), worker=SubprocessRunner"
     );
     let worker: Arc<dyn crate::ports::orchestration::WorkerHandle> = Arc::new(
         crate::adapters::outbound::subprocess_runner::SubprocessRunner::new(
@@ -283,7 +282,7 @@ pub(crate) fn build_orchestrator(
         )
         .with_trace(step_sink),
     );
-    let planner: Arc<dyn Planner> = Arc::new(RagPlanner::new(
+    let planner: Arc<dyn Planner> = Arc::new(RegistryPlanner::new(
         cfg.agent.clone(),
         llm,
         config.memory.clone(),
@@ -293,7 +292,6 @@ pub(crate) fn build_orchestrator(
         }),
         planner_recall_store(),
         planner_embedder(&config.memory),
-        Some(bus.clone()),
         session_id,
     ));
 

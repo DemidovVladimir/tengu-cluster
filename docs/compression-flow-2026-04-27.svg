@@ -73,7 +73,7 @@
     <rect class="panel" width="1320" height="120"/>
     <rect class="panelH" x="14" y="14" width="200" height="22"/>
     <text x="22" y="30" class="tag">PARENT  tengu chat</text>
-    <text x="24" y="60" font-size="13"><tspan class="mono blue">RagPlanner</tspan> emits plan JSON  →  <tspan class="mono blue">DagExecutor</tspan> drives steps  →  <tspan class="mono blue">SubprocessRunner.run(AgentIpcInput)</tspan></text>
+    <text x="24" y="60" font-size="13"><tspan class="mono blue">RegistryPlanner</tspan> emits plan JSON  →  <tspan class="mono blue">DagExecutor</tspan> drives steps  →  <tspan class="mono blue">SubprocessRunner.run(AgentIpcInput)</tspan></text>
     <text x="24" y="82" class="small mono">orchestrator/planner.rs::PlannerLlm::call  (planner → engine: no tools, no memory — strict separation)</text>
     <text x="24" y="100" class="small">Each plan step spawns a fresh child <tspan class="mono">tengu run-agent</tspan> process. IPC over stdin/stdout JSON.</text>
   </g>

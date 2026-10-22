@@ -81,7 +81,7 @@ impl PlannerLlm {
 ///
 /// Phase 7.1 — promoted from `OrchestratorAgentPlanner::parse_verdict`
 /// (associated function with no `self`) to a free function when that
-/// type was deleted. RagPlanner is the only remaining caller.
+/// type was deleted. RegistryPlanner is the only remaining caller.
 pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
     let trimmed = raw.trim();
 
@@ -193,21 +193,14 @@ fn extract_balanced_json_object(s: &str) -> Option<String> {
 }
 
 // =====================================================================
-// RagPlanner — the only Planner implementation as of Phase 7.1.
+// RegistryPlanner — the only Planner implementation as of Phase 7.1.
 //
 // Loads `TENGU_PLANNER_REGISTRY.md` per turn and prepends the full roster
 // to the user message; uses `parse_verdict` (free fn above) for tolerant
 // JSON parsing of the LLM's plan output.
 // =====================================================================
 
-#[derive(Debug, Clone)]
-struct RegistryHit {
-    kind: String,
-    name: String,
-    score: f32,
-}
-
-pub struct RagPlanner {
+pub struct RegistryPlanner {
     orchestrator_agent: String,
     llm: PlannerLlm,
     memory_config: crate::config::MemoryConfig,
@@ -220,9 +213,9 @@ pub struct RagPlanner {
     /// hardcoded minimal instruction if the file is missing.
     system_prompt: String,
     /// Phase 6.4 (lite) — in-memory ring buffer of recent user messages
-    /// for THIS RagPlanner instance. Survives within one channel session,
+    /// for THIS RegistryPlanner instance. Survives within one channel session,
     /// lost on restart; mixes turns from concurrent Telegram chats sharing
-    /// one RagPlanner. Used as the source of the "## Recent user messages
+    /// one RegistryPlanner. Used as the source of the "## Recent user messages
     /// this session" prompt block. With `postgres_memory`, the current user
     /// message is also written to Postgres `agentic_memory`.
     session_history: tokio::sync::Mutex<Vec<String>>,
@@ -230,11 +223,6 @@ pub struct RagPlanner {
     /// `crate::bootstrap::orchestrator::build_orchestrator` and shared with
     /// `SubprocessRunner` so planner and subagent writes line up.
     session_id: String,
-    /// Phase 6.1 (full) — optional event bus for emitting
-    /// `OrchestratorEvent::RagQueried` on every `plan()`/`replan()`.
-    /// `None` means structured events are silently dropped (the
-    /// `tracing::info!` line still fires regardless).
-    bus: Option<crate::application::orchestrator::events::EventBus>,
     /// Source of the registry's TOOLS section: the tool catalog plus every
     /// `[[mcp_servers]]` tool (`<server>__<tool>`, live `tools/list`).
     tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
@@ -250,7 +238,7 @@ pub struct RagPlanner {
     embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
 }
 
-impl RagPlanner {
+impl RegistryPlanner {
     pub fn new(
         orchestrator_agent: String,
         llm: PlannerLlm,
@@ -259,7 +247,6 @@ impl RagPlanner {
         tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
         recall: Option<Arc<dyn crate::ports::memory::RecallStore>>,
         embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
-        bus: Option<crate::application::orchestrator::events::EventBus>,
         // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
         // and shared with `SubprocessRunner`, so the parent's recall query
         // and the child's `compress_and_store` write key match. Pre-Fix-B
@@ -283,7 +270,6 @@ impl RagPlanner {
             system_prompt,
             session_history: tokio::sync::Mutex::new(Vec::new()),
             session_id,
-            bus,
             tool_directory,
             tool_defs: tokio::sync::OnceCell::new(),
             recall,
@@ -308,7 +294,7 @@ impl RagPlanner {
         }
     }
 
-    async fn load_registry_block(&self) -> (String, Vec<RegistryHit>) {
+    async fn load_registry_block(&self) -> String {
         let tool_defs = self
             .tool_defs
             .get_or_init(|| async {
@@ -322,24 +308,10 @@ impl RagPlanner {
             &self.agents,
             tool_defs,
         ) {
-            Ok(snapshot) => {
-                let hits = snapshot
-                    .entries
-                    .into_iter()
-                    .map(|entry| RegistryHit {
-                        kind: entry.kind,
-                        name: entry.name,
-                        score: 1.0,
-                    })
-                    .collect();
-                (snapshot.prompt_block, hits)
-            }
+            Ok(block) => block,
             Err(e) => {
                 tracing::warn!(error = %e, "planner registry file unavailable");
-                (
-                    "\n## Planner registry\n\n_(registry file unavailable)_\n\n".to_string(),
-                    Vec::new(),
-                )
+                "\n## Planner registry\n\n_(registry file unavailable)_\n\n".to_string()
             }
         }
     }
@@ -569,7 +541,7 @@ Rules:
 ";
 
 #[async_trait]
-impl Planner for RagPlanner {
+impl Planner for RegistryPlanner {
     fn session_id(&self) -> Option<String> {
         Some(self.session_id.clone())
     }
@@ -581,12 +553,7 @@ impl Planner for RagPlanner {
         let embed_vec: Option<Vec<f32>> = self.embed_text(user_message).await;
         let embed_slice = embed_vec.as_deref();
 
-        let (registry_block, hits) = self.load_registry_block().await;
-
-        // Phase 6.1 (lite + full) — surface the planner's input roster on
-        // both the tracing channel (always) and the OrchestratorEvent bus
-        // (when one is wired into this planner).
-        emit_rag_query("plan", user_message, &hits, self.bus.as_ref());
+        let registry_block = self.load_registry_block().await;
 
         // Semantic recall of prior user messages from runtime memory BEFORE
         // we persist the current
@@ -659,8 +626,7 @@ impl Planner for RagPlanner {
         failed_step_id: &str,
         error: &str,
     ) -> anyhow::Result<PlannerVerdict> {
-        let (registry_block, hits) = self.load_registry_block().await;
-        emit_rag_query("replan", user_message, &hits, self.bus.as_ref());
+        let registry_block = self.load_registry_block().await;
 
         // Phase 6.5 — cross-plan recall. Pull the top-K most similar
         // step outputs so the planner sees relevant prior work before
@@ -837,64 +803,6 @@ fn format_history(hist: &[String], limit: usize) -> String {
         }
     }
     s
-}
-
-/// Phase 6.1 (lite + full) — emit one info-level tracing line per planner
-/// call AND fire `OrchestratorEvent::RagQueried` on the bus if one was
-/// wired into this planner. The tracing line and the bus event carry the
-/// same payload (top-10 hits with kind/name/score), so subscribers can
-/// pick whichever transport suits them.
-///
-/// Bus send failure is non-fatal — `broadcast::Sender::send` returns
-/// `Err` only when there are no live receivers, which is the steady
-/// state on cold-start before the channel adapter subscribes; we silently
-/// ignore that case rather than spamming warnings.
-fn emit_rag_query(
-    phase: &'static str,
-    query: &str,
-    hits: &[RegistryHit],
-    bus: Option<&crate::application::orchestrator::events::EventBus>,
-) {
-    // Tracing — same shape as the lite version, kept for `RUST_LOG=tengu=info`.
-    if hits.is_empty() {
-        tracing::info!(phase, query, "rag query returned 0 hits");
-    } else {
-        let summary: Vec<String> = hits
-            .iter()
-            .take(10)
-            .map(|h| format!("{}:{}={:.2}", h.kind, h.name, h.score))
-            .collect();
-        tracing::info!(
-            phase,
-            query,
-            hits = %summary.join(", "),
-            "rag query returned {} hits",
-            hits.len()
-        );
-    }
-
-    // Structured event — only when a bus is wired (the standalone unit
-    // tests pass `None`).
-    if let Some(bus) = bus {
-        let payload_hits: Vec<crate::application::orchestrator::events::RagQueriedHit> = hits
-            .iter()
-            .take(10)
-            .map(
-                |h| crate::application::orchestrator::events::RagQueriedHit {
-                    kind: h.kind.as_str().to_string(),
-                    name: h.name.clone(),
-                    score: h.score,
-                },
-            )
-            .collect();
-        let _ = bus.send(
-            crate::application::orchestrator::events::OrchestratorEvent::RagQueried {
-                phase,
-                query: query.to_string(),
-                hits: payload_hits,
-            },
-        );
-    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 
 | Then (this doc) | Now | Where |
 |---|---|---|
-| `OrchestratorAgentPlanner`: an orchestrator agent with one `memory_search` tool | `RagPlanner`: file registry `TENGU_PLANNER_REGISTRY.md` + `skills/orchestrator/SKILL.md`; `PlannerLlm::call` sends one message to the `[orchestrator] agent`'s engine — no tools, executor, bridge, `[[mcp_servers]]` or memory | `src/application/orchestrator/planner.rs` |
+| `OrchestratorAgentPlanner`: an orchestrator agent with one `memory_search` tool | `RegistryPlanner`: file registry `TENGU_PLANNER_REGISTRY.md` + `skills/orchestrator/SKILL.md`; `PlannerLlm::call` sends one message to the `[orchestrator] agent`'s engine — no tools, executor, bridge, `[[mcp_servers]]` or memory | `src/application/orchestrator/planner.rs` |
 | `ChatWorker` runs each step in-process | `SubprocessRunner` spawns `tengu run-agent` per step (IPC JSON over stdin / stdout) | `src/adapters/outbound/subprocess_runner.rs` → `src/adapters/inbound/cli/run_agent.rs` |
 | `MemoryInjector` / `MemoryWriter` around every step | removed 2026-10-22 (with `MemoryProvider`, `BuiltinMemoryProvider`, `ChatOrchestratorPortImpl`); `MemoryManager` = the workspace vector store behind the memory tools; durable memory = Postgres `agentic_memory` (feature `postgres_memory`) | `src/application/memory/`, `src/adapters/outbound/tools/agentic_memory/` |
 | channel snapshot factory (`OrchestratorSnapshots`) feeds the planner turn | removed 2026-10-22: `bootstrap::orchestrator::planner_llm(config)` builds the planner's engine; `build_orchestrator(config, llm, session_id, trace)` | `src/bootstrap/orchestrator.rs` |
@@ -96,7 +96,7 @@ Each step dispatch:
 | `config.rs` | Removed — `OrchestratorConfig` lives in `src/config/mod.rs`. |
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
 | `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `leaves` (the executor joins parallel leaves). `single_leaf` is test-only; `validate` (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles) runs in `replan::drive` before any step — an invalid plan replans. |
-| `planner.rs` | `RagPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
+| `planner.rs` | `RegistryPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
 | `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Waits 1 s, 3 s, then 9 s between attempts; emits `StepFailed` per attempt, `StepExhausted` at the end. |
 | `executor.rs` | `DagExecutor`. Parallel ready-set scheduling via `tokio::spawn`. Cancel or an exhausted step aborts every in-flight step (`abort_in_flight`). (`WorkerHandle` trait: `src/ports/orchestration.rs`.) |
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
@@ -190,7 +190,7 @@ and draft a reply to legal."
 
 ## 5. Channel wiring
 
-> **Now (2026-10-22):** the snapshot pattern below is history. The planner holds an engine, not a chat service: `bootstrap::orchestrator::planner_llm(config) -> anyhow::Result<Option<PlannerLlm>>` builds the `[orchestrator] agent`'s engine (`None` without `[orchestrator]`; an error for a missing agent block or an engine that does not build), and `build_orchestrator(config, llm, session_id, trace) -> Option<Orchestrator>` wires `RagPlanner` + `SubprocessRunner` (`session_id` from `resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — `tengu webhooks` mints `webhook-<name>-<uuid>` per request instead; shared by `RagPlanner` and `SubprocessRunner`). Steps are `tengu run-agent` children, so no channel builds per-agent inputs for them.
+> **Now (2026-10-22):** the snapshot pattern below is history. The planner holds an engine, not a chat service: `bootstrap::orchestrator::planner_llm(config) -> anyhow::Result<Option<PlannerLlm>>` builds the `[orchestrator] agent`'s engine (`None` without `[orchestrator]`; an error for a missing agent block or an engine that does not build), and `build_orchestrator(config, llm, session_id, trace) -> Option<Orchestrator>` wires `RegistryPlanner` + `SubprocessRunner` (`session_id` from `resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — `tengu webhooks` mints `webhook-<name>-<uuid>` per request instead; shared by `RegistryPlanner` and `SubprocessRunner`). Steps are `tengu run-agent` children, so no channel builds per-agent inputs for them.
 >
 > | Surface | Builds `PlannerLlm` | On error |
 > |---|---|---|
@@ -560,7 +560,7 @@ For future work, the harness is explicitly designed to accept extensions at thes
 |---|---|---|
 | New channel (Slack, Discord, HTTP API) | `planner_llm(config)` + `build_orchestrator(config, llm, session_id, trace)` | Wiring a new IM/API endpoint into the same orchestration flow |
 | New memory backend | `impl VectorStore` (and register via `MemoryManager::set_vector_backend`) | Swap legacy vector DB for Pinecone, or add an in-memory mock for tests |
-| Custom orchestrator (rules-based, cheaper) | `impl Planner` instead of `RagPlanner` | Skip LLM planner calls for recognized patterns |
+| Custom orchestrator (rules-based, cheaper) | `impl Planner` instead of `RegistryPlanner` | Skip LLM planner calls for recognized patterns |
 | Custom worker handle (delegate to remote cluster, Modal, etc.) | `impl WorkerHandle` | Fan work out to hosted inference instead of local engine |
 | Replay / deterministic test | `PlannerLlm` over a scripted `impl Engine` | Golden-test orchestration flows without live LLM calls |
 

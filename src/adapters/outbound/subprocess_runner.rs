@@ -186,7 +186,7 @@ impl SubprocessRunner {
     /// the parent planner's session_id into the IPC payload of every step.
     ///
     /// Pre Fix-B (2026-05-09) this minted a fresh UUID per construction,
-    /// which meant the planner's `RagPlanner.session_id` and the runner's
+    /// which meant the planner's `RegistryPlanner.session_id` and the runner's
     /// `SubprocessRunner.session_id` were independent. The child wrote
     /// `compress_and_store` outputs tagged with the runner's id, which the
     /// planner could never find via `search_outputs_for_session`. Now
@@ -507,7 +507,7 @@ mod tests {
     /// Fix B (2026-05-09) — confirm `SubprocessRunner::new` plumbs the
     /// explicit session_id through instead of minting a fresh UUID.
     /// Pre-Fix-B the runner ignored the parent's id, breaking
-    /// within-session output recall in `RagPlanner::plan`.
+    /// within-session output recall in `RegistryPlanner::plan`.
     #[test]
     fn new_uses_explicit_session_id() {
         let runner = SubprocessRunner::new(

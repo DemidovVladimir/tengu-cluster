@@ -380,7 +380,7 @@
         <td>TENGU_PLANNER_REGISTRY.md</td>
         <td><code>[agents.*]</code> blocks with a <code>description</code>, skills, core + MCP tool defs</td>
         <td><code>shared_files::ensure_planner_registry</code> before planner calls</td>
-        <td><code>RagPlanner::plan/replan</code> prompt context</td>
+        <td><code>RegistryPlanner::plan/replan</code> prompt context</td>
         <td>NO</td>
       </tr>
       <tr>
@@ -393,15 +393,15 @@
       <tr>
         <td>Open Brain user memory</td>
         <td>User messages keyed by session_id</td>
-        <td><code>RagPlanner::persist_user_message</code> on every plan()</td>
-        <td><code>RagPlanner::cross_session_recall_block</code> (opt-in via <code>memory.cross_session_msg_top_k</code>)</td>
+        <td><code>RegistryPlanner::persist_user_message</code> on every plan()</td>
+        <td><code>RegistryPlanner::cross_session_recall_block</code> (opt-in via <code>memory.cross_session_msg_top_k</code>)</td>
         <td>none yet (tracked in SESSION_HANDOFF)</td>
       </tr>
       <tr>
         <td>Open Brain step outputs</td>
         <td>Compressed step output summaries</td>
         <td><code>adapters/inbound/cli/run_agent.rs::try_persist_agentic_step_summary</code> when the child's implicit <code>compress_and_store</code> fires (or at exit)</td>
-        <td><code>RagPlanner::replan</code> (cross-plan) + <code>session_output_recall_block</code> (within-session, opt-in)</td>
+        <td><code>RegistryPlanner::replan</code> (cross-plan) + <code>session_output_recall_block</code> (within-session, opt-in)</td>
         <td>none yet (tracked in SESSION_HANDOFF)</td>
       </tr>
       <tr>
@@ -580,13 +580,13 @@
     <div class="mech-card">
       <div class="label">Doctrine</div>
       <h3>A. LLM = heart, Open Brain + Karpathy LLM Wiki = brain, tools = hands</h3>
-      <p>RagPlanner (legacy name) does ONE thing — pick the right agent. It holds an engine, not a chat service: PlannerLlm::call sends one message with no tools, no tool executor, no bridge, no [[mcp_servers]] and no memory — nothing to strip — so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
+      <p>RegistryPlanner does ONE thing — pick the right agent. It holds an engine, not a chat service: PlannerLlm::call sends one message with no tools, no tool executor, no bridge, no [[mcp_servers]] and no memory — nothing to strip — so the planner has only one job: emit plan JSON. Subagents do the actual work in their own subprocess.</p>
       <div class="ref">application/orchestrator/planner.rs::PlannerLlm::call · test planner_call_has_no_hands_and_reports_usage</div>
     </div>
     <div class="mech-card">
       <div class="label">Fix B</div>
       <h3>B. Shared session_id</h3>
-      <p>The caller resolves the id once (<code>resolve_session_id</code>: <code>TENGU_SESSION_ID</code> env override or a fresh UUID; <code>tengu webhooks</code> mints <code>webhook-&lt;name&gt;-&lt;uuid&gt;</code> per request) and <code>build_orchestrator</code> passes it to both RagPlanner and SubprocessRunner, so planner messages and subagent summaries share the same session key.</p>
+      <p>The caller resolves the id once (<code>resolve_session_id</code>: <code>TENGU_SESSION_ID</code> env override or a fresh UUID; <code>tengu webhooks</code> mints <code>webhook-&lt;name&gt;-&lt;uuid&gt;</code> per request) and <code>build_orchestrator</code> passes it to both RegistryPlanner and SubprocessRunner, so planner messages and subagent summaries share the same session key.</p>
       <div class="ref">bootstrap/orchestrator.rs::resolve_session_id · build_orchestrator</div>
     </div>
     <div class="mech-card">
@@ -605,7 +605,7 @@
       <div class="label">Recall layers</div>
       <h3>E. Recall layers in the planner prompt</h3>
       <p>In-memory ring buffer (Phase 6.4 lite) — recent user msgs THIS process, lost on restart. Cross-session block (Phase 6.4 full) — Open Brain agentic_memory recall, opt-in via memory.cross_session_msg_top_k. Both inject before the current turn. A third opt-in lane, <code>within_session_output_top_k</code>, recalls this session's step outputs.</p>
-      <div class="ref">RagPlanner::update_and_format_history + cross_session_recall_block + session_output_recall_block</div>
+      <div class="ref">RegistryPlanner::update_and_format_history + cross_session_recall_block + session_output_recall_block</div>
     </div>
     <div class="mech-card">
       <div class="label">Multi-turn UX</div>
@@ -751,33 +751,33 @@ const STEPS = [
       { path: "src/adapters/inbound/telegram.rs", desc: "Telegram polling + per-chat dispatch; allow-list, private agents never @-routable" },
       { path: "src/adapters/inbound/webhooks.rs", desc: "POST /webhooks/:name → one-shot orchestrator turn, or a loop event (loop = \"<name>\")" },
     ],
-    deep: "Both chat surfaces also subscribe to the OrchestratorEvent bus so they can render plan progress lines (PlanCreated, StepStarted, ✓ step-N). The TUI additionally renders RagQueried as a debug bubble when TENGU_TUI_RAG_DEBUG=1 is set."
+    deep: "Both chat surfaces also subscribe to the OrchestratorEvent bus so they can render plan progress lines (PlanCreated, StepStarted, ✓ step-N)."
   },
   {
     num: 2, title: "Bootstrap — build_orchestrator", lane: "orch",
     what: "bootstrap/orchestrator.rs::planner_llm(config) builds the planner's engine (PlannerLlm) from [agents.<[orchestrator] agent>]; build_orchestrator(config, llm, session_id, trace) constructs the Orchestrator wrapping the planner + worker. planner_llm returns None when [orchestrator] is missing — channels then fall back to direct default-agent dispatch.",
     files: [
       { path: "src/bootstrap/orchestrator.rs::planner_llm", desc: "the planner's engine + agent block; an error for a missing block or an engine that does not build. TUI / Telegram: at startup (refuse to start); webhook planner endpoints, loop escalations: per turn (warn, skip); eval: per row; A2A: per planner turn" },
-      { path: "src/bootstrap/orchestrator.rs::build_orchestrator", desc: "the wiring: RagPlanner + SubprocessRunner share config.agents and the caller's session_id" },
+      { path: "src/bootstrap/orchestrator.rs::build_orchestrator", desc: "the wiring: RegistryPlanner + SubprocessRunner share config.agents and the caller's session_id" },
       { path: "src/bootstrap/orchestrator.rs::resolve_session_id", desc: "TENGU_SESSION_ID, else a fresh UUID (per process for chat / Telegram, per row for tengu eval); tengu webhooks mints webhook-<name>-<uuid> per request instead" },
       { path: "src/application/orchestrator/events.rs", desc: "EventBus minted here, shared with planner; the global metrics sink is bridged onto it" },
     ],
     deep: "engine = \"rag\" is the only orchestrator engine (Phase 7.1) — any other value fails config validation (orchestrator.engine must be one of); build_orchestrator keeps a defensive warn + None. The old static-mode planner (OrchestratorAgentPlanner + ChatWorker) is deleted."
   },
   {
-    num: 3, title: "Planner — RagPlanner::plan (legacy name)", lane: "plan",
-    what: "Embed once (postgres_memory) → regenerate/load TENGU_PLANNER_REGISTRY.md → emit RagQueried event → optional cross-session recall → persist user message → push to in-memory buffer → optional session-output recall → LLM call → parse verdict.",
+    num: 3, title: "Planner — RegistryPlanner::plan (legacy name)", lane: "plan",
+    what: "Embed once (postgres_memory) → regenerate/load TENGU_PLANNER_REGISTRY.md → optional cross-session recall → persist user message → push to in-memory buffer → optional session-output recall → LLM call → parse verdict.",
     files: [
-      { path: "src/application/orchestrator/planner.rs::RagPlanner::plan", desc: "the orchestration of all the steps below" },
+      { path: "src/application/orchestrator/planner.rs::RegistryPlanner::plan", desc: "the orchestration of all the steps below" },
       { path: "TENGU_PLANNER_REGISTRY.md", desc: "root file-backed roster loaded into the planner prompt" },
       { path: "skills/orchestrator/SKILL.md", desc: "the planner's system prompt (no Rust code)" },
       { path: "skills/orchestrator/plan_schema.json", desc: "the plan JSON shape the prompt asks for (no JSON-schema check in Rust; Plan::validate checks the plan)" },
     ],
-    deep: "The planner LLM call is PlannerLlm::call: one user message through collect_engine_response with no tools, executor, observer, memory, bridge or [[mcp_servers]]; it returns (text, TurnTelemetry) with prompt/completion tokens, model slug, latency — the same usage on every surface. RagPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / session_recall / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after it. parse_verdict (4-path cascade: raw JSON, fenced, JSON inside prose, prose → Direct) gives PlannerVerdict::Direct { response } or PlannerVerdict::Plan { plan }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
+    deep: "The planner LLM call is PlannerLlm::call: one user message through collect_engine_response with no tools, executor, observer, memory, bridge or [[mcp_servers]]; it returns (text, TurnTelemetry) with prompt/completion tokens, model slug, latency — the same usage on every surface. RegistryPlanner captures the per-context-layer breakdown (system / roster / cross_session / history / session_recall / user_message) BEFORE the call and emits one MetricsRecord with kind=Planner via emit_planner_metrics after it. parse_verdict (4-path cascade: raw JSON, fenced, JSON inside prose, prose → Direct) gives PlannerVerdict::Direct { response } or PlannerVerdict::Plan { plan }. Cross-session recall happens BEFORE persisting the current message so the just-written message can never appear in its own recall block."
   },
   {
     num: 4, title: "DagExecutor", lane: "exec",
-    what: "Standard topological DAG with retry. Plan::ready_steps returns every step whose deps are satisfied; each is tokio::spawn'd on the SubprocessRunner. On step exhaustion, calls RagPlanner::replan with failure context + cross-plan recall.",
+    what: "Standard topological DAG with retry. Plan::ready_steps returns every step whose deps are satisfied; each is tokio::spawn'd on the SubprocessRunner. On step exhaustion, calls RegistryPlanner::replan with failure context + cross-plan recall.",
     files: [
       { path: "src/application/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel; abort_in_flight on cancel / exhaustion" },
       { path: "src/application/orchestrator/replan.rs::drive", desc: "the outer loop — Plan::validate (empty, duplicate ids, unknown agents / dependencies, cycles) then replan-on-invalid / exhausted; stores the rendered plan per session (plan_state)" },
@@ -1133,7 +1133,7 @@ const SUBSYSTEMS = [
     subtitle: "the harness brain. Heart of the v2 redesign.",
     files: [
       ["mod.rs", "Orchestrator — top-level handle: new(planner, worker, policy, max_replans, bus), handle, subscribe"],
-      ["planner.rs", "PlannerLlm { engine, agent } — call = the planner's one engine call, no hands; RagPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
+      ["planner.rs", "PlannerLlm { engine, agent } — call = the planner's one engine call, no hands; RegistryPlanner (only Planner since 7.1), parse_verdict free fn, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
       ["domain/plan.rs", "Plan, Step, AgentCompose (C→B B-half), StepId, ready_steps, leaves"],
       ["executor.rs", "DagExecutor — parallel ready_steps with cancel; aborts in-flight steps on cancel / exhaustion; parallel leaves joined"],
       ["retry.rs", "RetryPolicy"],
@@ -1143,7 +1143,7 @@ const SUBSYSTEMS = [
       ["ports/orchestration.rs", "traits Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn only — tengu evolve); TurnTelemetry. wiring.rs / ChatOrchestratorPortImpl / OrchestratorChatPort removed 2026-10-22"],
       ["shared_files.rs", "TENGU_PLANNER_REGISTRY.md, per-session plan state, TENGU_PLAN.md debug copy"],
     ],
-    deep: "Phase 7.1 deleted OrchestratorAgentPlanner, ChatWorker, and the engine = \"static\" branches. RagPlanner is the only Planner impl now. SubprocessRunner (adapters/outbound/subprocess_runner.rs) is the only WorkerHandle.",
+    deep: "Phase 7.1 deleted OrchestratorAgentPlanner, ChatWorker, and the engine = \"static\" branches. RegistryPlanner is the only Planner impl now. SubprocessRunner (adapters/outbound/subprocess_runner.rs) is the only WorkerHandle.",
   },
   {
     key: "metrics", title: "metrics — context/token observability (2026-04-28)",
@@ -1482,12 +1482,12 @@ const FILE_MAP = [
   ["src/application/chat/tool_loop.rs", "chat", "collect_engine_response / run_single_engine_turn — the inner tool loop; tool_result_content caps results"],
   ["src/adapters/outbound/subprocess_runner.rs", "orchestrator", "SubprocessRunner::new(sandbox, session_id, agents) — fail-fast on unknown [agents.*], per-step max_tool_rounds / step_timeout_secs, run_with_timeout, TENGU_EGRESS to the child; AgentIpcInput, AgentIpcOutput"],
   ["src/application/orchestrator/mod.rs", "orchestrator", "Orchestrator top-level handle: new(planner, worker, policy, max_replans, bus), handle, subscribe"],
-  ["src/application/orchestrator/planner.rs", "orchestrator", "PlannerLlm::call (one engine call: SKILL.md + one message, no tools / executor / bridge / [[mcp_servers]] / memory → (text, TurnTelemetry)), RagPlanner::new(.., llm, .., agents, tool directory, recall, embedder, bus, session_id), parse_verdict (free fn), persist_user_message, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
+  ["src/application/orchestrator/planner.rs", "orchestrator", "PlannerLlm::call (one engine call: SKILL.md + one message, no tools / executor / bridge / [[mcp_servers]] / memory → (text, TurnTelemetry)), RegistryPlanner::new(.., llm, .., agents, tool directory, recall, embedder, bus, session_id), parse_verdict (free fn), persist_user_message, cross_session_recall_block, session_output_recall_block, emit_planner_metrics"],
   ["src/domain/plan.rs", "orchestrator", "Plan, Step, StepId, AgentCompose (Phase 6.7), ready_steps, leaves"],
   ["src/application/orchestrator/executor.rs", "orchestrator", "DagExecutor — abort_in_flight on cancel / exhaustion, never-ready step ⇒ replan, parallel leaves joined (WorkerHandle trait → ports/orchestration.rs)"],
   ["src/application/orchestrator/retry.rs", "orchestrator", "RetryPolicy"],
   ["src/application/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop: Plan::validate each plan, replan-on-invalid / exhausted"],
-  ["src/application/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, RagQueried, MetricsRecorded), EventBus, RagQueriedHit"],
+  ["src/application/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, MetricsRecorded, …), EventBus"],
   ["src/application/orchestrator/trace.rs", "orchestrator", "OrchestratorTrace + TraceBridge: plan.created / step.started / step.completed / step.retrying / step.failed / plan.replanned / plan.completed / metrics.recorded (Studio)"],
   ["src/application/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_summaries); per-session active plan (set_active_plan / active_plan → IPC plan_state); TENGU_PLAN.md debug artifact"],
   ["src/ports/orchestration.rs", "orchestrator", "Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn — tengu evolve), TurnTelemetry, PlannerVerdict"],

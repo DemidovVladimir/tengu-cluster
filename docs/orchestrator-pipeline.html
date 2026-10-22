@@ -169,7 +169,7 @@
 
 <header class="title">
   <h1>Tengu Orchestrator — Pipeline</h1>
-  <div class="subtitle">Harness-owned orchestration, parallel + sequential execution, retention. Every diagram references exact file:line locations in the source tree. Current shape: planner = <code>RagPlanner</code> (file-backed <code>TENGU_PLANNER_REGISTRY.md</code>), worker = <code>SubprocessRunner</code> (one <code>tengu run-agent</code> child per step), step memory = Postgres <code>agentic_memory</code>. Line numbers as of 2026-10-08 (<code>main</code> at bc9bc12a038654ac4941c714abcfa777c99af631). Chat-turn orchestration only — <code>tengu run</code>, backtests, rankings, lineage and sources run without a planner (<a href="architecture-2026-04-27.html">architecture explorer</a>).</div>
+  <div class="subtitle">Harness-owned orchestration, parallel + sequential execution, retention. Every diagram references exact file:line locations in the source tree. Current shape: planner = <code>RegistryPlanner</code> (file-backed <code>TENGU_PLANNER_REGISTRY.md</code>), worker = <code>SubprocessRunner</code> (one <code>tengu run-agent</code> child per step), step memory = Postgres <code>agentic_memory</code>. Line numbers as of 2026-10-08 (<code>main</code> at bc9bc12a038654ac4941c714abcfa777c99af631). Chat-turn orchestration only — <code>tengu run</code>, backtests, rankings, lineage and sources run without a planner (<a href="architecture-2026-04-27.html">architecture explorer</a>).</div>
 </header>
 
 <!-- ============================================================= -->
@@ -212,7 +212,7 @@ flowchart TB
     subgraph OR["Orchestrator subsystem"]
       H["Orchestrator::handle<br/>mod.rs:86"]
       RD["replan::drive<br/>replan.rs:13"]
-      P["RagPlanner<br/>planner.rs:151<br/>TENGU_PLANNER_REGISTRY.md"]
+      P["RegistryPlanner<br/>planner.rs:151<br/>TENGU_PLANNER_REGISTRY.md"]
       EX["DagExecutor::run<br/>executor.rs:26"]
       RT["RetryPolicy<br/>retry.rs:13"]
       EV_BUS["EventBus broadcast<br/>events.rs"]
@@ -273,7 +273,7 @@ sequenceDiagram
     participant User
     participant Ch as Channel
     participant Or as Orchestrator
-    participant Pl as RagPlanner
+    participant Pl as RegistryPlanner
     participant LLM as PlannerLlm → engine (no tools, no memory)
     participant Ex as DagExecutor
     participant Rn as SubprocessRunner
@@ -324,7 +324,7 @@ sequenceDiagram
     <tr><td>planner_llm / build_orchestrator</td><td class="file-ref">src/bootstrap/orchestrator.rs</td><td>123 / 212</td></tr>
     <tr><td>Orchestrator::handle</td><td class="file-ref">src/application/orchestrator/mod.rs</td><td>86</td></tr>
     <tr><td>replan::drive</td><td class="file-ref">src/application/orchestrator/replan.rs</td><td>13</td></tr>
-    <tr><td>RagPlanner::plan + parse_verdict</td><td class="file-ref">src/application/orchestrator/planner.rs</td><td>518 (plan), 26 (parse_verdict), 151 (struct)</td></tr>
+    <tr><td>RegistryPlanner::plan + parse_verdict</td><td class="file-ref">src/application/orchestrator/planner.rs</td><td>518 (plan), 26 (parse_verdict), 151 (struct)</td></tr>
     <tr><td>Registry + active plan</td><td class="file-ref">src/application/orchestrator/shared_files.rs</td><td>ensure_planner_registry 80, routable_agents 168, set_active_plan 39, write_plan_state 128</td></tr>
     <tr><td>DagExecutor::run</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>26</td></tr>
     <tr><td>plan.ready_steps</td><td class="file-ref">src/domain/plan.rs</td><td>91</td></tr>
@@ -699,7 +699,7 @@ between retention sweeps.
   <tbody>
     <tr><td>Orchestrator public API</td><td class="file-ref">application/orchestrator/mod.rs</td><td><code>Orchestrator::{new,handle,subscribe}</code> — <code>new(planner, worker, policy, max_replans, bus)</code></td></tr>
     <tr><td>Replan loop</td><td class="file-ref">application/orchestrator/replan.rs</td><td><code>drive()</code> — <code>Plan::validate</code> each plan, then the executor</td></tr>
-    <tr><td>Planner</td><td class="file-ref">application/orchestrator/planner.rs</td><td><code>PlannerLlm::call</code> (the planner's one engine call), <code>RagPlanner::{new,plan,replan}</code>, <code>parse_verdict</code>, <code>extract_balanced_json_object</code>, <code>load_orchestrator_skill_body</code> (trait <code>Planner</code>: <code>ports/orchestration.rs</code>)</td></tr>
+    <tr><td>Planner</td><td class="file-ref">application/orchestrator/planner.rs</td><td><code>PlannerLlm::call</code> (the planner's one engine call), <code>RegistryPlanner::{new,plan,replan}</code>, <code>parse_verdict</code>, <code>extract_balanced_json_object</code>, <code>load_orchestrator_skill_body</code> (trait <code>Planner</code>: <code>ports/orchestration.rs</code>)</td></tr>
     <tr><td>Planner registry + plan state</td><td class="file-ref">application/orchestrator/shared_files.rs</td><td><code>routable_agents</code>, <code>render_registry</code>, <code>ensure_planner_registry</code>, <code>set_active_plan</code> / <code>active_plan</code>, <code>write_plan_state</code>, <code>scan_skill_summaries</code></td></tr>
     <tr><td>DAG executor</td><td class="file-ref">application/orchestrator/executor.rs</td><td><code>DagExecutor::run</code>, <code>ExecResult</code>, <code>render_step_inputs</code>, <code>abort_in_flight</code> (trait <code>WorkerHandle</code>: <code>ports/orchestration.rs</code>)</td></tr>
     <tr><td>Worker (subprocess)</td><td class="file-ref">adapters/outbound/subprocess_runner.rs</td><td><code>SubprocessRunner::{new,run_step,run_with_timeout}</code>, <code>AgentIpcInput</code>, <code>AgentIpcOutput</code>, <code>forward_child_log</code></td></tr>

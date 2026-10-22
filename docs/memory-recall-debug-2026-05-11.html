@@ -364,7 +364,7 @@
 <p class="small">Scenario: user types <code>M1</code> on turn N; planner emits <code>Direct{response:R1}</code>; user types <code>M2</code> on turn N+1 referring to R1. Trace shows what's persisted, read, and dropped at each step.</p>
 
 <div class="trace">
-  <div class="step write"><span class="role">Turn N · write</span> User msg <code>M1</code> → <code>RagPlanner.session_history.push(M1)</code> <span class="info">(in-RAM ring buffer, USER side only)</span> <span class="cite"><code>planner.rs:291</code></span></div>
+  <div class="step write"><span class="role">Turn N · write</span> User msg <code>M1</code> → <code>RegistryPlanner.session_history.push(M1)</code> <span class="info">(in-RAM ring buffer, USER side only)</span> <span class="cite"><code>planner.rs:291</code></span></div>
   <div class="step write"><span class="role">Turn N · write</span> <code>persist_user_message(M1)</code> → <code>agentic_memory user events</code> row, <code>session_id=$sid</code>, <code>step_id=None</code> <span class="cite"><code>planner.rs:446</code></span></div>
   <div class="step read"><span class="role">Turn N · read</span> <code>load_registry_block</code> reads the file-backed <code>TENGU_PLANNER_REGISTRY.md</code> (regenerated from the <code>[agents.*]</code> blocks that carry a <code>description</code>, plus skills, core tools, MCP tools) <span class="info">(no embedding, no similarity score — the planner LLM reads every entry)</span> <span class="cite"><code>planner.rs:252</code> · <code>shared_files.rs::render_registry</code></span></div>
   <div class="step note"><span class="role">Turn N · build</span> Planner combines: <code>system + roster + cross_session_block (empty, OFF) + history_block (just M1) + session_recall (empty, OFF) + user_message</code></div>
@@ -513,7 +513,7 @@
     <tr>
       <td><span class="priority-1">1</span></td>
       <td><strong>Verbatim last-N turn-pair window</strong> (both user + assistant), always injected ahead of any Open Brain / Karpathy LLM Wiki block. No embedding, no threshold.</td>
-      <td><code>RagPlanner</code> prompt assembly · new <code>VerbatimWindow</code> in planner state</td>
+      <td><code>RegistryPlanner</code> prompt assembly · new <code>VerbatimWindow</code> in planner state</td>
       <td>Fixes recency / coref / short-utterance in one move. Today's dominant failure mode.</td>
       <td>Small. ~50 LoC + a new ring buffer alongside <code>session_history</code>.</td>
     </tr>

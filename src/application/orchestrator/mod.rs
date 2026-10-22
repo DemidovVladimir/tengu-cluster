@@ -1,7 +1,7 @@
 //! Harness-owned orchestration.
 //!
 //! - `plan`         — Step, StepId, Plan types + topology helpers
-//! - `planner`      — `RagPlanner`: the planner agent's LLM call over the file-backed registry
+//! - `planner`      — `RegistryPlanner`: the planner agent's LLM call over the file-backed registry
 //! - `executor`     — DAG executor: parallel, ready-set scheduling
 //! - `retry`        — per-step retry policy
 //! - `replan`       — outer loop: re-invoke the planner on exhaustion
@@ -39,11 +39,10 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    /// Phase 6.1 (full) — `bus` is now an explicit constructor argument
-    /// rather than being minted internally, so the same bus can be wired
-    /// into the `RagPlanner` (which emits `OrchestratorEvent::RagQueried`)
-    /// before the orchestrator owns it. Callers without a planner that
-    /// emits events can pass a fresh `events::new_bus()`.
+    /// `bus` is an explicit constructor argument so the caller can wire
+    /// the metrics forwarder and the trace bridge onto it before the
+    /// orchestrator owns it. Callers with nothing to wire pass a fresh
+    /// `events::new_bus()`.
     pub fn new(
         planner: Arc<dyn Planner>,
         worker: Arc<dyn WorkerHandle>,
