@@ -928,8 +928,8 @@ async fn build_bridge_executor(
 
     // Per-tool scopes — ENFORCED, resolved exactly like
     // `crate::bootstrap::tools::build_tool_executor`: the agent's configured
-    // entry (see `bridge_agent_config`), else `permissive_scope` — minus the
-    // shell when the agent has `no_shell_fallback` (signing sandbox).
+    // entry (see `bridge_agent_config`), else `permissive_scope` (no env
+    // var) — or deny-all when the agent has `no_shell_fallback` (hardened).
     let scopes = crate::bootstrap::tools::resolve_tool_scopes(
         workspace,
         &agent_config.scopes,

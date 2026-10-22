@@ -317,7 +317,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 <span class="c"># no fs_roots: denied, not inherited</span></pre>
     </div>
   </div>
-  <p class="note">A configured scope is deny-by-default per field. A tool with no scope at all gets the permissive fallback rooted in the workspace (see <a href="scopes.html">Scopes and hardening</a>).</p>
+  <p class="note">A configured scope is deny-by-default per field. A tool with no scope at all gets the fallback rooted in the workspace, with no env var (see <a href="scopes.html">Scopes and hardening</a>).</p>
 </section>
 
 <section class="sec" aria-labelledby="s-shelf">
@@ -450,7 +450,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
     <li><span><b>A broken base file stops only what needs it.</b> It is loaded before <code>--sandbox</code>; when it fails, <code>chat</code>, <code>telegram</code>, <code>webhooks</code>, <code>run</code>, <code>a2a</code>, <code>doctor</code>, <code>decide</code>, <code>studio</code>, <code>history</code>, <code>backtest</code>, <code>ranking</code>, <code>risk</code> and <code>sources</code> with <code>--sandbox</code> log a warning and go on; any other command stops. <code>evidence</code>, <code>lineage</code>, <code>trace</code> and <code>sandbox</code> never read it; <code>soe</code> reads a config only for its weekly commands (<code>--sandbox</code> or <code>-c</code>).</span></li>
     <li><span><b>Children see the same file.</b> <code>run-agent</code> reloads it by sandbox name; the bridge reads the absolute <code>TENGU_CONFIG</code>.</span></li>
     <li><span><b>One set of sections.</b> Every agent holds the same <code>SandboxSections</code>, so tools read identical <code>[risk]</code>, <code>[paper]</code>, <code>[sources]</code>, <code>[soe]</code>, <code>[a2a]</code> remotes, the <code>[solana] privy_wallet_id</code>, state dirs and rate limits.</span></li>
-    <li><span><b>Hardened means hardened.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, every agent's fallback scope runs no shell.</span></li>
+    <li><span><b>Hardened means hardened.</b> With <code>[risk]</code>, <code>[soe]</code> or a Solana signer, every agent's fallback scope is deny-all.</span></li>
     <li><span><b>Bound sandboxes stay in their generation.</b> With <code>[generation]</code>, every load checks the sandbox against <code>lineage/generations/&lt;id&gt;.toml</code>; xlab and xmarket-weekend bind W1.</span></li>
     <li><span><b>Ranking contracts fit the sandbox.</b> With <code>[strategy_ranking]</code>, every load refuses an unknown contract, one of another sandbox, or a contract strategy missing from <code>[backtest.strategies]</code> (<a href="strategy-ranking.html">Strategy ranking</a>).</span></li>
   </ul>

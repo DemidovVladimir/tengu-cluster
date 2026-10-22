@@ -566,9 +566,9 @@ fn parse_headers(raw: &str, ctx: &ToolCtx<'_>) -> Result<Vec<(String, String, bo
 ///
 /// Each env read is gated by `ctx.scope.check_env_read(name)`; scopes whose
 /// `env_reads` list is empty will reject the expansion (default-deny).
-/// `permissive_scope` (the fallback for tools with no configured scope) sets
-/// `env_reads = ["*"]`, which the check honours as allow-any; a configured
-/// `[agents.*.scopes.http_request].env_reads` list narrows it.
+/// `permissive_scope` (the fallback for tools with no configured scope)
+/// grants none, so a `$VAR` needs `[agents.*.scopes.http_request].env_reads`
+/// (or `[default_scopes.http_request]`) naming it; `"*"` there allows any.
 fn expand_env_refs(input: &str, ctx: &ToolCtx<'_>) -> Result<String> {
     let mut out = String::new();
     let bytes = input.as_bytes();

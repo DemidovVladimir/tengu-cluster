@@ -539,7 +539,10 @@ These are not preferences. They're load-bearing.
   wholesale; `~` in `fs_roots` expanded). `build_tool_executor` and the MCP
   bridge (the agent's folded scopes loaded from `TENGU_CONFIG`;
   `TENGU_BRIDGE_SCOPES` only as its fallback) use the configured scope for
-  each tool and `permissive_scope` only for tools with no entry. A configured scope is deny-by-default per field: an
+  each tool and `permissive_scope` only for tools with no entry: the workspace,
+  any host, any binary, NO env var (2026-10-22 — a `$VAR`, a Privy / RPC / A2A
+  credential needs `env_reads`); in a hardened sandbox deny-all (`tengu doctor`
+  lists, per agent, the tools on it). A configured scope is deny-by-default per field: an
   `http_request` scope with empty `fs_roots` denies multipart file uploads.
   Subprocess children get their own workspace added to every inherited
   scope's `fs_roots` (`grant_workspace_root`) — except a deny-all scope (every
@@ -1052,7 +1055,7 @@ These are not preferences. They're load-bearing.
   every fs root / workspace) and `config/solana.rs` refuses a wallet id that is
   not 1-64 `[A-Za-z0-9_-]`, a missing `[keys.env] PRIVY_API_URL` route and any
   `env_reads` of the session (`TENGU_KEYS_SESSION_TOKEN`, an `@session` var,
-  `"*"`); the permissive fallback then runs no shell. Sends are
+  `"*"`); the fallback scope is then deny-all. Sends are
   serialized per wallet by a lease in `<TENGU_HOME>/state/solana-writes.db`
   (+ pending record resolved before the next send, + write fence that makes
   older `lp_snapshot` rows `stale_input`) — it cannot see the TS bot, so

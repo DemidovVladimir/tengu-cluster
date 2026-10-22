@@ -70,6 +70,35 @@ pub(super) fn print_status(config: &Config, profile: RuntimeProfile) {
     println!();
 }
 
+/// Print, per agent, the tools that run on the fallback scope (no
+/// `[default_scopes.<tool>]` / `[agents.<a>.scopes.<tool>]`): the workspace,
+/// any host and any binary but no env var — or nothing at all in a hardened
+/// sandbox, where such a tool is refused on every call. Informational: a
+/// config is allowed to lean on the fallback outside a hardened sandbox.
+fn doctor_fallback_scopes(config: &Config) {
+    let rows: Vec<(&String, bool, Vec<String>)> = config
+        .agents
+        .iter()
+        .map(|(id, ac)| {
+            let tools = crate::bootstrap::tools::fallback_scoped_tools(ac, config.memory.enabled);
+            (id, ac.no_shell_fallback, tools)
+        })
+        .filter(|(_, _, tools)| !tools.is_empty())
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    println!("  Tools without a configured scope:");
+    for (id, hardened, tools) in rows {
+        let scope = if hardened {
+            "deny-all (hardened), refused"
+        } else {
+            "workspace + any host + any binary, no env var"
+        };
+        println!("    {id}: {scope}: {}", tools.join(", "));
+    }
+}
+
 /// `tengu doctor` — build every configured agent's engine and print its
 /// diagnostics. Returns `Err` (→ non-zero exit) when any engine fails to
 /// build, with `--live` when the sandbox's `tengu run` is not live, or with
@@ -134,6 +163,7 @@ pub(super) async fn run_doctor(
         }
     }
 
+    doctor_fallback_scopes(config);
     doctor_egress(tor_check, &mut failures).await;
     if live {
         doctor_live(config, &mut failures).await;

@@ -41,7 +41,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 | `[decision_loops.<n>]` | `DecisionLoopConfig` (`decision_loop.rs`) | none | **error** |
 | `[scaffold]` | `ScaffoldConfig` | none | ignored |
 | `[claude_code]` | `ClaudeCodeConfig` | defaults | ignored |
-| `[default_scopes.<tool>]` | `ToolScope` (`domain/scope.rs`) | permissive fallback per tool | ignored |
+| `[default_scopes.<tool>]` | `ToolScope` (`domain/scope.rs`) | the fallback per tool: workspace, any host, any binary, no env var (deny-all when hardened) | ignored |
 | `[egress]` | `EgressConfig` (`egress.rs`) | Tor | **error** |
 | `[[mcp_servers]]` | `McpServerConfig` | none | ignored |
 | `[solana]` | `SolanaConfig` (`solana.rs`) | write tools simulate only | **error** |
@@ -120,7 +120,7 @@ example_queries = ["what is the BTC price?"]
 
 | Rule | Effect |
 |---|---|
-| Precedence | an agent's own `scopes.<tool>` replaces `[default_scopes.<tool>]` wholesale (never field-merged); a tool with neither gets the permissive fallback (no shell in a hardened sandbox) |
+| Precedence | an agent's own `scopes.<tool>` replaces `[default_scopes.<tool>]` wholesale (never field-merged); a tool with neither gets the fallback (workspace, any host, any binary, no env var; deny-all in a hardened sandbox); `tengu doctor` lists, per agent, the tools on it |
 | Plan steps | `run-agent` (and its bridge) add the step workspace to every configured scope's `fs_roots` — except a deny-all scope (every field empty), which stays a deny |
 | Writers | `write_file` refuses `.tengu/`, `.claude/`, `.git/`, `skills/` at any depth and `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` / `.mcp.json`; a hardened sandbox also `MEMORY.md` / `USER.md` / `IDENTITY.md` / `PROFILE.md` / `CONTEXT.md` |
 | Per-family needs | `docs/tools.md` § Give it to an agent |

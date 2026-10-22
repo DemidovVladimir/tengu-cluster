@@ -385,6 +385,7 @@ ufw: allow 22/tcp and 7080/tcp
     <li><span class="chip bad">1</span><span><b>FAIL row</b><code>--engines</code>: a smoke turn missed a tool, got an error, or lost the token.</span></li>
     <li><span class="chip">skip</span><span><b>local on macOS</b>A <code>local</code> agent on a loopback <code>base_url</code> is never contacted.</span></li>
     <li><span class="chip">skip</span><span><b>scopes deny</b>The agent's own scopes deny <code>list_directory</code> or <code>read_file</code>.</span></li>
+    <li><span class="chip">info</span><span><b>Tools without a configured scope</b>Per agent, the tools on the fallback: the workspace, any host, any binary, no env var; in a hardened sandbox <code>deny-all (hardened), refused</code>. Never a failure.</span></li>
   </ul>
 </section>
 

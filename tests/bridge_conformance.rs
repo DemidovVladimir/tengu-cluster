@@ -1056,6 +1056,14 @@ fn paper_buy() -> Value {
 /// A paper case: `hl_ctx` first (the `mkt_ctx/1` + `mkt_instrument/1`
 /// rows the gate and the fill read), the $100 budget, the live book (its
 /// `time` = now) on the mock, the opportunity row seeded.
+/// A configured scope for a Privy tool: the env it reads, the default
+/// wallet label and the Privy host (the fallback grants no env var).
+fn privy_scope(tool: &str) -> String {
+    format!(
+        "[default_scopes.{tool}]\nwallets = [\"default\"]\nnet_hosts = [\"api.privy.io\"]\nenv_reads = [\"CHAIN_ID\", \"PRIVY_APP_ID\", \"PRIVY_APP_SECRET\", \"PRIVY_WALLET_ID\", \"PRIVY_API_URL\"]\n"
+    )
+}
+
 fn paper(c: Case) -> Case {
     hl_xyz(c.before("hl_ctx", json!({"coins": ["xyz:TSLA"]})))
         .toml(XM_RISK_TOML)
@@ -1280,13 +1288,17 @@ fn cases() -> Vec<Case> {
             .err("tengu calls only the configured hosts"),
         // ── crypto (Privy is not configured in tests) ──────────────────
         case("sign_and_send_transaction", json!({"to": WALLET, "value": "1"}))
-            .err("PRIVY_APP_ID"),
-        case("sign_message", json!({"message": "hello"})).err("PRIVY_APP_ID"),
+            .toml(&privy_scope("sign_and_send_transaction"))
+            .err("Missing environment variable PRIVY_APP_ID"),
+        // The fallback scope reads no env var (2026-10-22).
+        case("sign_message", json!({"message": "hello"}))
+            .err("env var 'PRIVY_APP_ID' not in allowed env_reads []"),
         case("get_wallet_address", json!({})).err("PRIVY_APP_ID"),
         // Privy requests pass `[egress]` like `http_request`: api.privy.io
         // is outside `allow_hosts`, nothing is sent.
         case("get_wallet_address", json!({}))
             .named("egress_denied")
+            .toml(&privy_scope("get_wallet_address"))
             .env("PRIVY_APP_ID", "conformance-app")
             .env("PRIVY_APP_SECRET", "conformance-app-secret")
             .env("PRIVY_WALLET_ID", "conformance-wallet")
@@ -1465,6 +1477,7 @@ fn cases() -> Vec<Case> {
         // ── xmarket risk: `[risk]` + `[paper]` + the ledger reach the bridge
         case("risk_status", json!({}))
             .toml(XM_RISK_TOML)
+            .toml("[default_scopes.risk_status]\nfs_roots = [\"{ws}\"]\n")
             .ok("risk account=conf halt=none equity=100.00 daily_pnl=0.00 total_pnl=0.00 headroom=10.00"),
         // Without `[risk]`: refused alike (tracker convention 9).
         case("risk_status", json!({}))

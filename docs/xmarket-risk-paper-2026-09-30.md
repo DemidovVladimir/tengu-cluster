@@ -10,7 +10,7 @@ The `[risk]` gate, the paper ledger and the kill switch of an xmarket sandbox. S
 | `<TENGU_HOME>/state` (no overlap either way), `kill_switch_file` and the config file itself outside every `fs_roots` and agent `workspace` (symlinks resolved) | `read_file` / `write_file` cannot edit `ledger.db`, delete the kill-switch file or lift a limit for the next load |
 | `[xmarket]` present; every agent sets `workspace` (absolute or `~/…`); feed, loop and xmarket-tool agents share one (`config/xmarket.rs`, `docs/runtime-2026-09-30.md` § State layout) | the ledger lives in the state dir; an agent without a workspace works in the process cwd, which may hold `<TENGU_HOME>/state` |
 | Exec tools (`paper_order`, `paper_close`, `xm_exits`, `xm_weekend_fade` — `domain/tools.rs::XM_EXEC_TOOLS`) only on a private agent: no `description`, not `default`, no webhook endpoint's `agent`; a loop action running one is not `read_only` | neither the planner, a chat user nor a webhook reaches an order tool; loops and the operator's `@<agent>` chat do |
-| `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing stays off (a tool without a scope gets the permissive fallback's `default` wallet) |
+| `[default_scopes.sign_and_send_transaction]` and `[default_scopes.sign_message]` present without `wallets`; no agent scope grants one | Privy signing stays off (a tool without a scope gets the fallback's `default` wallet outside a hardened sandbox; xmarket is hardened, so nothing since 2026-10-22) |
 
 ## Gate enforcement — `run_exec` (every exec tool, in-process and through the bridge)
 

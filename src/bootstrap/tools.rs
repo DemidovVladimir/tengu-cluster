@@ -243,9 +243,10 @@ pub(crate) fn within_generation(agent: &AgentConfig, tools: &[ToolDef]) -> Vec<T
 /// Resolve the per-tool scope map for an executor: a configured entry in
 /// `configured` (per-agent `[agents.*.scopes.<tool>]`, with `[default_scopes]`
 /// already folded in) wins; any tool without one gets `permissive_scope` —
-/// minus the shell when `no_shell` (every hardened sandbox — a `[solana]`
-/// `privy_wallet_id` signer, `[risk]` or `[soe]`, `config/hardening.rs`: a shell
-/// could read the seal-proxy session or route around the risk gate).
+/// or deny-all when `no_shell` (every hardened sandbox — a `[solana]`
+/// `privy_wallet_id` signer, `[risk]` or `[soe]`, `config/hardening.rs`):
+/// there every tool an agent runs must have its own scope (the hardened
+/// sandboxes configure all of them; `tengu doctor` lists any that does not).
 /// Shared by `build_tool_executor` and `mcp_bridge::build_bridge_executor`.
 pub(crate) fn resolve_tool_scopes(
     workspace: &Path,
@@ -253,10 +254,11 @@ pub(crate) fn resolve_tool_scopes(
     tool_names: impl IntoIterator<Item = String>,
     no_shell: bool,
 ) -> HashMap<String, ToolScope> {
-    let mut fallback = permissive_scope(workspace);
-    if no_shell {
-        fallback.shell_bins.clear();
-    }
+    let fallback = if no_shell {
+        ToolScope::default()
+    } else {
+        permissive_scope(workspace)
+    };
     tool_names
         .into_iter()
         .map(|name| {
@@ -323,9 +325,12 @@ pub(crate) fn workspace_or_temp(
 
 /// Build the fallback `ToolScope` for tools with no configured entry:
 /// the workspace root is writable, any host is reachable, any binary is
-/// runnable, any env var is readable, and the canonical wallet label is
+/// runnable, NO env var is readable, and the canonical wallet label is
 /// granted so the crypto plugin's `check_wallet` guard succeeds. Narrow it
-/// per tool via `[default_scopes.<tool>]` / `[agents.*.scopes.<tool>]`.
+/// per tool via `[default_scopes.<tool>]` / `[agents.*.scopes.<tool>]`; a
+/// tool that reads env (`http_request` `$VAR`, the Privy and RPC URLs, an
+/// A2A bearer) needs a configured `env_reads` (2026-10-22: `"*"` let a
+/// fetched page put any secret into a URL for any host).
 ///
 /// Phase 7.7 — `pub(crate)` so the MCP bridge calls this instead of
 /// inlining its own copy. Both paths share the same scope shape.
@@ -333,7 +338,7 @@ pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],
         net_hosts: vec!["*".to_string()],
-        env_reads: vec!["*".to_string()],
+        env_reads: Vec::new(),
         shell_bins: vec!["*".to_string()],
         wallets: vec![
             crate::adapters::outbound::tools::crypto::helpers::DEFAULT_WALLET_LABEL.to_string(),
@@ -442,6 +447,21 @@ pub(crate) fn agent_base_tools(
             .collect()
     };
     within_generation(agent, &listed)
+}
+
+/// The catalog tools `agent` runs on the fallback scope
+/// (`resolve_tool_scopes`): every base tool with no configured
+/// `[default_scopes.<tool>]` / `[agents.<a>.scopes.<tool>]` entry, sorted
+/// (`compress_and_store` left out: it touches nothing). `tengu doctor`
+/// lists them.
+pub(crate) fn fallback_scoped_tools(agent: &AgentConfig, has_memory: bool) -> Vec<String> {
+    let mut names: Vec<String> = agent_base_tools(agent, true, has_memory)
+        .into_iter()
+        .map(|d| d.name)
+        .filter(|n| n != "compress_and_store" && !agent.scopes.contains_key(n))
+        .collect();
+    names.sort();
+    names
 }
 
 /// A plan step's `compose` applied to its base `[agents.<compose.base_agent>]`
@@ -714,9 +734,10 @@ mod golden_tests {
         assert!(open["my_shell_skill"].check_shell_bin("cat").is_ok());
         let closed = resolve_tool_scopes(tmp.path(), &configured, names(), true);
         assert!(closed["my_shell_skill"].check_shell_bin("cat").is_err());
+        // Hardened: an unconfigured tool gets deny-all, not just no shell.
         assert!(closed["my_shell_skill"]
             .check_net_host("any.example")
-            .is_ok());
+            .is_err());
         assert!(closed["run_command"].check_shell_bin("ls").is_ok());
 
         let mut cfg = crate::config::Config::default();
@@ -757,12 +778,31 @@ mod golden_tests {
         assert!(http.check_env_read("OTHER").is_err());
         assert!(http.check_fs_read(tmp.path()).is_err());
 
-        // Unconfigured tool: permissive fallback.
+        // Unconfigured tool: permissive fallback, but no env var.
         let read = &scopes["read_file"];
         assert!(read.check_net_host("anything.example").is_ok());
-        assert!(read.check_env_read("ANY").is_ok());
+        assert!(read.check_env_read("ANY").is_err());
+        assert!(read.check_env_read("OPENROUTER_API_KEY").is_err());
         assert!(read.check_shell_bin("rm").is_ok());
         assert!(read.check_fs_read(tmp.path()).is_ok());
+
+        // Hardened (`no_shell`): an unconfigured tool may touch nothing.
+        let hardened = resolve_tool_scopes(
+            tmp.path(),
+            &configured,
+            vec!["http_request".to_string(), "read_file".to_string()],
+            true,
+        );
+        let read = &hardened["read_file"];
+        assert!(read.check_fs_read(tmp.path()).is_err());
+        assert!(read.check_net_host("anything.example").is_err());
+        assert!(read.check_shell_bin("rm").is_err());
+        assert!(hardened["http_request"]
+            .check_net_host("api.example.com")
+            .is_ok());
+        assert!(hardened["http_request"]
+            .check_env_read("EXAMPLE_API_KEY")
+            .is_ok());
     }
 
     /// End-to-end through `build_tool_executor`: the executor's scope map

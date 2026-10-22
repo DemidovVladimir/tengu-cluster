@@ -101,7 +101,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- Tool scopes (default-deny per field; docs/configuration.md § Scopes) ---
 # [default_scopes.<tool>] is the fallback for every agent; an agent's own
 # [agents.<name>.scopes.<tool>] replaces it wholesale. A tool with neither runs
-# on a permissive fallback (no shell in a [risk] / signer sandbox).
+# on the fallback: the workspace, any host, any binary, no env var (a `$VAR`,
+# a Privy / RPC / A2A credential needs env_reads here); in a [risk] / [soe] /
+# signer sandbox it gets nothing (`tengu doctor` lists such tools).
 # [default_scopes.http_request]
 # net_hosts = ["api.example.com"]   # exact, "*.suffix" or "*"
 # env_reads = ["EXAMPLE_API_KEY"]   # env vars the tool may read ($VAR headers)

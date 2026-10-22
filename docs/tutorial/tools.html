@@ -189,7 +189,7 @@
         <li>An agent block lists <code>tools</code> (the allow-list) and <code>workspace_tools</code> (opt-ins). An empty <code>tools</code> means every default tool.</li>
         <li><code>agent_base_tools</code> walks the catalog: default rows, memory rows when memory is on, opt-in rows that are named (an opt-in memory row, <code>persistent_store</code>, also needs memory on). A non-empty <code>tools</code> keeps only listed names.</li>
         <li><code>register_catalog</code> builds each needed plugin once and registers only allowed tools, none outside a bound <code>[generation]</code>. The in-process executor and the MCP bridge call this same function.</li>
-        <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace. A hardened sandbox drops its shell.</li>
+        <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace with no env var. A hardened sandbox makes it deny-all.</li>
         <li>The model asks for a call. The executor publishes an activity line first; an unknown name fails with the sorted list of this agent's tools.</li>
         <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, memory, secrets, conversation, agent config, call id.</li>
         <li><code>Tool::execute</code> calls <code>ctx.scope.check_*</code> before it touches a file, host, env var, shell or wallet. A denial is an error, never a silent skip.</li>
@@ -344,7 +344,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
     <li><span><b>Lists cannot drift.</b> <code>catalog_tests</code> fail when an opt-in row and <code>WORKSPACE_TOOLS</code> disagree.</span></li>
     <li><span><b>Opt-ins are checked at load.</b> A <code>workspace_tools</code> name outside the 38 fails the config.</span></li>
     <li><span><b>Every tool gates itself.</b> <code>scope_lint</code> fails a tool whose <code>execute</code> has no <code>scope.check_</code> in its first 30 lines and no pure-compute note.</span></li>
-    <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace and shell-free in a hardened sandbox.</span></li>
+    <li><span><b>No tool runs unscoped.</b> A configured entry wins; otherwise the fallback, rooted in the workspace, no env var, deny-all in a hardened sandbox.</span></li>
     <li><span><b>No duplicate names.</b> Registering a second tool with the same name fails that plugin.</span></li>
     <li><span><b>Secrets stay out.</b> Text, observations and error messages pass <code>SanitizedToolExecutor</code> before a model sees them.</span></li>
     <li><span><b>Generation-bound.</b> In a sandbox with <code>[generation]</code>, a tool outside it is neither advertised nor registered, with a warning, on top of the load-time refusal (<a href="lineage.html">Lineage and generations</a>).</span></li>

@@ -117,7 +117,7 @@ Then every `WORKSPACE_TOOLS` name in `TENGU_BRIDGE_TOOLS` joins the agent's `wor
 | Topic | Bridge |
 |---|---|
 | Scopes | `resolve_tool_scopes(workspace, agent.scopes, …, agent.no_shell_fallback)` — the in-process call |
-| `no_shell` | from the agent (`no_shell_fallback`: a signer, `[risk]` or `[soe]` sandbox); the permissive fallback then has no `shell_bins` and no shell skill loads |
+| `no_shell` | from the agent (`no_shell_fallback`: a signer, `[risk]` or `[soe]` sandbox); the fallback then is deny-all (no fs, host, env, binary, wallet) and no shell skill loads; elsewhere it is the workspace + any host + any binary, no env var |
 | Tools list | `TENGU_BRIDGE_TOOLS` = what the parent advertised, which follows the agent's `tools` on every surface (`bootstrap::tools::agent_base_tools`; `[[mcp_servers]]` tools too) — a tool outside it runs nowhere |
 | Conversation | the run's transcript ending in the call (§ Dispatch) — in-process: the loop's messages |
 | Workspace | `TENGU_BRIDGE_WORKSPACE`; a `run-agent` step always sends one — the agent's, else the step's temp dir (the executor's too) |

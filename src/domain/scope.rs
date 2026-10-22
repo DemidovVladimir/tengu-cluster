@@ -285,9 +285,10 @@ impl ToolScope {
 
     /// Check whether `var` is allowed by this scope's `env_reads` list.
     ///
-    /// `"*"` is an allow-any wildcard — used by `permissive_scope` (the
-    /// fallback for tools with no configured scope) to keep env reads
-    /// ungated. Mirrors the `check_net_host` / `check_shell_bin` wildcard.
+    /// `"*"` is an allow-any wildcard, honoured when a configured scope
+    /// asks for it (`permissive_scope`, the fallback for tools with no
+    /// configured scope, grants no env var since 2026-10-22). Mirrors the
+    /// `check_net_host` / `check_shell_bin` wildcard.
     pub(crate) fn check_env_read(&self, var: &str) -> anyhow::Result<()> {
         if self.env_reads.iter().any(|v| v == "*" || v == var) {
             return Ok(());
