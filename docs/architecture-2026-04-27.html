@@ -745,7 +745,7 @@
 const STEPS = [
   {
     num: 1, title: "User input", lane: "user",
-    what: "User types a message into the TUI or sends a Telegram message (fails closed without an allow-list); a webhook POST (--features webhooks) runs a one-shot orchestrator turn with its own session_id.",
+    what: "User types a message into the TUI or sends a Telegram message (fails closed without an allow-list); a webhook POST (feature webhooks, default) runs a one-shot orchestrator turn with its own session_id.",
     files: [
       { path: "src/adapters/inbound/tui/mod.rs", desc: "cursive TUI loop, captures input, dispatches to engine thread" },
       { path: "src/adapters/inbound/telegram.rs", desc: "Telegram polling + per-chat dispatch; allow-list, private agents never @-routable" },
@@ -832,7 +832,7 @@ const FLOWS = [
         num: 1, title: "Start — leases", lane: "orch",
         what: "tengu run --sandbox <s> takes the leases runtime:<s> (+ state:<dir> for an [xmarket] state dir) in <state dir>/runtime.db — all or none, TTL 30 s, renewed every 10 s. A held lease ⇒ exit 1; a lost one ⇒ the run stops as failed. tengu webhooks takes the same leases.",
         files: [
-          { path: "src/adapters/inbound/run.rs::run_runtime", desc: "signals (a second one exits 130), webhook routes with --features webhooks, the tengu run started line" },
+          { path: "src/adapters/inbound/run.rs::run_runtime", desc: "signals (a second one exits 130), webhook routes (feature webhooks, default), the tengu run started line" },
           { path: "src/bootstrap/runtime.rs", desc: "LeasePlan / OwnerLeases, loops built once, start_feeds, Runtime::spawn / shutdown" },
           { path: "src/adapters/outbound/runtime_store.rs", desc: "SqliteRuntimeStore — acquire / renew / release, TTL takeover" },
           { path: "src/domain/runtime.rs", desc: "lease resources and the live verdict (pure)" },
@@ -1547,7 +1547,7 @@ const FILE_MAP = [
   ["src/adapters/inbound/telegram.rs", "telegram", "Telegram polling + per-chat dispatch; allow-list (fails closed); build_bot() builds a proxied reqwest 0.11 client (30s/60s timeouts)"],
   ["src/adapters/inbound/webhooks.rs", "channel", "tengu webhooks — HMAC / header auth, one-shot orchestrator turns or loop events; takes the tengu run leases"],
   // ── engines + bridge ──
-  ["src/adapters/outbound/engines/mod.rs", "engine", "build_engine (openrouter / local / claude_code / codex), build_step_engine (a run-agent step's engine), bridges_tools (claude_code, codex), build_planner_engine"],
+  ["src/adapters/outbound/engines/mod.rs", "engine", "build_engine (openrouter / local / claude_code / codex), build_step_engine (a run-agent step's engine), bridges_tools (claude_code, codex)"],
   ["src/adapters/outbound/engines/openrouter.rs", "engine", "OpenRouterEngine — OpenAI-compatible streaming + tool calls"],
   ["src/adapters/outbound/engines/local.rs", "engine", "LocalEngine — Unsloth / Ollama / llama.cpp / vLLM over /v1/chat/completions, direct; tool results fit the window"],
   ["src/adapters/outbound/engines/claude_code.rs", "engine", "ClaudeCodeEngine — Claude CLI subprocess; cli_args (--strict-mcp-config, profile none isolation), build_mcp_config_json (no secret values), HTTPS_PROXY from egress::claude_cli_env"],

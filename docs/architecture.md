@@ -140,7 +140,7 @@ Paths are under `src/`. The full, test-enforced list is `docs/code-map.md`.
 ### Engines
 | Module | Purpose |
 |--------|---------|
-| `adapters/outbound/engines/mod.rs` | Engine factory (`build_engine`, `build_step_engine`, `build_planner_engine`) |
+| `adapters/outbound/engines/mod.rs` | Engine factory (`build_engine`, `build_step_engine`) |
 | `adapters/outbound/engines/openrouter.rs` | OpenRouter engine |
 | `adapters/outbound/engines/local.rs` | Local OpenAI-compatible engine |
 | `adapters/outbound/engines/claude_code.rs` | Claude Code engine (feature-gated) |

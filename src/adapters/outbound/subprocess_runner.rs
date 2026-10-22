@@ -323,7 +323,7 @@ impl SubprocessRunner {
 const STDERR_TAIL_LINES: usize = 40;
 
 /// Read the child's stderr (its tracing log) line by line into the parent's
-/// log at `info` (target `tengu::run_agent`, ANSI colours stripped); the task
+/// log at `info` (target `tengu::run_agent`); the task
 /// returns the last `STDERR_TAIL_LINES` lines once the pipe closes.
 fn forward_child_log(
     stderr: tokio::process::ChildStderr,
@@ -334,7 +334,8 @@ fn forward_child_log(
         let mut lines = tokio::io::BufReader::new(stderr).lines();
         let mut tail = std::collections::VecDeque::with_capacity(STDERR_TAIL_LINES);
         while let Ok(Some(line)) = lines.next_line().await {
-            let line = strip_ansi(&line);
+            // The child logs without colours: its stderr is not a terminal
+            // (`cli::init_logging`).
             if line.trim().is_empty() {
                 continue;
             }
@@ -346,25 +347,6 @@ fn forward_child_log(
         }
         Vec::from(tail).join("\n")
     })
-}
-
-/// `line` without ANSI escape sequences (`ESC [ … letter`).
-fn strip_ansi(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.peek() == Some(&'[') {
-            chars.next();
-            for d in chars.by_ref() {
-                if d.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 // =====================================================================
@@ -502,15 +484,6 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
 mod tests {
     use super::*;
 
-    #[test]
-    fn ansi_colours_are_stripped() {
-        assert_eq!(
-            strip_ansi("\x1b[2m2026\x1b[0m \x1b[32m INFO\x1b[0m tengu: hi"),
-            "2026  INFO tengu: hi"
-        );
-        assert_eq!(strip_ansi("plain"), "plain");
-    }
-
     /// A child's stderr reaches the parent log, and its last lines come back
     /// for the error of a failed exit (they used to be empty: stderr was
     /// inherited).
@@ -518,7 +491,7 @@ mod tests {
     async fn child_stderr_tail_explains_a_failed_exit() {
         let mut child = tokio::process::Command::new("sh")
             .arg("-c")
-            .arg("for i in $(seq 0 44); do echo \"line $i\" >&2; done; printf '\\033[31mERROR\\033[0m boom\\n' >&2; exit 3")
+            .arg("for i in $(seq 0 44); do echo \"line $i\" >&2; done; echo 'ERROR boom' >&2; exit 3")
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();

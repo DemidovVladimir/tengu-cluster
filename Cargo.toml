@@ -79,16 +79,20 @@ hmac = { version = "0.12", optional = true }
 curve25519-dalek = { version = "~4.1", default-features = false }
 
 [features]
-default = ["openrouter", "telegram", "studio", "codex", "a2a"]
+# Every engine (openrouter, local, claude_code, codex) is always built: the
+# binary only spawns a CLI when an agent names its engine.
+default = ["telegram", "studio", "a2a", "webhooks"]
 telegram = ["teloxide", "dptree", "reqwest011"]
-openrouter = []
 postgres_memory = ["tokio-postgres"]
-claude_code = []
-# `engine = "codex"`: the OpenAI Codex CLI on the ChatGPT subscription
-# (`engines/codex.rs`). A default feature: the binary only spawns `codex`
-# when an agent names the engine.
-codex = []
+# `tengu webhooks` and decision-loop escalation under `tengu run`. A default
+# feature since 2026-10-22 (a default build used to stop at "escalation
+# unavailable").
 webhooks = ["axum", "hmac"]
+# No-ops since 2026-10-22: every engine is always built. Kept so older build
+# commands (`--features claude_code`, `TENGU_FEATURES=openrouter,…`) still work.
+openrouter = []
+claude_code = []
+codex = []
 # `tengu studio --sandbox <s>`: the local Studio server (loopback only;
 # HTML/CSS/JS from web/studio/ embedded with include_str!). axum as for
 # webhooks. A default feature since 2026-10-09 (the normal build and the Docker

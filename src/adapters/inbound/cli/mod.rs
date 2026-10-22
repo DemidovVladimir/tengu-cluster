@@ -458,6 +458,89 @@ enum SkillAction {
     },
 }
 
+/// Where a command's tracing lines go ([`init_logging`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LogSink {
+    /// stderr only: stdout carries a protocol (MCP, the `run-agent` IPC
+    /// JSON) or data.
+    Stderr,
+    /// `<TENGU_HOME>/logs/tengu.log` only: the TUI owns the terminal.
+    File,
+    /// `tengu.log` and stderr: the long-running servers (`telegram`,
+    /// `webhooks`, `run`, `studio`, `a2a serve`), so `tail -f tengu.log`
+    /// works next to the console. Never stdout: the Studio server prints its
+    /// URL there alone.
+    FileAndStderr,
+    /// stdout: every other command.
+    Stdout,
+}
+
+/// Install the process's one tracing subscriber.
+///
+/// | Rule | Why |
+/// |---|---|
+/// | filter = `RUST_LOG` when set, else `default` | an added `tengu=info` used to replace `RUST_LOG`'s own `tengu=` level, so `RUST_LOG=tengu=debug` logged at info |
+/// | ANSI colours only on a terminal | a `run-agent` child's stderr is a pipe its parent copies into `tengu.log` |
+/// | a `tengu.log` that cannot open → stderr (the TUI: no log), one line says why | the TUI and Telegram used to panic on an unwritable log dir |
+fn init_logging(sink: LogSink, default: &str) {
+    use std::io::IsTerminal;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
+    let file = match sink {
+        LogSink::File | LogSink::FileAndStderr => {
+            let path = resolve_tengu_home().join("logs").join("tengu.log");
+            let opened = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| {
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&path)
+                });
+            match opened {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    let instead = if sink == LogSink::File {
+                        "logging off"
+                    } else {
+                        "logging to stderr only"
+                    };
+                    eprintln!("tengu: cannot open {}: {e}; {instead}", path.display());
+                    None
+                }
+            }
+        }
+        LogSink::Stderr | LogSink::Stdout => None,
+    };
+    let file_layer = file.map(|f| {
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(f))
+    });
+    let stderr_layer = matches!(sink, LogSink::Stderr | LogSink::FileAndStderr).then(|| {
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(std::io::stderr().is_terminal())
+            .with_writer(std::io::stderr)
+    });
+    let stdout_layer = (sink == LogSink::Stdout).then(|| {
+        tracing_subscriber::fmt::layer()
+            .compact()
+            .with_ansi(std::io::stdout().is_terminal())
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file_layer)
+        .with(stderr_layer)
+        .with(stdout_layer)
+        .init();
+}
+
 pub(crate) async fn run() -> Result<()> {
     // Load .env first (highest priority after shell env), then parse CLI so we can
     // special-case subprocess modes that must keep stdout protocol-clean.
@@ -473,14 +556,7 @@ pub(crate) async fn run() -> Result<()> {
         if !matches!(action, sandbox::SandboxAction::New { no_open: false, .. }) {
             // Quiet by default (skill discovery logs a line per skill);
             // RUST_LOG=tengu=info shows every step.
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=warn")),
-                )
-                .compact()
-                .with_writer(std::io::stderr)
-                .init();
+            init_logging(LogSink::Stderr, "tengu=warn");
         }
         match tokio::task::block_in_place(|| sandbox::run_sandbox(action))? {
             Some(open) => {
@@ -495,108 +571,52 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     if matches!(cli.command, Some(Commands::McpBridge)) {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return crate::adapters::inbound::mcp_bridge::run_mcp_bridge().await;
     }
 
     #[cfg(feature = "postgres_memory")]
     if matches!(cli.command, Some(Commands::AgenticMemoryServer)) {
         // Stdout carries the JSON-RPC protocol — route tracing to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return crate::adapters::inbound::mcp_bridge::run_agentic_memory_mcp_server().await;
     }
 
     if matches!(cli.command, Some(Commands::RunAgent)) {
         // Subprocess mode — stdout is JSON only, everything else goes to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return run_agent_subprocess().await;
     }
 
     if let Some(Commands::Tool { action }) = cli.command {
         // stdout is one JSON value; logs go to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return tool::run_tool_command(cli.config, action).await;
     }
 
     if let Some(Commands::Evidence { action }) = cli.command {
         // No config, secrets or egress: read-only files + the new vault.
         // stdout carries the report; logs go to stderr.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return tokio::task::block_in_place(|| evidence::run_evidence(action));
     }
 
     if let Some(Commands::Lineage(args)) = cli.command {
         // Registry only — no config, no secrets; stdout carries the view.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return lineage::run_lineage(args);
     }
 
     if let Some(Commands::Soe(args)) = cli.command {
         // Profile + record files only — no config, secrets or egress; stdout
         // carries the report.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return soe::run_soe(args, cli.config).await;
     }
 
     if let Some(Commands::Trace { sandbox, action }) = cli.command {
         // Trace files only — no config, no secrets; stdout carries JSON lines.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        init_logging(LogSink::Stderr, "tengu=info");
         return trace::run_trace(sandbox, action).await;
     }
 
@@ -630,67 +650,18 @@ pub(crate) async fn run() -> Result<()> {
                 }
         )
     );
-    if is_tui {
-        let log_dir = resolve_tengu_home().join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("tengu.log"))
-            .expect("Failed to open log file");
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::sync::Mutex::new(log_file))
-            .with_ansi(false)
-            .init();
+    let sink = if is_tui {
+        LogSink::File
     } else if is_telegram || is_webhooks {
-        use tracing_subscriber::layer::SubscriberExt;
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("tengu=info"));
-        let log_dir = resolve_tengu_home().join("logs");
-        std::fs::create_dir_all(&log_dir).ok();
-        let log_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_dir.join("tengu.log"))
-            .expect("Failed to open log file");
-        let file_layer = tracing_subscriber::fmt::layer()
-            .compact()
-            .with_ansi(false)
-            .with_writer(std::sync::Mutex::new(log_file));
-        let stderr_layer = tracing_subscriber::fmt::layer()
-            .compact()
-            .with_writer(std::io::stderr);
-        let subscriber = tracing_subscriber::registry()
-            .with(filter)
-            .with(file_layer)
-            .with(stderr_layer);
-        tracing::subscriber::set_global_default(subscriber)
-            .expect("Failed to set tracing subscriber");
+        LogSink::FileAndStderr
     } else if stdout_is_data(&cli.command) {
         // stdout carries JSON (lines) / the operator's report; logs go to
         // stderr, so `tengu decide … | jq` reads the JSON alone.
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .with_writer(std::io::stderr)
-            .init();
+        LogSink::Stderr
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("tengu=info".parse().unwrap()),
-            )
-            .compact()
-            .init();
-    }
+        LogSink::Stdout
+    };
+    init_logging(sink, "tengu=info");
 
     let config_path = cli.config.unwrap_or_else(default_config_path);
     // `run-agent` children and the MCP bridge resolve the config through

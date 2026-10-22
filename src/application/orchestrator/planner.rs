@@ -916,6 +916,7 @@ mod tests {
             (100, 7)
         );
         assert_eq!(telemetry.model, "stub/planner");
+        assert!(engine.called());
         let seen = engine.calls.lock().unwrap().clone();
         assert_eq!(seen.len(), 1);
         let s = &seen[0];

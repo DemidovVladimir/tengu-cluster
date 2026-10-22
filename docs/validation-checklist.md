@@ -425,7 +425,7 @@ rm ~/.tengu/state/xmarket/KILL
 ### 9.4 Engine matrix — xm set (live, costs tokens)
 
 ```bash
-cargo test --features claude_code --test engine_matrix _xm -- --ignored --nocapture --test-threads 1
+cargo test --test engine_matrix _xm -- --ignored --nocapture --test-threads 1
 ```
 
 **Expect:** one `engine_matrix |` line per leg; gemini · haiku · claude_code green (W1 gate: 39 / 39 over 13 sets); `local_xm` skipped without `TENGU_MATRIX_LOCAL_BASE_URL` (operator's PC). Needs `OPENROUTER_API_KEY` (env or `.env`) and `claude` logged in.
@@ -492,7 +492,7 @@ Each run prints its run dir `~/.tengu/state/xlab/backtests/<run id>/` (`report.j
 ### 10.5 Engine matrix — xlab sets (live, costs tokens)
 
 ```bash
-cargo test --features claude_code --test engine_matrix xlab -- --ignored --nocapture --test-threads 1
+cargo test --test engine_matrix xlab -- --ignored --nocapture --test-threads 1
 ```
 
 **Expect:** 12 legs (`openrouter_gemini_*`, `openrouter_haiku_*`, `claude_code_*`, `local_*` × `xlab`, `xlab_holdout`, `xlab_rank`). 2026-10-01 (before `xlab_rank`): haiku-4.5 and the Claude CLI pass both sets; gemini-2.5-flash-lite calls every tool but may misquote numbers — re-run; `local_*` skipped without `TENGU_MATRIX_LOCAL_BASE_URL`.

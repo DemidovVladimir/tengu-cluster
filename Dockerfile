@@ -12,10 +12,11 @@ COPY crates crates
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs
 
 # Pre-build dependencies (cached unless Cargo.toml changes)
-# The Cargo.toml default features (openrouter, telegram, studio, codex, a2a) are always on:
-# no --no-default-features here, so FEATURES only adds to them.
-# Optional extras: postgres_memory, claude_code, webhooks (no qdrant feature exists)
-ARG FEATURES="openrouter,telegram"
+# The Cargo.toml default features (telegram, studio, a2a, webhooks) and every
+# engine (openrouter, local, claude_code, codex) are always on: no
+# --no-default-features here, so FEATURES only adds to them.
+# Optional extra: postgres_memory
+ARG FEATURES="telegram"
 RUN cargo build --release --features "${FEATURES}" 2>/dev/null || true
 
 # Copy real source + skills + sandboxes; web/ = the Studio page, compiled into

@@ -27,8 +27,8 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 | Rust 1.78+ | `Cargo.lock` is v4; Docker image builds on `rust:1.91` |
 | OpenRouter API key | [openrouter.ai](https://openrouter.ai) — planner, subagents, embeddings and the Jev decisions endpoint |
 | Docker + `lyrebird-rs` checkout | The Tor proxy (`make tor`) is a container: Arti + lyrebird-rs built from `../lyrebird-rs` (`LYREBIRD_RS_DIR=<dir or git URL>` to override). Skip only if every config sets `[egress] network = "open"` |
-| Claude Code CLI (optional) | `claude` installed + authenticated; build with `--features claude_code` |
-| Codex CLI (optional) | `codex` installed + `codex login` (ChatGPT subscription) for `engine = "codex"`; feature `codex` is on by default |
+| Claude Code CLI (optional) | `claude` installed + authenticated for `engine = "claude_code"` |
+| Codex CLI (optional) | `codex` installed + `codex login` (ChatGPT subscription) for `engine = "codex"` |
 | Cloudflare account + ssh-agent key (optional) | the seal proxy (`[keys]`): deploy `cloudflare/seal-worker` with `npx wrangler`, keys as its secrets — `docs/cloudflare-secrets-setup.html` |
 | Postgres + pgvector (optional) | Agentic memory; build with `--features postgres_memory` |
 
@@ -38,7 +38,7 @@ Multi-agent harness in Rust. Single binary. One config file per sandbox (`sandbo
 git clone https://github.com/DemidovVladimir/tengu-cluster.git
 git clone https://github.com/DemidovVladimir/lyrebird-rs.git         # sibling checkout, built into the Tor proxy image
 cd tengu-cluster
-cargo build                                            # default features: openrouter + telegram + studio + codex + a2a
+cargo build                                            # default features: telegram + studio + a2a + webhooks; every engine is always built
 cargo run -- secret init                               # encrypted vault ~/.tengu/secrets.vault
 cargo run -- secret set OPENROUTER_API_KEY sk-or-...
 mkdir -p ~/.tengu && cp config.example.toml ~/.tengu/config.toml
@@ -181,7 +181,7 @@ Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper-2026-09-30.md`. Plan
 
 ```bash
 cargo run -- chat --sandbox lping
-cargo run --features claude_code -- chat --sandbox xlab     # sandbox agents use engine = "claude_code"
+cargo run -- chat --sandbox xlab     # sandbox agents use engine = "claude_code"
 cargo run -- telegram --sandbox storage-test
 ```
 
@@ -189,7 +189,7 @@ Adding an agent = add an `[agents.<name>]` block with a `description` and restar
 
 ### Mixed engines
 
-Planner on OpenRouter, subagents on Claude Code. In the agent block set `engine = "claude_code"` and `model = "claude-sonnet-4-6"` (bare slug); OpenRouter agents use `anthropic/claude-sonnet-4-6`. Per `CLAUDE.md`: **use OpenRouter for the planner agent and Claude Code for subagents** — the Claude Code CLI keeps MCP tool access at engine-construction time, so planner-side tool stripping does not stop it from calling tools instead of emitting plan JSON. Build with `--features claude_code`.
+Planner on OpenRouter, subagents on Claude Code. In the agent block set `engine = "claude_code"` and `model = "claude-sonnet-4-6"` (bare slug); OpenRouter agents use `anthropic/claude-sonnet-4-6`. Per `CLAUDE.md`: **use OpenRouter for the planner agent and Claude Code for subagents** — the Claude Code CLI keeps MCP tool access at engine-construction time, so planner-side tool stripping does not stop it from calling tools instead of emitting plan JSON.
 
 ### Agentic memory (Postgres)
 
@@ -204,8 +204,7 @@ Open Brain lives in Postgres `agentic_memory` (pgvector, 1536-dim `text-embeddin
 ### Webhooks
 
 ```bash
-cargo build --features webhooks
-cargo run --features webhooks -- webhooks --sandbox lping
+cargo run -- webhooks --sandbox lping
 ```
 
 `[webhooks.endpoints.<name>]` blocks bind `/webhooks/<name>` to the planner (`agent` is informational) or a decision loop (`loop = "<name>"`). Operator doc: `docs/webhooks-2026-05-11.md`.
@@ -247,17 +246,15 @@ Add one, give it to an agent, scopes, `[[mcp_servers]]`: `docs/tools.md`. Rows, 
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `openrouter` | on | marker only — no code is gated on it; the OpenRouter engine is always built |
 | `telegram` | on | Telegram bot channel |
-| `claude_code` | off | Claude Code CLI backend |
-| `codex` | on | OpenAI Codex CLI backend (ChatGPT subscription) |
-| `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
-| `webhooks` | off | `tengu webhooks` listener, webhook routes under `tengu run` |
+| `webhooks` | on | `tengu webhooks` listener; webhook routes and decision-loop escalation under `tengu run` |
 | `studio` | on | the `tengu studio` server (loopback, `web/studio/` embedded); a `--no-default-features` build without it refuses `tengu studio --sandbox`, naming the flag; `tengu studio graph` works in every build |
 | `a2a` | on | the `tengu a2a serve` server (`[a2a.server]`); the A2A client (tool `a2a`, `tengu a2a send`) needs no feature |
+| `postgres_memory` | off | Postgres + pgvector agentic memory, `agentic-memory-server` |
+| `openrouter` · `claude_code` · `codex` | off | no-ops: every engine (`openrouter`, `local`, `claude_code`, `codex`) is always built; kept so old build commands still work |
 
 ```bash
-cargo build --features claude_code,postgres_memory,webhooks
+cargo build --features postgres_memory
 cargo build --all-features
 ```
 
@@ -321,8 +318,8 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 | `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) · any `engine = "codex"` agent | Not runnable in the image: it has no Claude Code or Codex CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
 | Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
-| Features | the Cargo default features (`openrouter`, `telegram`, `studio`, `codex`, `a2a`) are always built in (the build stage copies `web/` for the Studio page and `crates/` for the `tengu-seal` path dependency); `TENGU_FEATURES` adds more: `TENGU_FEATURES=openrouter,telegram,postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
-| Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build or the Tor proxy is unreachable — a config with `engine = "claude_code"` agents needs `claude_code` in `TENGU_FEATURES` or the container reports unhealthy |
+| Features | the Cargo default features (`telegram`, `studio`, `a2a`, `webhooks`) and every engine are always built in (the build stage copies `web/` for the Studio page and `crates/` for the `tengu-seal` path dependency); `TENGU_FEATURES` (default `telegram`) adds more: `TENGU_FEATURES=postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
+| Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build, a `claude_code` / `codex` agent's CLI is not on `PATH` (the image has neither) or the Tor proxy is unreachable |
 
 VPS one-liner: `curl -fsSL https://raw.githubusercontent.com/DemidovVladimir/tengu-cluster/main/deploy/install.sh | bash` (`TENGU_NETWORK=open` to skip Tor, `TENGU_PROFILE=postgres-memory` for memory; clones lyrebird-rs next to the checkout). Cloud-init: `deploy/cloud-init.yml`.
 

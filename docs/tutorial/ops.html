@@ -207,7 +207,6 @@
       <label for="m-sb"><code>SANDBOX=</code> <select class="sel" id="m-sb"></select></label>
       <label for="m-net"><code>NETWORK=</code> <select class="sel" id="m-net"><option value="">(derived)</option><option>tor</option><option>open</option></select></label>
       <label for="m-mem"><input type="checkbox" id="m-mem"> <code>make up-memory</code></label>
-      <label for="m-cc"><input type="checkbox" id="m-cc"> <code>claude_code</code> in <code>TENGU_FEATURES</code></label>
     </div>
     <div class="plan" id="m-plan" aria-live="polite"></div>
   </div>
@@ -298,7 +297,7 @@
     <p>The top-level commands in <code>cli/mod.rs</code>. A command with <code>--sandbox</code> loads <code>sandboxes/&lt;name&gt;/config.toml</code> instead of the base config; <code>evidence</code>, <code>lineage</code> and <code>trace</code> load no config, <code>soe</code> only for its weekly commands; <code>sandbox</code> reads and writes the sandbox's own files.</p>
   </div>
   <div class="targets">
-    <div class="dk"><b>chat · telegram · webhooks</b>the TUI · the bot · the webhook listener (<code>--features webhooks</code>) — <a href="channels.html">channels</a></div>
+    <div class="dk"><b>chat · telegram · webhooks</b>the TUI · the bot · the webhook listener — <a href="channels.html">channels</a></div>
     <div class="dk"><b>run · decide</b><code>tengu run</code>: loops, feeds, lease, heartbeat — <a href="runtime.html">runtime</a> · one loop event, <code>--map</code> — <a href="decision-loop.html">decision loop</a></div>
     <div class="dk"><b>a2a</b><code>serve</code> (default build) · <code>cards</code> <code>remotes</code> · <code>card</code> <code>send</code> <code>get</code> <code>cancel</code> (<code>--remote</code> or <code>--url</code>) — <a href="a2a.html">A2A</a></div>
     <div class="dk"><b>sandbox</b><code>new</code> (template, then the builder in the browser) · <code>compile</code> <code>finalise</code> <code>palette</code> without a browser — <a href="builder.html">builder</a></div>
@@ -342,8 +341,8 @@ tengu secret list              <span class="c"># names only, values hidden</span
 tengu secret change-password
 tengu secret path</pre></div>
     <div class="tabpanel" id="tab-img" hidden><pre><span class="c"># Dockerfile (tengu)</span>
-builder  rust:1.91-bookworm, FEATURES=<span class="s">"openrouter,telegram"</span> (TENGU_FEATURES overrides)
-         + the default features (openrouter, telegram, studio, codex, a2a)   <span class="c"># no --no-default-features</span>
+builder  rust:1.91-bookworm, FEATURES=<span class="s">"telegram"</span> (TENGU_FEATURES overrides)
+         + the default features (telegram, studio, a2a, webhooks) + every engine   <span class="c"># no --no-default-features</span>
          copies src/, web/ (the Studio page, compiled in), skills/, sandboxes/
 runtime  debian:bookworm-slim + ca-certificates, libssl3   <span class="c"># no Claude or Codex CLI inside</span>
          /opt/tengu/{skills,sandboxes,lineage}, WORKDIR /opt/tengu
@@ -377,7 +376,7 @@ ufw: allow 22/tcp and 7080/tcp
   </div>
   <ul class="states">
     <li><span class="chip ok">0</span><span><b>all ok</b>Exit 0; Docker keeps the container healthy.</span></li>
-    <li><span class="chip bad">1</span><span><b>backend init error</b>An engine did not build: e.g. <code>OPENROUTER_API_KEY is required</code>, or <code>claude_code</code> without its feature.</span></li>
+    <li><span class="chip bad">1</span><span><b>backend init error</b>An engine did not build: e.g. <code>OPENROUTER_API_KEY is required</code>, or an unknown <code>builtin_tools_profile</code>.</span></li>
     <li><span class="chip bad">1</span><span><b>Claude CLI `claude` not found</b>A <code>claude_code</code> agent whose CLI (<code>[claude_code] cli_path</code>) is not on <code>PATH</code>; the shipped image has none.</span></li>
     <li><span class="chip bad">1</span><span><b>Codex CLI `codex` not found</b>A <code>codex</code> agent whose CLI (<code>[agents.&lt;a&gt;.codex] cli_path</code>) is not on <code>PATH</code>; its login is checked only by <code>--engines</code>.</span></li>
     <li><span class="chip bad">1</span><span><b>proxy unreachable</b>The <code>[egress]</code> proxy port refused or timed out: is tor running?</span></li>
@@ -472,14 +471,14 @@ ufw: allow 22/tcp and 7080/tcp
   /* --- make up: sandbox facts read from sandboxes/<name>/config.toml --- */
   var SB = {
     "": { file: "config.toml", open: false, cc: 0, or: 1, tg: false },
-    "a2a-lab": { file: "sandboxes/a2a-lab/config.toml", open: true, cc: 0, or: 3, tg: false },
-    "control-loop-lab": { file: "sandboxes/control-loop-lab/config.toml", open: true, cc: 0, or: 1, tg: false },
-    "jev-exec":{ file: "sandboxes/jev-exec/config.toml", open: true, cc: 1, or: 1, tg: false },
-    "lping": { file: "sandboxes/lping/config.toml", open: true, cc: 0, or: 3, tg: false },
-    "sealed-check": { file: "sandboxes/sealed-check/config.toml", open: true, cc: 0, or: 1, tg: false, keys: true },
+    "a2a-lab": { file: "sandboxes/a2a-lab/config.toml", open: true, cc: 3, or: 0, tg: false },
+    "control-loop-lab": { file: "sandboxes/control-loop-lab/config.toml", open: true, cc: 1, or: 0, tg: false },
+    "jev-exec":{ file: "sandboxes/jev-exec/config.toml", open: true, cc: 2, or: 0, tg: false },
+    "lping": { file: "sandboxes/lping/config.toml", open: true, cc: 3, or: 0, tg: false },
+    "sealed-check": { file: "sandboxes/sealed-check/config.toml", open: true, cc: 1, or: 0, tg: false, keys: true },
     "soe": { file: "sandboxes/soe/config.toml", open: true, cc: 3, or: 0, tg: false, gen: true },
     "storage-test": { file: "sandboxes/storage-test/config.toml", open: false, cc: 1, or: 0, tg: true },
-    "tor-check": { file: "sandboxes/tor-check/config.toml", open: false, cc: 0, or: 1, tg: false },
+    "tor-check": { file: "sandboxes/tor-check/config.toml", open: false, cc: 1, or: 0, tg: false },
     "unlimited": { file: "sandboxes/unlimited/config.toml", open: true, cc: 0, or: 1, tg: true },
     "xlab": { file: "sandboxes/xlab/config.toml", open: true, cc: 2, or: 0, tg: false, gen: true },
     "xlab-w2": { file: "sandboxes/xlab-w2/config.toml", open: true, cc: 3, or: 0, tg: false, rank: true },
@@ -494,16 +493,15 @@ ufw: allow 22/tcp and 7080/tcp
   });
   function row(k, v) { return "<div><span>" + k + "</span><span>" + v + "</span></div>"; }
   function plan() {
-    var k = sel.value, s = SB[k], ov = $("m-net").value, mem = $("m-mem").checked, cc = $("m-cc").checked;
+    var k = sel.value, s = SB[k], ov = $("m-net").value, mem = $("m-mem").checked;
     var net = ov || (s.open ? "open" : "tor");
     var why = ov ? "set on the command line" : (s.open ? "its <code>[egress]</code> section says <code>network = \"open\"</code>" : "no <code>network = \"open\"</code> under <code>[egress]</code> → tor");
     var files = "-f docker-compose.yml" + (net === "tor" ? " -f docker-compose.tor.yml" : "");
-    var cmd = (mem ? "TENGU_FEATURES=openrouter,telegram,postgres_memory " : "") + "docker compose " + files + (mem ? " --profile postgres-memory" : "") + " up -d --build";
+    var cmd = (mem ? "TENGU_FEATURES=postgres_memory " : "") + "docker compose " + files + (mem ? " --profile postgres-memory" : "") + " up -d --build";
     var ports = net === "tor" ? "none (internal network)" : "<code>7080</code> (webhooks)" + (mem ? ", <code>5432</code> (Postgres)" : "");
     var proxy = net === "tor" ? "<code>socks5h://tor:9050</code> via <code>TENGU_TOR_PROXY</code>" : "none from compose; the config's <code>[egress]</code> applies";
     var h = [];
-    if (s.cc && !cc) h.push('<span class="bad">doctor exits 1: ' + s.cc + " <code>claude_code</code> agent" + (s.cc > 1 ? "s" : "") + " need the feature → unhealthy</span>");
-    if (s.cc && cc) h.push('<span class="bad">doctor exits 1: the image has no Claude CLI (<code>claude</code> not on PATH) → unhealthy</span>');
+    if (s.cc) h.push('<span class="bad">doctor exits 1: ' + s.cc + " <code>claude_code</code> agent" + (s.cc > 1 ? "s" : "") + " but the image has no Claude CLI (<code>claude</code> not on PATH) → unhealthy</span>");
     if (s.keys) h.push('<span class="bad">doctor exits 1: <code>[keys]</code> needs an ssh-agent key and the seal proxy (<code>127.0.0.1:8787</code> = the container itself); no session → <code>[keys.env]</code> unset → <code>OPENROUTER_API_KEY is required</code>. Run it natively (<code>docs/sealed-check-2026-10-09.md</code>)</span>');
     else if (s.or) h.push("needs <code>OPENROUTER_API_KEY</code> in <code>.env</code> (" + s.or + " openrouter agent" + (s.or > 1 ? "s" : "") + ")");
     if (net === "open" && !s.open) h.push('<span class="warn">NETWORK=open but the config still says tor: doctor\'s proxy check fails without a proxy on 127.0.0.1:9050</span>');
@@ -521,7 +519,7 @@ ufw: allow 22/tcp and 7080/tcp
       row("health", h.join("<br>")) +
       row("doctor", "<code>make doctor" + (k ? " SANDBOX=" + k : "") + "</code> → <code>tengu doctor" + (net === "tor" ? " --tor" : "") + "</code>");
   }
-  [sel, $("m-net"), $("m-mem"), $("m-cc")].forEach(function (e) { e.addEventListener("change", plan); });
+  [sel, $("m-net"), $("m-mem")].forEach(function (e) { e.addEventListener("change", plan); });
   plan();
 
   /* --- doctor verdict --- */

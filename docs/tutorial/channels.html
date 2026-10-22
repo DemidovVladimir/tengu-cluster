@@ -362,12 +362,12 @@
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">Open each door</h2>
-    <p>Webhooks need a build with <code>--features webhooks</code>; the default build has <code>openrouter</code>, <code>telegram</code>, <code>studio</code>, <code>codex</code> and <code>a2a</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
+    <p>The default build has every engine plus <code>telegram</code>, <code>studio</code>, <code>a2a</code> and <code>webhooks</code>. The secret below is an example. With <code>[keys.env] TELEGRAM_API_URL = "telegram"</code> no bot token is needed here: the bot sends a placeholder and the Worker swaps in its <code>TELEGRAM_BOT_TOKEN</code> secret (<a href="sealed-keys.html">sealed keys</a>). With that line and no session, <code>tengu telegram</code> refuses to start; it never falls back to a local token.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>TENGU_TUI_METRICS=1 tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>TELEGRAM_BOT_TOKEN=&lt;bot token&gt; TENGU_TELEGRAM_ALLOWED_USERS=&lt;your id&gt; tengu telegram --sandbox lping</span>
-<span class="ln cmd"><span class="p">$ </span>cargo build --release --features webhooks</span>
+<span class="ln cmd"><span class="p">$ </span>cargo build --release</span>
 <span class="ln cmd"><span class="p">$ </span>TENGU_LPING_WEBHOOK_SECRET=example-secret target/release/tengu webhooks --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>BODY='{"pool":"example"}'; SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac example-secret | sed 's/^.* //')</span>
 <span class="ln cmd"><span class="p">$ </span>curl -s -X POST localhost:7081/webhooks/solana_events -H "X-Tengu-Signature: sha256=$SIG" -d "$BODY"</span>

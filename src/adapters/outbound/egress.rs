@@ -347,7 +347,6 @@ impl EgressPolicy {
     /// through the proxy via `HTTPS_PROXY` when `route_llm_api` is set.
     /// Empty otherwise (the CLI then connects directly, like OpenRouter does
     /// when `route_llm_api = false`).
-    #[cfg_attr(not(any(feature = "claude_code", feature = "codex")), allow(dead_code))]
     pub(crate) fn claude_cli_env(&self) -> Vec<(&'static str, String)> {
         if !self.route_llm_api() {
             return Vec::new();
@@ -537,7 +536,6 @@ impl EgressPolicy {
     /// Claude Code builtin profile to actually launch. The builtin `Bash`
     /// has no egress control, so `editor_shell` drops to `editor` while a
     /// proxy is set. The CLI's own API traffic follows `claude_cli_env`.
-    #[cfg_attr(not(feature = "claude_code"), allow(dead_code))]
     pub(crate) fn claude_code_profile<'a>(&self, requested: &'a str) -> &'a str {
         if self.proxy().is_some() && requested == "editor_shell" {
             tracing::warn!(

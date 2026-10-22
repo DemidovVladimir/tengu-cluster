@@ -40,7 +40,7 @@ Launch with `cargo run -- telegram` (`TELEGRAM_BOT_TOKEN` env var required; `[te
 
 ## Telegram smoke (storage-test)
 
-Launch with `cargo run --features claude_code -- telegram --sandbox storage-test`. The sandbox flag must take effect for the Telegram channel too.
+Launch with `cargo run -- telegram --sandbox storage-test`. The sandbox flag must take effect for the Telegram channel too.
 
 - [ ] Bot starts against the storage-test roster without panic
 - [ ] A short message from the phone gets a coherent reply grounded in the storage-test sandbox context

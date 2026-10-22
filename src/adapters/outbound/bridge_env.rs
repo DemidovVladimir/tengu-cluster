@@ -12,10 +12,6 @@
 //! `TENGU_SECRETS_LOADED` (names only), `TENGU_SESSION_ID` and `TENGU_CONFIG`
 //! (`config::paths::TENGU_CONFIG_ENV`, absolute: the bridge loads it).
 
-// The builder is used by the CLI engines only (features `claude_code`,
-// `codex`); the bridge reads the names in every build.
-#![cfg_attr(not(any(feature = "claude_code", feature = "codex")), allow(dead_code))]
-
 /// The calling agent's per-tool scope map (JSON `HashMap<String, ToolScope>`).
 /// Used only when the bridge cannot resolve the agent from `TENGU_CONFIG`.
 pub(crate) const TENGU_BRIDGE_SCOPES_ENV: &str = "TENGU_BRIDGE_SCOPES";

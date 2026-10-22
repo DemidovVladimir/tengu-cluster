@@ -392,8 +392,8 @@ These are not preferences. They're load-bearing.
   `http_request`, never WebFetch) or `[agents.<a>.codex] web_search = "cached"
   | "live"` (at OpenAI). Converted 2026-10-14: `a2a-lab`, `lping`, `jev-exec`,
   `control-loop-lab`, `sealed-check`, `tor-check` run every LLM agent on
-  `claude_code` (`none`; build with `--features claude_code`, `claude` logged
-  in); `OPENROUTER_API_KEY` is for their Jev loops only. Left: `xmarket-weekend`
+  `claude_code` (`none`; `claude` logged in); `OPENROUTER_API_KEY` is for
+  their Jev loops only. Left: `xmarket-weekend`
   (its agent model is W1-pinned — a new generation is the operator's step;
   its loop executor never calls the LLM) and `unlimited`.
 
@@ -576,10 +576,11 @@ These are not preferences. They're load-bearing.
   `agentic_memory` `capture` stamps both when the LLM omits `session_id` /
   `agent`, so subagent captures are session-scoped.
 - **`tengu doctor` exits non-zero when any agent engine fails to build** —
-  it is the Docker HEALTHCHECK. A config with `engine = "claude_code"` agents
-  needs an image built with `claude_code` in `TENGU_FEATURES` or the
-  container reports unhealthy; an `engine = "codex"` agent needs the `codex`
-  CLI on `PATH` (`doctor` checks; the shipped image has none).
+  it is the Docker HEALTHCHECK. It also fails when a `claude_code` agent's
+  CLI (`[claude_code] cli_path`, default `claude`) or a `codex` agent's
+  (`[agents.<a>.codex] cli_path`, default `codex`) is not on `PATH` — the
+  shipped image has neither, so such a config reports unhealthy there; the
+  logins are checked only by a live turn (`tengu doctor --engines`).
 - **IPC boundary test is Rust** — `cargo test --test run_agent_ipc`
   (`tests/run_agent_ipc.rs`) replaced `scripts/test-runner.sh`. Pre-loop
   failures (missing `TENGU_AGENT_IPC`, bad stdin JSON, unknown agent) exit
@@ -653,13 +654,12 @@ These are not preferences. They're load-bearing.
   (this session)` block from Postgres `agentic_memory` filtered by the shared
   `session_id`. Recommended `3–5`.
 - **`[agents.<name>].engine` selects the subagent engine (Phase 7.3)** —
-  `"openrouter"`, `"local"`, `"claude_code"` or `"codex"` (required field, no default; the list is `config::ENGINES`);
+  `"openrouter"`, `"local"`, `"claude_code"` or `"codex"` (required field, no default; the list is `config::ENGINES`; all four in every build);
   the same block serves in-process chat and `run-agent` steps.
   `model` slug format depends on engine: OpenRouter wants
-  `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`
-  (building with `--features claude_code` is required); Codex (2026-10-10,
-  OpenAI ChatGPT subscription via `codex exec`, `codex login` first, feature
-  `codex` on by default) wants a bare OpenAI id (`gpt-5.5`), takes
+  `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`;
+  Codex (2026-10-10, OpenAI ChatGPT subscription via `codex exec`, `codex
+  login` first) wants a bare OpenAI id (`gpt-5.5`), takes
   `[agents.<a>.codex] sandbox = "read-only" | "workspace-write"`, gets tengu
   tools through the bridge (`-c mcp_servers.tengu-tools.*`, env names
   forwarded, never values) and is refused in a hardened sandbox
@@ -920,7 +920,7 @@ These are not preferences. They're load-bearing.
   refused `account_owner_mismatch`); every `[decision_loops.*]` built once
   behind `LoopDispatch` (one event per loop at a time, `[runtime]
   max_decisions_in_flight`; past `max_queued_per_loop` waiting events, 64 by
-  default, one more is refused with a warn — webhook 429); `/webhooks/:name` with `--features webhooks`;
+  default, one more is refused with a warn — webhook 429); `/webhooks/:name` (feature `webhooks`, default);
   SIGINT/SIGTERM drain ≤ `shutdown_grace_secs`; heartbeat
   `<state dir>/run-<s>.json` + `loop/1` / `feed/1` rows; `tengu doctor
   --sandbox <s> --live` is the healthcheck for a `tengu run` container (the

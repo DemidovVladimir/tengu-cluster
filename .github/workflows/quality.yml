@@ -38,15 +38,10 @@ jobs:
       # above runs the Studio server tests. This step keeps the build without
       # it compiling — the `tengu studio --sandbox` stub that names the flag
       # and its test (`cli::studio::tests`).
+      # `webhooks` is a default feature too (2026-10-22), so the webhook
+      # listener tests run above as well; this build has neither.
       - name: Studio tests (without the studio feature)
-        run: cargo test --no-default-features --features openrouter,telegram --bin tengu studio
-
-      # The webhook listener (`--features webhooks`, not a default feature):
-      # auth, queue bounds, each request's `trigger.webhook` /
-      # `webhook.responded` trace events. `cargo test --workspace` above
-      # compiles none of these tests.
-      - name: Webhook tests (feature webhooks)
-        run: cargo test --features webhooks --bin tengu webhooks
+        run: cargo test --no-default-features --features telegram --bin tengu studio
 
       # Sealed keys (docs/sealed-keys-2026-10-09.md): the shared formats crate
       # is a path dependency, not a workspace member, so `--workspace` skips

@@ -51,15 +51,15 @@
 //! |---|---|---|---|
 //! | openrouter · `google/gemini-2.5-flash-lite` | `gemini`, `xm_gemini` · `gemini` | `openrouter_gemini_*` | `OPENROUTER_API_KEY` (env or the repo's `.env`) |
 //! | openrouter · `anthropic/claude-haiku-4.5` | `haiku`, `xm_haiku` · `haiku` | `openrouter_haiku_*` | same |
-//! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `--features claude_code`, `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
-//! | codex · `gpt-5.5`, `sandbox = "read-only"` | — · `codex` (open sets only: `engine = "codex"` is refused in a hardened sandbox, so every hardened set's `codex_*` leg is absent) | `codex_*` | feature `codex` (default), `codex` logged in with ChatGPT (`codex login`); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
+//! | claude_code · `claude-haiku-4-5`, built-ins off | `claude`, `xm_claude` · `claude` | `claude_code_*` | `claude` logged in (subscription); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
+//! | codex · `gpt-5.5`, `sandbox = "read-only"` | — · `codex` (open sets only: `engine = "codex"` is refused in a hardened sandbox, so every hardened set's `codex_*` leg is absent) | `codex_*` | `codex` logged in with ChatGPT (`codex login`); `OPENROUTER_API_KEY` for the `memory` set's embeddings |
 //! | local · `gemma4:latest` | `gemma`, `xm_gemma` · `gemma` | `local_*` | `TENGU_MATRIX_LOCAL_BASE_URL`; unset ⇒ skipped; loopback on macOS ⇒ skipped (local models run on the operator's PC) |
 //! | local → a scripted OpenAI-compatible mock | `gemma`, `xm_gemma` · `gemma` | `offline_local_workspace`, `offline_local_xm` (`risk_status` + `paper_positions`; then an open position's row arrives whole — full instrument id, exit deadline — under the 16k cap), `offline_local_shell`, `offline_local_xlab` (`market_history` with 200 points: the text — table cut to 48 rows — arrives whole under the 16k cap; both `backtest` runs' texts whole too), `offline_local_xlab_holdout` (the hidden run, the holdout read and the stored run's rows, each whole), `offline_local_xlab_rank` (the ranking run and `latest`, each whole, rows weakest first), `offline_local_sources` (`source_evidence` before / after the change notice: the original stands, then `superseded … (correction)`; each text whole under the 16k cap, the buyer's name fenced), `offline_local_soe` (the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent), `offline_local_a2a` (the card and the remote's answer reach the model whole) (no network; not ignored) | nothing |
 //! | — | all | `fixtures_load_and_agree`, `every_catalog_tool_has_a_live_leg` (not ignored) | nothing |
 //!
 //! Live run (sequential; one `engine_matrix |` result line per leg, a
 //! skipped leg says why):
-//! `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1`
+//! `cargo test --test engine_matrix -- --ignored --nocapture --test-threads 1`
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -920,10 +920,6 @@ fn live_leg(target: Target, set: Set) {
             (vec![("OPENROUTER_API_KEY", key)], 300)
         }
         Kind::ClaudeCode => {
-            assert!(
-                cfg!(feature = "claude_code"),
-                "build with --features claude_code (the tengu binary runs the engine)"
-            );
             // The engine logs each bridged tool result at debug: the
             // bridge's own answer for `SECRET_FILE`.
             let log = "tengu::adapters::outbound::engines::claude_code=debug";
@@ -937,10 +933,6 @@ fn live_leg(target: Target, set: Set) {
             if set.hardened() || set == Set::Xm {
                 return skip("refused: engine = \"codex\" is not allowed in a hardened sandbox");
             }
-            assert!(
-                cfg!(feature = "codex"),
-                "build with --features codex (the tengu binary runs the engine)"
-            );
             let log = "tengu::adapters::outbound::engines::codex=debug";
             (vec![("RUST_LOG", log.to_string())], 600)
         }

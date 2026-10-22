@@ -2943,7 +2943,7 @@ builtin_tools_profile = "none"
     /// `--mcp-config` it was handed — `--mcp-config` + `--allowedTools` for
     /// the agent's tools, the bridge running as `cc-eval` of the expanded
     /// eval config (not the base config in the env).
-    #[cfg(all(feature = "claude_code", unix))]
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn claude_code_eval_agent_gets_its_tools_through_the_bridge() {
         use std::os::unix::fs::PermissionsExt;

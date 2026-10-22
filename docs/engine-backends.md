@@ -5,7 +5,7 @@ Tengu supports four engine backends (`openrouter`, `local`, `claude_code`, `code
 ## OpenRouter (`engine = "openrouter"`)
 
 **Transport:** HTTP JSON to OpenRouter API
-**Feature flag:** none — always built (the `openrouter` cargo feature is an empty marker, on by default)
+**Feature flag:** none — always built (the `openrouter` cargo feature is a no-op, kept for old build commands)
 **File:** `src/adapters/outbound/engines/openrouter.rs` (`build_engine` in `engines/mod.rs`)
 
 The default backend. Sends chat completions to OpenRouter, which proxies to any supported model (Anthropic, OpenAI, Google, Meta, DeepSeek, etc.).
@@ -106,7 +106,7 @@ Live check: § Engine matrix below — the local legs run against the operator's
 ## Claude Code (`engine = "claude_code"`)
 
 **Transport:** `claude` CLI subprocess, `-p --output-format stream-json` (NDJSON on stdout)
-**Feature flag:** `claude_code` (opt-in: `cargo build --features claude_code`)
+**Feature flag:** none — always built (the `claude_code` cargo feature is a no-op, kept for old build commands)
 **File:** `src/adapters/outbound/engines/claude_code.rs`
 
 Runs agents through the local Claude Code CLI. Uses the operator's Claude subscription instead of API tokens (`ANTHROPIC_API_KEY` is removed from the child env). A parent Claude Code session's env is removed too (`claude_code.rs::parent_session_env`: `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, every `CLAUDE_CODE_*` but auth / provider), so a nested `claude` — tengu run from inside Claude Code — starts like one from the operator's terminal.
@@ -181,7 +181,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 
 **Transport:** the OpenAI Codex CLI as a subprocess, `codex exec --json` (JSONL events on stdout, the prompt on stdin)
 **Billing:** the operator's ChatGPT subscription (`codex login` → "Logged in using ChatGPT"); the CLI starts from an EMPTY env + the base set (`codex.rs::BASE_ENV`: `PATH`, `HOME`, locale, temp, TLS certs, `CODEX_HOME` / `CODEX_CA_CERTIFICATE`, non-secret `TENGU_*`) + `[agents.<a>.codex] forward_env` (`codex.rs::child_env`), so no API key bills instead, no parent Codex session's vars leak in, and no vault secret, `.env` key, master password or seal-proxy session reaches the built-in shell (it ignores tengu scopes). A bridged tool under codex reads only those names: forward what it needs (e.g. `OPENROUTER_API_KEY` for memory embeddings) — the shell can read them too
-**Feature flag:** `codex` (on by default)
+**Feature flag:** none — always built (the `codex` cargo feature is a no-op, kept for old build commands)
 **File:** `src/adapters/outbound/engines/codex.rs` (shared with Claude Code: `engines/cli_run.rs`, `outbound/bridge_env.rs`)
 
 | Setup | |
@@ -243,7 +243,7 @@ One scripted turn per engine × model × tool set (`tests/engine_matrix.rs`). Ev
 
 | Command | Runs |
 |---|---|
-| `cargo test --features claude_code --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (87: 19 sets × 4 targets — gemini, haiku, claude_code, local — plus 11 `codex_*` legs on the open sets: hardened ones refuse `engine = "codex"`); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it one target at a time (a filter such as `openrouter_gemini_`, 19 legs; `codex_`, 11) or smaller chunks to stay under a 10-minute call |
+| `cargo test --test engine_matrix -- --ignored --nocapture --test-threads 1` | every live leg (87: 19 sets × 4 targets — gemini, haiku, claude_code, local — plus 11 `codex_*` legs on the open sets: hardened ones refuse `engine = "codex"`); one `engine_matrix \|` line each (secs, tokens, Claude CLI cost, or why it skipped); local legs skip without `TENGU_MATRIX_LOCAL_BASE_URL`. Run it one target at a time (a filter such as `openrouter_gemini_`, 19 legs; `codex_`, 11) or smaller chunks to stay under a 10-minute call |
 | `cargo test --test engine_matrix` | offline, in CI: the local path against a scripted OpenAI-compatible mock (workspace, shell, xlab, xlab_holdout, xlab_rank, sources, soe and a2a sets via `run-agent` — a2a: the card and the remote's answer reach the model whole; xlab: the `market_history` text and both `backtest` texts whole under the 16k cap; xlab_holdout: a stored run's rows, a hidden split and a holdout read, each whole; xlab_rank: the ranking run and `latest`, each whole, rows weakest first; soe: the candidates view, the proposal and the challenge, each whole, each record stamped with the step's agent; `risk_status` + `paper_positions` via `tool turn`), fixture checks, the catalog-coverage check |
 | `tengu -c tests/fixtures/engine_matrix/<engine>.toml doctor --engines` | per agent: `list_directory` + `read_file` in a temp workspace → agent · engine · model · ok · tools called · secs; non-zero exit on a failure; on macOS a `local` agent with a loopback `base_url` prints `skipped (local models run on the operator's PC)` and is never contacted |
 
@@ -295,7 +295,7 @@ Local leg — the operator's Windows PC over the LAN:
 To add a new engine backend:
 
 1. Create `src/adapters/outbound/engines/<name>.rs` implementing the `Engine` trait (`src/ports/engine.rs`)
-2. Optional: a feature flag in `Cargo.toml` (as `claude_code`, `codex`)
+2. Optional, for heavy deps only: a feature flag in `Cargo.toml` (no engine has one today: all four are always built)
 3. Declare the module in `src/adapters/outbound/engines/mod.rs`; gate its construction with `#[cfg(feature = …)]` if 2
 4. Add a match arm in `engines/mod.rs` `build_step_engine()` — `build_engine()` delegates to it (the planner uses the `[orchestrator] agent`'s engine; `build_planner_engine()` is dead code)
 5. Add the engine name to `config::ENGINES` in `src/config/mod.rs` (validation reads it)

@@ -14,7 +14,7 @@
 #   LYREBIRD_RS_REPO Git URL of lyrebird-rs  (default: https://github.com/DemidovVladimir/lyrebird-rs.git)
 #   TENGU_PROFILE    Compose profile         (default: none — OpenRouter + Telegram only)
 #                    Options: postgres-memory (Postgres + pgvector agentic memory;
-#                    sets TENGU_FEATURES=openrouter,telegram,postgres_memory so the
+#                    sets TENGU_FEATURES=postgres_memory so the
 #                    image is built with the feature)
 #   TENGU_BRANCH     Git branch to clone     (default: main)
 #   SKIP_DOCKER      Skip Docker install     (default: false)
@@ -168,7 +168,7 @@ start_services() {
 
     info "Building tengu image..."
     if [ "$TENGU_PROFILE" = "postgres-memory" ]; then
-        export TENGU_FEATURES="${TENGU_FEATURES:-openrouter,telegram,postgres_memory}"
+        export TENGU_FEATURES="${TENGU_FEATURES:-postgres_memory}"
     fi
     if [ -n "$TENGU_PROFILE" ]; then
         make up-memory NETWORK="$TENGU_NETWORK"

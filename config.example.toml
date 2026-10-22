@@ -144,7 +144,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # allowed_users = ["123456789"]   # required (or TENGU_TELEGRAM_ALLOWED_USERS): none = `tengu telegram` refuses to start
 
 # --- Webhooks (inbound HTTP) ---
-# Run with: tengu webhooks --sandbox <name>   (build with --features webhooks)
+# Run with: tengu webhooks --sandbox <name>
 # Listens on [webhooks].port (default 7080). See docs/webhooks-2026-05-11.md.
 
 # [webhooks]
@@ -448,7 +448,7 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # --- tengu run (docs/runtime-2026-09-30.md) ---
 # `tengu run --sandbox <name>`: one long-running process per sandbox (lease
 # runtime:<name> in <state dir>/runtime.db) — every [decision_loops.*] built
-# once + the [webhooks] routes (build with --features webhooks). All optional.
+# once + the [webhooks] routes. All optional.
 # [runtime]
 # shutdown_grace_secs = 20                  # SIGINT/SIGTERM: running loop events + planner turns (webhook, escalation) get this long, then abort
 # max_decisions_in_flight = 4               # loop events running at once across loops (one per loop)
@@ -795,7 +795,6 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 
 # --- Claude Code Backend ---
 # Run agents powered by your Claude Code subscription instead of API tokens.
-# Requires: cargo build --features claude_code
 # Requires: Claude Code CLI installed and authenticated (https://docs.anthropic.com/en/docs/claude-code)
 # Claude loads your CLAUDE.md and skills from the workspace. MCP: only the tengu
 # bridge (--strict-mcp-config) — Tengu-native tools (http_request, crypto,
@@ -824,9 +823,9 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # max_tokens_per_flow = 5_000_000
 
 # --- Codex Backend (OpenAI, ChatGPT subscription) ---
-# Run agents on your ChatGPT subscription through the OpenAI Codex CLI
-# (feature `codex`, on by default). Requires: `npm i -g @openai/codex` and
-# `codex login` (ChatGPT). Tengu tools reach Codex through `tengu mcp-bridge`;
+# Run agents on your ChatGPT subscription through the OpenAI Codex CLI.
+# Requires: `npm i -g @openai/codex` and `codex login` (ChatGPT). Tengu tools
+# reach Codex through `tengu mcp-bridge`;
 # your ~/.codex/config.toml (MCP servers, profiles, hooks, model, effort) is
 # not loaded, and Codex's apps, plugins and browser / computer use are off;
 # its web search is off unless `web_search` below says otherwise.

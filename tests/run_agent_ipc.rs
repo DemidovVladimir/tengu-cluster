@@ -14,7 +14,7 @@
 //! | widening compose | hardened sandbox (a `[solana]` signer), `compose.tools` adds `write_file` to a base listing `read_file` | exit != 0 before the engine is built, stderr: "compose would widen agent `arch` in a hardened sandbox", stdout empty; the same compose without the signer offers `write_file` to a loopback model, exit 0 |
 //! | local fit | local agent, 16 384-token window, `read_file` of 100 000 bytes | the tool message the server gets next is ≤ 8 192 bytes (1/8 of the window), exit 0; a local agent left on the default window is warned about on stderr |
 //! | OpenRouter caps | `OPENROUTER_BASE_URL` = a loopback fake, `max_tool_result_chars = 2000`, `compact_result_limit = 50`, `read_file` of 100 011 bytes, then a small file | round 0's result capped (+ footer); in the next request it is line 1 only; one system message per request |
-//! | Claude Code, no workspace (`--features claude_code`) | `[claude_code] cli_path` = a stand-in that logs argv, cwd and stdin, streams a `compress_and_store` call, writes the step's summary file, then sleeps 30 s | `--mcp-config` + every tool in `--allowedTools`; cwd = a `tengu-step-*` temp dir, gone after the step; the system prompt only in `--system-prompt`; the bridge transcript = system, goal, the call; the run ends at the stored summary (< 15 s), IPC `summary` = the stub's |
+//! | Claude Code, no workspace (unix) | `[claude_code] cli_path` = a stand-in that logs argv, cwd and stdin, streams a `compress_and_store` call, writes the step's summary file, then sleeps 30 s | `--mcp-config` + every tool in `--allowedTools`; cwd = a `tengu-step-*` temp dir, gone after the step; the system prompt only in `--system-prompt`; the bridge transcript = system, goal, the call; the run ends at the stored summary (< 15 s), IPC `summary` = the stub's |
 //!
 //! None of the failure paths emit an `AgentIpcOutput` — every failure before
 //! the tool loop propagates as `anyhow::Error` out of `main`, and the parent
@@ -538,7 +538,7 @@ fn openrouter_step_caps_results_and_compacts_older_rounds() {
 /// rides on `--system-prompt` only; the bridge's transcript holds the
 /// step's messages and the streamed call; a stored summary ends the CLI run
 /// (the stand-in would sleep 30 s); the temp dir goes with the step.
-#[cfg(feature = "claude_code")]
+#[cfg(unix)]
 #[test]
 fn claude_code_step_without_workspace_runs_in_a_temp_dir_with_the_bridge() {
     let dir = tempfile::tempdir().expect("stub dir");

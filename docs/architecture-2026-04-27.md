@@ -36,7 +36,7 @@ Trace through them in order. Every step has a file you can open.
 
 ### 1. User input → Channel
 
-The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Telegram message (`src/adapters/inbound/telegram.rs`; fails closed without an allow-list); a webhook POST (`src/adapters/inbound/webhooks.rs`, `--features webhooks`) runs a one-shot orchestrator turn with its own `session_id`. All get their wiring from `src/bootstrap/` (tool executor, memory, orchestrator); TUI and Telegram share `src/adapters/inbound/channel.rs` helpers.
+The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Telegram message (`src/adapters/inbound/telegram.rs`; fails closed without an allow-list); a webhook POST (`src/adapters/inbound/webhooks.rs`, feature `webhooks`, default) runs a one-shot orchestrator turn with its own `session_id`. All get their wiring from `src/bootstrap/` (tool executor, memory, orchestrator); TUI and Telegram share `src/adapters/inbound/channel.rs` helpers.
 
 ### 2. Bootstrap → Orchestrator
 
@@ -619,7 +619,7 @@ Implementation: `domain/plan.rs::AgentCompose`, threaded through `AgentIpcInput.
 
 ### G. Engines: four backends, mixed is the verified pattern (Phase 7.3, `local` 2026-09-23, `codex` 2026-10-10)
 
-Each `[agents.<name>]` block declares its `engine`: `"openrouter"`, `"local"` (any OpenAI-compatible server on the host — Unsloth, Ollama, llama.cpp, vLLM; direct, never via the proxy), `"claude_code"` or `"codex"` (the OpenAI Codex CLI on the ChatGPT subscription; refused in a hardened sandbox) — the same field for in-process agents. Model slug format depends on engine: OpenRouter wants `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6` (build with `--features claude_code`); Codex a bare OpenAI id (`gpt-5.5`; feature `codex`, default); `local` sends the server's own id.
+Each `[agents.<name>]` block declares its `engine`: `"openrouter"`, `"local"` (any OpenAI-compatible server on the host — Unsloth, Ollama, llama.cpp, vLLM; direct, never via the proxy), `"claude_code"` or `"codex"` (the OpenAI Codex CLI on the ChatGPT subscription; refused in a hardened sandbox) — the same field for in-process agents. Model slug format depends on engine: OpenRouter wants `anthropic/claude-sonnet-4-6`; Claude Code wants the bare `claude-sonnet-4-6`; Codex a bare OpenAI id (`gpt-5.5`); `local` sends the server's own id. Every engine is in every build.
 
 **A Claude Code planner sets `builtin_tools_profile = "none"` (2026-10-14).** A CLI engine takes its tengu tools from the bridge per run, and the planner call (`PlannerLlm::call`) passes no tools, no bridge and no `[[mcp_servers]]`; with profile `none` the CLI has no built-ins either, so it can only write plan JSON (`planner_call_has_no_hands_and_reports_usage`; live: `sandboxes/a2a-lab`). Before 2026-10-14 the bridge still reached a planner that was also the chat agent, hence the old "OpenRouter for the planner" rule. Codex keeps its own built-in shell / patch tool (`-s read-only` by default) even on a tool-less turn — prefer Claude Code for the planner. Operator rule: frontier models only on the subscriptions (CLAUDE.md gotcha "Model spend").
 
@@ -706,7 +706,7 @@ Provider keys are Cloudflare Worker secrets; tengu holds only a session signed b
 Trace ONE turn end-to-end before changing anything:
 
 ```
-cargo run --release --features postgres_memory,claude_code -- chat --sandbox lping
+cargo run --release --features postgres_memory -- chat --sandbox lping
 > what is the current BTC price in USD?
 ```
 

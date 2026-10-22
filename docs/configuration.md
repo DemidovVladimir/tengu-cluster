@@ -78,7 +78,7 @@ example_queries = ["what is the BTC price?"]
 
 | Field | Default | Notes |
 |---|---|---|
-| `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI + `--features claude_code`), `codex` (`codex` CLI signed in with ChatGPT, default feature; `[agents.<a>.codex] sandbox`; refused in hardened sandboxes) — `docs/engine-backends.md`; the Studio builder (`tengu sandbox new`) writes these blocks from a canvas — `docs/studio-builder-2026-10-10.md` |
+| `engine` | required | `openrouter` (`OPENROUTER_API_KEY`), `local` (OpenAI-compatible server on this host / LAN), `claude_code` (`claude` CLI), `codex` (`codex` CLI signed in with ChatGPT; `[agents.<a>.codex] sandbox`; refused in hardened sandboxes); all four in every build — `docs/engine-backends.md`; the Studio builder (`tengu sandbox new`) writes these blocks from a canvas — `docs/studio-builder-2026-10-10.md` |
 | `model` | required | non-empty; slug format per engine |
 | `default` | `false` | at most one agent |
 | `description` | none | present ⇒ in `TENGU_PLANNER_REGISTRY.md`, runnable as a plan step (`tengu run-agent`); absent ⇒ in-process only (planner role, `@role:` chat). No `description` and not `default` = a **private** agent: never reachable from Telegram, the only kind that may hold exec tools or a Solana wallet grant. Non-empty when set |
@@ -552,7 +552,7 @@ Every one and `config.example.toml` must load (`config::risk::tests::every_sandb
 
 ```bash
 tengu chat --sandbox lping
-cargo run --features claude_code -- chat --sandbox xlab   # xlab's agents use engine = "claude_code"
+cargo run -- chat --sandbox xlab                          # xlab's agents use engine = "claude_code"
 tengu run --sandbox xmarket                               # long-running: feeds, loops, webhooks
 tengu backtest --sandbox xlab --strategy weekend_fade --split time:2026-07-01
 tengu sources --sandbox soe list                          # the source registry; fetch needs an enabled, reviewed row
@@ -594,25 +594,23 @@ tengu sources --sandbox soe list                          # the source registry;
 | `TENGU_TUI_METRICS` · `TENGU_TUI_RAG_DEBUG` | `tui/mod.rs` | off | metrics line · planner recall hits as System bubbles |
 | `TENGU_GPU_HINT` · `CUDA_VISIBLE_DEVICES` | `config/mod.rs::detect_gpu` | auto-detect | `none\|cpu\|off\|false` or `gpu\|cuda\|metal\|mps\|on\|true` for `runtime_profile = "auto"` |
 | `NO_COLOR` | `inbound/eval.rs` | unset | plain eval table |
-| `RUST_LOG` | `cli/mod.rs` (`tracing_subscriber::EnvFilter`) | `tengu=info` | log filter; one `metrics` line per LLM call at info |
+| `RUST_LOG` | `cli/mod.rs::init_logging` | `tengu=info` (`tengu sandbox`: `tengu=warn`) | log filter, replaces the default whole (`tengu=debug` works); one `metrics` line per LLM call at info. Sinks: TUI → `tengu.log`; telegram / webhooks / run / studio / `a2a serve` → `tengu.log` + stderr; protocol and data commands → stderr; the rest → stdout. Colours only on a terminal; an unopenable `tengu.log` → stderr (TUI: no log) with one line saying why |
 | Claude CLI child env | `engines/claude_code.rs` | — | strips a parent Claude Code session's vars (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_*` but auth / provider) and `ANTHROPIC_API_KEY` |
 | Codex CLI child env | `engines/codex.rs::child_env` | `[agents.<a>.codex] forward_env` | an EMPTY env + `BASE_ENV` + the `forward_env` names (vault secrets, `.env` keys, the master password and the seal-proxy session never reach it; a value equal to the session token is dropped); never `OPENAI_API_KEY` / `CODEX_API_KEY` (the ChatGPT login bills, never an API key); adds `[egress]` `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` when the LLM API is proxied |
 | `LYREBIRD_RS_DIR` · `NETWORK` · `SANDBOX` | `Makefile` | `../lyrebird-rs` · the config's `[egress] network` · none | Tor image source · compose network · sandbox config to mount |
-| `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `openrouter,telegram` · 7080 | image features · host port |
+| `TENGU_FEATURES` · `TENGU_WEBHOOK_PORT` | `docker-compose.yml` | `telegram` · 7080 | image features · host port |
 | Tests only | `tests/*.rs`, `outbound/solana/rpc.rs` tests | — | `TENGU_MATRIX_LOCAL_BASE_URL` (local engine-matrix leg), `TENGU_CONFORMANCE_ONLY` / `_VERBOSE`, `TENGU_REGEN_CODE_MAP`, `TENGU_REGEN_SOURCE_EVAL` (the source eval set), `TENGU_REGEN_GOLDEN` (Studio graph goldens), `TENGU_REGEN_SOE_STATE` (the SOE fixture state root), `SOE_CASE` (one synthetic SOE cycle case), `TENGU_CAPTURE_FIXTURES` |
 
 ## Feature flags
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `openrouter` | on | marker only — no code is gated on it; OpenRouter and `local` engines are always built |
 | `telegram` | on | Telegram bot channel |
 | `studio` | on | the `tengu studio` local server (loopback; `web/studio/` embedded) incl. the builder (`--allow-edit`); `tengu studio graph` and `tengu sandbox compile` work without it |
-| `codex` | on | `engine = "codex"` (the Codex CLI is spawned only when an agent names the engine) |
+| `webhooks` | on | `tengu webhooks`; webhook routes and decision-loop escalation under `tengu run` |
 | `a2a` | on | the `tengu a2a serve` server; the `a2a` tool and `tengu a2a send` need no feature |
-| `claude_code` | off | Claude Code CLI backend |
 | `postgres_memory` | off | Postgres + pgvector agentic memory, `tengu agentic-memory-server` |
-| `webhooks` | off | `tengu webhooks`, webhook routes under `tengu run` |
+| `openrouter` · `claude_code` · `codex` | off | no-ops: every engine (`openrouter`, `local`, `claude_code`, `codex`) is always built, its CLI spawned only when an agent names it; kept so old build commands still work |
 
 ## Validation summary
 
