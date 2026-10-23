@@ -325,16 +325,12 @@ mod tests {
             );
         }
         flagged.sort();
-        // S14 gives `main`, `probe` and `planner` explicit `tools`.
         assert_eq!(
             flagged,
             [
-                "a2a-lab/planner",
-                "config.example/main",
                 "lping/crypto_researcher",
                 "lping/lping",
                 "storage-test/storage",
-                "tor-check/probe",
             ]
         );
     }

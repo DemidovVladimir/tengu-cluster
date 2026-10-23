@@ -33,6 +33,7 @@ engine = "rag"
 default = true
 engine = "claude_code"            # the Claude subscription (operator rule 2026-10-14: no frontier model via OpenRouter)
 model = "claude-haiku-5-5"
+tools = ["read_file", "list_directory"]   # a planner turn gets no tool; this list keeps the default set (run_command, sign_*) off the block on every other surface
 
 [agents.planner.claude_code]
 builtin_tools_profile = "none"    # tengu tools only (through the bridge); no Claude Code built-ins

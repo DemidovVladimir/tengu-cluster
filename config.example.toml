@@ -49,6 +49,11 @@ mode = "hybrid"
 default = true
 engine = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
+# Explicit: an empty `tools` = every default tool, `write_file`, `run_command` and
+# the Privy signing tools included. Add one on purpose — a reader of outside text
+# (`http_request`) that also writes or runs a shell warns at load (docs/tools.md
+# § Untrusted input).
+tools = ["read_file", "list_directory", "http_request", "memory_search", "memory_ingest", "view_skill", "skill_resource"]
 # workspace = "~/projects/my-app"
 default_lens = "eco"
 # skill_packages = ["my-skill"]                      # skills loaded into the prompt (`skills = [...]` also accepted)
