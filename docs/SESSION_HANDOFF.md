@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-10-23: audit fixes part 1 — branch `fix/audit-bugs`, PR #59 (open, not merged)
+
+The 2026-10-22 audit (`TENGU_IMPROVEMENTS.md`, tracker at its top with every commit hash). Done: A1–A12, W2, W3 (but `--older-than`), R1 + B7, R2, R3, S1–S16, T1, T2, T4, T5, T7, T9, Y3, Y4, Y10, O6 (ignore half), D3, D5, D6.
+
+| Item | State |
+|---|---|
+| R4 (module-wide `#![allow(dead_code)]`) | in progress, uncommitted in `~/development/tengu-wt-audit`; patch `~/.cache/tengu-xm.noindex/wip/r4-dead-code-wip.patch`; what is left: the tracker R4 row |
+| Next rows | R5–R8, Y1, Y2, Y5, Y6, Y8, Y9, B1–B6, B8–B10, W1, W4, O1–O5, O7–O11, O6 move (`TENGU_{HANDOFF,ROADMAP,STUDIO_PLAN}.md` → `docs/plans/`) |
+| Operator (§ 11) | D1, D2, T3, Y7 (→ T8), T6, D4, S4 narrow-only, S14 empty set, W3 `--older-than` |
+| On merge | `~/.tengu/config.toml`: delete line 1 `runtime_profile` (R2) and line 7 `default_lens` (A9) — else the base config fails to load; xpower's branch: delete `runtime_profile`, review S3 / S10 / S13 / S16 (PR #59 body) |
+| Behaviour | `tengu webhooks` = `tengu run` with no feeds (`kind = "run"` + heartbeat); `tengu status` gone; `[orchestrator]` rejects unknown keys (no `engine`); step retries by error class (fatal / decode: none) |
+
 ## 2026-10-14 (later): every sandbox LLM agent on the subscriptions — branch `fix/subscription-agents-everywhere`, one PR
 
 | Change | Where | Tests / evidence |
