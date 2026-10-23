@@ -4,7 +4,7 @@
 //!
 //! Ported from `src/adapters/memory_builder.rs::DiskVectorMemoryStore` with the
 //! signatures adapted to the new `VectorStore` trait. Uses an in-memory
-//! `RwLock<Vec<Entry>>` as the working set, atomic-rename flush to disk.
+//! `RwLock<Vec<Entry>>` as the working set, flushed whole (`fs_atomic`, 0600).
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::outbound::fs_atomic::{write_atomic, Mode};
 use crate::domain::memory::{ChunkMetadata, MemoryHit};
 use crate::ports::memory::VectorStore;
 
@@ -131,12 +132,7 @@ impl DiskVectorStore {
 
     fn flush(&self, entries: &[Entry]) -> Result<()> {
         let data = bincode::serialize(entries).context("failed to serialize memory store")?;
-        let tmp_path = self.store_path.with_extension("bin.tmp");
-        std::fs::write(&tmp_path, &data)
-            .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-        std::fs::rename(&tmp_path, &self.store_path)
-            .with_context(|| format!("failed to rename to {}", self.store_path.display()))?;
-        Ok(())
+        write_atomic(&self.store_path, &data, Mode::OwnerOnly)
     }
 }
 

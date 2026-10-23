@@ -4,7 +4,7 @@
 //! | File | Holds |
 //! |---|---|
 //! | `runtime.db` | the leases of `tengu run` / `tengu webhooks` (`runtime:<sandbox>`, `state:<dir>`; `bootstrap/runtime.rs::LeasePlan`) — 0600, WAL + busy_timeout (`sqlite.rs::open_wal`), one statement per change, atomic across processes (pattern of `solana/writes_store.rs`) |
-//! | `run-<sandbox>.json` | the heartbeat — written to a temp file, then renamed (readers never see a partial file); [`read_heartbeat`] serves `tengu doctor --live` |
+//! | `run-<sandbox>.json` | the heartbeat, 0600 — `fs_atomic::write_atomic` (readers never see a partial file); [`read_heartbeat`] serves `tengu doctor --live` |
 
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use rusqlite::params;
 
+use crate::adapters::outbound::fs_atomic::{write_atomic, Mode};
 use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::domain::runtime::{heartbeat_file, Heartbeat, RunnerLease};
 use crate::ports::runtime::RuntimeStore;
@@ -38,17 +39,13 @@ pub(crate) struct SqliteRuntimeStore {
     path: PathBuf,
 }
 
-/// Write `<dir>/run-<sandbox>.json` atomically (temp file + rename).
+/// Write `<dir>/run-<sandbox>.json` atomically (`fs_atomic`).
 pub(crate) fn write_heartbeat(dir: &Path, hb: &Heartbeat) -> Result<()> {
-    let path = dir.join(heartbeat_file(&hb.sandbox));
-    let tmp = dir.join(format!(
-        ".{}.{}.tmp",
-        heartbeat_file(&hb.sandbox),
-        std::process::id()
-    ));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(hb)?)
-        .with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("replace {}", path.display()))
+    write_atomic(
+        &dir.join(heartbeat_file(&hb.sandbox)),
+        &serde_json::to_vec_pretty(hb)?,
+        Mode::OwnerOnly,
+    )
 }
 
 /// `<dir>/run-<sandbox>.json`: `None` when absent, `Err` when unreadable.

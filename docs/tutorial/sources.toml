@@ -247,6 +247,7 @@ sources = [
 [pages.secrets]
 sources = [
   "src/adapters/outbound/secrets.rs",
+  "src/adapters/outbound/fs_atomic.rs",
   "src/domain/secrets.rs",
   "src/adapters/inbound/cli/mod.rs",
   "src/adapters/outbound/tools/http/request.rs",

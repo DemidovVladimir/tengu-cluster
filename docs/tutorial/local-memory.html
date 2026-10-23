@@ -200,7 +200,7 @@
         <li>The system prompt loads <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code> from the agent's workspace: up to 2000 tokens each, 32000 in total.</li>
         <li>A message about the last, latest, newest, previous or most recent thing skips recall. A system note tells the model to verify instead.</li>
         <li>Otherwise the last message is embedded and scored against every entry by cosine. The top 5 (<code>max_recall_entries</code>), capped at <code>max_recall_tokens</code> (600), join the head of the user message inside a <code>&lt;memory-context&gt;</code> fence, never as a system message and never stored in history.</li>
-        <li><code>memory_ingest</code>: secrets are redacted, the text embedded, one entry appended. Under a lock file the store re-reads the file, applies the change and rewrites it through a temp file and a rename, so two processes keep each other's rows.</li>
+        <li><code>memory_ingest</code>: secrets are redacted, the text embedded, one entry appended. Under a lock file the store re-reads the file, applies the change and rewrites it whole (a 0600 temp file, fsync, rename), so two processes keep each other's rows.</li>
         <li><code>memory_search</code>: a query plus optional <code>agent</code>, <code>source</code> or <code>kind</code> filters. Returns JSON hits with text, score and metadata.</li>
         <li><code>persistent_store</code> (opt-in): the source path must pass the tool's read scope; the file is copied under <code>.tengu/storage/</code>, its text extracted (PDF, docx, xlsx or UTF-8), chunked, one entry per chunk.</li>
         <li><code>shared_cache</code> (opt-in): <code>get</code>, <code>put</code>, <code>delete</code>, <code>list</code> by namespace and key in <code>.tengu/cache.db</code>. Non-JSON values are stored as JSON strings.</li>
@@ -362,7 +362,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

@@ -366,7 +366,7 @@
     <li><span><b>A loop never runs two events at once</b>, and no more than <code>max_decisions_in_flight</code> run across loops.</span></li>
     <li><span><b>Bursts are bounded.</b> Past <code>max_queued_per_loop</code> waiting events, the next is refused and counted.</span></li>
     <li><span><b>No replay storms.</b> Missed feed slots are skipped; a clock stepping back does not stall a feed.</span></li>
-    <li><span><b>Readers never see half a heartbeat.</b> It is written to a temp file, then renamed.</span></li>
+    <li><span><b>Readers never see half a heartbeat.</b> It is written to a 0600 temp file, synced, then renamed.</span></li>
     <li><span><b>No URLs in health.</b> Heartbeats and <code>loop/1</code> / <code>feed/1</code> rows replace every URL with <code>&lt;url&gt;</code>.</span></li>
     <li><span><b>Shutdown is bounded.</b> <code>shutdown_grace_secs</code> ≤ 3600; a second signal exits 130 at once.</span></li>
     <li><span><b>No turn outlives the run.</b> A webhook planner endpoint's turn and a loop escalation's are owned by the dispatch (<code>Runtime::turns</code>): the drain waits for them with the loop events, aborts what still runs at the grace (its <code>plan.completed</code>, dropped, is written first), then the leases go and <code>runtime.stopped</code> is the last line. New turns get 503 once the drain began.</span></li>

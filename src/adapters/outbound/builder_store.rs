@@ -5,7 +5,7 @@
 //! | Op | How |
 //! |---|---|
 //! | every op | the name passes `config::builder::sandbox_name_error` (no `/`, `.`, absolute path) and an existing dir / file resolves inside the root / the sandbox dir (canonicalized: a symlink out is refused) — before any read or write, whatever the caller checked |
-//! | write | temp file in the same dir + rename (a crash leaves the old file; a symlink at the path is replaced, never followed) |
+//! | write | `fs_atomic::write_atomic` (`Shared`, 0644): temp file in the same dir + fsync + rename (a crash leaves the old file; a symlink at the path is replaced, never followed) |
 //! | `write_config` | the old `config.toml` written to `config.toml.prev` first (same temp + rename) |
 //! | `check_config` | `config::builder::load_report` on `<tmp>/sandboxes/<sandbox>/config.toml` |
 //! | `create` | `create_dir` (an existing dir is refused), then both files |
@@ -15,11 +15,11 @@
 //! Check, then use: a process racing a symlink swap between the two is not
 //! covered (the operator's own machine).
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::adapters::outbound::fs_atomic::{write_atomic, Mode};
 use crate::config::builder::{load_report, sandbox_name_error, LoadReport};
 use crate::ports::builder::{SandboxDrafts, SecretState};
 
@@ -104,18 +104,6 @@ fn read_opt(path: &Path) -> Result<Option<String>> {
     }
 }
 
-/// `bytes` → `path` through a temp file in the same directory + rename.
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().context("no parent dir")?;
-    let mut tmp = tempfile::NamedTempFile::new_in(dir)
-        .with_context(|| format!("temp file in {}", dir.display()))?;
-    tmp.write_all(bytes)?;
-    tmp.as_file().sync_all()?;
-    tmp.persist(path)
-        .with_context(|| format!("write {}", path.display()))?;
-    Ok(())
-}
-
 impl SandboxDrafts for FsDrafts {
     fn config_path(&self, sandbox: &str) -> Result<PathBuf> {
         self.file(sandbox, CONFIG_FILE)
@@ -131,7 +119,7 @@ impl SandboxDrafts for FsDrafts {
         if !dir.is_dir() {
             bail!("no sandbox dir {}", dir.display());
         }
-        write_atomic(&path, json.as_bytes())
+        write_atomic(&path, json.as_bytes(), Mode::Shared)
     }
 
     fn read_config(&self, sandbox: &str) -> Result<Option<String>> {
@@ -159,12 +147,13 @@ impl SandboxDrafts for FsDrafts {
         let prev = self.file(sandbox, PREV_FILE)?;
         let backup = if path.is_file() {
             let old = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-            write_atomic(&prev, &old).with_context(|| format!("back up {}", path.display()))?;
+            write_atomic(&prev, &old, Mode::Shared)
+                .with_context(|| format!("back up {}", path.display()))?;
             Some(prev)
         } else {
             None
         };
-        write_atomic(&path, toml.as_bytes())?;
+        write_atomic(&path, toml.as_bytes(), Mode::Shared)?;
         Ok(backup)
     }
 
@@ -183,8 +172,13 @@ impl SandboxDrafts for FsDrafts {
         write_atomic(
             &self.file(sandbox, BLUEPRINT_FILE)?,
             blueprint_json.as_bytes(),
+            Mode::Shared,
         )?;
-        write_atomic(&self.file(sandbox, CONFIG_FILE)?, toml.as_bytes())?;
+        write_atomic(
+            &self.file(sandbox, CONFIG_FILE)?,
+            toml.as_bytes(),
+            Mode::Shared,
+        )?;
         Ok(dir)
     }
 
