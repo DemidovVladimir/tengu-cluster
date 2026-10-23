@@ -7,7 +7,7 @@ Concise schema. Tables. No prose.
 | `view_skill` built (always on): `list` / `read` / `read_resource` | `src/adapters/outbound/tools/view_skill/mod.rs`, `domain/tools.rs::DEFAULT_TOOLS` |
 | `manage_skill` built (opt-in): all six actions; `patch` = exact, then whitespace-normalized (`fuzzy_find_and_replace`) | `src/adapters/outbound/tools/manage_skill/mod.rs` |
 | Migration not done as planned: `skill_distill` is still its own tool (not a `manage_skill` wrapper); `apply_improver_proposal` was kept (opt-in catalog row); `skill_resource` kept | `tools/skill_lifecycle/{distill,apply_improver_proposal}.rs`, `domain/tools.rs::WORKSPACE_TOOLS` |
-| `[agents.learning-agent]` is in no shipped sandbox — the orchestrator's lifecycle rows need one defined first | `sandboxes/*/config.toml`, `skills/orchestrator/SKILL.md` |
+| `[agents.learning-agent]` is in no shipped sandbox — the lifecycle-verb rows (in `skills/skill-creator/SKILL.md` since 2026-10-23; the planner routes by the agent's description) need one defined first | `sandboxes/*/config.toml`, `skills/skill-creator/SKILL.md` |
 | Tier walk is four dirs (managed → `<ws>/.tengu/skills` → `<ws>/skills` → `<cwd>/skills`), first wins | `application/skills/registry.rs::skill_directories` |
 
 ---

@@ -313,7 +313,7 @@ Data that lives ONLY on the operator's Mac (not in git, the repo is public). Kep
 | What | Note |
 |---|---|
 | Removed | the science-pipeline sandbox, its three skills (pipeline orchestrator, science-social posting, paid lab mutations), their env vars in `.env.example`, every code / test / doc mention |
-| Consequence | `[skill_lifecycle]` and the `learning-agent` / `skill-improver` agents have no shipped sandbox (commented sample in `config.example.toml`); `skills/orchestrator/SKILL.md` "Lifecycle verbs" still route to `learning-agent` — define it in a sandbox before using them. Examples now use `lping` (orchestrated, webhooks), `xlab` (claude_code), `storage-test` (Telegram) |
+| Consequence | `[skill_lifecycle]` and the `learning-agent` / `skill-improver` agents have no shipped sandbox (commented sample in `config.example.toml`); the lifecycle-verb rows live in `skills/skill-creator/SKILL.md` (moved out of the planner prompt 2026-10-23, audit T2) — define a `learning-agent` with a description naming them before using them. Examples now use `lping` (orchestrated, webhooks), `xlab` (claude_code), `storage-test` (Telegram) |
 | Not removed | git history (public repo; a rewrite cannot reach PR refs or forks) — the leaked keys of those integrations are revoked |
 
 ---
