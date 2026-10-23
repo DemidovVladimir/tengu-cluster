@@ -65,7 +65,10 @@ async fn try_persist_agentic_step_summary(
 ///    grants the workspace and writes `compress_and_store` into a summary file).
 /// 6. Builds the tool stack: `effective_tools = (base ∩ agent.tools) ∪
 ///    {compress_and_store} ∪ shell skills ∪ [[mcp_servers]] tools` plus a
-///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`).
+///    `PluginToolExecutor` over those tools (`build_subprocess_tool_executor`)
+///    — on a Claude Code / Codex step only the list (`bridged_step_tools`:
+///    its bridge builds the executor it calls), unless `[[mcp_servers]]`
+///    tools must be discovered by connecting.
 /// 7. Runs in-process chat's tool loop (`tool_loop::collect_engine_response`)
 ///    with the step's `StepHooks` and call ids
 ///    `step:<session>:<step>:<loop nonce>:<round>:<i>:<provider id>`.
@@ -315,33 +318,45 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     );
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
-    // A real MemoryManager from the parent config, so the MemoryPlugin
-    // registers persistent_store / memory_ingest as callable handlers, not
-    // just advertised tool defs (a bridged call would otherwise get "Tool
-    // 'X' is not available to this agent").
-    // The store sits in the agent's own workspace, else at `[memory]
-    // store_path` (as in-process chat and the bridge): never in a step's
-    // temp dir, which goes when the step ends.
-    let memory_manager = if parent_config.memory.enabled {
-        Some(
-            crate::bootstrap::memory::build_memory_manager_async(
-                &parent_config.memory,
-                configured_workspace.then_some(workspace.as_path()),
-            )
-            .await,
-        )
+    // A Claude Code / Codex step calls its tools in its own MCP bridge,
+    // which builds the executor (and memory manager) it runs them on: this
+    // process only needs the tool list — unless `[[mcp_servers]]` tools
+    // must be discovered by connecting (`bridged_step_tools`).
+    let bridged_tools = if crate::adapters::outbound::engines::bridges_tools(&spec.engine) {
+        crate::bootstrap::tools::bridged_step_tools(&spec, &parent_config, &workspace)
     } else {
         None
     };
-
-    let (tools, stack) = crate::bootstrap::tools::build_subprocess_tool_executor(
-        &spec,
-        &parent_config,
-        &workspace,
-        &secret_registry,
-        activity,
-        memory_manager.clone(),
-    );
+    let (tools, stack) = match bridged_tools {
+        Some(tools) => (tools, None),
+        None => {
+            // A real MemoryManager from the parent config, so the
+            // MemoryPlugin registers persistent_store / memory_ingest as
+            // callable handlers, not just advertised tool defs. The store
+            // sits in the agent's own workspace, else at `[memory]
+            // store_path` (as in-process chat and the bridge): never in a
+            // step's temp dir, which goes when the step ends.
+            let memory_manager = if parent_config.memory.enabled {
+                Some(
+                    crate::bootstrap::memory::build_memory_manager_async(
+                        &parent_config.memory,
+                        configured_workspace.then_some(workspace.as_path()),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+            crate::bootstrap::tools::build_subprocess_tool_executor(
+                &spec,
+                &parent_config,
+                &workspace,
+                &secret_registry,
+                activity,
+                memory_manager,
+            )
+        }
+    };
     // The parent records this step (`AgentIpcInput.trace`): every tool call
     // here becomes `tool.*` drafts it writes into its run, under the step's
     // `step.started` (`trace_exec::DraftBuffer`; outside the redaction, as a

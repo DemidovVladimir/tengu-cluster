@@ -639,24 +639,7 @@ pub(crate) fn build_subprocess_tool_executor(
     // its allow-list.
     memory_manager: Option<Arc<crate::application::memory::manager::MemoryManager>>,
 ) -> (Vec<ToolDef>, Option<ToolStack>) {
-    let mut agent_cfg = subagent_config(agent);
-    grant_workspace_root(&mut agent_cfg.scopes, workspace);
-
-    // The agent's catalog tools: `tools` when listed (its workspace-tool
-    // opt-ins included), else every base tool.
-    let mut effective = agent_base_tools(agent, true, config.memory.enabled);
-
-    // Always-on protocol tool. The run-agent loop dispatches it
-    // out-of-band, so only its description is needed here.
-    effective
-        .push(crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::definition());
-
-    // Shell skills named in `skill_packages` are tools here too, as in
-    // in-process chat (skill bodies also reach the system prompt, loaded by
-    // `run-agent`); none in a sandbox that runs no shell.
-    let skill_registry = agent_skill_registry(workspace, &agent_cfg, config.memory.enabled);
-    effective.extend(skill_registry.active_tools());
-
+    let (agent_cfg, skill_registry, effective) = step_tools(agent, config, workspace);
     let stack = build_tool_executor(
         workspace,
         &effective,
@@ -678,6 +661,44 @@ pub(crate) fn build_subprocess_tool_executor(
         Some(stack) => (stack.tools.clone(), Some(stack)),
         None => (effective, None),
     }
+}
+
+/// The tool list of a step whose engine runs tools in its own MCP bridge
+/// (`engines::bridges_tools`: Claude Code, Codex) — the bridge builds the
+/// executor it calls, so the step builds none. `None` when `[[mcp_servers]]`
+/// are configured: their `{server}__{tool}` entries are known only by
+/// connecting, so the caller builds the executor
+/// ([`build_subprocess_tool_executor`]).
+pub(crate) fn bridged_step_tools(
+    agent: &AgentConfig,
+    config: &Config,
+    workspace: &Path,
+) -> Option<Vec<ToolDef>> {
+    if !config.mcp_servers.is_empty() {
+        return None;
+    }
+    let (agent_cfg, _, effective) = step_tools(agent, config, workspace);
+    Some(within_generation(&agent_cfg, &effective))
+}
+
+/// A step's agent block (workspace granted) and catalog tools: `tools` when
+/// listed (its workspace-tool opt-ins included), else every base tool; plus
+/// `compress_and_store` (answered out-of-band by the run-agent loop, so only
+/// its description is needed) and the shell skills of `skill_packages`, as
+/// in in-process chat (none in a sandbox that runs no shell).
+fn step_tools(
+    agent: &AgentConfig,
+    config: &Config,
+    workspace: &Path,
+) -> (AgentConfig, SkillRegistry, Vec<ToolDef>) {
+    let mut agent_cfg = subagent_config(agent);
+    grant_workspace_root(&mut agent_cfg.scopes, workspace);
+    let mut effective = agent_base_tools(agent, true, config.memory.enabled);
+    effective
+        .push(crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::definition());
+    let skill_registry = agent_skill_registry(workspace, &agent_cfg, config.memory.enabled);
+    effective.extend(skill_registry.active_tools());
+    (agent_cfg, skill_registry, effective)
 }
 // ---------------------------------------------------------------------------
 // Golden registry test — asserts the LLM-facing tool surface is unchanged.
@@ -1211,6 +1232,37 @@ mod golden_tests {
         let listed = advertised(&["read_file", "fake__echo"]);
         assert!(listed.contains(&"fake__echo".to_string()));
         assert!(listed.contains(&"read_file".to_string()));
+    }
+
+    /// A bridged step (Claude Code, Codex) builds no executor: the same list
+    /// the executor path advertises, `compress_and_store` included — until
+    /// `[[mcp_servers]]` tools need a connection to be known.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_bridged_step_lists_its_tools_without_an_executor() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut config = Config::default();
+        let mut agent = config.agents.get("main").unwrap().clone();
+        agent.tools = vec!["read_file".into(), "http_request".into()];
+        let names = |defs: Vec<ToolDef>| defs.into_iter().map(|d| d.name).collect::<Vec<_>>();
+        let listed = names(bridged_step_tools(&agent, &config, tmp.path()).unwrap());
+        let (built, _) = build_subprocess_tool_executor(
+            &agent,
+            &config,
+            tmp.path(),
+            &Arc::new(SecretRegistry::new()),
+            Arc::new(crate::adapters::outbound::noop::NoopActivity),
+            None,
+        );
+        assert_eq!(listed, names(built));
+        assert!(
+            listed.contains(&"compress_and_store".to_string()),
+            "{listed:?}"
+        );
+
+        config.mcp_servers = vec![crate::adapters::outbound::mcp_client::tests::fake_server(
+            "fake",
+        )];
+        assert!(bridged_step_tools(&agent, &config, tmp.path()).is_none());
     }
 
     // Claude Code webhook and eval agents used to get `bridge_tools: None` —
