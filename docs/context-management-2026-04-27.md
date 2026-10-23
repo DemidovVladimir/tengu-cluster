@@ -68,7 +68,7 @@ mutates a prompt.
 |---|---|---|
 | `estimate_tokens_approx(text)` | `text.len() / 4` heuristic (`CHARS_PER_TOKEN = 4`) | Everywhere a token count is needed |
 | `estimate_tokens_approx_min1(text)` | Same, but floors to 1 | Per-message token math |
-| `truncate_at_boundary(s, max_chars)` | UTF-8-safe slice point | `truncate_tool_result`, `fit_tool_result`, `mcp_bridge::truncate_mcp_result` |
+| `truncate_at_boundary(s, max_chars)` | UTF-8-safe slice point | `truncate_tool_result`, `fit_tool_result` (the bridge reaches both through `tool_result_content`) |
 | `truncate_with_suffix(s, max, suffix)` | Truncate + append marker only when actually clipped | Display clipping (`inbound/activity.rs`, `inbound/channel.rs`) — not LLM context |
 | `tool_result_char_budget(window)` | `window / 8 × 4` chars — one tool result's share of a local model's window | `LocalEngine::tool_result_char_cap` (Layer 3 #14) |
 
@@ -197,12 +197,19 @@ recall, and replan cross-plan recall — each lane reads only rows of its own
 sandbox (`AgenticRecallStore { sandbox }`, `Config::sandbox_owner`). Without
 `postgres_memory`, these durable planner-memory lanes are empty.
 
-**#10 `<memory-context>` fencing** (`application/memory/fencing.rs::build_memory_context_block`):
-wraps the chat recall block (#8) in `<memory-context>…</memory-context>` with
-a system note. `sanitize_context` runs to a fixpoint (one pass let
-`<memory-<memory-context>context>` rebuild a closing tag) and drops control
-characters but `\n` / `\t`, so recalled text cannot close the fence or forge
-the note (2026-10-22).
+**#10 Untrusted fence** (`domain/untrusted.rs::fence`, 2026-10-23): one shape
+for every text tengu did not write — `<untrusted origin="…">` newline, text,
+newline, `</untrusted>`; `clean` drops control characters but `\n` / `\t`
+and strips every tengu fence tag to a fixpoint, so fenced text cannot close
+or forge one. A label, not enforcement. Fenced: the chat recall block (#8,
+`application/memory/fencing.rs`: a system note, then origin `memory`), the
+planner's recall rows (`memory:<kind>`), a replan's error
+(`step-error:<id>`), upstream step outputs (`step:<id>`), webhook bodies
+(`webhook:<endpoint>`), loop escalations (`loop-args` / `loop-state`), and in
+every LLM sink (`tool_result_content`, the loops and `tengu mcp-bridge`) the
+results of `http_request`, `a2a`, `[[mcp_servers]]` tools, `agentic_memory`,
+`memory_search` (#14, #19). SOE source text keeps its inline `<source-text>` fence
+on the same tag stripper.
 
 ### 11. Grounding nudge
 
@@ -265,6 +272,11 @@ same rules for every engine (`tool_loop::tool_result_content` + `compact_tool_re
 of older rounds — before 2026-10-01 only for local agents; an OpenRouter step
 resent a 2 MB result on every turn).
 
+A tool that returns outside text (`domain::untrusted::tool_origin`: `http_request`,
+`a2a`, `[[mcp_servers]]` tools, `agentic_memory`, `memory_search`) goes in after
+the cut inside one `untrusted` fence (#10); `compact_tool_result` keeps the fence
+around the compacted text.
+
 ### 15. `compact_tool_result` mid-loop (`application/chat/tool_loop.rs:458`, caller `compact_older_tool_results` `:389`, called at `:226`)  — *the closest to /compact*
 
 After `round >= 1`, walks `messages[..compact_cutoff]`. Every
@@ -312,14 +324,15 @@ own flow budget (#5).
 
 `adapters/outbound/engines/{claude_code,codex}.rs` (set it, through `outbound/bridge_env.rs`) · `adapters/inbound/mcp_bridge.rs` (cuts).
 
-### 19. `max_mcp_result_chars` (`config/mod.rs:641` → `claude_code.rs:835` / `codex.rs:624` → `bridge_env.rs:112` → `mcp_bridge.rs:252`, cut at `:639`)
+### 19. `max_mcp_result_chars` (`config/mod.rs:641` → `claude_code.rs:835` / `codex.rs:624` → `bridge_env.rs:112` → `mcp_bridge.rs:252`, cut by `tool_result_content`)
 
 Caps tool results returned to the Claude Code and Codex CLIs through the MCP
 bridge. Default **50 000 chars / ~12.5K tokens**. The knob is
 `[agents.<name>.limits] max_mcp_result_chars`; the engine writes it into the
 bridge's env as `TENGU_BRIDGE_MAX_RESULT_CHARS` (`bridge_env::bridge_env`: Claude Code's `--mcp-config`, Codex's `-c mcp_servers.tengu-tools.env.*`), and
-`tengu mcp-bridge` cuts each result there (`truncate_mcp_result`, same
-`[truncated — showing X of Y chars]` footer; 50 000 when the env is unset).
+`tengu mcp-bridge` cuts each result there (`tool_loop::tool_result_content`, the
+loops' sink: same `[truncated — showing X of Y chars]` footer, outside text
+fenced as in #14, errors too; 50 000 when the env is unset).
 
 This exists because the **Claude Code and Codex CLI engines have no in-loop
 compaction at all**. Without this cap, bridge-routed tool results would
@@ -527,7 +540,7 @@ the chat-pane bottom (a true status bar) is on the open list.
 | 7 | 2 | `assemble_recent_history` | prompt_budget.rs:8 | 20 msgs |
 | 8 | 2 | memory recall block (chat) | application/chat/service.rs | top-5, ≤ `max_recall_tokens` (600), in the user turn |
 | 9 | 2 | `cross_session_msg_top_k` | orchestrator/planner.rs:332 (planner side) | 0 (off) |
-| 10 | 2 | `<memory-context>` fencing | application/memory/fencing.rs | wraps #8; fixpoint cleaner |
+| 10 | 2 | untrusted fence | domain/untrusted.rs · application/memory/fencing.rs | wraps #8, planner recall, step inputs, webhook bodies, escalations, outside tool text; fixpoint cleaner |
 | 11 | 2 | grounding nudge (chat only) | application/chat/service.rs:250 · :395 | trigger words (whole) |
 | 12 | 2 | identity / skill / prompt caps | application/skills/registry.rs:1253 | 2K / 16K / 32K |
 | 13 | 2 | `truncate_to_token_budget` | prompt_budget.rs:41 | char cap |

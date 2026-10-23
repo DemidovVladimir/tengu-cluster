@@ -168,9 +168,7 @@ pub(crate) fn linted_tool(server: &str, remote: &protocol::McpRemoteTool) -> Opt
     None
 }
 
-/// Separator between server and tool name. Provider function names allow only
-/// `[a-zA-Z0-9_-]`, so a `.` would be rejected by the model API.
-pub(crate) const MCP_NAME_SEPARATOR: &str = "__";
+pub(crate) use crate::domain::tools::MCP_NAME_SEPARATOR;
 
 /// Name an external MCP tool is exposed under: `{server}__{tool}`.
 pub(crate) fn qualified_tool_name(server: &str, tool: &str) -> String {

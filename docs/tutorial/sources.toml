@@ -75,6 +75,7 @@ sources = [
   "src/application/tools/",
   "src/domain/message.rs",
   "src/domain/token.rs",
+  "src/domain/untrusted.rs",
   "src/domain/session.rs",
   "src/domain/usage.rs",
   "src/config/mod.rs",

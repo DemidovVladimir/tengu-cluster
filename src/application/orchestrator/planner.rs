@@ -388,17 +388,13 @@ impl RegistryPlanner {
                 "_(prior user messages from Postgres `agentic_memory`, excluding the current turn)_\n\n",
             );
             for (i, h) in hits.iter().enumerate() {
-                let snippet: String = h.content.chars().take(400).collect();
                 s.push_str(&format!(
-                    "{}. score={:.2}  kind={}  {}\n",
+                    "{}. score={:.2}  kind={}\n{}\n",
                     i + 1,
                     h.score,
                     h.kind,
-                    snippet
+                    recalled(h)
                 ));
-                if h.content.chars().count() > 400 {
-                    s.push_str("   …(truncated)\n");
-                }
             }
             s.push('\n');
             return s;
@@ -445,19 +441,15 @@ impl RegistryPlanner {
             let mut s = String::from("\n## Recent step outputs (this session)\n\n");
             s.push_str("_(prior subagent results from Postgres `agentic_memory`, filtered to this `session_id`)_\n\n");
             for (i, h) in hits.iter().enumerate() {
-                let snippet: String = h.content.chars().take(400).collect();
                 let step = h.step_id.as_deref().unwrap_or(&h.id);
                 s.push_str(&format!(
-                    "{}. score={:.2}  kind={}  step={}\n   {}\n",
+                    "{}. score={:.2}  kind={}  step={}\n{}\n",
                     i + 1,
                     h.score,
                     h.kind,
                     step,
-                    snippet
+                    recalled(h)
                 ));
-                if h.content.chars().count() > 400 {
-                    s.push_str("   …(truncated)\n");
-                }
             }
             s.push('\n');
             return s;
@@ -659,15 +651,14 @@ impl Planner for RegistryPlanner {
                         String::from("\n## Relevant prior step outputs (cross-plan recall)\n\n");
                     s.push_str("_(prior subagent results from Postgres `agentic_memory`)_\n\n");
                     for (i, h) in hits.iter().enumerate() {
-                        let snippet: String = h.content.chars().take(400).collect();
                         let step = h.step_id.as_deref().unwrap_or(&h.id);
                         s.push_str(&format!(
-                            "{}. score={:.2}  kind={}  step={}\n   {}\n\n",
+                            "{}. score={:.2}  kind={}  step={}\n{}\n\n",
                             i + 1,
                             h.score,
                             h.kind,
                             step,
-                            snippet
+                            recalled(h)
                         ));
                     }
                     s
@@ -691,12 +682,15 @@ impl Planner for RegistryPlanner {
         let cross_session_block = self.cross_session_recall_block(user_message, None).await;
 
         let prior_plan_text = serde_json::to_string_pretty(prior_plan)?;
+        // The error carries the step's partial output: fenced.
         let failure_block = format!(
             "\n## A previous plan failed\n\n\
-             Failed step: {}\nError after retries: {}\n\n\
+             Failed step: {}\nError after retries:\n{}\n\n\
              Prior plan steps:\n{}\n\n\
              Produce a new plan that avoids this failure, or respond directly if recovery is not possible.\n\n",
-            failed_step_id, error, prior_plan_text,
+            failed_step_id,
+            crate::domain::untrusted::fence(&format!("step-error:{failed_step_id}"), error),
+            prior_plan_text,
         );
         let context = format!(
             "{}{}{}{}{}## Original user message\n\n{}",
@@ -776,6 +770,16 @@ fn emit_planner_metrics(
         layers,
         step_id: None,
     });
+}
+
+/// One recalled Open Brain row in a planner recall block: its first 400
+/// chars in a `domain::untrusted` fence, origin `memory:<kind>`.
+fn recalled(h: &crate::domain::memory::RecallHit) -> String {
+    let mut text: String = h.content.chars().take(400).collect();
+    if h.content.chars().count() > 400 {
+        text.push_str(" …(truncated)");
+    }
+    crate::domain::untrusted::fence(&format!("memory:{}", h.kind), &text)
 }
 
 /// Phase 6.4 (lite) — render the planner's per-session history buffer as a

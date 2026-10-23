@@ -199,7 +199,7 @@
     <text x="10" y="120" class="file">application/memory/manager.rs</text>
     <text x="10" y="132" class="small">MemoryManager - vector backend</text>
     <text x="10" y="154" class="file">application/memory/fencing.rs</text>
-    <text x="10" y="166" class="small">&lt;memory-context&gt; helpers</text>
+    <text x="10" y="166" class="small">recall block (untrusted fence)</text>
     <text x="10" y="178" class="small">(not called yet)</text>
     <text x="10" y="200" class="file">outbound/memory/disk_vector.rs</text>
     <text x="10" y="212" class="small">DiskVectorStore - the only VectorStore</text>

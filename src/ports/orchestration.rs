@@ -50,8 +50,8 @@ pub trait Planner: Send + Sync {
 #[async_trait]
 pub trait WorkerHandle: Send + Sync {
     /// Run `step.agent` with `step.goal + step_inputs` as the user turn.
-    /// `step_inputs` is the rendered `<step-input>` blocks from upstream
-    /// completed steps.
+    /// `step_inputs` is the completed upstream steps' outputs, each in a
+    /// `domain::untrusted` fence (origin `step:<id>`).
     async fn run_step(&self, step: &Step, step_inputs: &str) -> anyhow::Result<String>;
 
     /// The agent names a step may use, sorted — `replan::drive` checks each

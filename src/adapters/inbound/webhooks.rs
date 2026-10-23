@@ -637,9 +637,11 @@ async fn handle_webhook(
     //    aren't required to be UTF-8 (binary webhooks exist) — fall
     //    through to lossy stringification rather than rejecting.
     let body_str = String::from_utf8_lossy(body);
+    //    The body is the sender's text: fenced (`domain::untrusted`).
     let user_message = format!(
         "{}\n\nPayload (raw body, may be JSON):\n{}",
-        endpoint.goal_template, body_str
+        endpoint.goal_template,
+        crate::domain::untrusted::fence(&format!("webhook:{name}"), &body_str)
     );
 
     // 6. Start the orchestrator turn — caller gets 202 immediately; the

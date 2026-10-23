@@ -869,7 +869,8 @@ pub struct WebhookEndpointConfig {
     pub secret: Option<String>,
     /// Prefix prepended to the synthesized user message that the
     /// orchestrator receives. The full user message is
-    /// `<goal_template>\n\nPayload (raw body, may be JSON):\n<request body>`. Defaults to
+    /// `<goal_template>\n\nPayload (raw body, may be JSON):\n<request body>`, the body in
+    /// a `domain::untrusted` fence (origin `webhook:<endpoint>`). Defaults to
     /// `"A webhook arrived. Process the payload below."` if omitted.
     #[serde(default = "default_webhook_goal_template")]
     pub goal_template: String,

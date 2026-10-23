@@ -500,16 +500,16 @@ Example queries:
     h.push(row("heart", "system: skills/orchestrator/SKILL.md", "body after the frontmatter", true, "always"));
     h.push(row("", "## Planner registry (loaded from `TENGU_PLANNER_REGISTRY.md`)", "agents with a description; skill and tool names", true, "always"));
     var xsOn = mem && xs > 0;
-    h.push(row("brain", "## Cross-session message recall", xsOn ? "top " + xs + " earlier user messages, any session, ≤ 400 chars each" : (mem ? "off: cross_session_msg_top_k = 0" : "off: no postgres_memory"), xsOn, xsOn ? "if hits" : "off"));
+    h.push(row("brain", "## Cross-session message recall", xsOn ? "top " + xs + " earlier user messages, any session, ≤ 400 chars each, each fenced" : (mem ? "off: cross_session_msg_top_k = 0" : "off: no postgres_memory"), xsOn, xsOn ? "if hits" : "off"));
     h.push(row("", "## Recent user messages this session", prior > 0 ? prior + " earlier message" + (prior === 1 ? "" : "s") + " (cap " + n + "), ≤ 400 chars each" : "empty on the first turn", prior > 0, prior > 0 ? prior + " lines" : "off"));
     if (!replan) {
       var wsOn = mem && ws > 0;
-      h.push(row("brain", "## Recent step outputs (this session)", wsOn ? "top " + ws + " step summaries with this session_id" : (mem ? "off: within_session_output_top_k = 0" : "off: no postgres_memory"), wsOn, wsOn ? "if hits" : "off"));
+      h.push(row("brain", "## Recent step outputs (this session)", wsOn ? "top " + ws + " step summaries with this session_id, each fenced" : (mem ? "off: within_session_output_top_k = 0" : "off: no postgres_memory"), wsOn, wsOn ? "if hits" : "off"));
       h.push(row("you", "## User message (current turn)", "your message, verbatim", true, "always"));
     } else {
       var xpOn = mem && xp > 0;
-      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs of this sandbox, any session; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
-      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries, prior plan JSON", true, "always"));
+      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs of this sandbox, any session, each fenced; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
+      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries (fenced as step-error:<id>), prior plan JSON", true, "always"));
       h.push(row("you", "## Original user message", "the same message as plan()", true, "always"));
     }
     layers.innerHTML = h.join("");

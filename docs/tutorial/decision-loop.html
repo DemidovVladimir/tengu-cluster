@@ -368,7 +368,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
     <li><span class="chip guard">risk</span><span><b>refused</b>The tool's <code>[risk]</code> gate said no. History records a failure; a sequence halts.</span></li>
     <li><span class="chip data">log</span><span><b>dry_run</b>A write while <code>dry_run = true</code>: logged, the loop goes on. Steps bound to its output stay illegal.</span></li>
     <li><span class="chip data">end</span><span><b>stopped</b>A terminal action (no <code>tool</code>), such as <code>hold</code> or <code>done</code>.</span></li>
-    <li><span class="chip heart">ask</span><span><b>escalated</b>Below <code>act_at</code>. The planner gets the full state when the surface has one; otherwise the event stops.</span></li>
+    <li><span class="chip heart">ask</span><span><b>escalated</b>Below <code>act_at</code>. The planner gets the proposed args and the full state, each in an <code>&lt;untrusted&gt;</code> fence, when the surface has one; otherwise the event stops.</span></li>
     <li><span class="chip bad">no</span><span><b>rejected</b>Missing answer, a label that was not offered, or a value over its cap.</span></li>
     <li><span class="chip bad">err</span><span><b>error</b>The decisions call failed. Audited, then the error propagates.</span></li>
   </ul>
@@ -450,7 +450,7 @@ amount = { from = <span class="s">"plan_swap"</span>, path = <span class="s">"/s
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

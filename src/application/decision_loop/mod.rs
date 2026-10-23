@@ -703,13 +703,18 @@ impl DecisionLoop {
             warn!(decision_loop = %self.name, action, confidence, "low confidence; escalation unavailable — stopping");
             return;
         };
+        // The args and the state carry event and tool text: fenced.
         let message = format!(
             "Decision loop `{}` is unsure (confidence {confidence:.2}) about the next step.\n\
-             Proposed action: `{action}` with args {args}\n\
+             Proposed action: `{action}` with args:\n{}\n\
              Review the state, decide what should happen, and explain why. \
              Show every address, mint and signature in full.\n\nState:\n{}",
             self.name,
-            serde_json::to_string_pretty(state).unwrap_or_default()
+            crate::domain::untrusted::fence(&format!("loop-args:{}", self.name), &args.to_string()),
+            crate::domain::untrusted::fence(
+                &format!("loop-state:{}", self.name),
+                &serde_json::to_string_pretty(state).unwrap_or_default()
+            )
         );
         escalator.escalate(session_id.to_string(), message).await;
     }

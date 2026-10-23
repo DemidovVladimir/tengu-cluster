@@ -558,7 +558,7 @@ const MECHS = [
     n: 4, tier: "t4",
     title: "MCP bridge cap",
     where: "adapters/outbound/engines/claude_code.rs sets it (env <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>) · adapters/inbound/mcp_bridge.rs cuts",
-    file: "src/adapters/inbound/mcp_bridge.rs:634",
+    file: "src/adapters/inbound/mcp_bridge.rs",
     body: "Caps tool results returned to the Claude Code CLI through the MCP bridge. Default <strong>50_000 chars / ~12.5K tokens</strong> — knob <code>[agents.&lt;n&gt;.limits] max_mcp_result_chars</code>. Exists because the Claude Code engine has NO per-turn compaction of its own — without this, bridge-routed tools would leak unbounded context into Claude.",
     config: ["max_mcp_result_chars = 50_000", "TENGU_BRIDGE_MAX_RESULT_CHARS env (set by the engine)"],
     code: `<span class="cm">// adapters/outbound/engines/claude_code.rs L995:</span>
@@ -567,8 +567,9 @@ const MECHS = [
 <span class="cm">// Forwarded to the bridge subprocess as env (L223):</span>
 <span class="str">"TENGU_BRIDGE_MAX_RESULT_CHARS"</span>: max_mcp_result_chars.to_string()
 
-<span class="cm">// adapters/inbound/mcp_bridge.rs L634 — the cut, same footer as #3:</span>
-<span class="kw">fn</span> <span class="fn">truncate_mcp_result</span>(result: &amp;<span class="kw">str</span>, max_chars: <span class="kw">usize</span>) -&gt; <span class="kw">String</span>`,
+<span class="cm">// adapters/inbound/mcp_bridge.rs — the loops' sink, same footer as #3,</span>
+<span class="cm">// outside text (web, A2A, MCP, memory) fenced:</span>
+<span class="kw">let</span> truncated = tool_loop::<span class="fn">tool_result_content</span>(&amp;call.name, &amp;result, None, None, max_result_chars);`,
   },
   {
     n: 5, tier: "t5",

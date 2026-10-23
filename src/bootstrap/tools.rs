@@ -500,7 +500,7 @@ pub(crate) fn compose_agent(
         // A `[[mcp_servers]]` tool: the base holds every one when its
         // `tools` is empty, else the ones it lists.
         .chain(compose.tools.iter().cloned().filter(|t| {
-            t.contains(crate::adapters::outbound::mcp_client::MCP_NAME_SEPARATOR)
+            t.contains(crate::domain::tools::MCP_NAME_SEPARATOR)
                 && !base.tools.is_empty()
                 && !base.tools.contains(t)
         }))
@@ -1396,12 +1396,15 @@ mod golden_tests {
             .find(|m| matches!(m.role, Role::User))
             .unwrap();
         assert!(
-            user.content.starts_with("<memory-context>"),
+            user.content
+                .starts_with("[System note: The following is recalled memory")
+                && user.content.contains("<untrusted origin=\"memory\">"),
             "{}",
             user.content
         );
-        assert!(user.content.ends_with("</memory-context>\n\nhello there"));
-        assert_eq!(user.content.matches("</memory-context>").count(), 1);
+        assert!(user.content.ends_with("</untrusted>\n\nhello there"));
+        assert_eq!(user.content.matches("</untrusted>").count(), 1);
+        assert!(!user.content.contains("memory-context"));
         assert!(user.content.contains("[truncated]"));
         assert!(user.content.len() < 100 * 4 + 400, "{}", user.content.len());
         let stored = state

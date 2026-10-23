@@ -505,7 +505,7 @@ const MECHS = [
     body: "<code>text.len() / 4</code> heuristic. Used everywhere a token count is needed.",
     pills: ["~4 chars/token", "no tokeniser"], tags: ["token", "estimate", "heuristic"] },
   { n: 2, layer: 0, title: "truncate_at_boundary / truncate_with_suffix", where: "domain/token.rs:38-57",
-    body: "UTF-8-safe slice point (<code>truncate_tool_result</code>, <code>fit_tool_result</code>, the bridge's <code>truncate_mcp_result</code>) + \"truncate + append marker only when actually clipped\" (display clipping in <code>inbound/activity.rs</code> / <code>channel.rs</code>).",
+    body: "UTF-8-safe slice point (<code>truncate_tool_result</code>, <code>fit_tool_result</code>, shared by the bridge through <code>tool_result_content</code>) + \"truncate + append marker only when actually clipped\" (display clipping in <code>inbound/activity.rs</code> / <code>channel.rs</code>).",
     pills: ["UTF-8 safe", "lazy suffix"], tags: ["truncate", "boundary", "utf8"] },
 
   // Layer 1
@@ -534,9 +534,9 @@ const MECHS = [
   { n: 9, layer: 2, title: "cross_session_msg_top_k", where: "MemoryConfig · orchestrator/planner.rs:332",
     body: "When > 0, planner-side surfaces similar messages from prior sessions. Off by default. Reads Postgres <code>agentic_memory</code> when <code>postgres_memory</code> is enabled.",
     pills: ["default 0 (off)"], tags: ["recall", "cross-session", "planner", "messages"] },
-  { n: 10, layer: 2, title: "&lt;memory-context&gt; fencing", where: "application/memory/fencing.rs",
-    body: "Wraps the chat recall block (#8) in <code>&lt;memory-context&gt;...&lt;/memory-context&gt;</code> + system note. The cleaner runs to a fixpoint and drops control characters but newline and tab, so recalled text cannot close the fence or forge the note.",
-    pills: ["wraps #8", "fixpoint cleaner"], tags: ["fencing", "memory", "recall", "context"] },
+  { n: 10, layer: 2, title: "Untrusted fence", where: "domain/untrusted.rs · application/memory/fencing.rs",
+    body: "One shape for text tengu did not write: <code>&lt;untrusted origin=\"…\"&gt;</code>, the text, <code>&lt;/untrusted&gt;</code>. The cleaner drops control characters but newline and tab and strips every tengu fence tag to a fixpoint, so fenced text cannot close or forge one. A label, not enforcement. Fenced: the chat recall block (#8, after a system note), planner recall rows, a replan error, upstream step outputs, webhook bodies, loop escalations, and the results of <code>http_request</code>, <code>a2a</code>, MCP tools, <code>agentic_memory</code>, <code>memory_search</code> in every LLM sink (#14, #19).",
+    pills: ["wraps #8", "fixpoint cleaner", "origin label"], tags: ["fencing", "untrusted", "memory", "recall", "context", "injection"] },
   { n: 11, layer: 2, title: "Grounding nudge (chat only)", where: "application/chat/service.rs:250 · :395",
     body: "If user message contains <em>last/latest/recent/...</em> (whole words), inject a system msg \"verify, do not trust recall\" AND skip memory recall this turn. Chat layer only: the planner never goes through it — <code>PlannerLlm::call</code> sends SKILL.md + one message straight to the engine (<code>suppress_grounding_nudge</code> deleted 2026-10-22).",
     pills: ["7 trigger words", "whole words", "skips recall when triggered"], tags: ["grounding", "nudge", "fresh", "planner"] },
@@ -550,7 +550,7 @@ const MECHS = [
 
   // Layer 3
   { n: 14, layer: 3, title: "truncate_tool_result", where: "application/chat/tool_loop.rs:406 (tool_result_content)",
-    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. <strong>Local engines</strong> (<code>Engine::tool_result_char_cap</code>): <code>fit_tool_result</code> — a result within 1/8 of <code>context_window</code> × 4 chars stays whole; above it a typed row's <code>data</code> → <code>data: &lt;n&gt; bytes in observation &lt;key&gt;</code>, then the cut, footer included; <code>run-agent</code> applies the same rules (<code>tool_result_content</code> + older rounds cut to line 1) for every engine.",
+    body: "Per-tool-call char cap on insert. Footer: <code>[truncated — showing X of Y chars]</code>. UTF-8 boundary safe. <strong>Local engines</strong> (<code>Engine::tool_result_char_cap</code>): <code>fit_tool_result</code> — a result within 1/8 of <code>context_window</code> × 4 chars stays whole; above it a typed row's <code>data</code> → <code>data: &lt;n&gt; bytes in observation &lt;key&gt;</code>, then the cut, footer included; <code>run-agent</code> applies the same rules (<code>tool_result_content</code> + older rounds cut to line 1) for every engine. Outside text (web, A2A, MCP, memory) goes in fenced (#10); compaction keeps the fence.",
     pills: ["max_tool_result_chars = 300_000", "local: window / 8 × 4 chars"], tags: ["truncate", "tool", "result", "char", "local", "compact"] },
   { n: 15, layer: 3, title: "compact_tool_result ★ (mid-loop)", where: "application/chat/tool_loop.rs:458 (caller :226)",
     star: true,
@@ -577,8 +577,8 @@ const MECHS = [
     pills: ["None on every caller", "warn log on exit"], tags: ["budget", "early-exit", "tokens", "eval"] },
 
   // Layer 4
-  { n: 19, layer: 4, title: "max_mcp_result_chars (bridge cap)", where: "config/mod.rs:641 → claude_code.rs:835 / codex.rs:624 → bridge_env.rs:112 → inbound/mcp_bridge.rs:252 (cut at :639)",
-    body: "Caps each tool result returned to the Claude Code and Codex CLIs through the MCP bridge. Knob <code>[agents.&lt;n&gt;.limits] max_mcp_result_chars</code>; the engine writes it into the bridge env as <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>, <code>tengu mcp-bridge</code> cuts (<code>truncate_mcp_result</code>). <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire in-process (OpenRouter, local: chat and <code>run-agent</code>).",
+  { n: 19, layer: 4, title: "max_mcp_result_chars (bridge cap)", where: "config/mod.rs:641 → claude_code.rs:835 / codex.rs:624 → bridge_env.rs:112 → inbound/mcp_bridge.rs:252 (cut by tool_result_content)",
+    body: "Caps each tool result returned to the Claude Code and Codex CLIs through the MCP bridge. Knob <code>[agents.&lt;n&gt;.limits] max_mcp_result_chars</code>; the engine writes it into the bridge env as <code>TENGU_BRIDGE_MAX_RESULT_CHARS</code>, <code>tengu mcp-bridge</code> cuts with the loops' sink (<code>tool_result_content</code>: outside text fenced, errors too). <strong>Only governor on the Claude Code path</strong> — Layer 3 #14, #15 only fire in-process (OpenRouter, local: chat and <code>run-agent</code>).",
     pills: ["50_000 chars", "TENGU_BRIDGE_MAX_RESULT_CHARS (set by the engine)"], tags: ["mcp", "bridge", "claude-code", "cap"] },
 
   // Layer 5

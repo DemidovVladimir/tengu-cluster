@@ -206,7 +206,7 @@
     <div class="stage-side">
       <ol class="captions">
         <li>A message arrives from the TUI, Telegram or a webhook. It joins the flow; turns beyond the history limit drop out (20 user turns by default).</li>
-        <li>With a memory manager, the top 5 hits, capped at <code>max_recall_tokens</code>, go fenced in <code>&lt;memory-context&gt;</code> at the head of the user message. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
+        <li>With a memory manager, the top 5 hits, capped at <code>max_recall_tokens</code>, go at the head of the user message, after a system note, in one <code>&lt;untrusted origin="memory"&gt;</code> fence. A failed recall is skipped. "Last" or "latest" questions skip recall.</li>
         <li>The prompt: system prompt, memories, then the newest history that fits the input budget, at most 20 messages. Nothing fits: "Context budget exhausted".</li>
         <li>One engine round gets every message plus the tool definitions. No stream event for <code>stream_event_timeout_secs</code> (120 s) fails the turn.</li>
         <li>Each tool call goes to the executor with its own call id. The tool gets the scope configured for it and checks it before it acts.</li>
@@ -416,6 +416,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
     <li><span><b>A tool runs with its own scope.</b> Configured entry first; a tool with none gets the fallback rooted in the workspace (no shell in a hardened sandbox). See <a href="scopes.html">Scopes</a>.</span></li>
     <li><span><b>Unknown names never run.</b> The executor answers with the agent's real tool list, so the model can retry.</span></li>
     <li><span><b>No result enters whole above the cap.</b> <code>max_tool_result_chars</code> on every engine; local engines ≤ 1/8 of the window, footer included.</span></li>
+    <li><span><b>Outside text goes in fenced.</b> Results of <code>http_request</code>, <code>a2a</code>, MCP tools, <code>agentic_memory</code> and <code>memory_search</code> sit in one <code>&lt;untrusted origin="…"&gt;</code> fence after the cut (<code>domain/untrusted.rs</code>); compaction keeps it, and <code>tengu mcp-bridge</code> uses the same sink. A label, not a wall: scopes are what stop a hostile page.</span></li>
     <li><span><b>Older rounds shrink to line 1.</b> Chat and <code>run-agent</code> apply the same rule, on every engine.</span></li>
     <li><span><b>Secrets never reach the model.</b> Every surface wraps its executor in <code>SanitizedToolExecutor</code>: text, typed rows and errors redacted.</span></li>
     <li><span><b>Call ids never repeat.</b> A fresh uuid nonce per loop, plus round and index.</span></li>
@@ -456,6 +457,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>PluginToolExecutor</code>: per-call <code>ToolCtx</code> and scope</td></tr>
         <tr><td><code>src/application/skills/registry.rs</code></td><td><code>build_system_prompt_with_tools</code></td></tr>
         <tr><td><code>src/domain/token.rs</code></td><td>bytes / 4 estimate, the 1/8 window budget</td></tr>
+        <tr><td><code>src/domain/untrusted.rs</code></td><td>the one fence for outside text: <code>fence</code>, the fixpoint <code>clean</code>, <code>tool_origin</code></td></tr>
         <tr><td><code>src/domain/session.rs</code> · <code>usage.rs</code> · <code>message.rs</code></td><td>loop state, usage totals, <code>StreamEvent</code></td></tr>
         <tr><td><code>src/config/mod.rs</code></td><td><code>LimitsConfig</code>, <code>FlowConfig</code>, <code>PromptBudgetConfig</code></td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>executor build, scope resolution, fallback scope</td></tr>

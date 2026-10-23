@@ -197,7 +197,7 @@
         </g>
 
         <!-- per-step badges (one slot) -->
-        <g class="pop badge" data-at="1"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">goal + &lt;step-input&gt; blocks</text></g>
+        <g class="pop badge" data-at="1"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">goal + fenced step inputs</text></g>
         <g class="pop badge" data-at="2"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">no description → fails, no spawn</text></g>
         <g class="pop badge" data-at="3"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">JSON on stdin · stderr to the log</text></g>
         <g class="pop badge" data-at="4"><rect x="440" y="346" width="240" height="24" rx="12"/><text x="560" y="362" text-anchor="middle">same file as the parent</text></g>
@@ -232,7 +232,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;step-input from="s1"&gt;</code> block per finished dependency.</li>
+        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;untrusted origin="step:s1"&gt;</code> fence per finished dependency (<code>domain/untrusted.rs</code>: an upstream output cannot close it).</li>
         <li>The runner looks up <code>[agents.&lt;step.agent&gt;]</code> (or <code>compose.base_agent</code>). Missing, or no <code>description</code>: the step fails before any process starts.</li>
         <li>It starts the same binary as <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and the resolved egress policy, writes the JSON request, starts the step timer.</li>
         <li>The child checks the guard, reloads <code>sandboxes/&lt;name&gt;/config.toml</code> from <code>sandbox_config</code> (with <code>[keys]</code> it reuses the parent's seal-proxy session), and checks the <code>description</code> again. A <code>compose</code> applies here.</li>
@@ -338,7 +338,7 @@
       <button type="button" aria-controls="tab-prompt">system prompt</button>
     </div>
     <div class="tabpanel" id="tab-in"><pre>{
-  <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;step-input from=\"s1\"&gt;\n…\n&lt;/step-input&gt;\n\n"</span>,
+  <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;untrusted origin=\"step:s1\"&gt;\n…\n&lt;/untrusted&gt;\n\n"</span>,
   <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set</span>
   <span class="k">"model"</span>: <span class="s">""</span>,  <span class="k">"tools"</span>: [],  <span class="k">"skills"</span>: [],   <span class="c"># sent empty; the child reads its agent block</span>
   <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (20 if the field is missing)</span>
@@ -454,7 +454,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       <tbody>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
-        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), <code>&lt;step-input&gt;</code>, leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
+        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), fenced step inputs (<code>step:&lt;id&gt;</code>), leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
         <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans (finished steps carried over), plan per session</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>WorkerHandle</code></td></tr>
@@ -539,7 +539,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     var last = steps[steps.length - 1], goal = last[1];
     var got = last[2].filter(function (d) { return steps.some(function (s) { return s[0] === d; }); });
     if (last[2].length) {
-      goal += "\n\nUpstream context:\n" + got.map(function (d) { return '<step-input from="' + d + '">\n(' + d + "'s output)\n</step-input>\n\n"; }).join("");
+      goal += "\n\nUpstream context:\n" + got.map(function (d) { return '<untrusted origin="step:' + d + '">\n(' + d + "'s output)\n</untrusted>\n\n"; }).join("");
       if (!got.length) goal = "(never runs: " + last[2].join(", ") + " is not a step)";
     }
     $("shape-goal").textContent = goal;

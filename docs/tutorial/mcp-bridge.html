@@ -193,7 +193,7 @@
         <li>No config file or no such agent: a warning, then the built-in <code>main</code> agent with <code>TENGU_BRIDGE_SCOPES</code> (the engine's copy of its scopes); a loaded config's <code>[generation]</code> still applies.</li>
         <li>It registers the same catalog as in-process, keeps only <code>TENGU_BRIDGE_TOOLS</code> minus any tool the <code>[generation]</code> refuses, adds shell skills and <code>[[mcp_servers]]</code> proxies, and wraps it all in <code>SanitizedToolExecutor</code>.</li>
         <li>Each <code>tools/call</code> gets call id <code>mcp:&lt;process nonce&gt;:&lt;JSON-RPC id&gt;</code> and the run's conversation, read from the transcript the engine keeps current.</li>
-        <li>The tool runs inside its scope. Text and errors are redacted, then cut at <code>max_mcp_result_chars</code> (50 000) before they go back to the CLI.</li>
+        <li>The tool runs inside its scope. Text and errors are redacted, then cut at <code>max_mcp_result_chars</code> (50 000) by the loops' own sink (<code>tool_result_content</code>): web, A2A, MCP and memory results go back to the CLI in one <code>&lt;untrusted origin="…"&gt;</code> fence.</li>
         <li>In a <code>run-agent</code> step, <code>compress_and_store</code> writes the summary file and answers <code>stored — stop now</code>; the engine stops the CLI. Anywhere else it is refused.</li>
         <li>The engine turns each <code>tool_use</code> → <code>tool_result</code> pair into <code>ToolRan {name, ok}</code>, prefix stripped: Tengu's record of the call. It never runs it again.</li>
       </ol>
@@ -371,7 +371,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

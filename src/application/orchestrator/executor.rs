@@ -257,10 +257,13 @@ fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> Strin
     let mut out = String::new();
     for dep in &step.depends_on {
         if let Some(body) = completed.get(dep) {
-            out.push_str(&format!(
-                "<step-input from=\"{}\">\n{}\n</step-input>\n\n",
-                dep.0, body
+            // An upstream step's output is text the model wrote from what its
+            // tools read: fenced (`domain::untrusted`), origin `step:<id>`.
+            out.push_str(&crate::domain::untrusted::fence(
+                &format!("step:{}", dep.0),
+                body,
             ));
+            out.push_str("\n\n");
         }
     }
     out
@@ -464,7 +467,7 @@ mod tests {
         let result = DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus).await;
         match result {
             ExecResult::Done { final_output } => {
-                assert!(final_output.contains("s1")); // s1's output fed into s2 via <step-input>
+                assert!(final_output.contains("s1")); // s1's output fed into s2, fenced as `step:s1`
                 assert!(final_output.contains("s2"));
             }
             _ => panic!("expected Done"),

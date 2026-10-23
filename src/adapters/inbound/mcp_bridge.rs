@@ -589,7 +589,14 @@ async fn handle_tools_call(
 
     match executor.execute(&call, &conversation).await {
         Ok(result) => {
-            let truncated = truncate_mcp_result(&result, max_result_chars);
+            // The loops' sink: the same cut, outside text fenced.
+            let truncated = crate::application::chat::tool_loop::tool_result_content(
+                &call.name,
+                &result,
+                None,
+                None,
+                max_result_chars,
+            );
             info!(
                 tool = %call.name,
                 elapsed_ms = started_at.elapsed().as_millis(),
@@ -615,6 +622,14 @@ async fn handle_tools_call(
                 error = %text,
                 "MCP tool call failed"
             );
+            // As the loops feed an error back: the same cut and fence.
+            let text = crate::application::chat::tool_loop::tool_result_content(
+                &call.name,
+                &text,
+                None,
+                None,
+                max_result_chars,
+            );
             JsonRpcResponse::success(
                 id,
                 serde_json::json!({
@@ -635,18 +650,6 @@ async fn handle_tools_call(
 /// every byte here stays in that context for the rest of the run.  50 000 chars ≈ ~12 500 tokens — enough for any useful
 /// response while preventing schema-introspection blowup.
 const MAX_MCP_RESULT_CHARS: usize = 50_000;
-
-fn truncate_mcp_result(result: &str, max_chars: usize) -> String {
-    match crate::domain::token::truncate_at_boundary(result, max_chars) {
-        None => result.to_string(),
-        Some((prefix, end)) => format!(
-            "{}\n\n[truncated — showing {} of {} chars]",
-            prefix,
-            end,
-            result.len()
-        ),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tool executor construction — mirrors `crate::bootstrap::tools::build_tool_executor`

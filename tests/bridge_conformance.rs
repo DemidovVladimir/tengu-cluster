@@ -8,6 +8,7 @@
 //! |---|---|
 //! | Every `tengu tool list` name has a case (a catalog row cannot land without one); every case names a listed tool | `every_catalog_tool_has_a_case` |
 //! | Per step: same `is_error`, same normalised text; the case's expected outcome | `bridge_matches_in_process` |
+//! | Per step: a tool that returns outside text (web, A2A, MCP, memory) comes back from the bridge in one `untrusted` fence (compared without it) | same |
 //! | Per case: same files left under the workspace and `TENGU_HOME` — SQLite stores as sorted table rows (`observations` without `observed_at_ms`), text as content | same |
 //! | Per case: same upstream requests to the mock (sorted, normalised) | same |
 //! | Two bridge processes on one sandbox, the same JSON-RPC ids: two orders, never a replay | `two_bridge_sessions_place_two_orders` |
@@ -2391,6 +2392,29 @@ fn db_rows(path: &Path, rel: &str) -> Result<Vec<String>, String> {
 // Running a case
 // ---------------------------------------------------------------------------
 
+/// The fence origin the bridge gives `tool`'s result (`tengu mcp-bridge`
+/// feeds it through `tool_loop::tool_result_content`, which fences outside
+/// text by `domain::untrusted::tool_origin`); `None` = unfenced.
+fn fence_origin(tool: &str) -> Option<String> {
+    match tool {
+        "http_request" | "a2a" | "agentic_memory" | "memory_search" => Some(tool.to_string()),
+        _ => tool.split_once("__").map(|(s, _)| format!("mcp:{s}")),
+    }
+}
+
+/// The bridge text without its fence — the in-process side (the executor,
+/// before any LLM sink) has none. A tool that returns outside text must
+/// come back fenced.
+fn unfence(tool: &str, text: &str) -> Result<String, String> {
+    let Some(origin) = fence_origin(tool) else {
+        return Ok(text.to_string());
+    };
+    text.strip_prefix(&format!("<untrusted origin=\"{origin}\">\n"))
+        .and_then(|t| t.strip_suffix("\n</untrusted>"))
+        .map(str::to_string)
+        .ok_or_else(|| format!("bridge result not fenced as `{origin}`:\n{text}"))
+}
+
 fn run_case(case: &Case) -> Result<(), String> {
     let mock = Mock::start(case.routes.clone());
     let local = Side::new(case, &mock.base);
@@ -2433,7 +2457,13 @@ fn run_case(case: &Case) -> Result<(), String> {
     for (i, step) in case.steps.iter().enumerate() {
         let (x, y) = (&a[i], &b[i]);
         let tx = normalize(&x.text, &local.roots);
-        let ty = normalize(&y.text, &bridged.roots);
+        let ty = match unfence(&step.tool, &y.text) {
+            Ok(inner) => normalize(&inner, &bridged.roots),
+            Err(e) => {
+                problems.push(format!("step {i} ({}): {e}", step.tool));
+                continue;
+            }
+        };
         if x.is_error != y.is_error || tx != ty {
             problems.push(format!(
                 "step {i} ({}): in-process is_error={}:\n{tx}\n--- bridge is_error={}:\n{ty}",

@@ -13,7 +13,7 @@
 //!
 //! - `manager`       — `MemoryManager`: the workspace vector backend
 //!                     (embedder + store) behind the memory tools.
-//! - `fencing`       — `<memory-context>` block helpers.
+//! - `fencing`       — the recalled-memory block (`domain::untrusted` fence).
 //! - `vector`        — `DiskVectorStore` (only impl) +
 //!                     `Embedder` (`DEFAULT_EMBEDDING_MODEL`).
 //! - shared types (`MemoryHit`, `ChunkMetadata`, …) live in `domain/memory.rs`;

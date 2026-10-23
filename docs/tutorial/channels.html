@@ -517,7 +517,7 @@
       return out(202, { endpoint: name, loop: e.loop, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The JSON body becomes the loop event (a non-JSON body becomes a string). Events run one at a time.");
     }
     if (down.checked) return out(503, { error: "shutting down — not accepting webhook turns" }, "New turns are refused; running ones get <code>shutdown_grace_secs</code>, then are aborted (recorded <code>plan.completed</code>, dropped).");
-    out(202, { agent: e.agent, endpoint: name, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The planner gets <code>goal_template</code> plus the raw body. The answer goes to the log and, with <code>postgres_memory</code>, to Open Brain.");
+    out(202, { agent: e.agent, endpoint: name, session_id: "webhook-" + name + "-<uuid>", status: "accepted" }, "The planner gets <code>goal_template</code> plus the raw body in an <code>&lt;untrusted origin=\"webhook:" + name + "\"&gt;</code> fence. The answer goes to the log and, with <code>postgres_memory</code>, to Open Brain.");
   }
   [ep, auth, env, down].forEach(function (x) { x.addEventListener("change", wh); });
   q.addEventListener("input", wh);

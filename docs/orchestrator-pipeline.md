@@ -255,7 +255,7 @@ T+22.9s  orchestrator:plan_completed  cancelled=false
 
 1. `for step in plan.ready_steps(&completed)` — `s2` is NOT in ready while `s1` is in-flight (its dep isn't completed).
 2. When s1 succeeds, `completed_outputs.insert(s1, output)`, next iteration includes s2 in ready.
-3. `render_step_inputs` at `executor.rs:167` builds `<step-input from="s1">...</step-input>` and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`).
+3. `render_step_inputs` (`executor.rs`) builds `<untrusted origin="step:s1">...</untrusted>` (`domain::untrusted::fence`; `<step-input>` before 2026-10-23) and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`).
 
 ### Code reference
 

@@ -189,7 +189,7 @@ Current durable memory is Postgres `agentic_memory` (`adapters/outbound/tools/ag
 | `ports/memory.rs` | Traits: `VectorStore`, `Embedding`, `MemoryService` (what memory tools call), `RecallStore` (planner recall lanes) |
 | `domain/memory.rs` | Shared types — `MemoryHit`, `ChunkMetadata`, `RecallHit`, `DEFAULT_EMBEDDING_MODEL` |
 | `application/memory/manager.rs` | `MemoryManager` — the workspace vector backend (embedder + `DiskVectorStore`) behind `remember`, `memory_ingest`, `memory_search`, `persistent_store`; `impl MemoryService` |
-| `application/memory/fencing.rs` | `<memory-context>` block helpers (not called yet) |
+| `application/memory/fencing.rs` | the recalled-memory block: a note + one `domain/untrusted.rs` fence (chat recall) |
 | `adapters/outbound/memory/disk_vector.rs` | Bincode store — the only `VectorStore` impl |
 | `adapters/outbound/memory/embedder.rs` | OpenRouter `text-embedding-3-small` client (1536d), `impl Embedding` |
 | `bootstrap/memory.rs` | Builds the `MemoryManager` for a workspace |
