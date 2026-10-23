@@ -153,9 +153,9 @@ mod tests {
             temp_prefix: "tengu-turn-test-",
         };
         let secrets = Arc::new(SecretRegistry::new());
-        let err = run_once(&Config::default(), "ghost", "hi", &secrets, opts)
-            .await
-            .unwrap_err();
+        let Err(err) = run_once(&Config::default(), "ghost", "hi", &secrets, opts).await else {
+            panic!("a turn ran for an agent the config does not have");
+        };
         assert!(format!("{err:#}").contains("no [agents.ghost]"), "{err:#}");
     }
 }
