@@ -657,13 +657,14 @@ impl crate::application::chat::tool_loop::LoopHooks for StepHooks {
             agent: self.agent.clone(),
             model: self.model.clone(),
             prompt_tokens: turn.input_tokens,
+            cached_input_tokens: turn.cached_input_tokens,
             completion_tokens: turn.output_tokens,
             total_tokens: turn.input_tokens.saturating_add(turn.output_tokens),
             prompt_chars: turn.prompt_chars,
             prompt_bytes: turn.prompt_bytes,
             response_chars: turn.text.chars().count() as u32,
             latency_ms: turn.latency_ms,
-            layers: Vec::new(),
+            layers: turn.layers.clone(),
             step_id: Some(self.step_id.clone()),
         };
         // In the step's own log too (the parent forwards stderr).

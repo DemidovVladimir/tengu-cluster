@@ -34,6 +34,7 @@ use futures::StreamExt;
 use tracing::debug;
 
 use crate::domain::message::{Message, Role, StreamEvent, ToolCall, ToolDef, ToolRun};
+use crate::domain::metrics::MetricsLayer;
 use crate::domain::observation::Observation;
 use crate::domain::token::truncate_at_boundary;
 use crate::domain::untrusted;
@@ -50,6 +51,9 @@ pub struct EngineResponse {
     pub text: String,
     pub input_tokens_delta: u32,
     pub output_tokens_delta: u32,
+    /// Of `input_tokens_delta`, the tokens read from the provider's prompt
+    /// cache (`StreamEvent::Usage::cached_input_tokens`).
+    pub cached_input_tokens_delta: u32,
     /// Tool call outcomes collected during the turn (name, result).
     pub tool_outcomes: Vec<(String, String)>,
     /// Every tool call of the turn in order, with its outcome: the ones run
@@ -65,6 +69,7 @@ pub(crate) struct EngineTurn {
     pub tool_calls: Vec<ToolCall>,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub cached_input_tokens: u32,
     /// Calls the engine already ran (`StreamEvent::ToolRan`).
     pub engine_runs: Vec<ToolRun>,
 }
@@ -110,8 +115,12 @@ pub struct TurnStats<'t> {
     /// Size of the messages the turn was sent (chars, UTF-8 bytes).
     pub prompt_chars: u32,
     pub prompt_bytes: u32,
+    /// The same size per message role (`system`, `user`, `assistant`,
+    /// `tool`; empty roles left out) — the step's metrics layers.
+    pub layers: Vec<MetricsLayer>,
     pub input_tokens: u32,
     pub output_tokens: u32,
+    pub cached_input_tokens: u32,
     pub latency_ms: u64,
 }
 
@@ -143,6 +152,7 @@ pub async fn collect_engine_response(
     let mut messages: Vec<Message> = prompt_messages.to_vec();
     let mut total_input_delta: u32 = 0;
     let mut total_output_delta: u32 = 0;
+    let mut total_cached_delta: u32 = 0;
     let mut tool_outcomes: Vec<(String, String)> = Vec::new();
     let mut tool_runs: Vec<ToolRun> = Vec::new();
     let turn_nonce = uuid::Uuid::new_v4().simple().to_string();
@@ -156,6 +166,7 @@ pub async fn collect_engine_response(
                 text: String::new(),
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
+                cached_input_tokens_delta: total_cached_delta,
                 tool_outcomes,
                 tool_runs,
             });
@@ -167,6 +178,8 @@ pub async fn collect_engine_response(
 
         total_input_delta += turn.input_tokens;
         total_output_delta += turn.output_tokens;
+
+        total_cached_delta += turn.cached_input_tokens;
 
         if tool_calls.is_empty() || tools.is_empty() || (tool_executor.is_none() && hooks.is_none())
         {
@@ -200,6 +213,7 @@ pub async fn collect_engine_response(
                 text: response_text,
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
+                cached_input_tokens_delta: total_cached_delta,
                 tool_outcomes,
                 tool_runs,
             });
@@ -224,6 +238,7 @@ pub async fn collect_engine_response(
                     text: String::new(),
                     input_tokens_delta: total_input_delta,
                     output_tokens_delta: total_output_delta,
+                    cached_input_tokens_delta: total_cached_delta,
                     tool_outcomes,
                     tool_runs,
                 });
@@ -288,6 +303,7 @@ pub async fn collect_engine_response(
                 text: response_text,
                 input_tokens_delta: total_input_delta,
                 output_tokens_delta: total_output_delta,
+                cached_input_tokens_delta: total_cached_delta,
                 tool_outcomes,
                 tool_runs,
             });
@@ -302,12 +318,14 @@ pub async fn collect_engine_response(
     let turn = reported_turn(engine, &messages, &[], context, opts).await?;
     total_input_delta += turn.input_tokens;
     total_output_delta += turn.output_tokens;
+    total_cached_delta += turn.cached_input_tokens;
     tool_runs.extend(turn.engine_runs);
 
     Ok(EngineResponse {
         text: turn.text,
         input_tokens_delta: total_input_delta,
         output_tokens_delta: total_output_delta,
+        cached_input_tokens_delta: total_cached_delta,
         tool_outcomes,
         tool_runs,
     })
@@ -321,15 +339,7 @@ async fn reported_turn(
     context: &EngineContext,
     opts: &LoopOpts<'_>,
 ) -> Result<EngineTurn> {
-    let sizes = opts.hooks.map(|_| {
-        (
-            messages
-                .iter()
-                .map(|m| m.content.chars().count() as u32)
-                .sum::<u32>(),
-            messages.iter().map(|m| m.content.len() as u32).sum::<u32>(),
-        )
-    });
+    let layers = opts.hooks.map(|_| role_layers(messages));
     let started = std::time::Instant::now();
     let turn = run_single_engine_turn(
         engine,
@@ -340,17 +350,39 @@ async fn reported_turn(
         opts.stream_event_timeout_secs,
     )
     .await?;
-    if let (Some(h), Some((prompt_chars, prompt_bytes))) = (opts.hooks, sizes) {
+    if let (Some(h), Some(layers)) = (opts.hooks, layers) {
         h.on_turn(&TurnStats {
             text: &turn.text,
-            prompt_chars,
-            prompt_bytes,
+            prompt_chars: layers.iter().map(|l| l.chars).sum(),
+            prompt_bytes: layers.iter().map(|l| l.bytes).sum(),
+            layers,
             input_tokens: turn.input_tokens,
             output_tokens: turn.output_tokens,
+            cached_input_tokens: turn.cached_input_tokens,
             latency_ms: started.elapsed().as_millis() as u64,
         });
     }
     Ok(turn)
+}
+
+/// The size of `messages` per role, in role order; empty roles left out.
+fn role_layers(messages: &[Message]) -> Vec<MetricsLayer> {
+    let mut layers = ["system", "user", "assistant", "tool"].map(|name| MetricsLayer {
+        name: name.to_string(),
+        chars: 0,
+        bytes: 0,
+    });
+    for m in messages {
+        let layer = &mut layers[match m.role {
+            Role::System => 0,
+            Role::User => 1,
+            Role::Assistant => 2,
+            Role::Tool => 3,
+        }];
+        layer.chars += m.content.chars().count() as u32;
+        layer.bytes += m.content.len() as u32;
+    }
+    layers.into_iter().filter(|l| l.bytes > 0).collect()
 }
 
 /// Run a single engine turn and collect text, tool calls, usage and the
@@ -369,6 +401,7 @@ pub(crate) async fn run_single_engine_turn(
 
     let mut response_text = String::new();
     let mut turn_usage_snapshot: Option<(u32, u32)> = None;
+    let mut cached_input_tokens: u32 = 0;
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut engine_runs: Vec<ToolRun> = Vec::new();
     let mut pending_tool_id: Option<String> = None;
@@ -437,8 +470,10 @@ pub(crate) async fn run_single_engine_turn(
             StreamEvent::Usage {
                 input_tokens,
                 output_tokens,
+                cached_input_tokens: cached,
             } => {
                 absorb_turn_usage_snapshot(&mut turn_usage_snapshot, input_tokens, output_tokens);
+                cached_input_tokens = cached;
             }
             StreamEvent::ToolRan { name, ok } => engine_runs.push(ToolRun { name, ok }),
             StreamEvent::Error { message } => {
@@ -466,6 +501,7 @@ pub(crate) async fn run_single_engine_turn(
         tool_calls,
         input_tokens,
         output_tokens,
+        cached_input_tokens,
         engine_runs,
     })
 }
@@ -1189,6 +1225,28 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
         }]
+    }
+
+    /// A turn's size per role, in role order, empty roles left out.
+    #[test]
+    fn role_layers_split_the_prompt_by_role() {
+        let msg = |role, content: &str| Message {
+            role,
+            content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
+        };
+        let layers = role_layers(&[
+            msg(Role::User, "go"),
+            msg(Role::System, "sys"),
+            msg(Role::Tool, "é"),
+            msg(Role::User, "on"),
+        ]);
+        let got: Vec<_> = layers
+            .iter()
+            .map(|l| (l.name.as_str(), l.chars, l.bytes))
+            .collect();
+        assert_eq!(got, [("system", 3, 3), ("user", 4, 4), ("tool", 1, 2)]);
     }
 
     /// At the round cap the engine gets one more call with no tools: the

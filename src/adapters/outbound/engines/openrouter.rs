@@ -334,6 +334,7 @@ impl OpenRouterEngine {
             events.push(StreamEvent::Usage {
                 input_tokens: input.saturating_add(earlier.0),
                 output_tokens: output.saturating_add(earlier.1),
+                cached_input_tokens: 0,
             });
         }
         events.push(StreamEvent::Done);
@@ -764,6 +765,7 @@ mod tests {
             StreamEvent::Usage {
                 input_tokens,
                 output_tokens,
+                ..
             } => Some((*input_tokens, *output_tokens)),
             _ => None,
         })

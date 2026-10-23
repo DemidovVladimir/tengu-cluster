@@ -39,8 +39,11 @@
 //! - Planner LLM call (one per user turn): full telemetry including
 //!   per-context-layer breakdown (system / roster / cross_session / history /
 //!   user_message).
-//! - Subagent LLM turns (1..N per step): per-turn telemetry. Carried back over
-//!   IPC via `AgentIpcOutput.metrics` and re-emitted on the parent's bus.
+//! - Subagent LLM turns (1..N per step): per-turn telemetry, layers = the
+//!   turn's messages per role. Carried back over IPC via
+//!   `AgentIpcOutput.metrics` and re-emitted on the parent's bus.
+//! - `prompt_tokens` is the whole prompt on every engine; `cached_input_tokens`
+//!   the part read from the provider's prompt cache (Claude Code, Codex).
 //! - Embedding calls: tokens via OpenRouter `usage.total_tokens` (we now read
 //!   it back where previously we discarded the entire response wrapper).
 
@@ -66,6 +69,11 @@ pub struct MetricsRecord {
     /// Tokens used by the prompt/input. For embeddings this is the only
     /// non-zero token field (no completion).
     pub prompt_tokens: u32,
+    /// Of `prompt_tokens`, the tokens read from the provider's prompt cache
+    /// (Claude Code cache reads, Codex cached input; 0 when the engine does
+    /// not say). `prompt_tokens` is the whole prompt either way.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub cached_input_tokens: u32,
     /// Tokens used by the model's response. Always 0 for embeddings.
     pub completion_tokens: u32,
     /// `prompt_tokens + completion_tokens`. Stored for cheap rendering.
@@ -80,15 +88,20 @@ pub struct MetricsRecord {
     pub response_chars: u32,
     /// Wall-clock latency of the LLM/embedding call.
     pub latency_ms: u64,
-    /// Pre-call breakdown of which prompt sections contributed which bytes.
-    /// Empty for non-planner records (subagent turns don't compose layers
-    /// the same way; embeddings are single-string).
+    /// Pre-call breakdown of which prompt sections contributed which bytes:
+    /// the planner's prompt blocks; a subagent turn's messages per role
+    /// (`system`, `user`, `assistant`, `tool`). Empty for embeddings
+    /// (single-string) and the other kinds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<MetricsLayer>,
     /// Plan step id for subagent records — links the metric back to the
     /// plan that dispatched it. `None` for planner + embedding records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// Categorical label so subscribers can filter / aggregate by call type.
@@ -256,6 +269,7 @@ mod tests {
             agent: agent.to_string(),
             model: "m".to_string(),
             prompt_tokens: prompt,
+            cached_input_tokens: 0,
             completion_tokens: completion,
             total_tokens: prompt + completion,
             prompt_chars: 0,
@@ -279,6 +293,20 @@ mod tests {
         assert_eq!(s.by_agent["researcher"].total_tokens, 750);
         assert_eq!(s.by_agent["planner"].total_tokens, 150);
         assert_eq!(s.by_kind["subagent"].call_count, 2);
+    }
+
+    /// Old payloads have no `cached_input_tokens` (0); a 0 is not written,
+    /// a count is.
+    #[test]
+    fn cached_input_tokens_are_optional_on_the_wire() {
+        let mut rec = record_for(MetricsKind::Subagent, "a", 10, 1);
+        let json = serde_json::to_value(&rec).unwrap();
+        assert!(json.get("cached_input_tokens").is_none());
+        let back: MetricsRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(back.cached_input_tokens, 0);
+        rec.cached_input_tokens = 7;
+        let json = serde_json::to_value(&rec).unwrap();
+        assert_eq!(json["cached_input_tokens"], 7);
     }
 
     #[test]

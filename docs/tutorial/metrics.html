@@ -165,7 +165,7 @@
       <ol class="captions">
         <li>A planner call returns. One record: kind <code>planner</code>, agent <code>planner/&lt;agent&gt;</code> (<code>replanner/</code> on replan), the engine's token counts and the prompt's layers.</li>
         <li><code>record()</code> always writes one info line, message <code>metrics</code>: kind, agent, model, tokens, chars, latency, step and session. Layer sizes go to debug.</li>
-        <li>A <code>run-agent</code> child records one per engine turn, with its <code>step_id</code>, and logs that line in its own process.</li>
+        <li>A <code>run-agent</code> child records one per engine turn, with its <code>step_id</code> and its messages' size per role as layers (<code>system</code>, <code>user</code>, <code>assistant</code>, <code>tool</code>), and logs that line in its own process.</li>
         <li>The records ride back in <code>AgentIpcOutput.metrics</code>. The parent puts each one on the sink, after a success and after a failure; its log line already came with the child's log.</li>
         <li>Embedding calls (agent <code>embedder</code>), the wiki compiler and Jev decisions (agent = the loop's name) report the same way.</li>
         <li><code>build_orchestrator</code> installs one global sink: a broadcast channel with 256 slots. Without an orchestrator there is no sink, only the log line.</li>
@@ -209,7 +209,7 @@
   </div>
   <ul class="states">
     <li><span class="chip ok">yes</span><span><b>planner plan / replan</b>After the engine answers. Layers included.</span></li>
-    <li><span class="chip ok">yes</span><span><b>subagent engine turn</b>One per turn of the <code>run-agent</code> loop: logged by the child, sent on by the parent without a second line.</span></li>
+    <li><span class="chip ok">yes</span><span><b>subagent engine turn</b>One per turn of the <code>run-agent</code> loop, layers per message role: logged by the child, sent on by the parent without a second line.</span></li>
     <li><span class="chip ok">yes</span><span><b>embedding call</b>Tokens from the response's <code>usage</code>, else chars / 4.</span></li>
     <li><span class="chip ok">yes</span><span><b>wiki compiler · Jev decision</b>One per successful call.</span></li>
     <li><span class="chip bad">no</span><span><b>a failed call</b>Planner, embedding or decision errors return before recording. A failed decision still gets an audit line.</span></li>
@@ -255,12 +255,12 @@
   <span class="k">"kind"</span>: <span class="s">"subagent"</span>,
   <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>,
   <span class="k">"model"</span>: <span class="s">"claude-sonnet-5-5"</span>,
-  <span class="k">"prompt_tokens"</span>: <span class="n">6250</span>, <span class="k">"completion_tokens"</span>: <span class="n">430</span>, <span class="k">"total_tokens"</span>: <span class="n">6680</span>,
+  <span class="k">"prompt_tokens"</span>: <span class="n">6250</span>, <span class="k">"cached_input_tokens"</span>: <span class="n">5120</span>, <span class="k">"completion_tokens"</span>: <span class="n">430</span>, <span class="k">"total_tokens"</span>: <span class="n">6680</span>,
   <span class="k">"prompt_chars"</span>: <span class="n">24800</span>, <span class="k">"prompt_bytes"</span>: <span class="n">25120</span>, <span class="k">"response_chars"</span>: <span class="n">1350</span>,
   <span class="k">"latency_ms"</span>: <span class="n">8400</span>,
   <span class="k">"step_id"</span>: <span class="s">"s1"</span>
 }
-<span class="c"># "layers" appears only when non-empty (planner); "step_id" only for subagents</span></pre></div>
+<span class="c"># "layers" left out here: planner blocks, or a subagent turn per role; "cached_input_tokens" only when non-zero; "step_id" only for subagents</span></pre></div>
     <div class="tabpanel" id="tab-ipc" hidden><pre><span class="c"># stdout of tengu run-agent, one line (example, shortened to the fields that matter here)</span>
 { <span class="k">"status"</span>: <span class="s">"ok"</span>, <span class="k">"output"</span>: <span class="s">"&lt;reply&gt;"</span>, <span class="k">"summary"</span>: <span class="s">"&lt;compress_and_store text&gt;"</span>,
   <span class="k">"metrics"</span>: [ <span class="c">&lt;one MetricsRecord per engine turn&gt;</span> ],
@@ -275,7 +275,7 @@
           <tbody>
             <tr><td>message</td><td><code>metrics</code> at info; each layer as <code>metrics.layer</code> at debug</td></tr>
             <tr><td>kind · agent · model</td><td>planner · subagent · embedding · wiki_compiler · decision</td></tr>
-            <tr><td>prompt_tokens · completion_tokens · total_tokens</td><td>from the engine, else 0 (embeddings and the wiki compiler: chars / 4)</td></tr>
+            <tr><td>prompt_tokens · cached_input_tokens · completion_tokens · total_tokens</td><td>from the engine, else 0 (embeddings and the wiki compiler: chars / 4). <code>prompt_tokens</code> is the whole prompt; <code>cached_input_tokens</code> the part read from the prompt cache (Claude Code cache reads, its cache writes counted as input; Codex cached input; 0 elsewhere)</td></tr>
             <tr><td>prompt_chars · response_chars · latency_ms</td><td>measured locally</td></tr>
             <tr><td>layer_count · step_id · session_id</td><td>embeddings and the wiki compiler use <code>TENGU_SESSION_ID</code>, else <code>-</code></td></tr>
           </tbody>

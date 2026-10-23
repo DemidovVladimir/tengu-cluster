@@ -1018,6 +1018,7 @@ pub async fn judge_row(
             StreamEvent::Usage {
                 input_tokens: it,
                 output_tokens: ot,
+                ..
             } => {
                 input_tokens = input_tokens.saturating_add(it);
                 output_tokens = output_tokens.saturating_add(ot);
@@ -1667,6 +1668,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
                 text: String::new(),
                 input_tokens_delta: 0,
                 output_tokens_delta: 0,
+                cached_input_tokens_delta: 0,
                 tool_outcomes: vec![],
                 tool_runs: vec![],
             },
@@ -3364,6 +3366,7 @@ metrics:
             agent: "planner/planner".into(),
             model: session.clone(),
             prompt_tokens: 10,
+            cached_input_tokens: 0,
             completion_tokens: 2,
             total_tokens: 12,
             prompt_chars: 40,

@@ -1398,6 +1398,7 @@ async fn chat_complete(model: &str, system: &str, user: &str) -> Result<String> 
         agent: "wiki_compiler".to_string(),
         model: model.clone(),
         prompt_tokens,
+        cached_input_tokens: 0,
         completion_tokens,
         total_tokens: prompt_tokens + completion_tokens,
         prompt_chars,

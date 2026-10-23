@@ -161,6 +161,7 @@ impl LocalEngine {
             events.push(StreamEvent::Usage {
                 input_tokens: usage.prompt_tokens,
                 output_tokens: usage.completion_tokens,
+                cached_input_tokens: 0,
             });
         }
         events.push(StreamEvent::Done);

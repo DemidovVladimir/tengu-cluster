@@ -377,6 +377,7 @@ mod tests {
             agent: "crypto_researcher".into(),
             model: "anthropic/claude-sonnet-4-6".into(),
             prompt_tokens: 100,
+            cached_input_tokens: 0,
             completion_tokens: 20,
             total_tokens: 120,
             prompt_chars: 400,

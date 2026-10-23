@@ -397,6 +397,7 @@ impl StageRunner for ScriptedRunner {
                 agent: req.agent.clone(),
                 model: "synthetic-model".into(),
                 prompt_tokens: 12_000,
+                cached_input_tokens: 0,
                 completion_tokens: 900,
                 total_tokens: 12_900,
                 prompt_chars: 0,

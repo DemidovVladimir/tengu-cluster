@@ -284,9 +284,11 @@ without a plan) emit none. Three surfaces:
 
 1. **Always-on tracing** — `RUST_LOG=tengu=info` prints one structured line
    per call: `kind=`, `agent=`, `model=`, `prompt_tokens=`,
+   `cached_input_tokens=` (of `prompt_tokens`, the prompt-cache reads),
    `completion_tokens=`, `latency_ms=`, `prompt_chars=`. Per-layer breakdown
-   (system / roster / cross_session / history / user_message) goes to `debug`
-   so the info line stays narrow.
+   (planner: system / roster / cross_session / history / user_message;
+   subagent turn: its messages per role) goes to `debug` so the info line
+   stays narrow.
 2. **TUI bottom panel** — opt-in via `TENGU_TUI_METRICS=1`. Renders a
    compact aggregated status line as a System bubble after every call. The
    in-process aggregator (`AggregatorState`) absorbs records even when the
@@ -631,7 +633,8 @@ These are not preferences. They're load-bearing.
   (`RUST_LOG=tengu=info` → one `metrics` info line per call) is always-on.
 - **Per-context-layer metric attribution is approximate** — `MetricsLayer`
   only sees the strings the planner builds (system / roster / cross_session
-  / history / recall / failure / user_message). Engine-side framing
+  / history / recall / failure / user_message) and, for a subagent turn, its
+  messages per role (system / user / assistant / tool). Engine-side framing
   (Anthropic `<thinking>` blocks, OpenAI tool-call schema, function-calling
   message wrappers) isn't counted. Treat layers as relative attribution
   for "which planner block bloated this turn", not absolute byte-perfect

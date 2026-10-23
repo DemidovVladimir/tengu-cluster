@@ -195,7 +195,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 
 | `codex exec` arg | Why |
 |---|---|
-| `--json` | events: `item.started` / `item.completed` (`agent_message` → text, `reasoning` → thinking, `mcp_tool_call` / `command_execution` / `file_change` → `ToolRan`), `turn.completed` (usage), `turn.failed` (error) |
+| `--json` | events: `item.started` / `item.completed` (`agent_message` → text, `reasoning` → thinking, `mcp_tool_call` / `command_execution` / `file_change` → `ToolRan`), `turn.completed` (usage: `input_tokens` already holds `cached_input_tokens`, both passed on), `turn.failed` (error) |
 | `--ignore-user-config` `--ignore-rules` `--ephemeral` `--skip-git-repo-check` | no `~/.codex/config.toml` (your MCP servers, profiles, hooks, notify) and no execpolicy rules; no session files; any workspace — the ChatGPT login still works |
 | `-s <sandbox>` `-c approval_policy="never"` | Codex's own shell / patch tool: read-only (default) or workspace-write, never network, never asks |
 | `-c web_search="<mode>"` (`[agents.<a>.codex] web_search`: `disabled` default, `cached` = OpenAI's index, `live`; `config::CODEX_WEB_SEARCH`) | OpenAI's hosted web search on the ChatGPT subscription: it runs at OpenAI, not from this machine, so it needs no tengu egress; pages the agent must read still come through `http_request` (scopes, egress, audit) |

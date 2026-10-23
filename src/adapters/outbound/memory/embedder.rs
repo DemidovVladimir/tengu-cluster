@@ -176,6 +176,7 @@ async fn embed_batch_openrouter(
         agent: "embedder".to_string(),
         model: model.to_string(),
         prompt_tokens,
+        cached_input_tokens: 0,
         completion_tokens: 0,
         total_tokens: prompt_tokens,
         prompt_chars: total_chars,

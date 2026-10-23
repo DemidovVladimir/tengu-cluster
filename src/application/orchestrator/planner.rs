@@ -57,6 +57,7 @@ impl PlannerLlm {
         .await?;
         let telemetry = TurnTelemetry {
             prompt_tokens: resp.input_tokens_delta,
+            cached_input_tokens: resp.cached_input_tokens_delta,
             completion_tokens: resp.output_tokens_delta,
             model: self.agent.model.clone(),
             latency_ms: started.elapsed().as_millis() as u64,
@@ -759,6 +760,7 @@ fn emit_planner_metrics(
         agent: agent_label,
         model: telemetry.model.clone(),
         prompt_tokens: telemetry.prompt_tokens,
+        cached_input_tokens: telemetry.cached_input_tokens,
         completion_tokens: telemetry.completion_tokens,
         total_tokens,
         prompt_chars,
@@ -1003,6 +1005,7 @@ pub(crate) mod testkit {
                 StreamEvent::Usage {
                     input_tokens: 100,
                     output_tokens: 7,
+                    cached_input_tokens: 0,
                 },
                 StreamEvent::Done,
             ])))

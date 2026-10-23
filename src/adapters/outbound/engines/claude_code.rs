@@ -421,13 +421,38 @@ fn str_field<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
     value.get(key).and_then(|v| v.as_str()).unwrap_or_default()
 }
 
-/// The usage of one CLI run so far: each API response's
-/// `input_tokens` / `output_tokens` (`message.usage`, the last one seen per
+/// An Anthropic `usage` object as (input, output, cached): its
+/// `input_tokens` counts only the uncached part, so the whole prompt adds
+/// `cache_read_input_tokens` and `cache_creation_input_tokens`; the cache
+/// reads are the cached part.
+fn anthropic_usage(usage: &serde_json::Value) -> (u32, u32, u32) {
+    let tokens = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let cached = tokens("cache_read_input_tokens");
+    let input = tokens("input_tokens")
+        .saturating_add(cached)
+        .saturating_add(tokens("cache_creation_input_tokens"));
+    (input, tokens("output_tokens"), cached)
+}
+
+/// (input, output, cached) as a `StreamEvent::Usage`; `None` when nothing
+/// was counted.
+fn usage_event(
+    (input_tokens, output_tokens, cached_input_tokens): (u32, u32, u32),
+) -> Option<StreamEvent> {
+    (input_tokens > 0 || output_tokens > 0).then_some(StreamEvent::Usage {
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+    })
+}
+
+/// The usage of one CLI run so far: each API response's usage
+/// (`message.usage` through `anthropic_usage`, the last one seen per
 /// `message.id` — the CLI repeats a response's usage on each of its lines),
 /// summed — what the `result` line reports when the run ends on its own.
 #[derive(Default)]
 struct RunUsage {
-    by_message: std::collections::HashMap<String, (u32, u32)>,
+    by_message: std::collections::HashMap<String, (u32, u32, u32)>,
 }
 
 impl RunUsage {
@@ -444,25 +469,27 @@ impl RunUsage {
         let Some(usage) = message.get("usage") else {
             return;
         };
-        let tokens = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let id = str_field(message, "id");
         let key = if id.is_empty() {
             format!("#{}", self.by_message.len())
         } else {
             id.to_string()
         };
-        self.by_message
-            .insert(key, (tokens("input_tokens"), tokens("output_tokens")));
+        self.by_message.insert(key, anthropic_usage(usage));
     }
 
-    fn total(&self) -> Option<(u32, u32)> {
-        let (input, output) = self
-            .by_message
-            .values()
-            .fold((0u32, 0u32), |(i, o), (a, b)| {
-                (i.saturating_add(*a), o.saturating_add(*b))
-            });
-        (input > 0 || output > 0).then_some((input, output))
+    fn total(&self) -> Option<StreamEvent> {
+        usage_event(
+            self.by_message
+                .values()
+                .fold((0u32, 0u32, 0u32), |(i, o, c), (a, b, d)| {
+                    (
+                        i.saturating_add(*a),
+                        o.saturating_add(*b),
+                        c.saturating_add(*d),
+                    )
+                }),
+        )
     }
 }
 
@@ -580,21 +607,8 @@ fn process_ndjson_line(
                 }
 
                 // Usage from this turn
-                if let Some(usage) = msg.get("usage") {
-                    let inp = usage
-                        .get("input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    let out = usage
-                        .get("output_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    if inp > 0 || out > 0 {
-                        events.push(StreamEvent::Usage {
-                            input_tokens: inp,
-                            output_tokens: out,
-                        });
-                    }
+                if let Some(event) = msg.get("usage").map(anthropic_usage).and_then(usage_event) {
+                    events.push(event);
                 }
             }
         }
@@ -633,21 +647,8 @@ fn process_ndjson_line(
             }
 
             // Emit final usage from result (cumulative)
-            if let Some(usage) = json.get("usage") {
-                let inp = usage
-                    .get("input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let out = usage
-                    .get("output_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                if inp > 0 || out > 0 {
-                    events.push(StreamEvent::Usage {
-                        input_tokens: inp,
-                        output_tokens: out,
-                    });
-                }
+            if let Some(event) = json.get("usage").map(anthropic_usage).and_then(usage_event) {
+                events.push(event);
             }
 
             if is_error {
@@ -997,13 +998,8 @@ impl Engine for ClaudeCodeEngine {
                 );
                 // What the `result` line would have carried: the run's usage
                 // so far (the turn takes the last `Usage` frame).
-                if let Some((input_tokens, output_tokens)) = usage.total() {
-                    let _ = tx
-                        .send(StreamEvent::Usage {
-                            input_tokens,
-                            output_tokens,
-                        })
-                        .await;
+                if let Some(event) = usage.total() {
+                    let _ = tx.send(event).await;
                 }
                 Some(StreamEvent::Done)
             } else if tool_limit_hit {
@@ -1735,7 +1731,7 @@ mod tests {
     #[tokio::test]
     async fn compress_and_store_ends_the_run_after_its_round() {
         const TEXT: &str = r#"echo '{"type":"assistant","message":{"id":"msg_0","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":7,"output_tokens":3}}}'"#;
-        const CALLS: &str = r#"echo '{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_a","name":"mcp__tengu-tools__read_file","input":{"path":"a"}},{"type":"tool_use","id":"toolu_c","name":"mcp__tengu-tools__compress_and_store","input":{"summary":"done"}}],"usage":{"input_tokens":10,"output_tokens":5}}}'"#;
+        const CALLS: &str = r#"echo '{"type":"assistant","message":{"id":"msg_1","content":[{"type":"tool_use","id":"toolu_a","name":"mcp__tengu-tools__read_file","input":{"path":"a"}},{"type":"tool_use","id":"toolu_c","name":"mcp__tengu-tools__compress_and_store","input":{"summary":"done"}}],"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":2,"output_tokens":5}}}'"#;
         const STORED: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_c","content":"stored — stop now"}]}}'"#;
         const READ: &str = r#"echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"alpha"}]}}'"#;
         const LATE: &str =
@@ -1760,8 +1756,9 @@ mod tests {
                 &events[events.len() - 2..],
                 [
                     StreamEvent::Usage {
-                        input_tokens: 17,
-                        output_tokens: 8
+                        input_tokens: 39,
+                        output_tokens: 8,
+                        cached_input_tokens: 20
                     },
                     StreamEvent::Done
                 ]

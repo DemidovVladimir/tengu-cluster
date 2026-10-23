@@ -192,7 +192,7 @@
         <li>Small windows: each tool result is capped at window ÷ 8 × 4 chars, and a system message equal to the prompt is sent once.</li>
         <li>claude_code: spawns <code>claude -p --output-format stream-json</code> with <code>--strict-mcp-config</code>. Parent-session env and <code>ANTHROPIC_API_KEY</code> are stripped. codex: spawns <code>codex exec --json</code> with <code>--ignore-user-config</code>; <code>OPENAI_API_KEY</code> is stripped, so the ChatGPT subscription pays.</li>
         <li>Each CLI runs its own loop. Tengu tools go through <code>tengu mcp-bridge</code> (Codex: <code>-c mcp_servers.tengu-tools.*</code>) and return as <code>ToolRan</code>, never re-run. Past <code>max_tool_rounds</code> calls the CLI is killed.</li>
-        <li>Every engine yields the same <code>StreamEvent</code>s: text, tool calls, tool runs, usage. One tool loop consumes them, so history and metrics look alike.</li>
+        <li>Every engine yields the same <code>StreamEvent</code>s: text, tool calls, tool runs, usage (input = the whole prompt; Claude Code adds its cache reads and writes, and Claude Code / Codex report the cache reads as <code>cached_input_tokens</code>). One tool loop consumes them, so history and metrics look alike.</li>
       </ol>
     </div>
   </figure>

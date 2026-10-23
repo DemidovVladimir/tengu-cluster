@@ -77,6 +77,8 @@ pub trait WorkerHandle: Send + Sync {
 #[derive(Debug, Clone, Default)]
 pub struct TurnTelemetry {
     pub prompt_tokens: u32,
+    /// Of `prompt_tokens`, the tokens read from the provider's prompt cache.
+    pub cached_input_tokens: u32,
     pub completion_tokens: u32,
     pub model: String,
     pub latency_ms: u64,

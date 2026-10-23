@@ -879,6 +879,7 @@ impl DecisionLoop {
                 d.model.clone()
             },
             prompt_tokens: d.usage.input_tokens,
+            cached_input_tokens: 0,
             completion_tokens: d.usage.output_tokens,
             total_tokens: d.usage.input_tokens + d.usage.output_tokens,
             prompt_chars: prompt.chars().count() as u32,

@@ -731,6 +731,7 @@ mod tests {
             agent: "researcher".into(),
             model: "anthropic/claude-sonnet-4-6".into(),
             prompt_tokens: 100,
+            cached_input_tokens: 0,
             completion_tokens: 50,
             total_tokens: 150,
             prompt_chars: 500,

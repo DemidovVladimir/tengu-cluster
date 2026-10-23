@@ -161,10 +161,15 @@ pub enum StreamEvent {
     /// Optional thinking/reasoning text chunk.
     ThinkingDelta { text: String },
 
-    /// Usage accounting snapshot for the current turn.
+    /// Usage accounting snapshot for the current turn. `input_tokens` is the
+    /// whole prompt, cache reads and writes included; `cached_input_tokens`
+    /// the part of it read from the provider's prompt cache (0 when the
+    /// engine does not say).
     Usage {
         input_tokens: u32,
         output_tokens: u32,
+        #[serde(default)]
+        cached_input_tokens: u32,
     },
 
     /// A tool call the engine ran itself (Claude Code: the CLI through

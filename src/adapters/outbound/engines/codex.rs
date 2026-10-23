@@ -522,9 +522,11 @@ pub(crate) fn process_line(line: &str, st: &mut RunState) -> Vec<StreamEvent> {
                     "Codex turn completed"
                 );
                 if input > 0 || output > 0 {
+                    // OpenAI counts cached input inside `input_tokens`.
                     events.push(StreamEvent::Usage {
                         input_tokens: input,
                         output_tokens: output,
+                        cached_input_tokens: tokens("cached_input_tokens"),
                     });
                 }
             }
@@ -1353,7 +1355,8 @@ mod tests {
             e,
             StreamEvent::Usage {
                 input_tokens: 44249,
-                output_tokens: 84
+                output_tokens: 84,
+                cached_input_tokens: 30848
             }
         )));
         let mut failed = RunState::default();
