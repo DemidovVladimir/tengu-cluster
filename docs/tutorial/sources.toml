@@ -221,6 +221,7 @@ sources = [
 sources = [
   "src/domain/scope.rs",
   "src/config/hardening.rs",
+  "src/config/readers.rs",
   "src/adapters/outbound/tools/args.rs",
   "src/config/mod.rs",
   "src/bootstrap/tools.rs",

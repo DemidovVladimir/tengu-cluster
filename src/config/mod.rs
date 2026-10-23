@@ -14,6 +14,7 @@ pub(crate) mod keys;
 pub(crate) mod lineage;
 pub(crate) mod paths;
 pub(crate) mod rate_limits;
+pub(crate) mod readers;
 pub(crate) mod recorder;
 pub(crate) mod risk;
 pub(crate) mod runtime;
@@ -1509,6 +1510,7 @@ impl Config {
         }
         out.extend(self.telegram.approvals_warning());
         out.extend(a2a::validation_warnings(self));
+        out.extend(readers::warnings(self));
         out.sort();
         out
     }
@@ -1566,6 +1568,9 @@ impl Config {
             errors.push(issue);
         }
         for issue in hardening::validation_errors(self) {
+            errors.push(issue);
+        }
+        for issue in readers::errors(self) {
             errors.push(issue);
         }
         for issue in xmarket::validation_errors(self) {
@@ -2605,7 +2610,11 @@ ttl_days = 7
         )
         .unwrap();
         assert!(cfg.validate().is_ok(), "a warning, not an error");
-        let warnings = cfg.validation_warnings();
+        let warnings: Vec<String> = cfg
+            .validation_warnings()
+            .into_iter()
+            .filter(|w| w.contains("context_window"))
+            .collect();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].starts_with("agents.gemma.limits.context_window is the 1000000 default"),
@@ -2631,7 +2640,11 @@ ttl_days = 7
              [agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\ntools = [\"write_file\"]\n",
         )
         .unwrap();
-        let warnings = cfg.validation_warnings();
+        let warnings: Vec<String> = cfg
+            .validation_warnings()
+            .into_iter()
+            .filter(|w| w.contains("no `workspace`"))
+            .collect();
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         assert!(
             warnings[0].starts_with("agents.everything has no `workspace`")

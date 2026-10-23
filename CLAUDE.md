@@ -717,7 +717,11 @@ These are not preferences. They're load-bearing.
   chat agent (`lping`) got the chat agent's bridge and could call tools instead
   of writing plan JSON. With profile `none` the CLI has no built-ins either:
   plan JSON only (`planner_call_has_no_hands_and_reports_usage`; live:
-  `a2a-lab` planner on claude-haiku-5-5 → helper step, 6.6 s). Planners and
+  `a2a-lab` planner on claude-haiku-5-5 → helper step, 6.6 s). Since 2026-10-23
+  any other profile on the `[orchestrator]` agent fails the load, and an agent
+  that reads outside text (`research`, Codex `web_search`, `http_request` to
+  `"*"`, `a2a`, MCP) while holding a side effect is a load warning
+  (`config/readers.rs`, `docs/tools.md` § Untrusted input). Planners and
   subagents both run on the subscriptions (gotcha "Model spend").
 - **`parse_verdict` has a Phase 7.4 prose-fallback** — when the planner LLM
   emits non-JSON (Claude Code being conversational), the harness wraps the

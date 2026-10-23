@@ -134,7 +134,7 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 - Stderr is drained while the CLI runs (`cli_run::drain_stderr`, shared with Codex): a chatty CLI never stalls on a full pipe. A non-zero exit with no answer is an error carrying stderr's tail (`Claude CLI exited with exit status: 1: Not logged in …`); after an answer it is only a warn
 - `model` is the bare slug (`claude-sonnet-4-6`), not the OpenRouter form
 - Uses Claude subscription, no per-token cost
-- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner call gets no bridge tools and no `[[mcp_servers]]` (`application/orchestrator/planner.rs::PlannerLlm::call`, test `planner_call_has_no_hands_and_reports_usage`), so the CLI has no tool and writes plan JSON; another profile keeps its built-ins. Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
+- Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner call gets no bridge tools and no `[[mcp_servers]]` (`application/orchestrator/planner.rs::PlannerLlm::call`, test `planner_call_has_no_hands_and_reports_usage`), so the CLI has no tool and writes plan JSON; another profile on the `[orchestrator]` agent fails the load (2026-10-23, `config/readers.rs`). Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
 
 ### Builtin Tools Profiles
 

@@ -109,6 +109,18 @@ net_hosts = ["*"]
 | `[soe]` sandbox | hardened like `[risk]` (built-ins off, no shell, no `[[mcp_servers]]`); closed tool world `domain/tools.rs::SOE_ALLOWED`, a non-empty `tools` per agent; deny-all `[default_scopes.<t>]` for `SIDE_EFFECT_TOOLS` (`http_request`, `write_file`, `run_command`, the Privy signing tools) — rules `src/config/soe.rs` |
 | `compress_and_store` | Added to every subagent automatically — never list it. |
 
+## Untrusted input
+
+Text tengu did not write (web bodies, A2A replies, MCP results, recalled memory, webhook bodies, step inputs and errors) reaches a model fenced: `<untrusted origin="…">` (`domain/untrusted.rs`). The fence is a label, not a wall. The walls are these load rules:
+
+| Rule | Where | Kind |
+|---|---|---|
+| A reader holds no side effect. Reader: Claude Code `research`, Codex `web_search` ≠ `disabled`, `http_request` on no scope or to `"*"`, `a2a`, an `[[mcp_servers]]` tool (an empty `tools` holds them all). Side effect: `write_file`, `run_command`, a Privy signing / xmarket exec / Solana write tool on a scope that is not deny-all; an `env_reads` entry on a scope whose `net_hosts` holds `"*"`; Claude Code `editor` / `editor_shell`; Codex `workspace-write` | `config/readers.rs` | load warning (an error later); the flagged shipped agents are pinned in its test |
+| The `[orchestrator]` agent on `claude_code` runs `builtin_tools_profile = "none"` | `config/readers.rs` | load error |
+| `[soe]`: closed tool world, deny-all side-effect scopes | `config/soe.rs` | load error |
+
+Fix a warning: split the agent (a reader that answers, a private actor the planner routes to), or narrow its `tools` / scopes.
+
 ## MCP servers
 
 ```toml
