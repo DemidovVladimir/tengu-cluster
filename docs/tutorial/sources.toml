@@ -64,6 +64,7 @@ sources = [
   "src/ports/orchestration.rs",
   "src/bootstrap/tools.rs",
   "src/application/chat/tool_loop.rs",
+  "src/application/chat/tool_loop_tests.rs",
   "src/adapters/outbound/tools/skill_lifecycle/compress_and_store.rs",
   "src/config/mod.rs",
   "tests/run_agent_ipc.rs",
@@ -311,6 +312,7 @@ sources = [
   "src/domain/backtest/ranking.rs",
   "src/config/strategy_ranking.rs",
   "src/application/backtest/mod.rs",
+  "src/application/backtest/tests.rs",
   "src/application/ranking/",
   "src/adapters/inbound/cli/ranking.rs",
   "src/adapters/outbound/tools/xlab/rank.rs",
@@ -349,6 +351,7 @@ sources = [
   "src/ports/history.rs",
   "src/adapters/inbound/cli/history.rs",
   "src/application/chat/tool_loop.rs",
+  "src/application/chat/tool_loop_tests.rs",
   "src/domain/token.rs",
 ]
 
@@ -359,6 +362,7 @@ sources = [
   "src/bootstrap/runtime.rs",
   "src/config/runtime.rs",
   "src/config/feeds.rs",
+  "src/config/feeds_tests.rs",
   "src/config/rate_limits.rs",
   "src/adapters/outbound/runtime_store.rs",
   "src/adapters/outbound/sqlite.rs",
@@ -369,10 +373,12 @@ sources = [
   "src/domain/calendar.rs",
   "src/domain/tz.rs",
   "src/domain/schedule.rs",
+  "src/domain/schedule_tests.rs",
   "src/ports/runtime.rs",
   "src/ports/clock.rs",
   "src/adapters/outbound/http_class.rs",
   "src/config/xmarket.rs",
+  "src/config/xmarket_tests.rs",
 ]
 
 [pages.metrics]
@@ -396,8 +402,10 @@ sources = [
   "src/application/orchestrator/trace.rs",
   "src/bootstrap/runtime.rs",
   "src/application/runtime/feeds.rs",
+  "src/application/runtime/feeds_tests.rs",
   "src/application/runtime/loops.rs",
   "src/application/decision_loop/mod.rs",
+  "src/application/decision_loop/tests.rs",
   "src/adapters/inbound/cli/decide.rs",
   "src/adapters/inbound/webhooks.rs",
   "src/adapters/outbound/subprocess_runner.rs",
@@ -476,6 +484,7 @@ sources = [
   "src/adapters/outbound/hyperliquid/",
   "src/config/risk.rs",
   "src/config/xmarket.rs",
+  "src/config/xmarket_tests.rs",
   "src/adapters/inbound/cli/risk.rs",
   "src/ports/paper.rs",
   "src/ports/book.rs",
@@ -495,6 +504,7 @@ sources = [
   "src/adapters/outbound/backfill/",
   "src/adapters/inbound/cli/history.rs",
   "src/adapters/outbound/tools/xlab/history.rs",
+  "src/adapters/outbound/tools/xlab/history_tests.rs",
 ]
 
 [pages.backtest]
@@ -519,6 +529,7 @@ sources = [
   "src/adapters/outbound/tools/soe/",
   "src/bootstrap/soe.rs",
   "src/config/soe.rs",
+  "src/config/soe_tests.rs",
   "src/adapters/inbound/cli/soe.rs",
   "src/adapters/inbound/cli/soe/",
   "tests/soe_cli.rs",

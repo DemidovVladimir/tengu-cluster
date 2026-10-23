@@ -2424,7 +2424,7 @@ M7 · S · rust · partial · ports | application | bootstrap · PRD §35 S8
 M7 · L · rust · missing · application | ports | outbound | inbound | config · PRD §33 §34 §35 S8
 After: `info-store` (M4), `ops-audit-record-v2` (M5), `ops-clock-port` (M7), `ops-history-recorder` (M1), `ops-rules-baseline` (M5), `risk-paper-tools` (M0)
 
-- **Have:** Pieces only: StubbedExecutor replays canned tool outputs (src/adapters/inbound/eval.rs:598-642); an in-memory MemStore exists in observe.rs tests; a pure policy has a golden-vector replay (src/domain/lp/hedge.rs:588, tests/fixtures/hedge-vectors.jsonl). The loop reads the wall clock (mod.rs:138, 333). There is no event replay, as-of store, fake clock, recorded-decision cache or arms configuration.
+- **Have:** Pieces only: StubbedExecutor replays canned tool outputs (src/adapters/inbound/eval.rs:598-642); an in-memory MemStore exists in observe.rs tests; a pure policy has a golden-vector replay (src/domain/lp/hedge_tests.rs:45, tests/fixtures/hedge-vectors.jsonl). The loop reads the wall clock (mod.rs:138, 333). There is no event replay, as-of store, fake clock, recorded-decision cache or arms configuration.
 - **Need:** application/replay/:
   - mod.rs: per arm, reset the loops and feed events in time order through DecisionLoop::handle_event on a FakeClock.
   - source.rs: merge recorded info events event/1 (by first_seen_ms only, to avoid lookahead), market-anomaly triggers recomputed from recorded rows by the deterministic layer, and schedule ticks.

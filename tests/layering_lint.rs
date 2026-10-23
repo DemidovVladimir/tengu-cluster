@@ -23,11 +23,20 @@
 //! A `use` statement counts leaf by leaf: grouped and multi-line imports
 //! (`use crate::domain::{soe, xm::risk};`) are expanded (`file_paths`).
 //!
+//! Test code is inline `#[cfg(test)] mod … { … }` blocks and the files the
+//! crate builds only in tests (`tests/support/test_files.rs`: a `mod x;`
+//! behind `#[cfg(test)]`, `#[path]` or not, and every module below one).
+//!
 //! `EXCEPTIONS` lists known violations still being unwound. It may only
 //! shrink; the rewrite is done when it is empty.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[path = "support/test_files.rs"]
+mod support;
+use support::test_files;
 
 const LAYERS: &[&str] = &[
     "domain",
@@ -148,6 +157,23 @@ fn code_lines(src: &str) -> Vec<(usize, &str)> {
     out
 }
 
+/// Every `.rs` file under `src/` by its `src/`-relative path.
+fn src_texts(src: &Path) -> BTreeMap<String, String> {
+    let mut paths = Vec::new();
+    rust_files(src, &mut paths);
+    paths
+        .iter()
+        .map(|p| {
+            let rel = p
+                .strip_prefix(src)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            (rel, fs::read_to_string(p).unwrap())
+        })
+        .collect()
+}
+
 /// Every `crate::<layer>...` path in `line`, as the full path text.
 fn crate_paths(line: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -244,18 +270,19 @@ fn file_paths(text: &str) -> Vec<(usize, String)> {
 
 fn violations() -> Vec<String> {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let texts = src_texts(&src);
+    let tests = test_files(&texts);
+    let in_dir = |dir: &str| {
+        let prefix = format!("{dir}/");
+        texts
+            .iter()
+            .filter(|(rel, _)| rel.starts_with(&prefix) && !tests.contains(*rel))
+            .collect::<Vec<_>>()
+    };
     let mut found = Vec::new();
     for (layer, allowed) in RULES {
-        let mut files = Vec::new();
-        rust_files(&src.join(layer), &mut files);
-        for file in files {
-            let rel = file
-                .strip_prefix(&src)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            let text = fs::read_to_string(&file).unwrap();
-            for (n, path) in file_paths(&text) {
+        for (rel, text) in in_dir(layer) {
+            for (n, path) in file_paths(text) {
                 let target = path
                     .trim_start_matches("crate::")
                     .split("::")
@@ -266,14 +293,14 @@ fn violations() -> Vec<String> {
                 }
                 if EXCEPTIONS
                     .iter()
-                    .any(|(f, p)| *f == rel && path.starts_with(p))
+                    .any(|(f, p)| f == rel && path.starts_with(p))
                 {
                     continue;
                 }
                 found.push(format!("src/{rel}:{n}: `{layer}` must not use `{path}`"));
             }
             if *layer == "domain" {
-                for (n, line) in code_lines(&text) {
+                for (n, line) in code_lines(text) {
                     for io in DOMAIN_IO_CRATES {
                         if line.contains(io) {
                             found.push(format!("src/{rel}:{n}: `domain` must not do IO (`{io}`)"));
@@ -284,16 +311,8 @@ fn violations() -> Vec<String> {
         }
     }
     for (dir, forbidden) in FORBIDDEN {
-        let mut files = Vec::new();
-        rust_files(&src.join(dir), &mut files);
-        for file in files {
-            let rel = file
-                .strip_prefix(&src)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            let text = fs::read_to_string(&file).unwrap();
-            for (n, path) in file_paths(&text) {
+        for (rel, text) in in_dir(dir) {
+            for (n, path) in file_paths(text) {
                 if forbidden.iter().any(|p| path.starts_with(p)) {
                     found.push(format!("src/{rel}:{n}: `{dir}` must not use `{path}`"));
                 }
@@ -359,4 +378,28 @@ fn grouped_and_multi_line_imports_expand() {
         paths.iter().all(|p| !p.contains(['{', '}', ' '])),
         "{paths:?}"
     );
+}
+
+/// Out-of-line test modules are test code: a `#[path]` sibling, a `tests.rs`
+/// under a `mod.rs`, a `#[cfg(test)]` module file; prod files never are.
+#[test]
+fn cfg_test_module_files_are_test_code() {
+    let tests = test_files(&src_texts(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+    ));
+    for f in [
+        "domain/schedule_tests.rs",
+        "application/backtest/tests.rs",
+        "domain/backtest/testkit.rs",
+        "domain/source/eval.rs",
+    ] {
+        assert!(tests.contains(f), "{f} not in {tests:?}");
+    }
+    for f in [
+        "domain/schedule.rs",
+        "application/backtest/mod.rs",
+        "main.rs",
+    ] {
+        assert!(!tests.contains(f), "{f} counted as test code");
+    }
 }

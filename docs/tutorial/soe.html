@@ -765,6 +765,7 @@
         <tr><td><code>sandboxes/soe/config.toml</code> · <code>skills/soe-architect/</code> · <code>skills/soe-critic/</code></td><td>the sandbox (<code>[soe]</code>, the stage agents, the job feed, bound to SOE-G0) · the two stage protocols (+ the Architect's example draft)</td></tr>
         <tr><td><code>lineage/generations/SOE-G0.toml</code> · <code>lineage/capabilities/intel.soe_*.toml</code> · <code>lineage/families/soe.toml</code></td><td>the hash-only public records: the generation, the three tool capabilities, the family</td></tr>
         <tr><td><code>src/config/soe.rs</code></td><td><code>load_profile</code>, <code>load_opportunity</code>, <code>load_record_dir</code>, <code>load_cited</code>; <code>SoeConfig</code> and the <code>[soe]</code> load rules</td></tr>
+        <tr><td><code>src/config/soe_tests.rs</code></td><td>its tests: each profile refusal and each closed-world rule, the fixture eval cases</td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe.rs</code></td><td><code>tengu soe init|check|portfolio|sensitivity|eval</code>, the profile template</td></tr>
         <tr><td><code>src/adapters/inbound/cli/soe/weekly.rs</code></td><td><code>tengu soe cycle|replay|grade|resolve|review|verify|show</code></td></tr>
         <tr><td><code>tests/soe_cli.rs</code></td><td>the command, end to end, with <code>TENGU_HOME</code> a temp dir</td></tr>
@@ -776,7 +777,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

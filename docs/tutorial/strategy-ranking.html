@@ -508,6 +508,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
         <tr><td><code>src/config/strategy_ranking.rs</code></td><td><code>[strategy_ranking]</code> and its load rules</td></tr>
         <tr><td><code>src/domain/backtest/ranking.rs</code></td><td><code>RunFacts</code>, <code>StrategyStanding</code>, <code>select</code>, <code>rank</code>, <code>ranking.md</code>, the compact lines, <code>content_sha256</code></td></tr>
         <tr><td><code>src/application/backtest/mod.rs</code></td><td>the cohort identity, the cited runs retention keeps</td></tr>
+        <tr><td><code>src/application/backtest/tests.rs</code></td><td>its tests: retention keeps every run a registry or a <code>latest.json</code> cites, the cohort identity in the report</td></tr>
         <tr><td><code>src/application/ranking/mod.rs</code></td><td><code>run_ranking</code>: seal check, date and cutoff, lease, resume, freshness, backtests, rank, publish</td></tr>
         <tr><td><code>src/application/ranking/store.rs</code></td><td>the manifest, the dated files, <code>latest</code>, atomic writes</td></tr>
         <tr><td><code>src/adapters/inbound/cli/ranking.rs</code></td><td><code>tengu ranking run</code> and <code>show</code></td></tr>
@@ -522,7 +523,7 @@ tie_break = <span class="s">"strategy_asc"</span></pre></div>
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-09.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>
