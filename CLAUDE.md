@@ -359,8 +359,9 @@ These are not preferences. They're load-bearing.
 3. **Composition over wholesale.** Per-agent scopes override
    `default_scopes` wholesale (NOT field-merged). Per-step `Step.compose`
    overrides the base spec's skills/tools wholesale — in a hardened sandbox
-   (`[risk]` / `[soe]` / Solana signer) it may only narrow them
-   (`bootstrap::tools::compose_agent`; a widening compose fails the step).
+   (`[risk]` / `[soe]` / Solana signer) it may only narrow them, elsewhere it
+   may add only tools with a configured scope
+   (`bootstrap::tools::compose_agent`; any other widening fails the step).
    This keeps the contract simple even if it costs some convenience.
 
 4. **Fail-soft on memory operations, hard on plan-shape errors.** Open Brain

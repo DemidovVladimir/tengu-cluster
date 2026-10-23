@@ -284,7 +284,20 @@ fn run_agent_refuses_a_widening_compose_in_a_hardened_sandbox() {
     );
     assert_no_ipc_json(&run);
 
-    let open = run_with("");
+    // Not hardened: an added tool needs a configured scope (S4).
+    let unscoped = run_with("");
+    assert_ne!(unscoped.code, Some(0), "stderr:\n{}", unscoped.stderr);
+    assert!(
+        unscoped.stderr.contains("no configured scope") && unscoped.stderr.contains("write_file"),
+        "stderr should name the unscoped tool, got:\n{}",
+        unscoped.stderr
+    );
+    assert_no_ipc_json(&unscoped);
+
+    let open = run_with(&format!(
+        "[default_scopes.write_file]\nfs_roots = [\"{}\"]\n\n",
+        workspace.path().display()
+    ));
     assert_eq!(open.code, Some(0), "stderr:\n{}", open.stderr);
     let bodies = server.join().expect("fake server");
     assert_eq!(bodies.len(), 1, "only the open run calls the model");

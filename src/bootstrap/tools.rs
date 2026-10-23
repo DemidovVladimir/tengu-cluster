@@ -466,13 +466,17 @@ pub(crate) fn fallback_scoped_tools(agent: &AgentConfig, has_memory: bool) -> Ve
 
 /// A plan step's `compose` applied to its base `[agents.<compose.base_agent>]`
 /// block: `skills` and `tools` replace the base's wholesale (doctrine #3).
-/// In a hardened sandbox (`hardened`: a `[solana]` signer or `[risk]`,
-/// `config::hardening`) a compose may only narrow: a catalog tool the
-/// composed agent would get that the base does not (an empty `tools` = every
-/// catalog tool), or a skill the base does not list, refuses the step — a
-/// planner fed hostile text must not hand a routable agent `write_file` or
-/// an exec tool. (A hardened sandbox has no `[[mcp_servers]]` and loads no
-/// shell skill, so the catalog is every tool there is.)
+/// A planner fed hostile text (a webhook body, a failed step's output) must
+/// not hand a routable agent a shell, so a tool the composed agent would get
+/// that the base does not (an empty `tools` = every catalog tool; a
+/// `[[mcp_servers]]` name the base's `tools` leaves out):
+/// - in a hardened sandbox (`hardened`: a `[solana]` signer, `[risk]` or
+///   `[soe]`, `config::hardening`) refuses the step, as does a skill the base
+///   does not list — a compose may only narrow there (no `[[mcp_servers]]`,
+///   no shell skill: the catalog is every tool there is);
+/// - elsewhere is allowed only when the base has a configured scope for it
+///   (`[default_scopes.<tool>]` / `[agents.<a>.scopes.<tool>]`), never one
+///   that would run on the fallback scope (`fallback_scoped_tools`).
 pub(crate) fn compose_agent(
     base_name: &str,
     base: &AgentConfig,
@@ -483,9 +487,6 @@ pub(crate) fn compose_agent(
     let mut agent = base.clone();
     agent.skill_packages = compose.skills.clone();
     agent.tools = compose.tools.clone();
-    if !hardened {
-        return Ok(agent);
-    }
     let names = |a: &AgentConfig| -> HashSet<String> {
         agent_base_tools(a, true, has_memory)
             .into_iter()
@@ -496,8 +497,31 @@ pub(crate) fn compose_agent(
     let mut tools: Vec<String> = names(&agent)
         .into_iter()
         .filter(|t| !held.contains(t))
+        // A `[[mcp_servers]]` tool: the base holds every one when its
+        // `tools` is empty, else the ones it lists.
+        .chain(compose.tools.iter().cloned().filter(|t| {
+            t.contains(crate::adapters::outbound::mcp_client::MCP_NAME_SEPARATOR)
+                && !base.tools.is_empty()
+                && !base.tools.contains(t)
+        }))
+        .filter(|t| t != "compress_and_store")
         .collect();
     tools.sort();
+    tools.dedup();
+    if !hardened {
+        let unscoped: Vec<&String> = tools
+            .iter()
+            .filter(|t| !base.scopes.contains_key(*t))
+            .collect();
+        if unscoped.is_empty() {
+            return Ok(agent);
+        }
+        anyhow::bail!(
+            "compose would give agent `{base_name}` tools {unscoped:?} it does not hold and that \
+             have no configured scope: a composed plan step may add a tool only when \
+             `[default_scopes.<tool>]` or `[agents.{base_name}.scopes.<tool>]` configures one"
+        );
+    }
     let mut skills: Vec<&str> = compose
         .skills
         .iter()
@@ -509,8 +533,8 @@ pub(crate) fn compose_agent(
         return Ok(agent);
     }
     anyhow::bail!(
-        "compose would widen agent `{base_name}` in a hardened sandbox (Solana signer or \
-         [risk]): a composed plan step may only narrow its base agent's tools and skills — \
+        "compose would widen agent `{base_name}` in a hardened sandbox (Solana signer, \
+         [risk] or [soe]): a composed plan step may only narrow its base agent's tools and skills — \
          adds tools {tools:?}, skills {skills:?}"
     )
 }
@@ -1035,11 +1059,13 @@ mod golden_tests {
 
     /// Hardened sandbox: a compose may only narrow its base agent — a tool
     /// or skill the base lacks, or an empty `tools` (= every catalog tool)
-    /// over a listed base, refuses the step. Elsewhere it replaces wholesale.
+    /// over a listed base, refuses the step. Elsewhere it replaces wholesale
+    /// but adds only tools with a configured scope.
     #[test]
     fn compose_only_narrows_in_a_hardened_sandbox() {
         use crate::domain::plan::AgentCompose;
         let mut base = Config::default().agents.remove("main").unwrap();
+        base.scopes.clear();
         base.tools = vec!["read_file".into(), "list_directory".into(), "hl_ctx".into()];
         base.skill_packages = vec!["research".into()];
         let compose = |tools: &[&str], skills: &[&str]| AgentCompose {
@@ -1076,9 +1102,30 @@ mod golden_tests {
                     && err.contains(want),
                 "{c:?}: {err}"
             );
-            let open = run(&base, &c, false).unwrap();
-            assert_eq!(open.tools, c.tools, "not hardened: wholesale");
+            if c.tools == ["read_file"] {
+                // Only a new skill: not hardened, wholesale.
+                assert_eq!(run(&base, &c, false).unwrap().tools, c.tools);
+            } else {
+                let err = run(&base, &c, false).unwrap_err().to_string();
+                assert!(err.contains("no configured scope"), "{c:?}: {err}");
+            }
         }
+
+        // Not hardened: a tool the base has a configured scope for may be
+        // added (it runs on that scope), and the swap stays wholesale.
+        let mut scoped = base.clone();
+        scoped
+            .scopes
+            .insert("write_file".into(), ToolScope::default());
+        let c = compose(&["read_file", "write_file"], &["evil"]);
+        let open = run(&scoped, &c, false).unwrap();
+        assert_eq!(open.tools, c.tools);
+        assert_eq!(open.skill_packages, ["evil"]);
+        // A `[[mcp_servers]]` tool the base does not list is a widening too.
+        let err = run(&scoped, &compose(&["srv__shell"], &[]), false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("srv__shell"), "{err}");
 
         // A base with every catalog tool (`tools = []`): an opt-in tool it
         // never enabled (an exec tool) is still a widening.

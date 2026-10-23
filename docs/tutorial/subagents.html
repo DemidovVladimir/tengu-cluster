@@ -300,8 +300,8 @@
 <section class="sec" aria-labelledby="s-compose">
   <div class="sec-head">
     <span class="kicker">Try it: a composed step</span>
-    <h2 id="s-compose">compose replaces, hardening only narrows</h2>
-    <p>Example base agent <code>researcher</code> with <code>tools = ["read_file", "http_request"]</code> and <code>skills = ["web-research"]</code>; four catalog tools shown. Hardened = a <code>[risk]</code> or <code>[soe]</code> section, or a Solana signer (<code>[solana] privy_wallet_id</code>).</p>
+    <h2 id="s-compose">compose replaces, adds only scoped tools, hardening only narrows</h2>
+    <p>Example base agent <code>researcher</code> with <code>tools = ["read_file", "http_request"]</code> and <code>skills = ["web-research"]</code>; four catalog tools shown, configured scopes for all but <code>write_file</code>. Hardened = a <code>[risk]</code> or <code>[soe]</code> section, or a Solana signer (<code>[solana] privy_wallet_id</code>).</p>
   </div>
   <div class="widget">
     <div class="checks-inline">
@@ -416,6 +416,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <li><span><b>Bounded in time.</b> After <code>step_timeout_secs</code> the parent stops waiting and the child process is killed.</span></li>
     <li><span><b>A deny stays a deny.</b> The workspace root is added to every inherited scope except one with every field empty.</span></li>
     <li><span><b>Hardened compose only narrows.</b> In a <code>[risk]</code>, <code>[soe]</code> or signer sandbox an extra tool or skill fails the step before the engine is built.</span></li>
+    <li><span><b>Elsewhere only scoped tools are added.</b> A tool the base lacks needs a configured scope for it (<code>[default_scopes.&lt;tool&gt;]</code> or the agent&#39;s own), so injected planner text cannot hand a step a tool on the fallback scope.</span></li>
     <li><span><b>Redacted results.</b> Every tool result and tool error passes the secret redactor before the model sees it.</span></li>
     <li><span><b>Same network rules.</b> The child installs the parent's resolved egress policy; an invalid one aborts it.</span></li>
     <li><span><b>One trace writer.</b> A child never opens the run file: it hands its tool events back over IPC and the parent writes them under the step (an old parent or child sends no <code>trace</code> field and nothing changes).</span></li>
@@ -590,7 +591,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 
   /* ---- compose check: same rule as bootstrap::tools::compose_agent ---- */
   var CATALOG = ["read_file", "list_directory", "http_request", "write_file"];
-  var BASE = { tools: ["read_file", "http_request"], skills: ["web-research"] };
+  var BASE = { tools: ["read_file", "http_request"], skills: ["web-research"], scoped: ["read_file", "list_directory", "http_request"] };
   function picked(cls) { return Array.prototype.slice.call(document.querySelectorAll("." + cls)).filter(function (x) { return x.checked; }).map(function (x) { return x.value; }); }
   function renderCompose() {
     var hard = $("hard").checked, tools = picked("ct"), skills = picked("cs");
@@ -601,7 +602,10 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     var dbg = function (a) { return "[" + a.map(function (x) { return '"' + x + '"'; }).join(", ") + "]"; };
     if (hard && (addT.length || addS.length)) {
       v.className = "verdict bad"; v.textContent = "Step refused before the engine is built";
-      out.textContent = "compose would widen agent `researcher` in a hardened sandbox (Solana signer or [risk]): a composed plan step may only narrow its base agent's tools and skills — adds tools " + dbg(addT) + ", skills " + dbg(addS);
+      out.textContent = "compose would widen agent `researcher` in a hardened sandbox (Solana signer, [risk] or [soe]): a composed plan step may only narrow its base agent's tools and skills — adds tools " + dbg(addT) + ", skills " + dbg(addS);
+    } else if (!hard && addT.some(function (t) { return BASE.scoped.indexOf(t) < 0; })) {
+      v.className = "verdict bad"; v.textContent = "Step refused: a new tool with no configured scope";
+      out.textContent = "compose would give agent `researcher` tools " + dbg(addT.filter(function (t) { return BASE.scoped.indexOf(t) < 0; })) + " it does not hold and that have no configured scope: a composed plan step may add a tool only when `[default_scopes.<tool>]` or `[agents.researcher.scopes.<tool>]` configures one";
     } else {
       v.className = "verdict ok"; v.textContent = hard ? "Allowed: it only narrows" : "Allowed: lists replaced wholesale";
       out.textContent = "tools  = " + dbg(tools) + (tools.length ? "" : "   # empty = every catalog tool: " + dbg(CATALOG)) + "\nskills = " + dbg(skills) + "\n+ compress_and_store (always)";

@@ -130,6 +130,7 @@ Rules:
 - `compose.base_agent` must be the EXACT name of an `[agents.<name>]` block from the roster — the runner loads it as the starting point.
 - `compose.skills` and `compose.tools` REPLACE the base spec's lists for this run only — the file on disk is unchanged. Pick names from the `## Skills` and `## Tools` lines of the registry.
 - In a sandbox with money or signing (`[risk]`, a Solana signer) a compose may only NARROW the base agent: every tool and skill must already be on its lists, and `tools` must not be empty. A compose that adds anything fails the step.
+- Elsewhere a compose may add a tool the base agent does not hold only when the sandbox configures a scope for it (`[default_scopes.<tool>]` or `[agents.<base>.scopes.<tool>]`); any other added tool (and an empty `tools` over a listed base) fails the step.
 - The top-level `agent` field is just a label for events/logs (use something readable like `composed-<base>`); the actual base lives in `compose.base_agent`.
 - Use `compose` ONLY after a prior C-style Direct asked the user to confirm. Do NOT compose silently — that defeats the purpose of asking.
 
