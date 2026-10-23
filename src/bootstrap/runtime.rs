@@ -1203,14 +1203,22 @@ mod tests {
         let rt = begin(dir.path(), fast).await.unwrap();
         let thief = SqliteRuntimeStore::open(dir.path()).unwrap();
         let r = state_resource(dir.path());
-        thief.release_lease(&r, rt.holder()).await.unwrap();
-        assert!(
-            thief
+        // The keeper renews every 20 ms and may take a released lease back
+        // before the thief asks (a loaded test run): steal until it holds.
+        let mut stolen = false;
+        for _ in 0..50 {
+            thief.release_lease(&r, rt.holder()).await.unwrap();
+            if thief
                 .acquire_lease(&r, "thief:2:x", 60_000, now_ms())
                 .await
                 .unwrap()
                 .granted
-        );
+            {
+                stolen = true;
+                break;
+            }
+        }
+        assert!(stolen);
         let stop = tokio::time::timeout(Duration::from_secs(5), stopped(&mut rt.stop_rx()))
             .await
             .expect("state lease keeper noticed");
