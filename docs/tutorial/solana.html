@@ -201,7 +201,7 @@
         <li>A private agent or a decision loop calls a write tool, such as <code>dlmm_open_position</code>, with a <code>mode</code>. No mode means <code>simulate</code>.</li>
         <li><b>simulate</b>: live reads, checks, then each transaction simulated as the wallet. No signer is called, nothing is sent. Result: <code>write/1</code>, status <code>simulated</code>.</li>
         <li><b>send</b>: this agent's own scope for the tool must list the wallet in full, and <code>[solana] privy_wallet_id</code> must be that wallet, reached only through the seal proxy (<a href="sealed-keys.html">sealed keys</a>).</li>
-        <li>The tool takes lease <code>wallet:&lt;address&gt;</code> in <code>&lt;TENGU_HOME&gt;/state/solana-writes.db</code> for 150 s. Held, or an earlier send still in flight: refused.</li>
+        <li>The tool takes lease <code>wallet:&lt;address&gt;</code> in <code>&lt;TENGU_HOME&gt;/state/solana-writes.db</code> (mode 0600) for 150 s. Held, or an earlier send still in flight: refused.</li>
         <li>Reads are live, never cached, and pinned at or after the wallet's fence. Any failed check refuses the whole write before anything is signed.</li>
         <li>Per transaction: renew the lease, simulate, CU limit, priority fee, blockhash, ≤ 1232 bytes. Privy signs via the seal proxy; tengu verifies the signature, writes a pending record, then <code>sendTransaction</code>.</li>
         <li>Poll up to 120 s. Landed: the fence rises to its slot and the record clears. Then stale cache rows are dropped and the lease released.</li>
@@ -443,7 +443,7 @@ wallets   = [<span class="s">"&lt;the Privy wallet's full address&gt;"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

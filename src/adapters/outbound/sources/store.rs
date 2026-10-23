@@ -2,7 +2,7 @@
 //! per `[sources]` state dir, `<state dir>/sources.db` (O2): outside every
 //! workspace and fs root (load rule, `config/sources.rs`), mode 0600 for the
 //! database, its WAL and the WAL index (raw bodies may hold contact data;
-//! the file is created 0600 before SQLite opens it). WAL (`synchronous = NORMAL`: a power cut
+//! `sqlite.rs::open_wal`, as every store). WAL (`synchronous = NORMAL`: a power cut
 //! may lose the last commit, which a re-fetch reads again — later, never
 //! earlier) + busy_timeout; every call runs on `spawn_blocking`;
 //! `user_version = 2` (2: + `switches`; a version-1 file gains the table on
@@ -24,12 +24,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
+use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::config::sources::sources_db;
 use crate::domain::evidence::valid_sha256;
 use crate::domain::source::record::valid_source_id;
@@ -191,22 +191,14 @@ const ALL_SQL: [&str; 24] = [
 ];
 
 pub(crate) struct SqliteSourceStore {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
 }
 
 impl SqliteSourceStore {
     /// Open (creating) `<state_dir>/sources.db`.
     pub(crate) fn open(state_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(state_dir)
-            .with_context(|| format!("create {}", state_dir.display()))?;
         let path: PathBuf = sources_db(state_dir);
-        // Owner-only before SQLite opens it: the WAL and its index are
-        // created with the database file's mode.
-        owner_only(&path)?;
-        let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
-        )?;
+        let conn = open_wal(&path, Durability::Normal)?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version > SCHEMA_VERSION {
             bail!(
@@ -217,53 +209,10 @@ impl SqliteSourceStore {
         conn.execute_batch(SCHEMA_SQL)
             .with_context(|| format!("schema of {}", path.display()))?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
-        owner_only(&path)?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: SharedConn::new(conn, "source store"),
         })
     }
-
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut Connection) -> Result<T> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || {
-            let mut guard = conn.lock().map_err(|e| anyhow!("source store lock: {e}"))?;
-            f(&mut guard)
-        })
-        .await
-        .context("source store task")?
-    }
-}
-
-/// `sources.db` and its `-wal` / `-shm` mode 0600 (raw bodies may hold
-/// contact data, and the WAL holds the same pages): the database file is
-/// created 0600 when missing (an empty file is a new database to SQLite,
-/// which then creates the WAL and its index with that mode); every one of
-/// the three that exists is narrowed to 0600.
-fn owner_only(db: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(db)
-            .with_context(|| format!("create {}", db.display()))?;
-        for suffix in ["", "-wal", "-shm"] {
-            let p = PathBuf::from(format!("{}{suffix}", db.display()));
-            if p.exists() {
-                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600))
-                    .with_context(|| format!("chmod 600 {}", p.display()))?;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = db;
-    Ok(())
 }
 
 /// Non-empty, no whitespace or control character.
@@ -581,152 +530,157 @@ impl SourceStore for SqliteSourceStore {
         if batch.is_empty() {
             return Ok(CommitReport::default());
         }
-        self.with_conn(move |conn| commit_tx(conn, &batch)).await
+        self.conn.run(move |conn| commit_tx(conn, &batch)).await
     }
 
     async fn records(&self, query: &RecordQuery) -> Result<Vec<SourceRecord>> {
         let q = query.clone();
-        self.with_conn(move |conn| records_tx(conn, &q)).await
+        self.conn.run(move |conn| records_tx(conn, &q)).await
     }
 
     async fn coverage(&self, source_id: Option<&str>) -> Result<Vec<Coverage>> {
         let source = source_id.map(str::to_string);
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare_cached(COVERAGE_SQL)?;
-            let out = stmt
-                .query_map(params![source], |r| {
-                    Ok(Coverage {
-                        source_id: r.get(0)?,
-                        query_key: r.get(1)?,
-                        fetched_ms: r.get(2)?,
-                        from_ms: r.get(3)?,
-                        to_ms: r.get(4)?,
-                        complete: r.get(5)?,
-                        error_class: r.get(6)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(out)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let mut stmt = conn.prepare_cached(COVERAGE_SQL)?;
+                let out = stmt
+                    .query_map(params![source], |r| {
+                        Ok(Coverage {
+                            source_id: r.get(0)?,
+                            query_key: r.get(1)?,
+                            fetched_ms: r.get(2)?,
+                            from_ms: r.get(3)?,
+                            to_ms: r.get(4)?,
+                            complete: r.get(5)?,
+                            error_class: r.get(6)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(out)
+            })
+            .await
     }
 
     async fn cursor(&self, source_id: &str, query_key: &str) -> Result<Option<Cursor>> {
         let (source, key) = (source_id.to_string(), query_key.to_string());
-        self.with_conn(move |conn| {
-            let row = conn
-                .query_row(CURSOR_SQL, params![source, key], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-                })
-                .optional()?;
-            Ok(row.map(|(value, updated_ms)| Cursor {
-                source_id: source,
-                query_key: key,
-                value,
-                updated_ms,
-            }))
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let row = conn
+                    .query_row(CURSOR_SQL, params![source, key], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                    })
+                    .optional()?;
+                Ok(row.map(|(value, updated_ms)| Cursor {
+                    source_id: source,
+                    query_key: key,
+                    value,
+                    updated_ms,
+                }))
+            })
+            .await
     }
 
     async fn cursors(&self, source_id: Option<&str>) -> Result<Vec<Cursor>> {
         let source = source_id.map(str::to_string);
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare_cached(CURSORS_SQL)?;
-            let out = stmt
-                .query_map(params![source], |r| {
-                    Ok(Cursor {
-                        source_id: r.get(0)?,
-                        query_key: r.get(1)?,
-                        value: r.get(2)?,
-                        updated_ms: r.get(3)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(out)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let mut stmt = conn.prepare_cached(CURSORS_SQL)?;
+                let out = stmt
+                    .query_map(params![source], |r| {
+                        Ok(Cursor {
+                            source_id: r.get(0)?,
+                            query_key: r.get(1)?,
+                            value: r.get(2)?,
+                            updated_ms: r.get(3)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(out)
+            })
+            .await
     }
 
     async fn snapshot(&self, sha256: &str) -> Result<Option<Snapshot>> {
         let sha = sha256.to_string();
-        self.with_conn(move |conn| {
-            let row = conn
-                .query_row(SNAPSHOT_SQL, params![sha], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                        r.get::<_, u16>(5)?,
-                        r.get::<_, String>(6)?,
-                        r.get::<_, i64>(7)?,
-                        r.get::<_, i64>(8)?,
-                        r.get::<_, Option<Vec<u8>>>(9)?,
-                        r.get::<_, Option<i64>>(10)?,
-                    ))
-                })
-                .optional()?;
-            let Some((
-                sha256,
-                kind,
-                source_id,
-                request_key,
-                url,
-                http_status,
-                content_type,
-                fetched_ms,
-                bytes,
-                body,
-                purged_ms,
-            )) = row
-            else {
-                return Ok(None);
-            };
-            Ok(Some(Snapshot {
-                kind: SnapshotKind::parse(&kind)
-                    .ok_or_else(|| anyhow!("snapshot {sha256}: unknown kind `{kind}`"))?,
-                sha256,
-                source_id,
-                request_key,
-                url,
-                http_status,
-                content_type,
-                fetched_ms,
-                bytes: u64::try_from(bytes).map_err(|_| anyhow!("snapshot bytes {bytes}"))?,
-                body,
-                purged_ms,
-            }))
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let row = conn
+                    .query_row(SNAPSHOT_SQL, params![sha], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, String>(4)?,
+                            r.get::<_, u16>(5)?,
+                            r.get::<_, String>(6)?,
+                            r.get::<_, i64>(7)?,
+                            r.get::<_, i64>(8)?,
+                            r.get::<_, Option<Vec<u8>>>(9)?,
+                            r.get::<_, Option<i64>>(10)?,
+                        ))
+                    })
+                    .optional()?;
+                let Some((
+                    sha256,
+                    kind,
+                    source_id,
+                    request_key,
+                    url,
+                    http_status,
+                    content_type,
+                    fetched_ms,
+                    bytes,
+                    body,
+                    purged_ms,
+                )) = row
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(Snapshot {
+                    kind: SnapshotKind::parse(&kind)
+                        .ok_or_else(|| anyhow!("snapshot {sha256}: unknown kind `{kind}`"))?,
+                    sha256,
+                    source_id,
+                    request_key,
+                    url,
+                    http_status,
+                    content_type,
+                    fetched_ms,
+                    bytes: u64::try_from(bytes).map_err(|_| anyhow!("snapshot bytes {bytes}"))?,
+                    body,
+                    purged_ms,
+                }))
+            })
+            .await
     }
 
     async fn purge(&self, request: &PurgeRequest) -> Result<Purge> {
         let req = request.clone();
-        self.with_conn(move |conn| purge_tx(conn, &req)).await
+        self.conn.run(move |conn| purge_tx(conn, &req)).await
     }
 
     async fn purges(&self, source_id: Option<&str>) -> Result<Vec<Purge>> {
         let source = source_id.map(str::to_string);
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare_cached(PURGES_SQL)?;
-            let out = stmt
-                .query_map(params![source], |r| {
-                    Ok(Purge {
-                        source_id: r.get(0)?,
-                        purged_ms: r.get(1)?,
-                        raw_before_ms: r.get(2)?,
-                        records_before_ms: r.get(3)?,
-                        snapshots: r.get::<_, i64>(4)? as u64,
-                        records: r.get::<_, i64>(5)? as u64,
-                        reason: r.get(6)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(out)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let mut stmt = conn.prepare_cached(PURGES_SQL)?;
+                let out = stmt
+                    .query_map(params![source], |r| {
+                        Ok(Purge {
+                            source_id: r.get(0)?,
+                            purged_ms: r.get(1)?,
+                            raw_before_ms: r.get(2)?,
+                            records_before_ms: r.get(3)?,
+                            snapshots: r.get::<_, i64>(4)? as u64,
+                            records: r.get::<_, i64>(5)? as u64,
+                            reason: r.get(6)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(out)
+            })
+            .await
     }
 
     async fn set_switch(&self, switch: &SourceSwitch) -> Result<()> {
@@ -737,33 +691,35 @@ impl SourceStore for SqliteSourceStore {
             bail!("switch {}: a reason is required", switch.source_id);
         }
         let s = switch.clone();
-        self.with_conn(move |conn| {
-            conn.execute(
-                PUT_SWITCH_SQL,
-                params![s.source_id, s.enabled, s.at_ms, s.reason],
-            )?;
-            Ok(())
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                conn.execute(
+                    PUT_SWITCH_SQL,
+                    params![s.source_id, s.enabled, s.at_ms, s.reason],
+                )?;
+                Ok(())
+            })
+            .await
     }
 
     async fn switches(&self, source_id: Option<&str>) -> Result<Vec<SourceSwitch>> {
         let source = source_id.map(str::to_string);
-        self.with_conn(move |conn| {
-            let mut stmt = conn.prepare_cached(SWITCHES_SQL)?;
-            let out = stmt
-                .query_map(params![source], |r| {
-                    Ok(SourceSwitch {
-                        source_id: r.get(0)?,
-                        enabled: r.get(1)?,
-                        at_ms: r.get(2)?,
-                        reason: r.get(3)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(out)
-        })
-        .await
+        self.conn
+            .run(move |conn| {
+                let mut stmt = conn.prepare_cached(SWITCHES_SQL)?;
+                let out = stmt
+                    .query_map(params![source], |r| {
+                        Ok(SourceSwitch {
+                            source_id: r.get(0)?,
+                            enabled: r.get(1)?,
+                            at_ms: r.get(2)?,
+                            reason: r.get(3)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(out)
+            })
+            .await
     }
 }
 

@@ -3,16 +3,16 @@
 //!
 //! | File | Holds |
 //! |---|---|
-//! | `runtime.db` | the leases of `tengu run` / `tengu webhooks` (`runtime:<sandbox>`, `state:<dir>`; `bootstrap/runtime.rs::LeasePlan`) — WAL + busy_timeout, one statement per change, atomic across processes (pattern of `solana/writes_store.rs`) |
+//! | `runtime.db` | the leases of `tengu run` / `tengu webhooks` (`runtime:<sandbox>`, `state:<dir>`; `bootstrap/runtime.rs::LeasePlan`) — 0600, WAL + busy_timeout (`sqlite.rs::open_wal`), one statement per change, atomic across processes (pattern of `solana/writes_store.rs`) |
 //! | `run-<sandbox>.json` | the heartbeat — written to a temp file, then renamed (readers never see a partial file); [`read_heartbeat`] serves `tengu doctor --live` |
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use rusqlite::{params, Connection};
+use rusqlite::params;
 
+use crate::adapters::outbound::sqlite::{open_wal, Durability, SharedConn};
 use crate::domain::runtime::{heartbeat_file, Heartbeat, RunnerLease};
 use crate::ports::runtime::RuntimeStore;
 
@@ -33,7 +33,7 @@ WHERE leases.holder = excluded.holder OR leases.expires_at_ms <= ?3";
 
 #[derive(Clone)]
 pub(crate) struct SqliteRuntimeStore {
-    conn: Arc<Mutex<Connection>>,
+    conn: SharedConn,
     dir: PathBuf,
     path: PathBuf,
 }
@@ -67,13 +67,11 @@ pub(crate) fn read_heartbeat(dir: &Path, sandbox: &str) -> Result<Option<Heartbe
 impl SqliteRuntimeStore {
     /// Open (creating) `<dir>/runtime.db`.
     pub(crate) fn open(dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let path = crate::config::xmarket::runtime_db(dir);
-        let conn = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")?;
+        let conn = open_wal(&path, Durability::Full)?;
         conn.execute_batch(SCHEMA_SQL)?;
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: SharedConn::new(conn, "runtime store"),
             dir: dir.to_path_buf(),
             path,
         })
@@ -82,22 +80,6 @@ impl SqliteRuntimeStore {
     /// The database file (for operator messages).
     pub(crate) fn path(&self) -> &Path {
         &self.path
-    }
-
-    async fn with_conn<T, F>(&self, f: F) -> Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
-    {
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || {
-            let guard = conn
-                .lock()
-                .map_err(|e| anyhow::anyhow!("runtime store lock: {e}"))?;
-            f(&guard)
-        })
-        .await
-        .context("runtime store task")?
     }
 }
 
@@ -111,38 +93,40 @@ impl RuntimeStore for SqliteRuntimeStore {
         now_ms: i64,
     ) -> Result<RunnerLease> {
         let (resource, holder) = (resource.to_string(), holder.to_string());
-        self.with_conn(move |c| {
-            c.execute(
-                ACQUIRE_SQL,
-                params![resource, holder, now_ms, now_ms.saturating_add(ttl_ms)],
-            )?;
-            let (current, acquired, expires): (String, i64, i64) = c.query_row(
-                "SELECT holder, acquired_at_ms, expires_at_ms FROM leases WHERE resource = ?1",
-                params![resource],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?;
-            Ok(RunnerLease {
-                granted: current == holder,
-                resource,
-                holder,
-                current_holder: current,
-                acquired_at_ms: acquired,
-                expires_at_ms: expires,
+        self.conn
+            .run(move |c| {
+                c.execute(
+                    ACQUIRE_SQL,
+                    params![resource, holder, now_ms, now_ms.saturating_add(ttl_ms)],
+                )?;
+                let (current, acquired, expires): (String, i64, i64) = c.query_row(
+                    "SELECT holder, acquired_at_ms, expires_at_ms FROM leases WHERE resource = ?1",
+                    params![resource],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                Ok(RunnerLease {
+                    granted: current == holder,
+                    resource,
+                    holder,
+                    current_holder: current,
+                    acquired_at_ms: acquired,
+                    expires_at_ms: expires,
+                })
             })
-        })
-        .await
+            .await
     }
 
     async fn release_lease(&self, resource: &str, holder: &str) -> Result<()> {
         let (resource, holder) = (resource.to_string(), holder.to_string());
-        self.with_conn(move |c| {
-            c.execute(
-                "DELETE FROM leases WHERE resource = ?1 AND holder = ?2",
-                params![resource, holder],
-            )?;
-            Ok(())
-        })
-        .await
+        self.conn
+            .run(move |c| {
+                c.execute(
+                    "DELETE FROM leases WHERE resource = ?1 AND holder = ?2",
+                    params![resource, holder],
+                )?;
+                Ok(())
+            })
+            .await
     }
 
     async fn write_heartbeat(&self, hb: &Heartbeat) -> Result<()> {

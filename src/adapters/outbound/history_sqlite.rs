@@ -1,8 +1,9 @@
 //! `SqliteHistoryStore` — `ports::history::HistoryStore` over one SQLite file
 //! per UTC day, `<dir>/<YYYYMMDD>.db` (the day of `observed_at_ms`; `dir` =
 //! `<TENGU_HOME>/state/<xmarket.state>/history`). Table `obs_history`, unique
-//! `(key, observed_at_ms)` (a re-append is a no-op), WAL (`synchronous =
-//! NORMAL`) + busy_timeout so every process of the install can append. Day
+//! `(key, observed_at_ms)` (a re-append is a no-op), 0600, WAL (`synchronous
+//! = NORMAL`) + busy_timeout (`sqlite.rs::open_wal`) so every process of the
+//! install can append. Day
 //! files older than `retention_days` are deleted on open and whenever a new
 //! day file is created, and rows that old are not appended. A `reader`
 //! creates no day file and deletes nothing (`tengu history`). Every call runs
@@ -19,6 +20,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 use tracing::warn;
 
+use crate::adapters::outbound::sqlite::{open_wal, Durability};
 use crate::domain::observation::now_ms;
 use crate::ports::history::{HistoryRow, HistoryStore};
 
@@ -146,11 +148,8 @@ fn day_files(dir: &Path) -> Result<Vec<(i64, PathBuf)>> {
 }
 
 fn open_day(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
-    // NORMAL: WAL stays consistent; a power cut may lose the last appends.
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;",
-    )?;
+    // Normal: a power cut may lose the last appends.
+    let conn = open_wal(path, Durability::Normal)?;
     conn.execute_batch(SCHEMA_SQL)?;
     Ok(conn)
 }

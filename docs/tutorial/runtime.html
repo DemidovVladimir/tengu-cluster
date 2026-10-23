@@ -416,6 +416,7 @@
         <tr><td><code>src/domain/calendar.rs</code> · <code>src/domain/tz.rs</code></td><td>sessions, holidays, weekend clock · NY / Paris DST</td></tr>
         <tr><td><code>src/config/runtime.rs</code> · <code>feeds.rs</code> · <code>rate_limits.rs</code></td><td><code>[runtime]</code>, <code>[feeds.*]</code>, <code>[rate_limits.*]</code></td></tr>
         <tr><td><code>src/adapters/outbound/runtime_store.rs</code></td><td><code>runtime.db</code> leases, atomic heartbeat file</td></tr>
+        <tr><td><code>src/adapters/outbound/sqlite.rs</code></td><td>every state db (<code>runtime.db</code>, <code>ledger.db</code>, <code>market.db</code>, …): mode 0600 with its WAL, busy timeout, one shared connection</td></tr>
         <tr><td><code>src/adapters/outbound/rate_limit.rs</code> · <code>http_class.rs</code> · <code>clock.rs</code></td><td>limiters, HTTP error classes, system clock</td></tr>
         <tr><td><code>src/ports/runtime.rs</code> · <code>src/ports/clock.rs</code></td><td>runtime store, <code>RuntimeJob</code> (a job feed's run), <code>Ownership</code> (<code>ensure</code> before a write, <code>lost</code> to race a wait; <code>LeaseLost</code>, <code>Unleased</code>) and clock ports (<code>SimClock</code> for replay)</td></tr>
       </tbody>
@@ -424,7 +425,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

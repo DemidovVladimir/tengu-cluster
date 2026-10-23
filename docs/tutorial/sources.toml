@@ -358,6 +358,7 @@ sources = [
   "src/config/feeds.rs",
   "src/config/rate_limits.rs",
   "src/adapters/outbound/runtime_store.rs",
+  "src/adapters/outbound/sqlite.rs",
   "src/adapters/outbound/rate_limit.rs",
   "src/adapters/outbound/clock.rs",
   "src/domain/runtime.rs",
