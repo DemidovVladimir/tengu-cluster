@@ -70,3 +70,11 @@ lastrun.md
 # git-visible — we only need to ignore the literal `~` directory that
 # pre-fix runs created at the repo root).
 /~/
+
+# Private planning set — operator figures, local only (docs/soe-2026-10-08.md:
+# "stays local") — and the review handoff. One `git add docs` must never
+# publish them. Disk images never belong here.
+/docs/software-opportunity-*
+/docs/crypto-opportunity-*
+/handoff_review.md
+*.dmg
