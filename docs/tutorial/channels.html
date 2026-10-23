@@ -349,7 +349,7 @@
     <li><span><b>Private agents stay private.</b> No <code>description</code> and not default: never routable, never the default, not in <code>/agents</code> or the team block.</span></li>
     <li><span><b>Webhooks authenticate first.</b> HMAC-SHA256 or an exact <code>Authorization</code> header, compared in constant time, before any work starts.</span></li>
     <li><span><b>Bad endpoint config fails at start.</b> Both or neither secret, an empty inline secret, or a loop with no <code>[decision_loops]</code> block stops the listener.</span></li>
-    <li><span><b>One owner.</b> <code>tengu webhooks</code> takes the same leases as <code>tengu run</code>; a second process exits 1.</span></li>
+    <li><span><b>One owner.</b> <code>tengu webhooks</code> is <code>tengu run</code> with no feeds and only the endpoints' loops: the same leases, heartbeat and drain; a second process exits 1.</span></li>
     <li><span><b>Every request is recorded.</b> A configured endpoint's request is one <code>trigger.webhook</code> root in the execution trace, its loop or plan events under it, then <code>webhook.responded</code> with the code. Never the body or a header; an unknown endpoint is only logged.</span></li>
     <li><span><b>Plans are recorded.</b> With <code>[orchestrator]</code>, <code>tengu chat</code> and <code>tengu telegram</code> each write one run of <code>plan.*</code> / <code>step.*</code> events (<a href="studio.html">Studio</a>).</span></li>
     <li><span><b>Loops stay ordered.</b> One event at a time per loop, at most 64 waiting by default; the rest get <code>429</code>.</span></li>
@@ -394,7 +394,8 @@
         <tr><td><code>src/adapters/inbound/channel.rs</code></td><td><code>@role:</code> parsing, chunking, team activity</td></tr>
         <tr><td><code>src/adapters/inbound/activity.rs</code></td><td>activity line text per tool</td></tr>
         <tr><td><code>src/ports/tool_activity.rs</code></td><td>the activity port every surface implements</td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns owned by the loop dispatch; each request's <code>trigger.webhook</code> root and answer; <code>tengu webhooks</code>' recording</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td>routes, auth, 202 / 401 / 404 / 429 / 503, one-shot turns owned by the loop dispatch; each request's <code>trigger.webhook</code> root and answer</td></tr>
+        <tr><td><code>src/adapters/inbound/run.rs</code></td><td><code>tengu webhooks</code> = <code>run_webhooks</code>: the runtime with no feeds and only the endpoints' loops</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td>the loop queue: one at a time, cap, drain; <code>Turns</code>: the orchestrator turns the drain waits for</td></tr>
         <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>resolve_session_id</code>, <code>build_orchestrator</code> (+ the recording a surface hands it)</td></tr>
       </tbody>

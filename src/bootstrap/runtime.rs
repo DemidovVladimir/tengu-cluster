@@ -475,9 +475,9 @@ pub(crate) type MakeEscalator<'a> =
 /// Take the lease, open the trace recording (`run_id`; `runtime_id` = the
 /// lease holder), build every decision loop (their audit lines carry both
 /// ids), start the lease keeper and the heartbeat. `escalator` comes from
-/// the inbound side (the webhook listener's orchestrator escalator when
-/// built with `--features webhooks`): it records into this run and its
-/// turns are the runtime's ([`Runtime::turns`], drained on shutdown).
+/// the inbound side (`bootstrap::one_shot::orchestrator_escalator`): it
+/// records into this run and its turns are the runtime's
+/// ([`Runtime::turns`], drained on shutdown).
 pub(crate) async fn start(
     config: &Config,
     secrets: Arc<SecretRegistry>,

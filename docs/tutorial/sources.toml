@@ -167,6 +167,7 @@ sources = [
   "src/adapters/inbound/tui/",
   "src/adapters/inbound/telegram.rs",
   "src/adapters/inbound/webhooks.rs",
+  "src/adapters/inbound/run.rs",
   "src/adapters/inbound/channel.rs",
   "src/adapters/inbound/activity.rs",
   "src/ports/tool_activity.rs",

@@ -86,10 +86,11 @@ enum Commands {
         sandbox: Option<String>,
     },
     /// Run the inbound webhook listener (`[webhooks.endpoints.<name>]` blocks
-    /// in the sandbox config bind URL paths to agents). Returns 202 Accepted
-    /// on every authenticated POST and dispatches a one-shot orchestrator
-    /// turn in the background. Takes the leases `tengu run` takes (never
-    /// beside it); SIGINT / SIGTERM drain it. Build with `--features webhooks`.
+    /// in the sandbox config bind URL paths to agents or loops). Returns 202
+    /// Accepted on every authenticated POST and dispatches a one-shot
+    /// orchestrator turn or a loop event in the background. It is `tengu
+    /// run` with no feeds and only the endpoints' loops: the same leases
+    /// (never beside it), heartbeat and drain. Feature `webhooks` (default).
     Webhooks {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
         #[arg(long)]
@@ -739,7 +740,7 @@ pub(crate) async fn run() -> Result<()> {
         #[cfg(feature = "webhooks")]
         Commands::Webhooks { sandbox } => {
             let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
-            crate::adapters::inbound::webhooks::run_webhooks(config, secret_registry).await
+            crate::adapters::inbound::run::run_webhooks(config, secret_registry).await
         }
         #[cfg(not(feature = "webhooks"))]
         Commands::Webhooks { .. } => {

@@ -9,7 +9,8 @@
 # Agentic memory needs the image built WITH the feature, not just the profile:
 #   TENGU_FEATURES=postgres_memory docker compose --profile postgres-memory up -d --build
 #
-# Ports: 7080 is the webhook listener (`tengu webhooks`, feature `webhooks`).
+# Ports: 7080 is the webhook listener (`tengu run` / `tengu webhooks` — the
+# runtime with no feeds; feature `webhooks`).
 # Nothing listens on [hub].port. Not published under NETWORK=tor.
 #
 # Config:

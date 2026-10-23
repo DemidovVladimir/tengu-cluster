@@ -18,11 +18,11 @@
 //!
 //! ## Files / responsibilities
 //!
-//! - `run_webhooks(...)` — entry point called by `Commands::Webhooks` in
-//!   `main.rs`. Owns the long-running tokio task that hosts the axum
-//!   server.
-//! - `app_state(...)` + `router(...)` — the same routes for `tengu run`
-//!   (`inbound/run.rs`), which mounts them in its own process on its
+//! - `tengu webhooks` = `inbound/run.rs::run_webhooks`: `tengu run` with no
+//!   feeds and only the loops an endpoint names, after [`check_config`] —
+//!   one runtime (leases, recording, heartbeat, drain), never a copy.
+//! - `app_state(...)` + `router(...)` — the routes `tengu run` / Studio Play
+//!   mount (`inbound/run.rs::mount_webhooks`) on the runtime's
 //!   `LoopDispatch` (every loop built once) with graceful shutdown.
 //! - `WebhookAppState` — per-process shared state (config, memory
 //!   manager, loop dispatch). Cloned into each request handler.
@@ -35,11 +35,11 @@
 //!
 //! ## Trace (`domain/trace.rs`, Studio)
 //!
-//! `tengu webhooks` records one run per process (`RunKind::Webhooks`,
-//! `runtime_id` = the lease holder; ends with `run.closed`); under `tengu
-//! run` / Studio Play the routes write into the runtime's run. Per request
-//! to a configured endpoint (an unknown one is logged, never recorded — its
-//! name is the sender's):
+//! The routes write into the runtime's run (`tengu run`, `tengu webhooks`,
+//! Studio Play: `kind = "run"`, `runtime_id` = the lease holder; older
+//! `tengu webhooks` recordings are `kind = "webhooks"`, ending in
+//! `run.closed`). Per request to a configured endpoint (an unknown one is
+//! logged, never recorded — its name is the sender's):
 //!
 //! | Event | Node | Status | Payload |
 //! |---|---|---|---|
@@ -54,8 +54,8 @@
 //!
 //! | Piece | Rule |
 //! |---|---|
-//! | owner | an agent endpoint's turn and a loop escalation's run on the process's `Turns` (`LoopDispatch::spawn_turn`; `tengu run`: `Runtime::turns`); refused once the drain began (a request: 503) |
-//! | drain | `LoopDispatch::drain` (standalone `listen`, `Runtime::shutdown`) waits for them with the loop events ≤ `[runtime] shutdown_grace_secs` — before the lease release and `run.closed` / `runtime.stopped` |
+//! | owner | an agent endpoint's turn and a loop escalation's run on the process's `Turns` (`LoopDispatch::spawn_turn`: `Runtime::turns`); refused once the drain began (a request: 503) |
+//! | drain | `LoopDispatch::drain` (`Runtime::shutdown`) waits for them with the loop events ≤ `[runtime] shutdown_grace_secs` — before the lease release and `runtime.stopped` |
 //! | end of a turn | `Orchestrator::flush_metrics` (the metrics barrier: its last `metrics.recorded` is written), then its trace gate closes (`trace_exec::close_after`) |
 //! | a turn past the deadline | aborted: its steps are aborted, `plan.completed` (dropped, `cancelled`) is written as it drops, the gate closes — all before the drain returns; `drain.turns.aborted` counts it |
 //!
@@ -70,23 +70,19 @@
 
 #![cfg(feature = "webhooks")]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use std::time::Instant;
 
 use crate::application::orchestrator::trace::OrchestratorTrace;
-use crate::application::runtime::loops::{LoopDispatch, LoopHandler, Refused, Turns};
+use crate::application::runtime::loops::{LoopDispatch, Refused};
 use crate::application::trace_exec::{self, Cause, GatedTrace};
-use crate::bootstrap::one_shot::{
-    config_planner, orchestrator_escalator, run_one_shot, PlannerSource,
-};
+use crate::bootstrap::one_shot::{config_planner, run_one_shot, PlannerSource};
 use crate::config::{Config, WebhookEndpointConfig};
 use crate::domain::secrets::SecretRegistry;
-use crate::domain::trace::{
-    http_status, line1, Component, EventDraft, RunKind, Status, RUN_CLOSED,
-};
+use crate::domain::trace::{http_status, line1, Component, EventDraft, Status};
 use crate::domain::workflow::node_id;
 use crate::ports::trace::TraceSink;
 use anyhow::{anyhow, Context, Result};
@@ -111,205 +107,9 @@ type HmacSha256 = Hmac<Sha256>;
 /// (different prefix, identical shape).
 const SIG_HEADER: &str = "x-tengu-signature";
 
-/// Long-running entry point: takes the leases `tengu run` takes
-/// (`bootstrap::runtime::LeasePlan`: `runtime:<sandbox>`, and `state:<dir>`
-/// for an `[xmarket]` state dir — never beside `tengu run` of the sandbox or
-/// of another sandbox on its ledger; held ⇒ exit 1 naming the holder), then
-/// serves until SIGINT / SIGTERM (graceful: loop events and orchestrator
-/// turns drain ≤ `[runtime] shutdown_grace_secs`, then the leases are freed
-/// and `run.closed` written; a second signal exits 130) or a lost lease
-/// (exit 1).
-pub async fn run_webhooks(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
-    use crate::application::runtime::{LeaseTiming, Supervisor};
-    use crate::bootstrap::runtime::{LeasePlan, OwnerLeases};
-
-    check_config(&config)?;
-    let addr = bind_addr(&config)?;
-    // Before anything slow: a SIGTERM during boot must stop us cleanly.
-    let signals = super::run::Signals::install()?;
-    let plan = LeasePlan::of(&config);
-    let timing = LeaseTiming::default();
-    let owner = OwnerLeases::take(&plan, timing.ttl_ms).await?;
-    let mut supervisor = Supervisor::new();
-    owner.keep(&mut supervisor, timing);
-    info!(
-        sandbox = %plan.sandbox,
-        leases = ?owner.resources(),
-        holder = %owner.holder(),
-        state_dir = %plan.state_dir.display(),
-        "tengu webhooks leases taken"
-    );
-    let stopper = supervisor.stopper();
-    let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
-    // This process's recording (module docs § Trace), after the leases.
-    let trace = crate::bootstrap::trace::open_sink(
-        &config,
-        Some(owner.holder()),
-        RunKind::Webhooks,
-        &secret_registry,
-    );
-    let holder = owner.holder().to_string();
-    let (served, drained) = serve_webhooks(
-        config,
-        secret_registry,
-        addr,
-        signals,
-        stopper.clone(),
-        (Arc::clone(&trace), holder),
-    )
-    .await;
-    supervisor
-        .shutdown(tokio::time::Instant::now() + grace)
-        .await;
-    let released = owner.release().await;
-    let stop = stopper.cause();
-    info!(lease_released = released, stop = ?stop, "tengu webhooks stopped");
-    let failed = served.is_err() || stop.as_ref().is_some_and(|s| s.failed);
-    trace.emit(
-        EventDraft::new(
-            Component::Runtime,
-            RUN_CLOSED,
-            if failed { Status::Failed } else { Status::Ok },
-        )
-        .payload(json!({
-            "reason": stop.as_ref().map(|s| s.reason.clone()),
-            "failed": failed,
-            "lease_released": released,
-            "drained": drained.map(|d| d.to_json()),
-        })),
-    );
-    served?;
-    match stop {
-        Some(s) if s.failed => anyhow::bail!("tengu webhooks stopped: {}", s.reason),
-        _ => Ok(()),
-    }
-}
-
-/// The listener under the leases: every endpoint loop built once, served
-/// until the stop signal (a signal, a lost lease), then the loop events and
-/// orchestrator turns drained (`None`: it never served). `rec` = the
-/// recording + the lease holder its audit lines name.
-async fn serve_webhooks(
-    config: Config,
-    secret_registry: Arc<SecretRegistry>,
-    addr: SocketAddr,
-    signals: super::run::Signals,
-    stopper: crate::application::runtime::Stopper,
-    rec: (Arc<dyn TraceSink>, String),
-) -> (
-    Result<()>,
-    Option<crate::application::runtime::loops::DrainReport>,
-) {
-    match listen(config, secret_registry, addr, signals, stopper, rec).await {
-        Ok((served, drained)) => (served, Some(drained)),
-        Err(e) => (Err(e), None),
-    }
-}
-
-async fn listen(
-    config: Config,
-    secret_registry: Arc<SecretRegistry>,
-    addr: SocketAddr,
-    mut signals: super::run::Signals,
-    stopper: crate::application::runtime::Stopper,
-    (trace, holder): (Arc<dyn TraceSink>, String),
-) -> Result<(Result<()>, crate::application::runtime::loops::DrainReport)> {
-    use crate::application::runtime::stopped;
-
-    let grace = std::time::Duration::from_secs(config.runtime.shutdown_grace_secs);
-    // One `DecisionLoop` per loop referenced by an endpoint — built once so
-    // its action history survives across events. Escalation reuses the
-    // one-shot orchestrator path when `[orchestrator]` is configured; its
-    // turns, like an agent endpoint's, are the dispatch's (drained below).
-    let turns = Turns::new();
-    let escalator = orchestrator_escalator(&config, Arc::clone(&trace), Arc::clone(&turns));
-    let rec = crate::bootstrap::trace::Recording::of(Arc::clone(&trace), Some(&holder));
-    let mut handlers: BTreeMap<String, Arc<dyn LoopHandler>> = BTreeMap::new();
-    for ep in config.webhooks.endpoints.values() {
-        let Some(name) = &ep.decision_loop else {
-            continue;
-        };
-        if handlers.contains_key(name) {
-            continue;
-        }
-        // Step / tool events into this process's recording; audit lines
-        // carry its runtime + run id.
-        let dl = crate::bootstrap::decision::build_decision_loop(
-            &config,
-            name,
-            escalator.clone(),
-            Arc::clone(&secret_registry),
-            rec.clone(),
-        )?;
-        handlers.insert(name.clone(), dl);
-    }
-    let loops = Arc::new(
-        LoopDispatch::new(
-            handlers,
-            config.runtime.max_decisions_in_flight,
-            config.runtime.max_queued_per_loop,
-        )
-        .with_trace(Arc::clone(&trace))
-        .with_turns(turns),
-    );
-
-    let state = app_state(config, Arc::clone(&loops), secret_registry, trace)?;
-    let endpoints_summary: Vec<&str> = state
-        .config
-        .webhooks
-        .endpoints
-        .keys()
-        .map(|s| s.as_str())
-        .collect();
-    info!(
-        %addr,
-        endpoints = ?endpoints_summary,
-        sandbox = ?state.config.sandbox_name,
-        "tengu webhooks listening"
-    );
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("bind webhook listener to {}", addr))?;
-
-    let on_signal = stopper.clone();
-    let signal_task = tokio::spawn(async move {
-        let first = signals.next().await;
-        on_signal.stop(first, false);
-        let second = signals.next().await;
-        error!(
-            signal = second,
-            "second signal while draining — exiting now (code 130)"
-        );
-        std::process::exit(130);
-    });
-    let mut stop = stopper.subscribe();
-    let served = axum::serve(listener, router(state))
-        .with_graceful_shutdown(async move {
-            stopped(&mut stop).await;
-        })
-        .await
-        .context("webhook server exited unexpectedly");
-    // Not stopped yet ⇒ the server died on its own.
-    stopper.stop("webhook server exited", true);
-    // Loop events and orchestrator turns: every one ends (or is aborted)
-    // before the caller frees the leases and writes `run.closed`.
-    let drained = loops.drain(tokio::time::Instant::now() + grace).await;
-    info!(
-        finished = drained.finished,
-        dropped = drained.dropped,
-        aborted = drained.aborted,
-        turns_finished = drained.turns_finished,
-        turns_aborted = drained.turns_aborted,
-        "webhook loop events and turns drained"
-    );
-    signal_task.abort();
-    Ok((served, drained))
-}
-
 /// Refuse a config the listener cannot serve: disabled, no endpoints,
 /// planner endpoints without `[orchestrator]`, bad endpoint auth or loop refs.
-fn check_config(config: &Config) -> Result<()> {
+pub(crate) fn check_config(config: &Config) -> Result<()> {
     if !config.webhooks.enabled {
         return Err(anyhow!(
             "[webhooks] not enabled in this sandbox config — set `[webhooks] enabled = true` to start the listener"
@@ -856,6 +656,9 @@ fn decode_nibble(b: u8) -> Result<u8, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::runtime::loops::{LoopHandler, Turns};
+    use crate::domain::trace::RUN_CLOSED;
+    use std::collections::BTreeMap;
 
     /// Compute the expected signature for a body+secret. Used by tests
     /// to build inputs for `verify_hmac`.

@@ -66,7 +66,8 @@ RUN mkdir -p /opt/tengu/data
 ENV TENGU_CONFIG=/opt/tengu/config.toml \
     TENGU_HOME=/opt/tengu/data
 
-# Webhook listener port (`tengu webhooks`, feature `webhooks`). Nothing listens
+# Webhook listener port (`tengu run` / `tengu webhooks` — the runtime with no
+# feeds; feature `webhooks`). Nothing listens
 # on [hub].port — the hub is config-only.
 EXPOSE 7080
 

@@ -9,13 +9,12 @@
 //! | [`run_ids`] · [`Recording`] | `runtime_id` + `run_id` for `AuditLog` (`decisions.jsonl`) · the sink + ids handed to each decision loop (`bootstrap::decision`) |
 //! | [`reader`] · [`run_path`] | a sandbox's `JsonlTraceReader` · one run's file |
 //!
-//! Who records: `tengu run` (`RunKind::Run`, `runtime_id` = the lease holder,
-//! `bootstrap/runtime.rs::start`: `runtime.*`, `feed.*`, `loop.*`, every
-//! loop's step / tool events, each webhook request's `trigger.webhook` and
-//! its work, escalation turns), `tengu decide` (`RunKind::Decide`, no
-//! `runtime_id`: `trigger.*` + the loop's step / tool events), `tengu
-//! webhooks` (`RunKind::Webhooks`, `runtime_id` = the lease holder: the same
-//! per-request events, `run.closed`), `tengu chat` / `tengu telegram` (one
+//! Who records: `tengu run` and `tengu webhooks` (`RunKind::Run`,
+//! `runtime_id` = the lease holder, `bootstrap/runtime.rs::start`:
+//! `runtime.*`, `feed.*`, `loop.*`, every loop's step / tool events, each
+//! webhook request's `trigger.webhook` and its work, escalation turns),
+//! `tengu decide` (`RunKind::Decide`, no `runtime_id`: `trigger.*` + the
+//! loop's step / tool events), `tengu chat` / `tengu telegram` (one
 //! per process) and `tengu eval` (one per orchestrated row) with
 //! `[orchestrator]` (`plan.*`, `step.*`, `metrics.recorded`, each step's
 //! `run-agent` `tool.*`; `application/orchestrator/trace.rs`).

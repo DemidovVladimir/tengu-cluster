@@ -13,6 +13,7 @@
 //! | [`RunSession::stopper`] | requests the graceful stop: the first SIGINT / SIGTERM here, Studio's Stop (`"studio stop"`) — the same `Stopper::stop` |
 //! | [`RunSession::wait_and_shutdown`] | waits for the stop, drains loop events and orchestrator turns — the webhook agent endpoints' and escalations', owned by `Runtime::turns` (≤ `[runtime] shutdown_grace_secs`, then aborted), releases the leases, writes `runtime.stopped`, logs the totals |
 //! | [`run_runtime`] | `tengu run`: signals + a session + its exit code |
+//! | [`run_webhooks`] | `tengu webhooks`: [`run_runtime`] on the sandbox with no feeds and only the loops an endpoint names ([`webhooks_only`]) — the same leases, recording (`kind = "run"`), heartbeat, drain and exit codes |
 
 use std::sync::Arc;
 
@@ -48,6 +49,31 @@ pub(crate) async fn run_runtime(config: Config, secrets: Arc<SecretRegistry>) ->
         anyhow::bail!("tengu run stopped: {}", report.stop.reason);
     }
     Ok(())
+}
+
+/// `tengu webhooks --sandbox <s>` (module table): the listener's config
+/// checks (`[webhooks] enabled`, endpoints, `[orchestrator]` for a planner
+/// endpoint), then the runtime with nothing but the webhook routes and
+/// their loops.
+#[cfg(feature = "webhooks")]
+pub(crate) async fn run_webhooks(config: Config, secrets: Arc<SecretRegistry>) -> Result<()> {
+    super::webhooks::check_config(&config)?;
+    run_runtime(webhooks_only(config), secrets).await
+}
+
+/// `config` without its feeds and without the loops no
+/// `[webhooks.endpoints.*] loop` names.
+#[cfg_attr(not(feature = "webhooks"), allow(dead_code))]
+fn webhooks_only(mut config: Config) -> Config {
+    config.feeds.clear();
+    let named: std::collections::BTreeSet<String> = config
+        .webhooks
+        .endpoints
+        .values()
+        .filter_map(|ep| ep.decision_loop.clone())
+        .collect();
+    config.decision_loops.retain(|name, _| named.contains(name));
+    config
 }
 
 /// Start the sandbox's runtime in this process (module table): the
@@ -201,8 +227,7 @@ fn webhooks_off(config: &Config, _rt: &mut Runtime) -> Result<()> {
     Ok(())
 }
 
-/// SIGINT + SIGTERM, registered up front (unix); Ctrl-C elsewhere. Also
-/// `tengu webhooks` (`webhooks.rs`).
+/// SIGINT + SIGTERM, registered up front (unix); Ctrl-C elsewhere.
 pub(super) struct Signals {
     #[cfg(unix)]
     int: tokio::signal::unix::Signal,
@@ -242,5 +267,31 @@ impl Signals {
             }
             "ctrl-c"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `tengu webhooks` keeps the routes' loops and nothing else that runs
+    /// on its own: no feed, no loop an endpoint does not name.
+    #[test]
+    fn webhooks_only_keeps_the_endpoint_loops_and_no_feeds() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("sandboxes/control-loop-lab/config.toml");
+        let mut config = Config::load(&path).unwrap();
+        assert!(!config.feeds.is_empty() && config.decision_loops.contains_key("demo"));
+        let mut other = config.decision_loops["demo"].clone();
+        other.model = "x/other".into();
+        config.decision_loops.insert("other".into(), other);
+        config.webhooks.endpoints.insert(
+            "e".into(),
+            toml::from_str("loop = \"demo\"\nsecret = \"k\"").unwrap(),
+        );
+        let scoped = webhooks_only(config);
+        assert!(scoped.feeds.is_empty());
+        let loops: Vec<&String> = scoped.decision_loops.keys().collect();
+        assert_eq!(loops, ["demo"]);
     }
 }

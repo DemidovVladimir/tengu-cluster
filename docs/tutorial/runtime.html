@@ -404,7 +404,7 @@
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, the escalator (handed the run's recording and turns), stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play</td></tr>
+        <tr><td><code>src/adapters/inbound/run.rs</code></td><td>the command: signals, webhooks mount, the escalator (handed the run's recording and turns), stop report; <code>start_session</code> → <code>RunSession</code> (stopper, <code>wait_and_shutdown</code>) — also Studio's Play; <code>run_webhooks</code>: <code>tengu webhooks</code> = this runtime with no feeds and only the endpoints' loops</td></tr>
         <tr><td><code>src/bootstrap/runtime.rs</code></td><td>composition: leases, loops, turns, feeds, health, shutdown (drain → leases → <code>runtime.stopped</code>); <code>read_live</code> (the <code>--live</code> verdict, shared with Studio)</td></tr>
         <tr><td><code>src/application/runtime/mod.rs</code></td><td>supervisor, stop signal, <code>HeldLeases</code> (the leases the keeper and the writers share: one expiry each, one sticky loss), lease keeper</td></tr>
         <tr><td><code>src/application/runtime/loops.rs</code></td><td><code>LoopDispatch</code>: turn, permits, queue bound, drain; <code>Turns</code>: owned orchestrator turns, drained with the events</td></tr>

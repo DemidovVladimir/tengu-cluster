@@ -267,7 +267,7 @@
   <div class="grid">
     <div class="card guard"><h3><code>tengu run</code></h3><span class="chip data">kind run</span><p>One file per start. <code>runtime_id</code> = the lease holder. Feeds, loops, webhook requests, escalations. Ends <code>runtime.stopped</code>.</p></div>
     <div class="card jev"><h3><code>tengu decide</code></h3><span class="chip data">kind decide</span><p>One file per call, no <code>runtime_id</code>. Root <code>trigger.decide</code> or <code>trigger.map</code>; ends <code>trigger.completed</code> or <code>trigger.failed</code>.</p></div>
-    <div class="card hands"><h3><code>tengu webhooks</code></h3><span class="chip data">kind webhooks</span><p>One file per process, <code>runtime_id</code> = its lease holder. Each request is a <code>trigger.webhook</code> root. Ends <code>run.closed</code>.</p></div>
+    <div class="card hands"><h3><code>tengu webhooks</code></h3><span class="chip data">kind run</span><p>The runtime with no feeds and only the endpoints' loops: one file per process, as <code>tengu run</code>. Each request is a <code>trigger.webhook</code> root. Ends <code>runtime.stopped</code> (before 2026-10-23: <code>kind webhooks</code>, ending <code>run.closed</code>).</p></div>
     <div class="card heart"><h3><span><code>tengu chat</code> · <code>tengu telegram</code></span></h3><span class="chip data">kind chat · telegram</span><p>Only with <code>[orchestrator]</code>: one file per process, its plans and steps. Ends <code>run.closed</code>.</p></div>
     <div class="card heart"><h3><code>tengu eval</code></h3><span class="chip data">kind eval</span><p>Only with <code>[orchestrator]</code>: one file per orchestrated row. Ends <code>run.closed</code>.</p></div>
     <div class="card data"><h3><code>tengu studio</code></h3><span class="chip data">kind studio</span><p>With control on: its own file of <code>studio.*</code> requests and verdicts. Play starts a runtime in the process, which writes its own <code>run</code> file.</p></div>
@@ -565,7 +565,7 @@
         <tr><td><code>src/application/runtime/feeds.rs</code> · <code>loops.rs</code></td><td><code>feed.*</code> · <code>loop.*</code>; <code>Turns</code>: the owned orchestrator turns the drain waits for</td></tr>
         <tr><td><code>src/application/decision_loop/mod.rs</code></td><td><code>observation.read</code>, <code>jev.*</code>, <code>action.*</code></td></tr>
         <tr><td><code>src/adapters/inbound/cli/decide.rs</code></td><td><code>trigger.decide</code> / <code>trigger.map</code> → <code>trigger.completed</code> / <code>trigger.failed</code></td></tr>
-        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code>, <code>webhook.responded</code>; the <code>tengu webhooks</code> recording; each turn owned by the dispatch</td></tr>
+        <tr><td><code>src/adapters/inbound/webhooks.rs</code></td><td><code>trigger.webhook</code>, <code>webhook.responded</code>; each turn owned by the dispatch</td></tr>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code> · <code>inbound/cli/run_agent.rs</code></td><td>the step's trace ref to the child; the child's tool events back over IPC</td></tr>
         <tr><td><code>src/adapters/inbound/studio/control.rs</code></td><td><code>studio.*</code>: Studio's own recording</td></tr>
         <tr><td><code>src/adapters/inbound/cli/trace.rs</code></td><td><code>tengu trace runs</code> · <code>tengu trace show</code></td></tr>

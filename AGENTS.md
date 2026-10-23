@@ -969,8 +969,8 @@ These are not preferences. They're load-bearing.
   the operator's 2026-10-10 request, merged #52);
   ST-90 clean room passed 2026-10-09 (`docs/studio-clean-room-2026-10-09.md`).
 - **Execution trace (2026-10-09, `domain/trace.rs`, `docs/runtime-2026-09-30.md`
-  § Trace)** — `tengu run`, `tengu decide`, `tengu webhooks` (`kind =
-  "webhooks"`) and Studio (`kind = "studio"`) each write one JSONL file per
+  § Trace)** — `tengu run` (and `tengu webhooks`: the runtime with no
+  feeds, `kind = "run"`), `tengu decide` and Studio (`kind = "studio"`) each write one JSONL file per
   recording: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`; with
   `[orchestrator]` also `tengu chat` / `tengu telegram` (one per process) and
   each orchestrated `tengu eval` row (`bootstrap::trace::open_orchestration`,

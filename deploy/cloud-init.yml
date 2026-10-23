@@ -42,7 +42,8 @@ runcmd:
   # Configure
   - cd /opt/tengu-cluster && cp .env.example .env && cp config.example.toml config.toml
 
-  # Bind the webhook listener ([webhooks] bind, port 7080 — `tengu webhooks`)
+  # Bind the webhook listener ([webhooks] bind, port 7080 — `tengu run` /
+  # `tengu webhooks`, the runtime with no feeds)
   # to 0.0.0.0 for external access. Only the [webhooks]
   # section is rewritten; nothing listens on [hub].port. Only matters for
   # `make up NETWORK=open` (the default Tor topology publishes no ports),

@@ -289,7 +289,8 @@ pub(crate) enum RunKind {
     /// `studio.control` (Play / Stop / send-event: requested, then ok /
     /// refused / failed), `studio.stopped`.
     Studio,
-    /// One `tengu webhooks` process (outside `tengu run`): a
+    /// A `tengu webhooks` process before 2026-10-23, outside `tengu run`
+    /// (read only: one now records as [`RunKind::Run`]): a
     /// `trigger.webhook` root per request, its loop / orchestration events
     /// under it, [`RUN_CLOSED`] at the stop.
     Webhooks,
