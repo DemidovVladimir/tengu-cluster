@@ -12,7 +12,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `b4c5ef85ff8cbaff93692d4c81236593ddd2bf1c` (D6) · **not pushed, no PR** |
+| Last code commit | `fbc1e7e3f022dfe75ce94e5f78d24c4ba55878c2` (A6) · **not pushed, no PR** |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -21,7 +21,9 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | A1 | done | `c4164852c3bce8128eecb1c4d5a1cf6828482c4e` |
 | A2 | done | `6ac73cf50865e208deba78019570e6e145884986` |
 | A3, A4 | done | `5da9fd291dded2c09b624ce47364b1b052641f51` |
-| A5 | partial: shared stderr drain + Claude Code failed exit = `Error`; `cli_run::drive` (one run loop, keepalive for both) left | `327fcd89292f93933f2d802af7ade4c9495ec1fc` |
+| A5 | done: shared stderr drain + Claude Code failed exit = `Error` | `327fcd89292f93933f2d802af7ade4c9495ec1fc` |
+| A5 rest | done: `cli_run::drive` — one run loop (`LineParser`, `RunLimits`), keepalive + idle kill for both, a dropped stream kills the CLI | `074425279e4d0110a479843241df32ec4bc252c1` |
+| A6 | done: `build_tool_executor` → `ToolStack` (redacting by construction, MCP tools advertised); `bootstrap/turn.rs::run_once` for the A2A agent endpoint + `tool turn`. Deviation: eval and `doctor --engines` keep their own turn (stubs / observer; smoke tools) on the stack; webhooks has no agent turn left | `fbc1e7e3f022dfe75ce94e5f78d24c4ba55878c2` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -62,7 +64,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | A5 (rest), A6, A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
