@@ -111,7 +111,26 @@ net_hosts = ["*"]
 
 ## Untrusted input
 
-Text tengu did not write (web bodies, A2A replies, MCP results, recalled memory, webhook bodies, step inputs and errors) reaches a model fenced: `<untrusted origin="…">` (`domain/untrusted.rs`). The fence is a label, not a wall. The walls are these load rules:
+Text tengu did not write reaches a model fenced: `<untrusted origin="…">` (`domain/untrusted.rs`: control characters dropped, every fence tag stripped to a fixpoint). The fence is a label, not a wall: the right column is what holds.
+
+| Input | Reaches | Label | Enforced in code |
+|---|---|---|---|
+| `http_request` body | the LLM's tool result (in-process loop, `tengu mcp-bridge`) | `origin="http_request"` | scope `net_hosts` + `[egress]` on every hop; the fallback reads no env; reader rule below |
+| `a2a` reply | tool result | `origin="a2a"` | only `[a2a.remotes.*]` hosts (a card naming another host is refused); the credential is host-bound |
+| `[[mcp_servers]]` result | tool result | `origin="mcp:<server>"` | schema lint at discovery; none in a hardened sandbox; reader rule below |
+| `agentic_memory` / `memory_search` result | tool result | `origin="agentic_memory"` / `"memory_search"` | Open Brain rows carry their sandbox; `capture` refuses the kinds the harness writes |
+| Recalled memory (Open Brain lanes, `[Relevant memories]`) | planner / chat prompt | `memory:<kind>` / `memory` | the planner call has no tools, memory or bridge (`PlannerLlm::call`) |
+| A failed step's error | replan prompt | `step-error:<id>` | as above |
+| Webhook body | planner or decision loop | `webhook:<name>` | the endpoint's auth header / HMAC; loops pick from typed menus |
+| Upstream step output | the next step's input | `step:<id>` | only routable agents run; a `compose` adds only scoped tools, narrows only when hardened |
+| Loop escalation args / state | planner prompt | `loop-args:<loop>` / `loop-state:<loop>` | as the planner |
+| A tool's output inside a decision loop | the loop's parser, never an LLM | none (parsed) | typed slots: an unresolved value makes the action illegal |
+| SOE source text | SOE stage agents | `<source-text record="…">` (same stripper) | `[soe]` closed tool world, deny-all side-effect scopes |
+| CLI engine prompt (Claude Code / Codex stdin) | the CLI | `<turn role="…">` tags stripped from every body | — |
+| WebSearch (Claude Code `research`) / Codex `web_search` results | the CLI's model, at the provider | none | reader rule below: that agent holds no side effect |
+| Telegram message | chat | none: it is the user | `allowed_users`, fail closed |
+
+Agent identities no longer say "web pages are untrusted" (prompt-only; the fence labels it now).
 
 | Rule | Where | Kind |
 |---|---|---|
