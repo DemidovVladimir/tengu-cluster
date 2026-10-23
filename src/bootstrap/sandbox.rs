@@ -1,9 +1,10 @@
 //! Sandbox resolution — picks `sandboxes/<name>/config.toml` over the base
 //! config, pins it as `TENGU_CONFIG` and installs its `[egress]` policy.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
+use crate::config::builder::sandbox_name_error;
 use crate::config::paths::{absolute_path, TENGU_CONFIG_ENV};
 use crate::config::Config;
 
@@ -25,6 +26,11 @@ pub(crate) fn load_sandbox_or(sandbox: Option<String>, default: Config) -> Resul
     let cfg = match sandbox {
         None => default,
         Some(name) => {
+            // The one name rule: a name that loads also names its trace dir,
+            // and never leaves `sandboxes/`.
+            if let Some(why) = sandbox_name_error(&name) {
+                bail!("--sandbox {why}");
+            }
             let path = PathBuf::from("sandboxes").join(&name).join("config.toml");
             let mut cfg = Config::load(&path).with_context(|| {
                 format!("Failed to load sandbox '{}' from {}", name, path.display())

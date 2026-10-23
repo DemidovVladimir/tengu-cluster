@@ -207,7 +207,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>You run <code>tengu chat --sandbox lping</code>. With no subcommand at all, <code>tengu</code> runs <code>chat</code>.</li>
+        <li>You run <code>tengu chat --sandbox lping</code>. With no subcommand at all, <code>tengu</code> runs <code>chat</code>. The name must be <code>[a-z0-9][a-z0-9_-]</code>, at most 40 (the one name rule: builder, trace dirs), so it never leaves <code>sandboxes/</code>.</li>
         <li>Base path: <code>-c</code>, else <code>$TENGU_CONFIG</code>, else <code>&lt;TENGU_HOME&gt;/config.toml</code>. It is pinned as <code>TENGU_CONFIG</code>. No file there: built-in defaults, one <code>main</code> agent.</li>
         <li><code>Config::load</code> reads the file and fills every <code>${VAR}</code> from the environment. An unset variable stays as literal text, with a warning naming it (comment lines are skipped).</li>
         <li>Strict parse: an unknown key at the root or inside an <code>[agents.*]</code> block fails the load. A typo never switches a knob off silently.</li>
@@ -505,7 +505,7 @@ net_hosts = [<span class="s">"api.hyperliquid.xyz"</span>]
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>

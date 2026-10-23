@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::domain::runtime::scrub_urls;
-use crate::domain::secrets::SecretRegistry;
+use crate::domain::secrets::{map_strings, SecretRegistry};
 
 /// Version of the [`ExecutionEvent`] JSON shape.
 pub(crate) const TRACE_SCHEMA_VERSION: u32 = 1;
@@ -485,24 +485,10 @@ impl RunContext {
 /// (`SecretRegistry::redact` → `[REDACTED]`), then URLs (`scrub_urls` →
 /// `<url>`: an RPC URL carries its key, and a `${VAR}` substituted into
 /// the config may not be a registered secret). The trace store applies it to
-/// every payload before the write, the Studio graph to every attr. Two keys
-/// that redact alike keep the last one's value.
+/// every payload before the write, the Studio graph to every attr. The walk
+/// is `secrets::map_strings` (two keys that end alike keep one value).
 pub(crate) fn scrub_value(v: &mut Value, secrets: &SecretRegistry) {
-    match v {
-        Value::String(s) => {
-            if let Some(c) = scrub_str(s, secrets) {
-                *s = c;
-            }
-        }
-        Value::Array(a) => a.iter_mut().for_each(|x| scrub_value(x, secrets)),
-        Value::Object(o) => {
-            for (k, mut x) in std::mem::take(o) {
-                scrub_value(&mut x, secrets);
-                o.insert(scrub_str(&k, secrets).unwrap_or(k), x);
-            }
-        }
-        _ => {}
-    }
+    map_strings(v, &|s| scrub_str(s, secrets));
 }
 
 /// `s` with registered secrets and URLs replaced; `None` = nothing to hide.

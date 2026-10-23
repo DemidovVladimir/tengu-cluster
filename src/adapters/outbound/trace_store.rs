@@ -21,6 +21,7 @@ use tokio::sync::mpsc::{self, Receiver};
 use tracing::warn;
 
 use crate::application::decision_loop::append_line;
+use crate::config::builder::sandbox_name_error;
 use crate::domain::observation::now_ms;
 use crate::domain::secrets::SecretRegistry;
 use crate::domain::trace::{
@@ -39,18 +40,13 @@ pub(crate) fn trace_root(home: &Path) -> PathBuf {
     home.join("logs").join("trace")
 }
 
-/// A sandbox name as a directory: letters, digits, `.`, `_`, `-`; not
-/// starting with `.`.
+/// A sandbox name as a directory: the one name rule
+/// (`domain::runtime::valid_name`).
 pub(crate) fn check_sandbox_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
-        && !name.starts_with('.')
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    if !ok {
-        bail!("sandbox name `{name}`: letters, digits, `.`, `_`, `-` only");
+    match sandbox_name_error(name) {
+        Some(why) => bail!("sandbox name {why}"),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// A run id as a file name: a lowercase hyphenated UUID, nothing else.

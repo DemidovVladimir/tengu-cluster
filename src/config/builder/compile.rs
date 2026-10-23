@@ -23,6 +23,7 @@ use serde_json::Value;
 use super::palette::{connection, kind_spec, FieldType, KindSpec, CONNECTIONS};
 use super::Facts;
 use crate::domain::blueprint::{Blueprint, Issue, Node, Status};
+pub(crate) use crate::domain::runtime::valid_name;
 
 /// Top-level keys the builder writes; any other key of the current file is
 /// kept as it is.
@@ -132,15 +133,6 @@ impl Card<'_> {
     fn id(&self) -> &str {
         &self.node.id
     }
-}
-
-/// Whether `name` is an agent / endpoint / sandbox name:
-/// `[a-z0-9][a-z0-9_-]{0,39}`.
-pub(crate) fn valid_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
-        && name.len() <= 40
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
 /// Whether `name` is an env var name: `[A-Z_][A-Z0-9_]*`, ≤ 128.

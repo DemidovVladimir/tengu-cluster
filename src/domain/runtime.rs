@@ -31,6 +31,16 @@ pub fn state_lease_resource(state_dir_name: &str) -> String {
     format!("state:{state_dir_name}")
 }
 
+/// Whether `name` is a sandbox, agent or endpoint name:
+/// `[a-z0-9][a-z0-9_-]{0,39}` — one path segment, never `.` or `..`. The
+/// one rule for `--sandbox`, the builder and the trace dirs.
+pub(crate) fn valid_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name.len() <= 40
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 /// `run-<sandbox>.json` — the heartbeat file in the runtime state dir.
 pub fn heartbeat_file(sandbox: &str) -> String {
     format!("run-{sandbox}.json")

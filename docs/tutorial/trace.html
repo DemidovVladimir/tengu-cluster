@@ -489,7 +489,7 @@
     <li><span><b>One writer per file.</b> A <code>run-agent</code> child keeps at most 512 tool events and hands them back over IPC; the parent writes them under the step.</span></li>
     <li><span><b>The closing event is last.</b> <code>tengu run</code> and <code>tengu webhooks</code> own every accepted orchestrator turn (a webhook agent endpoint's, a loop escalation's) and drain it with the loop events before the lease release and <code>runtime.stopped</code> / <code>run.closed</code>; one still running at <code>shutdown_grace_secs</code> is aborted and its <code>plan.completed</code> (dropped) is written first. A turn and an eval row await the metrics barrier, so their last <code>metrics.recorded</code> lands before the end, then their trace gate shuts: a straggler is not written.</span></li>
     <li><span><b>Runs never mix.</b> Every process start is a new <code>run_id</code> and a new file.</span></li>
-    <li><span><b>No path from input.</b> A run id must be a lowercase UUID, a sandbox name letters, digits, <code>.</code> <code>_</code> <code>-</code>, before any file opens.</span></li>
+    <li><span><b>No path from input.</b> A run id must be a lowercase UUID, a sandbox name <code>[a-z0-9][a-z0-9_-]</code> (at most 40, the rule <code>--sandbox</code> and the builder use), before any file opens.</span></li>
     <li><span><b>Replay order is <code>seq</code>, never the clock.</b> Readers sort by <code>seq</code> and keep one copy of each <code>event_id</code>; a partial last line is skipped.</span></li>
     <li><span><b>Fail-soft.</b> No writable trace dir: the run goes on with no trace and a warning. A failed write warns; the run goes on.</span></li>
   </ul>
@@ -576,7 +576,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>
