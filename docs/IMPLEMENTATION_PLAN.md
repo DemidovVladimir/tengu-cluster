@@ -163,7 +163,7 @@ not create a parallel block.
 > Today (2026-09-18): `ttl_days`, `qdrant_*`, `backend`, `vector_size` are gone
 > (ignored if present — `memory_config_ignores_removed_qdrant_keys`);
 > `session_recent_n` / `cross_plan_top_k` remain; there is no `[rag]` block;
-> `[orchestrator] engine` accepts only `"rag"`.
+> `[orchestrator] engine` is gone (2026-10-23): the planner runs on its `agent`'s engine.
 
 ```toml
 [memory]

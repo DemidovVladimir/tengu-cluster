@@ -183,9 +183,7 @@ impl TurnRunner {
         let session_id = format!("a2a-{}", turn.context_id);
         let orchestrator =
             crate::bootstrap::orchestrator::build_orchestrator(&self.config, llm, session_id, None)
-                .ok_or_else(|| {
-                    anyhow!("the planner is not available ([orchestrator] engine must be \"rag\")")
-                })?;
+                .ok_or_else(|| anyhow!("the planner is not available (no [orchestrator])"))?;
         Ok(orchestrator.handle(planner_message(turn)).await)
     }
 }

@@ -32,10 +32,10 @@ tengu chat                                     # or: tengu chat --sandbox lping
 
 | Key | Struct (`src/config/`) | Absent = | Unknown keys inside |
 |---|---|---|---|
-| `runtime_profile` | `Config` (`mod.rs`) | `"auto"` | — |
-| `[hub]` | `HubConfig` | defaults | ignored |
+
+
 | `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
-| `[orchestrator]` | `OrchestratorConfig` | single-agent dispatch | ignored |
+| `[orchestrator]` | `OrchestratorConfig` | single-agent dispatch | **error** |
 | `[memory]` | `MemoryConfig` | `enabled = false` | ignored |
 | `[telegram]` · `[webhooks]` | `TelegramConfig` · `WebhookConfig` | off | ignored |
 | `[decision_loops.<n>]` | `DecisionLoopConfig` (`decision_loop.rs`) | none | **error** |
@@ -129,8 +129,7 @@ example_queries = ["what is the BTC price?"]
 
 ```toml
 [orchestrator]
-agent = "lping"                # the [agents.*] block that runs the planner LLM call (use an OpenRouter agent)
-engine = "rag"                 # the only accepted value (historical name; file-registry planner)
+agent = "lping"                # the [agents.*] block whose engine + model run the planner LLM call
 max_attempts_per_step = 3      # Tier 1: retries per step before escalation
 max_replans = 2                # Tier 2: replans before bailing out
 route_explicit_agents = false  # true = `@role:` messages also go through the planner
@@ -211,7 +210,7 @@ Jev picks, existing tools run (`docs/decision-loop-plan-2026-09-24.md`). Trigger
 | Section | Fields (default) | Notes |
 |---|---|---|
 | `[scaffold]` | `root` (required), `directories` (`[]`), `files` (`[{path, content}]`), `project.directories` · `project.files` | created when `tengu telegram` starts (files never overwritten); `project` = template of Telegram's `/project <name>`; soft `tengu prune --sandbox` clears `project.directories` |
-| `[hub]` | `bind` (`127.0.0.1`), `port` (7070), `auth_mode` (`token` \| `open`), `auth_token`, `reload.mode` (`hybrid` \| `hot` \| `restart` \| `off`), `reload.debounce_ms` (300) | config-only: validated, shown by `tengu status`; nothing listens |
+
 | `[claude_code]` | `cli_path` (`claude`), `timeout_secs` (120) | per-agent `builtin_tools_profile` in `[agents.<a>.claude_code]` |
 | `[[mcp_servers]]` | `name`, `transport` (`stdio` \| `http`), `command` (stdio), `url` (http), `env` (`$VAR` resolved at spawn), `auth = { type = "bearer", token = "$VAR" }` | tools `<name>__<tool>`; a schema outside the engine subset is dropped with a warn; refused in a hardened sandbox — `docs/tools.md` § MCP servers |
 
@@ -592,7 +591,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | `TENGU_BRIDGE_*` (`AGENT`, `TOOLS`, `WORKSPACE`, `GRANT_WORKSPACE`, `SCOPES`, `MCP_SERVERS`, `SUMMARY_FILE`, `TRANSCRIPT_FILE`, `MAX_RESULT_CHARS`) | `inbound/mcp_bridge.rs` (names: `outbound/bridge_env.rs`) | set by the Claude Code and Codex engines | engine → bridge contract — `docs/mcp-bridge.md` |
 | `TENGU_PERSISTENT_STORE_CHUNK_SIZE` · `_OVERLAP` | forwarded by `engines/claude_code.rs` | unset | read by nothing — the bridge takes `[memory]` from its config |
 | `TENGU_TUI_METRICS` | `tui/mod.rs` | off | metrics line as a System bubble |
-| `TENGU_GPU_HINT` · `CUDA_VISIBLE_DEVICES` | `config/mod.rs::detect_gpu` | auto-detect | `none\|cpu\|off\|false` or `gpu\|cuda\|metal\|mps\|on\|true` for `runtime_profile = "auto"` |
+
 | `NO_COLOR` | `inbound/eval.rs` | unset | plain eval table |
 | `RUST_LOG` | `cli/mod.rs::init_logging` | `tengu=info` (`tengu sandbox`: `tengu=warn`) | log filter, replaces the default whole (`tengu=debug` works); one `metrics` line per LLM call at info. Sinks: TUI → `tengu.log`; telegram / webhooks / run / studio / `a2a serve` → `tengu.log` + stderr; protocol and data commands → stderr; the rest → stdout. Colours only on a terminal; an unopenable `tengu.log` → stderr (TUI: no log) with one line saying why |
 | Claude CLI child env | `engines/claude_code.rs` | — | strips a parent Claude Code session's vars (`CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_*` but auth / provider) and `ANTHROPIC_API_KEY` |

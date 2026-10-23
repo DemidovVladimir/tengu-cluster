@@ -218,15 +218,6 @@ pub(crate) fn build_orchestrator(
 ) -> Option<Orchestrator> {
     let cfg = config.orchestrator.as_ref()?;
 
-    if cfg.engine != "rag" {
-        tracing::warn!(
-            engine = %cfg.engine,
-            "[orchestrator] engine != \"rag\" — only the rag engine remains since Phase 7.1; \
-             orchestration disabled for this channel"
-        );
-        return None;
-    }
-
     // The orchestrator event bus: the Orchestrator emits
     // `PlanCreated`/`StepStarted`/etc. on it and the metrics forwarder
     // below adds `MetricsRecorded`; subscribers (TUI, eval, the trace

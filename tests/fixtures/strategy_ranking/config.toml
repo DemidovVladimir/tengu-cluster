@@ -5,8 +5,6 @@
 # tests/fixtures/xlab/dataset_xyz_TSLA_1h.json (67 xyz:TSLA hours + funding).
 # No network: nothing here fetches.
 
-runtime_profile = "auto"
-
 [egress]
 network = "open"
 allow_hosts = ["api.hyperliquid.xyz"]

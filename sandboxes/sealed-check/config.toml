@@ -22,8 +22,6 @@
 #      tengu run --sandbox sealed-check            # Ctrl-C = graceful stop
 #      tengu studio --sandbox sealed-check --allow-control
 
-runtime_profile = "auto"
-
 # The seal proxy. http://127.0.0.1:8787 = `npx wrangler dev` in cloudflare/seal-worker
 # (local check); after `npx wrangler deploy` put your https://tengu-seal.<subdomain>.workers.dev.
 [keys]

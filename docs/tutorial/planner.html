@@ -62,7 +62,7 @@
   <h1>Planner</h1>
   <p class="lede">One LLM call per turn, straight to the engine: no tools, bridge or memory exist on it. It reads a generated roster of agents, skills and tools, and must answer JSON: a direct reply, or a plan of steps for subagents.</p>
   <ul class="facts">
-    <li>engine <b>rag</b>, the only value</li>
+    <li><b>1</b> required key: <code>agent</code></li>
     <li>last <b>10</b> user messages in the prompt</li>
     <li>replan recall top <b>5</b> step outputs</li>
     <li><b>0</b> retries of the planner call</li>
@@ -408,7 +408,7 @@ Example queries:
   </div>
   <ul class="checks">
     <li><span><b>The planner cannot call tools.</b> <code>PlannerLlm</code> holds only an engine and the agent block: its call has no tool list, executor, bridge tools, <code>[[mcp_servers]]</code> or memory recall to pass. A CLI's own built-ins are not bridge tools: a Claude Code planner sets <code>builtin_tools_profile = "none"</code> and is then a pure text turn.</span></li>
-    <li><span><b>Only one engine.</b> <code>[orchestrator] engine</code> other than <code>"rag"</code> fails the config load.</span></li>
+    <li><span><b>No unknown keys.</b> <code>[orchestrator]</code> takes <code>agent</code>, <code>max_attempts_per_step</code>, <code>max_replans</code>, <code>route_explicit_agents</code>; anything else (the old <code>engine = "rag"</code> too) fails the config load.</span></li>
     <li><span><b>Private agents stay private.</b> A block without a <code>description</code> never appears in the registry.</span></li>
     <li><span><b>Memory trouble never blocks a turn.</b> A Postgres or embedding error leaves its block empty and the call goes on.</span></li>
     <li><span><b>No self-recall.</b> Earlier messages are read before this message is stored.</span></li>

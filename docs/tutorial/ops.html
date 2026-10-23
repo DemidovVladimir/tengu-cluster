@@ -320,20 +320,15 @@
 <section class="sec" aria-labelledby="s-more">
   <div class="sec-head">
     <span class="kicker">Three more pieces</span>
-    <h2 id="s-more">Status, secrets and the proxy image</h2>
+    <h2 id="s-more">Secrets, images and install</h2>
   </div>
   <div class="tabs">
     <div class="tablist">
-      <button type="button" aria-controls="tab-status" aria-selected="true">tengu status</button>
-      <button type="button" aria-controls="tab-secret">tengu secret</button>
+      <button type="button" aria-controls="tab-secret" aria-selected="true">tengu secret</button>
       <button type="button" aria-controls="tab-img">images</button>
       <button type="button" aria-controls="tab-vps">install · cloud-init</button>
     </div>
-    <div class="tabpanel" id="tab-status"><pre><span class="c"># a static snapshot; never fails</span>
-tengu status
-<span class="c">#   Profile, the number of agents, each agent's engine/model [default]
-#   with its diagnostics (or "unavailable (&lt;why&gt;)"), and [hub] bind:port</span></pre></div>
-    <div class="tabpanel" id="tab-secret" hidden><pre><span class="c"># the encrypted vault &lt;TENGU_HOME&gt;/secrets.vault — see Secrets and redaction</span>
+    <div class="tabpanel" id="tab-secret"><pre><span class="c"># the encrypted vault &lt;TENGU_HOME&gt;/secrets.vault — see Secrets and redaction</span>
 tengu secret init              <span class="c"># create it, with a master password</span>
 tengu secret set KEY VALUE
 tengu secret remove KEY
@@ -439,7 +434,7 @@ ufw: allow 22/tcp and 7080/tcp
     <table>
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
-        <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu status</code>, <code>tengu doctor</code> and its four blocks</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/doctor.rs</code></td><td><code>tengu doctor</code> and its four blocks</td></tr>
         <tr><td><code>src/adapters/inbound/cli/mod.rs</code></td><td>every top-level command and which config it loads; flags of doctor, prune, secret; the prune prompt</td></tr>
         <tr><td><code>src/domain/engine_smoke.rs</code></td><td>the smoke prompt, tools, round cap and verdict</td></tr>
         <tr><td><code>src/domain/runtime.rs</code></td><td><code>live_verdict</code>: heartbeat, loops, feeds</td></tr>

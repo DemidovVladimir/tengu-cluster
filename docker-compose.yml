@@ -11,7 +11,7 @@
 #
 # Ports: 7080 is the webhook listener (`tengu run` / `tengu webhooks` — the
 # runtime with no feeds; feature `webhooks`).
-# Nothing listens on [hub].port. Not published under NETWORK=tor.
+# Not published under NETWORK=tor.
 #
 # Config:
 #   1. cp .env.example .env && edit .env (set API keys)

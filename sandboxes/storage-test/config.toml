@@ -4,16 +4,11 @@
 # Or TUI:   tengu chat --sandbox storage-test
 # The agent uses engine = "claude_code" — build with `--features claude_code`.
 
-runtime_profile = "auto"
-
 # Network: Tor by default (`make tor` must be running). Uncomment for the
 # open internet:
 # [egress]
 # network = "open"
 
-[hub]
-bind = "127.0.0.1"
-port = 7072
 
 [memory]
 enabled = true

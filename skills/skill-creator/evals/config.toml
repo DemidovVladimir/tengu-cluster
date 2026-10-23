@@ -4,8 +4,6 @@
 # fixture prompt; the judge scores the output against `expected` + the
 # `distill_quality` rubric declared in SKILL.md frontmatter.
 
-runtime_profile = "cloud"
-
 [agents.skill-creator-agent]
 default = true
 engine = "openrouter"

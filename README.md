@@ -79,7 +79,7 @@ Flags from `tengu <command> --help`. Global: `-c/--config <path>`. `--sandbox <s
 | Command | Flags that matter | Does | Feature | Env |
 |---|---|---|---|---|
 | `chat` | `--sandbox` | Interactive TUI; orchestrated when the config has `[orchestrator]`; with `[decision_loops]` it tails `<TENGU_HOME>/logs/decisions.jsonl` as System bubbles | default | `OPENROUTER_API_KEY` |
-| `status` | — (`-c` for another file) | Static snapshot of the base config: runtime profile, agents with engine diagnostics, hub | default | — |
+
 | `doctor` | `--sandbox`, `--tor` (live Tor-exit check), `--live` (the sandbox's `tengu run`: heartbeat ≤ `[runtime] heartbeat_stale_secs`, every required feed live — the healthcheck for a `tengu run` container; the shipped image checks plain `doctor`), `--engines` (one `list_directory` + `read_file` turn per agent on its own engine + model; costs tokens) | Builds every agent's engine, checks the `[egress]` proxy; exits non-zero on any failure | default | `OPENROUTER_API_KEY` (an `openrouter` agent's engine fails to build without it) |
 | `telegram` | `--sandbox` | Telegram bot channel; refuses to start without an allow-list | `telegram` (default) | `TELEGRAM_BOT_TOKEN`, `OPENROUTER_API_KEY` |
 | `webhooks` | `--sandbox` | `[webhooks.endpoints.<n>]` → `POST /webhooks/<n>` (HMAC `X-Tengu-Signature: sha256=<hex>` or a static `auth_header_env` header); 202 + a one-shot orchestrator turn, or `loop = "<name>"` → that decision loop. Takes the leases `tengu run` takes | `webhooks` | `OPENROUTER_API_KEY` (planner / Jev), each endpoint's `secret_env` / `auth_header_env` |
@@ -173,7 +173,7 @@ Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper-2026-09-30.md`. Plan
 
 | Piece | Where |
 |---|---|
-| Planner agent | `sandboxes/<name>/config.toml` → `[orchestrator] agent = "<planner agent>"`, `engine = "rag"` (historical name; file-registry planner — the only supported value) |
+| Planner agent | `sandboxes/<name>/config.toml` → `[orchestrator] agent = "<planner agent>"` (the planner call runs on that agent's engine + model) |
 | Planner prompt | `skills/orchestrator/SKILL.md`, read from the cwd (inline fallback when missing) |
 | Subagents | Any `[agents.<name>]` block **with a `description`** in the same file (`engine`, `model`, `tools`, `skill_packages`, `example_queries`, `limits.max_tool_rounds`, `limits.step_timeout_secs`, …). Same schema as in-process agents — no separate spec files |
 | Registry | `TENGU_PLANNER_REGISTRY.md` regenerated from those blocks + skills + tools each planner turn; the accepted plan reaches subagents over IPC only (`plan_state`); the registry is gitignored |
@@ -317,7 +317,7 @@ Network follows the chosen config's `[egress] network`: Tor (tengu's only exit i
 | Container command | `tengu telegram` (image `CMD`); `tengu run` is not wired into compose yet |
 | `engine = "claude_code"` sandboxes (`jev-exec`, `soe`, `storage-test`, `xlab`, `xlab-w2`, `xmarket`) · any `engine = "codex"` agent | Not runnable in the image: it has no Claude Code or Codex CLI. `doctor` fails → container unhealthy |
 | `~` in sandbox paths | Expands to `/root` in the container — not the `tengu-data` volume, so `~/<name>-workspace` is lost on container recreate |
-| Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only); nothing listens on `[hub].port` |
+| Port | `7080` = webhook listener only (`TENGU_WEBHOOK_PORT` on the host, `NETWORK=open` only) |
 | Features | the Cargo default features (`telegram`, `studio`, `a2a`, `webhooks`) and every engine are always built in (the build stage copies `web/` for the Studio page and `crates/` for the `tengu-seal` path dependency); `TENGU_FEATURES` (default `telegram`) adds more: `TENGU_FEATURES=postgres_memory docker compose --profile postgres-memory up -d --build`. `tengu studio` in a container binds the container's loopback only — no port is published for it |
 | Healthcheck | `tengu doctor` exits non-zero when any agent engine fails to build, a `claude_code` / `codex` agent's CLI is not on `PATH` (the image has neither) or the Tor proxy is unreachable |
 
@@ -340,9 +340,9 @@ Restart=on-failure
 
 | Section | Purpose |
 |---|---|
-| `runtime_profile` | `auto` / `cloud` / `desktop` / `minimal` |
+
 | `[agents.<id>]` | engine, model, workspace, `tools` (allow-list), `skill_packages`, `workspace_tools`, `scopes`, limits, identity, `claude_code`, `local`, `codex`; a `description` (+ `example_queries`) makes it planner-routable |
-| `[orchestrator]` | `agent`, `engine = "rag"`, `max_attempts_per_step`, `max_replans`, `route_explicit_agents` |
+| `[orchestrator]` | `agent`, `max_attempts_per_step`, `max_replans`, `route_explicit_agents` (unknown keys fail the load) |
 | `[memory]` | disk vector store, recall knobs, `within_session_output_top_k` |
 | `[telegram]` · `[webhooks]` | channels: allow-list · listener + `[webhooks.endpoints.<n>]` |
 | `[decision_loops.<n>]` | Jev loop: goal, agent, actions, slots, `world`, `requires`, `dry_run`, `act_at` |
@@ -367,7 +367,7 @@ Restart=on-failure
 | `[soe]` | `architect`, `critic`, `max_proposals`, `forecast_max_weeks` (+ optional `token_prices`): the weekly cycle's stage agents and limits; closed world — tools inside `SOE_ALLOWED`, only `kind = "job"` feeds, no loops, `[risk]`, `[xmarket]`, signer, Telegram or webhooks; hardened (`soe`) |
 | `[studio]` | `control` (default `false`): `tengu studio` may Play / Stop / send events; refused in a `[generation]`-bound or hardened sandbox (`control-loop-lab` = `true`) |
 | `[skill_lifecycle]` | `tengu skill evolve` (improver agent, cycles) |
-| `[hub]` | bind / port / auth — config-only (shown by `tengu status`; nothing listens) |
+
 
 ## Documentation
 

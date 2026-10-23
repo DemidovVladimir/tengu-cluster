@@ -117,7 +117,6 @@ pub(crate) fn config_slice(
                 "orchestrator".into(),
                 json!({
                     "agent": o.agent,
-                    "engine": o.engine,
                     "max_attempts_per_step": o.max_attempts_per_step,
                     "max_replans": o.max_replans,
                     "routable_agents": routable,

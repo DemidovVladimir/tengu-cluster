@@ -233,7 +233,7 @@ One sandbox file holds everything (`docs/configuration.md`):
 ```bash
 mkdir -p sandboxes/smoke && cp config.example.toml sandboxes/smoke/config.toml
 # edit sandboxes/smoke/config.toml:
-#   - uncomment [orchestrator] (agent = the planner agent, engine = "rag")
+#   - uncomment [orchestrator] (agent = the planner agent)
 #   - one [agents.<name>] per worker (researcher, writer) WITH a `description` — only those are routable
 #   - [memory] enabled = true
 #   - `make tor` is running, or add [egress] network = "open"
@@ -251,7 +251,7 @@ mkdir -p sandboxes/smoke && cp config.example.toml sandboxes/smoke/config.toml
 - `TUI orchestrator constructed`
 - `DiskVectorStore loaded` with `entries=0` on first boot (`[memory] enabled = true`)
 
-**If missing:** orchestrator didn't construct. Check `[orchestrator]` block (`engine = "rag"`) + default agent present. An `agent` with no `[agents.*]` block, or an engine that does not build, stops `tengu chat` at startup (`planner_llm`).
+**If missing:** orchestrator didn't construct. Check the `[orchestrator]` block (`agent = …`) + default agent present. An `agent` with no `[agents.*]` block, or an engine that does not build, stops `tengu chat` at startup (`planner_llm`).
 
 ### 5.3 Sanity prompts
 

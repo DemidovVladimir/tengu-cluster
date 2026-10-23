@@ -71,7 +71,7 @@
     <rect x="0" y="50" width="305" height="56" rx="4" class="col-tengu" />
     <text x="10" y="66" class="h3">Orchestration / planner</text>
     <text x="10" y="80" class="body">RegistryPlanner → SubprocessRunner → run-agent</text>
-    <text x="10" y="92" class="mono">engine = "rag" · [agents.*] with description</text>
+    <text x="10" y="92" class="mono">[orchestrator] agent · [agents.*] with description</text>
     <circle cx="296" cy="98" r="3" class="new" />
     <text x="10" y="103" class="small">+ event bus, file-backed registry</text>
     <rect x="317" y="50" width="305" height="56" rx="4" class="col-hermes" />

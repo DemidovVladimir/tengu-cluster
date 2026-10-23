@@ -29,8 +29,8 @@ use tracing::{info, warn};
 use crate::adapters::outbound::secrets;
 use crate::bootstrap::sandbox::load_sandbox_or;
 use crate::config::paths::{default_config_path, resolve_tengu_home};
-use crate::config::{Config, RuntimeProfile};
-use doctor::{print_status, run_doctor};
+use crate::config::Config;
+use doctor::run_doctor;
 use run_agent::run_agent_subprocess;
 use skill::run_skill_command;
 
@@ -54,8 +54,7 @@ enum Commands {
         #[arg(long)]
         sandbox: Option<String>,
     },
-    /// Print static runtime status snapshot.
-    Status,
+
     /// Run runtime/environment diagnostics.
     Doctor {
         /// Load config from sandboxes/<name>/config.toml instead of ~/.tengu/config.toml
@@ -706,18 +705,12 @@ pub(crate) async fn run() -> Result<()> {
     // `load_sandbox_or` re-installs from the sandbox config.
     crate::adapters::outbound::egress::install(&config.egress)?;
 
-    let profile = RuntimeProfile::resolve(Some(&config.runtime_profile));
-
     match cli.command.unwrap_or(Commands::Chat { sandbox: None }) {
         Commands::Chat { sandbox } => {
             let (config, secret_registry) = sandbox_ctx(sandbox, config, secret_registry)?;
             tokio::task::block_in_place(|| {
-                crate::adapters::inbound::tui::run_tui(config, profile, secret_registry)
+                crate::adapters::inbound::tui::run_tui(config, secret_registry)
             })
-        }
-        Commands::Status => {
-            print_status(&config, profile);
-            Ok(())
         }
         Commands::Doctor {
             sandbox,
@@ -1118,7 +1111,11 @@ mod tests {
             Some("xlab-w2")
         );
         assert_eq!(replacing_sandbox(&command(&["tengu", "chat"])), None);
-        assert_eq!(replacing_sandbox(&command(&["tengu", "status"])), None);
+        assert_eq!(replacing_sandbox(&command(&["tengu", "doctor"])), None);
+        assert!(
+            Cli::try_parse_from(["tengu", "status"]).is_err(),
+            "status is gone"
+        );
         assert_eq!(replacing_sandbox(&command(&["tengu"])), None);
     }
 

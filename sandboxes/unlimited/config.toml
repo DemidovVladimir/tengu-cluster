@@ -1,7 +1,5 @@
 # Tengu Cluster — "unlimited" sandbox
 
-runtime_profile = "auto"
-
 # Network: OPEN — no Tor. http_request, shell, and the LLM API all go direct
 # over the host's real network. Flip back to `network = "tor"` (with
 # `route_llm_api = false`, since OpenRouter's Cloudflare 403s Tor exits) to

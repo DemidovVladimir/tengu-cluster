@@ -150,8 +150,6 @@ pub(crate) mod tests {
     /// fixture contract `rank.fixture.v1` listed (also the ranking
     /// coordinator's, `application/ranking/`).
     pub(crate) const CONFIG: &str = r#"
-runtime_profile = "auto"
-
 [egress]
 network = "open"
 allow_hosts = ["api.hyperliquid.xyz"]

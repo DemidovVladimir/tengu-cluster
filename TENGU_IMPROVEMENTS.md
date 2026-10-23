@@ -12,7 +12,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `c11386e9be5227083735d03953c0807466cfad37` (A11) · **not pushed, no PR** |
+| Last code commit | `869d1b94f529aa4cb484c4246b9b0e7468a14b90` (A12) · **not pushed, no PR** |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -30,6 +30,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | A9 | done: lens (`Lens`, `/eco` `/standard` `/precise`, `default_lens`, `[agents.<a>.lens]`) and `max_cost_per_flow` / `warn_at_cost` deleted; IPC `max_turns` required. Kept: `max_recall_tokens` (read since S5). Operator: `~/.tengu/config.toml` line 7 `default_lens` must go after merge | `bdba5604401a82be124d913557ceaa7126bd617e` |
 | A10 | done: escalator + `run_one_shot` → `src/bootstrap/one_shot.rs`, no feature gate (the default-build half was R1). Not done: showing the answer in Studio — the trace carries no answer by rule; `escalate` keeps its default (lping relies on it) | `36d83dafe36d67e00f14b2dd540034297a7f2148` |
 | A11 | done: `bridged_step_tools` — a Claude Code / Codex step builds no executor (unless `[[mcp_servers]]` need discovering); in-process-runner idea dropped | `c11386e9be5227083735d03953c0807466cfad37` |
+| A12 | done: `tengu webhooks` = `run.rs::run_webhooks` (`tengu run` with no feeds, only the endpoint loops); ~200 lines deleted; a webhooks process records `kind = "run"` + writes the heartbeat | `869d1b94f529aa4cb484c4246b9b0e7468a14b90` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -70,7 +71,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 

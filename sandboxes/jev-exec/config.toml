@@ -17,8 +17,6 @@
 # runs in the architect's workspace, where `--sandbox` (cwd-relative) and the
 # older `tengu` on PATH would not resolve.
 
-runtime_profile = "auto"
-
 # Open: OpenRouter and the price APIs commonly block Tor exits.
 [egress]
 network = "open"

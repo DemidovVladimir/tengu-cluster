@@ -8,8 +8,6 @@
 # parallel fan-out with synthesizer, failure/replan, and the "skip orchestration
 # for trivial input" fast path.
 
-runtime_profile = "cloud"
-
 [memory]
 enabled = true
 

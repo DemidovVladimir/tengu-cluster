@@ -52,8 +52,6 @@ No sandbox ships one — start from the commented `[skill_lifecycle]` sample in 
 Minimum example:
 
 ```toml
-runtime_profile = "auto"
-
 [agents.main]
 default = true
 engine = "openrouter"
@@ -181,7 +179,7 @@ All should return without error.
 ```
 
 Expected output includes:
-- Auto-detected runtime profile + `[egress]` network mode.
+- The `[egress]` network mode.
 - Backend diagnostics for **each configured agent** — look for `main` (or the sandbox planner) and `skill-improver`.
 
 If `skill-improver` is missing → the active config is incomplete. Re-check section 0.3.

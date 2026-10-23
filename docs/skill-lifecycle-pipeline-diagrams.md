@@ -805,8 +805,6 @@ Flow (see Section 5):
 `skill_distill` writes `evals/config.toml` alongside the skill: `engine` + `model` mirror the calling agent (`ToolCtx::agent_config`; fallback `openrouter` + `anthropic/claude-sonnet-4-6`), `workspace_tools` is the union of tool names in the extracted fixtures. Shape (edit by hand if the fixtures need more):
 
 ```toml
-runtime_profile = "cloud"
-
 [agents.<skill-name>-agent]
 default = true
 engine = "openrouter"

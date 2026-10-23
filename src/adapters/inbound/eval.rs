@@ -2418,11 +2418,7 @@ fixtures:
             "| Prompt | Expected |\n|---|---|\n| \"hi\" | ok |\n",
         )
         .unwrap();
-        std::fs::write(
-            skill_dir.join("config.toml"),
-            "runtime_profile = \"cloud\"\n",
-        )
-        .unwrap();
+        std::fs::write(skill_dir.join("config.toml"), "# eval config\n").unwrap();
 
         let skills = discover_skills(&[], &[tmp.path().join("skills")]).expect("discover");
         assert_eq!(skills.len(), 1);
@@ -2519,8 +2515,6 @@ fixtures:
         std::fs::write(
             &config_path,
             r#"
-runtime_profile = "cloud"
-
 [agents.main]
 engine = "openrouter"
 model = "anthropic/claude-sonnet-4-6"

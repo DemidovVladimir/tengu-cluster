@@ -756,7 +756,7 @@ const STEPS = [
       { path: "src/bootstrap/orchestrator.rs::resolve_session_id", desc: "TENGU_SESSION_ID, else a fresh UUID (per process for chat / Telegram, per row for tengu eval); tengu webhooks mints webhook-<name>-<uuid> per request instead" },
       { path: "src/application/orchestrator/events.rs", desc: "EventBus minted here, shared with planner; the global metrics sink is bridged onto it" },
     ],
-    deep: "engine = \"rag\" is the only orchestrator engine (Phase 7.1) — any other value fails config validation (orchestrator.engine must be one of); build_orchestrator keeps a defensive warn + None. The old static-mode planner (OrchestratorAgentPlanner + ChatWorker) is deleted."
+    deep: "[orchestrator] has no engine key (removed 2026-10-23; unknown keys fail the load) — the planner call runs on the agent's engine. The old static-mode planner (OrchestratorAgentPlanner + ChatWorker) is deleted."
   },
   {
     num: 3, title: "Planner — RegistryPlanner::plan (legacy name)", lane: "plan",
@@ -1435,7 +1435,7 @@ const FILE_MAP = [
   ["src/adapters/inbound/cli/mod.rs", "cli", "clap Cli/Commands + dispatch (chat / status / doctor / telegram / webhooks / run / decide / history / backtest / ranking / evidence / lineage / soe / sources / studio / trace / risk / eval / secret / prune / mcp-bridge / agentic-memory-server / skill; hidden run-agent / tool)"],
   ["src/adapters/inbound/cli/run_agent.rs", "cli", "tengu run-agent child: AgentIpcInput in, LLM-with-tools loop until compress_and_store, AgentIpcOutput out; try_persist_agentic_step_summary"],
   ["src/adapters/inbound/cli/skill.rs", "cli", "tengu skill … commands"],
-  ["src/adapters/inbound/cli/doctor.rs", "cli", "tengu status / doctor (--tor exit check, --live runner health, --engines smoke turn per agent)"],
+  ["src/adapters/inbound/cli/doctor.rs", "cli", "tengu doctor (--tor exit check, --live runner health, --engines smoke turn per agent)"],
   ["src/adapters/inbound/cli/decide.rs", "decision", "tengu decide --sandbox <s> --loop <n> [--event f.json] — one event through a loop; --map <file|-> — an execution map"],
   ["src/adapters/inbound/cli/history.rs", "xlab", "tengu history range / asof (recorder) + backfill / events (SEC EDGAR) / import-hl-archive / import-json / coverage (market.db)"],
   ["src/adapters/inbound/cli/backtest.rs", "xlab", "tengu backtest — rules arms, --split (a counted holdout read), --data-through, --fetch, --gate [<loop>] --max-decisions --concurrency --offline"],

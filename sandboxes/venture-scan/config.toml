@@ -20,8 +20,6 @@
 # prompts carry no private figures; only the critic (no fetch tool) gets the
 # operator's private brief, which lives outside the repo.
 
-runtime_profile = "auto"
-
 # Open: WebSearch and Codex web search run at the providers; http_request
 # fetches pages directly (switchable to Tor — the Claude CLI then gets the
 # proxy env, and http_request goes through egress.rs either way).

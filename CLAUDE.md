@@ -607,11 +607,11 @@ These are not preferences. They're load-bearing.
   or memory, and returns its usage (planner metrics on every surface). TUI and
   Telegram refuse to start when it does not build; webhooks, escalations, eval
   rows and A2A build it per turn.
-- **`engine = "rag"` is the only orchestrator engine and now the default.**
-  `OrchestratorConfig.engine` defaults to `"rag"` (was `"static"`, which
-  silently disabled orchestration); any other value fails config validation.
-  The name is historical; current routing is file-registry + Open Brain
-  memory, not retrieval-first memory.
+- **`[orchestrator]` has no `engine` key (2026-10-23)** — the planner is
+  the file-registry planner + Open Brain memory; its call runs on `agent`'s
+  engine + model. `[orchestrator]` is `deny_unknown_fields`: the old
+  `engine = "rag"` fails the load, as do the removed top-level
+  `runtime_profile` and `[hub]` (and `tengu status` is gone: `tengu doctor`).
 - **Planner registry is file-backed** — `RegistryPlanner` regenerates root
   `TENGU_PLANNER_REGISTRY.md` from the `[agents.*]` blocks with a
   `description` (`shared_files::routable_agents`), skills, and core tool

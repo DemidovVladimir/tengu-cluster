@@ -224,8 +224,6 @@ pub(crate) mod tests {
     #[test]
     fn mcp_config_deserializes() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [agents.main]
             default = true
             engine = "openrouter"

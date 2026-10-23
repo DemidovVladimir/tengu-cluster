@@ -4,8 +4,6 @@
 # (domain/backtest/checks.rs): the 75 xyz names, 5 m bars, KIOXIA excluded,
 # half the 3.8 bps round trip per side, no spread, slippage or funding.
 
-runtime_profile = "auto"
-
 [generation]
 id = "W1"
 registry = "../../registry"

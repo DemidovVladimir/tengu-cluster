@@ -46,7 +46,7 @@ The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Teleg
 - Builds `RegistryPlanner` (legacy name; planner side) with its ports injected — `ToolDirectory` (`CatalogDirectory`: tool catalog + MCP `tools/list`), `RecallStore` + `Embedding` (only with `postgres_memory`) — and `SubprocessRunner` (worker side). Both receive `config.agents` (the planner renders the registry, the runner fails fast on unknown agents and reads per-step `limits.max_tool_rounds` / `limits.step_timeout_secs`) and the caller's `session_id` (`resolve_session_id`: `TENGU_SESSION_ID`, else a fresh UUID — once per process for chat / Telegram, per row for `tengu eval`; `tengu webhooks` mints `webhook-<name>-<uuid>` per request).
 - Returns an `Orchestrator` that wraps them.
 
-The default-agent dispatch (no orchestrator at all) is the fallback when `[orchestrator]` is missing from the sandbox config. `engine = "rag"` is the only orchestrator engine (Phase 7.1) — any other value fails config validation; `build_orchestrator` keeps a defensive warn + `None`. The name is historical: file-registry planner + Open Brain memory.
+The default-agent dispatch (no orchestrator at all) is the fallback when `[orchestrator]` is missing from the sandbox config. `[orchestrator]` has no engine key (removed 2026-10-23; unknown keys fail the load): the planner is the file-registry planner + Open Brain memory, its call runs on the `agent`'s engine.
 
 ### 3. Planner — `RegistryPlanner::plan`
 

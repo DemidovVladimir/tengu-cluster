@@ -1,4 +1,4 @@
-//! `tengu status` / `tengu doctor` (incl. `--tor` exit check, `--live`, the
+//! `tengu doctor` (incl. `--tor` exit check, `--live`, the
 //! running `tengu run`: heartbeat file + `loop/1` / `feed/1` rows
 //! (`bootstrap::runtime::read_live`, shared with Studio) →
 //! `domain::runtime::live_verdict`, and `--engines`, a tool-using smoke turn
@@ -15,7 +15,7 @@ use crate::bootstrap::runtime::{read_live, runtime_state_dir};
 use crate::bootstrap::tools::{
     build_tool_executor, compute_base_tools, grant_workspace_root, subagent_config,
 };
-use crate::config::{AgentClaudeCodeConfig, AgentConfig, Config, RuntimeProfile};
+use crate::config::{AgentClaudeCodeConfig, AgentConfig, Config};
 use crate::domain::engine_smoke::{
     runs_summary, smoke_prompt, smoke_verdict, SMOKE_MAX_ROUNDS, SMOKE_SYSTEM, SMOKE_TOOLS,
     TOKEN_FILE_PREFIX,
@@ -36,38 +36,6 @@ fn format_diagnostics_compact(d: &crate::ports::engine::EngineDiagnostics) -> St
         caps.max_output_tokens_per_turn,
         caps.supports_streaming,
     )
-}
-
-pub(super) fn print_status(config: &Config, profile: RuntimeProfile) {
-    println!();
-    println!("  TENGU CLUSTER — Status");
-    println!("  ─────────────────────────────────────");
-    println!("  Profile:  {:?}", profile);
-    println!("  Agents:   {}", config.agents.len());
-    for (id, ac) in &config.agents {
-        println!(
-            "    - {} ({}/{}){}",
-            id,
-            ac.engine,
-            ac.model,
-            if ac.default { " [default]" } else { "" }
-        );
-        match build_engine(id, ac, config.claude_code.as_ref()) {
-            Ok(engine) => {
-                let diagnostics = engine.diagnostics();
-                println!(
-                    "      diagnostics: {}",
-                    format_diagnostics_compact(&diagnostics)
-                );
-            }
-            Err(err) => {
-                println!("      diagnostics: unavailable ({})", err);
-            }
-        }
-    }
-    println!("  Hub:      {}:{}", config.hub.bind, config.hub.port);
-    println!("  ─────────────────────────────────────");
-    println!();
 }
 
 /// Print, per agent, the tools that run on the fallback scope (no

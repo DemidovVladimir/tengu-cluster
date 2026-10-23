@@ -2,8 +2,6 @@
 # capabilities plus two W2-only ones — the `event_window` strategy kind and a
 # news probe tool (`w2_news_probe`, not a real tool). Loaded only by tests.
 
-runtime_profile = "auto"
-
 [generation]
 id = "W2-SIM"
 registry = "../../registry"

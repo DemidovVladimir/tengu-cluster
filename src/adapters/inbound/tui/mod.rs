@@ -11,7 +11,7 @@ use crate::application::chat::service::{
 use crate::application::skills::registry::{
     FileSystemSkillSource, SkillCommandMatch, SkillCommandRouter, SkillRegistry, SkillStatus,
 };
-use crate::config::{Config, RuntimeProfile};
+use crate::config::Config;
 use crate::domain::message::{ToolCall, ToolDef};
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::engine::ToolExecutor;
@@ -115,11 +115,7 @@ impl ToolActivityPort for CursiveToolActivityAdapter {
 }
 
 /// Run the full-screen TUI chat (blocking — call from `block_in_place`).
-pub fn run_tui(
-    config: Config,
-    _profile: RuntimeProfile,
-    secret_registry: Arc<SecretRegistry>,
-) -> Result<()> {
+pub fn run_tui(config: Config, secret_registry: Arc<SecretRegistry>) -> Result<()> {
     // Resolve agent config
     let (agent_id, agent_config) = config
         .agents

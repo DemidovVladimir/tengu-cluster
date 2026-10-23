@@ -30,109 +30,9 @@ pub(crate) mod xmarket;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use sysinfo::System;
-use tracing::info;
 
 use crate::domain::scope::ToolScope;
 use egress::EgressConfig;
-
-// ---------------------------------------------------------------------------
-// Runtime profile
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RuntimeProfile {
-    /// High-resource environment (cloud GPU/large RAM).
-    Cloud,
-    /// Typical desktop/laptop environment.
-    Desktop,
-    /// Constrained environment (SBC/VPS/low-RAM).
-    Minimal,
-}
-
-#[derive(Debug, Clone)]
-pub struct SystemCapabilities {
-    pub total_ram_mb: u64,
-    pub available_ram_mb: u64,
-    pub cpu_cores: usize,
-    pub arch: String,
-    pub has_gpu: bool,
-}
-
-impl SystemCapabilities {
-    pub fn detect() -> Self {
-        let mut sys = System::new_all();
-        sys.refresh_all();
-
-        let total_ram_mb = sys.total_memory() / (1024 * 1024);
-        let available_ram_mb = sys.available_memory() / (1024 * 1024);
-        let cpu_cores = sys.cpus().len();
-        let arch = std::env::consts::ARCH.to_string();
-
-        let has_gpu = Self::detect_gpu();
-
-        Self {
-            total_ram_mb,
-            available_ram_mb,
-            cpu_cores,
-            arch,
-            has_gpu,
-        }
-    }
-
-    pub fn recommended_profile(&self) -> RuntimeProfile {
-        match (self.available_ram_mb, self.has_gpu) {
-            (ram, true) if ram > 16_000 => RuntimeProfile::Cloud,
-            (ram, _) if ram > 4_000 => RuntimeProfile::Desktop,
-            _ => RuntimeProfile::Minimal,
-        }
-    }
-
-    fn detect_gpu() -> bool {
-        if let Ok(hint) = std::env::var("TENGU_GPU_HINT") {
-            let normalized = hint.trim().to_ascii_lowercase();
-            match normalized.as_str() {
-                "none" | "cpu" | "off" | "false" => return false,
-                "gpu" | "cuda" | "metal" | "mps" | "on" | "true" => return true,
-                _ => {}
-            }
-        }
-
-        if std::env::var("CUDA_VISIBLE_DEVICES").is_ok() {
-            return true;
-        }
-
-        if cfg!(target_os = "macos") && std::env::consts::ARCH == "aarch64" {
-            return true;
-        }
-        false
-    }
-}
-
-impl RuntimeProfile {
-    pub fn resolve(configured: Option<&str>) -> Self {
-        match configured {
-            Some("cloud") => RuntimeProfile::Cloud,
-            Some("desktop") => RuntimeProfile::Desktop,
-            Some("minimal") => RuntimeProfile::Minimal,
-            _ => {
-                let caps = SystemCapabilities::detect();
-                let profile = caps.recommended_profile();
-                info!(
-                    arch = %caps.arch,
-                    ram_mb = caps.total_ram_mb,
-                    available_mb = caps.available_ram_mb,
-                    cores = caps.cpu_cores,
-                    gpu = caps.has_gpu,
-                    profile = ?profile,
-                    "Auto-detected runtime profile"
-                );
-                profile
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Configuration schema
@@ -144,12 +44,6 @@ impl RuntimeProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default = "default_profile")]
-    pub runtime_profile: String,
-
-    #[serde(default)]
-    pub hub: HubConfig,
-
     #[serde(default)]
     pub agents: HashMap<String, AgentConfig>,
 
@@ -371,72 +265,6 @@ pub struct McpAuthConfig {
     pub auth_type: String,
     /// Token value. `$VAR` references are resolved from the process env.
     pub token: String,
-}
-
-fn default_profile() -> String {
-    "auto".to_string()
-}
-
-/// Hub runtime/network configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HubConfig {
-    #[serde(default = "default_bind")]
-    pub bind: String,
-    #[serde(default = "default_port")]
-    pub port: u16,
-    #[serde(default = "default_auth_mode")]
-    pub auth_mode: String,
-    #[serde(default)]
-    pub auth_token: Option<String>,
-    #[serde(default)]
-    pub reload: ReloadConfig,
-}
-
-impl Default for HubConfig {
-    fn default() -> Self {
-        Self {
-            bind: default_bind(),
-            port: default_port(),
-            auth_mode: default_auth_mode(),
-            auth_token: None,
-            reload: ReloadConfig::default(),
-        }
-    }
-}
-
-fn default_bind() -> String {
-    "127.0.0.1".to_string()
-}
-fn default_port() -> u16 {
-    7070
-}
-fn default_auth_mode() -> String {
-    "token".to_string()
-}
-
-/// Hot-reload behavior for runtime configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ReloadConfig {
-    #[serde(default = "default_reload_mode")]
-    pub mode: String,
-    #[serde(default = "default_debounce_ms")]
-    pub debounce_ms: u64,
-}
-
-impl Default for ReloadConfig {
-    fn default() -> Self {
-        Self {
-            mode: default_reload_mode(),
-            debounce_ms: default_debounce_ms(),
-        }
-    }
-}
-
-fn default_reload_mode() -> String {
-    "hybrid".to_string()
-}
-fn default_debounce_ms() -> u64 {
-    300
 }
 
 /// Every `[agents.<a>] engine` value (`engines::build_engine` builds each;
@@ -709,8 +537,11 @@ fn default_max_tokens() -> u64 {
 }
 
 /// Orchestration configuration. Presence activates orchestration;
-/// absence falls back to single-agent-default dispatch.
+/// absence falls back to single-agent-default dispatch. Unknown keys fail
+/// the load (the old `engine = "rag"` too: the planner runs on `agent`'s
+/// engine).
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrchestratorConfig {
     /// Name of the agent (in `Config.agents`) that acts as the
     /// orchestrator.
@@ -733,13 +564,6 @@ pub struct OrchestratorConfig {
     /// preserves the "talk to this agent specifically" escape hatch.
     #[serde(default)]
     pub route_explicit_agents: bool,
-
-    /// Planner engine. `"rag"` (default) is the only supported value; the
-    /// name is historical, the planner is `RegistryPlanner` (file-backed
-    /// `TENGU_PLANNER_REGISTRY.md`) + the `SubprocessRunner` worker. Any
-    /// other value fails config validation.
-    #[serde(default = "default_orchestrator_engine")]
-    pub engine: String,
 }
 
 fn default_max_attempts_per_step() -> u32 {
@@ -747,9 +571,6 @@ fn default_max_attempts_per_step() -> u32 {
 }
 fn default_max_replans() -> u32 {
     2
-}
-fn default_orchestrator_engine() -> String {
-    "rag".to_string()
 }
 
 /// Telegram bot adapter configuration. Unknown keys fail the load, the old
@@ -1447,20 +1268,6 @@ impl Config {
     fn validation_errors(&self) -> Vec<String> {
         let mut errors = ValidationErrors::default();
 
-        errors.require_one_of(
-            "runtime_profile",
-            &self.runtime_profile,
-            &["auto", "cloud", "desktop", "minimal"],
-        );
-        errors.require_nonempty("hub.bind", &self.hub.bind);
-        errors.require(self.hub.port > 0, "hub.port must be greater than 0");
-        errors.require_one_of("hub.auth_mode", &self.hub.auth_mode, &["token", "open"]);
-        errors.require_one_of(
-            "hub.reload.mode",
-            &self.hub.reload.mode,
-            &["hybrid", "hot", "restart", "off"],
-        );
-
         errors.require(
             !self.agents.is_empty(),
             "at least one agent must be configured",
@@ -1469,10 +1276,6 @@ impl Config {
         let default_count = self.agents.values().filter(|agent| agent.default).count();
         if default_count > 1 {
             errors.push("only one agent can have default=true");
-        }
-
-        if let Some(orch) = &self.orchestrator {
-            errors.require_one_of("orchestrator.engine", &orch.engine, &["rag"]);
         }
 
         self.agents.iter().for_each(|(agent_id, agent)| {
@@ -1794,8 +1597,6 @@ impl Default for Config {
         );
 
         Self {
-            runtime_profile: "auto".to_string(),
-            hub: HubConfig::default(),
             agents,
             orchestrator: None,
             memory: MemoryConfig::default(),
@@ -1985,38 +1786,16 @@ secret = "literal-dev-secret"
     }
 
     #[test]
-    fn orchestrator_engine_defaults_to_rag() {
-        let toml_str = r#"
-[orchestrator]
-agent = "main"
-"#;
-        let parsed: toml::Value = toml::from_str(toml_str).unwrap();
-        let orch: OrchestratorConfig = parsed
-            .get("orchestrator")
-            .unwrap()
-            .clone()
-            .try_into()
-            .unwrap();
-        assert_eq!(orch.engine, "rag");
-    }
-
-    #[test]
-    fn validate_rejects_unknown_orchestrator_engine() {
-        let mut config = Config::default();
-        config.orchestrator = Some(OrchestratorConfig {
-            agent: "main".to_string(),
-            max_attempts_per_step: default_max_attempts_per_step(),
-            max_replans: default_max_replans(),
-            route_explicit_agents: false,
-            engine: "static".to_string(),
-        });
-        let err = config.validate().expect_err("expected validation error");
-        assert!(err
-            .to_string()
-            .contains("orchestrator.engine must be one of"));
-
-        config.orchestrator.as_mut().unwrap().engine = "rag".to_string();
-        assert!(config.validate().is_ok());
+    fn removed_top_level_keys_fail_the_load() {
+        for key in [
+            "runtime_profile = \"auto\"",
+            "[hub]\nport = 7070",
+            "[orchestrator]\nagent = \"main\"\nengine = \"rag\"",
+        ] {
+            let text = format!("{key}\n[agents.main]\nengine = \"openrouter\"\nmodel = \"m\"\n");
+            let err = toml::from_str::<Config>(&text).expect_err(key);
+            assert!(err.to_string().contains("unknown field"), "{key}: {err}");
+        }
     }
 
     #[test]
@@ -2186,12 +1965,6 @@ ttl_days = 7
     #[test]
     fn existing_config_no_scopes_parses() {
         let toml_str = r#"
-            runtime_profile = "auto"
-            [hub]
-            bind = "127.0.0.1"
-            port = 7070
-            auth_mode = "token"
-
             [agents.main]
             default = true
             engine = "openrouter"
@@ -2206,8 +1979,6 @@ ttl_days = 7
     #[test]
     fn agent_scopes_roundtrip() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [agents.main]
             default = true
             engine = "openrouter"
@@ -2230,8 +2001,6 @@ ttl_days = 7
     #[test]
     fn default_scopes_roundtrip() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [agents.main]
             default = true
             engine = "openrouter"
@@ -2252,8 +2021,6 @@ ttl_days = 7
     #[test]
     fn resolve_scope_agent_overrides_default() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [default_scopes.write_file]
             fs_roots = ["./global"]
 
@@ -2274,8 +2041,6 @@ ttl_days = 7
     #[test]
     fn resolve_scope_falls_back_to_default() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [default_scopes.read_file]
             fs_roots = ["./"]
 
@@ -2339,8 +2104,6 @@ ttl_days = 7
     #[test]
     fn fold_default_scopes_materialises_fallback_per_agent() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [default_scopes.read_file]
             fs_roots = ["~/ws"]
 
@@ -2417,8 +2180,6 @@ ttl_days = 7
     #[test]
     fn validate_passes_with_scopes() {
         let toml_str = r#"
-            runtime_profile = "auto"
-
             [default_scopes.read_file]
             fs_roots = ["./"]
 

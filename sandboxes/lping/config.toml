@@ -20,8 +20,6 @@
 # `lp_executor` send real transactions, see
 # "Signing" at the bottom of this file.
 
-runtime_profile = "auto"
-
 # --- Network -----------------------------------------------------------------
 # Open: paid RPC providers + market-data APIs (and OpenRouter) commonly block
 # Tor exits, and streaming feeds are latency-sensitive. Flip to "tor" to test.
@@ -149,7 +147,6 @@ fs_roots = ["~/lping-workspace"]
 
 [orchestrator]
 agent = "lping"
-engine = "rag"
 max_attempts_per_step = 3
 max_replans = 2
 

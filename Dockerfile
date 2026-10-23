@@ -67,8 +67,7 @@ ENV TENGU_CONFIG=/opt/tengu/config.toml \
     TENGU_HOME=/opt/tengu/data
 
 # Webhook listener port (`tengu run` / `tengu webhooks` — the runtime with no
-# feeds; feature `webhooks`). Nothing listens
-# on [hub].port — the hub is config-only.
+# feeds; feature `webhooks`).
 EXPOSE 7080
 
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 --start-period=10s \
