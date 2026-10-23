@@ -681,7 +681,7 @@ impl Planner for RegistryPlanner {
         // so `embed_vec = None` falls through to the str-input path.
         let cross_session_block = self.cross_session_recall_block(user_message, None).await;
 
-        let prior_plan_text = serde_json::to_string_pretty(prior_plan)?;
+        let prior_plan_text = serde_json::to_string(prior_plan)?;
         // The error carries the step's partial output: fenced.
         let failure_block = format!(
             "\n## A previous plan failed\n\n\

@@ -347,20 +347,7 @@ Example queries:
 
 - `s1` agent=`crypto_researcher` depends_on=`-` goal: Get the SOL price and 24h volume from two sources.
 
-<span class="k">## JSON</span>
-
-```json
-{
-  <span class="k">"steps"</span>: [
-    {
-      <span class="k">"id"</span>: <span class="s">"s1"</span>,
-      <span class="k">"agent"</span>: <span class="s">"crypto_researcher"</span>,
-      <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
-      <span class="k">"depends_on"</span>: []
-    }
-  ]
-}
-```
+<span class="c"># bullets only: each carries every Step field (a compose adds a sub-bullet)</span>
 <span class="c"># a step sees this text under "## Current execution plan (loaded from IPC `plan_state`)"</span></pre></div>
     <div class="tabpanel" id="tab-json" hidden><pre><span class="c"># the two shapes serde accepts (PlannerVerdict, tag "kind")</span>
 { <span class="k">"kind"</span>: <span class="s">"direct"</span>, <span class="k">"response"</span>: <span class="s">"&lt;text for the user&gt;"</span> }
@@ -509,7 +496,7 @@ Example queries:
     } else {
       var xpOn = mem && xp > 0;
       h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs of this sandbox, any session, each fenced; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
-      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries (fenced as step-error:<id>), prior plan JSON", true, "always"));
+      h.push(row("bad", "## A previous plan failed", "failed step id, error after retries (fenced as step-error:<id>), prior plan as compact JSON", true, "always"));
       h.push(row("you", "## Original user message", "the same message as plan()", true, "always"));
     }
     layers.innerHTML = h.join("");

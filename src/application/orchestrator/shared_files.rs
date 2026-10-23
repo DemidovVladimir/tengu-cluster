@@ -36,12 +36,12 @@ fn with_active_plans<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R 
 
 /// Render `plan` and register it as the active plan for `session_id`.
 /// Returns the rendered markdown (the same text `write_plan_state` writes).
-pub(crate) fn set_active_plan(session_id: &str, phase: &str, plan: &Plan) -> Result<String> {
-    let rendered = render_plan_state(phase, plan)?;
+pub(crate) fn set_active_plan(session_id: &str, phase: &str, plan: &Plan) -> String {
+    let rendered = render_plan_state(phase, plan);
     with_active_plans(|m| {
         m.insert(session_id.to_string(), rendered.clone());
     });
-    Ok(rendered)
+    rendered
 }
 
 /// Rendered plan markdown for `session_id`, if one is active.
@@ -116,9 +116,9 @@ pub(crate) fn write_plan_state(workspace: &Path, rendered: &str) -> Result<()> {
 }
 
 /// Markdown rendering of a plan — the single template behind both the IPC
-/// field and the debug file.
-pub(crate) fn render_plan_state(phase: &str, plan: &Plan) -> Result<String> {
-    let json = serde_json::to_string_pretty(plan)?;
+/// field and the debug file. One bullet per step carries every `Step` field
+/// (id, agent, dependencies, goal, compose), so no JSON copy rides along.
+pub(crate) fn render_plan_state(phase: &str, plan: &Plan) -> String {
     let mut out = format!("# Tengu Current Plan\n\n- phase: `{}`\n\n", phase);
     out.push_str("## Steps\n\n");
     for step in &plan.steps {
@@ -142,10 +142,7 @@ pub(crate) fn render_plan_state(phase: &str, plan: &Plan) -> Result<String> {
             ));
         }
     }
-    out.push_str("\n## JSON\n\n```json\n");
-    out.push_str(&json);
-    out.push_str("\n```\n");
-    Ok(out)
+    out
 }
 
 /// Subagents = `[agents.<name>]` blocks with a `description`. Sorted by
@@ -320,15 +317,15 @@ mod tests {
 
     #[test]
     fn active_plan_is_per_session() {
-        let a = set_active_plan("sf-sess-a", "active", &plan("a1")).unwrap();
-        let b = set_active_plan("sf-sess-b", "active", &plan("b1")).unwrap();
+        let a = set_active_plan("sf-sess-a", "active", &plan("a1"));
+        let b = set_active_plan("sf-sess-b", "active", &plan("b1"));
         assert_ne!(a, b);
         assert_eq!(active_plan("sf-sess-a").as_deref(), Some(a.as_str()));
         assert_eq!(active_plan("sf-sess-b").as_deref(), Some(b.as_str()));
         assert!(active_plan("sf-sess-none").is_none());
 
         // Clearing with a stale rendering leaves a newer registration alone.
-        let a2 = set_active_plan("sf-sess-a", "active", &plan("a2")).unwrap();
+        let a2 = set_active_plan("sf-sess-a", "active", &plan("a2"));
         clear_active_plan("sf-sess-a", &a);
         assert_eq!(active_plan("sf-sess-a").as_deref(), Some(a2.as_str()));
         clear_active_plan("sf-sess-a", &a2);
@@ -338,8 +335,9 @@ mod tests {
 
     #[test]
     fn plan_state_block_wraps_rendered_text() {
-        let rendered = render_plan_state("active", &plan("s1")).unwrap();
+        let rendered = render_plan_state("active", &plan("s1"));
         assert!(rendered.contains("- `s1` agent=`researcher`"));
+        assert!(!rendered.contains("```json"), "bullets only");
         let block = plan_state_block(&rendered, "IPC `plan_state`");
         assert!(block.starts_with("\n## Current execution plan (loaded from IPC `plan_state`)"));
         assert!(block.contains(&rendered));
@@ -349,7 +347,7 @@ mod tests {
     #[test]
     fn write_plan_state_mirrors_rendered_text() {
         let dir = tempfile::tempdir().unwrap();
-        let rendered = render_plan_state("active", &plan("s1")).unwrap();
+        let rendered = render_plan_state("active", &plan("s1"));
         write_plan_state(dir.path(), &rendered).unwrap();
         let block = read_plan_state_block(dir.path());
         assert!(block.contains(&rendered));

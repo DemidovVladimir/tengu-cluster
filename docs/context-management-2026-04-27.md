@@ -354,7 +354,8 @@ the picture.
 The child `tengu run-agent` process starts with **empty `messages`** —
 it never inherits the parent's chat history. The IPC payload
 (`AgentIpcInput`) carries `goal`, `agent_name`, `max_turns`, `session_id`,
-`step_id`, `sandbox_config`, `plan_state` (plus `compose` for composed steps);
+`step_id`, `sandbox_config`, `plan_state` (the plan as one bullet per step,
+no JSON copy; plus `compose` for composed steps);
 `model` / `tools` / `skills` travel empty — the child re-loads the same sandbox
 config and takes them from its own `[agents.<name>]` block. By design — keeps
 subagents focused and prevents accidental context leakage between

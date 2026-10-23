@@ -142,13 +142,6 @@ impl ActivePlanGuard {
             Some(sid) => shared_files::set_active_plan(sid, "active", plan),
             None => shared_files::render_plan_state("active", plan),
         };
-        let rendered = match rendered {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to render plan state");
-                return;
-            }
-        };
         if let Ok(root) = std::env::current_dir() {
             if let Err(e) = shared_files::write_plan_state(&root, &rendered) {
                 tracing::warn!(error = %e, "failed to write shared plan state debug file");
