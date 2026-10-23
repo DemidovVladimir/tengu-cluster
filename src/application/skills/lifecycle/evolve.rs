@@ -149,22 +149,29 @@ pub(crate) fn apply_proposal_to_skill_md(
     proposal: &ProposalBody,
 ) -> Result<()> {
     let body = std::fs::read_to_string(skill_md_path)?;
-    let (fm_block, _old_body) = split_frontmatter(&body)?;
-    let new_fm = if let Some(ms) = &proposal.metrics {
-        replace_metrics_block(fm_block, ms)?
-    } else {
-        fm_block.to_string()
-    };
-    let new_contents = format!(
-        "---\n{}---\n\n{}\n",
-        new_fm,
-        proposal.body_markdown.trim_end()
-    );
+    let new_contents = proposed_skill_md(&body, proposal)?;
     let parent = skill_md_path.parent().unwrap();
     let tmp = parent.join(format!(".SKILL.md.tmp-{}", unique_suffix()));
     std::fs::write(&tmp, new_contents)?;
     std::fs::rename(&tmp, skill_md_path)?;
     Ok(())
+}
+
+/// The SKILL.md `proposal` turns `current` into: its frontmatter (the
+/// metrics block replaced when the proposal carries metrics) and the
+/// proposed body.
+pub(crate) fn proposed_skill_md(current: &str, proposal: &ProposalBody) -> Result<String> {
+    let (fm_block, _old_body) = split_frontmatter(current)?;
+    let new_fm = if let Some(ms) = &proposal.metrics {
+        replace_metrics_block(fm_block, ms)?
+    } else {
+        fm_block.to_string()
+    };
+    Ok(format!(
+        "---\n{}---\n\n{}\n",
+        new_fm,
+        proposal.body_markdown.trim_end()
+    ))
 }
 
 /// Validate that `rel_path` stays inside the `resources/` subdir of the skill.

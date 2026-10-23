@@ -400,6 +400,7 @@ tengu skill remove my-notes --tier project
     <li><span><b>A timeout is a fail.</b> A row past its <code>timeout_secs</code> fails without a judge call; malformed judge output fails with a preview.</span></li>
     <li><span><b>An orchestrated row's trace ends last.</b> With <code>[orchestrator]</code> the row awaits the metrics barrier, then reads every event sent to its observer, then shuts its trace gate and writes <code>run.closed</code> — no timed sleep; a timed-out row's turn is cancelled (<code>plan.completed</code>, dropped) first.</span></li>
     <li><span><b>Installs are checked first.</b> Symlink escapes are rejected; <code>--strict</code> refuses a caution or dangerous verdict; an existing target is never overwritten.</span></li>
+    <li><span><b>Agent writes are scanned first.</b> <code>manage_skill</code> runs the same scan on a <code>create</code>, <code>edit_body</code> or <code>patch</code> before it writes (<code>scanner::scan_file</code>) and refuses a caution or dangerous verdict, like <code>--strict</code>: no human approves it.</span></li>
     <li><span><b>Busy skills can't vanish.</b> <code>remove</code> and <code>manage_skill delete</code> refuse while an evolve worktree for that skill exists.</span></li>
   </ul>
 </section>
@@ -453,7 +454,7 @@ tengu skill remove my-notes --tier project
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>
