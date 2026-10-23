@@ -149,7 +149,7 @@
         <g class="n data" data-at="7-8">
           <rect x="245" y="278" width="290" height="58" rx="8"/>
           <text x="390" y="302" text-anchor="middle" class="t-title t-mono">memory_promotions</text>
-          <text x="390" y="321" text-anchor="middle" class="t-small">target · reason · status pending</text>
+          <text x="390" y="321" text-anchor="middle" class="t-small">target · reason · pending → approved</text>
         </g>
         <text x="390" y="368" text-anchor="middle" class="t-small">pgvector HNSW cosine + full-text GIN indexes</text>
         <text x="390" y="386" text-anchor="middle" class="t-small">vector(1536) on events and chunks</text>
@@ -168,7 +168,7 @@
         <g class="n heart" data-at="8">
           <rect x="590" y="258" width="250" height="58" rx="8"/>
           <text x="715" y="282" text-anchor="middle" class="t-title">Wiki compiler</text>
-          <text x="715" y="301" text-anchor="middle" class="t-small">one LLM call, cites [mem:kind/id]</text>
+          <text x="715" y="301" text-anchor="middle" class="t-small">approved only · cites [mem:kind/id]</text>
         </g>
         <g class="n data" data-at="8">
           <rect x="590" y="352" width="250" height="58" rx="8"/>
@@ -183,7 +183,7 @@
         <g class="pop badge" data-at="5"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">kind step_output + step_id</text></g>
         <g class="pop badge" data-at="6"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">raw/&lt;kind&gt;/&lt;sha256&gt;.md kept on disk</text></g>
         <g class="pop badge" data-at="7"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">promotion = one row, nothing copied</text></g>
-        <g class="pop badge" data-at="8"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">30 newest promotions per page</text></g>
+        <g class="pop badge" data-at="8"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">30 newest approved per page</text></g>
         <g class="pop badge" data-at="9"><rect x="225" y="418" width="330" height="22" rx="11"/><text x="390" y="433" text-anchor="middle">same tool, same database</text></g>
 
         <circle class="tok" r="6" data-path="p-user-plan" data-at="1"/>
@@ -212,7 +212,7 @@
         <li>The step summary is stored as kind <code>step_output</code> with its <code>step_id</code>: the <code>compress_and_store</code> text, or the final reply as a backstop.</li>
         <li>Agents with the opt-in tool capture notes and ingest sources. <code>ingest_source</code> keeps the raw file, one source row and its chunks, each embedded.</li>
         <li><code>promote</code> marks a stable event, chunk or source: one <code>memory_promotions</code> row with a reason and optional evidence.</li>
-        <li><code>compile_wiki</code> reads the 30 newest promotions. An LLM writes one page citing <code>[mem:kind/id]</code>; if it fails, a plain bullet list is written.</li>
+        <li><code>promote</code> files a <code>pending</code> row; the operator approves it in Postgres. <code>compile_wiki</code> reads the 30 newest <code>approved</code> promotions of this sandbox. With <code>TENGU_WIKI_COMPILER_MODEL</code> set an LLM writes one page citing <code>[mem:kind/id]</code>; unset (the default) or failed, a plain bullet list is written.</li>
         <li><code>tengu agentic-memory-server</code> serves the same tool over MCP stdio, so agents outside Tengu read and write the same memory.</li>
       </ol>
     </div>
@@ -233,17 +233,17 @@
     </div>
     <div class="tabpanel" id="tab-ops">
       <div class="ops">
-        <div class="card hands"><h3>capture</h3><p>Stores <code>content</code> as one event, embedded (text only without a key). <code>kind</code> defaults to <code>event</code>.</p><pre class="mini">captured: event_id=&lt;uuid&gt; kind=&lt;kind&gt; bytes=&lt;n&gt;</pre></div>
-        <div class="card hands"><h3>recall</h3><p>Events and chunks. Vector order first, full text if no vector hit. <code>top_k</code> 5, kept in 1–20.</p><pre class="mini">- &lt;uuid&gt; [&lt;kind&gt;] &lt;first line, 500 chars&gt;</pre></div>
+        <div class="card hands"><h3>capture</h3><p>Stores <code>content</code> as one event of this sandbox, embedded (text only without a key). <code>kind</code>: <code>event</code> (default), <code>note</code>, <code>preference</code>, <code>fact</code>, <code>claim</code>, <code>decision</code> — never <code>message</code> / <code>step_output</code>, the planner's lanes.</p><pre class="mini">captured: event_id=&lt;uuid&gt; kind=&lt;kind&gt; bytes=&lt;n&gt;</pre></div>
+        <div class="card hands"><h3>recall</h3><p>Events and chunks of this sandbox. Vector order first, full text if no vector hit. <code>top_k</code> 5, kept in 1–20.</p><pre class="mini">- &lt;uuid&gt; [&lt;kind&gt;] &lt;first line, 500 chars&gt;</pre></div>
         <div class="card hands"><h3>ingest_source</h3><p><code>content</code> or a workspace <code>path</code>. Raw copy on disk, one source row, chunks with vectors.</p><pre class="mini">ingested: source_id=&lt;uuid&gt; chunks=&lt;n&gt; raw_path=&lt;path&gt;</pre></div>
         <div class="card hands"><h3>promote</h3><p>Marks <code>target_id</code> (an event by default) as stable, with a <code>reason</code> and <code>evidence</code>.</p><pre class="mini">promoted: promotion_id=&lt;uuid&gt; target=&lt;kind&gt;/&lt;id&gt;</pre></div>
-        <div class="card hands"><h3>compile_wiki</h3><p>One page per <code>title</code> (default <code>agentic-memory</code>) from the 30 newest promotions.</p><pre class="mini">compiled_wiki: page=&lt;path&gt; items=&lt;n&gt; mode=llm</pre></div>
+        <div class="card hands"><h3>compile_wiki</h3><p>One page per <code>title</code> (default <code>agentic-memory</code>) from the 30 newest approved promotions.</p><pre class="mini">compiled_wiki: page=&lt;path&gt; items=&lt;n&gt; mode=deterministic</pre></div>
         <div class="card hands"><h3>lint</h3><p>Counts only: rows per table and wiki pages. No hygiene checks yet.</p><pre class="mini">agentic_memory lint: events=&lt;n&gt; sources=&lt;n&gt; chunks=&lt;n&gt; promotions=&lt;n&gt; wiki_pages=&lt;n&gt;</pre></div>
       </div>
     </div>
     <div class="tabpanel" id="tab-tables" hidden>
       <div class="ops">
-        <div class="card data"><h3>memory_events</h3><ul class="cols"><li><b>id</b> uuid</li><li><b>session_id</b> · <b>agent</b> · <b>role</b> · <b>kind</b></li><li><b>content</b> text · <b>summary</b></li><li class="vec"><b>embedding</b> vector(1536)</li><li><b>metadata</b> jsonb · <b>created_at</b></li></ul></div>
+        <div class="card data"><h3>memory_events</h3><ul class="cols"><li><b>id</b> uuid · <b>sandbox</b></li><li><b>session_id</b> · <b>agent</b> · <b>role</b> · <b>kind</b></li><li><b>content</b> text · <b>summary</b></li><li class="vec"><b>embedding</b> vector(1536)</li><li><b>metadata</b> jsonb · <b>created_at</b></li></ul></div>
         <div class="card data"><h3>memory_sources</h3><ul class="cols"><li><b>id</b> uuid · <b>kind</b> · <b>uri</b></li><li><b>title</b> · <b>raw_path</b></li><li><b>hash</b> sha256 of the content</li><li><b>metadata</b> jsonb · <b>created_at</b></li></ul></div>
         <div class="card data"><h3>memory_chunks</h3><ul class="cols"><li><b>id</b> uuid</li><li><b>source_id</b> → sources, cascade</li><li><b>event_id</b> → events, cascade</li><li><b>content</b> · <span class="vec"><b>embedding</b> vector(1536)</span></li><li><b>metadata</b> · <b>created_at</b></li></ul></div>
         <div class="card data"><h3>memory_promotions</h3><ul class="cols"><li><b>id</b> uuid</li><li><b>target_kind</b> · <b>target_id</b></li><li><b>status</b> default 'pending'</li><li><b>reason</b> · <b>evidence</b> jsonb</li><li><b>created_at</b></li></ul></div>
@@ -264,7 +264,7 @@ workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># o
 <span class="c"># environment</span>
 <span class="c"># TENGU_MEMORY_DATABASE_URL   Postgres with pgvector (the tool's scope must allow reading it)</span>
 <span class="c"># OPENROUTER_API_KEY          embeddings + the wiki compiler; unset = text-only</span>
-<span class="c"># TENGU_WIKI_COMPILER_MODEL   default anthropic/claude-sonnet-4-6</span></pre></div>
+<span class="c"># TENGU_WIKI_COMPILER_MODEL   no default: unset = a deterministic page</span></pre></div>
   </div>
 </section>
 
@@ -346,7 +346,7 @@ workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># o
     <li><span class="chip heart">step</span><span><b>step summary</b>The <code>compress_and_store</code> text, in-process or through the MCP bridge. kind <code>step_output</code>, agent <code>subagent</code>.</span></li>
     <li><span class="chip guard">backstop</span><span><b>final reply</b>A step that never called <code>compress_and_store</code> but replied: its text, same kind.</span></li>
     <li><span class="chip data">hook</span><span><b>webhook output</b>A webhook turn's final text: <code>step_output</code>, step id <code>webhook-handler</code>.</span></li>
-    <li><span class="chip hands">tool</span><span><b>capture</b>Any kind. session and agent from the args, else the exported env, else the model slug. Embedded when a key is set.</span></li>
+    <li><span class="chip hands">tool</span><span><b>capture</b>An agent kind only (not <code>message</code> / <code>step_output</code>), role <code>agent</code>. session from <code>TENGU_SESSION_ID</code>, agent from <code>TENGU_AGENT_NAME</code>, else the model slug — never from the args. Embedded when a key is set.</span></li>
   </ul>
 </section>
 
@@ -359,6 +359,7 @@ workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># o
     <li><span><b>Read before write.</b> The cross-session lane runs before the current message is stored, and drops rows whose text equals it.</span></li>
     <li><span><b>Memory never breaks a turn.</b> A lane that fails becomes an empty block; a failed write is a warning. The planner still plans.</span></li>
     <li><span><b>No wrong-size vector is stored.</b> Anything but 1536 finite numbers falls back to a text-only row or full-text recall.</span></li>
+    <li><span><b>One sandbox.</b> Every row carries its sandbox; every lane, <code>recall</code> and the wiki read only their own (older rows without one: none).</span></li>
     <li><span><b>One session key.</b> The planner and its <code>run-agent</code> children share one <code>session_id</code>, so the this-session lane finds their outputs.</span></li>
     <li><span><b>Scope first.</b> Every tool call checks that its scope may read <code>TENGU_MEMORY_DATABASE_URL</code>; <code>ingest_source</code> and <code>compile_wiki</code> also need workspace write.</span></li>
     <li><span><b>No instruction-file pages.</b> <code>compile_wiki</code> refuses titles that become <code>claude.md</code> or <code>agents.md</code>; hardened sandboxes also the five prompt files.</span></li>
@@ -407,7 +408,7 @@ workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># o
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>
@@ -556,7 +557,7 @@ workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># o
     out.push(row("capture", vec ? "ok" : "warn", vec ? "row + vector" : "text-only row (" + why + ")"));
     out.push(row("recall (tool)", vec ? "ok" : "warn", vec ? "vector first, full text if none" : "full text only"));
     out.push(row("ingest_source", vec ? "ok" : "warn", vec ? "chunks + vectors" : "chunks stored text-only"));
-    out.push(row("compile_wiki", key ? "ok" : "warn", key ? "LLM page with citations (mode=llm)" : "bullet-list page (mode=fallback), with a warning"));
+    out.push(row("compile_wiki", "ok", "bullet-list page of approved promotions (mode=deterministic); an LLM page (mode=llm) only when TENGU_WIKI_COMPILER_MODEL names a model" + (key ? "" : " and a key is set")));
     board.innerHTML = out.join("");
   }
   ids.forEach(function (i) { document.getElementById(i).addEventListener("change", soft); });

@@ -580,8 +580,9 @@ These are not preferences. They're load-bearing.
   sessions no longer race on it. It and `TENGU_PLANNER_REGISTRY.md` are runtime
   artifacts — gitignored, never hand-edited.
 - **`run-agent` children export `TENGU_SESSION_ID` and `TENGU_AGENT_NAME`** —
-  `agentic_memory` `capture` stamps both when the LLM omits `session_id` /
-  `agent`, so subagent captures are session-scoped.
+  `agentic_memory` `capture` takes both from them (never from the args;
+  2026-10-23) and every Open Brain row carries its sandbox: lanes, `recall`
+  and `compile_wiki` (approved promotions only) read their own sandbox's.
 - **`tengu doctor` exits non-zero when any agent engine fails to build** —
   it is the Docker HEALTHCHECK. It also fails when a `claude_code` agent's
   CLI (`[claude_code] cli_path`, default `claude`) or a `codex` agent's

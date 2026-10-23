@@ -27,7 +27,7 @@
 | User says: "Keep docs concise." | `memory_events(kind=preference)` (an explicit `capture`; the Tengu planner itself writes every user message as `kind=message`) |
 | Agent answers | `memory_events(kind=step_output)` (Tengu: a plan step's summary, `run_agent.rs::try_persist_agentic_step_summary`, and webhook output) |
 | Preference repeats | Claim confidence increases (planned — no claims table yet) |
-| Stable preference | Promotion candidate |
+| Stable preference | Promotion candidate (`pending` until the operator approves) |
 | Human approves behavior | Skill/TOML patch applied |
 
 Example call:
@@ -60,8 +60,9 @@ Example call:
 | 2 | Store source metadata in Postgres |
 | 3 | Chunk/embed for fast recall |
 | 4 | Extract claims/entities (planned — no `memory_claims` table yet) |
-| 5 | Promote important items (a separate `promote` call with `target_id` = the `source_id` / chunk / event id, `target_kind`) |
-| 6 | Compile wiki pages from promoted items (`compile_wiki`) |
+| 5 | Promote important items (a separate `promote` call with `target_id` = the `source_id` / chunk / event id, `target_kind`): a `pending` row |
+| 5b | The operator approves it: `UPDATE memory_promotions SET status = 'approved' WHERE id = '<id>'` |
+| 6 | Compile wiki pages from approved promotions of the sandbox (`compile_wiki`; an LLM page only with `TENGU_WIKI_COMPILER_MODEL` set) |
 
 Example call (the as-built tool takes `kind`, `path` or `content`, optional `uri` / `title` / `metadata`):
 

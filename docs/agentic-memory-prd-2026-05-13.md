@@ -20,6 +20,7 @@ Canonical short doc: `docs/portable-agentic-memory-plugin-2026-05-15.md`.
 | Made implementation too broad | Start with capture, recall, promote, compile, lint |
 | Scoped it as Tengu-only replacement | Build a portable hybrid memory plugin; Tengu is one adapter |
 | Host Adapters / R6 / R7 read as shipped (`propose_behavior`, claims + links graph, contradiction lint) | As built (2026-10-08, `src/adapters/outbound/tools/agentic_memory/mod.rs`): ops `capture`, `recall`, `ingest_source`, `promote`, `compile_wiki`, `lint` (row counts only); tables `memory_events`, `memory_sources`, `memory_chunks`, `memory_promotions`; no `[agentic_memory]` config (`TENGU_MEMORY_DATABASE_URL` only); MCP via `tengu agentic-memory-server`. Rest planned — `docs/agentic-memory-implementation-2026-05-13.md` |
+| R2 "with provenance" read as met; `compile_wiki` read `pending` promotions | As built (2026-10-23, audit S8): provenance is the harness's — every row carries its `sandbox` and each lane, `recall` and the wiki read only their own; `capture` takes no `session_id` / `agent` / `role` args and refuses kinds `message` / `step_output`; `compile_wiki` reads `approved` promotions only (the operator approves); no default compiler model |
 
 ## Product
 

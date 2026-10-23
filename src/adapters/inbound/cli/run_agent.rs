@@ -13,6 +13,7 @@ use crate::config::Config;
 
 #[cfg(feature = "postgres_memory")]
 async fn try_persist_agentic_step_summary(
+    sandbox: &str,
     session_id: &str,
     step_id: &str,
     summary: &str,
@@ -39,6 +40,7 @@ async fn try_persist_agentic_step_summary(
         Err(_) => None,
     };
     crate::adapters::outbound::tools::agentic_memory::write_step_summary_with_embedding(
+        sandbox,
         session_id,
         step_id,
         summary,
@@ -450,6 +452,9 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         hooks: Some(&hooks),
         ..crate::application::chat::tool_loop::LoopOpts::from_limits(&spec.limits)
     };
+    // Open Brain rows are stamped with (and recalled by) the owning sandbox.
+    #[cfg(feature = "postgres_memory")]
+    let memory_sandbox = parent_config.sandbox_owner();
     let resp = crate::application::chat::tool_loop::collect_engine_response(
         engine.as_ref(),
         &messages,
@@ -469,7 +474,13 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         tracing::info!("compress_and_store invoked; exiting subagent loop cleanly");
         #[cfg(feature = "postgres_memory")]
         if let Some(text) = &summary {
-            let _ = try_persist_agentic_step_summary(&input.session_id, &input.step_id, text).await;
+            let _ = try_persist_agentic_step_summary(
+                &memory_sandbox,
+                &input.session_id,
+                &input.step_id,
+                text,
+            )
+            .await;
         }
     }
 
@@ -486,8 +497,13 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             compress_called = true;
             #[cfg(feature = "postgres_memory")]
             {
-                let _ = try_persist_agentic_step_summary(&input.session_id, &input.step_id, &text)
-                    .await;
+                let _ = try_persist_agentic_step_summary(
+                    &memory_sandbox,
+                    &input.session_id,
+                    &input.step_id,
+                    &text,
+                )
+                .await;
             }
             summary = Some(text);
         }
@@ -503,7 +519,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // unchanged — recall is best-effort, not a barrier to step completion.
     #[cfg(feature = "postgres_memory")]
     if !compress_called && !summary.trim().is_empty() {
-        match try_persist_agentic_step_summary(&input.session_id, &input.step_id, &summary).await {
+        match try_persist_agentic_step_summary(
+            &memory_sandbox,
+            &input.session_id,
+            &input.step_id,
+            &summary,
+        )
+        .await
+        {
             Ok(id) => tracing::info!(
                 entry_id = %id,
                 session_id = %input.session_id,

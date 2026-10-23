@@ -474,7 +474,7 @@ Example queries:
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>
@@ -508,7 +508,7 @@ Example queries:
       h.push(row("you", "## User message (current turn)", "your message, verbatim", true, "always"));
     } else {
       var xpOn = mem && xp > 0;
-      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs, any session; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
+      h.push(row("brain", "## Relevant prior step outputs (cross-plan recall)", xpOn ? "top " + xp + " step outputs of this sandbox, any session; query = message + failed step + error" : (mem ? "off: cross_plan_top_k = 0" : "off: no postgres_memory"), xpOn, xpOn ? "if hits" : "off"));
       h.push(row("bad", "## A previous plan failed", "failed step id, error after retries, prior plan JSON", true, "always"));
       h.push(row("you", "## Original user message", "the same message as plan()", true, "always"));
     }

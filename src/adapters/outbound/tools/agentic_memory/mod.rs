@@ -10,8 +10,19 @@
 //! Runtime contract:
 //! - Scope gate: `execute` checks `env_reads` for `TENGU_MEMORY_DATABASE_URL`
 //!   first; `ingest_source` / `compile_wiki` additionally gate fs writes.
-//! - `capture` threading: `session_id` = arg > `TENGU_SESSION_ID`;
-//!   `agent` = arg > `TENGU_AGENT_NAME` > model slug.
+//! - Provenance is the harness's, never the model's: every row carries its
+//!   `sandbox` (the config's, `Config::sandbox_owner`), and every read —
+//!   the planner's lanes, the tool's `recall`, the wiki — sees only its own
+//!   sandbox's rows (rows written before the column existed: none).
+//!   `capture` takes `kind` from [`CAPTURE_KINDS`] (`message` /
+//!   `step_output` are the harness's: the planner's lanes read them), role
+//!   `agent`, `session_id` = `TENGU_SESSION_ID`, `agent` =
+//!   `TENGU_AGENT_NAME` > model slug.
+//! - `promote` files a `pending` promotion; `compile_wiki` reads `approved`
+//!   ones only — the operator approves (`UPDATE memory_promotions SET
+//!   status = 'approved' WHERE id = '<id>'`). The page is an LLM synthesis
+//!   only when `TENGU_WIKI_COMPILER_MODEL` names a model (no default),
+//!   else a deterministic bullet page.
 //! - Fail-soft: a rejected embedding (wrong dim / non-finite) warns and
 //!   degrades to text-only insert / FTS-only recall — never errors.
 //! - Schema DDL runs once per process (`SCHEMA_READY`); connections are per call.
@@ -37,11 +48,20 @@ const DEFAULT_DATABASE_URL_ENV: &str = "TENGU_MEMORY_DATABASE_URL";
 const RAW_ROOT: &str = ".tengu/agentic-memory/raw";
 const WIKI_ROOT: &str = ".tengu/agentic-memory/wiki";
 
+/// Kinds an agent may `capture`. `message` (the planner's user messages)
+/// and `step_output` (step summaries, webhook output) are written by the
+/// harness alone: the planner's recall lanes read them.
+pub(crate) const CAPTURE_KINDS: &[&str] =
+    &["event", "note", "preference", "fact", "claim", "decision"];
+
 pub(crate) fn tool_defs() -> Vec<ToolDef> {
     vec![AgenticMemoryTool::definition_static()]
 }
 
+/// A step's (or a webhook turn's) output, as `kind = step_output` of
+/// `sandbox`.
 pub(crate) async fn write_step_summary_with_embedding(
+    sandbox: &str,
     session_id: &str,
     step_id: &str,
     summary: &str,
@@ -56,6 +76,7 @@ pub(crate) async fn write_step_summary_with_embedding(
     store.ensure_schema().await?;
     let id = store
         .insert_event_with_embedding(
+            sandbox,
             Some(session_id),
             Some("subagent"),
             "assistant",
@@ -68,83 +89,12 @@ pub(crate) async fn write_step_summary_with_embedding(
     Ok(id.to_string())
 }
 
-pub(crate) async fn write_user_message_with_embedding(
-    session_id: &str,
-    message: &str,
-    embedding: Option<&[f32]>,
-) -> Result<String> {
-    let metadata = json!({
-        "session_id": session_id,
-        "source": "planner_user_message"
-    });
-    let store = PostgresMemoryStore::connect_from_env().await?;
-    store.ensure_schema().await?;
-    let id = store
-        .insert_event_with_embedding(
-            Some(session_id),
-            Some("planner"),
-            "user",
-            "message",
-            message,
-            &metadata,
-            embedding,
-        )
-        .await?;
-    Ok(id.to_string())
+/// `ports::memory::RecallStore` over Postgres `agentic_memory` for one
+/// sandbox: writes are stamped with it, every lane reads only its rows. Each
+/// call connects from `TENGU_MEMORY_DATABASE_URL` (fail-soft at the caller).
+pub(crate) struct AgenticRecallStore {
+    pub(crate) sandbox: String,
 }
-
-pub(crate) async fn recall_user_messages_with_vec(
-    query: &str,
-    embedding: Option<&[f32]>,
-    top_k: usize,
-    exclude_exact: &str,
-) -> Result<Vec<RecallHit>> {
-    let store = PostgresMemoryStore::connect_from_env().await?;
-    store.ensure_schema().await?;
-    let hits = store
-        .recall_events_hybrid(query, embedding, Some("message"), None, top_k as i64 + 2)
-        .await?
-        .into_iter()
-        .filter(|h| h.content.trim() != exclude_exact.trim())
-        .take(top_k)
-        .collect();
-    Ok(hits)
-}
-
-pub(crate) async fn recall_step_outputs_for_session_with_vec(
-    session_id: &str,
-    query: &str,
-    embedding: Option<&[f32]>,
-    top_k: usize,
-) -> Result<Vec<RecallHit>> {
-    let store = PostgresMemoryStore::connect_from_env().await?;
-    store.ensure_schema().await?;
-    store
-        .recall_events_hybrid(
-            query,
-            embedding,
-            Some("step_output"),
-            Some(session_id),
-            top_k as i64,
-        )
-        .await
-}
-
-pub(crate) async fn recall_step_outputs_with_vec(
-    query: &str,
-    embedding: Option<&[f32]>,
-    top_k: usize,
-) -> Result<Vec<RecallHit>> {
-    let store = PostgresMemoryStore::connect_from_env().await?;
-    store.ensure_schema().await?;
-    store
-        .recall_events_hybrid(query, embedding, Some("step_output"), None, top_k as i64)
-        .await
-}
-
-/// `ports::memory::RecallStore` over Postgres `agentic_memory` — each call
-/// connects from `TENGU_MEMORY_DATABASE_URL` (fail-soft at the caller).
-pub(crate) struct AgenticRecallStore;
 
 #[async_trait]
 impl crate::ports::memory::RecallStore for AgenticRecallStore {
@@ -154,7 +104,25 @@ impl crate::ports::memory::RecallStore for AgenticRecallStore {
         message: &str,
         embedding: Option<&[f32]>,
     ) -> Result<String> {
-        write_user_message_with_embedding(session_id, message, embedding).await
+        let metadata = json!({
+            "session_id": session_id,
+            "source": "planner_user_message"
+        });
+        let store = PostgresMemoryStore::connect_from_env().await?;
+        store.ensure_schema().await?;
+        let id = store
+            .insert_event_with_embedding(
+                &self.sandbox,
+                Some(session_id),
+                Some("planner"),
+                "user",
+                "message",
+                message,
+                &metadata,
+                embedding,
+            )
+            .await?;
+        Ok(id.to_string())
     }
     async fn recall_user_messages(
         &self,
@@ -163,7 +131,23 @@ impl crate::ports::memory::RecallStore for AgenticRecallStore {
         top_k: usize,
         exclude_exact: &str,
     ) -> Result<Vec<RecallHit>> {
-        recall_user_messages_with_vec(query, embedding, top_k, exclude_exact).await
+        let store = PostgresMemoryStore::connect_from_env().await?;
+        store.ensure_schema().await?;
+        let hits = store
+            .recall_events_hybrid(
+                &self.sandbox,
+                query,
+                embedding,
+                Some("message"),
+                None,
+                top_k as i64 + 2,
+            )
+            .await?
+            .into_iter()
+            .filter(|h| h.content.trim() != exclude_exact.trim())
+            .take(top_k)
+            .collect();
+        Ok(hits)
     }
     async fn recall_step_outputs_for_session(
         &self,
@@ -172,7 +156,18 @@ impl crate::ports::memory::RecallStore for AgenticRecallStore {
         embedding: Option<&[f32]>,
         top_k: usize,
     ) -> Result<Vec<RecallHit>> {
-        recall_step_outputs_for_session_with_vec(session_id, query, embedding, top_k).await
+        let store = PostgresMemoryStore::connect_from_env().await?;
+        store.ensure_schema().await?;
+        store
+            .recall_events_hybrid(
+                &self.sandbox,
+                query,
+                embedding,
+                Some("step_output"),
+                Some(session_id),
+                top_k as i64,
+            )
+            .await
     }
     async fn recall_step_outputs(
         &self,
@@ -180,7 +175,18 @@ impl crate::ports::memory::RecallStore for AgenticRecallStore {
         embedding: Option<&[f32]>,
         top_k: usize,
     ) -> Result<Vec<RecallHit>> {
-        recall_step_outputs_with_vec(query, embedding, top_k).await
+        let store = PostgresMemoryStore::connect_from_env().await?;
+        store.ensure_schema().await?;
+        store
+            .recall_events_hybrid(
+                &self.sandbox,
+                query,
+                embedding,
+                Some("step_output"),
+                None,
+                top_k as i64,
+            )
+            .await
     }
 }
 
@@ -220,7 +226,7 @@ impl AgenticMemoryTool {
                     },
                     "kind": {
                         "type": "string",
-                        "description": "Memory/source kind, e.g. preference, claim, file, youtube_transcript."
+                        "description": "capture: one of event (default), note, preference, fact, claim, decision. ingest_source: the source kind, e.g. file, youtube_transcript."
                     },
                     "content": {
                         "type": "string",
@@ -259,18 +265,6 @@ impl AgenticMemoryTool {
                         "description": "Free-form metadata stored with the event/source.",
                         "additionalProperties": true
                     },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session id to scope a captured memory to (capture)."
-                    },
-                    "agent": {
-                        "type": "string",
-                        "description": "Originating agent name for a captured memory (capture). Defaults to the calling agent's model."
-                    },
-                    "role": {
-                        "type": "string",
-                        "description": "Role for a captured memory, e.g. user/assistant/system (capture). Defaults to kind."
-                    },
                     "reason": {
                         "type": "string",
                         "description": "Why an item is being promoted (promote)."
@@ -291,19 +285,15 @@ impl AgenticMemoryTool {
     }
 
     async fn capture(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<String> {
-        let kind = opt_str(args, "kind").unwrap_or("event");
+        let kind = capture_kind(opt_str(args, "kind"))?;
         let content = require_str(args, AGENTIC_MEMORY_TOOL_NAME, "content")?;
         let metadata = args.get("metadata").cloned().unwrap_or_else(|| json!({}));
-        // Session/agent threading: explicit tool arg > env exported by the
-        // parent (`TENGU_SESSION_ID` / `TENGU_AGENT_NAME`) > model slug.
-        let session_id = opt_str(args, "session_id")
-            .map(str::to_string)
-            .or_else(|| std::env::var("TENGU_SESSION_ID").ok());
-        let agent = opt_str(args, "agent")
-            .map(str::to_string)
-            .or_else(|| std::env::var("TENGU_AGENT_NAME").ok())
+        // Provenance from the process, never from the model: the parent
+        // exports `TENGU_SESSION_ID` / `TENGU_AGENT_NAME` to its children.
+        let session_id = std::env::var("TENGU_SESSION_ID").ok();
+        let agent = std::env::var("TENGU_AGENT_NAME")
+            .ok()
             .or_else(|| ctx.agent_config.map(|a| a.model.clone()));
-        let role = opt_str(args, "role").unwrap_or(kind);
 
         // Embedded like every other event write (step summaries, planner
         // messages): captures used to be stored text-only, so vector recall
@@ -314,9 +304,10 @@ impl AgenticMemoryTool {
         store.ensure_schema().await?;
         let id = store
             .insert_event_with_embedding(
+                &sandbox_of(ctx),
                 session_id.as_deref(),
                 agent.as_deref(),
-                role,
+                "agent",
                 kind,
                 content,
                 &metadata,
@@ -329,7 +320,7 @@ impl AgenticMemoryTool {
         ))
     }
 
-    async fn recall(&self, args: &Value) -> Result<String> {
+    async fn recall(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<String> {
         let query = require_str(args, AGENTIC_MEMORY_TOOL_NAME, "query")?;
         let top_k = args.get("top_k").and_then(|v| v.as_i64()).unwrap_or(5);
         // Embed the query so recall is hybrid (pgvector first, FTS fallback),
@@ -339,7 +330,12 @@ impl AgenticMemoryTool {
         let store = Self::store().await?;
         store.ensure_schema().await?;
         let rows = store
-            .recall(query, embedding.as_deref(), top_k.clamp(1, 20))
+            .recall(
+                &sandbox_of(ctx),
+                query,
+                embedding.as_deref(),
+                top_k.clamp(1, 20),
+            )
             .await?;
         if rows.is_empty() {
             return Ok("recall: no matches".to_string());
@@ -382,14 +378,28 @@ impl AgenticMemoryTool {
         let store = Self::store().await?;
         store.ensure_schema().await?;
         let source_id = store
-            .insert_source(kind, uri, title, &raw_path, &hash, &metadata)
+            .insert_source(
+                &sandbox_of(ctx),
+                kind,
+                uri,
+                title,
+                &raw_path,
+                &hash,
+                &metadata,
+            )
             .await?;
         // Embed chunks on ingest so `memory_chunks.embedding` is populated and
         // the source is vector-recallable, not FTS-only. Fail-soft: no API key
         // (or a per-chunk embed error) stores that chunk text-only.
         let embedder = env_embedder();
         let chunk_count = store
-            .insert_chunks(source_id, &content, &metadata, embedder.as_ref())
+            .insert_chunks(
+                &sandbox_of(ctx),
+                source_id,
+                &content,
+                &metadata,
+                embedder.as_ref(),
+            )
             .await?;
 
         Ok(format!(
@@ -398,7 +408,7 @@ impl AgenticMemoryTool {
         ))
     }
 
-    async fn promote(&self, args: &Value) -> Result<String> {
+    async fn promote(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<String> {
         let target_id = require_str(args, AGENTIC_MEMORY_TOOL_NAME, "target_id")?;
         let target_kind = opt_str(args, "target_kind").unwrap_or("event");
         let reason = opt_str(args, "reason").unwrap_or("agent selected for wiki compilation");
@@ -406,18 +416,18 @@ impl AgenticMemoryTool {
         let store = Self::store().await?;
         store.ensure_schema().await?;
         let promotion_id = store
-            .insert_promotion(target_kind, target_id, reason, &evidence)
+            .insert_promotion(&sandbox_of(ctx), target_kind, target_id, reason, &evidence)
             .await?;
         Ok(format!(
-            "promoted: promotion_id={promotion_id} target={target_kind}/{target_id}"
+            "promoted: promotion_id={promotion_id} target={target_kind}/{target_id} status=pending (the operator approves it before compile_wiki reads it)"
         ))
     }
 
-    /// Phase 4 LLM Wiki compiler. Runs an LLM over the promoted Open Brain
-    /// memories to synthesise a cited Markdown page. Fail-soft: if the LLM
-    /// call fails (no `OPENROUTER_API_KEY`, API error), a deterministic
-    /// bullet-dump page is written instead so `compile_wiki` never hard-fails
-    /// on a memory/LLM-availability problem.
+    /// Phase 4 LLM Wiki compiler over this sandbox's `approved` promotions
+    /// (module doc). With `TENGU_WIKI_COMPILER_MODEL` an LLM synthesises a
+    /// cited Markdown page; without it (no default model), or when the call
+    /// fails, a deterministic bullet page is written — `compile_wiki` never
+    /// hard-fails on an LLM-availability problem.
     async fn compile_wiki(&self, args: &Value, ctx: &ToolCtx<'_>) -> Result<String> {
         ctx.scope.check_fs_write(ctx.workspace)?;
 
@@ -433,26 +443,31 @@ impl AgenticMemoryTool {
 
         let store = Self::store().await?;
         store.ensure_schema().await?;
-        let promoted = store.promoted_items(30).await?;
+        let promoted = store.promoted_items(&sandbox_of(ctx), 30).await?;
 
         if promoted.is_empty() {
             std::fs::write(&wiki_path, render_wiki_page(title, &promoted))
                 .with_context(|| format!("agentic_memory: write {}", wiki_path.display()))?;
             return Ok(format!(
-                "compiled_wiki: page={} items=0 (no promoted memories yet)",
+                "compiled_wiki: page={} items=0 (no approved promotions yet)",
                 wiki_path.display()
             ));
         }
 
-        let (system, user) = compile_wiki_prompt(title, &promoted);
-        let (body, mode) = match chat_complete(&system, &user).await {
-            Ok(llm_body) => (render_wiki_page_llm(title, &llm_body, &promoted), "llm"),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "agentic_memory: wiki compiler LLM call failed; writing deterministic fallback page"
-                );
-                (render_wiki_page(title, &promoted), "fallback")
+        let (body, mode) = match wiki_compiler_model() {
+            None => (render_wiki_page(title, &promoted), "deterministic"),
+            Some(model) => {
+                let (system, user) = compile_wiki_prompt(title, &promoted);
+                match chat_complete(&model, &system, &user).await {
+                    Ok(llm_body) => (render_wiki_page_llm(title, &llm_body, &promoted), "llm"),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "agentic_memory: wiki compiler LLM call failed; writing deterministic fallback page"
+                        );
+                        (render_wiki_page(title, &promoted), "fallback")
+                    }
+                }
             }
         };
         std::fs::write(&wiki_path, body)
@@ -491,9 +506,9 @@ impl Tool for AgenticMemoryTool {
         let operation = require_str(args, AGENTIC_MEMORY_TOOL_NAME, "operation")?;
         let text = match operation {
             "capture" => self.capture(args, ctx).await?,
-            "recall" => self.recall(args).await?,
+            "recall" => self.recall(args, ctx).await?,
             "ingest_source" => self.ingest_source(args, ctx).await?,
-            "promote" => self.promote(args).await?,
+            "promote" => self.promote(args, ctx).await?,
             "compile_wiki" => self.compile_wiki(args, ctx).await?,
             "lint" => self.lint(ctx).await?,
             other => bail!("agentic_memory: unknown operation '{other}'"),
@@ -601,6 +616,16 @@ impl PostgresMemoryStore {
                     ON memory_events USING hnsw (embedding vector_cosine_ops);
                 CREATE INDEX IF NOT EXISTS memory_chunks_embedding_hnsw
                     ON memory_chunks USING hnsw (embedding vector_cosine_ops);
+
+                -- Provenance (module doc): the sandbox each row belongs to.
+                -- A row without one (written before the column) is read by no
+                -- lane.
+                ALTER TABLE memory_events ADD COLUMN IF NOT EXISTS sandbox text;
+                ALTER TABLE memory_sources ADD COLUMN IF NOT EXISTS sandbox text;
+                ALTER TABLE memory_chunks ADD COLUMN IF NOT EXISTS sandbox text;
+                ALTER TABLE memory_promotions ADD COLUMN IF NOT EXISTS sandbox text;
+                CREATE INDEX IF NOT EXISTS memory_events_sandbox_kind
+                    ON memory_events (sandbox, kind);
                 "#,
             )
             .await;
@@ -625,12 +650,16 @@ impl PostgresMemoryStore {
         content: &str,
         metadata: &Value,
     ) -> Result<Uuid> {
-        self.insert_event_with_embedding(session_id, agent, role, kind, content, metadata, None)
-            .await
+        self.insert_event_with_embedding(
+            "test", session_id, agent, role, kind, content, metadata, None,
+        )
+        .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn insert_event_with_embedding(
         &self,
+        sandbox: &str,
         session_id: Option<&str>,
         agent: Option<&str>,
         role: &str,
@@ -656,8 +685,8 @@ impl PostgresMemoryStore {
             self.client
                 .execute(
                     "INSERT INTO memory_events
-                     (id, session_id, agent, role, kind, content, metadata, embedding)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::vector)",
+                     (id, session_id, agent, role, kind, content, metadata, embedding, sandbox)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text::vector, $9)",
                     &[
                         &id,
                         &session_id,
@@ -667,6 +696,7 @@ impl PostgresMemoryStore {
                         &content,
                         &metadata,
                         &embedding,
+                        &sandbox,
                     ],
                 )
                 .await?;
@@ -674,17 +704,28 @@ impl PostgresMemoryStore {
             self.client
                 .execute(
                     "INSERT INTO memory_events
-                     (id, session_id, agent, role, kind, content, metadata)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                    &[&id, &session_id, &agent, &role, &kind, &content, &metadata],
+                     (id, session_id, agent, role, kind, content, metadata, sandbox)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    &[
+                        &id,
+                        &session_id,
+                        &agent,
+                        &role,
+                        &kind,
+                        &content,
+                        &metadata,
+                        &sandbox,
+                    ],
                 )
                 .await?;
         }
         Ok(id)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn insert_source(
         &self,
+        sandbox: &str,
         kind: &str,
         uri: Option<&str>,
         title: &str,
@@ -697,9 +738,11 @@ impl PostgresMemoryStore {
         self.client
             .execute(
                 "INSERT INTO memory_sources
-                 (id, kind, uri, title, raw_path, hash, metadata)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                &[&id, &kind, &uri, &title, &raw_path, &hash, &metadata],
+                 (id, kind, uri, title, raw_path, hash, metadata, sandbox)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                &[
+                    &id, &kind, &uri, &title, &raw_path, &hash, &metadata, &sandbox,
+                ],
             )
             .await?;
         Ok(id)
@@ -707,6 +750,7 @@ impl PostgresMemoryStore {
 
     async fn insert_chunks(
         &self,
+        sandbox: &str,
         source_id: Uuid,
         content: &str,
         metadata: &Value,
@@ -745,9 +789,9 @@ impl PostgresMemoryStore {
                     self.client
                         .execute(
                             "INSERT INTO memory_chunks
-                             (id, source_id, content, metadata, embedding)
-                             VALUES ($1, $2, $3, $4, $5::text::vector)",
-                            &[&id, &source_id, chunk, &metadata, &literal],
+                             (id, source_id, content, metadata, embedding, sandbox)
+                             VALUES ($1, $2, $3, $4, $5::text::vector, $6)",
+                            &[&id, &source_id, chunk, &metadata, &literal, &sandbox],
                         )
                         .await?;
                 }
@@ -755,9 +799,9 @@ impl PostgresMemoryStore {
                     self.client
                         .execute(
                             "INSERT INTO memory_chunks
-                             (id, source_id, content, metadata)
-                             VALUES ($1, $2, $3, $4)",
-                            &[&id, &source_id, chunk, &metadata],
+                             (id, source_id, content, metadata, sandbox)
+                             VALUES ($1, $2, $3, $4, $5)",
+                            &[&id, &source_id, chunk, &metadata, &sandbox],
                         )
                         .await?;
                 }
@@ -772,6 +816,7 @@ impl PostgresMemoryStore {
     /// query falls back to full-text search. Mirrors `recall_events_hybrid`.
     async fn recall(
         &self,
+        sandbox: &str,
         query: &str,
         embedding: Option<&[f32]>,
         top_k: i64,
@@ -785,16 +830,16 @@ impl PostgresMemoryStore {
                     FROM (
                         SELECT id, kind, content, embedding
                         FROM memory_events
-                        WHERE embedding IS NOT NULL
+                        WHERE embedding IS NOT NULL AND sandbox = $3
                         UNION ALL
                         SELECT id, 'chunk' AS kind, content, embedding
                         FROM memory_chunks
-                        WHERE embedding IS NOT NULL
+                        WHERE embedding IS NOT NULL AND sandbox = $3
                     ) hybrid
                     ORDER BY embedding <=> $1::text::vector
                     LIMIT $2
                     "#,
-                    &[&literal, &top_k],
+                    &[&literal, &top_k, &sandbox],
                 )
                 .await?;
             if !rows.is_empty() {
@@ -817,15 +862,17 @@ impl PostgresMemoryStore {
                        ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', $1)) AS rank
                 FROM memory_events
                 WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
+                  AND sandbox = $3
                 UNION ALL
                 SELECT id::text, 'chunk' AS kind, content,
                        ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', $1)) AS rank
                 FROM memory_chunks
                 WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
+                  AND sandbox = $3
                 ORDER BY rank DESC
                 LIMIT $2
                 "#,
-                &[&query, &top_k],
+                &[&query, &top_k, &sandbox],
             )
             .await?;
 
@@ -841,6 +888,7 @@ impl PostgresMemoryStore {
 
     async fn recall_events(
         &self,
+        sandbox: &str,
         query: &str,
         kind: Option<&str>,
         session_id: Option<&str>,
@@ -859,10 +907,11 @@ impl PostgresMemoryStore {
                 WHERE to_tsvector('english', content) @@ plainto_tsquery('english', $1)
                   AND ($2::text IS NULL OR kind = $2)
                   AND ($3::text IS NULL OR session_id = $3)
+                  AND sandbox = $5
                 ORDER BY rank DESC, created_at DESC
                 LIMIT $4
                 "#,
-                &[&query, &kind, &session_id, &top_k],
+                &[&query, &kind, &session_id, &top_k, &sandbox],
             )
             .await?;
 
@@ -880,6 +929,7 @@ impl PostgresMemoryStore {
 
     async fn recall_events_hybrid(
         &self,
+        sandbox: &str,
         query: &str,
         embedding: Option<&[f32]>,
         kind: Option<&str>,
@@ -912,10 +962,11 @@ impl PostgresMemoryStore {
                     WHERE embedding IS NOT NULL
                       AND ($2::text IS NULL OR kind = $2)
                       AND ($3::text IS NULL OR session_id = $3)
+                      AND sandbox = $5
                     ORDER BY embedding <=> $1::text::vector, created_at DESC
                     LIMIT $4
                     "#,
-                    &[&embedding, &kind, &session_id, &top_k],
+                    &[&embedding, &kind, &session_id, &top_k, &sandbox],
                 )
                 .await?;
 
@@ -934,11 +985,13 @@ impl PostgresMemoryStore {
             }
         }
 
-        self.recall_events(query, kind, session_id, top_k).await
+        self.recall_events(sandbox, query, kind, session_id, top_k)
+            .await
     }
 
     async fn insert_promotion(
         &self,
+        sandbox: &str,
         target_kind: &str,
         target_id: &str,
         reason: &str,
@@ -948,15 +1001,17 @@ impl PostgresMemoryStore {
         self.client
             .execute(
                 "INSERT INTO memory_promotions
-                 (id, target_kind, target_id, reason, evidence)
-                 VALUES ($1, $2, $3, $4, $5)",
-                &[&id, &target_kind, &target_id, &reason, &evidence],
+                 (id, target_kind, target_id, reason, evidence, sandbox)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[&id, &target_kind, &target_id, &reason, &evidence, &sandbox],
             )
             .await?;
         Ok(id)
     }
 
-    async fn promoted_items(&self, limit: i64) -> Result<Vec<PromotedItem>> {
+    /// The operator-`approved` promotions of `sandbox`, each with its target
+    /// from the same sandbox (a target elsewhere reads as empty).
+    async fn promoted_items(&self, sandbox: &str, limit: i64) -> Result<Vec<PromotedItem>> {
         let rows = self
             .client
             .query(
@@ -965,12 +1020,16 @@ impl PostgresMemoryStore {
                        COALESCE(e.content, c.content, s.title, '') AS content
                 FROM memory_promotions p
                 LEFT JOIN memory_events e ON p.target_kind = 'event' AND e.id::text = p.target_id
+                    AND e.sandbox = p.sandbox
                 LEFT JOIN memory_chunks c ON p.target_kind = 'chunk' AND c.id::text = p.target_id
+                    AND c.sandbox = p.sandbox
                 LEFT JOIN memory_sources s ON p.target_kind = 'source' AND s.id::text = p.target_id
+                    AND s.sandbox = p.sandbox
+                WHERE p.sandbox = $2 AND p.status = 'approved'
                 ORDER BY p.created_at DESC
                 LIMIT $1
                 "#,
-                &[&limit],
+                &[&limit, &sandbox],
             )
             .await?;
         Ok(rows
@@ -1031,6 +1090,27 @@ fn opt_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key)
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
+}
+
+/// A `capture` kind: one of [`CAPTURE_KINDS`], `event` when absent.
+fn capture_kind(kind: Option<&str>) -> Result<&str> {
+    let kind = kind.unwrap_or("event");
+    if CAPTURE_KINDS.contains(&kind) {
+        Ok(kind)
+    } else {
+        bail!(
+            "agentic_memory.capture: kind '{kind}' is not one of {}",
+            CAPTURE_KINDS.join(", ")
+        )
+    }
+}
+
+/// The sandbox the calling agent runs in (`SandboxSections::owner`).
+fn sandbox_of(ctx: &ToolCtx<'_>) -> String {
+    ctx.agent_config.map_or_else(
+        || crate::config::sections::DEFAULT_SANDBOX.to_string(),
+        |a| a.sandbox.owner().to_string(),
+    )
 }
 
 /// Construct an embedder from the environment, mirroring `main.rs` and
@@ -1237,22 +1317,24 @@ cites both tokens.\n\
     (system, user)
 }
 
-/// Model slug for the wiki compiler chat call. Env-overridable; defaults to
-/// the orchestrator's model. OpenRouter slug format (`anthropic/...`).
-fn wiki_compiler_model() -> String {
+/// Model slug for the wiki compiler chat call (OpenRouter format): only
+/// what `TENGU_WIKI_COMPILER_MODEL` names — no default, so nothing calls a
+/// model the operator did not choose (CLAUDE.md, gotcha "Model spend").
+fn wiki_compiler_model() -> Option<String> {
     std::env::var("TENGU_WIKI_COMPILER_MODEL")
-        .unwrap_or_else(|_| "anthropic/claude-sonnet-4-6".to_string())
+        .ok()
+        .filter(|m| !m.trim().is_empty())
 }
 
 /// Minimal OpenRouter chat-completion call — the chat-side sibling of
 /// `Embedder` (direct HTTP, OpenAI-compatible, emits a `MetricsRecord`).
 /// Used only by the wiki compiler; not a general-purpose engine.
-async fn chat_complete(system: &str, user: &str) -> Result<String> {
+async fn chat_complete(model: &str, system: &str, user: &str) -> Result<String> {
     let api_key = std::env::var("OPENROUTER_API_KEY")
         .map_err(|_| anyhow!("OPENROUTER_API_KEY must be set for agentic_memory.compile_wiki"))?;
     let base_url = std::env::var("OPENROUTER_BASE_URL")
         .unwrap_or_else(|_| "https://openrouter.ai/api".to_string());
-    let model = wiki_compiler_model();
+    let model = model.to_string();
     let client = crate::adapters::outbound::egress::policy().llm_api_client(
         reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(30))
@@ -1394,6 +1476,25 @@ mod tests {
         assert!(pgvector_literal(&[1.0, 2.0]).is_err());
     }
 
+    #[test]
+    fn capture_refuses_the_kinds_the_harness_writes() {
+        assert_eq!(capture_kind(None).unwrap(), "event");
+        assert_eq!(capture_kind(Some("fact")).unwrap(), "fact");
+        // The recall lanes read these: a model must not forge them.
+        for forged in ["message", "step_output", "anything"] {
+            assert!(capture_kind(Some(forged)).is_err(), "{forged}");
+        }
+    }
+
+    #[test]
+    fn capture_schema_takes_no_provenance_fields() {
+        let defs = tool_defs();
+        let props = &defs[0].parameters["properties"];
+        for field in ["session_id", "agent", "role"] {
+            assert!(props.get(field).is_none(), "{field}");
+        }
+    }
+
     #[tokio::test]
     #[ignore = "requires TENGU_MEMORY_DATABASE_URL and a running Postgres/pgvector DB"]
     async fn postgres_capture_and_recall_smoke() {
@@ -1411,11 +1512,14 @@ mod tests {
             )
             .await
             .unwrap();
-        let rows = store.recall(&marker, None, 5).await.unwrap();
+        let rows = store.recall("test", &marker, None, 5).await.unwrap();
         assert!(
             rows.iter().any(|row| row.id == id.to_string()),
             "expected inserted row in recall results"
         );
+        // Another sandbox never reads it (S8).
+        let other = store.recall("other", &marker, None, 5).await.unwrap();
+        assert!(other.iter().all(|row| row.id != id.to_string()));
     }
 
     #[tokio::test]
@@ -1430,6 +1534,7 @@ mod tests {
 
         let id = store
             .insert_event_with_embedding(
+                "test",
                 Some("smoke-session"),
                 Some("smoke-agent"),
                 "user",
@@ -1443,6 +1548,7 @@ mod tests {
 
         let rows = store
             .recall_events_hybrid(
+                "test",
                 "unrelated lexical query",
                 Some(&embedding),
                 Some("message"),

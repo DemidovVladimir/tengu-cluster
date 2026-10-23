@@ -157,15 +157,16 @@ pub fn resolve_session_id() -> String {
 
 /// The planner's durable-memory lanes: Postgres `agentic_memory` when built
 /// with `postgres_memory`, otherwise none (those prompt blocks stay empty).
-fn planner_recall_store() -> Option<Arc<dyn crate::ports::memory::RecallStore>> {
+fn planner_recall_store(sandbox: String) -> Option<Arc<dyn crate::ports::memory::RecallStore>> {
     #[cfg(feature = "postgres_memory")]
     {
         Some(Arc::new(
-            crate::adapters::outbound::tools::agentic_memory::AgenticRecallStore,
+            crate::adapters::outbound::tools::agentic_memory::AgenticRecallStore { sandbox },
         ))
     }
     #[cfg(not(feature = "postgres_memory"))]
     {
+        let _ = sandbox;
         None
     }
 }
@@ -290,7 +291,7 @@ pub(crate) fn build_orchestrator(
         Arc::new(crate::adapters::outbound::tools::CatalogDirectory {
             mcp_servers: config.mcp_servers.clone(),
         }),
-        planner_recall_store(),
+        planner_recall_store(config.sandbox_owner()),
         planner_embedder(&config.memory),
         session_id,
     ));

@@ -1393,6 +1393,15 @@ impl Config {
         }
     }
 
+    /// The sandbox this config is: `<name>` of `sandboxes/<name>/config.toml`
+    /// however it was loaded, else `default` (`SandboxSections::owner`).
+    pub fn sandbox_owner(&self) -> String {
+        self.loaded_from
+            .as_deref()
+            .and_then(paths::sandbox_of_config_file)
+            .unwrap_or_else(|| sections::DEFAULT_SANDBOX.to_string())
+    }
+
     /// The sandbox sections every agent's tools read (`config/sections.rs`).
     fn sandbox_sections(&self) -> sections::SandboxSections {
         let home = crate::config::paths::resolve_tengu_home();

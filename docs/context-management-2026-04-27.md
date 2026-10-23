@@ -193,8 +193,9 @@ with its own tools and skills), then skill and core + MCP tool names only,
 before planner calls. Builds with
 `postgres_memory` use Postgres `agentic_memory` for planner user-message
 persistence, cross-session message recall, within-session step-output
-recall, and replan cross-plan recall. Without `postgres_memory`, these
-durable planner-memory lanes are empty.
+recall, and replan cross-plan recall — each lane reads only rows of its own
+sandbox (`AgenticRecallStore { sandbox }`, `Config::sandbox_owner`). Without
+`postgres_memory`, these durable planner-memory lanes are empty.
 
 **#10 `<memory-context>` fencing** (`application/memory/fencing.rs::build_memory_context_block`):
 wraps the chat recall block (#8) in `<memory-context>…</memory-context>` with
@@ -363,7 +364,7 @@ with embeddings when available and text-only fallback otherwise
 **Read side** — cross-plan recall: `RegistryPlanner::replan` (legacy planner type
 name) surfaces past step summaries to the planner LLM. With
 `postgres_memory`, it queries Postgres `agentic_memory` step outputs
-(`RecallStore::recall_step_outputs`) via pgvector first and FTS fallback.
+(`RecallStore::recall_step_outputs`, this sandbox only) via pgvector first and FTS fallback.
 Without that feature, planner memory lanes are empty. Capped by
 `cross_plan_top_k` (default 5; `0` = off). `plan()` reads this session's
 step outputs too when `within_session_output_top_k > 0`.

@@ -732,7 +732,7 @@ const CONFIG = [
   { layer: 2, knob: "memory.max_recall_tokens", def: "600", where: "config/mod.rs:1050", what: "Caps the chat recall block (~4 chars / token) before fencing; 0 = no recall block." },
   { layer: 2, knob: "memory.session_recent_n", def: "10", where: "config/mod.rs:1065", what: "Recent user messages of this session the planner shows each turn (in-memory ring, lost on restart)." },
   { layer: 2, knob: "memory.cross_session_msg_top_k", def: "0 (off)", where: "config/mod.rs:1081", what: "Cross-session message recall — opt-in." },
-  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config/mod.rs:1070", what: "Top-K for replan recall over prior step outputs; 0 = off." },
+  { layer: 2, knob: "memory.cross_plan_top_k", def: "5", where: "config/mod.rs:1070", what: "Top-K for replan recall over this sandbox's prior step outputs; 0 = off." },
   { layer: 2, knob: "memory.within_session_output_top_k", def: "0 (off)", where: "config/mod.rs:1095", what: "Within-session step-output recall on plan() — opt-in, recommended 3–5." },
   { layer: 2, knob: "prompt_budget.max_file_tokens", def: "2_000", where: "config/mod.rs:1154", what: "Per identity instructions and per workspace file (IDENTITY.md / PROFILE.md / CONTEXT.md)." },
   { layer: 2, knob: "prompt_budget.max_skill_context_tokens", def: "16_000", where: "config/mod.rs:1156", what: "Per skill context fragment." },
