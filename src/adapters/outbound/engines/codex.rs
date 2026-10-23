@@ -29,6 +29,7 @@
 //! | `max_tool_rounds` | counts tool calls (MCP + built-in) of the run: past it the CLI is killed with an error |
 //! | silence | `--json` reports nothing while the model reasons (minutes at high effort): every [`KEEPALIVE_SECS`] of silence the engine sends an empty `ThinkingDelta` so the caller's `stream_event_timeout_secs` does not fire, and kills the CLI only after [`idle_limit_secs`] (the configured timeout, at least [`REASONING_IDLE_FLOOR_SECS`]) |
 //! | `turn.failed` · a non-zero exit with no answer | `StreamEvent::Error` with the CLI's message (last `error` event, else stderr's tail) |
+//! | the loop | `cli_run::drive` (shared with Claude Code); this file keeps the args, the env policy and the JSONL parser (`JsonRun`) |
 //! | hardened sandbox | refused at load (`config/hardening.rs`): the built-in shell ignores tengu scopes |
 
 use std::collections::HashMap;
@@ -41,13 +42,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use futures::stream;
 use serde_json::{Map, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
-use super::cli_run::{format_prompt, run_workspace, Transcript};
+use super::cli_run::{
+    drive, format_prompt, run_workspace, LineParser, RunLimits, Transcript, KEEPALIVE_SECS,
+};
 use crate::adapters::outbound::bridge_env::{bridge_env, BridgeRun, StepBridge};
-use crate::adapters::outbound::tools::skill_lifecycle::compress_and_store;
 use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolCall, ToolDef};
 use crate::domain::scope::ToolScope;
 use crate::ports::engine::{Engine, EngineContext, EngineDiagnostics};
@@ -133,9 +134,6 @@ impl CodexWebSearch {
         }
     }
 }
-
-/// Seconds of CLI silence between keepalives to the caller (module table).
-pub(crate) const KEEPALIVE_SECS: u64 = 30;
 
 /// The least silence that kills the CLI: a reasoning model says nothing
 /// over `--json` until it finishes thinking.
@@ -433,8 +431,6 @@ pub(crate) struct RunState {
     pub open: HashMap<String, String>,
     /// The last top-level `error` event's message (a failed run's reason).
     pub last_error: Option<String>,
-    /// A `turn.failed` was turned into `StreamEvent::Error`.
-    pub failed: bool,
 }
 
 /// One JSONL line → the events to emit (module table).
@@ -539,7 +535,6 @@ pub(crate) fn process_line(line: &str, st: &mut RunState) -> Vec<StreamEvent> {
                 .or(st.last_error.as_deref())
                 .unwrap_or("no reason given")
                 .to_string();
-            st.failed = true;
             events.push(StreamEvent::Error {
                 message: format!("Codex turn failed: {message}"),
             });
@@ -554,6 +549,35 @@ pub(crate) fn process_line(line: &str, st: &mut RunState) -> Vec<StreamEvent> {
         _ => {}
     }
     events
+}
+
+/// One CLI run's `--json` stream, for `cli_run::drive`: each line through
+/// [`process_line`] and into the bridge's transcript.
+struct JsonRun {
+    st: RunState,
+    transcript: Option<Transcript>,
+}
+
+impl LineParser for JsonRun {
+    fn line(&mut self, line: &str) -> Vec<StreamEvent> {
+        if let Some(t) = self.transcript.as_mut() {
+            t.update(|m, from| absorb_event(m, from, line));
+        }
+        process_line(line, &mut self.st)
+    }
+
+    fn tool_calls(&self) -> u32 {
+        self.st.tool_calls
+    }
+
+    fn calls_open(&self) -> bool {
+        !self.st.open.is_empty()
+    }
+
+    /// The last top-level `error` event (a reconnect notice, a refusal).
+    fn failure(&self) -> Option<String> {
+        self.st.last_error.clone()
+    }
 }
 
 /// One JSONL line into the bridge's conversation (`cli_run::Transcript`):
@@ -789,159 +813,24 @@ impl Engine for CodexEngine {
             "Spawning Codex CLI subprocess (exec --json)"
         );
 
-        let mut child = cmd.spawn().map_err(|e| {
+        let child = cmd.spawn().map_err(|e| {
             anyhow::anyhow!(
                 "Failed to spawn codex CLI at {:?}: {e} — install it (npm i -g @openai/codex) and run `codex login`, or set [agents.<a>.codex] cli_path",
                 self.cli_path
             )
         })?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(prompt.as_bytes()).await?;
-            stdin.shutdown().await?;
-        }
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from the Codex CLI"))?;
-        let stderr_task = super::cli_run::drain_stderr(&mut child);
-
-        let timeout_secs = self.timeout_secs;
-        let max_tool_rounds = context.max_tool_rounds.unwrap_or(70);
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
-
-        tokio::spawn(async move {
-            // Kept alive until the CLI exits.
-            let _temp_workspace = temp_workspace;
-            let mut transcript = transcript;
-            let mut lines = tokio::io::BufReader::new(stdout).lines();
-            let mut st = RunState::default();
-            let idle = Duration::from_secs(idle_limit_secs(timeout_secs));
-            let tick = Duration::from_secs(KEEPALIVE_SECS).min(idle);
-            let mut silent = Duration::ZERO;
-            let (mut timed_out, mut tool_limit_hit, mut step_done) = (false, false, false);
-            let mut summary_stored = false;
-            loop {
-                match tokio::time::timeout(tick, lines.next_line()).await {
-                    Ok(Ok(Some(line))) => {
-                        silent = Duration::ZERO;
-                        if line.trim().is_empty() {
-                            continue;
-                        }
-                        let events = process_line(&line, &mut st);
-                        if let Some(t) = transcript.as_mut() {
-                            t.update(|m, from| absorb_event(m, from, &line));
-                        }
-                        summary_stored |= events.iter().any(|e| {
-                            matches!(e, StreamEvent::ToolRan { name, ok: true } if name == compress_and_store::NAME)
-                        });
-                        for event in events {
-                            if tx.send(event).await.is_err() {
-                                break;
-                            }
-                        }
-                        if summary_stored && st.open.is_empty() {
-                            step_done = true;
-                            break;
-                        }
-                        if st.tool_calls > max_tool_rounds {
-                            tool_limit_hit = true;
-                            break;
-                        }
-                    }
-                    Ok(Ok(None)) => break,
-                    Ok(Err(e)) => {
-                        warn!(error = %e, "Error reading Codex CLI stdout");
-                        break;
-                    }
-                    Err(_) => {
-                        silent += tick;
-                        if silent >= idle {
-                            timed_out = true;
-                            break;
-                        }
-                        // Alive but quiet: the model is reasoning. An empty
-                        // ThinkingDelta keeps the caller's idle clock at 0.
-                        if tx
-                            .send(StreamEvent::ThinkingDelta {
-                                text: String::new(),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if step_done || tool_limit_hit || timed_out {
-                let _ = child.kill().await;
-            }
-            let status = child.wait().await;
-            let stderr = super::cli_run::stderr_tail(stderr_task).await;
-            if !stderr.is_empty() {
-                debug!(stderr = %stderr, "Codex CLI stderr");
-            }
-
-            let last = if step_done {
-                info!(
-                    tool_calls = st.tool_calls,
-                    "Codex: compress_and_store stored the step summary — ending the CLI run"
-                );
-                Some(StreamEvent::Done)
-            } else if tool_limit_hit {
-                error!(
-                    tool_calls = st.tool_calls,
-                    max_tool_rounds, "Codex max tool rounds exceeded — killing subprocess"
-                );
-                Some(StreamEvent::Error {
-                    message: format!(
-                        "Max tool rounds exceeded ({} calls, limit {}). The agent may be stuck in a retry loop.",
-                        st.tool_calls, max_tool_rounds
-                    ),
-                })
-            } else if timed_out {
-                let idle_secs = idle.as_secs();
-                error!(idle_secs, "Codex CLI idle timeout — killing subprocess");
-                Some(StreamEvent::Error {
-                    message: format!("Codex CLI idle timeout — no output for {idle_secs}s"),
-                })
-            } else if st.failed {
-                None // the `turn.failed` error is already out
-            } else {
-                match status {
-                    Ok(s) if !s.success() && !st.emitted_text => {
-                        let why = st
-                            .last_error
-                            .clone()
-                            .filter(|m| !m.is_empty())
-                            .unwrap_or_else(|| stderr.clone());
-                        error!(exit_code = s.code(), reason = %why, "Codex CLI failed");
-                        Some(StreamEvent::Error {
-                            message: format!("Codex CLI exited with {s}: {why}"),
-                        })
-                    }
-                    Ok(s) => {
-                        if !s.success() {
-                            warn!(
-                                exit_code = s.code(),
-                                "Codex CLI exited with non-zero status after answering"
-                            );
-                        }
-                        Some(StreamEvent::Done)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to wait for the Codex CLI");
-                        Some(StreamEvent::Done)
-                    }
-                }
-            };
-            if let Some(event) = last {
-                let _ = tx.send(event).await;
-            }
-        });
-
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        let limits = RunLimits {
+            cli: "Codex CLI",
+            idle: Duration::from_secs(idle_limit_secs(self.timeout_secs)),
+            keepalive: Duration::from_secs(KEEPALIVE_SECS),
+            max_tool_rounds: context.max_tool_rounds.unwrap_or(70),
+        };
+        let parser = JsonRun {
+            st: RunState::default(),
+            transcript,
+        };
+        // A temp workspace lives until the CLI exits.
+        drive(child, &prompt, parser, limits, temp_workspace).await
     }
 }
 
@@ -1369,7 +1258,6 @@ mod tests {
             matches!(&ev[..], [StreamEvent::Error { message }] if message.contains("stream disconnected")),
             "{ev:?}"
         );
-        assert!(failed.failed);
         // Another MCP server's tool keeps its server.
         let other = r#"{"type":"item.completed","item":{"id":"x","type":"mcp_tool_call","server":"matrix","tool":"token","status":"completed","error":null}}"#;
         let ev = process_line(other, &mut RunState::default());

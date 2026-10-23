@@ -21,6 +21,10 @@
 //! | `[[mcp_servers]]` behind `{server}__{tool}` bridge tools | their names only (`TENGU_BRIDGE_MCP_SERVERS`): the bridge takes each from the config it loads — no value of the config (a `${VAR}`-expanded secret) is written to the temp `--mcp-config` |
 //! | `compress_and_store` succeeded (a `run-agent` step) | the run ends once the round's other calls are answered — the CLI is stopped, as the in-process loop stops after its round; the run's usage so far is reported as the `result` line would (`RunUsage`) |
 //! | `max_tool_rounds` | counts tool calls (`tool_use` blocks) of the run, not rounds: past it the CLI is killed with an error |
+//! | silence | an empty `ThinkingDelta` every `cli_run::KEEPALIVE_SECS` (a long bridged tool, a long thought); the CLI is killed after `stream_event_timeout_secs` of no output |
+//!
+//! The run loop is `cli_run::drive` (shared with Codex); this file keeps the
+//! args, the env strip and the stream-json parser ([`NdjsonRun`]).
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -28,11 +32,9 @@ use futures::stream;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, warn};
 
-use crate::adapters::outbound::tools::skill_lifecycle::compress_and_store;
 use crate::domain::message::{Message, ModelInfo, Role, StreamEvent, ToolCall, ToolDef};
 use crate::ports::engine::EngineContext;
 use crate::ports::engine::{Engine, EngineDiagnostics};
@@ -493,6 +495,49 @@ impl RunUsage {
     }
 }
 
+/// One CLI run's stream-json, for `cli_run::drive`: each line through
+/// [`process_ndjson_line`], into the bridge's transcript and the run's usage.
+#[derive(Default)]
+struct NdjsonRun {
+    emitted_text: bool,
+    tool_calls: u32,
+    /// Open `tool_use` ids → tool, until their `tool_result`.
+    tool_names: std::collections::HashMap<String, String>,
+    /// Usage per API response: a run stopped early has no `result` line,
+    /// whose cumulative usage the turn's metric would take.
+    usage: RunUsage,
+    transcript: Option<Transcript>,
+}
+
+impl super::cli_run::LineParser for NdjsonRun {
+    fn line(&mut self, line: &str) -> Vec<StreamEvent> {
+        if let Some(t) = self.transcript.as_mut() {
+            t.absorb(line);
+        }
+        self.usage.absorb(line);
+        process_ndjson_line(
+            line,
+            &mut self.emitted_text,
+            &mut self.tool_calls,
+            &mut self.tool_names,
+        )
+    }
+
+    fn tool_calls(&self) -> u32 {
+        self.tool_calls
+    }
+
+    fn calls_open(&self) -> bool {
+        !self.tool_names.is_empty()
+    }
+
+    /// What the `result` line would have carried: the run's usage so far
+    /// (the turn takes the last `Usage` frame).
+    fn stopped(&mut self) -> Vec<StreamEvent> {
+        self.usage.total().into_iter().collect()
+    }
+}
+
 /// Process a single NDJSON line from the Claude CLI stream.
 ///
 /// Returns events to emit. Mutates `emitted_text` to track whether any
@@ -886,173 +931,21 @@ impl Engine for ClaudeCodeEngine {
             "Spawning Claude Code CLI subprocess (stream-json, --strict-mcp-config)"
         );
 
-        // Spawn subprocess
-        let mut child = cmd.spawn().map_err(|e| {
+        let child = cmd.spawn().map_err(|e| {
             anyhow::anyhow!("Failed to spawn claude CLI at {:?}: {}", self.cli_path, e)
         })?;
-
-        // Write prompt to stdin, then close it to signal EOF
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(prompt.as_bytes()).await?;
-            stdin.shutdown().await?;
-        }
-
-        // Take stdout for NDJSON streaming
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout from Claude CLI"))?;
-        let stderr_task = super::cli_run::drain_stderr(&mut child);
-
-        let timeout_secs = self.timeout_secs;
-        let max_tool_rounds = context.max_tool_rounds.unwrap_or(70);
-        let (tx, rx) = tokio::sync::mpsc::channel::<StreamEvent>(64);
-
-        // Spawn async reader task that processes NDJSON lines and emits StreamEvents
-        tokio::spawn(async move {
-            // Keep temp files (and a temp workspace) alive until subprocess exits
-            let _mcp_temp = mcp_temp;
-            let _temp_workspace = temp_workspace;
-            let mut transcript = transcript;
-
-            let reader = tokio::io::BufReader::new(stdout);
-            let mut lines = reader.lines();
-            let mut emitted_text = false;
-            let mut tool_call_count: u32 = 0;
-            let mut tool_names = std::collections::HashMap::new();
-            let idle_timeout = Duration::from_secs(timeout_secs);
-
-            let mut timed_out = false;
-            let mut tool_limit_hit = false;
-            // The stream already carried an error (a failed `result` line).
-            let mut sent_error = false;
-            // `compress_and_store` succeeded (a run-agent step's bridge stored
-            // the summary): the run ends once the round's calls are answered.
-            let mut summary_stored = false;
-            let mut step_done = false;
-            // Usage per API response: a run stopped early has no `result`
-            // line, whose cumulative usage the turn's metric would take.
-            let mut usage = RunUsage::default();
-            loop {
-                match tokio::time::timeout(idle_timeout, lines.next_line()).await {
-                    Ok(Ok(Some(line))) => {
-                        if line.trim().is_empty() {
-                            continue;
-                        }
-                        let events = process_ndjson_line(
-                            &line,
-                            &mut emitted_text,
-                            &mut tool_call_count,
-                            &mut tool_names,
-                        );
-                        if let Some(t) = transcript.as_mut() {
-                            t.absorb(&line);
-                        }
-                        usage.absorb(&line);
-                        summary_stored |= events.iter().any(|e| {
-                            matches!(e, StreamEvent::ToolRan { name, ok: true } if name == compress_and_store::NAME)
-                        });
-                        sent_error |= events
-                            .iter()
-                            .any(|e| matches!(e, StreamEvent::Error { .. }));
-                        for event in events {
-                            if tx.send(event).await.is_err() {
-                                break;
-                            }
-                        }
-                        if summary_stored && tool_names.is_empty() {
-                            step_done = true;
-                            break;
-                        }
-                        // Enforce max tool rounds — kill subprocess if exceeded
-                        if tool_call_count > max_tool_rounds {
-                            tool_limit_hit = true;
-                            break;
-                        }
-                    }
-                    Ok(Ok(None)) => break, // EOF
-                    Ok(Err(e)) => {
-                        warn!(error = %e, "Error reading Claude CLI stdout");
-                        break;
-                    }
-                    Err(_) => {
-                        timed_out = true;
-                        break;
-                    }
-                }
-            }
-
-            if step_done || tool_limit_hit || timed_out {
-                let _ = child.kill().await;
-            }
-            let status = child.wait().await;
-            let stderr = super::cli_run::stderr_tail(stderr_task).await;
-            if !stderr.is_empty() {
-                warn!(stderr = %stderr, "Claude CLI stderr");
-            }
-
-            let last = if step_done {
-                info!(
-                    tool_call_count,
-                    "Claude Code: compress_and_store stored the step summary — ending the CLI run"
-                );
-                // What the `result` line would have carried: the run's usage
-                // so far (the turn takes the last `Usage` frame).
-                if let Some(event) = usage.total() {
-                    let _ = tx.send(event).await;
-                }
-                Some(StreamEvent::Done)
-            } else if tool_limit_hit {
-                error!(
-                    tool_call_count,
-                    max_tool_rounds, "Claude Code max tool rounds exceeded — killing subprocess"
-                );
-                Some(StreamEvent::Error {
-                    message: format!(
-                        "Max tool rounds exceeded ({} calls, limit {}). \
-                         The agent may be stuck in a retry loop.",
-                        tool_call_count, max_tool_rounds
-                    ),
-                })
-            } else if timed_out {
-                error!(timeout_secs, "Claude CLI idle timeout — killing subprocess");
-                Some(StreamEvent::Error {
-                    message: format!("Claude CLI idle timeout — no output for {}s", timeout_secs),
-                })
-            } else if sent_error {
-                None // the `result` error is already out
-            } else {
-                match status {
-                    // A failed run that said nothing: its stderr says why
-                    // (not logged in, a bad flag, …).
-                    Ok(s) if !s.success() && !emitted_text => {
-                        error!(exit_code = s.code(), stderr = %stderr, "Claude CLI failed");
-                        Some(StreamEvent::Error {
-                            message: format!("Claude CLI exited with {s}: {stderr}"),
-                        })
-                    }
-                    Ok(s) => {
-                        if !s.success() {
-                            warn!(
-                                exit_code = s.code(),
-                                "Claude CLI exited with non-zero status after answering"
-                            );
-                        }
-                        Some(StreamEvent::Done)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to wait for Claude CLI process");
-                        Some(StreamEvent::Done)
-                    }
-                }
-            };
-            if let Some(event) = last {
-                let _ = tx.send(event).await;
-            }
-        });
-
-        // Return the channel receiver as an async stream
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        let limits = super::cli_run::RunLimits {
+            cli: "Claude CLI",
+            idle: Duration::from_secs(self.timeout_secs),
+            keepalive: Duration::from_secs(super::cli_run::KEEPALIVE_SECS),
+            max_tool_rounds: context.max_tool_rounds.unwrap_or(70),
+        };
+        let parser = NdjsonRun {
+            transcript,
+            ..NdjsonRun::default()
+        };
+        // The temp files (and a temp workspace) live until the CLI exits.
+        super::cli_run::drive(child, &prompt, parser, limits, (mcp_temp, temp_workspace)).await
     }
 }
 

@@ -130,8 +130,10 @@ Runs agents through the local Claude Code CLI. Uses the operator's Claude subscr
 - `supports_tool_use()` = `true` — tools handled internally
 - Each turn spawns a fresh CLI process (~1-2s overhead)
 - Conversation history formatted into the prompt (stateless sessions)
-- Idle timeout between stream events = `[agents.<id>.limits] stream_event_timeout_secs`; `[claude_code] cli_path` locates the binary
-- Stderr is drained while the CLI runs (`cli_run::drain_stderr`, shared with Codex): a chatty CLI never stalls on a full pipe. A non-zero exit with no answer is an error carrying stderr's tail (`Claude CLI exited with exit status: 1: Not logged in …`); after an answer it is only a warn
+- One run loop for both CLI engines: `cli_run::drive` (each engine keeps its args, env policy and line parser); `[claude_code] cli_path` locates the binary
+- Silence: an empty `ThinkingDelta` every 30 s (`cli_run::KEEPALIVE_SECS`) keeps the caller's clock at 0 during a long bridged tool or thought; no output for `[agents.<id>.limits] stream_event_timeout_secs` kills the CLI (`Claude CLI idle timeout — no output for 120s`)
+- Stderr is drained while the CLI runs: a chatty CLI never stalls on a full pipe. A non-zero exit with no answer is an error carrying stderr's tail (`Claude CLI exited with exit status: 1: Not logged in …`); after an answer it is only a warn
+- A caller that drops the stream (cancel, its own timeout) stops the CLI at once
 - `model` is the bare slug (`claude-sonnet-4-6`), not the OpenRouter form
 - Uses Claude subscription, no per-token cost
 - Planner role (2026-10-14): OK with `builtin_tools_profile = "none"` — a planner call gets no bridge tools and no `[[mcp_servers]]` (`application/orchestrator/planner.rs::PlannerLlm::call`, test `planner_call_has_no_hands_and_reports_usage`), so the CLI has no tool and writes plan JSON; another profile on the `[orchestrator]` agent fails the load (2026-10-23, `config/readers.rs`). Live: `sandboxes/a2a-lab` planner (`claude-haiku-5-5`) planned `s1` → `helper`, no prose fallback. `lping`, `a2a-lab` run their planner this way
@@ -208,7 +210,7 @@ See [[mcp-bridge]] for how Tengu-native tools (http_request, crypto, cache, skil
 | `run-agent` step | `bridge_tools` + workspace grant + the summary file the bridge serves `compress_and_store` into (`engines::bridges_tools`); a stored summary ends the CLI run |
 | `max_tool_rounds` | counts tool calls (MCP + built-in) of the run |
 | planner turn | no bridge, no `[[mcp_servers]]` (2026-10-14, as Claude Code); its built-in shell stays (`-s read-only` by default) |
-| silence | `--json` reports nothing while the model reasons (minutes at high effort), which used to trip `stream_event_timeout_secs` (120 s: "Engine stream timed out — no data for 120s"); now every `KEEPALIVE_SECS` (30) of silence the engine sends an empty `ThinkingDelta` (resets the caller's idle clock) and kills the CLI only after `idle_limit_secs` = max(configured timeout, `REASONING_IDLE_FLOOR_SECS` 900) — "Codex CLI idle timeout — no output for <n>s" |
+| silence | `--json` reports nothing while the model reasons (minutes at high effort), which would trip `stream_event_timeout_secs` (120 s: "Engine stream timed out — no data for 120s"); every `cli_run::KEEPALIVE_SECS` (30) of silence the engine sends an empty `ThinkingDelta` (resets the caller's idle clock) and kills the CLI only after `idle_limit_secs` = max(configured timeout, `REASONING_IDLE_FLOOR_SECS` 900) — "Codex CLI idle timeout — no output for <n>s" |
 | failure | `turn.failed`, or a non-zero exit with no answer → an error naming the CLI's reason (last `error` event, else stderr) |
 | `[egress]` | the CLI's own API traffic gets `HTTPS_PROXY` (HTTP CONNECT on the proxy port) when `route_llm_api`; its shell has no network in either sandbox mode |
 | Hardened sandbox (`[risk]`, `[soe]`, a Solana signer) | refused at load (`config/hardening.rs`): the built-in shell cannot be switched off for good and ignores tengu scopes — use `claude_code` with `builtin_tools_profile = "none"`, `openrouter` or `local` there |
