@@ -12,7 +12,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `fbc1e7e3f022dfe75ce94e5f78d24c4ba55878c2` (A6) · **not pushed, no PR** |
+| Last code commit | `c11386e9be5227083735d03953c0807466cfad37` (A11) · **not pushed, no PR** |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -24,6 +24,12 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | A5 | done: shared stderr drain + Claude Code failed exit = `Error` | `327fcd89292f93933f2d802af7ade4c9495ec1fc` |
 | A5 rest | done: `cli_run::drive` — one run loop (`LineParser`, `RunLimits`), keepalive + idle kill for both, a dropped stream kills the CLI | `074425279e4d0110a479843241df32ec4bc252c1` |
 | A6 | done: `build_tool_executor` → `ToolStack` (redacting by construction, MCP tools advertised); `bootstrap/turn.rs::run_once` for the A2A agent endpoint + `tool turn`. Deviation: eval and `doctor --engines` keep their own turn (stubs / observer; smoke tools) on the stack; webhooks has no agent turn left | `fbc1e7e3f022dfe75ce94e5f78d24c4ba55878c2` |
+| A6 follow-up | the `run_once` test compiles (`EngineResponse` has no `Debug`) | `369034efef37b4fb48b7ef62cda86119aa9cb87a` |
+| A7 | done: the plan reaches a step only as `AgentIpcInput.plan_state` (`render_plan_state`); `ACTIVE_PLANS`, `Planner::session_id`, `TENGU_PLAN.md` writes and the IPC `model` / `tools` / `skills` / `sandbox` fields deleted | `babb8243b7b557ba153280990a1b1d96c870f5af` |
+| A8 | done: `domain::plan::StepFailure` (class + message); retry waits from `domain::backoff::next_delay` (transient / timeout 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode no retry); `drain_until` serves both drains | `8f7aa3f568239de31249e8eb4119ac83ecb79dab` |
+| A9 | done: lens (`Lens`, `/eco` `/standard` `/precise`, `default_lens`, `[agents.<a>.lens]`) and `max_cost_per_flow` / `warn_at_cost` deleted; IPC `max_turns` required. Kept: `max_recall_tokens` (read since S5). Operator: `~/.tengu/config.toml` line 7 `default_lens` must go after merge | `bdba5604401a82be124d913557ceaa7126bd617e` |
+| A10 | done: escalator + `run_one_shot` → `src/bootstrap/one_shot.rs`, no feature gate (the default-build half was R1). Not done: showing the answer in Studio — the trace carries no answer by rule; `escalate` keeps its default (lping relies on it) | `36d83dafe36d67e00f14b2dd540034297a7f2148` |
+| A11 | done: `bridged_step_tools` — a Claude Code / Codex step builds no executor (unless `[[mcp_servers]]` need discovering); in-process-runner idea dropped | `c11386e9be5227083735d03953c0807466cfad37` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -64,7 +70,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
