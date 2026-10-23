@@ -204,7 +204,9 @@ and strips every tengu fence tag to a fixpoint, so fenced text cannot close
 or forge one. A label, not enforcement. Fenced: the chat recall block (#8,
 `application/memory/fencing.rs`: a system note, then origin `memory`), the
 planner's recall rows (`memory:<kind>`), a replan's error
-(`step-error:<id>`), upstream step outputs (`step:<id>`), webhook bodies
+(`step-error:<id>`), upstream step outputs (`step:<id>`; each cut at the
+receiver's tool-result cap, `AgentConfig::tool_result_cap`, footer naming
+the step), webhook bodies
 (`webhook:<endpoint>`), loop escalations (`loop-args` / `loop-state`), and in
 every LLM sink (`tool_result_content`, the loops and `tengu mcp-bridge`) the
 results of `http_request`, `a2a`, `[[mcp_servers]]` tools, `agentic_memory`,

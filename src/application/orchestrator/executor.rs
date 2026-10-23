@@ -115,7 +115,8 @@ impl DagExecutor {
                 if in_flight.contains(&step.id) {
                     continue;
                 }
-                let step_inputs = render_step_inputs(step, &completed_outputs);
+                let step_inputs =
+                    render_step_inputs(step, &completed_outputs, worker.input_cap(step));
                 let worker = Arc::clone(&worker);
                 let policy = policy.clone();
                 let events = events.clone();
@@ -250,7 +251,11 @@ impl<T> Drop for InFlight<T> {
     }
 }
 
-fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> String {
+fn render_step_inputs(
+    step: &Step,
+    completed: &HashMap<StepId, String>,
+    cap: Option<usize>,
+) -> String {
     if step.depends_on.is_empty() {
         return String::new();
     }
@@ -258,15 +263,29 @@ fn render_step_inputs(step: &Step, completed: &HashMap<StepId, String>) -> Strin
     for dep in &step.depends_on {
         if let Some(body) = completed.get(dep) {
             // An upstream step's output is text the model wrote from what its
-            // tools read: fenced (`domain::untrusted`), origin `step:<id>`.
+            // tools read: cut at the receiver's tool-result cap, then fenced
+            // (`domain::untrusted`), origin `step:<id>`.
             out.push_str(&crate::domain::untrusted::fence(
                 &format!("step:{}", dep.0),
-                body,
+                &cap_input(dep, body, cap),
             ));
             out.push_str("\n\n");
         }
     }
     out
+}
+
+/// `body` cut at `cap` bytes (a char boundary), with a last line naming the
+/// step and how much of it is shown.
+fn cap_input<'a>(dep: &StepId, body: &'a str, cap: Option<usize>) -> std::borrow::Cow<'a, str> {
+    match cap.and_then(|c| crate::domain::token::truncate_at_boundary(body, c)) {
+        None => std::borrow::Cow::Borrowed(body),
+        Some((head, shown)) => std::borrow::Cow::Owned(format!(
+            "{head}\n\n[step {} output cut — showing {shown} of {} chars]",
+            dep.0,
+            body.len()
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -316,6 +335,54 @@ mod tests {
                     compose: None,
                 },
             ],
+        }
+    }
+
+    /// An upstream output longer than the receiver's cap reaches it cut, the
+    /// last line naming the step; under the cap it arrives whole.
+    #[tokio::test]
+    async fn step_inputs_are_cut_at_the_receivers_cap() {
+        struct Capped {
+            cap: usize,
+            inputs: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait]
+        impl WorkerHandle for Capped {
+            async fn run_step(&self, step: &Step, inputs: &str) -> anyhow::Result<String> {
+                self.inputs.lock().await.push(inputs.to_string());
+                Ok(if step.id.0 == "s1" {
+                    "é".repeat(20)
+                } else {
+                    "done".into()
+                })
+            }
+            fn input_cap(&self, _step: &Step) -> Option<usize> {
+                Some(self.cap)
+            }
+        }
+        let mut policy = RetryPolicy::new(1);
+        policy.backoff = vec![];
+        for (cap, cut) in [(15, true), (40, false)] {
+            let inputs = Arc::new(Mutex::new(Vec::new()));
+            let worker = Arc::new(Capped {
+                cap,
+                inputs: inputs.clone(),
+            });
+            DagExecutor::run(&linear_plan(), worker, &policy, &new_bus()).await;
+            let s2 = inputs.lock().await[1].clone();
+            let (_, inner) = crate::domain::untrusted::unwrap(s2.trim_end()).expect("one fence");
+            if cut {
+                // 15 bytes fall inside the 8th "é": the cut keeps 7 (14 bytes).
+                assert_eq!(
+                    inner,
+                    format!(
+                        "{}\n\n[step s1 output cut — showing 14 of 40 chars]",
+                        "é".repeat(7)
+                    )
+                );
+            } else {
+                assert_eq!(inner, "é".repeat(20));
+            }
         }
     }
 

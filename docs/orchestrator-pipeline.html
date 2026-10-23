@@ -330,7 +330,7 @@ sequenceDiagram
     <tr><td>plan.ready_steps</td><td class="file-ref">src/domain/plan.rs</td><td>91</td></tr>
     <tr><td>tokio::spawn per ready step</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>63</td></tr>
     <tr><td>abort_in_flight (cancel / exhaustion)</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>161</td></tr>
-    <tr><td>render_step_inputs</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>167</td></tr>
+    <tr><td>render_step_inputs</td><td class="file-ref">src/application/orchestrator/executor.rs</td><td>254</td></tr>
     <tr><td>RetryPolicy::run_step_with_retry</td><td class="file-ref">src/application/orchestrator/retry.rs</td><td>37</td></tr>
     <tr><td>SubprocessRunner::run_step / run_with_timeout</td><td class="file-ref">src/adapters/outbound/subprocess_runner.rs</td><td>316 / 191</td></tr>
     <tr><td>run_agent_subprocess (child)</td><td class="file-ref">src/adapters/inbound/cli/run_agent.rs</td><td>79</td></tr>
@@ -473,7 +473,7 @@ for step in plan.ready_steps(&completed) {
     if in_flight.contains(&step.id) {
         continue;
     }
-    let step_inputs = render_step_inputs(step, &completed_outputs);
+    let step_inputs = render_step_inputs(step, &completed_outputs, worker.input_cap(step));
     // ... clone worker / policy / events / step ...
     in_flight.insert(step.id.clone());
     let _ = events.send(OrchestratorEvent::StepStarted { step_id: step.id.clone(), agent: step.agent.clone() });

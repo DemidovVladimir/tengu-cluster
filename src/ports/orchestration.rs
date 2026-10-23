@@ -60,6 +60,13 @@ pub trait WorkerHandle: Send + Sync {
     fn known_agents(&self) -> Option<Vec<String>> {
         None
     }
+
+    /// The most chars of one upstream output `step`'s agent gets as a step
+    /// input: its tool-result cap (`AgentConfig::tool_result_cap`). `None`
+    /// (default): whole.
+    fn input_cap(&self, _step: &Step) -> Option<usize> {
+        None
+    }
 }
 
 /// What one planner LLM call cost (`PlannerLlm::call`), for its

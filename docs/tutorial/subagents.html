@@ -232,7 +232,7 @@
     </div>
     <div class="stage-side">
       <ol class="captions">
-        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;untrusted origin="step:s1"&gt;</code> fence per finished dependency (<code>domain/untrusted.rs</code>: an upstream output cannot close it).</li>
+        <li>The executor hands over one ready step. Its goal gets <code>Upstream context:</code> and one <code>&lt;untrusted origin="step:s1"&gt;</code> fence per finished dependency (<code>domain/untrusted.rs</code>: an upstream output cannot close it), each cut at the receiving agent's tool-result cap (<code>AgentConfig::tool_result_cap</code>: 50 000 chars on <code>claude_code</code> / <code>codex</code>, 1/8 of the window at 4 chars/token on <code>local</code>, else 300 000) with a last line <code>[step s1 output cut — showing N of M chars]</code>.</li>
         <li>The runner looks up <code>[agents.&lt;step.agent&gt;]</code> (or <code>compose.base_agent</code>). Missing, or no <code>description</code>: the step fails before any process starts.</li>
         <li>It starts the same binary as <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and the resolved egress policy, writes the JSON request, starts the step timer.</li>
         <li>The child checks the guard, reloads <code>sandboxes/&lt;name&gt;/config.toml</code> from <code>sandbox_config</code> (with <code>[keys]</code> it reuses the parent's seal-proxy session), and checks the <code>description</code> again. A <code>compose</code> applies here.</li>
@@ -454,7 +454,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       <tbody>
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
-        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), fenced step inputs (<code>step:&lt;id&gt;</code>), leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
+        <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), fenced step inputs (<code>step:&lt;id&gt;</code>, cut at <code>WorkerHandle::input_cap</code>), leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
         <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans (finished steps carried over), plan per session</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>WorkerHandle</code></td></tr>

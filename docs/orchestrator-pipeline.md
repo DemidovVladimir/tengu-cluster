@@ -199,7 +199,7 @@ sequenceDiagram
 | `ready_steps` | `domain/plan.rs` | 91 |
 | `tokio::spawn` per step | `application/orchestrator/executor.rs` | 63 |
 | `abort_in_flight` (cancel / exhaustion) | `application/orchestrator/executor.rs` | 161 |
-| `render_step_inputs` | `application/orchestrator/executor.rs` | 167 |
+| `render_step_inputs` | `application/orchestrator/executor.rs` | 254 |
 | `run_step_with_retry` | `application/orchestrator/retry.rs` | 37 |
 | `SubprocessRunner::run_step` / `run_with_timeout` | `adapters/outbound/subprocess_runner.rs` | 316 / 191 |
 | `run_agent_subprocess` (child) | `adapters/inbound/cli/run_agent.rs` | 79 |
@@ -255,7 +255,7 @@ T+22.9s  orchestrator:plan_completed  cancelled=false
 
 1. `for step in plan.ready_steps(&completed)` — `s2` is NOT in ready while `s1` is in-flight (its dep isn't completed).
 2. When s1 succeeds, `completed_outputs.insert(s1, output)`, next iteration includes s2 in ready.
-3. `render_step_inputs` (`executor.rs`) builds `<untrusted origin="step:s1">...</untrusted>` (`domain::untrusted::fence`; `<step-input>` before 2026-10-23) and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`).
+3. `render_step_inputs` (`executor.rs`) builds `<untrusted origin="step:s1">...</untrusted>` (`domain::untrusted::fence`; `<step-input>` before 2026-10-23) and prepends to s2's goal (sent to the `tengu run-agent` child as `AgentIpcInput.goal`); each output is cut at the receiver's tool-result cap (`WorkerHandle::input_cap` → `AgentConfig::tool_result_cap`) with a footer naming the step.
 
 ### Code reference
 
@@ -343,7 +343,7 @@ for step in plan.ready_steps(&completed) {
     if in_flight.contains(&step.id) {
         continue;
     }
-    let step_inputs = render_step_inputs(step, &completed_outputs);
+    let step_inputs = render_step_inputs(step, &completed_outputs, worker.input_cap(step));
     // ... clone worker / policy / events / step ...
     in_flight.insert(step.id.clone());
     let _ = events.send(OrchestratorEvent::StepStarted { step_id: step.id.clone(), agent: step.agent.clone() });

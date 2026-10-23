@@ -542,6 +542,23 @@ impl AgentConfig {
     pub fn hardened(&self) -> bool {
         self.no_shell_fallback
     }
+
+    /// The most chars of one tool result this agent's model gets — and of
+    /// one upstream output pasted into its plan step (`WorkerHandle::input_cap`):
+    /// `limits.max_mcp_result_chars` on a CLI engine (the bridge's cap), else
+    /// `limits.max_tool_result_chars`, and on `local` at most 1/8 of
+    /// `limits.context_window` (`domain::token::tool_result_char_budget`, as
+    /// `LocalEngine::tool_result_char_cap`).
+    pub fn tool_result_cap(&self) -> usize {
+        let limits = &self.limits;
+        match self.engine.as_str() {
+            "claude_code" | "codex" => limits.max_mcp_result_chars as usize,
+            "local" => (limits.max_tool_result_chars as usize).min(
+                crate::domain::token::tool_result_char_budget(limits.context_window as usize),
+            ),
+            _ => limits.max_tool_result_chars as usize,
+        }
+    }
 }
 
 /// Optional identity metadata used for prompts/UI.

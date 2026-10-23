@@ -363,6 +363,11 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
         Some(self.routable_agents())
     }
 
+    fn input_cap(&self, step: &crate::domain::plan::Step) -> Option<usize> {
+        let agent = step.compose.as_ref().map_or(&step.agent, |c| &c.base_agent);
+        self.agents.get(agent).map(AgentConfig::tool_result_cap)
+    }
+
     async fn run_step(
         &self,
         step: &crate::domain::plan::Step,
