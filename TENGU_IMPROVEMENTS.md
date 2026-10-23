@@ -12,7 +12,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `3954018056c492563230aaa1aa0753afc7441727` (S16) · **not pushed, no PR** |
+| Last code commit | `b4c5ef85ff8cbaff93692d4c81236593ddd2bf1c` (D6) · **not pushed, no PR** |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -49,11 +49,20 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | S14 | done: explicit `tools` in example `main`, tor-check `probe`, a2a-lab `planner` | `34fe62b320fcf0d1a51f76806057c0a69adb067e` |
 | S15 | done: `manage_skill` scans before writing (`scanner::scan_file`), `serde_yaml` frontmatter | `bd9e95cbf0114db928fd776c046378f6e31f25c7` |
 | S16 | done: `docs/tools.md` § Untrusted input map; venture-scan's 2 identity sentences removed (xpower's 2 are on its branch) | `3954018056c492563230aaa1aa0753afc7441727` |
+| T2 | done: planner prompt 11.2 KB → 2.8 KB | `7d4c3e85e981cc63618e4070c97d6d948f30edba` |
+| T4 | done: each step input cut at the receiver's tool-result cap | `d1cabf6c7f645ddebde723a23983a9b8bce303f2` |
+| T5 | done: the plan reaches a step once, as bullets; a replan gets compact JSON | `47771639353feecf6140a0f5448f4ce835ab1a0c` |
+| T7 | done: whole-prompt input tokens, `cached_input_tokens`, subagent per-role layers | `ee2d13e20fa569c6ac51c3d3aed914f9e825d4db` |
+| T8 | waits: depends on Y7 (§ 11) | — |
+| T9 | done: no `# Tools` list in the chat system prompt | `1c31aad557b174aaa58ce0769d87c341ca39a3d1` |
+| D3 | done: the tutorial-sync hook names the pages, once per file per session | `87e010a8c6b8eddbdec4f2790f357c09db564dd3` |
+| D5 | done: ~90 history comments in present tense (29 files) | `dc7920609d817458d7769efd35165d0ee0cd7767` |
+| D6 | done: 21 test modules ≥ 500 lines → sibling files; the layering lint + code map treat test-only files as test code | `b4c5ef85ff8cbaff93692d4c81236593ddd2bf1c` |
 
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | T2, T4, T5, T7, T8, T9, D3, D5, D6, A5 (rest), A6, A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | A5 (rest), A6, A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
