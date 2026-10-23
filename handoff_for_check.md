@@ -2,6 +2,93 @@
 
 > For the operator's architecture agent. Newest session first; earlier sessions below, unchanged. Ids and hashes are full. Everything is verifiable from git, GitHub and the commands in each session's last section.
 
+# Session 2026-10-22 → 2026-10-23: audit fixes part 1 — PR #59 open, not merged
+
+| What | Value |
+|---|---|
+| PR | https://github.com/DemidovVladimir/tengu-cluster/pull/59 (open, not merged) |
+| Branch | `fix/audit-bugs` on `origin` (never `mol`), from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
+| Head | `58e7a14ba2e0b2c6476c211039422cefe4e6dba2` |
+| Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` — R4 uncommitted there; patch `/Users/vladimirdemidov/.cache/tengu-xm.noindex/wip/r4-dead-code-wip.patch` |
+| Tracker | top of `TENGU_IMPROVEMENTS.md` on the branch (each row, full commit hash) |
+
+## Commits (oldest first)
+
+- `c4164852c3bce8128eecb1c4d5a1cf6828482c4e` telegram /stop drops the running plan; delete the dead orchestrator cancel flag
+- `6ac73cf50865e208deba78019570e6e145884986` orchestrator: validate every plan before any step runs
+- `5da9fd291dded2c09b624ce47364b1b052641f51` planner calls its engine directly; run-agent runs chat's tool loop
+- `327fcd89292f93933f2d802af7ade4c9495ec1fc` claude_code: drain stderr while the CLI runs; a silent failed exit is an error
+- `d237e4afc970c14535bbd5062e0829148bdc9da6` TENGU_HOME is the one root: memory default and managed skills under it
+- `3b246d771b0ce02803e613184691fded4a5a7cc3` tengu prune --sandbox prunes only that sandbox; drop the dead targets
+- `d206882fdc1e1b4c6f7bb1415158693c63780f8c` Default build runs every engine and webhooks; one logging init
+- `3f4b80bd9bd250be4fa275db0eed6ce4da920417` S1: the fallback scope reads no env var; deny-all when hardened
+- `f987c1a27505735be9968c7c776ec64655fe74f6` S2: an env value goes only to a host net_hosts names without "*"
+- `69e767e11ba7fcc0da2461fbf8a19548fe9dbe9a` S3: Claude Code `research` = WebSearch only; every profile runs isolated
+- `1786b9147c702424bfe61b21ee039efc87862771` S9: a claude_code agent with no profile block runs `none`
+- `a240e48d8efb49ad61a63aa1c08c096a0f645df0` S5: chat recall is capped, fenced and rides in the user turn
+- `493aff525c031fec0f7290b7203da32ec0035b0c` S12: every registry-taking command loads through sandbox_ctx
+- `b4a2441aab8dddee8155ba3bde1c74e11ac145bc` S13: net_hosts "*" never matches a loopback / LAN / link-local host
+- `b5322abf867a24f5de610753182f7c7844c4d2eb` R3: drop the RAG vestiges of the planner
+- `8716a1b2d77f1a1b31b5b425ddec6db60343a8b2` T1: planner registry sends agents in full, skills and tools as names
+- `00e895828176a3324f5a3576a3f940e6c52bb104` TENGU_IMPROVEMENTS.md: the audit, with a progress tracker to resume from
+- `731f8578083efef87515c951b4bf016f6aec95e2` S13 follow-up: core::net for the local-host check, so domain names no std::net
+- `d1523bcdda8a3754fe59e2cba47ed318c9a4bfa4` Y3: one SQLite opener — every state db is 0600, one SharedConn
+- `ff91596bee7ec0a2a180aabc52a6de05ee5d6066` Y4: one atomic writer — temp file born with its mode, fsynced, renamed
+- `fe1e080dc875c94021c512fb6a17f7d939ec8367` Y10: one name rule, one JSON redaction walker
+- `3e0ec9cff0654e2a06b60d9cf023e87343642fd0` O6 (ignore half): the private planning set and handoff_review.md are ignored
+- `e117c22fce30884122b480b9a440caddf49cf32c` test: the lease-loss test retries the steal
+- `a4d7ed4ca7b97bb9d406741026de56723e4ba8e2` S8: Open Brain provenance is the harness's
+- `85a01bab7305794ca0873b7646c416d5ab2783d4` S4: a widening compose adds only scoped tools
+- `5795ba314a16128e67ce68d43e4b9f4c65321941` TENGU_IMPROVEMENTS: progress — Y3, Y4, Y10, O6 (ignore half), S8, S4 done
+- `78808a059f3cacd34c90013f2ee8395bff88b58e` S6: one fence for text tengu did not write
+- `5a5a378dcce47db9467fc18ab21d45cdb01ccd88` S7: CLI engines get tagged turns
+- `938f7361594d87f0453e55f7db7a91b1734f55ad` S10: readers of outside text are warned off side effects
+- `84ea7c110d8e42db21c30a361edddd74f83c88ce` S11: the never-read Telegram approval keys are gone
+- `34fe62b320fcf0d1a51f76806057c0a69adb067e` S14: explicit tools in the three blocks that had none
+- `bd9e95cbf0114db928fd776c046378f6e31f25c7` S15: manage_skill scans before it writes; YAML frontmatter via serde_yaml
+- `3954018056c492563230aaa1aa0753afc7441727` S16: one map of every untrusted input
+- `1811feb2e9ed321bb00aa5d7347a0bdfe29820da` TENGU_IMPROVEMENTS: progress — leaks done (S6, S7, S10, S11, S14, S15, S16)
+- `7d4c3e85e981cc63618e4070c97d6d948f30edba` T2: the planner prompt is 2.8 KB instead of 11.2 KB
+- `d1cabf6c7f645ddebde723a23983a9b8bce303f2` T4: cut each step input at the receiver's tool-result cap
+- `47771639353feecf6140a0f5448f4ce835ab1a0c` T5: the plan reaches a step once, as bullets; a replan gets compact JSON
+- `ee2d13e20fa569c6ac51c3d3aed914f9e825d4db` T7: whole-prompt input tokens, cached input counted, subagent layers
+- `1c31aad557b174aaa58ce0769d87c341ca39a3d1` T9: no `# Tools` list in the chat system prompt
+- `87e010a8c6b8eddbdec4f2790f357c09db564dd3` D3: the tutorial-sync hook names the pages, once per file per session
+- `dc7920609d817458d7769efd35165d0ee0cd7767` D5: history comments in present tense
+- `b4c5ef85ff8cbaff93692d4c81236593ddd2bf1c` D6: large inline test modules move to sibling files
+- `2aa6b1860696ae785167a21fb2b5840196557cd5` TENGU_IMPROVEMENTS: progress — T2, T4, T5, T7, T9, D3, D5, D6 done; T8 waits for Y7
+- `074425279e4d0110a479843241df32ec4bc252c1` A5: one CLI run loop for Claude Code and Codex (`cli_run::drive`)
+- `fbc1e7e3f022dfe75ce94e5f78d24c4ba55878c2` A6: ToolStack — tool executors redact by construction; one agent turn in bootstrap/turn.rs
+- `5811869159eb3edc58137d33e8cd68cbfcf08ad8` TENGU_IMPROVEMENTS: tracker — A5 rest, A6 done
+- `369034efef37b4fb48b7ef62cda86119aa9cb87a` A6 follow-up: the run_once test compiles (EngineResponse has no Debug)
+- `babb8243b7b557ba153280990a1b1d96c870f5af` A7: the plan reaches a step through run_step, not a global map or a file
+- `8f7aa3f568239de31249e8eb4119ac83ecb79dab` A8: classify plan-step failures; retry waits from domain::backoff; one drain helper
+- `bdba5604401a82be124d913557ceaa7126bd617e` A9: delete knobs nothing reads — lens modes, cost caps, the IPC turn-cap default
+- `36d83dafe36d67e00f14b2dd540034297a7f2148` A10: the loop escalator moves to bootstrap/one_shot.rs — escalation in every build
+- `c11386e9be5227083735d03953c0807466cfad37` A11: a Claude Code / Codex step builds no tool executor it never calls
+- `486bbec17a5462e7326f832a06c5c02cbc0ad1fb` TENGU_IMPROVEMENTS: tracker — A6 follow-up, A7–A11 done
+- `869d1b94f529aa4cb484c4246b9b0e7468a14b90` A12: `tengu webhooks` is `tengu run` with no feeds — one runtime lifecycle
+- `d9cc3fa11a0b3a64755b882bef59bddf3eaa76d2` R2: delete dead config — runtime_profile, [hub], [orchestrator] engine, tengu status
+- `3c9b920e0715e7b76807b138cafbe00322d604bb` TENGU_IMPROVEMENTS: tracker — R2 done, R4 in progress (handover)
+- `58e7a14ba2e0b2c6476c211039422cefe4e6dba2` SESSION_HANDOFF: audit fixes part 1 (PR #59), R4 in progress, operator steps on merge
+
+## On merge (operator)
+
+| File | Change |
+|---|---|
+| `~/.tengu/config.toml` | delete line 1 `runtime_profile = "auto"` (R2) and line 7 `default_lens = "eco"` (A9): unknown keys fail the load |
+| `sandboxes/xpower/config.toml` (branch `feature/xpower-sandbox`) | on rebase: delete `runtime_profile` (R2); S3: `research` loses page fetches; S13: `*` no longer reaches local hosts; S10: check its readers against the side-effect rule; S16: delete its 2 "web pages are untrusted" sentences (lines 548 and 578 of the main checkout copy) |
+
+## Behaviour changes
+
+- `tengu webhooks` = `tengu run` with no feeds: records `kind = "run"`, writes the heartbeat (A12).
+- `tengu status` is gone (`tengu doctor`); `[orchestrator]` rejects unknown keys (R2).
+- Plan-step retries follow the error class: fatal / decode are not retried (A8).
+
+## Gates still the operator's
+
+D1, D2, T3, Y7 (→ T8), T6, D4, S4 narrow-only, S14 empty set, W3 `--older-than` (§ 11).
+
 # Session 2026-10-12 → 2026-10-13: weekend #2 stop + grade, PRs #50–#54 merged, cleanup, docs sweep, review fixes
 
 ## T1. What was asked → what was delivered
