@@ -194,8 +194,7 @@ mod e2e_tests {
                 },
             ],
         };
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let bus = new_bus();
         let out = replan::drive(
             Arc::new(StaticPlanner { plan }),

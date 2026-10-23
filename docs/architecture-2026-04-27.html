@@ -775,7 +775,7 @@ const STEPS = [
     files: [
       { path: "src/application/orchestrator/executor.rs::DagExecutor", desc: "parallel ready_steps + cancel; abort_in_flight on cancel / exhaustion" },
       { path: "src/application/orchestrator/replan.rs::drive", desc: "the outer loop — Plan::validate (empty, duplicate ids, unknown agents / dependencies, cycles) then replan-on-invalid / exhausted; stores the rendered plan per session (plan_state)" },
-      { path: "src/application/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts: at once, then 1 s, 3 s (9 s for any later one)" },
+      { path: "src/application/orchestrator/retry.rs::RetryPolicy", desc: "default 3 attempts; by the failure's class (StepFailure): transient / timeout at once, then 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode never retried" },
       { path: "src/domain/plan.rs::Plan::ready_steps · leaves", desc: "topology check · the steps that make the reply" },
     ],
     deep: "Replan uses memory.cross_plan_top_k (default 5) prior step-output hits as context for the new plan when postgres_memory is enabled. Runtime planner memory reads Postgres agentic_memory via pgvector first and FTS fallback. SubprocessRunner::run_step fails fast (before any spawn; the retry policy still runs its attempts, then the replan) on an agent name with no routable [agents.*] block — composed agents use Step.compose to declare a transient roster, NOT a renamed agent name. Cancel or an exhausted step aborts every step still in flight (its run-agent child is kill_on_drop); an unknown dependency or a cycle fails Plan::validate before any step (a replan), and a step that still never becomes ready is a replan; parallel leaves with no join step are joined in plan order, one ### <id> (<agent>) section each."

@@ -16,13 +16,15 @@
 
 #![allow(dead_code)] // SubprocessRunner is wired by the DagExecutor in Phase 4.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::config::AgentConfig;
+use crate::domain::observation::ErrorClass;
+use crate::domain::plan::StepFailure;
 
 /// JSON schema of the IPC input stream (stdin of `tengu run-agent`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,29 +273,44 @@ impl SubprocessRunner {
             stdin.shutdown().await.context("close child stdin")?;
         }
 
-        // Wait with timeout.
-        let output = tokio::time::timeout(
+        // Wait with timeout. The error classes (`StepFailure`) tell the
+        // step's retry what another attempt can change.
+        let output = match tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
             child.wait_with_output(),
         )
         .await
-        .with_context(|| format!("run-agent timed out after {timeout_secs}s"))?
-        .context("wait_with_output failed")?;
+        {
+            Ok(waited) => waited.context("wait_with_output failed")?,
+            Err(_) => {
+                let why = format!("run-agent timed out after {timeout_secs}s");
+                return Err(StepFailure::new(ErrorClass::Timeout, why).into());
+            }
+        };
 
         if !output.status.success() {
             // EOF on the pipe ends the reader: the tail is complete.
             let tail = stderr_tail.await.unwrap_or_default();
-            bail!(
+            // An exit code = the child failed before its loop (config,
+            // compose, engine build): the same next time. A signal (no
+            // code, e.g. OOM-killed) may not be.
+            let class = match output.status.code() {
+                Some(_) => ErrorClass::Fatal,
+                None => ErrorClass::Transient,
+            };
+            let why = format!(
                 "run-agent exited with non-zero status ({}): {}",
                 output.status,
                 tail.trim()
             );
+            return Err(StepFailure::new(class, why).into());
         }
 
         let stdout_str = String::from_utf8(output.stdout).context("non-utf8 stdout")?;
-        let parsed: AgentIpcOutput = serde_json::from_str(stdout_str.trim())
-            .with_context(|| format!("parse IPC output: {}", stdout_str.trim()))?;
-        Ok(parsed)
+        serde_json::from_str(stdout_str.trim()).map_err(|e| {
+            let why = format!("parse IPC output: {}: {e}", stdout_str.trim());
+            StepFailure::new(ErrorClass::Decode, why).into()
+        })
     }
 }
 
@@ -370,16 +387,14 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             .filter(|a| a.description.is_some())
         else {
             let known = self.routable_agents();
-            anyhow::bail!(
+            let why = format!(
                 "no agent '{}' in the active config — the planner picked '{}' but there is \
                  no `[agents.{}]` block (routable agents: {:?}). Likely cause: a SKILL or \
                  TOOL name was placed in the plan's `agent` field. The agent field MUST \
                  come from the `## Available agents` section of the roster.",
-                spec_name,
-                step.agent,
-                spec_name,
-                known
+                spec_name, step.agent, spec_name, known
             );
+            return Err(StepFailure::new(ErrorClass::Fatal, why).into());
         };
         let max_turns = agent_cfg.limits.max_tool_rounds;
         let step_timeout_secs = agent_cfg.limits.step_timeout_secs;
@@ -519,11 +534,10 @@ mod tests {
         let plan = crate::domain::plan::Plan {
             steps: vec![step.clone()],
         };
-        let err = runner
-            .run_step(&step, "", &plan)
-            .await
-            .unwrap_err()
-            .to_string();
+        let err = runner.run_step(&step, "", &plan).await.unwrap_err();
+        let class = err.downcast_ref::<StepFailure>().map(|f| f.class);
+        assert_eq!(class, Some(ErrorClass::Fatal), "never retried");
+        let err = err.to_string();
         assert!(err.contains("no agent 'spanish-teacher'"), "{err}");
         assert!(err.contains("researcher"), "{err}");
     }

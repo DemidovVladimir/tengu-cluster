@@ -84,6 +84,26 @@ pub enum PlanError {
     Cycle(StepId),
 }
 
+/// A failed step attempt that says how retryable it is
+/// (`WorkerHandle::run_step`); `application/orchestrator/retry.rs` reads
+/// `class` (`domain::backoff::next_delay`). Any other error counts as
+/// `Transient`.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct StepFailure {
+    pub class: crate::domain::observation::ErrorClass,
+    pub message: String,
+}
+
+impl StepFailure {
+    pub fn new(class: crate::domain::observation::ErrorClass, message: impl Into<String>) -> Self {
+        Self {
+            class,
+            message: message.into(),
+        }
+    }
+}
+
 impl PlanError {
     /// The step the error is about (`None`: the plan as a whole).
     pub fn step(&self) -> Option<&StepId> {

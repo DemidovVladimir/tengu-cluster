@@ -462,9 +462,9 @@ T+2.7s   plan_created  steps=[s1:researcher(deps=[]), ...]   ← repaired plan
 ### Code reference
 
 - Every plan (initial and replanned) is checked before any step runs: `domain/plan.rs::Plan::validate` from `application/orchestrator/replan.rs::drive` — empty plan, duplicate ids, unknown agents (`compose.base_agent` when composed; `WorkerHandle::known_agents` = the `[agents.*]` blocks with a `description`, the same subset the planner sees), unknown dependencies, cycles. An invalid plan replans with the `PlanError` text.
-- Unknown agent at run time still fails fast (no spawn) as a backstop: `adapters/outbound/subprocess_runner.rs::run_step` (`:316`).
-- Retry at step level: `application/orchestrator/retry.rs::run_step_with_retry` (`:37`) — 3 attempts (`max_attempts_per_step`), waits 1 s then 3 s (9 s for any later attempt), then `StepExhausted`
-- Replan driver: `application/orchestrator/replan.rs::drive` (`:13`), abridged:
+- Unknown agent at run time still fails fast (no spawn, a `fatal` `StepFailure`) as a backstop: `adapters/outbound/subprocess_runner.rs::run_step` (`:366`).
+- Retry at step level: `application/orchestrator/retry.rs::run_step_with_retry` (`:87`) — 3 attempts (`max_attempts_per_step`), by the failure's class (`domain::plan::StepFailure`, else transient): transient / timeout wait 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode stop at once; then `StepExhausted`
+- Replan driver: `application/orchestrator/replan.rs::drive` (`:12`), abridged:
 
 ```rust
 ExecResult::NeedsReplan { failed, error } => {
@@ -626,7 +626,7 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 | **DAG executor** | `src/application/orchestrator/executor.rs` | `DagExecutor::run`, `ExecResult`, `render_step_inputs`, `abort_in_flight` (trait `WorkerHandle`: `src/ports/orchestration.rs`) |
 | **Worker (subprocess)** | `src/adapters/outbound/subprocess_runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput`, `forward_child_log` |
 | **Subagent child** | `src/adapters/inbound/cli/run_agent.rs` | `run_agent_subprocess` (loads parent config, `[agents.<name>]`, LLM + tools loop, `compress_and_store`), `try_persist_agentic_step_summary` |
-| **Retry** | `src/application/orchestrator/retry.rs` | `RetryPolicy`, `run_step_with_retry`, backoff `{1s, 3s, 9s}` |
+| **Retry** | `src/application/orchestrator/retry.rs` | `RetryPolicy`, `run_step_with_retry`; by class (`StepFailure`): transient / timeout `1s, 2s, 4s … ≤ 9s`, fatal / decode none |
 | **Plan types + topology** | `src/domain/plan.rs` | `Step`, `StepId`, `AgentCompose`, `Plan::ready_steps`, `Plan::leaves`; `Plan::validate` (every plan, in `replan::drive`), `Plan::single_leaf` (tests only) |
 | **Events** | `src/application/orchestrator/events.rs` | `OrchestratorEvent`, `EventBus`, `new_bus()` |
 | **Planner engine** | `src/bootstrap/orchestrator.rs` | `planner_llm(config) -> anyhow::Result<Option<PlannerLlm>>`, `build_orchestrator(config, llm, session_id, trace)`. `ChatServiceFactory` (`src/ports/orchestration.rs`, `run_turn` only) serves `tengu evolve` alone (`RuntimeChatServiceFactory`, `build_cli_chat_factory`) |

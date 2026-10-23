@@ -66,7 +66,7 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 `src/application/orchestrator/executor.rs`. Standard topological-sort-then-parallel pattern:
 - `Plan::ready_steps` (`domain/plan.rs`) returns every step whose `depends_on` is satisfied.
 - Each ready step is `tokio::spawn`'d on the worker (`SubprocessRunner`).
-- Retries follow `RetryPolicy::new(max_attempts_per_step)` from `retry.rs` (default 3 attempts: at once, then after 1 s, 3 s; 9 s before any later one).
+- Retries follow `RetryPolicy::new(max_attempts_per_step)` from `retry.rs` (default 3 attempts) and the failure's class (`domain::plan::StepFailure`, else transient) through `domain::backoff::next_delay`: transient / timeout → at once, then after 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode → no retry.
 - On exhaustion, `replan.rs::drive` calls `RegistryPlanner::replan` with the failed step + error context. With `postgres_memory`, replan also pulls `cross_plan_top_k` hits from Postgres `agentic_memory`.
 - Cancel or an exhausted step aborts every step still in flight (`abort_in_flight`; the dropped `run-agent` child is `kill_on_drop`). An unknown dependency or a cycle is caught by `Plan::validate` before the executor runs (a replan); a step that still never becomes ready is a replan too, not an empty reply. Parallel leaves with no join step are joined in plan order, one `### <id> (<agent>)` section each (`Plan::leaves`).
 - Every step gets the plan it belongs to: `WorkerHandle::run_step(step, inputs, plan)`; `SubprocessRunner` renders it (`shared_files::render_plan_state`) into `AgentIpcInput.plan_state`. No file, no per-session map.
@@ -74,7 +74,7 @@ The default-agent dispatch (no orchestrator at all) is the fallback when `[orche
 ### 5. Subprocess — `SubprocessRunner::run_step`
 
 `src/adapters/outbound/subprocess_runner.rs`. For each step:
-- Fails fast when `step.agent` (or `compose.base_agent`) names no routable `[agents.<name>]` block (one with a `description`) in the parent config — no spawn; the retry policy still runs its attempts (1 s, 3 s waits) before the replan.
+- Fails fast when `step.agent` (or `compose.base_agent`) names no routable `[agents.<name>]` block (one with a `description`) in the parent config — no spawn, a `fatal` `StepFailure`: no retry, straight to the replan (`replan::drive` already refuses such a plan before any step runs).
 - Builds `AgentIpcInput` JSON from the step (agent name, goal, session_id, step_id, `max_turns` = the agent's `limits.max_tool_rounds`, optional `compose` for C→B fallback, **`sandbox_config`** so the child sees the same scopes as the parent — Phase 7.2, **`plan_state`** — the rendered plan for this session, 2026-09-12). `model` / `tools` / `skills` travel empty — the child reads them from its own `[agents.<name>]`.
 - Spawns `tengu run-agent` as a child process with `TENGU_AGENT_IPC=1` env guard and `TENGU_EGRESS` (the parent's *resolved* `[egress]` policy — the child applies it verbatim, 2026-09-16).
 - Pipes the JSON over stdin; reads the result JSON from stdout; kill on drop. Wall-clock cap per step = `limits.step_timeout_secs` (default 600) via `run_with_timeout`. The child's stderr log goes through the parent's log (`forward_child_log`, target `tengu::run_agent`); a failed step's error carries its last 40 lines.

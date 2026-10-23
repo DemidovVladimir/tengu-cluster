@@ -97,7 +97,7 @@ Each step dispatch:
 | `events.rs` | `OrchestratorEvent` enum + `tokio::sync::broadcast` bus. |
 | `plan.rs` | Moved to `src/domain/plan.rs`: `Step`, `StepId`, `Plan`, `AgentCompose`; `ready_steps`, `leaves` (the executor joins parallel leaves). `single_leaf` is test-only; `validate` (empty plan, duplicate ids, unknown agents, unknown dependencies, cycles) runs in `replan::drive` before any step — an invalid plan replans. |
 | `planner.rs` | `RegistryPlanner` (the only `Planner` impl since Phase 7.1; `OrchestratorAgentPlanner` deleted) + free fn `parse_verdict` (raw JSON, fences, JSON in prose, prose → `Direct`). The `Planner` trait lives in `src/ports/orchestration.rs`. |
-| `retry.rs` | `RetryPolicy` + `run_step_with_retry`. Waits 1 s, 3 s, then 9 s between attempts; emits `StepFailed` per attempt, `StepExhausted` at the end. |
+| `retry.rs` | `RetryPolicy` + `run_step_with_retry`. By the failure's class (`StepFailure`, else transient; `domain::backoff::next_delay`): transient / timeout wait 1 s, 2 s, 4 s … ≤ 9 s; fatal / decode stop at once. Emits `StepFailed` per attempt, `StepExhausted` at the end. |
 | `executor.rs` | `DagExecutor`. Parallel ready-set scheduling via `tokio::spawn`. Cancel or an exhausted step aborts every in-flight step (`abort_in_flight`). (`WorkerHandle` trait: `src/ports/orchestration.rs`.) |
 | `replan.rs` | `drive()` — outer loop. On `StepExhausted`, re-invokes planner with failure context. Bounded by `max_replans`. |
 | `wiring.rs` | Removed 2026-10-22 (`ChatOrchestratorPortImpl`); the planner calls its engine through `PlannerLlm` (`planner.rs`). `ChatWorker` removed in Phase 7.1 — `SubprocessRunner` (`src/adapters/outbound/subprocess_runner.rs`) is the only `WorkerHandle`. |
@@ -169,7 +169,7 @@ and draft a reply to legal."
 │               → process_user_text()  (tool loop, may call memory_search etc.)
 │           → MemoryWriter.sync_turn spawned (fire-and-forget)
 │       awaits worker + retry wrapper
-│       retry policy: {1s, 3s, 9s} backoff, 3 attempts
+│       retry policy: 3 attempts, 1s/2s/4s… (≤ 9 s), fatal never retried
 │       on success:     emit StepSucceeded
 │       on exhaustion:  emit StepExhausted → return NeedsReplan
 │   if all done: emit PlanCompleted(leaf_step.output)

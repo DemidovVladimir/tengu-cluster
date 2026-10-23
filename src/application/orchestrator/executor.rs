@@ -374,8 +374,7 @@ mod tests {
                 Some(self.cap)
             }
         }
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         for (cap, cut) in [(15, true), (40, false)] {
             let inputs = Arc::new(Mutex::new(Vec::new()));
             let worker = Arc::new(Capped {
@@ -434,8 +433,7 @@ mod tests {
         let bus = new_bus().traced(bridge);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let worker = Arc::new(CauseRecordingWorker { seen: seen.clone() });
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus).await;
         assert!(matches!(result, ExecResult::Done { .. }));
         let d = sink.all();
@@ -489,8 +487,7 @@ mod tests {
                 Ok(format!("out-{}", step.id.0))
             }
         }
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let first = DagExecutor::run(&linear_plan(), Arc::new(FailS2), &policy, &new_bus()).await;
         let ExecResult::NeedsReplan {
             failed, finished, ..
@@ -535,8 +532,7 @@ mod tests {
             order: order.clone(),
         });
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let result = DagExecutor::run(&linear_plan(), worker, &policy, &bus).await;
         assert!(matches!(result, ExecResult::Done { .. }));
         assert_eq!(
@@ -548,8 +544,7 @@ mod tests {
     #[tokio::test]
     async fn dependent_step_sees_upstream_output() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let result = DagExecutor::run(&linear_plan(), Arc::new(OkWorker), &policy, &bus).await;
         match result {
             ExecResult::Done { final_output } => {
@@ -575,8 +570,7 @@ mod tests {
     #[tokio::test]
     async fn parallel_leaves_are_joined_into_the_reply() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let plan = Plan {
             steps: vec![step("a", &[]), step("b", &[])],
         };
@@ -598,8 +592,7 @@ mod tests {
     #[tokio::test]
     async fn a_step_that_never_starts_needs_a_replan() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         for steps in [
             vec![step("a", &[]), step("b", &["ghost"])],
             vec![step("a", &[]), step("b", &["a", "ghost"])],
@@ -635,8 +628,7 @@ mod tests {
     #[tokio::test]
     async fn a_replan_aborts_steps_still_in_flight() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = Arc::new(FailFastSlowWorker {
             slow_finished: Arc::clone(&slow_finished),
@@ -659,8 +651,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_run_aborts_steps_still_in_flight() {
         let bus = new_bus();
-        let mut policy = RetryPolicy::new(1);
-        policy.backoff = vec![];
+        let policy = RetryPolicy::new(1);
         let slow_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker = Arc::new(FailFastSlowWorker {
             slow_finished: Arc::clone(&slow_finished),

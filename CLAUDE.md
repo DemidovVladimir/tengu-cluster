@@ -375,7 +375,10 @@ These are not preferences. They're load-bearing.
    id, an agent that is not routable, an unknown `depends_on`, a cycle) goes
    straight back to the planner before any step runs; it counts as a
    replan. A failing plan step runs up to `max_attempts_per_step` times
-   (default 3; it waits 1 s, then 3 s, 9 s for any later attempt), then
+   (default 3; after a transient or timeout failure it waits 1 s, 2 s,
+   4 s … ≤ 9 s; a fatal one — an unknown agent, a child that exits before
+   its loop, an unreadable reply — is not retried: `retry.rs`,
+   `domain::plan::StepFailure`), then
    the plan is replanned up to `max_replans` times (default 2). The split
    is deliberate: memory degradation should not break a session, but a plan
    you can't parse means the model is broken.

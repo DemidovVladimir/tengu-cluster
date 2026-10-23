@@ -64,7 +64,7 @@
   <ul class="facts">
     <li>≤ <b>70</b> tool rounds per step</li>
     <li><b>600 s</b> per step, then killed</li>
-    <li><b>3</b> attempts, waits <b>1 s</b>, <b>3 s</b></li>
+    <li><b>3</b> attempts, waits <b>1 s</b>, <b>2 s</b>; none after a fatal error</li>
     <li>≤ <b>2</b> replans</li>
   </ul>
   <ul class="legend" aria-label="Colour key">
@@ -131,7 +131,7 @@
         <g class="n guard" data-at="2,10">
           <rect x="24" y="382" width="250" height="60" rx="8"/>
           <text x="149" y="406" text-anchor="middle" class="t-title">Retry policy</text>
-          <text x="149" y="425" text-anchor="middle" class="t-small">3 tries · waits 1 s, 3 s</text>
+          <text x="149" y="425" text-anchor="middle" class="t-small">3 tries · waits 1 s, 2 s</text>
         </g>
 
         <!-- child nodes, row 1 -->
@@ -284,12 +284,13 @@
     </div>
     <div class="seg" role="radiogroup" aria-label="How the step fails">
       <label><input type="radio" name="how" value="timeout" checked><span>every attempt times out</span></label>
+      <label><input type="radio" name="how" value="fatal"><span>the child exits before its loop</span></label>
       <label><input type="radio" name="how" value="ghost"><span>agent name does not exist</span></label>
     </div>
     <div class="runs" id="runs"></div>
     <div class="stats">
       <div class="stat"><b id="r-spawn">9</b><span>child processes</span></div>
-      <div class="stat"><b id="r-wait">12 s</b><span>spent waiting between tries</span></div>
+      <div class="stat"><b id="r-wait">9 s</b><span>spent waiting between tries</span></div>
       <div class="stat"><b id="r-wall">1 h 30 m</b><span>worst wall clock (planner calls not counted)</span></div>
       <div class="stat"><b id="r-plan">3</b><span>planner calls</span></div>
     </div>
@@ -453,7 +454,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
         <tr><td><code>src/adapters/outbound/subprocess_runner.rs</code></td><td>IPC types, the agent check, spawn, timeout, the child's log</td></tr>
         <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>the child: prompt, loop, <code>compress_and_store</code>, output (<code>step_output</code>); exports <code>TENGU_AGENT_NAME</code> and the step's skill identity <code>TENGU_AGENT_SKILL_SHA256</code> to its tools and bridge</td></tr>
         <tr><td><code>src/application/orchestrator/executor.rs</code></td><td>ready steps, reuse of finished steps on replan (<code>run_reusing</code>), fenced step inputs (<code>step:&lt;id&gt;</code>, cut at <code>WorkerHandle::input_cap</code>), leaves, aborts (<code>InFlight</code>: every way out, a dropped run too)</td></tr>
-        <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits</td></tr>
+        <tr><td><code>src/application/orchestrator/retry.rs</code></td><td>attempts and waits, by the failure's class (<code>StepFailure</code>)</td></tr>
         <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>replans (finished steps carried over), plan per session</td></tr>
         <tr><td><code>src/ports/orchestration.rs</code></td><td><code>WorkerHandle</code></td></tr>
         <tr><td><code>src/bootstrap/tools.rs</code></td><td>workspace, scope grant, <code>compose_agent</code>, the step's tools</td></tr>
@@ -545,8 +546,10 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   Array.prototype.forEach.call(document.querySelectorAll('input[name="shape"]'), function (x) { x.addEventListener("change", renderShape); });
   renderShape();
 
-  /* ---- retry worst case: RetryPolicy waits 1 s, 3 s, then 9 s ---- */
-  var BACKOFF = [1, 3, 9];
+  /* ---- retry worst case: a transient / timeout failure waits 1 s, 2 s,
+     4 s … ≤ 9 s (retry.rs, domain::backoff::next_delay); a fatal one
+     (StepFailure: the child exited before its loop) is not retried ---- */
+  function backoff(k) { return Math.min(9, Math.pow(2, k - 1)); }
   function fmt(s) {
     if (s < 60) return s + " s";
     var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
@@ -555,13 +558,13 @@ When you have completed your task, your FINAL action MUST be to call the `compre
   function renderRetry() {
     var att = +$("att").value, rep = +$("rep").value, tmo = +$("tmo").value, how = radio("how");
     $("att-out").textContent = att; $("rep-out").textContent = rep; $("tmo-out").textContent = tmo;
-    var runs = rep + 1, waits = 0;
-    for (var k = 1; k < att; k++) waits += BACKOFF[k - 1] !== undefined ? BACKOFF[k - 1] : 9;
+    var runs = rep + 1, waits = 0, tries = how === "fatal" ? 1 : att;
+    for (var k = 1; k < tries; k++) waits += backoff(k);
     // An unknown agent fails Plan::validate before any step runs: no child,
     // no retry, no wait — the next planner call comes at once.
     if (how === "ghost") waits = 0;
     var per = (how === "timeout" ? att * tmo : 0) + waits;
-    $("r-spawn").textContent = how === "timeout" ? att * runs : 0;
+    $("r-spawn").textContent = how === "ghost" ? 0 : tries * runs;
     $("r-wait").textContent = fmt(waits * runs);
     $("r-wall").textContent = fmt(per * runs).trim();
     $("r-plan").textContent = runs;
@@ -571,17 +574,18 @@ When you have completed your task, your FINAL action MUST be to call the `compre
       var cells = [];
       if (r) cells.push('<span class="plan" title="planner replan call">↻<em> replan</em></span>');
       if (how === "ghost") cells.push('<span class="try" style="flex:0 1 30px">✗<em> invalid plan</em></span>');
-      else for (var a = 1; a <= att; a++) {
+      else for (var a = 1; a <= tries; a++) {
         cells.push('<span class="try" style="flex:' + (how === "timeout" ? 4 : 0) + ' 1 30px">' + (how === "timeout" ? "✗" + a + "<em> · " + tmo + " s</em>" : "✗" + a) + "</span>");
-        if (a < att) cells.push('<span class="wait">' + (BACKOFF[a - 1] !== undefined ? BACKOFF[a - 1] : 9) + " s</span>");
+        if (a < tries) cells.push('<span class="wait">' + backoff(a) + " s</span>");
       }
       if (r === runs - 1) cells.push('<span class="end">give up</span>');
       row.innerHTML = "<small>" + (r ? "replan " + r : "first plan") + '</small><div class="bar-row">' + cells.join("") + "</div>";
       box.appendChild(row);
     }
     $("r-final").innerHTML = "Reply: <code>Unable to complete the request after " + rep + " replans. Last error: " +
-      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : "invalid plan: step \"s1\" names agent \"ghost\", which is not a routable agent …") + "</code>" +
-      (how === "ghost" ? " The plan is checked before any step runs: no child, no retry, no wait." : "");
+      (how === "timeout" ? "run-agent timed out after " + tmo + "s" : how === "fatal" ? "run-agent exited with non-zero status (exit status: 1): …" : "invalid plan: step \"s1\" names agent \"ghost\", which is not a routable agent …") + "</code>" +
+      (how === "ghost" ? " The plan is checked before any step runs: no child, no retry, no wait." :
+       how === "fatal" ? " An exit code before the loop is fatal: one try, no wait, straight to the replan." : "");
   }
   ["att", "rep", "tmo"].forEach(function (id) { $(id).addEventListener("input", renderRetry); });
   Array.prototype.forEach.call(document.querySelectorAll('input[name="how"]'), function (x) { x.addEventListener("change", renderRetry); });

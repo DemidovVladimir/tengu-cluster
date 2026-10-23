@@ -216,8 +216,7 @@ mod tests {
         let worker = Arc::new(KnownAgentsWorker {
             ran: Mutex::new(vec![]),
         });
-        let mut policy = RetryPolicy::new(3);
-        policy.backoff = vec![Duration::from_secs(10); 3];
+        let policy = RetryPolicy::waiting(3, 10_000);
         let out = tokio::time::timeout(
             Duration::from_secs(2),
             drive(planner, "msg", worker.clone(), &policy, 1, &bus),
@@ -267,8 +266,7 @@ mod tests {
         let worker = Arc::new(FailOnceWorker {
             calls: Mutex::new(0),
         });
-        let mut policy = RetryPolicy::new(3);
-        policy.backoff = vec![Duration::from_millis(1); 3];
+        let policy = RetryPolicy::waiting(3, 1);
         let out = drive(planner, "msg", worker, &policy, 2, &bus).await;
         assert!(out.contains("ok-good"));
     }
@@ -295,8 +293,7 @@ mod tests {
         let worker = Arc::new(FailOnceWorker {
             calls: Mutex::new(0),
         });
-        let mut policy = RetryPolicy::new(3);
-        policy.backoff = vec![Duration::from_millis(1); 3];
+        let policy = RetryPolicy::waiting(3, 1);
         let out = drive(planner, "msg", worker, &policy, 2, &bus).await;
         assert!(out.contains("Unable to complete"));
     }
