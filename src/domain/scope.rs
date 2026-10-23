@@ -67,7 +67,7 @@ pub(crate) fn is_local_host(host: &str) -> bool {
     if name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") {
         return true;
     }
-    let local_v4 = |ip: std::net::Ipv4Addr| {
+    let local_v4 = |ip: core::net::Ipv4Addr| {
         let [a, b, ..] = ip.octets();
         ip.is_loopback()
             || ip.is_private()
@@ -76,9 +76,9 @@ pub(crate) fn is_local_host(host: &str) -> bool {
             || a == 0
             || (a == 100 && (64..128).contains(&b))
     };
-    match name.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => local_v4(ip),
-        Ok(std::net::IpAddr::V6(ip)) => {
+    match name.parse::<core::net::IpAddr>() {
+        Ok(core::net::IpAddr::V4(ip)) => local_v4(ip),
+        Ok(core::net::IpAddr::V6(ip)) => {
             let first = ip.segments()[0];
             ip.is_loopback()
                 || ip.is_unspecified()
