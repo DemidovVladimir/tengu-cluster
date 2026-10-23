@@ -224,7 +224,6 @@
     <div class="brain"><span><b>PROFILE.md</b><small>Same rule. Empty files are skipped.</small></span><em>≤ 2000 tok</em></div>
     <div class="brain"><span><b>CONTEXT.md</b><small>Same rule. Over 32000 in total: this and later files are left out.</small></span><em>≤ 2000 tok</em></div>
     <div class="hands"><span><b>Skill contexts</b><small>Each skill's text; one over the total is dropped with a warning.</small></span><em>≤ 16000 tok</em></div>
-    <div><span><b># Tools</b><small>A name(required args) list, when tools are advertised and the agent has a workspace.</small></span><em>+10% slack</em></div>
   </div>
   <p class="note">Plan steps (<code>tengu run-agent</code>) build their own prompt from skills and the plan; they do not load profile files. In a hardened sandbox, file writers refuse <code>MEMORY.md</code>, <code>USER.md</code>, <code>IDENTITY.md</code>, <code>PROFILE.md</code> and <code>CONTEXT.md</code>.</p>
 </section>

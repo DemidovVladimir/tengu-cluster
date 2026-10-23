@@ -1237,22 +1237,9 @@ impl SkillSourcePort for FileSystemSkillSource {
 const IDENTITY_FILES: [&str; 3] = ["IDENTITY.md", "PROFILE.md", "CONTEXT.md"];
 
 /// Build bounded system prompt from config identity, role, custom instructions,
-/// workspace files, and optional skill context fragments.
-pub(crate) fn build_system_prompt(
-    agent_config: &AgentConfig,
-    advertise_workspace_tools: bool,
-    skill_contexts: &[String],
-) -> String {
-    build_system_prompt_with_tools(agent_config, advertise_workspace_tools, skill_contexts, &[])
-}
-
-/// Build system prompt with dynamic tool listing generated from ToolDef metadata.
-pub(crate) fn build_system_prompt_with_tools(
-    agent_config: &AgentConfig,
-    advertise_workspace_tools: bool,
-    skill_contexts: &[String],
-    tools: &[ToolDef],
-) -> String {
+/// workspace files, and optional skill context fragments. No tool list: the
+/// engine gets the tool definitions themselves.
+pub(crate) fn build_system_prompt(agent_config: &AgentConfig, skill_contexts: &[String]) -> String {
     let budget = &agent_config.prompt_budget;
     let max_file_tokens = budget.max_file_tokens;
     let max_skill_context_tokens = budget.max_skill_context_tokens;
@@ -1327,30 +1314,6 @@ pub(crate) fn build_system_prompt_with_tools(
         }
         total_tokens += chunk_tokens;
         parts.push(truncated);
-    }
-
-    // 6. Workspace tools listing.
-    if advertise_workspace_tools && agent_config.workspace.is_some() && !tools.is_empty() {
-        let mut lines = vec!["# Tools".to_string()];
-        for tool in tools {
-            let params = tool
-                .parameters
-                .get("required")
-                .and_then(|r| r.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            lines.push(format!("- {}({})", tool.name, params));
-        }
-        let tools_note = lines.join("\n");
-        let tools_tokens = estimate_tokens_approx_min1(&tools_note);
-        if total_tokens + tools_tokens <= max_total_tokens + max_total_tokens / 10 {
-            parts.push(tools_note);
-        }
     }
 
     parts.join("\n\n---\n\n")

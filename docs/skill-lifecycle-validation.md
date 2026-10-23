@@ -299,7 +299,7 @@ Check one of the transcripts:
 less evals/runs/<most-recent>/skill-creator-f1.md
 ```
 
-Look for a `# Tools` section that **includes `skill_distill`**. If it doesn't — your config doesn't have `workspace_tools = ["skill_distill"]` on the eval agent, or the `SkillLifecyclePlugin` registration regressed. The eval config is at `skills/skill-creator/evals/config.toml` — check that its `skill-creator-agent` has `workspace_tools = ["skill_distill"]`.
+Look for a `skill_distill` call (the agent's tool definitions, not a `# Tools` section — the system prompt has had no tool list since 2026-10-23). If there is none — your config doesn't have `workspace_tools = ["skill_distill"]` on the eval agent, or the `SkillLifecyclePlugin` registration regressed. The eval config is at `skills/skill-creator/evals/config.toml` — check that its `skill-creator-agent` has `workspace_tools = ["skill_distill"]`.
 
 Check that the metric rubric actually ran:
 

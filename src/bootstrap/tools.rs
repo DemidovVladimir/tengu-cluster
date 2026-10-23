@@ -38,24 +38,17 @@ pub(crate) fn rebuild_tools(
     tools
 }
 
-/// Rebuild the system prompt from agent config, skill registry state, and active tools.
+/// Rebuild the system prompt from agent config and skill registry state.
 pub(crate) fn rebuild_system_prompt(
     agent_config: &AgentConfig,
-    advertise_workspace_tools: bool,
     skill_registry: &SkillRegistry,
-    tools: &[ToolDef],
 ) -> String {
     let skill_context_strings: Vec<String> = skill_registry
         .active_context_fragments()
         .into_iter()
         .map(|(_, body)| body)
         .collect();
-    crate::application::skills::registry::build_system_prompt_with_tools(
-        agent_config,
-        advertise_workspace_tools,
-        &skill_context_strings,
-        tools,
-    )
+    crate::application::skills::registry::build_system_prompt(agent_config, &skill_context_strings)
 }
 
 /// Register a plugin, logging failures as warnings. Returns `true` on

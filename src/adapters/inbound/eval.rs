@@ -1546,12 +1546,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
     skill_registry.reload(&skill_source);
 
     let current_tools = crate::bootstrap::tools::rebuild_tools(&base_tools, &skill_registry);
-    let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
-        agent,
-        true,
-        &skill_registry,
-        &current_tools,
-    );
+    let system_prompt = crate::bootstrap::tools::rebuild_system_prompt(agent, &skill_registry);
 
     let mut tool_defs = current_tools.clone();
     // The agent's own executor, kept for `tool_assertion` metrics (its

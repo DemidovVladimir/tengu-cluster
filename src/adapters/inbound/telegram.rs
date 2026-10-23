@@ -501,7 +501,6 @@ struct TelegramAgentState {
     current_tools: Vec<ToolDef>,
     current_bridge_tools: Vec<ToolDef>,
     current_system_prompt: String,
-    advertise_workspace_tools: bool,
     history_turn_limit: usize,
     compaction_policy: crate::domain::session::FlowCompactionPolicy,
     role: Option<String>,
@@ -684,12 +683,8 @@ impl TelegramSession {
             } else {
                 vec![]
             };
-            let current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
-                agent_config,
-                advertise_workspace_tools,
-                &skill_registry,
-                &current_tools,
-            );
+            let current_system_prompt =
+                crate::bootstrap::tools::rebuild_system_prompt(agent_config, &skill_registry);
 
             let history_turn_limit = resolve_history_turn_limit(&agent_config.flow);
             let compaction_policy = resolve_flow_compaction_policy(
@@ -725,7 +720,6 @@ impl TelegramSession {
                     current_tools,
                     current_bridge_tools,
                     current_system_prompt,
-                    advertise_workspace_tools,
                     history_turn_limit,
                     compaction_policy,
                     role,
@@ -1130,9 +1124,7 @@ impl TelegramSession {
                 agent.rebuild_bridge_tools();
                 agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                     &agent.agent_config,
-                    agent.advertise_workspace_tools,
                     &agent.skill_registry,
-                    &agent.current_tools,
                 );
             }
         }
@@ -1764,9 +1756,7 @@ impl TelegramSession {
         agent.rebuild_bridge_tools();
         agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
             &agent.agent_config,
-            agent.advertise_workspace_tools,
             &agent.skill_registry,
-            &agent.current_tools,
         );
         self.skill_command_router = SkillCommandRouter::from_registry(&agent.skill_registry);
         lines.push(format!("{} tool(s) active.", agent.current_tools.len()));
@@ -1810,9 +1800,7 @@ impl TelegramSession {
                 agent.rebuild_bridge_tools();
                 agent.current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                     &agent.agent_config,
-                    agent.advertise_workspace_tools,
                     &agent.skill_registry,
-                    &agent.current_tools,
                 );
                 self.skill_command_router =
                     SkillCommandRouter::from_registry(&agent.skill_registry);

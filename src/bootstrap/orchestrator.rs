@@ -355,11 +355,7 @@ pub(crate) fn text_only_inputs(
             &agent_cfg.flow,
         ),
         compaction_policy,
-        system_prompt: crate::application::skills::registry::build_system_prompt(
-            agent_cfg,
-            false,
-            &[],
-        ),
+        system_prompt: crate::application::skills::registry::build_system_prompt(agent_cfg, &[]),
         tools: Vec::new(),
         tool_executor: None,
         memory_manager: memory,

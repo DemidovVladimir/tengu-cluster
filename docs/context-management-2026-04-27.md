@@ -238,7 +238,7 @@ path that set it were deleted 2026-10-22.)
 
 ### 12. Skill body assembly (+ #13)
 
-`application/skills/registry.rs::build_system_prompt_with_tools` (`:1253-1360`).
+`application/skills/registry.rs::build_system_prompt` (`:1242-1320`; no tool list since 2026-10-23 — the engine gets the tool definitions).
 Knobs `[agents.<name>.prompt_budget]` (`PromptBudgetConfig`, `config/mod.rs:1152`):
 
 | knob | default | what |

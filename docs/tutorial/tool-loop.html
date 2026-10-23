@@ -455,7 +455,7 @@ data: 12013 bytes in observation mkt_ctx/1:hyperliquid:xyz:TSLA</pre>
         <tr><td><code>src/application/chat/prompt_budget.rs</code></td><td>reserve, input budget, history assembly</td></tr>
         <tr><td><code>src/application/chat/flow.rs</code></td><td>flow key, history limit, flow compaction</td></tr>
         <tr><td><code>src/application/tools/registry.rs</code></td><td><code>PluginToolExecutor</code>: per-call <code>ToolCtx</code> and scope</td></tr>
-        <tr><td><code>src/application/skills/registry.rs</code></td><td><code>build_system_prompt_with_tools</code></td></tr>
+        <tr><td><code>src/application/skills/registry.rs</code></td><td><code>build_system_prompt</code> (no tool list: the engine gets the tool definitions)</td></tr>
         <tr><td><code>src/domain/token.rs</code></td><td>bytes / 4 estimate, the 1/8 window budget</td></tr>
         <tr><td><code>src/domain/untrusted.rs</code></td><td>the one fence for outside text: <code>fence</code>, the fixpoint <code>clean</code>, <code>tool_origin</code></td></tr>
         <tr><td><code>src/domain/session.rs</code> · <code>usage.rs</code> · <code>message.rs</code></td><td>loop state, usage totals, <code>StreamEvent</code></td></tr>

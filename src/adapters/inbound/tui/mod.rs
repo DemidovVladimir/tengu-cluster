@@ -145,15 +145,11 @@ pub fn run_tui(
         engine.context_window(),
         engine.max_output_tokens_per_turn() as usize,
     );
-    let advertise_workspace_tools = engine.supports_tool_use() && !engine.manages_own_workspace();
 
     // Build initial system prompt without skill contexts — the engine thread will rebuild
     // with actual skills on the first turn (tools_dirty = true).
-    let system_prompt = crate::application::skills::registry::build_system_prompt(
-        &agent_config,
-        advertise_workspace_tools,
-        &[],
-    );
+    let system_prompt =
+        crate::application::skills::registry::build_system_prompt(&agent_config, &[]);
 
     // Channel: UI → Engine thread
     let (request_tx, request_rx) = mpsc::channel::<ChatRequest>();
@@ -522,9 +518,7 @@ pub fn run_tui(
                             }
                             current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
-                                advertise_workspace_tools,
                                 &skill_registry,
-                                &current_tools,
                             );
                             tools_dirty = false;
                         }
@@ -603,9 +597,7 @@ pub fn run_tui(
                                 current_system_prompt =
                                     crate::bootstrap::tools::rebuild_system_prompt(
                                         &engine_agent_config,
-                                        advertise_workspace_tools,
                                         &skill_registry,
-                                        &current_tools,
                                     );
                                 if manages_workspace {
                                     current_bridge_tools = crate::bootstrap::tools::rebuild_tools(
@@ -746,9 +738,7 @@ pub fn run_tui(
                             }
                             current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
-                                advertise_workspace_tools,
                                 &skill_registry,
-                                &current_tools,
                             );
                             // Claude Code reaches tengu tools only through the
                             // MCP bridge — same rebuild as the skill-command path.

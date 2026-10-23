@@ -541,11 +541,11 @@ const MECHS = [
     body: "If user message contains <em>last/latest/recent/...</em> (whole words), inject a system msg \"verify, do not trust recall\" AND skip memory recall this turn. Chat layer only: the planner never goes through it — <code>PlannerLlm::call</code> sends SKILL.md + one message straight to the engine (<code>suppress_grounding_nudge</code> deleted 2026-10-22).",
     pills: ["7 trigger words", "whole words", "skips recall when triggered"], tags: ["grounding", "nudge", "fresh", "planner"] },
   { n: 12, layer: 2, title: "Identity / skill / prompt caps", where: "application/skills/registry.rs:1253-1360",
-    body: "<code>build_system_prompt_with_tools</code>, knobs <code>[agents.&lt;n&gt;.prompt_budget]</code>: <code>max_file_tokens</code> per identity instructions and per workspace file (IDENTITY.md / PROFILE.md / CONTEXT.md); <code>max_skill_context_tokens</code> per skill fragment; <code>max_total_tokens</code> on the whole prompt — a skill past it is dropped with a warn.",
+    body: "<code>build_system_prompt</code>, knobs <code>[agents.&lt;n&gt;.prompt_budget]</code>: <code>max_file_tokens</code> per identity instructions and per workspace file (IDENTITY.md / PROFILE.md / CONTEXT.md); <code>max_skill_context_tokens</code> per skill fragment; <code>max_total_tokens</code> on the whole prompt — a skill past it is dropped with a warn.",
     pills: ["max_file_tokens = 2_000", "max_skill_context_tokens = 16_000", "max_total_tokens = 32_000"],
     tags: ["skill", "file", "system-prompt", "truncate"] },
   { n: 13, layer: 2, title: "truncate_to_token_budget", where: "prompt_budget.rs:41",
-    body: "Char-cap using ~4 chars/token. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by <code>build_system_prompt_with_tools</code> (#12) + <code>maybe_compact_flow</code>.",
+    body: "Char-cap using ~4 chars/token. Appends <code>\\n\\n[truncated]</code> when actually clipped. Used by <code>build_system_prompt</code> (#12) + <code>maybe_compact_flow</code>.",
     pills: ["char-cap", "[truncated] marker"], tags: ["truncate", "char", "budget"] },
 
   // Layer 3
