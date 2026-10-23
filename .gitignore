@@ -44,9 +44,9 @@ lastrun.md
 # Codex CLI per-user settings (mirror of the /.claude/ rule above).
 /.codex/
 
-# Agentic memory — planner-context files regenerated on every planner turn
-# (TENGU_PLANNER_REGISTRY.md from agents/skills/tools, TENGU_PLAN.md from the
-# current accepted plan). Pure runtime artifacts; never hand-edited.
+# Planner registry — regenerated on every planner turn from agents / skills /
+# tools; TENGU_PLAN.md = what older builds left (the plan now travels over IPC
+# only). Pure runtime artifacts; never hand-edited.
 /TENGU_PLANNER_REGISTRY.md
 /TENGU_PLAN.md
 

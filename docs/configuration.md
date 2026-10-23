@@ -141,7 +141,7 @@ route_explicit_agents = false  # true = `@role:` messages also go through the pl
 | Presence turns orchestration on; `engine` defaults to `"rag"`, anything else fails validation | `config/mod.rs::OrchestratorConfig` |
 | Planner prompt = `skills/orchestrator/SKILL.md` read from the cwd (inline fallback when missing) | `application/orchestrator/planner.rs` |
 | Subagents = the `[agents.*]` blocks with a `description`; registry regenerated each planner turn | `orchestrator/shared_files.rs::routable_agents` |
-| The child re-loads the same config and takes `[agents.<step.agent>]`; the accepted plan arrives as IPC `plan_state` (`TENGU_PLAN.md` = debug copy) | `cli/run_agent.rs`, `orchestrator/replan.rs` |
+| The child re-loads the same config and takes `[agents.<step.agent>]`; the plan the step belongs to arrives as IPC `plan_state` | `cli/run_agent.rs`, `outbound/subprocess_runner.rs` |
 
 ## Memory — `[memory]`
 

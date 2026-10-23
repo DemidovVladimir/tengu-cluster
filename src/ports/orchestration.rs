@@ -34,15 +34,6 @@ pub trait Planner: Send + Sync {
         failed_step_id: &str,
         error: &str,
     ) -> anyhow::Result<PlannerVerdict>;
-
-    /// Orchestrator session id this planner stamps on memory writes, when it
-    /// has one. `replan::drive` keys the per-session active plan
-    /// (`shared_files::set_active_plan`) on it so `SubprocessRunner` — which
-    /// shares the same id — can hand each child its own session's plan over
-    /// IPC. `None` (default) skips the per-session registration.
-    fn session_id(&self) -> Option<String> {
-        None
-    }
 }
 
 /// Runs one plan step. The real impl (`SubprocessRunner`) spawns `tengu
@@ -51,8 +42,10 @@ pub trait Planner: Send + Sync {
 pub trait WorkerHandle: Send + Sync {
     /// Run `step.agent` with `step.goal + step_inputs` as the user turn.
     /// `step_inputs` is the completed upstream steps' outputs, each in a
-    /// `domain::untrusted` fence (origin `step:<id>`).
-    async fn run_step(&self, step: &Step, step_inputs: &str) -> anyhow::Result<String>;
+    /// `domain::untrusted` fence (origin `step:<id>`); `plan` is the plan
+    /// the step belongs to (the child sees it in its system prompt).
+    async fn run_step(&self, step: &Step, step_inputs: &str, plan: &Plan)
+        -> anyhow::Result<String>;
 
     /// The agent names a step may use, sorted — `replan::drive` checks each
     /// plan against them before any step runs (`Plan::validate`). `None`

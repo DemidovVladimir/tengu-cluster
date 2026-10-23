@@ -339,14 +339,12 @@
     </div>
     <div class="tabpanel" id="tab-in"><pre>{
   <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;untrusted origin=\"step:s1\"&gt;\n…\n&lt;/untrusted&gt;\n\n"</span>,
-  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set</span>
-  <span class="k">"model"</span>: <span class="s">""</span>,  <span class="k">"tools"</span>: [],  <span class="k">"skills"</span>: [],   <span class="c"># sent empty; the child reads its agent block</span>
+  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set; model, tools, skills: from its agent block</span>
   <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (20 if the field is missing)</span>
-  <span class="k">"sandbox"</span>: <span class="n">null</span>,
   <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,         <span class="c"># shared with the planner</span>
   <span class="k">"step_id"</span>: <span class="s">"s2"</span>,
   <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,          <span class="c"># the child loads sandboxes/lping/config.toml</span>
-  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n…"</span>,  <span class="c"># this session's plan</span>
+  <span class="k">"plan_state"</span>: <span class="s">"## Steps\n…"</span>,  <span class="c"># the plan this step belongs to</span>
   <span class="k">"trace"</span>: { <span class="k">"run_id"</span>: <span class="s">"&lt;run id&gt;"</span>, <span class="k">"parent_event_id"</span>: <span class="s">"&lt;run id&gt;:&lt;seq&gt;"</span> }   <span class="c"># only when the parent records: its step.started</span>
 }</pre></div>
     <div class="tabpanel" id="tab-ok" hidden><pre>{ <span class="k">"status"</span>: <span class="s">"ok"</span>,
@@ -379,7 +377,7 @@ Your role: <span class="c">&lt;role&gt;</span>.
 
 ---
 
-## Current execution plan (loaded from IPC `plan_state`)
+## Current execution plan
 
 <span class="c">&lt;the rendered plan&gt;</span>
 
@@ -433,7 +431,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
     <p>From the repo root. <code>run-agent</code> is internal, but the guard is the only thing stopping you. <code>crypto_researcher</code> runs on <code>claude_code</code>: needs <code>claude</code> logged in.</p>
   </div>
   <div class="term-wrap">
-<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"goal":"What is the SOL price?","agent_name":"crypto_researcher","model":"","session_id":"try-1","step_id":"s1","sandbox_config":"lping"}' &gt; step.json</span>
+<pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>echo '{"goal":"What is the SOL price?","agent_name":"crypto_researcher","session_id":"try-1","step_id":"s1","sandbox_config":"lping"}' &gt; step.json</span>
 <span class="ln cmd"><span class="p">$ </span>tengu run-agent &lt; step.json</span>
 <span class="ln er">Error: `tengu run-agent` is a subprocess mode not meant for direct invocation. Set TENGU_AGENT_IPC=1 …</span>
 <span class="ln cmd"><span class="p">$ </span>TENGU_AGENT_IPC=1 tengu run-agent &lt; step.json</span>

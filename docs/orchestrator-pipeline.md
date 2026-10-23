@@ -111,7 +111,7 @@ flowchart TB
 │         │    ├ ensure_planner_registry │   orchestrator/shared_files.rs:80
 │         │    ├ PlannerLlm::call → engine   orchestrator/planner.rs:28 (no tools)
 │         │    └ parse_verdict           │   orchestrator/planner.rs:26
-│         ├─▶ set_active_plan + TENGU_PLAN.md   shared_files.rs:39 / :128
+│         ├─▶ each step gets the plan (IPC plan_state)   subprocess_runner.rs
 │         └─▶ DagExecutor::run           │   orchestrator/executor.rs:26
 │              ├─▶ run_step_with_retry   │   orchestrator/retry.rs:37
 │              └─▶ SubprocessRunner      │   outbound/subprocess_runner.rs:316
@@ -148,7 +148,7 @@ sequenceDiagram
     LLM-->>Plan: JSON verdict + TurnTelemetry (→ planner MetricsRecord)
     Plan->>Plan: parse_verdict<br/>(raw → fences → prose → Direct fallback)
     Plan-->>Orch: PlannerVerdict::Plan{steps}
-    Orch->>Orch: set_active_plan(session_id) + write TENGU_PLAN.md
+    Orch->>Orch: run_step(step, inputs, plan) → IPC plan_state
     Orch-->>Channel: emit PlanCreated
     Orch->>Orch: Plan::validate (invalid → replan)
     Orch->>Exec: run(plan, worker)
@@ -194,7 +194,7 @@ sequenceDiagram
 | `Orchestrator::handle` | `application/orchestrator/mod.rs` | 86 |
 | `replan::drive` | `application/orchestrator/replan.rs` | 13 |
 | `RegistryPlanner::plan` / `parse_verdict` | `application/orchestrator/planner.rs` | 518 / 26 |
-| Registry + active plan | `application/orchestrator/shared_files.rs` | `ensure_planner_registry` 80, `routable_agents` 168, `set_active_plan` 39, `write_plan_state` 128 |
+| Registry + plan render | `application/orchestrator/shared_files.rs` | `ensure_planner_registry`, `routable_agents`, `render_plan_state`, `plan_state_block` |
 | `DagExecutor::run` | `application/orchestrator/executor.rs` | 26 |
 | `ready_steps` | `domain/plan.rs` | 91 |
 | `tokio::spawn` per step | `application/orchestrator/executor.rs` | 63 |
@@ -622,7 +622,7 @@ cat evals/runs/<ts>/orchestration-e2e-parallel_fan_out.md         # tool calls +
 | **Orchestrator public API** | `src/application/orchestrator/mod.rs` | `Orchestrator::new(planner, worker, policy, max_replans, bus)`, `::handle`, `::subscribe` |
 | **Replan loop** | `src/application/orchestrator/replan.rs` | `drive(planner, msg, worker, policy, max_replans, events)` — `Plan::validate` each plan, then the executor |
 | **Planner** | `src/application/orchestrator/planner.rs` | `PlannerLlm::call` (the planner's one engine call), `RegistryPlanner::{new,plan,replan}`, `parse_verdict`, `extract_balanced_json_object`, `load_orchestrator_skill_body` (trait `Planner`: `src/ports/orchestration.rs`) |
-| **Planner registry + plan state** | `src/application/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry` (tool list from the `ToolDirectory` port), `set_active_plan` / `active_plan`, `write_plan_state`, `scan_skill_names` |
+| **Planner registry + plan state** | `src/application/orchestrator/shared_files.rs` | `routable_agents`, `render_registry`, `ensure_planner_registry` (tool list from the `ToolDirectory` port), `render_plan_state` / `plan_state_block`, `scan_skill_names` |
 | **DAG executor** | `src/application/orchestrator/executor.rs` | `DagExecutor::run`, `ExecResult`, `render_step_inputs`, `abort_in_flight` (trait `WorkerHandle`: `src/ports/orchestration.rs`) |
 | **Worker (subprocess)** | `src/adapters/outbound/subprocess_runner.rs` | `SubprocessRunner::{new,run_step,run_with_timeout}`, `AgentIpcInput`, `AgentIpcOutput`, `forward_child_log` |
 | **Subagent child** | `src/adapters/inbound/cli/run_agent.rs` | `run_agent_subprocess` (loads parent config, `[agents.<name>]`, LLM + tools loop, `compress_and_store`), `try_persist_agentic_step_summary` |

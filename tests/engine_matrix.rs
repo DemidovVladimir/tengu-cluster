@@ -43,7 +43,7 @@
 //! `run-agent` workspace grant — for Claude Code the bridge's
 //! (`TENGU_BRIDGE_GRANT_WORKSPACE`, set by the step engine); the xm scopes
 //! name the workspace (no grant on the chat path). Children run in the leg's
-//! workspace (no repo `.env`, no `TENGU_PLAN.md`), without `HL_API_URL` /
+//! workspace (no repo `.env`), without `HL_API_URL` /
 //! `SOLANA_RPC_URL` (mainnet) and with whatever parent Claude Code session
 //! env this process has — the engine strips it (`claude_code.rs`).
 //!

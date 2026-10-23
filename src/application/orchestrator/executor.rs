@@ -101,6 +101,8 @@ impl DagExecutor {
                 })
                 .collect()
         };
+        // Every step's child sees the plan it is part of (`run_step`).
+        let shared_plan = Arc::new(plan.clone());
         let mut in_flight: HashSet<StepId> = HashSet::new();
         // Every way out — an early return, this future dropped unfinished
         // (Telegram `/stop`, a shutdown deadline) — aborts the steps still
@@ -121,6 +123,7 @@ impl DagExecutor {
                 let policy = policy.clone();
                 let events = events.clone();
                 let step_clone = step.clone();
+                let plan = Arc::clone(&shared_plan);
                 in_flight.insert(step.id.clone());
                 // A recording bus: the step's work (its `run-agent` child's
                 // tool events) runs caused by its `step.started`.
@@ -129,8 +132,14 @@ impl DagExecutor {
                     agent: step.agent.clone(),
                 });
                 futures.push(tokio::spawn(async move {
-                    let work =
-                        run_step_with_retry(&step_clone, &step_inputs, worker, &policy, &events);
+                    let work = run_step_with_retry(
+                        &step_clone,
+                        &step_inputs,
+                        &plan,
+                        worker,
+                        &policy,
+                        &events,
+                    );
                     let outcome = match cause {
                         Some(c) => crate::application::trace_exec::caused_by(c, work).await,
                         None => work.await,
@@ -301,7 +310,7 @@ mod tests {
     struct OkWorker;
     #[async_trait]
     impl WorkerHandle for OkWorker {
-        async fn run_step(&self, step: &Step, inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, inputs: &str, _: &Plan) -> anyhow::Result<String> {
             Ok(format!("out({})[{}]", step.id.0, inputs.trim()))
         }
     }
@@ -311,7 +320,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for OrderRecordingWorker {
-        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _inputs: &str, _: &Plan) -> anyhow::Result<String> {
             self.order.lock().await.push(step.id.0.clone());
             Ok(format!("out-{}", step.id.0))
         }
@@ -348,7 +357,12 @@ mod tests {
         }
         #[async_trait]
         impl WorkerHandle for Capped {
-            async fn run_step(&self, step: &Step, inputs: &str) -> anyhow::Result<String> {
+            async fn run_step(
+                &self,
+                step: &Step,
+                inputs: &str,
+                _: &Plan,
+            ) -> anyhow::Result<String> {
                 self.inputs.lock().await.push(inputs.to_string());
                 Ok(if step.id.0 == "s1" {
                     "é".repeat(20)
@@ -395,7 +409,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for CauseRecordingWorker {
-        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _inputs: &str, _: &Plan) -> anyhow::Result<String> {
             let cause = crate::application::trace_exec::cause();
             self.seen.lock().await.push((step.id.0.clone(), cause));
             Ok(format!("out-{}", step.id.0))
@@ -463,7 +477,12 @@ mod tests {
         struct FailS2;
         #[async_trait]
         impl WorkerHandle for FailS2 {
-            async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+            async fn run_step(
+                &self,
+                step: &Step,
+                _inputs: &str,
+                _: &Plan,
+            ) -> anyhow::Result<String> {
                 if step.id.0 == "s2" {
                     anyhow::bail!("s2 broke")
                 }
@@ -601,7 +620,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for FailFastSlowWorker {
-        async fn run_step(&self, step: &Step, _inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _inputs: &str, _: &Plan) -> anyhow::Result<String> {
             if step.id.0 == "fail" {
                 anyhow::bail!("boom");
             }

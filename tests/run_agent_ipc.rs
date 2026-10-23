@@ -12,7 +12,7 @@
 //! | bad json | `TENGU_AGENT_IPC=1`, stdin = `not json` | exit != 0, stderr: "parse IPC input JSON", stdout empty |
 //! | no agent | valid input, `agent_name = "__no_such_agent__"` | exit != 0, stderr: "no agent `__no_such_agent__` in the active config", stdout empty |
 //! | widening compose | hardened sandbox (a `[solana]` signer), `compose.tools` adds `write_file` to a base listing `read_file` | exit != 0 before the engine is built, stderr: "compose would widen agent `arch` in a hardened sandbox", stdout empty; the same compose without the signer offers `write_file` to a loopback model, exit 0 |
-//! | local fit | local agent, 16 384-token window, `read_file` of 100 000 bytes | the tool message the server gets next is ≤ 8 192 bytes (1/8 of the window), exit 0; a local agent left on the default window is warned about on stderr |
+//! | local fit | local agent, 16 384-token window, `read_file` of 100 000 bytes, a `plan_state` | the tool message the server gets next is ≤ 8 192 bytes (1/8 of the window), exit 0; a local agent left on the default window is warned about on stderr; the plan is the system prompt's plan block |
 //! | OpenRouter caps | `OPENROUTER_BASE_URL` = a loopback fake, `max_tool_result_chars = 2000`, `compact_result_limit = 50`, `read_file` of 100 011 bytes, then a small file | round 0's result capped (+ footer); in the next request it is line 1 only; one system message per request |
 //! | Claude Code, no workspace (unix) | `[claude_code] cli_path` = a stand-in that logs argv, cwd and stdin, streams a `compress_and_store` call, writes the step's summary file, then sleeps 30 s | `--mcp-config` + every tool in `--allowedTools`; cwd = a `tengu-step-*` temp dir, gone after the step; the system prompt only in `--system-prompt`; the bridge transcript = system, goal, the call; the run ends at the stored summary (< 15 s), IPC `summary` = the stub's |
 //!
@@ -130,11 +130,7 @@ fn valid_input(agent_name: &str) -> String {
     serde_json::json!({
         "goal": "say hello and confirm IPC works",
         "agent_name": agent_name,
-        "model": "openai/gpt-4o",
-        "tools": ["http_request"],
-        "skills": ["web-research"],
         "max_turns": 5,
-        "sandbox": null,
         "session_id": "test-session-run-agent-ipc",
         "step_id": "step-1"
     })
@@ -237,7 +233,6 @@ fn run_agent_refuses_a_widening_compose_in_a_hardened_sandbox() {
     let input = serde_json::json!({
         "goal": "write the answer",
         "agent_name": "arch",
-        "model": "",
         "max_turns": 2,
         "session_id": "test-session-hardened-compose",
         "step_id": "step-1",
@@ -380,6 +375,7 @@ fn fake_local_server(replies: Vec<&'static str>) -> (u16, std::thread::JoinHandl
 /// `x-local-model-fit`: a local agent with a 16 384-token window never gets
 /// a tool result above 1/8 of it (8 192 bytes, footer included), and
 /// `Config::load` warns about a local agent left on the default window.
+/// The IPC `plan_state` is the plan block of the step's system prompt.
 #[test]
 fn local_engine_child_fits_tool_results_to_the_window() {
     let workspace = tempfile::tempdir().expect("workspace");
@@ -403,10 +399,10 @@ fn local_engine_child_fits_tool_results_to_the_window() {
     let input = serde_json::json!({
         "goal": "read big.txt",
         "agent_name": "fitter",
-        "model": "",
         "max_turns": 3,
         "session_id": "test-session-local-fit",
-        "step_id": "step-1"
+        "step_id": "step-1",
+        "plan_state": "## Steps\n\n- `step-1` agent=`fitter` depends_on=`-` goal: read big.txt\n"
     })
     .to_string();
 
@@ -429,6 +425,11 @@ fn local_engine_child_fits_tool_results_to_the_window() {
     let messages = second["messages"].as_array().unwrap();
     let systems = messages.iter().filter(|m| m["role"] == "system").count();
     assert_eq!(systems, 1, "system prompt sent once");
+    let system = messages[0]["content"].as_str().unwrap_or_default();
+    assert!(
+        system.contains("## Current execution plan\n\n## Steps\n\n- `step-1` agent=`fitter`"),
+        "plan block missing from the system prompt:\n{system}"
+    );
     let tool = messages
         .iter()
         .find(|m| m["role"] == "tool")
@@ -479,7 +480,6 @@ fn openrouter_step_caps_results_and_compacts_older_rounds() {
     let input = serde_json::json!({
         "goal": "read big.txt then small.txt",
         "agent_name": "capped",
-        "model": "",
         "max_turns": 4,
         "session_id": "test-session-openrouter-caps",
         "step_id": "step-1"
@@ -596,7 +596,6 @@ exec sleep 30
     let input = serde_json::json!({
         "goal": goal,
         "agent_name": "researcher",
-        "model": "",
         "max_turns": 3,
         "session_id": "test-session-cc-no-workspace",
         "step_id": "step-1"
@@ -703,7 +702,7 @@ exec sleep 30
 #[test]
 fn fixture_has_required_ipc_fields() {
     let v: serde_json::Value = serde_json::from_str(&valid_input("researcher")).unwrap();
-    for key in ["goal", "agent_name", "model", "session_id", "step_id"] {
+    for key in ["goal", "agent_name", "session_id", "step_id"] {
         assert!(
             v.get(key).is_some(),
             "fixture missing required field `{key}`"

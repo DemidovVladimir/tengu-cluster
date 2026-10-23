@@ -383,13 +383,7 @@
         <td><code>RegistryPlanner::plan/replan</code> prompt context</td>
         <td>NO</td>
       </tr>
-      <tr>
-        <td>TENGU_PLAN.md</td>
-        <td>the accepted plan / replan (debug copy; IPC <code>plan_state</code> is the source of truth)</td>
-        <td><code>replan.rs::drive</code></td>
-        <td>humans; old-parent fallback in <code>run_agent_subprocess</code></td>
-        <td>overwritten</td>
-      </tr>
+
       <tr>
         <td>Open Brain user memory</td>
         <td>User messages keyed by session_id</td>
@@ -795,7 +789,7 @@ const STEPS = [
       { path: "src/adapters/outbound/subprocess_runner.rs::AgentIpcOutput", desc: "Ok { output, summary } / Failed { error, output }, both + metrics + tools (tool activity)" },
       { path: "src/adapters/inbound/cli/run_agent.rs::run_agent_subprocess", desc: "child entry point" },
     ],
-    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny. 2026-09-12 added plan_state (the rendered plan for this session) so concurrent sessions never read each other's TENGU_PLAN.md; scopes are enforced per tool (folded default_scopes + the child's workspace in fs_roots; a deny-all scope stays a deny)."
+    deep: "Phase 7.2 added sandbox_config to AgentIpcInput so the child loads sandboxes/<name>/config.toml instead of falling through to ~/.tengu/config.toml. Without that, sandbox-specific scopes/secrets/MCP servers don't reach the child and tools scope-deny. plan_state carries the plan the step belongs to (WorkerHandle::run_step(step, inputs, plan); no file); scopes are enforced per tool (folded default_scopes + the child's workspace in fs_roots; a deny-all scope stays a deny)."
   },
   {
     num: 6, title: "Subagent tool loop", lane: "tool",
@@ -1141,7 +1135,7 @@ const SUBSYSTEMS = [
       ["events.rs", "OrchestratorEvent enum + EventBus (incl. MetricsRecorded); a traced bus records each event before it broadcasts"],
       ["trace.rs", "TraceBridge — each OrchestratorEvent as plan.* / step.* / metrics.recorded in the execution trace; a step's cause for its run-agent child"],
       ["ports/orchestration.rs", "traits Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn only — tengu evolve); TurnTelemetry. wiring.rs / ChatOrchestratorPortImpl / OrchestratorChatPort removed 2026-10-22"],
-      ["shared_files.rs", "TENGU_PLANNER_REGISTRY.md, per-session plan state, TENGU_PLAN.md debug copy"],
+      ["shared_files.rs", "TENGU_PLANNER_REGISTRY.md, the plan render (IPC plan_state)"],
     ],
     deep: "Phase 7.1 deleted OrchestratorAgentPlanner, ChatWorker, and the engine = \"static\" branches. RegistryPlanner is the only Planner impl now. SubprocessRunner (adapters/outbound/subprocess_runner.rs) is the only WorkerHandle.",
   },
@@ -1490,7 +1484,7 @@ const FILE_MAP = [
   ["src/application/orchestrator/replan.rs", "orchestrator", "drive() — the outer loop: Plan::validate each plan, replan-on-invalid / exhausted"],
   ["src/application/orchestrator/events.rs", "orchestrator", "OrchestratorEvent enum (PlanCreated, StepStarted, MetricsRecorded, …), EventBus"],
   ["src/application/orchestrator/trace.rs", "orchestrator", "OrchestratorTrace + TraceBridge: plan.created / step.started / step.completed / step.retrying / step.failed / plan.replanned / plan.completed / metrics.recorded (Studio)"],
-  ["src/application/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_names); per-session active plan (set_active_plan / active_plan → IPC plan_state); TENGU_PLAN.md debug artifact"],
+  ["src/application/orchestrator/shared_files.rs", "orchestrator", "TENGU_PLANNER_REGISTRY.md generation — routable_agents + skills + core & MCP tools (ensure_planner_registry, render_registry, scan_skill_names); the plan render for each step (render_plan_state / plan_state_block → IPC plan_state)"],
   ["src/ports/orchestration.rs", "orchestrator", "Planner, WorkerHandle (known_agents), ChatServiceFactory (run_turn — tengu evolve), TurnTelemetry, PlannerVerdict"],
   // ── metrics ──
   ["src/domain/metrics.rs", "metrics", "MetricsRecord, MetricsKind (Planner, Subagent, Embedding, WikiCompiler, Decision), MetricsLayer, AggregatorState"],

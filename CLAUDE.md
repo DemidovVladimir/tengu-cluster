@@ -243,7 +243,7 @@ flow, audit these for staleness **before declaring done**:
 | `docs/architecture-2026-04-27.svg` | If you changed the per-turn flow OR added/removed a file in a subsystem panel |
 | `docs/architecture-2026-04-27.html` | Same triggers as the svg + md. The STEPS / FLOWS / SUBSYSTEM_GROUPS / SUBSYSTEMS / FILE_MAP arrays in the inline `<script>` need to stay in sync |
 | `docs/agentic-memory-*-2026-05-13.md` + `src/adapters/outbound/tools/agentic_memory/mod.rs` doc-comment | If you changed the memory schema, the `agentic_memory` tool API / operations, the recall lanes, or the Open Brain ↔ LLM Wiki split |
-| `src/application/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `TENGU_PLAN.md` shape, or who writes/reads them |
+| `src/application/orchestrator/shared_files.rs` doc-comment | If you changed the `TENGU_PLANNER_REGISTRY.md` / `plan_state` shape, or who writes/reads them |
 | `docs/comparison-2026-04-26.md` + `.svg` | If your change affects how Tengu compares to Hermes or PI on memory/skills/tools/routing or the trading runtime axes (typed decisions, runtime, money safety, research on history, engine parity) |
 | `docs/skill-research-2026-04-28.md` | If the skill-lifecycle plan, gap inventory, or learning-platform A1/A2/A3 decisions change. |
 | `docs/context-management-2026-04-27.{md,svg,html}` | If you changed any of the ~25 context-shaping mechanisms (anything in `prompt_budget.rs`, `application/chat/flow.rs`, `application/chat/tool_loop.rs::collect_engine_response`, `application/chat/service.rs::process_user_text`, the `LimitsConfig` / `MemoryConfig` defaults, the `compress_and_store` protocol, or the Open Brain / planner-file layer — `orchestrator/shared_files.rs`, `outbound/tools/agentic_memory/`). The .html keeps inline JS arrays — keep them in sync with the .md. |
@@ -573,15 +573,13 @@ These are not preferences. They're load-bearing.
   `make up SANDBOX=<name>`, at its own path `/opt/tengu/sandboxes/<name>/config.toml`
   so `../../lineage` resolves) as `TENGU_CONFIG`; `make` derives `NETWORK` from
   that file's `[egress] network`.
-- **The accepted plan reaches subagents via IPC, not the file** —
-  `replan.rs::drive` registers every accepted plan / replan per session
-  (`shared_files::set_active_plan`, keyed by the shared `session_id`) and
-  `AgentIpcInput.plan_state` carries it; `run_agent_subprocess`
-  (`cli/run_agent.rs` plan block) prefers it and only falls back to reading root
-  `TENGU_PLAN.md` for old parents that send none. `TENGU_PLAN.md` is a human
-  mirror of the last plan of any session — concurrent webhook / Telegram
-  sessions no longer race on it. It and `TENGU_PLANNER_REGISTRY.md` are runtime
-  artifacts — gitignored, never hand-edited.
+- **The plan reaches subagents via IPC only** — `WorkerHandle::run_step(step,
+  inputs, plan)` hands each step the plan it belongs to; `SubprocessRunner`
+  renders it into `AgentIpcInput.plan_state` (`shared_files::render_plan_state`)
+  and `run_agent_subprocess` puts it in the system prompt (`## Current
+  execution plan`). No file, no per-session map (2026-10-23: `TENGU_PLAN.md` is
+  gone). `TENGU_PLANNER_REGISTRY.md` is a runtime artifact — gitignored, never
+  hand-edited.
 - **`run-agent` children export `TENGU_SESSION_ID` and `TENGU_AGENT_NAME`** —
   `agentic_memory` `capture` takes both from them (never from the args;
   2026-10-23) and every Open Brain row carries its sandbox: lanes, `recall`

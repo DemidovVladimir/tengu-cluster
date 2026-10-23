@@ -6,7 +6,7 @@ use tokio::time::sleep;
 use tracing::warn;
 
 use crate::application::orchestrator::events::{EventBus, OrchestratorEvent};
-use crate::domain::plan::Step;
+use crate::domain::plan::{Plan, Step};
 use crate::ports::orchestration::WorkerHandle;
 
 #[derive(Debug, Clone)]
@@ -37,13 +37,14 @@ pub enum StepOutcome {
 pub async fn run_step_with_retry(
     step: &Step,
     step_inputs: &str,
+    plan: &Plan,
     worker: Arc<dyn WorkerHandle>,
     policy: &RetryPolicy,
     events: &EventBus,
 ) -> StepOutcome {
     let mut last_err = String::new();
     for attempt in 1..=policy.max_attempts {
-        match worker.run_step(step, step_inputs).await {
+        match worker.run_step(step, step_inputs, plan).await {
             Ok(output) => return StepOutcome::Ok(output),
             Err(err) => {
                 last_err = err.to_string();
@@ -88,7 +89,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for FlakyWorker {
-        async fn run_step(&self, _: &Step, _: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, _: &Step, _: &str, _: &Plan) -> anyhow::Result<String> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             if call <= self.fails_until {
                 anyhow::bail!("flaky fail #{}", call)
@@ -108,6 +109,12 @@ mod tests {
         }
     }
 
+    fn test_plan() -> Plan {
+        Plan {
+            steps: vec![test_step()],
+        }
+    }
+
     #[tokio::test]
     async fn succeeds_on_first_try() {
         let worker = Arc::new(FlakyWorker {
@@ -121,7 +128,7 @@ mod tests {
             Duration::from_millis(1),
         ];
         let bus = new_bus();
-        match run_step_with_retry(&test_step(), "", worker, &policy, &bus).await {
+        match run_step_with_retry(&test_step(), "", &test_plan(), worker, &policy, &bus).await {
             StepOutcome::Ok(s) => assert!(s.contains("output from call 1")),
             _ => panic!("expected ok"),
         }
@@ -136,7 +143,7 @@ mod tests {
         let mut policy = RetryPolicy::new(3);
         policy.backoff = vec![Duration::from_millis(1), Duration::from_millis(1)];
         let bus = new_bus();
-        match run_step_with_retry(&test_step(), "", worker, &policy, &bus).await {
+        match run_step_with_retry(&test_step(), "", &test_plan(), worker, &policy, &bus).await {
             StepOutcome::Exhausted(e) => assert!(e.contains("flaky fail")),
             _ => panic!("expected exhausted"),
         }
@@ -151,7 +158,7 @@ mod tests {
         let mut policy = RetryPolicy::new(3);
         policy.backoff = vec![Duration::from_millis(1), Duration::from_millis(1)];
         let bus = new_bus();
-        match run_step_with_retry(&test_step(), "", worker, &policy, &bus).await {
+        match run_step_with_retry(&test_step(), "", &test_plan(), worker, &policy, &bus).await {
             StepOutcome::Ok(s) => assert!(s.contains("output from call 2")),
             _ => panic!("expected ok"),
         }

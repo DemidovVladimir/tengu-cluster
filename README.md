@@ -176,7 +176,7 @@ Gate rules, ledger, exits, rule W: `docs/xmarket-risk-paper-2026-09-30.md`. Plan
 | Planner agent | `sandboxes/<name>/config.toml` → `[orchestrator] agent = "<planner agent>"`, `engine = "rag"` (historical name; file-registry planner — the only supported value) |
 | Planner prompt | `skills/orchestrator/SKILL.md`, read from the cwd (inline fallback when missing) |
 | Subagents | Any `[agents.<name>]` block **with a `description`** in the same file (`engine`, `model`, `tools`, `skill_packages`, `example_queries`, `limits.max_tool_rounds`, `limits.step_timeout_secs`, …). Same schema as in-process agents — no separate spec files |
-| Registry | `TENGU_PLANNER_REGISTRY.md` regenerated from those blocks + skills + tools each planner turn; the accepted plan reaches subagents over IPC (`TENGU_PLAN.md` is a debug copy; both gitignored) |
+| Registry | `TENGU_PLANNER_REGISTRY.md` regenerated from those blocks + skills + tools each planner turn; the accepted plan reaches subagents over IPC only (`plan_state`); the registry is gitignored |
 | Done signal | `compress_and_store` is appended implicitly to every subagent — never list it in `tools` |
 
 ```bash

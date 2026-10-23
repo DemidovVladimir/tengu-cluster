@@ -200,7 +200,7 @@
         <g class="pop badge" data-at="6"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">agent planner/&lt;agent&gt;</text></g>
         <g class="pop badge" data-at="7"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">raw → fenced → {…} → prose</text></g>
         <g class="pop badge" data-at="8"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">direct ends the turn</text></g>
-        <g class="pop badge" data-at="9"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">set_active_plan(session_id)</text></g>
+        <g class="pop badge" data-at="9"><rect x="384" y="430" width="212" height="24" rx="12"/><text x="490" y="446" text-anchor="middle">plan → each step (IPC)</text></g>
 
         <!-- moving tokens -->
         <circle class="tok" r="5" data-path="p-ag-reg" data-at="1"/>
@@ -231,7 +231,7 @@
         <li>Each call records a metric (<code>kind=planner</code>, chars per prompt layer).</li>
         <li><code>parse_verdict</code> tries raw JSON, fenced JSON, the first balanced object, then wraps prose as <code>direct</code>. Only empty output is an error.</li>
         <li><code>direct</code> ends the turn with its text. <code>plan</code> goes to the DAG executor.</li>
-        <li>The accepted plan is stored for this session, sent to every step over IPC, and mirrored to <code>TENGU_PLAN.md</code>. Cleared when the turn ends.</li>
+        <li>The accepted plan goes to the DAG executor; every step's child gets it, rendered, over IPC (<code>plan_state</code>) — the plan that step is part of, whatever other session runs beside it.</li>
       </ol>
     </div>
   </figure>
@@ -299,12 +299,12 @@
   <div class="sec-head">
     <span class="kicker">Files the planner leaves</span>
     <h2 id="s-files">Registry and plan, as written</h2>
-    <p>Rendered for <code>sandboxes/lping</code>: <code>crypto_researcher</code> is its only agent with a description. The plan is an example.</p>
+    <p>Rendered for <code>sandboxes/lping</code>: <code>crypto_researcher</code> is its only agent with a description. The plan is an example; it is never a file, only each step's <code>plan_state</code>.</p>
   </div>
   <div class="tabs">
     <div class="tablist">
       <button type="button" aria-controls="tab-reg" aria-selected="true">TENGU_PLANNER_REGISTRY.md</button>
-      <button type="button" aria-controls="tab-plan">TENGU_PLAN.md</button>
+      <button type="button" aria-controls="tab-plan">plan_state</button>
       <button type="button" aria-controls="tab-json">Plan JSON shape</button>
     </div>
     <div class="tabpanel" id="tab-reg"><pre><span class="k"># Tengu Planner Registry</span>
@@ -339,16 +339,12 @@ Example queries:
 
 `http_request`, `read_file`, `list_directory`, <span class="c">(…)</span>
 <span class="c">(one line: every catalog tool, opt-ins included, then every MCP server tool)</span></pre></div>
-    <div class="tabpanel" id="tab-plan" hidden><pre><span class="k"># Tengu Current Plan</span>
-
-- phase: `active`
-
-<span class="k">## Steps</span>
+    <div class="tabpanel" id="tab-plan" hidden><pre><span class="k">## Steps</span>
 
 - `s1` agent=`crypto_researcher` depends_on=`-` goal: Get the SOL price and 24h volume from two sources.
 
 <span class="c"># bullets only: each carries every Step field (a compose adds a sub-bullet)</span>
-<span class="c"># a step sees this text under "## Current execution plan (loaded from IPC `plan_state`)"</span></pre></div>
+<span class="c"># a step sees this text under "## Current execution plan"</span></pre></div>
     <div class="tabpanel" id="tab-json" hidden><pre><span class="c"># the two shapes serde accepts (PlannerVerdict, tag "kind")</span>
 { <span class="k">"kind"</span>: <span class="s">"direct"</span>, <span class="k">"response"</span>: <span class="s">"&lt;text for the user&gt;"</span> }
 
@@ -424,13 +420,13 @@ Example queries:
   <div class="sec-head">
     <span class="kicker">Try it</span>
     <h2 id="s-try">See what the planner saw</h2>
-    <p>Both files land in the directory you start <code>tengu</code> from. Per-layer sizes are debug log lines.</p>
+    <p>The registry lands in the directory you start <code>tengu</code> from. Per-layer sizes are debug log lines.</p>
   </div>
   <div class="term-wrap">
 <pre class="term" data-type><span class="ln cmd"><span class="p">$ </span>tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>rg '^### ' TENGU_PLANNER_REGISTRY.md</span>
 <span class="ln"><span class="hl">### crypto_researcher</span></span>
-<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md</span>
+
 <span class="ln cmd"><span class="p">$ </span>RUST_LOG=tengu=debug tengu chat --sandbox lping</span>
 <span class="ln cmd"><span class="p">$ </span>rg 'metrics.layer' ~/.tengu/logs/tengu.log</span></pre>
   </div>
@@ -446,8 +442,8 @@ Example queries:
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td><code>PlannerLlm</code> (the engine call); <code>RegistryPlanner</code>: prompt blocks, metrics, <code>parse_verdict</code></td></tr>
-        <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, plan state, <code>TENGU_PLAN.md</code></td></tr>
-        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt); per-session plan guard</td></tr>
+        <tr><td><code>src/application/orchestrator/shared_files.rs</code></td><td>registry render, the plan render (<code>plan_state</code>)</td></tr>
+        <tr><td><code>src/application/orchestrator/replan.rs</code></td><td>plan → run → replan loop (finished steps carried to the next attempt)</td></tr>
         <tr><td><code>src/application/orchestrator/events.rs</code></td><td><code>OrchestratorEvent</code>, the bus (records before it broadcasts)</td></tr>
         <tr><td><code>src/application/orchestrator/trace.rs</code></td><td>the bridge: each event as a trace event; a step's cause</td></tr>
         <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td><code>planner_llm</code> (the planner's engine from <code>[orchestrator] agent</code>), <code>build_orchestrator</code>; the recording a surface hands it; the metrics bridge the orchestrator owns (<code>flush_metrics</code>)</td></tr>

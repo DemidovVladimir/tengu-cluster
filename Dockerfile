@@ -56,7 +56,7 @@ COPY sandboxes /opt/tengu/sandboxes
 # without it the load fails closed (docs/lineage-2026-10-06.md § 4)
 COPY lineage /opt/tengu/lineage
 
-# Default working directory (planner registry + TENGU_PLAN.md are written here)
+# Default working directory (the planner registry is written here)
 WORKDIR /opt/tengu
 
 # Persistent data directory

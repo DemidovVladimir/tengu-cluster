@@ -134,8 +134,8 @@
         </g>
         <g class="n data" data-at="5">
           <rect x="196" y="280" width="160" height="52" rx="8"/>
-          <text x="276" y="302" text-anchor="middle" class="t-title t-mono">TENGU_PLAN.md</text>
-          <text x="276" y="320" text-anchor="middle" class="t-small">debug mirror of the plan</text>
+          <text x="276" y="302" text-anchor="middle" class="t-title t-mono">plan_state</text>
+          <text x="276" y="320" text-anchor="middle" class="t-small">the plan, to every step</text>
         </g>
         <g class="n" data-at="6,9-10">
           <rect x="390" y="300" width="150" height="60" rx="8"/>
@@ -210,7 +210,7 @@
         <li>With an <code>[orchestrator]</code> section the message goes to the planner. Without one (the default) the default agent answers in one in-process chat turn.</li>
         <li>The planner prompt: the registry of described agents, skills and tools, recalled memory, recent messages, then your message.</li>
         <li>One LLM call straight to the planner agent's engine: no tools, bridge or memory. It answers JSON: <code>direct</code> (that is the reply) or <code>plan</code> (steps).</li>
-        <li>The DAG executor registers the plan for this session and mirrors it to <code>TENGU_PLAN.md</code>. Every step whose <code>depends_on</code> are done starts at once.</li>
+        <li>The DAG executor runs the plan: every step whose <code>depends_on</code> are done starts at once, and each gets the plan it is part of (<code>plan_state</code>).</li>
         <li>Per step, <code>SubprocessRunner</code> spawns <code>tengu run-agent</code> with <code>TENGU_AGENT_IPC=1</code> and writes one JSON request to its stdin.</li>
         <li>The child reloads the same sandbox, takes <code>[agents.&lt;step.agent&gt;]</code> and loops: model turn, tool calls, results. At most 70 turns by default.</li>
         <li>The model ends with <code>compress_and_store(summary)</code>. With <code>postgres_memory</code> the summary lands in <code>agentic_memory</code> under the shared session id.</li>
@@ -313,15 +313,12 @@ step_timeout_secs = <span class="n">600</span></pre></div>
     <div class="tabpanel" id="tab-in" hidden><pre><span class="c"># what SubprocessRunner writes to the child's stdin (example values)</span>
 {
   <span class="k">"goal"</span>: <span class="s">"Get the SOL price and 24h volume from two sources."</span>,
-  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,
-  <span class="k">"model"</span>: <span class="s">""</span>,             <span class="c"># empty: the child uses the agent block's model</span>
-  <span class="k">"tools"</span>: [], <span class="k">"skills"</span>: [],
+  <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># model, tools, skills: from its agent block</span>
   <span class="k">"max_turns"</span>: <span class="n">40</span>,          <span class="c"># the agent's limits.max_tool_rounds</span>
-  <span class="k">"sandbox"</span>: <span class="n">null</span>,
   <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,
   <span class="k">"step_id"</span>: <span class="s">"s1"</span>,
   <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,
-  <span class="k">"plan_state"</span>: <span class="s">"# Tengu Current Plan\n\n- phase: `active`\n\n## Steps\n…"</span>
+  <span class="k">"plan_state"</span>: <span class="s">"## Steps\n\n- `s1` agent=`crypto_researcher` …"</span>
 }</pre></div>
     <div class="tabpanel" id="tab-out" hidden><pre><span class="c"># one line on the child's stdout (example values, pretty-printed here)</span>
 {
@@ -408,7 +405,7 @@ step_timeout_secs = <span class="n">600</span></pre></div>
 <span class="ln">orch: ▶ s1 [<span class="hl">crypto_researcher</span>]</span>
 <span class="ln o">orch: ✓ s1</span>
 <span class="ln o">orch: plan completed</span>
-<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLAN.md TENGU_PLANNER_REGISTRY.md</span>
+<span class="ln cmd"><span class="p">$ </span>cat TENGU_PLANNER_REGISTRY.md</span>
 <span class="ln cmd"><span class="p">$ </span>tail -f ~/.tengu/logs/tengu.log | rg 'metrics|planner registry'</span></pre>
   </div>
 </section>

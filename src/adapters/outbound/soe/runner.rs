@@ -54,11 +54,7 @@ impl SubprocessStageRunner {
         AgentIpcInput {
             goal: req.goal.clone(),
             agent_name: req.agent.clone(),
-            model: String::new(),
-            tools: Vec::new(),
-            skills: Vec::new(),
             max_turns: agent.limits.max_tool_rounds,
-            sandbox: None,
             session_id: req.dir.id().to_string(),
             step_id: stage_id(req),
             compose: None,
@@ -296,7 +292,7 @@ mod tests {
             ("soe_architect", "2026-W41", "ARCHITECT", Some("soe"))
         );
         assert_eq!(sent.goal, request("soe_architect").goal);
-        assert!(sent.tools.is_empty() && sent.model.is_empty());
+        assert!(sent.plan_state.is_none(), "a stage has no plan");
 
         // An ok child: the summary, else its output.
         let ok = AgentIpcOutput::Ok {

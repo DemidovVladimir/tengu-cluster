@@ -330,7 +330,7 @@
     <text x="10" y="198" class="h3">notable:</text>
     <text x="10" y="214" class="small">no vector DB dependency for routing</text>
     <text x="10" y="228" class="small">operator-readable source of truth</text>
-    <text x="10" y="242" class="small">TENGU_PLAN.md: debug copy of the plan</text>
+    <text x="10" y="242" class="small">the plan: to each step as IPC plan_state</text>
   </g>
 
   <g transform="translate(312, 1018)">

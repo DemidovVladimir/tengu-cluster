@@ -521,10 +521,6 @@ Rules:
 
 #[async_trait]
 impl Planner for RegistryPlanner {
-    fn session_id(&self) -> Option<String> {
-        Some(self.session_id.clone())
-    }
-
     async fn plan(&self, user_message: &str) -> anyhow::Result<PlannerVerdict> {
         // Embed the user message once per turn and reuse the vector across
         // Postgres memory recall/write lanes when `postgres_memory` is on.

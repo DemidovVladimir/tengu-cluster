@@ -3,62 +3,19 @@
 //! | Artifact | Writer | Reader | Role |
 //! |---|---|---|---|
 //! | `TENGU_PLANNER_REGISTRY.md` | `ensure_planner_registry` (every planner turn) | `RegistryPlanner` (in-memory render) | Roster of agents / skills / tools (core + MCP). The file is a debug mirror — the prompt block is built from the in-memory render even when the write fails. |
-//! | `AgentIpcInput.plan_state` | `SubprocessRunner::run_step` via `active_plan(session_id)` | `tengu run-agent` | **Source of truth** for the plan a subagent sees. Per-session, set by `replan::drive` on every accepted plan. |
-//! | `TENGU_PLAN.md` | `write_plan_state` (every accepted plan, any session) | `run-agent` fallback only (old parents that send no `plan_state`) | Human-readable debug artifact. One global file under cwd — concurrent sessions overwrite each other, which is why it is no longer the IPC path. |
+//! | `AgentIpcInput.plan_state` | `SubprocessRunner::run_step` (`render_plan_state` of the plan the step belongs to: `WorkerHandle::run_step(step, inputs, plan)`) | `tengu run-agent` (`plan_state_block` into its system prompt) | The plan a subagent sees — the one its step is part of, whatever other session runs beside it. |
 //!
-//! Both files are runtime artifacts — gitignored, never hand-edited.
+//! The registry file is a runtime artifact — gitignored, never hand-edited.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
 
 use crate::config::AgentConfig;
 use crate::domain::message::ToolDef;
 use crate::domain::plan::Plan;
 
 pub(crate) const PLANNER_REGISTRY_FILE: &str = "TENGU_PLANNER_REGISTRY.md";
-pub(crate) const PLAN_STATE_FILE: &str = "TENGU_PLAN.md";
-
-/// In-process plan state keyed by orchestrator `session_id`. Populated by
-/// `replan::drive` (via `set_active_plan`) and read by
-/// `SubprocessRunner::run_step` so each child gets ITS session's plan over
-/// IPC instead of whatever session last wrote `TENGU_PLAN.md`.
-static ACTIVE_PLANS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
-
-fn with_active_plans<R>(f: impl FnOnce(&mut HashMap<String, String>) -> R) -> R {
-    let mut guard = ACTIVE_PLANS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    f(guard.get_or_insert_with(HashMap::new))
-}
-
-/// Render `plan` and register it as the active plan for `session_id`.
-/// Returns the rendered markdown (the same text `write_plan_state` writes).
-pub(crate) fn set_active_plan(session_id: &str, phase: &str, plan: &Plan) -> String {
-    let rendered = render_plan_state(phase, plan);
-    with_active_plans(|m| {
-        m.insert(session_id.to_string(), rendered.clone());
-    });
-    rendered
-}
-
-/// Rendered plan markdown for `session_id`, if one is active.
-pub(crate) fn active_plan(session_id: &str) -> Option<String> {
-    with_active_plans(|m| m.get(session_id).cloned())
-}
-
-/// Drop the active plan for `session_id`, but only if it is still the
-/// `rendered` text the caller registered — a concurrent turn on the same
-/// session that has since replaced it is left alone.
-pub(crate) fn clear_active_plan(session_id: &str, rendered: &str) {
-    with_active_plans(|m| {
-        if m.get(session_id).map(String::as_str) == Some(rendered) {
-            m.remove(session_id);
-        }
-    });
-}
 
 /// Render the roster (agents + skills + core tools + `mcp_tools`) and return
 /// it as a prompt block. Fail-soft on the file write: the planner must never
@@ -86,41 +43,19 @@ pub(crate) fn ensure_planner_registry(
 }
 
 /// Wrap rendered plan markdown in the system-prompt block header the
-/// subagent sees. `source` names where the text came from (IPC vs file).
-pub(crate) fn plan_state_block(rendered: &str, source: &str) -> String {
+/// subagent sees.
+pub(crate) fn plan_state_block(rendered: &str) -> String {
     if rendered.trim().is_empty() {
         return String::new();
     }
-    format!(
-        "\n## Current execution plan (loaded from {})\n\n{}",
-        source, rendered
-    )
+    format!("\n## Current execution plan\n\n{rendered}")
 }
 
-/// Fallback for `run-agent` children whose parent sent no
-/// `AgentIpcInput.plan_state` (old binaries): read the global debug file.
-pub(crate) fn read_plan_state_block(workspace: &Path) -> String {
-    let path = workspace.join(PLAN_STATE_FILE);
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return String::new();
-    };
-    plan_state_block(&content, &format!("`{}`", PLAN_STATE_FILE))
-}
-
-/// Write the human-readable `TENGU_PLAN.md` debug artifact. Not the IPC
-/// path — see the module doc; `rendered` is the text `set_active_plan`
-/// produced so the file and the IPC field never diverge.
-pub(crate) fn write_plan_state(workspace: &Path, rendered: &str) -> Result<()> {
-    let path = workspace.join(PLAN_STATE_FILE);
-    std::fs::write(&path, rendered).with_context(|| format!("write plan state {}", path.display()))
-}
-
-/// Markdown rendering of a plan — the single template behind both the IPC
-/// field and the debug file. One bullet per step carries every `Step` field
-/// (id, agent, dependencies, goal, compose), so no JSON copy rides along.
-pub(crate) fn render_plan_state(phase: &str, plan: &Plan) -> String {
-    let mut out = format!("# Tengu Current Plan\n\n- phase: `{}`\n\n", phase);
-    out.push_str("## Steps\n\n");
+/// Markdown rendering of a plan (`AgentIpcInput.plan_state`). One bullet
+/// per step carries every `Step` field (id, agent, dependencies, goal,
+/// compose), so no JSON copy rides along.
+pub(crate) fn render_plan_state(plan: &Plan) -> String {
+    let mut out = String::from("## Steps\n\n");
     for step in &plan.steps {
         let deps = if step.depends_on.is_empty() {
             "-".to_string()
@@ -316,42 +251,14 @@ mod tests {
     }
 
     #[test]
-    fn active_plan_is_per_session() {
-        let a = set_active_plan("sf-sess-a", "active", &plan("a1"));
-        let b = set_active_plan("sf-sess-b", "active", &plan("b1"));
-        assert_ne!(a, b);
-        assert_eq!(active_plan("sf-sess-a").as_deref(), Some(a.as_str()));
-        assert_eq!(active_plan("sf-sess-b").as_deref(), Some(b.as_str()));
-        assert!(active_plan("sf-sess-none").is_none());
-
-        // Clearing with a stale rendering leaves a newer registration alone.
-        let a2 = set_active_plan("sf-sess-a", "active", &plan("a2"));
-        clear_active_plan("sf-sess-a", &a);
-        assert_eq!(active_plan("sf-sess-a").as_deref(), Some(a2.as_str()));
-        clear_active_plan("sf-sess-a", &a2);
-        assert!(active_plan("sf-sess-a").is_none());
-        clear_active_plan("sf-sess-b", &b);
-    }
-
-    #[test]
     fn plan_state_block_wraps_rendered_text() {
-        let rendered = render_plan_state("active", &plan("s1"));
-        assert!(rendered.contains("- `s1` agent=`researcher`"));
+        let rendered = render_plan_state(&plan("s1"));
+        assert!(rendered.starts_with("## Steps\n\n- `s1` agent=`researcher`"));
         assert!(!rendered.contains("```json"), "bullets only");
-        let block = plan_state_block(&rendered, "IPC `plan_state`");
-        assert!(block.starts_with("\n## Current execution plan (loaded from IPC `plan_state`)"));
+        let block = plan_state_block(&rendered);
+        assert!(block.starts_with("\n## Current execution plan\n\n## Steps"));
         assert!(block.contains(&rendered));
-        assert!(plan_state_block("   ", "x").is_empty());
-    }
-
-    #[test]
-    fn write_plan_state_mirrors_rendered_text() {
-        let dir = tempfile::tempdir().unwrap();
-        let rendered = render_plan_state("active", &plan("s1"));
-        write_plan_state(dir.path(), &rendered).unwrap();
-        let block = read_plan_state_block(dir.path());
-        assert!(block.contains(&rendered));
-        assert!(read_plan_state_block(&dir.path().join("missing")).is_empty());
+        assert!(plan_state_block("   ").is_empty());
     }
 
     #[test]

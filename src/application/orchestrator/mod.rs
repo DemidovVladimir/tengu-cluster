@@ -162,7 +162,7 @@ mod e2e_tests {
     struct OkWorker;
     #[async_trait]
     impl WorkerHandle for OkWorker {
-        async fn run_step(&self, step: &Step, inputs: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, inputs: &str, _: &Plan) -> anyhow::Result<String> {
             Ok(format!("out({})[{}]", step.id.0, inputs.trim()))
         }
     }

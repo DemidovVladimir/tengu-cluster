@@ -236,13 +236,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         crate::adapters::outbound::soe::runner::skill_sha256(&spec, &workspace),
     );
 
-    // IPC `model` overrides the agent block's `model` when non-empty (the
-    // orchestrator can swap models per-step in the future).
-    let model = if input.model.is_empty() {
-        spec.model.clone()
-    } else {
-        input.model.clone()
-    };
+    let model = spec.model.clone();
 
     // ----- Compose system prompt: base + identity + skill bodies + suffix -----
     let mut system_prompt = String::from(BASE_AGENT_TEMPLATE);
@@ -262,18 +256,13 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             }
         }
     }
-    // Plan block: the parent's per-session `plan_state` IPC field is the
-    // source of truth; the global `TENGU_PLAN.md` is only a fallback for old
-    // parents that don't send it (it is overwritten by every session).
-    let plan_state = match input.plan_state.as_deref() {
-        Some(rendered) => crate::application::orchestrator::shared_files::plan_state_block(
-            rendered,
-            "IPC `plan_state`",
-        ),
-        None => crate::application::orchestrator::shared_files::read_plan_state_block(
-            &std::env::current_dir()?,
-        ),
-    };
+    // Plan block: the plan this step belongs to (`plan_state`; none for an
+    // SOE stage).
+    let plan_state = input
+        .plan_state
+        .as_deref()
+        .map(crate::application::orchestrator::shared_files::plan_state_block)
+        .unwrap_or_default();
     if !plan_state.is_empty() {
         system_prompt.push_str("\n\n---\n\n");
         system_prompt.push_str(&plan_state);

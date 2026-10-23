@@ -38,21 +38,12 @@ pub async fn drive(
         }
     };
 
-    // Per-session active plan: registered in-process so `SubprocessRunner`
-    // (same session_id) forwards it to each child as `AgentIpcInput.plan_state`.
-    // Cleared on every exit path via the guard's `Drop`. `TENGU_PLAN.md` is
-    // still written as a human-readable debug artifact.
-    let mut active_plan = ActivePlanGuard {
-        session_id: planner.session_id(),
-        rendered: None,
-    };
     let mut replans_left = max_replans;
     // Steps that finished in any attempt so far: an identical step in the
     // replanned DAG keeps its output (`DagExecutor::run_reusing`).
     let mut finished = Finished::new();
     loop {
         let plan = plan_opt.as_ref().unwrap().clone();
-        active_plan.register(&plan);
         let _ = events.send(OrchestratorEvent::PlanCreated { plan: plan.clone() });
 
         // A plan that cannot run (unknown agent, unknown dependency, cycle,
@@ -127,38 +118,6 @@ pub async fn drive(
     }
 }
 
-/// Owns the per-session active-plan registration for one `drive` call.
-struct ActivePlanGuard {
-    session_id: Option<String>,
-    rendered: Option<String>,
-}
-
-impl ActivePlanGuard {
-    /// Render `plan`, register it for this session (when the planner has
-    /// one), and mirror it into `TENGU_PLAN.md` for humans.
-    fn register(&mut self, plan: &Plan) {
-        use crate::application::orchestrator::shared_files;
-        let rendered = match &self.session_id {
-            Some(sid) => shared_files::set_active_plan(sid, "active", plan),
-            None => shared_files::render_plan_state("active", plan),
-        };
-        if let Ok(root) = std::env::current_dir() {
-            if let Err(e) = shared_files::write_plan_state(&root, &rendered) {
-                tracing::warn!(error = %e, "failed to write shared plan state debug file");
-            }
-        }
-        self.rendered = Some(rendered);
-    }
-}
-
-impl Drop for ActivePlanGuard {
-    fn drop(&mut self) {
-        if let (Some(sid), Some(rendered)) = (&self.session_id, &self.rendered) {
-            crate::application::orchestrator::shared_files::clear_active_plan(sid, rendered);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,7 +151,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for FailOnceWorker {
-        async fn run_step(&self, step: &Step, _: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _: &str, _: &Plan) -> anyhow::Result<String> {
             let mut c = self.calls.lock().unwrap();
             *c += 1;
             // Bad steps always fail; good steps succeed. The counter is
@@ -213,7 +172,7 @@ mod tests {
     }
     #[async_trait]
     impl WorkerHandle for KnownAgentsWorker {
-        async fn run_step(&self, step: &Step, _: &str) -> anyhow::Result<String> {
+        async fn run_step(&self, step: &Step, _: &str, _: &Plan) -> anyhow::Result<String> {
             self.ran.lock().unwrap().push(step.id.0.clone());
             Ok(format!("ok-{}", step.id.0))
         }

@@ -3,9 +3,9 @@
 //! Spawns `tengu run-agent` as a child process, pipes the IPC JSON in and
 //! the result JSON out, and returns the `AgentIpcOutput`. `SubprocessRunner`
 //! implements `WorkerHandle` so the DagExecutor drives it; the child runs the
-//! real LLM mini-loop (`inbound/cli/run_agent.rs::run_agent_subprocess`). The accepted plan
-//! reaches the child as `AgentIpcInput.plan_state` (per session), not via
-//! the global `TENGU_PLAN.md`. A recording orchestrator (`with_trace`) asks
+//! real LLM mini-loop (`inbound/cli/run_agent.rs::run_agent_subprocess`). The plan
+//! the step belongs to reaches the child as `AgentIpcInput.plan_state`
+//! (`WorkerHandle::run_step(step, inputs, plan)`). A recording orchestrator (`with_trace`) asks
 //! the child for its tool events (`AgentIpcInput.trace`: the step's
 //! `step.started`) and writes the ones it hands back (`AgentIpcOutput.trace`)
 //! into its own run (`trace_exec::replay_child`).
@@ -32,21 +32,9 @@ pub struct AgentIpcInput {
     /// Name of the agent — the child resolves `[agents.<name>]` from the
     /// same config the parent runs on (`sandbox_config` / default config).
     pub agent_name: String,
-    /// OpenRouter model slug.
-    pub model: String,
-    /// Tool allow-list provided by the parent. The child intersects this with
-    /// the `[agents.<name>]` block's `tools` and always appends `compress_and_store`.
-    #[serde(default)]
-    pub tools: Vec<String>,
-    /// Skills to load into the system prompt. Resolved via the three-tier loader.
-    #[serde(default)]
-    pub skills: Vec<String>,
     /// Hard cap on LLM mini-loop turns (the agent's `limits.max_tool_rounds`).
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
-    /// Optional sandbox workspace. None → runner creates a temp dir.
-    #[serde(default)]
-    pub sandbox: Option<String>,
     /// Parent-assigned session id for tagging memory writes.
     pub session_id: String,
     /// Parent-assigned step id for tagging memory writes.
@@ -57,8 +45,6 @@ pub struct AgentIpcInput {
     /// the label used for events/logs (typically the same as
     /// `compose.base_agent`, but kept separate so the parent can pass
     /// a synthetic label like "composed-researcher" if it wants).
-    /// Skipped on the wire when None so existing IPC payloads stay
-    /// byte-compatible with prior versions of the binary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compose: Option<crate::domain::plan::AgentCompose>,
     /// Name of the sandbox the parent was loaded from
@@ -67,23 +53,18 @@ pub struct AgentIpcInput {
     /// through to the default user config — without this the child
     /// loses sandbox-specific scopes/secrets/MCP servers and tool
     /// calls scope-deny in the child even when the parent allows them.
-    /// Distinct from the legacy `sandbox` field above (which was a
-    /// workspace-path override, never wired up — kept for backward IPC
-    /// compatibility).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_config: Option<String>,
-    /// Rendered markdown of the accepted plan for THIS session
-    /// (`shared_files::render_plan_state`). Source of truth for the plan
-    /// block in the child's system prompt — replaces reading the global
-    /// `TENGU_PLAN.md`, which concurrent webhook/telegram sessions overwrite.
-    /// `None` (old parents) → the child falls back to the file.
+    /// Rendered markdown of the plan this step belongs to
+    /// (`shared_files::render_plan_state`): the plan block of the child's
+    /// system prompt. `None` (an SOE stage: no plan) ⇒ no block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_state: Option<String>,
     /// The parent's execution trace this step runs under: set ⇒ the child
     /// records its tool calls (`trace_exec::DraftBuffer`) and hands them
     /// back in `AgentIpcOutput.trace`; the parent writes them into this run
-    /// under `parent_event_id` (the step's `step.started`). `None` (old
-    /// parents, a surface that does not record) ⇒ nothing is recorded.
+    /// under `parent_event_id` (the step's `step.started`). `None` (a
+    /// surface that does not record) ⇒ nothing is recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<IpcTraceRef>,
 }
@@ -369,6 +350,7 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
         &self,
         step: &crate::domain::plan::Step,
         step_inputs: &str,
+        plan: &crate::domain::plan::Plan,
     ) -> anyhow::Result<String> {
         // Fail fast when the planner picked a name with no `[agents.<name>]`
         // block: no subprocess is spawned. `replan::drive` already rejects
@@ -409,18 +391,14 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
         };
 
         // The child re-loads the same config (`sandbox_config`) and takes
-        // `[agents.<agent_name>]` from it, so model/tools/skills stay empty
-        // here; only the per-agent turn cap travels in the payload.
+        // `[agents.<agent_name>]` from it (model, tools, skills); only the
+        // per-agent turn cap travels in the payload.
         // `step.compose` travels too: a composed agent reaches the child as
         // an explicit override, not a renamed agent block.
         let input = AgentIpcInput {
             goal,
             agent_name: step.agent.clone(),
-            model: String::new(),
-            tools: Vec::new(),
-            skills: Vec::new(),
             max_turns,
-            sandbox: None,
             session_id: self.session_id.clone(),
             step_id: step.id.0.clone(),
             compose: step.compose.clone(),
@@ -428,10 +406,8 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             // the subagent sees the same scopes/secrets/MCP servers as the
             // parent process did.
             sandbox_config: self.sandbox_name.clone(),
-            // Per-session plan registered by `replan::drive` under the same
-            // session_id this runner carries (see `build_orchestrator`).
-            plan_state: crate::application::orchestrator::shared_files::active_plan(
-                &self.session_id,
+            plan_state: Some(
+                crate::application::orchestrator::shared_files::render_plan_state(plan),
             ),
             trace: self.trace_ref(),
         };
@@ -540,7 +516,14 @@ mod tests {
             depends_on: vec![],
             compose: None,
         };
-        let err = runner.run_step(&step, "").await.unwrap_err().to_string();
+        let plan = crate::domain::plan::Plan {
+            steps: vec![step.clone()],
+        };
+        let err = runner
+            .run_step(&step, "", &plan)
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("no agent 'spanish-teacher'"), "{err}");
         assert!(err.contains("researcher"), "{err}");
     }
@@ -561,11 +544,7 @@ mod tests {
         let input = AgentIpcInput {
             goal: "say hello".to_string(),
             agent_name: "researcher".to_string(),
-            model: "openai/gpt-4o".to_string(),
-            tools: vec!["http_request".to_string()],
-            skills: vec!["web-research".to_string()],
             max_turns: 10,
-            sandbox: None,
             session_id: "s1".to_string(),
             step_id: "step-1".to_string(),
             compose: None,
@@ -574,7 +553,7 @@ mod tests {
             trace: None,
         };
         let json = serde_json::to_string(&input).unwrap();
-        // `None` is skipped on the wire so old children keep parsing.
+        // `None` is skipped on the wire.
         assert!(!json.contains("\"plan_state\""));
         let back: AgentIpcInput = serde_json::from_str(&json).unwrap();
         assert_eq!(back.goal, input.goal);
@@ -587,31 +566,27 @@ mod tests {
         let input = AgentIpcInput {
             goal: "g".to_string(),
             agent_name: "researcher".to_string(),
-            model: String::new(),
-            tools: Vec::new(),
-            skills: Vec::new(),
             max_turns: 1,
-            sandbox: None,
             session_id: "s1".to_string(),
             step_id: "step-1".to_string(),
             compose: None,
             sandbox_config: None,
-            plan_state: Some("# Tengu Current Plan\n".to_string()),
+            plan_state: Some("## Steps\n".to_string()),
             trace: None,
         };
         let json = serde_json::to_string(&input).unwrap();
         assert!(json.contains("\"plan_state\""));
         let back: AgentIpcInput = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.plan_state.as_deref(), Some("# Tengu Current Plan\n"));
+        assert_eq!(back.plan_state.as_deref(), Some("## Steps\n"));
     }
 
-    /// Old parents send payloads without `plan_state`; the field defaults.
+    /// The optional fields default: no plan block, nothing recorded.
     #[test]
-    fn ipc_input_parses_without_plan_state() {
-        let json = r#"{"goal":"g","agent_name":"a","model":"m","session_id":"s","step_id":"x"}"#;
+    fn ipc_input_parses_without_optional_fields() {
+        let json = r#"{"goal":"g","agent_name":"a","session_id":"s","step_id":"x"}"#;
         let back: AgentIpcInput = serde_json::from_str(json).unwrap();
         assert!(back.plan_state.is_none());
-        assert!(back.trace.is_none(), "an old parent records nothing");
+        assert!(back.trace.is_none());
     }
 
     /// The trace ref crosses only when set (an old child never sees the

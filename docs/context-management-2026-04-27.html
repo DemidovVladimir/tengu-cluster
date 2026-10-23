@@ -583,7 +583,7 @@ const MECHS = [
 
   // Layer 5
   { n: 20, layer: 5, title: "Fresh subprocess context", where: "subprocess_runner.rs:26 (AgentIpcInput)",
-    body: "Child <code>tengu run-agent</code> starts with empty messages. Payload: goal/agent_name/max_turns/session_id/step_id/sandbox_config/plan_state — model/tools/skills travel empty; the child re-loads the same sandbox config and takes them from its own <code>[agents.&lt;name&gt;]</code> block. By design — no parent-history leakage.",
+    body: "Child <code>tengu run-agent</code> starts with empty messages. Payload: goal/agent_name/max_turns/session_id/step_id/sandbox_config/plan_state (the plan the step belongs to) — model/tools/skills never travel; the child re-loads the same sandbox config and takes them from its own <code>[agents.&lt;name&gt;]</code> block. By design — no parent-history leakage.",
     pills: ["IPC over JSON stdin/stdout"], tags: ["subprocess", "ipc", "fresh", "isolation"] },
   { n: 21, layer: 5, title: "compress_and_store ★ durable summary", where: "outbound/tools/skill_lifecycle/compress_and_store.rs (def) · inbound/cli/run_agent.rs:534 (intercept) · inbound/mcp_bridge.rs::StepSummary (bridge)",
     star: true,
