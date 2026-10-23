@@ -28,7 +28,7 @@ const MAX_ORIGIN: usize = 64;
 pub fn fence(origin: &str, text: &str) -> String {
     format!(
         "<{TAG} origin=\"{}\">\n{}\n</{TAG}>",
-        origin_token(origin),
+        token(origin),
         clean(text)
     )
 }
@@ -55,12 +55,20 @@ pub fn tool_origin(tool: &str) -> Option<String> {
 
 /// `text` made safe to fence (module table: clean).
 pub fn clean(text: &str) -> String {
-    let mut s: String = text
+    let s: String = text
         .chars()
         .filter(|c| !c.is_control() || *c == '\n' || *c == '\t')
         .collect();
+    strip_all(&s, TAGS)
+}
+
+/// `text` without any `tags` tag, repeated until none is left (a removal
+/// cannot assemble a new tag). The CLI engines' prompt strips `turn` tags
+/// from every message body with it.
+pub fn strip_all(text: &str, tags: &[&str]) -> String {
+    let mut s = text.to_string();
     loop {
-        let next = strip_tags(&s, TAGS);
+        let next = strip_tags(&s, tags);
         if next == s {
             return s;
         }
@@ -68,7 +76,7 @@ pub fn clean(text: &str) -> String {
     }
 }
 
-/// `text` without any `tags` tag (one pass; [`clean`] repeats it).
+/// `text` without any `tags` tag (one pass; [`strip_all`] repeats it).
 pub fn strip_tags(text: &str, tags: &[&str]) -> String {
     let b = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -117,8 +125,9 @@ fn tag_len(b: &[u8], tag: &[u8]) -> Option<usize> {
     }
 }
 
-fn origin_token(origin: &str) -> String {
-    let token: String = origin
+/// `s` as a tag attribute value (module table: origin).
+pub fn token(s: &str) -> String {
+    let token: String = s
         .chars()
         .take(MAX_ORIGIN)
         .map(|c| {

@@ -1533,7 +1533,10 @@ mod tests {
         ];
         let once = ClaudeCodeEngine::format_prompt(&messages, Some("SYS PROMPT"));
         assert!(!once.contains("SYS PROMPT"), "{once}");
-        assert_eq!(once, "User: goal\n\nmemory block");
+        assert_eq!(
+            once,
+            "<turn role=\"user\">\ngoal\n</turn>\n\n<turn role=\"system\">\nmemory block\n</turn>"
+        );
         let args = strings(cli_args(
             BuiltinToolsProfile::None,
             None,
@@ -1543,7 +1546,12 @@ mod tests {
         assert_eq!(value_after(&args, "--system-prompt"), "SYS PROMPT");
         // No context prompt: every system message is in the prompt.
         let all = ClaudeCodeEngine::format_prompt(&messages, None);
-        assert!(all.starts_with("SYS PROMPT\n\nUser: goal"), "{all}");
+        assert!(
+            all.starts_with(
+                "<turn role=\"system\">\nSYS PROMPT\n</turn>\n\n<turn role=\"user\">\ngoal"
+            ),
+            "{all}"
+        );
     }
 
     /// The stream as the bridge's conversation: one assistant message per

@@ -228,7 +228,7 @@
   <div class="sec-head">
     <span class="kicker">Try it: pick a profile, toggle the sandbox</span>
     <h2 id="s-argv">The Claude Code command line</h2>
-    <p>Built by <code>cli_args</code> in <code>claude_code.rs</code>. The prompt goes in on stdin; the agent's workspace is the working directory. A chat agent with no <code>workspace</code> and Tengu tools gets a <code>tengu-claude-*</code> temp dir for the run, so the bridge still starts.</p>
+    <p>Built by <code>cli_args</code> in <code>claude_code.rs</code>. The prompt goes in on stdin, each message in one <code>&lt;turn role="…"&gt;</code> block (turn tags stripped from the bodies, so a body cannot forge a turn); the agent's workspace is the working directory. A chat agent with no <code>workspace</code> and Tengu tools gets a <code>tengu-claude-*</code> temp dir for the run, so the bridge still starts.</p>
   </div>
   <div class="widget" id="argvw">
     <div class="widget-row">
@@ -437,7 +437,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
         <tr><td><code>src/adapters/outbound/engines/local.rs</code></td><td>OpenAI-compatible server, no proxy, result cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/claude_code.rs</code></td><td>CLI args, env strip, NDJSON, transcript, tool cap</td></tr>
         <tr><td><code>src/adapters/outbound/engines/codex.rs</code></td><td><code>codex exec</code> args, <code>web_search</code>, env strip, JSONL events, keepalive, tool cap</td></tr>
-        <tr><td><code>src/adapters/outbound/engines/cli_run.rs</code></td><td>what the two CLI engines share: run dir, stdin prompt, transcript</td></tr>
+        <tr><td><code>src/adapters/outbound/engines/cli_run.rs</code></td><td>what the two CLI engines share: run dir, stdin prompt (tagged turns), transcript</td></tr>
         <tr><td><code>src/config/mod.rs</code></td><td><code>ENGINES</code>, <code>CLAUDE_CODE_PROFILES</code>, <code>AgentConfig</code>, <code>AgentLocalConfig</code>, <code>ClaudeCodeConfig</code>, <code>AgentCodexConfig</code>, validation</td></tr>
         <tr><td><code>src/config/hardening.rs</code></td><td>profile <code>none</code> in hardened sandboxes; no <code>codex</code> there</td></tr>
         <tr><td><code>src/domain/engine_smoke.rs</code></td><td>smoke prompt and verdict</td></tr>
@@ -448,7 +448,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-22.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
 </article>
 </main>
 </div>
@@ -484,7 +484,7 @@ cli_path   = <span class="s">"codex"</span>               <span class="c"># defa
       L.push(["  --mcp-config <temp file: tengu-tools → tengu mcp-bridge>", "add"]);
       L.push(["  --allowedTools mcp__tengu-tools__read_file mcp__tengu-tools__list_directory", "add"]);
     }
-    L.push(["  < stdin: User: <message>", ""]);
+    L.push(["  < stdin: <turn role=\"user\">\\n<message>\\n</turn>", ""]);
     out.innerHTML = L.map(function (l) { return l[1] ? '<span class="' + l[1] + '">' + esc(l[0]) + "</span>" : esc(l[0]); }).join("\n");
     if (eff !== prof) {
       verdict.className = "verdict warn";
