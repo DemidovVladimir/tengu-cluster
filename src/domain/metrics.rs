@@ -44,8 +44,7 @@
 //!   `AgentIpcOutput.metrics` and re-emitted on the parent's bus.
 //! - `prompt_tokens` is the whole prompt on every engine; `cached_input_tokens`
 //!   the part read from the provider's prompt cache (Claude Code, Codex).
-//! - Embedding calls: tokens via OpenRouter `usage.total_tokens` (we now read
-//!   it back where previously we discarded the entire response wrapper).
+//! - Embedding calls: tokens from OpenRouter's `usage.total_tokens`.
 
 use serde::{Deserialize, Serialize};
 

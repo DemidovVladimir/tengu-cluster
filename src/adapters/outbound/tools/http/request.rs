@@ -1,9 +1,6 @@
 // src/adapters/outbound/tools/http/request.rs
-//! `http_request` tool — generic HTTP client for skill-driven API calls.
-//!
-//! Migrated from `http_tool_executor.rs` during Phase A / task A2.
-//! The old executor used `tokio::task::block_in_place` to bridge sync→async;
-//! this implementation is natively async and uses `ctx.http` directly.
+//! `http_request` tool — generic HTTP client for skill-driven API calls,
+//! natively async on `ctx.http`.
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;

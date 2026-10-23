@@ -387,8 +387,8 @@ fn role_layers(messages: &[Message]) -> Vec<MetricsLayer> {
 
 /// Run a single engine turn and collect text, tool calls, usage and the
 /// tools the engine ran itself (`EngineTurn`).
-/// Pub(crate) so the run-agent subprocess (Phase 5b) can reuse this stream-
-/// draining loop without duplicating the StreamEvent state machine.
+/// Pub(crate) so the run-agent subprocess can reuse this stream-draining
+/// loop without duplicating the StreamEvent state machine.
 pub(crate) async fn run_single_engine_turn(
     engine: &dyn Engine,
     messages: &[Message],

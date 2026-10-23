@@ -51,7 +51,7 @@ pub struct AgentIpcInput {
     pub session_id: String,
     /// Parent-assigned step id for tagging memory writes.
     pub step_id: String,
-    /// Phase 6.7 (C→B B-half) — when set, the child loads
+    /// When set, the child loads
     /// `[agents.<compose.base_agent>]` and overrides its `skills` and
     /// `tools` with the values supplied here. `agent_name` above remains
     /// the label used for events/logs (typically the same as
@@ -61,7 +61,7 @@ pub struct AgentIpcInput {
     /// byte-compatible with prior versions of the binary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compose: Option<crate::domain::plan::AgentCompose>,
-    /// Phase 7.2 — name of the sandbox the parent was loaded from
+    /// Name of the sandbox the parent was loaded from
     /// (`--sandbox <name>` on the parent CLI). When `Some`, the child
     /// re-loads `sandboxes/<name>/config.toml` instead of falling
     /// through to the default user config — without this the child
@@ -139,7 +139,7 @@ pub enum AgentIpcOutput {
     },
 }
 
-/// Phase 3 spawner promoted to a `WorkerHandle` impl in Phase 4b. Each
+/// The `WorkerHandle` that spawns `tengu run-agent` per step. Each
 /// `SubprocessRunner` instance carries one session id (generated at
 /// construction); step ids come from each `Step` the executor passes in.
 pub struct SubprocessRunner {
@@ -155,7 +155,7 @@ pub struct SubprocessRunner {
     /// Stable session id for tagging memory writes from this orchestrator
     /// instance. Generated once per runner construction.
     pub session_id: String,
-    /// Phase 7.2 — name of the sandbox the parent was loaded from
+    /// Name of the sandbox the parent was loaded from
     /// (`--sandbox <name>`). Forwarded into every IPC payload so the child
     /// process re-resolves the same `sandboxes/<name>/config.toml` and
     /// inherits the parent's scopes/secrets/MCP servers. `None` when the
@@ -185,13 +185,10 @@ impl SubprocessRunner {
     /// Convenience constructor that propagates the parent's sandbox name AND
     /// the parent planner's session_id into the IPC payload of every step.
     ///
-    /// Pre Fix-B (2026-05-09) this minted a fresh UUID per construction,
-    /// which meant the planner's `RegistryPlanner.session_id` and the runner's
-    /// `SubprocessRunner.session_id` were independent. The child wrote
-    /// `compress_and_store` outputs tagged with the runner's id, which the
-    /// planner could never find via `search_outputs_for_session`. Now
-    /// `build_orchestrator` resolves one id (env-or-fresh) and threads it
-    /// through to both, so within-session output recall (Fix A) works.
+    /// `build_orchestrator` resolves one id (env or fresh) and hands it to
+    /// both this runner and the `RegistryPlanner`, so the child's
+    /// `compress_and_store` outputs carry the id the planner's
+    /// within-session recall (`search_outputs_for_session`) filters on.
     ///
     /// Standalone test harnesses can still call `SubprocessRunner::default()`
     /// to get a runner with an independently-minted UUID — the unified-id
@@ -414,9 +411,8 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
         // The child re-loads the same config (`sandbox_config`) and takes
         // `[agents.<agent_name>]` from it, so model/tools/skills stay empty
         // here; only the per-agent turn cap travels in the payload.
-        // Phase 6.7: forward `step.compose` so a composed agent (C→B B-half)
-        // reaches the child as an explicit override rather than a renamed
-        // agent block.
+        // `step.compose` travels too: a composed agent reaches the child as
+        // an explicit override, not a renamed agent block.
         let input = AgentIpcInput {
             goal,
             agent_name: step.agent.clone(),
@@ -428,7 +424,7 @@ impl crate::ports::orchestration::WorkerHandle for SubprocessRunner {
             session_id: self.session_id.clone(),
             step_id: step.id.0.clone(),
             compose: step.compose.clone(),
-            // Phase 7.2 — propagate the parent's sandbox into the child so
+            // Propagate the parent's sandbox into the child so
             // the subagent sees the same scopes/secrets/MCP servers as the
             // parent process did.
             sandbox_config: self.sandbox_name.clone(),
@@ -509,10 +505,9 @@ mod tests {
         assert!(!tail.contains("line 0\n"), "older lines dropped: {tail}");
     }
 
-    /// Fix B (2026-05-09) — confirm `SubprocessRunner::new` plumbs the
-    /// explicit session_id through instead of minting a fresh UUID.
-    /// Pre-Fix-B the runner ignored the parent's id, breaking
-    /// within-session output recall in `RegistryPlanner::plan`.
+    /// `SubprocessRunner::new` keeps the explicit session_id (the planner's)
+    /// instead of minting a fresh UUID — within-session output recall in
+    /// `RegistryPlanner::plan` depends on it.
     #[test]
     fn new_uses_explicit_session_id() {
         let runner = SubprocessRunner::new(

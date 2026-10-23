@@ -308,7 +308,7 @@ pub struct Config {
     #[serde(skip)]
     pub ranking_section: Option<std::sync::Arc<strategy_ranking::RankingSection>>,
 
-    /// Phase 7.2 — name of the sandbox this `Config` was loaded from, or
+    /// Name of the sandbox this `Config` was loaded from, or
     /// `None` for the default user config. Populated by `load_sandbox_or` in
     /// `main.rs`. Plumbed through `SubprocessRunner` and the IPC payload so
     /// `tengu run-agent` children resolve `sandboxes/<name>/config.toml` for
@@ -748,11 +748,10 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     pub route_explicit_agents: bool,
 
-    /// Planner engine. `"rag"` (default) is the only supported value — the
-    /// name is historical (Phase 4 of the redesign); the current planner is
-    /// `RegistryPlanner` (file-backed `TENGU_PLANNER_REGISTRY.md`) + the
-    /// `SubprocessRunner` worker. The legacy `"static"` roster engine was
-    /// removed in Phase 7.1; any other value fails config validation.
+    /// Planner engine. `"rag"` (default) is the only supported value; the
+    /// name is historical, the planner is `RegistryPlanner` (file-backed
+    /// `TENGU_PLANNER_REGISTRY.md`) + the `SubprocessRunner` worker. Any
+    /// other value fails config validation.
     #[serde(default = "default_orchestrator_engine")]
     pub engine: String,
 }
@@ -767,9 +766,9 @@ fn default_orchestrator_engine() -> String {
     "rag".to_string()
 }
 
-/// Telegram bot adapter configuration. Unknown keys fail the load: the
-/// approval keys `tool_approvals` / `approve_only` gated nothing and were
-/// removed (2026-10-23) — no tool call waits for an approval on any surface.
+/// Telegram bot adapter configuration. Unknown keys fail the load, the old
+/// approval keys `tool_approvals` / `approve_only` too: no tool call waits
+/// for an approval on any surface.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelegramConfig {
@@ -950,7 +949,7 @@ pub const CLAUDE_CODE_PROFILES: &[&str] =
 pub struct AgentClaudeCodeConfig {
     /// One of [`CLAUDE_CODE_PROFILES`], read trimmed; default `none` (no
     /// built-ins: every file, page and command through bridged, scoped
-    /// tools; was `editor_shell` until 2026-10-22).
+    /// tools).
     #[serde(default = "default_builtin_tools_profile")]
     pub builtin_tools_profile: String,
 }
@@ -1134,9 +1133,8 @@ pub struct MemoryConfig {
     #[serde(default = "default_cross_plan_top_k")]
     pub cross_plan_top_k: usize,
     /// Top-K breadth for fuzzy cross-session message recall (vector
-    /// search over `agentic_memory` user messages). Defaults to `0` = off — the planner
-    /// prompt stays unchanged for users who haven't opted in. Pair with
-    /// Phase 6.4 (full) durable user-message persistence: setting this
+    /// search over `agentic_memory` user messages, which the planner writes
+    /// on every `plan()`). Defaults to `0` = off. Setting this
     /// to e.g. `3` injects a "Cross-session message recall" block of the
     /// top-3 semantically-similar prior user messages before the current
     /// turn, surviving across restarts and across `session_id`s. Use
@@ -1147,14 +1145,11 @@ pub struct MemoryConfig {
     /// Top-K breadth for fuzzy WITHIN-session output recall on the planner's
     /// normal `plan()` path (vector search over `agentic_memory` step
     /// outputs filtered by the planner's `session_id`). Defaults to `0` =
-    /// off — back-compat.
-    /// Pair with the unified-session_id wiring (Fix B 2026-05-09): the
-    /// planner and `SubprocessRunner` share one `session_id`, so step
-    /// summaries captured by `run-agent` in this session are
-    /// retrievable on the next user turn. Without this, step outputs
-    /// are only read on `replan()` (`cross_plan_top_k`) — which is why
-    /// follow-up questions like "was the report saved?"
-    /// previously got "I have no record of that step" answers.
+    /// off. The planner and `SubprocessRunner` share one `session_id`, so
+    /// step summaries captured by `run-agent` in this session are
+    /// retrievable on the next user turn; with `0`, step outputs are read
+    /// only on `replan()` (`cross_plan_top_k`), and a follow-up like "was
+    /// the report saved?" finds no record of the step.
     /// Recommended `3–5` once your sandbox config opts in.
     #[serde(default = "default_within_session_output_top_k")]
     pub within_session_output_top_k: usize,
@@ -1637,9 +1632,9 @@ impl Config {
 
     /// A name an agent's `tools` may list: a default or opt-in catalog tool,
     /// or `<server>__<tool>` of a configured `[[mcp_servers]]` entry (its
-    /// tools are known only once connected). Any other name warns at load —
-    /// a misspelled name used to be dropped silently; not an error, because a
-    /// shell skill's tool (found in the skill tiers at run time) is legal too.
+    /// tools are known only once connected). Any other name warns at load,
+    /// not an error: a shell skill's tool (found in the skill tiers at run
+    /// time) is legal too.
     fn is_known_tool(&self, name: &str) -> bool {
         crate::domain::tools::DEFAULT_TOOLS.contains(&name)
             || crate::domain::tools::WORKSPACE_TOOLS.contains(&name)
@@ -2034,9 +2029,8 @@ secret = "literal-dev-secret"
         assert!(local.goal_template.contains("webhook arrived"));
     }
 
-    /// Fix A (2026-05-09) — `within_session_output_top_k` defaults to 0
-    /// (off) so existing users see no behaviour change. Pair with the
-    /// matching default for `cross_session_msg_top_k`.
+    /// `within_session_output_top_k` defaults to 0 (off), like
+    /// `cross_session_msg_top_k`.
     #[test]
     fn memory_config_within_session_output_top_k_defaults_off() {
         let cfg = MemoryConfig::default();
@@ -2047,9 +2041,8 @@ secret = "literal-dev-secret"
         assert_eq!(cfg.cross_plan_top_k, 5);
     }
 
-    /// Fix A — confirm the field round-trips through TOML and keeps the
-    /// default when absent in the source. This is the back-compat guard:
-    /// pre-Fix-A `[memory]` blocks must still parse.
+    /// The field round-trips through TOML and keeps the default when
+    /// absent: a `[memory]` block without it still parses.
     #[test]
     fn memory_config_within_session_output_top_k_optional_in_toml() {
         let toml_str = "[memory]\nenabled = true\n";
@@ -2123,9 +2116,9 @@ agent = "main"
 
     #[test]
     fn memory_config_ignores_removed_qdrant_keys() {
-        // Sandbox configs written before Phase 6 may still carry the old
-        // Qdrant-era keys; `MemoryConfig` has no `deny_unknown_fields`, so
-        // they must parse cleanly (and be ignored).
+        // Older sandbox configs may still carry the Qdrant-era keys;
+        // `MemoryConfig` has no `deny_unknown_fields`, so they must parse
+        // cleanly (and be ignored).
         let toml_str = r#"
 enabled = true
 backend = "disk"

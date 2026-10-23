@@ -325,8 +325,7 @@ pub(crate) fn workspace_or_temp(
 /// A2A bearer) needs a configured `env_reads` (2026-10-22: `"*"` let a
 /// fetched page put any secret into a URL for any host).
 ///
-/// Phase 7.7 — `pub(crate)` so the MCP bridge calls this instead of
-/// inlining its own copy. Both paths share the same scope shape.
+/// The MCP bridge calls this too, so both paths share the same scope shape.
 pub(crate) fn permissive_scope(workspace: &Path) -> ToolScope {
     ToolScope {
         fs_roots: vec![workspace.to_path_buf()],
@@ -556,7 +555,7 @@ pub(crate) fn agent_skill_registry(
     registry
 }
 
-/// Phase 5b — build the per-subprocess tool stack for `tengu run-agent`
+/// Build the per-subprocess tool stack for `tengu run-agent`
 /// (also `tengu tool call` and decision loops).
 ///
 /// Resolves `effective_tools = agent_base_tools ∪ {compress_and_store} ∪
@@ -576,12 +575,10 @@ pub(crate) fn build_subprocess_tool_executor(
     workspace: &Path,
     secret_registry: &Arc<SecretRegistry>,
     activity: Arc<dyn ToolActivityPort>,
-    // Phase 7.6 (Bug A) — caller provides a real MemoryManager so the
-    // MemoryPlugin can register `persistent_store` / `memory_ingest`.
-    // Pre-7.6 this was hardcoded `None`, which meant MCP-routed Claude Code
-    // tool calls returned "Tool not available" even when the tool def was
-    // advertised. Pass `None` only when the agent definitively has no memory
-    // tools in its allow-list.
+    // A real MemoryManager, so the MemoryPlugin registers `persistent_store`
+    // / `memory_ingest` (with `None` a bridged call to them gets "Tool not
+    // available"). Pass `None` only when the agent has no memory tools in
+    // its allow-list.
     memory_manager: Option<Arc<crate::application::memory::manager::MemoryManager>>,
 ) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
     let mut agent_cfg = subagent_config(agent);
@@ -591,8 +588,8 @@ pub(crate) fn build_subprocess_tool_executor(
     // opt-ins included), else every base tool.
     let mut effective = agent_base_tools(agent, true, config.memory.enabled);
 
-    // Always-on protocol tool. Phase 5b dispatches it out-of-band, so we
-    // only need its description here for the LLM to see + call.
+    // Always-on protocol tool. The run-agent loop dispatches it
+    // out-of-band, so only its description is needed here.
     effective
         .push(crate::adapters::outbound::tools::skill_lifecycle::compress_and_store::definition());
 

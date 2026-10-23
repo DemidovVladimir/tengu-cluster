@@ -11,7 +11,7 @@ use crate::config::Config;
 /// Load a sandbox config if `--sandbox <name>` was given, otherwise use the default config.
 ///
 /// Sandbox configs are loaded from `sandboxes/<name>/config.toml` relative to the
-/// current working directory. Phase 7.2 — when a sandbox config is loaded, the
+/// current working directory. When a sandbox config is loaded, the
 /// `Config.sandbox_name` runtime-only field is set to the resolved name so
 /// downstream code (notably `SubprocessRunner` → `tengu run-agent` IPC) can
 /// re-resolve the same config in the child process. Without this, child

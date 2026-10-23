@@ -194,7 +194,7 @@ pub(crate) struct FillEnv<'a> {
     /// The gate waived `book_age` for this order (a reduce-only exit under
     /// `allow_reduce_degraded`): a book past `max_book_age_ms` is filled,
     /// not refused, and the result says `stale_book`. An exit must be able
-    /// to get out; the waiver used to end in a `stale_book` rejection.
+    /// to get out.
     pub stale_book_ok: bool,
 }
 

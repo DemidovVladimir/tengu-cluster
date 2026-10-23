@@ -191,7 +191,7 @@ fn planner_embedder(
 /// Postgres schema is sized for (`vector(1536)`, `DEFAULT_EMBEDDING_MODEL`),
 /// like the `agentic_memory` tool. `[memory] embedding_model` stays the
 /// workspace vector store's; when it differs, a warning says so (another
-/// model here used to turn planner recall text-only, warnings only).
+/// model here would make every planner recall text-only).
 fn open_brain_embedding_model(configured: &str) -> (&'static str, Option<String>) {
     let pinned = crate::domain::memory::DEFAULT_EMBEDDING_MODEL;
     let warning = (configured != pinned).then(|| {
@@ -265,9 +265,9 @@ pub(crate) fn build_orchestrator(
         })
     };
 
-    // Fix B (2026-05-09) — session_id is resolved by the caller and
-    // passed in. Single value shared between RegistryPlanner (recall reads)
-    // and SubprocessRunner (compress_and_store writes via IPC).
+    // session_id is resolved by the caller and passed in: one value shared
+    // between RegistryPlanner (recall reads) and SubprocessRunner
+    // (compress_and_store writes via IPC).
     // Logged at info-level so users can stitch tracing output back
     // to a specific persisted thread.
     tracing::info!(

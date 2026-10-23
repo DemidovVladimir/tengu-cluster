@@ -30,19 +30,15 @@ pub(crate) fn resolve_memory_store_path(
     }
 }
 
-// `resolve_qdrant_collection` was removed in Phase 6 along with the Qdrant
-// backend — the disk-backed `VectorStore` does not use collection names.
-
 /// Build a `MemoryManager` holding the `Embedder` + `VectorStore` pair.
 ///
 /// Returns a manager without a backend when memory is disabled or the
 /// vector stack fails to initialize, so channels can always hand a valid
 /// `Arc<MemoryManager>` to the tool executor.
-/// Phase 7.6 — async sibling of `build_memory_manager` for callers that
-/// already live inside a tokio context (notably `run_agent_subprocess`,
-/// which can't take a `&Runtime` arg without re-entrant block-on hazards).
-/// Returns the same fully-wired `MemoryManager` — backed by the bincode
-/// `DiskVectorStore` (the only `VectorStore` impl since Phase 6).
+/// Async sibling of `build_memory_manager` for callers that already live
+/// inside a tokio context (notably `run_agent_subprocess`, which can't take
+/// a `&Runtime` arg without re-entrant block-on hazards). Backed by the
+/// bincode `DiskVectorStore`, the only `VectorStore` impl.
 pub(crate) async fn build_memory_manager_async(
     memory_config: &crate::config::MemoryConfig,
     workspace: Option<&Path>,
@@ -78,9 +74,8 @@ async fn build_vector_stack_async(
     };
     let resolved_store_path = resolve_memory_store_path(memory_config, workspace);
 
-    // The legacy `qdrant` backend was removed in Phase 6. The disk-backed
-    // bincode store is the only `VectorStore` impl now — `memory_config.backend`
-    // is no longer branched on.
+    // The disk-backed bincode store is the only `VectorStore` impl:
+    // `memory_config.backend` is not branched on.
     let store: Option<Arc<dyn VectorStore>> = DiskVectorStore::new(&resolved_store_path)
         .ok()
         .map(|s| Arc::new(s) as Arc<dyn VectorStore>);
@@ -92,7 +87,7 @@ async fn build_vector_stack_async(
     Some((embedder, store))
 }
 
-/// Phase 7.7 refactor #4 — sync wrapper around `build_memory_manager_async`.
+/// Sync wrapper around `build_memory_manager_async`.
 /// The backend wiring lives in the async function; this wrapper just
 /// block_on's it.
 pub(crate) fn build_memory_manager(

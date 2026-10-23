@@ -446,7 +446,7 @@ fn fixture_row(f: crate::application::skills::lifecycle::fixtures::Fixture) -> Y
 pub fn parse_yaml_prompts(body: &str) -> Result<Vec<PromptRow>> {
     // Either a plain list of rows, or the `{schema_version, fixtures}` file
     // that `skill_distill`, `tengu skill seed` and `manage_skill create` write
-    // (`lifecycle::fixtures::FixturesFile`) — which eval used to refuse.
+    // (`lifecycle::fixtures::FixturesFile`).
     let is_fixtures_file = serde_yaml::from_str::<serde_yaml::Value>(body)
         .ok()
         .and_then(|v| v.as_mapping().map(|m| m.contains_key("fixtures")))
@@ -976,12 +976,10 @@ pub async fn judge_row(
     observations: &[Observation],
     final_text: &str,
 ) -> anyhow::Result<JudgeOutcome> {
-    // NOTE: We used to prefill an Assistant message with `{"verdict":` to force
-    // JSON start, but OpenRouter's Anthropic provider rejects that ("The
-    // conversation must end with a user message."). `parse_verdict` is now
-    // robust to wrapped/fenced output, which removes the need for the prefill
-    // at the cost of occasionally paying a few tokens for prose the model
-    // emits before the JSON object.
+    // No assistant prefill (`{"verdict":`): OpenRouter's Anthropic provider
+    // rejects it ("The conversation must end with a user message.").
+    // `parse_verdict` takes wrapped / fenced output instead, at the cost of
+    // a few tokens of prose the model may write before the JSON object.
     let messages = vec![
         Message {
             role: Role::System,
@@ -1550,7 +1548,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
 
     let mut tool_defs = current_tools.clone();
     // The agent's own executor, kept for `tool_assertion` metrics (its
-    // registry, HTTP client, scopes): they used to get none and always failed.
+    // registry, HTTP client, scopes): without it they always fail.
     let mut plugin_executor: Option<Arc<crate::application::tools::registry::PluginToolExecutor>> =
         None;
     let inner_executor: Arc<dyn crate::ports::engine::ToolExecutor> =

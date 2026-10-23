@@ -73,16 +73,10 @@ impl PlannerLlm {
 ///   1. Raw JSON — parses directly.
 ///   2. JSON wrapped in markdown fences (```json ... ```).
 ///   3. JSON embedded in prose ("Here's my plan: {...}. Let me know if…").
-///   4. **Phase 7.4 — pure-prose fallback.** Some engines (notably
-///      Claude Code CLI) return conversational text even when the system
-///      prompt says JSON-only. When NO balanced `{...}` substring exists
-///      at all, we wrap the whole text as a `Direct { response: ... }`
-///      verdict. This is a safety net — much better UX than a hard parse
-///      error, and the user still gets the model's reply.
-///
-/// Phase 7.1 — promoted from `OrchestratorAgentPlanner::parse_verdict`
-/// (associated function with no `self`) to a free function when that
-/// type was deleted. RegistryPlanner is the only remaining caller.
+///   4. Pure prose: some engines (notably the Claude Code CLI) answer
+///      conversationally despite a JSON-only prompt. With no balanced
+///      `{...}` substring at all, the whole text becomes a
+///      `Direct { response }` verdict, so the user still gets the reply.
 pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
     let trimmed = raw.trim();
 
@@ -108,7 +102,7 @@ pub(crate) fn parse_verdict(raw: &str) -> anyhow::Result<PlannerVerdict> {
         }
     }
 
-    // Path 4 (Phase 7.4): pure-prose fallback. Some engines (Claude Code
+    // Path 4: pure-prose fallback. Some engines (Claude Code
     // CLI in particular) return conversational text even when told to
     // emit JSON-only. Rather than failing the whole turn, wrap the text
     // as a Direct verdict — same as if the planner had said
@@ -194,7 +188,7 @@ fn extract_balanced_json_object(s: &str) -> Option<String> {
 }
 
 // =====================================================================
-// RegistryPlanner — the only Planner implementation as of Phase 7.1.
+// RegistryPlanner — the only Planner implementation.
 //
 // Loads `TENGU_PLANNER_REGISTRY.md` per turn and prepends the full roster
 // to the user message; uses `parse_verdict` (free fn above) for tolerant
@@ -209,11 +203,11 @@ pub struct RegistryPlanner {
     /// rendered into `TENGU_PLANNER_REGISTRY.md` every planner turn.
     agents: Vec<(String, crate::config::AgentConfig)>,
     workspace: std::path::PathBuf,
-    /// Phase 4c — body of `skills/orchestrator/SKILL.md` (frontmatter
+    /// Body of `skills/orchestrator/SKILL.md` (frontmatter
     /// stripped) used as the planner system prompt. Falls back to a
     /// hardcoded minimal instruction if the file is missing.
     system_prompt: String,
-    /// Phase 6.4 (lite) — in-memory ring buffer of recent user messages
+    /// In-memory ring buffer of recent user messages
     /// for THIS RegistryPlanner instance. Survives within one channel session,
     /// lost on restart; mixes turns from concurrent Telegram chats sharing
     /// one RegistryPlanner. Used as the source of the "## Recent user messages
@@ -248,12 +242,9 @@ impl RegistryPlanner {
         tool_directory: Arc<dyn crate::ports::tool::ToolDirectory>,
         recall: Option<Arc<dyn crate::ports::memory::RecallStore>>,
         embedder: Option<Arc<dyn crate::ports::memory::Embedding>>,
-        // Fix B (2026-05-09) — session_id resolved by `build_orchestrator`
-        // and shared with `SubprocessRunner`, so the parent's recall query
-        // and the child's `compress_and_store` write key match. Pre-Fix-B
-        // the planner minted independently here and the runner minted
-        // independently of THAT, so within-session output recall (Fix A)
-        // would have filtered to a session_id no one else used.
+        // Resolved once by `build_orchestrator` and shared with
+        // `SubprocessRunner`: the parent's recall query and the child's
+        // `compress_and_store` write use the same key.
         session_id: String,
     ) -> Self {
         let system_prompt = load_orchestrator_skill_body().unwrap_or_else(|| {
@@ -317,7 +308,7 @@ impl RegistryPlanner {
         }
     }
 
-    /// Phase 6.4 (lite) — push the current user message into the session
+    /// Push the current user message into the session
     /// history buffer and return the formatted "recent dialogue" block.
     /// Returns an empty string for the first turn (no prior context to show).
     async fn update_and_format_history(&self, user_message: &str) -> String {
@@ -342,11 +333,10 @@ impl RegistryPlanner {
         format_history(&hist, limit)
     }
 
-    /// Phase 6.4 (full, read-back) — semantic recall over durable user messages.
+    /// Semantic recall over durable user messages.
     /// Returns a formatted prompt block of the top-K semantically-similar
     /// prior user messages, or an empty string when:
-    /// - the config knob `memory.cross_session_msg_top_k` is 0 (default,
-    ///   so existing users see no behaviour change),
+    /// - the config knob `memory.cross_session_msg_top_k` is 0 (the default),
     /// - the memory backend is unavailable,
     /// - the search returns nothing (collection empty / cold start), or
     /// - every hit is a near-duplicate of the current message (filtered out
@@ -356,11 +346,8 @@ impl RegistryPlanner {
     /// `persist_user_message()` so the just-written current message can
     /// never appear in its own recall block. (The semantic embedder will
     /// happily return a self-match at score ~1.0 if we read after writing.)
-    /// Fix E (2026-05-09) — `embed_vec` is the cached user-message vector
-    /// from `plan()`; when `Some`, skip the duplicate embedder call.
-    /// `None` means the caller didn't pre-compute (or the upstream embed
-    /// already failed) — we fall back to embedding internally for backward
-    /// compatibility with replan() and standalone test paths.
+    /// `embed_vec` is the user-message vector `plan()` already computed;
+    /// with `None` (replan, tests, a failed upstream embed) it embeds here.
     async fn cross_session_recall_block(
         &self,
         user_message: &str,
@@ -403,7 +390,7 @@ impl RegistryPlanner {
         String::new()
     }
 
-    /// Fix A (2026-05-09) — within-session output recall.
+    /// Within-session output recall.
     ///
     /// Returns a formatted prompt block of the top-K semantically-similar
     /// step outputs from THIS session (filtered to `self.session_id`), or
@@ -412,10 +399,9 @@ impl RegistryPlanner {
     /// - Postgres `agentic_memory` is unavailable, or
     /// - no outputs in this session match.
     ///
-    /// Pairs with Fix B's unified session_id wiring: the `run-agent` step
-    /// summary capture stamps `AgentIpcInput.session_id`, which now equals
-    /// the planner's `session_id`. Without Fix B this filter would never
-    /// match (parent and child mint independent UUIDs).
+    /// The `run-agent` step summary capture stamps `AgentIpcInput.session_id`,
+    /// which is the planner's own `session_id` (one id per surface session),
+    /// so the filter matches this session's steps.
     async fn session_output_recall_block(
         &self,
         user_message: &str,
@@ -458,7 +444,7 @@ impl RegistryPlanner {
         String::new()
     }
 
-    /// Phase 6.4 (full) — durably persist a user message to the configured
+    /// Durably persist a user message to the configured
     /// runtime memory backend.
     /// Called from `plan()` only (not `replan()`, which receives the same
     /// `user_message` in the same turn cycle — a second write would create
@@ -494,7 +480,7 @@ impl RegistryPlanner {
 
 /// Read `skills/orchestrator/SKILL.md` from cwd and return the body
 /// (everything after the YAML frontmatter, if present). Returns `None` if
-/// the file is missing or unreadable. Phase 4c.
+/// the file is missing or unreadable.
 fn load_orchestrator_skill_body() -> Option<String> {
     let path = std::path::Path::new("skills/orchestrator/SKILL.md");
     let content = std::fs::read_to_string(path).ok()?;
@@ -516,7 +502,7 @@ fn load_orchestrator_skill_body() -> Option<String> {
 }
 
 /// Last-resort planner prompt used when `skills/orchestrator/SKILL.md` is
-/// missing on disk. Phase 4c.
+/// missing on disk.
 const FALLBACK_PLANNER_PROMPT: &str = "You are the orchestrator for tengu-cluster.
 
 For every user message you receive the available agents, skills, tools, and the user's message.
@@ -557,22 +543,19 @@ impl Planner for RegistryPlanner {
             .cross_session_recall_block(user_message, embed_slice)
             .await;
 
-        // Phase 6.4 (full, write) — durable persist of user message AFTER
+        // Durable persist of the user message AFTER
         // the read above. Fail-soft: if embedder or Postgres is unavailable
         // we still want to plan and respond (in-memory buffer covers this
         // turn for "Recent user messages this session" injection).
         self.persist_user_message(user_message, embed_slice).await;
 
-        // Phase 6.4 (lite) — append current message to per-instance
+        // Append the current message to the per-instance
         // history buffer, then format the last N for prompt injection.
         let history_block = self.update_and_format_history(user_message).await;
 
-        // Fix A (2026-05-09) — within-session output recall on the normal
-        // plan() path. Without this, prior step outputs are only readable
-        // on replan; follow-up questions like "was the report
-        // created?" return "I have no record of that step." Off by default
-        // (`within_session_output_top_k = 0`) so existing users see no
-        // behaviour change.
+        // Within-session output recall on the plan() path, so a follow-up
+        // ("was the report created?") sees this session's step outputs.
+        // Off by default (`within_session_output_top_k = 0`).
         let session_recall_block = self
             .session_output_recall_block(user_message, embed_slice)
             .await;
@@ -621,7 +604,7 @@ impl Planner for RegistryPlanner {
     ) -> anyhow::Result<PlannerVerdict> {
         let registry_block = self.load_registry_block().await;
 
-        // Phase 6.5 — cross-plan recall. Pull the top-K most similar
+        // Cross-plan recall. Pull the top-K most similar
         // step outputs so the planner sees relevant prior work before
         // deciding the new plan. Failure is non-fatal — we still replan
         // with whatever roster we have.
@@ -669,7 +652,7 @@ impl Planner for RegistryPlanner {
             String::new()
         };
 
-        // Phase 6.4 (lite) — recent dialogue context for replan too.
+        // Recent dialogue context for replan too.
         // Don't append again (same user_message already pushed by plan()
         // earlier in this turn cycle); just read the last N for injection.
         let history_block = self.format_history_only().await;
@@ -784,7 +767,7 @@ fn recalled(h: &crate::domain::memory::RecallHit) -> String {
     crate::domain::untrusted::fence(&format!("memory:{}", h.kind), &text)
 }
 
-/// Phase 6.4 (lite) — render the planner's per-session history buffer as a
+/// Render the planner's per-session history buffer as a
 /// markdown "recent dialogue" block. Shows the last `limit` user messages.
 /// Returns an empty string when there's only one entry (just the current
 /// turn — no prior context worth showing).
@@ -865,12 +848,8 @@ mod tests {
         assert!(parse_verdict(raw).is_ok());
     }
 
-    /// Phase 7.4 prose-fallback — non-empty malformed input is wrapped as a
-    /// `Direct { response }` verdict rather than returning `Err`. Pre-7.4 this
-    /// test asserted `is_err()` on `"{"`; that contract changed when the
-    /// fallback landed (`parse_verdict` Path 4) so engines like Claude Code
-    /// that emit conversational prose stop hard-erroring the whole turn.
-    /// Truly empty input is the ONLY remaining error case.
+    /// Non-empty malformed input becomes a `Direct { response }` verdict
+    /// (`parse_verdict` Path 4); only empty input is an error.
     #[test]
     fn rejects_only_empty_input() {
         // Empty input still errors — there's nothing to wrap.

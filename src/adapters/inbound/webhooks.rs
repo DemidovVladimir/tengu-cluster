@@ -65,8 +65,8 @@
 //!   `sandboxes/<name>/config.toml`. Adding a new webhook is one TOML
 //!   block, no recompile.
 //! - Session_id is the recall key: per-request, namespaced as
-//!   `webhook-<endpoint>-<uuid>`. Pairs with Fix B (parent / child
-//!   share one id) and Fix A (within-session output recall).
+//!   `webhook-<endpoint>-<uuid>`, shared by the planner and its step
+//!   children, so within-session output recall finds this request's steps.
 
 #![cfg(feature = "webhooks")]
 

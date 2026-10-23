@@ -1,10 +1,6 @@
 // src/adapters/outbound/tools/memory/persistent_store.rs
-//! `persistent_store` tool — chunked file storage with vector semantic search.
-//!
-//! Migrated from `persistent_store_executor.rs` during Phase A / task A5. The
-//! old executor used `tokio::task::block_in_place` to bridge sync→async; this
-//! implementation is natively async and `.await`s `MemoryService` methods
-//! directly.
+//! `persistent_store` tool — chunked file storage with vector semantic search,
+//! natively async over `MemoryService`.
 //!
 //! Files are saved raw at `<workspace>/.tengu/storage/<file_id>/` and each
 //! file is chunked, embedded, and stored in the disk vector store

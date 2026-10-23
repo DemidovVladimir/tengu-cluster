@@ -59,7 +59,7 @@ impl MetricKind for ScriptKind {
 }
 
 // The script's env contract: the row's prompt, the agent's reply and the
-// expected outcome (all three used to be passed empty).
+// expected outcome.
 fn fixture_prompt_env(f: &FixtureContext<'_>) -> String {
     f.prompt.to_string()
 }

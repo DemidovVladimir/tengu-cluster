@@ -7,9 +7,7 @@ use std::path::{Component, Path, PathBuf};
 
 /// Fine-grained scope for tool execution. Default-deny: every field empty
 /// means the tool can do nothing. Config must grant access explicitly.
-///
-/// This type is defined by Phase 0 and consumed by Phase A's `ToolCtx`.
-/// Subject to refinement during Phase A if additional fields are needed.
+/// Every tool reads it from its `ToolCtx`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ToolScope {
     /// Allowed filesystem roots. Every fs-touching tool must reject

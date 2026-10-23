@@ -49,7 +49,7 @@ async fn try_persist_agentic_step_summary(
     .await
 }
 
-/// `tengu run-agent` handler — Phase 5b (real LLM + multi-turn tool loop).
+/// `tengu run-agent` handler: one plan step, an LLM with a multi-turn tool loop.
 ///
 /// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
 /// 2. Reads one JSON `AgentIpcInput` from stdin.
@@ -109,13 +109,13 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         "run-agent received"
     );
 
-    // Phase 7.6 Bug B — expose session_id via env so plugins (notably
+    // Expose session_id via env so plugins (notably
     // `agentic_memory` `capture`) can stamp it on their writes without needing it
     // threaded through ToolCtx. Set BEFORE building the tool executor so any
     // plugin construction that reads it sees the right value.
     std::env::set_var("TENGU_SESSION_ID", &input.session_id);
 
-    // ----- Resolve parent config (Phase 7.2 sandbox inheritance) -----
+    // ----- Resolve parent config (sandbox inheritance) -----
     //
     // The child runs on the SAME config as the parent: `sandbox_config`
     // names the sandbox (`sandboxes/<name>/config.toml`), otherwise the
@@ -155,7 +155,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
     // ----- Resolve the agent: `[agents.<name>]` of that config -----
     //
-    // Phase 6.7 (C→B B-half): when `input.compose` is set, the parent has
+    // When `input.compose` is set, the parent has
     // composed a transient agent. Take the BASE block
     // `[agents.<compose.base_agent>]` (not `[agents.<input.agent_name>]`,
     // which may be a synthetic label for events/logs), then override the
@@ -280,7 +280,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     }
     system_prompt.push_str(MANDATORY_SUFFIX);
 
-    // ----- Build engine (Phase 7.3 — honour the agent's engine) -----
+    // ----- Build engine (the agent's own `engine`) -----
     let mut agent_cfg_for_engine = crate::bootstrap::tools::subagent_config(&spec);
     // The Claude Code engine ships these scopes to the MCP bridge; the child
     // workspace must be an allowed fs root there too.
@@ -318,7 +318,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         "subprocess engine built"
     );
 
-    // ----- Build tool stack (Phase 5b) -----
+    // ----- Build tool stack -----
     // The parent's vault values (inherited, never prompts): tool output is
     // redacted like in the parent and in a Claude Code bridge.
     let secret_registry = std::sync::Arc::new(
@@ -326,12 +326,10 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     );
     let activity: std::sync::Arc<dyn crate::ports::tool_activity::ToolActivityPort> =
         std::sync::Arc::new(SubprocessActivity);
-    // Phase 7.6 Bug A — build a real MemoryManager from the parent config so
-    // the MemoryPlugin can register persistent_store / memory_ingest as
-    // callable handlers (not just advertised tool defs). Without this,
-    // MCP-routed Claude Code calls to those tools fail with
-    // "Tool 'X' is not available to this agent" even though the tool def is
-    // in the advertised list.
+    // A real MemoryManager from the parent config, so the MemoryPlugin
+    // registers persistent_store / memory_ingest as callable handlers, not
+    // just advertised tool defs (a bridged call would otherwise get "Tool
+    // 'X' is not available to this agent").
     // The store sits in the agent's own workspace, else at `[memory]
     // store_path` (as in-process chat and the bridge): never in a step's
     // temp dir, which goes when the step ends.
@@ -414,7 +412,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             tool_calls: None,
         },
     ];
-    // Phase 7.4 — when running on Claude Code engine, expose tengu's plugin
+    // On the Claude Code engine, expose tengu's plugin
     // tools to the CLI via its MCP bridge. Without this the Claude CLI only
     // has its built-in tools (Read/Write/Edit/Bash) and treats tengu tools
     // (http_request, compress_and_store, persistent_store, etc.) as unknown
@@ -509,7 +507,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         }
     }
     // If the model never called compress_and_store, treat the final
-    // assistant text as the summary (graceful degradation, same as Phase 5a).
+    // assistant text as the summary (graceful degradation).
     let summary = summary.unwrap_or_else(|| final_text.clone());
 
     // Backstop the durable write when the subagent finished WITHOUT calling
@@ -547,7 +545,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
     // plan's answer (`step_output`).
     let output = step_output(&final_text, &summary, compress_called);
 
-    // Phase 5c — middle-ground protocol enforcement.
+    // Middle-ground protocol enforcement.
     // Pass:    compress_and_store called              → Ok (the canonical good path)
     // Pass:    no compress_and_store but text produced → Ok (model answered usefully)
     // Fail:    no compress_and_store AND no text       → Failed (DagExecutor retries)
@@ -723,9 +721,9 @@ const BASE_AGENT_TEMPLATE: &str = "You are a focused subagent run as a single-sh
 Read the user's goal, do exactly what is asked, and respond concisely with the result. \
 Do not ask follow-up questions — make reasonable assumptions and answer the user directly.";
 
-/// Mandatory suffix appended to every subagent system prompt — Phase 5b
-/// version. Tells the model to call `compress_and_store(summary)` as its
-/// final action; the harness captures the summary (persisted to Postgres
+/// Mandatory suffix appended to every subagent system prompt. Tells the
+/// model to call `compress_and_store(summary)` as its final action; the
+/// harness captures the summary (persisted to Postgres
 /// `agentic_memory` with `postgres_memory`) and exits the loop on that call.
 const MANDATORY_SUFFIX: &str = "\n\n---\n\n\
 When you have completed your task, your FINAL action MUST be to call the \
@@ -774,8 +772,8 @@ fn load_skill_body_three_tier(name: &str, workspace: &std::path::Path) -> Option
 }
 
 /// The agent's own name, `role` and `[agents.<a>.identity] instructions`,
-/// as a chat turn shows them (`skills::registry::build_system_prompt`) — a
-/// plan step used to run without them. Empty when none is set.
+/// as a chat turn shows them (`skills::registry::build_system_prompt`).
+/// Empty when none is set.
 fn identity_block(spec: &crate::config::AgentConfig) -> String {
     let mut parts = Vec::new();
     if let Some(name) = spec

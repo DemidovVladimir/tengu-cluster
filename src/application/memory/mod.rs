@@ -1,6 +1,6 @@
 //! Harness-owned memory subsystem — the **in-process, file/disk** layer.
 //!
-//! ## Where this sits in the stack (post Phase 6, 2026-05-14)
+//! ## Where this sits in the stack
 //!
 //! | Layer | Owner | Backing store |
 //! |---|---|---|

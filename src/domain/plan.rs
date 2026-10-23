@@ -12,7 +12,7 @@ impl StepId {
     }
 }
 
-/// Phase 6.7 (C→B B-half) — optional override that lets the planner LLM
+/// Optional override that lets the planner LLM
 /// compose a transient agent on the fly when no listed agent fits the
 /// request.
 ///
@@ -49,7 +49,7 @@ pub struct Step {
     pub goal: String,
     #[serde(default)]
     pub depends_on: Vec<StepId>,
-    /// Phase 6.7 (C→B B-half) — if set, the runner builds a transient
+    /// If set, the runner builds a transient
     /// agent from `compose.base_agent` overriding `skills`/`tools`,
     /// rather than using `[agents.<step.agent>]` verbatim. `step.agent`
     /// becomes a label for the composed agent (used in events / logs);

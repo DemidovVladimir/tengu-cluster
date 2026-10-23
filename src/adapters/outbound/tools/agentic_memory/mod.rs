@@ -296,9 +296,8 @@ impl AgenticMemoryTool {
             .or_else(|| ctx.agent_config.map(|a| a.model.clone()));
 
         // Embedded like every other event write (step summaries, planner
-        // messages): captures used to be stored text-only, so vector recall
-        // (`embedding IS NOT NULL`) never found them. Fail-soft: no key or an
-        // embed error stores text-only.
+        // messages), so vector recall (`embedding IS NOT NULL`) finds
+        // captures too. Fail-soft: no key or an embed error stores text-only.
         let embedding = embed_query(content).await;
         let store = Self::store().await?;
         store.ensure_schema().await?;
@@ -423,7 +422,7 @@ impl AgenticMemoryTool {
         ))
     }
 
-    /// Phase 4 LLM Wiki compiler over this sandbox's `approved` promotions
+    /// The LLM Wiki compiler over this sandbox's `approved` promotions
     /// (module doc). With `TENGU_WIKI_COMPILER_MODEL` an LLM synthesises a
     /// cited Markdown page; without it (no default model), or when the call
     /// fails, a deterministic bullet page is written — `compile_wiki` never

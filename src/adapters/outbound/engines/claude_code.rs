@@ -260,7 +260,7 @@ const ISOLATED_SETTINGS: &str = r#"{"autoMemoryEnabled":false,"disableAllHooks":
 /// |---|---|
 /// | `--strict-mcp-config` | always: only the `--mcp-config` servers (the tengu bridge), never the operator's user / project / plugin MCP servers — they run outside tengu scopes and egress. No bridge = no MCP server |
 /// | `--tools <profile>` | built-in tools; `""` = none (`builtin_tools_profile = "none"`) |
-/// | every profile (2026-10-22; was `none` only): `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
+/// | every profile: `--setting-sources ""` `--disable-slash-commands` `--settings` [`ISOLATED_SETTINGS`] | no user / project / local settings files (their hooks and installed plugins run shell commands outside tengu scopes; their `env`), no project `CLAUDE.md` / `AGENTS.md` auto-discovery, no skills or custom commands, no auto-memory, no hooks at all. Verified on CLI 2.1.286: subscription OAuth and the `--mcp-config` bridge still work. Not `--safe-mode` (drops the `--mcp-config` bridge too) nor `--bare` (no OAuth / keychain) |
 /// | `--mcp-config <file>` `--allowedTools mcp__tengu-tools__<name>…` | the bridge; `--tools` covers built-ins only, so each bridged tool is allowed by name |
 fn cli_args(
     profile: BuiltinToolsProfile,

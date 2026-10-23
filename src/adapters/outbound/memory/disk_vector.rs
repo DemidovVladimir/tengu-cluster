@@ -105,8 +105,8 @@ impl DiskVectorStore {
 
     /// Apply one change to the store under the cross-process lock: re-read
     /// `vectors.bin` first (another process may have written it since this one
-    /// loaded), apply `op`, write it back. Each process used to rewrite the
-    /// whole file from its own copy, so the last writer dropped the others' rows.
+    /// loaded), apply `op`, write it back. Rewriting the whole file from a
+    /// process's own copy would drop the rows the others wrote.
     fn mutate<T>(&self, op: impl FnOnce(&mut Vec<Entry>) -> T) -> Result<T> {
         let _lock = StoreLock::acquire(self.store_path.with_extension("bin.lock"))?;
         let mut entries = self

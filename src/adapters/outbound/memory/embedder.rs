@@ -95,7 +95,7 @@ impl Embedder {
 
 /// `{OPENROUTER_BASE_URL}/v1/embeddings` (default base
 /// `https://openrouter.ai/api`), as the chat engine and the wiki compiler
-/// resolve it — the URL used to be hard-coded.
+/// resolve it.
 fn embeddings_url(base: Option<String>) -> String {
     let base = base
         .filter(|b| !b.trim().is_empty())

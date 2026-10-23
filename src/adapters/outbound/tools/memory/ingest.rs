@@ -7,8 +7,7 @@
 //! through a `MemoryServiceHandle` (`EmbeddingPort` / `MemoryStorePort`
 //! shim); this version bypasses that indirection entirely.
 //!
-//! Input schema (unchanged from the legacy `remember` tool plus the
-//! harness-orchestration Phase 2 extensions):
+//! Input schema:
 //!
 //! - `text` / `content` — the text to ingest (aliases).
 //! - `chunks: Vec<String>` — pre-chunked content; each chunk lands as
