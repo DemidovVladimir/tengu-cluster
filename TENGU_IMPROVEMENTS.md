@@ -12,7 +12,7 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `85a01bab7305794ca0873b7646c416d5ab2783d4` (S4) · **not pushed, no PR** |
+| Last code commit | `3954018056c492563230aaa1aa0753afc7441727` (S16) · **not pushed, no PR** |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -42,13 +42,20 @@ Updated 2026-10-23 (resumed from 2026-10-22). Work order (operator, 2026-10-22):
 | S8 | done | `a4d7ed4ca7b97bb9d406741026de56723e4ba8e2` |
 | test | lease-loss test retries the steal (flaky under load) | `e117c22fce30884122b480b9a440caddf49cf32c` |
 | S4 | done: doctrine-compatible variant (an added tool needs a configured scope) | `85a01bab7305794ca0873b7646c416d5ab2783d4` |
+| S6 | done: `domain/untrusted.rs` — one fence at the LLM sinks (tool results, recall, webhook bodies, step inputs, errors, loop escalations) | `78808a059f3cacd34c90013f2ee8395bff88b58e` |
+| S7 | done: CLI engines get `<turn role=…>` tags, stripped from every body | `5a5a378dcce47db9467fc18ab21d45cdb01ccd88` |
+| S10 | done: `config/readers.rs` load warning (reader + side effect) + the `[orchestrator]` claude_code profile `none` error; pinned: lping/lping, lping/crypto_researcher, storage-test/storage (unlimited quiet since S1) | `938f7361594d87f0453e55f7db7a91b1734f55ad` |
+| S11 | done: `tool_approvals` / `approve_only` removed, `[telegram]` `deny_unknown_fields` | `84ea7c110d8e42db21c30a361edddd74f83c88ce` |
+| S14 | done: explicit `tools` in example `main`, tor-check `probe`, a2a-lab `planner` | `34fe62b320fcf0d1a51f76806057c0a69adb067e` |
+| S15 | done: `manage_skill` scans before writing (`scanner::scan_file`), `serde_yaml` frontmatter | `bd9e95cbf0114db928fd776c046378f6e31f25c7` |
+| S16 | done: `docs/tools.md` § Untrusted input map; venture-scan's 2 identity sentences removed (xpower's 2 are on its branch) | `3954018056c492563230aaa1aa0753afc7441727` |
 
 | Next | Rows, in order |
 |---|---|
-| 1 · leaks (current) | **S6**, S7, S10, S11, S14 (explicit `tools` in the 3 blocks only), S15, S16 |
-| 2 · everything else | T2, T4, T5, T7, T8, T9, D3, D5, D6, A5 (rest), A6, A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 1 · leaks | done |
+| 2 · everything else (current) | T2, T4, T5, T7, T8, T9, D3, D5, D6, A5 (rest), A6, A7, A8, A9, A10 (rest), A11, A12, R2, R4, R5, R6, R7, R8, Y1, Y2, Y5, Y6, Y8, Y9, B1, B2, B3, B4, B5, B6, B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
-| Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts) |
+| Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
 Every commit follows the repo rules: tutorial pages + `sources.toml` (`cargo test --test tutorial_map`), code map regen (`TENGU_REGEN_CODE_MAP=1 cargo test --test code_map`), `CLAUDE.md` = `AGENTS.md`, `cargo fmt --all --check`.
 
