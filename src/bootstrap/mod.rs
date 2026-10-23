@@ -9,6 +9,7 @@ pub(crate) mod a2a;
 pub(crate) mod builder;
 pub(crate) mod decision;
 pub(crate) mod memory;
+pub(crate) mod one_shot;
 pub(crate) mod orchestrator;
 pub(crate) mod runtime;
 pub(crate) mod sandbox;

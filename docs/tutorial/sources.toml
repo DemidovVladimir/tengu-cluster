@@ -200,7 +200,7 @@ sources = [
   "src/application/orchestrator/planner.rs",
   "src/bootstrap/orchestrator.rs",
   "src/adapters/inbound/mcp_bridge.rs",
-  "src/adapters/inbound/webhooks.rs",
+  "src/bootstrap/one_shot.rs",
   "src/adapters/inbound/cli/run_agent.rs",
   "src/config/mod.rs",
 ]
@@ -335,6 +335,7 @@ sources = [
   "src/ports/decision.rs",
   "src/adapters/outbound/decisions.rs",
   "src/bootstrap/decision.rs",
+  "src/bootstrap/one_shot.rs",
   "src/adapters/inbound/cli/decide.rs",
   "skills/execution-map/",
   "sandboxes/lping/config.toml",

@@ -60,11 +60,9 @@ pub(crate) async fn start_session(
 ) -> Result<RunSession> {
     // The escalator records into the runtime's run and its turns are the
     // runtime's (drained on shutdown); `start` hands both before any loop runs.
-    #[cfg(feature = "webhooks")]
-    let escalator: runtime::MakeEscalator<'_> =
-        Box::new(|trace, turns| super::webhooks::orchestrator_escalator(config, trace, turns));
-    #[cfg(not(feature = "webhooks"))]
-    let escalator: runtime::MakeEscalator<'_> = Box::new(|_, _| None);
+    let escalator: runtime::MakeEscalator<'_> = Box::new(|trace, turns| {
+        crate::bootstrap::one_shot::orchestrator_escalator(config, trace, turns)
+    });
 
     let mut rt = runtime::start(config, Arc::clone(&secrets), escalator).await?;
     #[cfg(feature = "webhooks")]

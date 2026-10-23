@@ -36,7 +36,7 @@ Trace through them in order. Every step has a file you can open.
 
 ### 1. User input → Channel
 
-The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Telegram message (`src/adapters/inbound/telegram.rs`; fails closed without an allow-list); a webhook POST (`src/adapters/inbound/webhooks.rs`, feature `webhooks`, default) runs a one-shot orchestrator turn with its own `session_id`. All get their wiring from `src/bootstrap/` (tool executor, memory, orchestrator); TUI and Telegram share `src/adapters/inbound/channel.rs` helpers.
+The user types into the TUI (`src/adapters/inbound/tui/mod.rs`) or sends a Telegram message (`src/adapters/inbound/telegram.rs`; fails closed without an allow-list); a webhook POST (`src/adapters/inbound/webhooks.rs`, feature `webhooks`, default) runs a one-shot orchestrator turn with its own `session_id` (`src/bootstrap/one_shot.rs::run_one_shot`, also every decision-loop escalation). All get their wiring from `src/bootstrap/` (tool executor, memory, orchestrator); TUI and Telegram share `src/adapters/inbound/channel.rs` helpers.
 
 ### 2. Bootstrap → Orchestrator
 
@@ -480,6 +480,7 @@ The trace is what Studio reads; the page draws what Rust computed (graph, colour
 | `ports/trace.rs` | `TraceSink` (one recording, fail-soft) · `TraceReader` (runs, events after a `seq`, follow live) |
 | `adapters/outbound/trace_store.rs` | `JsonlTraceSink` / `JsonlTraceReader`: `<TENGU_HOME>/logs/trace/<sandbox>/<run_id>.jsonl`, first line `run.opened`, one `write_all` per event; follow = a 250 ms tail into a bounded channel (256) |
 | `application/trace_exec.rs` | `Cause` / `caused_by` (an event's parent) · `TracedExecutor` (`tool.started` → `tool.completed` / `tool.failed`, node `tool:<agent>/<tool>`) |
+| `bootstrap/one_shot.rs` | `run_one_shot`: one orchestrator turn for a planner webhook endpoint or a loop escalation (`orchestrator_escalator`, `tengu run` / Studio / `tengu webhooks`, any build); answer → log + Open Brain, never the trace |
 | `bootstrap/trace.rs` | `open_sink` (a new recording per process; an unwritable dir ⇒ `NoopTrace` + a warn), `reader`, `run_path`. Records: `tengu run` (`runtime.*`, `feed.*`, `loop.*`, steps, tools, webhook requests, plans), `tengu decide` (`trigger.*`, steps, tools), `tengu webhooks` (`trigger.webhook` per request, its loop / plan events, `run.closed`); `open_orchestration` — chat / telegram / eval with `[orchestrator]` (`plan.*`, `step.*`, a step's `run-agent` `tool.*`) |
 | `cli/trace.rs` | `tengu trace runs \| show --run <id> [--after <seq>] [--follow]` — JSON lines; no config, read-only |
 | `domain/workflow.rs` | `WorkflowGraph`: nodes `runtime` · `trigger` · `feed` · `agent` · `loop` · `world` · `jev` · `gate` · `action` · `escalation` · `scope` · `tool` (layer + order computed in Rust); edges `fires` · `reads` · `asks` · `chooses` · `calls` · `binds` · `next` · `guards` · `escalates` · `owns`; `narrowed_out` = dropped by an execution map — pure |

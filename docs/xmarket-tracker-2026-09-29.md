@@ -174,8 +174,8 @@ graph LR
 | Solana typed-tool family (plugin, defs, pure policy, goldens) | `src/adapters/outbound/tools/solana/`, `src/domain/lp/` | Template for `hl_*`, `rh_*`, `xm_*`, `paper_*`, `news_*` |
 | Scoped JSON fetch + JSON-RPC client with `ErrorClass` | `src/adapters/outbound/solana/{http_json,rpc}.rs` | Lift into a shared HTTP classifier + the EVM JSON-RPC transport |
 | Install-wide SQLite store pattern (lease, pending record, fence) | `src/adapters/outbound/solana/writes_store.rs` | Runtime lease, ledger, catalog, audit stores |
-| Webhook listener → loop endpoint (`auth_header_env`, HMAC) — only with `--features webhooks`, not a default feature or in the default image | `src/adapters/inbound/webhooks.rs` (gated in `src/adapters/inbound/mod.rs`) | Mounted by `tengu run` (feature-gated, or make `axum` / `hmac` non-optional); push vendors |
-| Orchestrator escalation (`run_one_shot`, `OrchestratorEscalator`) — same feature gate | `src/adapters/inbound/webhooks.rs` | Moves to `src/bootstrap/`; becomes the architect escalator (M5) |
+| Webhook listener → loop endpoint (`auth_header_env`, HMAC) — feature `webhooks`, a default feature since 2026-10-22 (`d206882fdc1e1b4c6f7bb1415158693c63780f8c`) | `src/adapters/inbound/webhooks.rs` (gated in `src/adapters/inbound/mod.rs`) | Mounted by `tengu run`; push vendors |
+| Orchestrator escalation (`run_one_shot`, `OrchestratorEscalator`) — no feature gate (2026-10-23) | `src/bootstrap/one_shot.rs` | Becomes the architect escalator (M5) |
 | Egress policy + per-tool scopes | `src/adapters/outbound/egress.rs`, `src/domain/scope.rs` | Every feed and tool; gains `stream_client` + `ws_connect` (M2) |
 | Signing-sandbox load rules | `src/config/solana.rs` | Pattern for the `[risk]` no-shell rules (M0) and live trading (M8) |
 | Terminal y/N prompt (reads one stdin line; no TTY check, so a piped `y` is accepted) | `src/application/skills/lifecycle/approval_gate.rs` | Prompt pattern for `tengu xm approve` / `tengu risk resume`, which must add a hard `is_terminal()` refusal |
@@ -397,7 +397,7 @@ Ids are stable — cite them in commits. Merged and dropped ids are listed after
 | ☐ | `jev-state-hygiene` | State budget + untrusted-text guard; loops with write actions see structured fields only | §15 §23 §24 | S | rust |
 | ☐ | `jev-escalation-guard` | Per-loop escalation budget, single-flight per event, no escalation on unsure terminal picks | §26 §27 | S | rust |
 | ☐ | `jev-architect-config` | `xm_architect` (OpenRouter or hardened `claude_code` on the subscription) + skills: entity research, why-moving, research-submit contract | §26 §27 | S | skill |
-| ☐ | `jev-architect-escalator` | `Escalator` returns an escalation id; moves out of the `webhooks`-gated module into `src/bootstrap/`; direct dispatch, timeout, post-check, audit link | §26 §27 | M | rust |
+| ☐ | `jev-architect-escalator` | `Escalator` returns an escalation id; ~~moves out of the `webhooks`-gated module into `src/bootstrap/`~~ (done 2026-10-23: `src/bootstrap/one_shot.rs`); direct dispatch, timeout, post-check, audit link | §26 §27 | M | rust |
 | ☐ | `jev-research-submit-tool` | `xm_submit_research`: validated result ⇒ `xm_research/1:<event_key>` | §17 §24 §26 §29 | M | rust |
 | ☐ | `jev-loop-resume` | Route the architect's result back into the originating loop + lane ("JEV resumes") | §26 §27 §36 | M | rust |
 | ☐ | `jev-obs-prefix` | Prefix listing on the observation store (watch lists, open candidates) | §22 §23 §29 | S | rust |

@@ -1464,6 +1464,7 @@ const FILE_MAP = [
   // ── bootstrap ──
   ["src/bootstrap/orchestrator.rs", "bootstrap", "planner_llm (the planner's PlannerLlm), build_orchestrator(config, llm, session_id, trace), resolve_session_id; ChatTurnInputs, RuntimeChatServiceFactory, build_cli_chat_factory (tengu evolve)"],
   ["src/bootstrap/turn.rs", "bootstrap", "run_once: one in-process agent turn (A2A agent endpoint, tengu tool turn)"],
+  ["src/bootstrap/one_shot.rs", "bootstrap", "run_one_shot: one orchestrator turn for a planner webhook endpoint or a loop escalation (orchestrator_escalator, any build)"],
   ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor → ToolStack (advertised tools + redacting executor + raw; catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, agent_base_tools, compose_agent, workspace_or_temp, resolve_tool_scopes, grant_workspace_root, permissive_scope, with_mcp_bridge_tools, within_generation"],
   ["src/bootstrap/memory.rs", "bootstrap", "build_memory_manager(_async), resolve_memory_store_path"],
   ["src/bootstrap/sandbox.rs", "bootstrap", "load_sandbox_or — sandboxes/<name>/config.toml + egress install"],
