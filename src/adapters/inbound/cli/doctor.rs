@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::adapters::outbound::engines::{build_engine, build_step_engine, StepOpts};
-use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
+use crate::adapters::outbound::secrets::process_secret_registry;
 use crate::application::chat::tool_loop::collect_engine_response;
 use crate::bootstrap::runtime::{read_live, runtime_state_dir};
 use crate::bootstrap::tools::{
@@ -467,8 +467,8 @@ async fn smoke_agent(
         &cfg,
         &[],
     )
-    .context("tool executor unavailable (egress tool client)")?;
-    let executor = SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(secrets));
+    .context("tool executor unavailable (egress tool client)")?
+    .executor;
 
     let message = |role, content: String| Message {
         role,
@@ -497,7 +497,7 @@ async fn smoke_agent(
             &messages,
             &tools,
             &context,
-            Some(&executor),
+            Some(executor.as_ref()),
             &crate::application::chat::tool_loop::LoopOpts {
                 max_tool_rounds: rounds,
                 ..crate::application::chat::tool_loop::LoopOpts::from_limits(limits)

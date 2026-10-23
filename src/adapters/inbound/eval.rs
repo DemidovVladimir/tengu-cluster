@@ -1035,7 +1035,7 @@ pub async fn judge_row(
 // ---------------------------------------------------------------------------
 // Per-row driver
 // ---------------------------------------------------------------------------
-use crate::adapters::outbound::secrets::{process_secret_registry, SanitizedToolExecutor};
+use crate::adapters::outbound::secrets::process_secret_registry;
 use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts, ToolResultObserver};
 use crate::application::skills::registry::{FileSystemSkillSource, SkillRegistry};
 use crate::config::AgentConfig;
@@ -1564,17 +1564,10 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             agent,
             &cfg.mcp_servers,
         ) {
-            Some(executor) => {
-                let extra = executor.additional_tool_defs(&tool_defs);
-                if !extra.is_empty() {
-                    tool_defs.extend(extra);
-                }
-                let executor = Arc::new(executor);
-                plugin_executor = Some(Arc::clone(&executor));
-                Arc::new(SanitizedToolExecutor::new(
-                    executor as Arc<dyn crate::ports::engine::ToolExecutor>,
-                    Arc::clone(&secret_registry),
-                )) as Arc<dyn crate::ports::engine::ToolExecutor>
+            Some(stack) => {
+                tool_defs = stack.tools;
+                plugin_executor = Some(stack.raw);
+                stack.executor
             }
             None => {
                 Arc::new(NoopRuntimeToolExecutor) as Arc<dyn crate::ports::engine::ToolExecutor>

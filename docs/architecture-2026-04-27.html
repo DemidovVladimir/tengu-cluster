@@ -1402,7 +1402,7 @@ const SUBSYSTEMS = [
       ["adapters/outbound/a2a/mod.rs", "the client: card → interface → host pin → JSON-RPC 1.0 / 0.3 or HTTP+JSON 1.0 → GetTask polling; egress peer_client (loopback direct) + scope per request; audit tool = a2a"],
       ["adapters/outbound/tools/a2a/", "the a2a tool: list · card · send · get · cancel (opt-in)"],
       ["ports/a2a.rs · application/a2a/", "A2aRunner · A2aService: every method, a task per message, max_running, run_timeout, cancel aborts; in-memory task store, context memory, ListTasks pages"],
-      ["bootstrap/a2a.rs", "cards; TurnRunner: planner = one-shot orchestrator turn (session a2a-<contextId>), agent = one in-process turn with its tools; answers redacted"],
+      ["bootstrap/a2a.rs", "cards; TurnRunner: planner = one-shot orchestrator turn (session a2a-<contextId>), agent = one in-process turn with its tools (bootstrap/turn.rs::run_once, shared with tengu tool turn); answers redacted"],
       ["adapters/inbound/a2a.rs", "tengu a2a serve (feature a2a, default): cards v1 / 0.3, JSON-RPC at /a2a and /a2a/agents/<n>, SSE, bearer auth (401)"],
       ["adapters/inbound/cli/a2a.rs", "tengu a2a serve | cards | remotes | card | send | get | cancel (--remote <name> or --url)"],
     ],
@@ -1469,7 +1469,8 @@ const FILE_MAP = [
   ["src/adapters/inbound/run.rs", "runtime", "tengu run [--sandbox <s>] — loops, feeds, webhook routes, lease, graceful shutdown"],
   // ── bootstrap ──
   ["src/bootstrap/orchestrator.rs", "bootstrap", "planner_llm (the planner's PlannerLlm), build_orchestrator(config, llm, session_id, trace), resolve_session_id; ChatTurnInputs, RuntimeChatServiceFactory, build_cli_chat_factory (tengu evolve)"],
-  ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor (catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, agent_base_tools, compose_agent, workspace_or_temp, resolve_tool_scopes, grant_workspace_root, permissive_scope, with_mcp_bridge_tools, within_generation"],
+  ["src/bootstrap/turn.rs", "bootstrap", "run_once: one in-process agent turn (A2A agent endpoint, tengu tool turn)"],
+  ["src/bootstrap/tools.rs", "bootstrap", "build_tool_executor → ToolStack (advertised tools + redacting executor + raw; catalog + SkillPlugin + McpPlugin + scopes), build_subprocess_tool_executor, subagent_config, agent_base_tools, compose_agent, workspace_or_temp, resolve_tool_scopes, grant_workspace_root, permissive_scope, with_mcp_bridge_tools, within_generation"],
   ["src/bootstrap/memory.rs", "bootstrap", "build_memory_manager(_async), resolve_memory_store_path"],
   ["src/bootstrap/sandbox.rs", "bootstrap", "load_sandbox_or — sandboxes/<name>/config.toml + egress install"],
   ["src/bootstrap/decision.rs", "decision", "build_decision_loop, build_mapped_loop, agent_tool_executor; replay: build_replay_loop, cached_decision_engine, build_gate"],

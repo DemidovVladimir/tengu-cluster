@@ -1,8 +1,9 @@
-//! Tool wiring — builds the `PluginToolExecutor` an agent runs with: the tool
-//! catalog (`adapters/outbound/tools`), shell skills, `[[mcp_servers]]`, and
-//! the per-tool scope map. Also the `run-agent` subagent variant, the
-//! Claude Code bridge tool list and a step / one-shot turn's workspace
-//! (`workspace_or_temp`).
+//! Tool wiring — builds the tool stack an agent runs with ([`ToolStack`]):
+//! the tool catalog (`adapters/outbound/tools`), shell skills,
+//! `[[mcp_servers]]`, the per-tool scope map, and the secret redaction every
+//! surface needs (`SanitizedToolExecutor`, by construction). Also the
+//! `run-agent` subagent variant, the Claude Code bridge tool list and a
+//! step / one-shot turn's workspace (`workspace_or_temp`).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ use crate::config::{AgentConfig, Config, McpServerConfig};
 // registered here, outside the catalog — they need the config's
 // `[[mcp_servers]]` / a skill registry.
 use crate::adapters::outbound::mcp_client::McpPlugin;
+use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::adapters::outbound::shell::LocalShellExecutor;
 use crate::adapters::outbound::tools::skill::SkillPlugin;
 use crate::application::skills::registry::SkillRegistry;
@@ -20,6 +22,7 @@ use crate::application::tools::registry::{PluginToolExecutor, ToolRegistry};
 use crate::domain::message::ToolDef;
 use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
+use crate::ports::engine::ToolExecutor;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool::PluginCtx;
 use crate::ports::tool_activity::ToolActivityPort;
@@ -73,7 +76,24 @@ fn register_plugin_safe(
     }
 }
 
-/// Build the plugin-backed tool executor from workspace, skill, and memory executors.
+/// What [`build_tool_executor`] builds for one agent.
+pub(crate) struct ToolStack {
+    /// The tools to advertise: the ones asked for (inside the bound
+    /// generation) + the `[[mcp_servers]]` tools found on connect.
+    pub tools: Vec<ToolDef>,
+    /// The executor behind them, secret-redacting by construction
+    /// (`SanitizedToolExecutor`: text, observations, errors).
+    pub executor: Arc<dyn ToolExecutor>,
+    /// The same executor unredacted: only for a caller that dispatches
+    /// through its parts (eval's `tool_assertion` metrics) — never hand it
+    /// to a model.
+    pub raw: Arc<PluginToolExecutor>,
+}
+
+/// Build an agent's tool stack: the plugin-backed executor (every tool a
+/// domain plugin — workspace, http, crypto, cache, memory, skill, mcp — in a
+/// `ToolRegistry`), wrapped in the secret redaction of `secret_registry`,
+/// and the tool list to advertise with it.
 ///
 /// The `activity` port is channel-specific — each channel adapter provides its own
 /// implementation (TUI dialogs, Telegram inline keyboards, Slack messages, etc.).
@@ -82,10 +102,7 @@ fn register_plugin_safe(
 /// `[egress]`, redirects off. There is deliberately no way to pass in a
 /// client: an unproxied one would bypass the egress policy. If the client
 /// can't be built the executor is not built (no tools, fail-closed).
-///
-/// The returned `PluginToolExecutor` wraps a `ToolRegistry`. Every tool is
-/// backed by a domain plugin (workspace, http, crypto, cache, memory, skill,
-/// mcp).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_tool_executor(
     workspace: &Path,
     tools: &[ToolDef],
@@ -97,10 +114,50 @@ pub(crate) fn build_tool_executor(
     memory_config: Option<&crate::config::MemoryConfig>,
     agent_config: &AgentConfig,
     mcp_servers: &[McpServerConfig],
+) -> Option<ToolStack> {
+    let mut tools = within_generation(agent_config, tools);
+    let raw = Arc::new(plugin_executor(
+        workspace,
+        &tools,
+        skill_registry,
+        memory_manager,
+        secret_registry,
+        activity,
+        cancel,
+        memory_config,
+        agent_config,
+        mcp_servers,
+    )?);
+    let extra = raw.additional_tool_defs(&tools);
+    tools.extend(extra);
+    let executor = Arc::new(SanitizedToolExecutor::new(
+        Arc::clone(&raw) as Arc<dyn ToolExecutor>,
+        Arc::clone(secret_registry),
+    ));
+    Some(ToolStack {
+        tools,
+        executor,
+        raw,
+    })
+}
+
+/// The unredacted `PluginToolExecutor` of [`build_tool_executor`].
+#[allow(clippy::too_many_arguments)]
+fn plugin_executor(
+    workspace: &Path,
+    tools: &[ToolDef],
+    skill_registry: &SkillRegistry,
+    memory_manager: &Option<Arc<crate::application::memory::manager::MemoryManager>>,
+    secret_registry: &Arc<SecretRegistry>,
+    activity: Arc<dyn ToolActivityPort>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    memory_config: Option<&crate::config::MemoryConfig>,
+    agent_config: &AgentConfig,
+    mcp_servers: &[McpServerConfig],
 ) -> Option<PluginToolExecutor> {
-    // Defense in depth for `[generation]`: `Config::load` already refuses a
-    // config listing a tool outside the bound generation.
-    let tools = &within_generation(agent_config, tools);
+    // `tools` is inside the bound generation (`build_tool_executor`): defense
+    // in depth, `Config::load` already refuses a config listing a tool
+    // outside it.
     if tools.is_empty() {
         return None;
     }
@@ -560,15 +617,16 @@ pub(crate) fn agent_skill_registry(
 ///
 /// Resolves `effective_tools = agent_base_tools ∪ {compress_and_store} ∪
 /// shell skills (skill_packages) ∪ [[mcp_servers]] tools (tools list)`, then
-/// constructs a `PluginToolExecutor` over those tools. Returns the resolved
+/// builds the agent's [`ToolStack`] over those tools. Returns the resolved
 /// ToolDef list (so `run-agent` can pass it to `engine.run`, or a Claude
-/// Code bridge as `bridge_tools`) plus the executor.
+/// Code bridge as `bridge_tools`; `[[mcp_servers]]` tools included once
+/// connected) plus the stack.
 ///
 /// `compress_and_store` is dispatched out-of-band by the run-agent loop
 /// (the summary is captured there and persisted to Postgres
 /// `agentic_memory` with `postgres_memory`; a Claude Code step's bridge
 /// writes it to the step's summary file) so its `ToolDef` is appended to the
-/// advertised list but its execution path bypasses the `PluginToolExecutor`.
+/// advertised list but its execution path bypasses the executor.
 pub(crate) fn build_subprocess_tool_executor(
     agent: &AgentConfig,
     config: &Config,
@@ -580,7 +638,7 @@ pub(crate) fn build_subprocess_tool_executor(
     // available"). Pass `None` only when the agent has no memory tools in
     // its allow-list.
     memory_manager: Option<Arc<crate::application::memory::manager::MemoryManager>>,
-) -> (Vec<ToolDef>, Option<PluginToolExecutor>) {
+) -> (Vec<ToolDef>, Option<ToolStack>) {
     let mut agent_cfg = subagent_config(agent);
     grant_workspace_root(&mut agent_cfg.scopes, workspace);
 
@@ -599,11 +657,11 @@ pub(crate) fn build_subprocess_tool_executor(
     let skill_registry = agent_skill_registry(workspace, &agent_cfg, config.memory.enabled);
     effective.extend(skill_registry.active_tools());
 
-    let executor = build_tool_executor(
+    let stack = build_tool_executor(
         workspace,
         &effective,
         &skill_registry,
-        &memory_manager, // Phase 7.6 — passed in by caller
+        &memory_manager,
         secret_registry,
         activity,
         None, // cancel
@@ -613,19 +671,13 @@ pub(crate) fn build_subprocess_tool_executor(
     );
 
     // `[[mcp_servers]]` tools are only known once the executor has connected
-    // to the servers. Advertise them too, through the same `tools` allow-list
-    // (empty = all). Claude Code subagents get them via the bridge, which
+    // to the servers (registered through the agent's `tools` allow-list,
+    // empty = all). Claude Code subagents get them via the bridge, which
     // receives this list as `bridge_tools`.
-    if let Some(exec) = &executor {
-        let mcp_defs: Vec<ToolDef> = exec
-            .additional_tool_defs(&effective)
-            .into_iter()
-            .filter(|d| agent.tools.is_empty() || agent.tools.contains(&d.name))
-            .collect();
-        effective.extend(mcp_defs);
+    match stack {
+        Some(stack) => (stack.tools.clone(), Some(stack)),
+        None => (effective, None),
     }
-
-    (effective, executor)
 }
 // ---------------------------------------------------------------------------
 // Golden registry test — asserts the LLM-facing tool surface is unchanged.
@@ -875,7 +927,7 @@ mod golden_tests {
         )
         .expect("executor");
 
-        let scope = &executor.scopes["http_request"];
+        let scope = &executor.raw.scopes["http_request"];
         assert_eq!(scope.net_hosts, vec!["api.example.com".to_string()]);
         assert!(scope.check_net_host("openrouter.ai").is_err());
     }
@@ -914,7 +966,7 @@ mod golden_tests {
         )
         .expect("executor");
 
-        let names: HashSet<String> = executor.registry.tool_names().into_iter().collect();
+        let names: HashSet<String> = executor.raw.registry.tool_names().into_iter().collect();
 
         let mut expected: HashSet<String> = [
             "read_file",
@@ -958,7 +1010,6 @@ mod golden_tests {
     /// something (the matrix fixtures' `fs_roots` elsewhere) still gets it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn run_agent_grant_keeps_an_empty_writer_scope_a_deny() {
-        use crate::ports::engine::ToolExecutor;
         let ws = tempfile::TempDir::new().unwrap();
         let toml = format!(
             "[agents.arch]\nengine = \"openrouter\"\nmodel = \"m\"\ndescription = \"routable\"\n\
@@ -998,7 +1049,8 @@ mod golden_tests {
             &agent,
             &[],
         )
-        .unwrap();
+        .unwrap()
+        .executor;
         assert!(inproc.execute(&write, &[]).await.is_err());
 
         // run-agent child executor (plan step): still denied; the configured
@@ -1011,12 +1063,13 @@ mod golden_tests {
             Arc::new(crate::adapters::outbound::noop::NoopActivity),
             None,
         );
-        let exec = exec.unwrap();
+        let stack = exec.unwrap();
+        let exec = &stack.executor;
         let denied = exec.execute(&write, &[]).await;
         assert!(denied.is_err(), "run-agent child wrote: {denied:?}");
         assert!(!ws.path().join("answer.txt").exists());
         assert_eq!(exec.execute(&read, &[]).await.unwrap(), "hello");
-        assert!(exec.scopes["write_file"].is_deny_all());
+        assert!(stack.raw.scopes["write_file"].is_deny_all());
     }
 
     /// `grant_workspace_root`: a deny-all scope stays one; every other

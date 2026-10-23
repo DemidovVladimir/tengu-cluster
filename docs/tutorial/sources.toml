@@ -181,6 +181,7 @@ sources = [
   "src/ports/a2a.rs",
   "src/application/a2a/",
   "src/bootstrap/a2a.rs",
+  "src/bootstrap/turn.rs",
   "src/adapters/outbound/a2a/",
   "src/adapters/outbound/tools/a2a/",
   "src/adapters/inbound/a2a.rs",

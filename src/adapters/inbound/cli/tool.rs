@@ -8,7 +8,7 @@
 //! | `tengu tool list` | every catalog tool name, all opt-ins included (the harness's completeness source), one JSON array |
 //! | `tengu tool call --agent <a> --tool <t> [--args '<json>'] [--call-id <id>] [--transcript <file>] [--sandbox <s>] [-c <file>]` | one `{"text", "observation", "is_error"}` |
 //! | `tengu tool call --agent <a> --batch …` | stdin: one `{"tool", "args", "call_id"}` per line, all through ONE executor (like a `run-agent` step or a bridge session); stdout: one result object per line |
-//! | `tengu tool turn --agent <a> --goal <text> [--sandbox <s>] [-c <file>]` | one engine turn as `[agents.<a>]` in this process — the `@<agent>` chat path (`chat/tool_loop.rs`: `chat:` call ids), so a private agent (no `description`: exec tools) runs too; its `tools` (`agent_base_tools`), shell skills (`skill_packages`) and `[[mcp_servers]]` tools, configured scopes as they are (no workspace grant), the bridge for `claude_code`; one `{"status", "output", "tools": [{name, ok}], "metrics"}` (the `run-agent` IPC fields the engine matrix reads) |
+//! | `tengu tool turn --agent <a> --goal <text> [--sandbox <s>] [-c <file>]` | one engine turn as `[agents.<a>]` in this process (`bootstrap::turn::run_once`, as an A2A agent endpoint) — the `@<agent>` chat path (`chat/tool_loop.rs`: `chat:` call ids), so a private agent (no `description`: exec tools) runs too; its `tools` (`agent_base_tools`), shell skills (`skill_packages`) and `[[mcp_servers]]` tools, configured scopes as they are (no workspace grant), the bridge for `claude_code`; one `{"status", "output", "tools": [{name, ok}], "metrics"}` (the `run-agent` IPC fields the engine matrix reads) |
 //!
 //! `call` builds the executor like `run-agent` and `bootstrap/decision.rs`:
 //!
@@ -18,7 +18,7 @@
 //! | Agent | `[agents.<a>]` (no `description` needed) → `build_subprocess_tool_executor`: `subagent_config`, workspace root granted to every configured scope, `resolve_tool_scopes` with `no_shell_fallback`, `[[mcp_servers]]`, shell skills (`skill_packages`, none without a shell), the agent's `tools` allow-list |
 //! | Workspace | the agent's `workspace` (`~` expanded), else a temp dir for this process — `run-agent`'s rule (`bootstrap::tools::workspace_or_temp`); `turn` too |
 //! | Memory | `[memory] enabled` → `build_memory_manager_async` (as `run-agent`) |
-//! | Secrets | `process_secret_registry` (inherited `TENGU_SECRETS_LOADED`, else the vault) + `SanitizedToolExecutor` |
+//! | Secrets | `process_secret_registry` (inherited `TENGU_SECRETS_LOADED`, else the vault), redacting by construction (`ToolStack`: `SanitizedToolExecutor`) |
 //! | Call id | `--call-id` / a line's `call_id` → `ToolCtx.call_id`, mapped like the bridge's JSON-RPC id (`mcp_bridge::call_id`: `mcp:<process nonce>:<id>`, the id a string verbatim, a number in decimal); absent = none |
 //! | Conversation | `--transcript <file>` (a JSON array of `Message`) → `ToolCtx.conversation` ending in the call, as the bridge builds it from `TENGU_BRIDGE_TRANSCRIPT_FILE` (`mcp_bridge::call_conversation`); absent = none (`skill_distill` refuses) |
 //! | Egress | the config's `[egress]`; `TENGU_EGRESS` wins |
@@ -34,9 +34,7 @@ use clap::Subcommand;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-use crate::adapters::outbound::secrets::{
-    process_secret_registry, secrets_file_path, SanitizedToolExecutor,
-};
+use crate::adapters::outbound::secrets::{process_secret_registry, secrets_file_path};
 use crate::config::paths::{default_config_path, resolve_tengu_home, TENGU_CONFIG_ENV};
 use crate::config::Config;
 use crate::domain::message::ToolCall;
@@ -150,95 +148,33 @@ exactly, one tool call each, using the named tools. Do not ask questions.";
 /// `tengu tool turn` (module table): the agent's engine and tools in this
 /// process, one user message, the turn's text and tool runs.
 async fn run_turn(config: &Config, agent_name: &str, goal: &str) -> Result<Value> {
-    use crate::adapters::outbound::engines::build_engine;
-    use crate::application::chat::tool_loop::collect_engine_response;
-    use crate::bootstrap::tools::{agent_base_tools, agent_skill_registry, build_tool_executor};
-    use crate::domain::message::{Message, Role};
-    use crate::ports::engine::EngineContext;
+    use crate::bootstrap::turn::{run_once, TurnOpts};
 
-    let mut agent = config
+    let secs = config
         .agents
         .get(agent_name)
-        .cloned()
-        .with_context(|| format!("no [agents.{agent_name}] in the config"))?;
-    // The agent's workspace, else a temp dir for this turn (`_turn_dir`,
-    // removed after it) — as a `run-agent` step.
-    let configured_workspace = agent.workspace.is_some();
-    let (workspace, _turn_dir) =
-        crate::bootstrap::tools::workspace_or_temp(agent.workspace.as_deref(), "tengu-turn-")?;
-    agent.workspace = Some(workspace.clone());
+        .with_context(|| format!("no [agents.{agent_name}] in the config"))?
+        .limits
+        .step_timeout_secs;
     let secrets = Arc::new(process_secret_registry(Some(&secrets_file_path(
         &resolve_tengu_home(),
     ))));
-    let engine =
-        build_engine(agent_name, &agent, config.claude_code.as_ref()).context("build engine")?;
     // The chat rule: the agent's `tools` (opt-ins included; empty = every
-    // base tool), its shell skills, its `[[mcp_servers]]` tools (below).
-    let skills = agent_skill_registry(&workspace, &agent, config.memory.enabled);
-    let mut tools = agent_base_tools(&agent, true, config.memory.enabled);
-    tools.extend(skills.active_tools());
-    let memory = if config.memory.enabled {
-        Some(
-            crate::bootstrap::memory::build_memory_manager_async(
-                &config.memory,
-                configured_workspace.then_some(workspace.as_path()),
-            )
-            .await,
-        )
-    } else {
-        None
-    };
-    let executor = build_tool_executor(
-        &workspace,
-        &tools,
-        &skills,
-        &memory,
-        &secrets,
-        Arc::new(crate::adapters::outbound::noop::NoopActivity),
-        None,
-        Some(&config.memory),
-        &agent,
-        &config.mcp_servers,
-    )
-    .context("no tool executor for this agent")?;
-    tools.extend(executor.additional_tool_defs(&tools));
-    let executor = SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(&secrets));
-    let message = |role, content: String| Message {
-        role,
-        content,
-        tool_call_id: None,
-        tool_calls: None,
-    };
-    let messages = [
-        message(Role::System, TURN_SYSTEM.to_string()),
-        message(Role::User, goal.to_string()),
-    ];
-    let limits = &agent.limits;
-    let rounds = limits.max_tool_rounds.max(1);
-    let context = EngineContext {
-        workspace: Some(workspace.clone()),
-        system_prompt: Some(TURN_SYSTEM.to_string()),
-        bridge_tools: engine.manages_own_workspace().then(|| tools.clone()),
-        max_tool_rounds: Some(rounds),
-        max_mcp_result_chars: Some(limits.max_mcp_result_chars),
-        mcp_servers: config.mcp_servers.clone(),
+    // base tool), its shell skills, its `[[mcp_servers]]` tools; its
+    // workspace, else a temp dir for this turn — as a `run-agent` step.
+    let opts = TurnOpts {
+        system: Some(TURN_SYSTEM),
+        history: &[],
+        no_tools: false,
+        memory: true,
+        temp_prefix: "tengu-turn-",
     };
     let resp = tokio::time::timeout(
-        std::time::Duration::from_secs(limits.step_timeout_secs),
-        collect_engine_response(
-            engine.as_ref(),
-            &messages,
-            &tools,
-            &context,
-            Some(&executor),
-            &crate::application::chat::tool_loop::LoopOpts {
-                max_tool_rounds: rounds,
-                ..crate::application::chat::tool_loop::LoopOpts::from_limits(limits)
-            },
-        ),
+        std::time::Duration::from_secs(secs),
+        run_once(config, agent_name, goal, &secrets, opts),
     )
     .await
-    .with_context(|| format!("no answer within {}s", limits.step_timeout_secs))??;
+    .with_context(|| format!("no answer within {secs}s"))??;
     Ok(json!({
         "status": "ok",
         "output": resp.text,
@@ -279,7 +215,7 @@ fn load_config(path: Option<PathBuf>, sandbox: Option<String>) -> Result<Config>
 
 /// One agent's in-process executor (module table).
 struct AgentTools {
-    executor: SanitizedToolExecutor,
+    executor: Arc<dyn ToolExecutor>,
     secrets: Arc<SecretRegistry>,
     /// `--transcript`: the conversation every call sees.
     transcript: Option<PathBuf>,
@@ -315,7 +251,7 @@ impl AgentTools {
         } else {
             None
         };
-        let (_, executor) = crate::bootstrap::tools::build_subprocess_tool_executor(
+        let (_, stack) = crate::bootstrap::tools::build_subprocess_tool_executor(
             &agent,
             config,
             &workspace,
@@ -323,9 +259,9 @@ impl AgentTools {
             Arc::new(crate::adapters::outbound::noop::NoopActivity),
             memory,
         );
-        let executor = executor.context("no tool executor for this agent")?;
+        let stack = stack.context("no tool executor for this agent")?;
         Ok(Self {
-            executor: SanitizedToolExecutor::new(Arc::new(executor), Arc::clone(&secrets)),
+            executor: stack.executor,
             secrets,
             transcript: None,
             _workspace_dir: workspace_dir,

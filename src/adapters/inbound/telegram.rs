@@ -23,7 +23,6 @@
 //!   `TENGU_TELEGRAM_ALLOWED_USERS`); an unlisted sender gets "Unauthorized.".
 
 use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::application::chat::service::{
     handle_chat_command, needs_fresh_history_grounding, ChatRuntimeService, CommandResult,
@@ -39,7 +38,6 @@ use crate::domain::message::{
 use crate::domain::secrets::SecretRegistry;
 use crate::domain::session::ChatLoopState;
 use crate::ports::engine::Engine;
-use crate::ports::engine::ToolExecutor;
 use crate::ports::tool_activity::ToolActivityPort;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
@@ -1203,7 +1201,7 @@ impl TelegramSession {
                 .clone()
                 .unwrap_or_else(|| agent.agent_id.clone()),
         );
-        let current_executor = agent.workspace.as_ref().and_then(|ws| {
+        let stack = agent.workspace.as_ref().and_then(|ws| {
             crate::bootstrap::tools::build_tool_executor(
                 ws,
                 &agent.current_tools,
@@ -1217,17 +1215,11 @@ impl TelegramSession {
                 &self.config.mcp_servers,
             )
         });
-        if let Some(ref exec) = current_executor {
-            let extra = exec.additional_tool_defs(&agent.current_tools);
-            if !extra.is_empty() {
-                agent.current_tools.extend(extra);
-            }
+        // The stack advertises the `[[mcp_servers]]` tools found on connect.
+        if let Some(stack) = &stack {
+            agent.current_tools = stack.tools.clone();
         }
-
-        let sanitized_executor = current_executor.map(|e| {
-            let inner: std::sync::Arc<dyn ToolExecutor> = Arc::new(e);
-            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry))
-        });
+        let sanitized_executor = stack.map(|s| s.executor);
 
         let turn_tool_log: Arc<std::sync::Mutex<Vec<String>>> =
             Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1308,7 +1300,7 @@ impl TelegramSession {
             compaction_policy: agent.compaction_policy,
             system_prompt: turn_system_prompt,
             tools: &turn_tools,
-            tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
+            tool_executor: sanitized_executor.as_deref(),
             memory_manager: self.memory_manager_handle.as_deref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,
@@ -1816,7 +1808,7 @@ impl TelegramSession {
             .clone()
             .unwrap_or_else(|| agent.agent_id.clone());
         let activity_adapter = make_tool_activity_adapter(agent_label);
-        let current_executor = agent.workspace.as_ref().and_then(|ws| {
+        let stack = agent.workspace.as_ref().and_then(|ws| {
             crate::bootstrap::tools::build_tool_executor(
                 ws,
                 &agent.current_tools,
@@ -1830,16 +1822,11 @@ impl TelegramSession {
                 &self.config.mcp_servers,
             )
         });
-        if let Some(ref exec) = current_executor {
-            let extra = exec.additional_tool_defs(&agent.current_tools);
-            if !extra.is_empty() {
-                agent.current_tools.extend(extra);
-            }
+        // The stack advertises the `[[mcp_servers]]` tools found on connect.
+        if let Some(stack) = &stack {
+            agent.current_tools = stack.tools.clone();
         }
-        let sanitized_executor = current_executor.map(|e| {
-            let inner: std::sync::Arc<dyn ToolExecutor> = Arc::new(e);
-            SanitizedToolExecutor::new(inner, Arc::clone(&self.secret_registry))
-        });
+        let sanitized_executor = stack.map(|s| s.executor);
 
         self.turn_cancel.store(false, Ordering::Relaxed);
 
@@ -1869,7 +1856,7 @@ impl TelegramSession {
             compaction_policy: agent.compaction_policy,
             system_prompt: agent.current_system_prompt.clone(),
             tools: &active_tools,
-            tool_executor: sanitized_executor.as_ref().map(|e| e as &dyn ToolExecutor),
+            tool_executor: sanitized_executor.as_deref(),
             memory_manager: self.memory_manager_handle.as_deref(),
             max_recall_entries: self.memory_config.max_recall_entries,
             max_recall_tokens: self.memory_config.max_recall_tokens,

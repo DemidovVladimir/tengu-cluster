@@ -520,7 +520,7 @@ Doc `docs/a2a-2026-10-10.md`; page `docs/tutorial/a2a.html`; example `sandboxes/
 | `adapters/outbound/a2a/mod.rs` | the client: card → interface → host pin (only the remote's hosts) → JSON-RPC / HTTP+JSON call → `GetTask` polling; egress `peer_client` (proxied, loopback direct) + scope per request; audit `tool = "a2a"` |
 | `adapters/outbound/tools/a2a/` | opt-in tool `a2a`: `list` · `card` · `send` · `get` · `cancel` |
 | `ports/a2a.rs` · `application/a2a/` | `A2aRunner` · `A2aService` (every method; task per message, `max_running`, `run_timeout`, cancel aborts) + `tasks.rs` (in-memory store, context memory, `ListTasks` pages) |
-| `bootstrap/a2a.rs` | cards; `TurnRunner`: planner = one-shot orchestrator turn (session `a2a-<contextId>`), agent = one in-process turn with its tools; answers redacted |
+| `bootstrap/a2a.rs` | cards; `TurnRunner`: planner = one-shot orchestrator turn (session `a2a-<contextId>`), agent = one in-process turn with its tools (`bootstrap/turn.rs::run_once`, shared with `tengu tool turn`); answers redacted |
 | `adapters/inbound/a2a.rs` · `cli/a2a.rs` | `tengu a2a serve` (axum, feature `a2a`, default): cards (v1 / 0.3), JSON-RPC, SSE, bearer auth · `tengu a2a cards\|remotes\|card\|send\|get\|cancel` |
 
 ### 2.21 Seal proxy + Privy Solana signing (2026-10-09 → 2026-10-13)

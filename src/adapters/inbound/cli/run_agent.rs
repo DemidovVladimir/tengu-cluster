@@ -345,7 +345,7 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         None
     };
 
-    let (tools, executor) = crate::bootstrap::tools::build_subprocess_tool_executor(
+    let (tools, stack) = crate::bootstrap::tools::build_subprocess_tool_executor(
         &spec,
         &parent_config,
         &workspace,
@@ -365,13 +365,8 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             Arc::clone(&secret_registry),
         ))
     });
-    let executor: Option<Arc<dyn crate::ports::engine::ToolExecutor>> = executor.map(|e| {
-        let sanitized: Arc<dyn crate::ports::engine::ToolExecutor> = Arc::new(
-            crate::adapters::outbound::secrets::SanitizedToolExecutor::new(
-                Arc::new(e),
-                Arc::clone(&secret_registry),
-            ),
-        );
+    let executor: Option<Arc<dyn crate::ports::engine::ToolExecutor>> = stack.map(|stack| {
+        let sanitized = stack.executor;
         match &step_trace {
             Some(buf) => Arc::new(crate::application::trace_exec::TracedExecutor::new(
                 sanitized,

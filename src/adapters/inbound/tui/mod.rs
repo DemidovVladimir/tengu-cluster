@@ -4,7 +4,6 @@ pub mod app;
 pub mod view;
 
 use crate::adapters::outbound::engines::build_engine;
-use crate::adapters::outbound::secrets::SanitizedToolExecutor;
 use crate::application::chat::flow::{resolve_flow_compaction_policy, resolve_history_turn_limit};
 use crate::application::chat::service::{
     handle_chat_command, ChatRuntimeService, ChatTurnResult, CommandResult, EngineInfo,
@@ -399,9 +398,7 @@ pub fn run_tui(
         let mut tools_dirty = true;
         let mut current_tools: Vec<ToolDef> = vec![];
         let mut current_bridge_tools: Vec<ToolDef> = vec![];
-        let mut current_executor: Option<
-            Arc<crate::application::tools::registry::PluginToolExecutor>,
-        > = None;
+        let mut current_executor: Option<Arc<dyn ToolExecutor>> = None;
         let mut current_system_prompt = system_prompt;
 
         let mut runtime_state =
@@ -497,7 +494,7 @@ pub fn run_tui(
                                 &base_tools,
                                 &skill_registry,
                             );
-                            current_executor = crate::bootstrap::tools::build_tool_executor(
+                            let stack = crate::bootstrap::tools::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
@@ -508,14 +505,12 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 &mcp_servers,
-                            )
-                            .map(Arc::new);
-                            if let Some(ref exec) = current_executor {
-                                let extra = exec.additional_tool_defs(&current_tools);
-                                if !extra.is_empty() {
-                                    current_tools.extend(extra);
-                                }
+                            );
+                            // The stack advertises the `[[mcp_servers]]` tools found on connect.
+                            if let Some(stack) = &stack {
+                                current_tools = stack.tools.clone();
                             }
+                            current_executor = stack.map(|s| s.executor);
                             current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
                                 &skill_registry,
@@ -575,7 +570,7 @@ pub fn run_tui(
                                     &base_tools,
                                     &skill_registry,
                                 );
-                                current_executor = crate::bootstrap::tools::build_tool_executor(
+                                let stack = crate::bootstrap::tools::build_tool_executor(
                                     ws,
                                     &current_tools,
                                     &skill_registry,
@@ -586,14 +581,12 @@ pub fn run_tui(
                                     Some(&memory_config),
                                     &engine_agent_config,
                                     &mcp_servers,
-                                )
-                                .map(Arc::new);
-                                if let Some(ref exec) = current_executor {
-                                    let extra = exec.additional_tool_defs(&current_tools);
-                                    if !extra.is_empty() {
-                                        current_tools.extend(extra);
-                                    }
+                                );
+                                // The stack advertises the `[[mcp_servers]]` tools found on connect.
+                                if let Some(stack) = &stack {
+                                    current_tools = stack.tools.clone();
                                 }
+                                current_executor = stack.map(|s| s.executor);
                                 current_system_prompt =
                                     crate::bootstrap::tools::rebuild_system_prompt(
                                         &engine_agent_config,
@@ -611,11 +604,7 @@ pub fn run_tui(
 
                         // Process as a chat turn with the injected prompt.
                         rt.block_on(async {
-                            let sanitized_executor = current_executor.as_ref().map(|e| {
-                                let inner: std::sync::Arc<dyn ToolExecutor> =
-                                    Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
-                                SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
-                            });
+                            let sanitized_executor = current_executor.clone();
                             let tool_defs = current_tools.clone();
 
                             let chat_runtime = ChatRuntimeService {
@@ -626,9 +615,7 @@ pub fn run_tui(
                                 compaction_policy,
                                 system_prompt: current_system_prompt.clone(),
                                 tools: &tool_defs,
-                                tool_executor: sanitized_executor
-                                    .as_ref()
-                                    .map(|e| e as &dyn ToolExecutor),
+                                tool_executor: sanitized_executor.as_deref(),
                                 memory_manager: memory_manager_handle.as_deref(),
                                 max_recall_entries: memory_config.max_recall_entries,
                                 max_recall_tokens: memory_config.max_recall_tokens,
@@ -717,7 +704,7 @@ pub fn run_tui(
                                 &base_tools,
                                 &skill_registry,
                             );
-                            current_executor = crate::bootstrap::tools::build_tool_executor(
+                            let stack = crate::bootstrap::tools::build_tool_executor(
                                 ws,
                                 &current_tools,
                                 &skill_registry,
@@ -728,14 +715,12 @@ pub fn run_tui(
                                 Some(&memory_config),
                                 &engine_agent_config,
                                 &mcp_servers,
-                            )
-                            .map(Arc::new);
-                            if let Some(ref exec) = current_executor {
-                                let extra = exec.additional_tool_defs(&current_tools);
-                                if !extra.is_empty() {
-                                    current_tools.extend(extra);
-                                }
+                            );
+                            // The stack advertises the `[[mcp_servers]]` tools found on connect.
+                            if let Some(stack) = &stack {
+                                current_tools = stack.tools.clone();
                             }
+                            current_executor = stack.map(|s| s.executor);
                             current_system_prompt = crate::bootstrap::tools::rebuild_system_prompt(
                                 &engine_agent_config,
                                 &skill_registry,
@@ -781,12 +766,7 @@ pub fn run_tui(
                     }
 
                     rt.block_on(async {
-                        // Wrap tool executor with secret redaction decorator.
-                        let sanitized_executor = current_executor.as_ref().map(|e| {
-                            let inner: std::sync::Arc<dyn ToolExecutor> =
-                                Arc::clone(e) as std::sync::Arc<dyn ToolExecutor>;
-                            SanitizedToolExecutor::new(inner, Arc::clone(&secret_registry))
-                        });
+                        let sanitized_executor = current_executor.clone();
                         let tool_defs = current_tools.clone();
 
                         let chat_runtime = ChatRuntimeService {
@@ -797,9 +777,7 @@ pub fn run_tui(
                             compaction_policy,
                             system_prompt: current_system_prompt.clone(),
                             tools: &tool_defs,
-                            tool_executor: sanitized_executor
-                                .as_ref()
-                                .map(|e| e as &dyn ToolExecutor),
+                            tool_executor: sanitized_executor.as_deref(),
                             memory_manager: memory_manager_handle.as_deref(),
                             max_recall_entries: memory_config.max_recall_entries,
                             max_recall_tokens: memory_config.max_recall_tokens,
