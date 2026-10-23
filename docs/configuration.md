@@ -165,7 +165,7 @@ Durable memory is the Postgres `agentic_memory` plugin: `--features postgres_mem
 |---|---|---|
 | `enabled` | `false` | |
 | `allowed_users` | `[]` | merged with `TENGU_TELEGRAM_ALLOWED_USERS`; both empty = `tengu telegram` refuses to start; an unlisted sender gets "Unauthorized." |
-| `tool_approvals` · `approve_only` | `false` · `[]` | **not implemented** — parsed, gate nothing on any engine or surface; `Config::load` warns while set. Gate tools with `tools` and scopes |
+| `tool_approvals` · `approve_only` | — | **removed** 2026-10-23 (they gated nothing): `[telegram]` refuses unknown keys, so either fails the load. No tool call waits for an approval; gate tools with `tools` and scopes |
 
 Private agents (no `description`, not `default`) are never `@`-routable from Telegram nor its default.
 
@@ -618,7 +618,7 @@ tengu sources --sandbox soe list                          # the source registry;
 |---|---|
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
 | no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
-| `workspace_tools` outside `WORKSPACE_TOOLS` | `[telegram] tool_approvals` / `approve_only` set (not implemented) |
+| `workspace_tools` outside `WORKSPACE_TOOLS`; an unknown `[telegram]` key (`tool_approvals` / `approve_only` were removed) | an agent that reads outside text and holds a side effect (`docs/tools.md` § Untrusted input) |
 | `[egress]`, `[keys]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[generation]`, `[strategy_ranking]`, `[sources]`, `[soe]`, `[studio]`, `[a2a]`, `[feeds]`, `[decision_loops]` rules (sections above) | an unset `${VAR}` (stays literal) · an agent holding `a2a` with no `[a2a.remotes.*]` |
 
 ## Reset

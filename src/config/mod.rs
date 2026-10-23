@@ -750,8 +750,11 @@ fn default_orchestrator_engine() -> String {
     "rag".to_string()
 }
 
-/// Telegram bot adapter configuration.
+/// Telegram bot adapter configuration. Unknown keys fail the load: the
+/// approval keys `tool_approvals` / `approve_only` gated nothing and were
+/// removed (2026-10-23) — no tool call waits for an approval on any surface.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TelegramConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -760,38 +763,6 @@ pub struct TelegramConfig {
     /// `tengu telegram` refuses to start; an unlisted sender is refused.
     #[serde(default)]
     pub allowed_users: Vec<String>,
-    /// NOT implemented: parsed and ignored — nothing is approval-gated on
-    /// any engine or surface (the approval adapter is gone). Kept so old
-    /// sandboxes load; `Config::load` warns while it is `true`
-    /// ([`Self::approvals_warning`]).
-    #[serde(default)]
-    pub tool_approvals: bool,
-    /// NOT implemented, like `tool_approvals`: the listed tools run without
-    /// an approval. `Config::load` warns while it is non-empty.
-    #[serde(default)]
-    pub approve_only: Vec<String>,
-}
-
-impl TelegramConfig {
-    /// One warning naming the approval keys that are set, `None` when
-    /// neither is: they gate nothing, so an operator must not read them as
-    /// a guard.
-    pub fn approvals_warning(&self) -> Option<String> {
-        let mut keys = Vec::new();
-        if self.tool_approvals {
-            keys.push("tool_approvals = true".to_string());
-        }
-        if !self.approve_only.is_empty() {
-            keys.push(format!("approve_only = {:?}", self.approve_only));
-        }
-        (!keys.is_empty()).then(|| {
-            format!(
-                "[telegram] {}: not implemented — tools are not approval-gated (no tool call \
-                 waits for an approval, on any engine or surface; docs/configuration.md § Telegram)",
-                keys.join(", ")
-            )
-        })
-    }
 }
 
 // =====================================================================
@@ -1508,7 +1479,6 @@ impl Config {
                 }
             }
         }
-        out.extend(self.telegram.approvals_warning());
         out.extend(a2a::validation_warnings(self));
         out.extend(readers::warnings(self));
         out.sort();
@@ -2660,50 +2630,21 @@ ttl_days = 7
         );
     }
 
-    /// `[telegram] tool_approvals` / `approve_only` gate nothing: a config
-    /// that sets them still loads and one warning names the keys that are
-    /// set; `false` / empty / absent warn nothing.
+    /// The removed approval keys (`tool_approvals` / `approve_only` gated
+    /// nothing) fail the load naming the key, so no operator reads them as a
+    /// guard; `[telegram]` without them loads.
     #[test]
-    fn telegram_approval_keys_load_with_one_warning() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("config.toml");
-        std::fs::write(
-            &path,
-            "[telegram]\ntool_approvals = true\napprove_only = [\"sign_and_send_transaction\"]\n\n\
-             [agents.m]\nengine = \"openrouter\"\nmodel = \"m\"\n",
-        )
-        .unwrap();
-        let cfg = Config::load(&path).expect("loads");
-        let warnings: Vec<String> = cfg
-            .validation_warnings()
-            .into_iter()
-            .filter(|w| w.starts_with("[telegram]"))
-            .collect();
-        assert_eq!(
-            warnings,
-            [
-                "[telegram] tool_approvals = true, approve_only = [\"sign_and_send_transaction\"]: \
-                 not implemented — tools are not approval-gated (no tool call waits for an \
-                 approval, on any engine or surface; docs/configuration.md § Telegram)"
-            ]
-        );
-
+    fn telegram_approval_keys_fail_the_load() {
         let agent = "[agents.m]\nengine = \"openrouter\"\nmodel = \"m\"\n";
-        let warns = |telegram: &str| {
-            let cfg: Config = toml::from_str(&format!("{telegram}\n{agent}")).unwrap();
-            cfg.validate().expect("valid");
-            cfg.telegram.approvals_warning()
-        };
-        assert_eq!(warns("[telegram]\ntool_approvals = false"), None);
-        assert_eq!(warns(""), None);
-        let only = warns("[telegram]\napprove_only = [\"run_command\"]").unwrap();
-        assert!(
-            only.starts_with("[telegram] approve_only = [\"run_command\"]: not implemented"),
-            "{only}"
-        );
-        let flag = warns("[telegram]\ntool_approvals = true").unwrap();
-        let head =
-            "[telegram] tool_approvals = true: not implemented — tools are not approval-gated";
-        assert!(flag.starts_with(head), "{flag}");
+        for key in ["tool_approvals = false", "approve_only = [\"run_command\"]"] {
+            let err = toml::from_str::<Config>(&format!("[telegram]\n{key}\n{agent}"))
+                .unwrap_err()
+                .to_string();
+            let name = key.split_whitespace().next().unwrap();
+            assert!(err.contains(&format!("unknown field `{name}`")), "{err}");
+        }
+        let ok: Config =
+            toml::from_str(&format!("[telegram]\nallowed_users = [\"1\"]\n{agent}")).unwrap();
+        assert_eq!(ok.telegram.allowed_users, ["1"]);
     }
 }

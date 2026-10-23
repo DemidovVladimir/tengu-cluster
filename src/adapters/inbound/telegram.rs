@@ -4,8 +4,8 @@
 //!
 //! - **TelegramPipe** — concrete struct for chat actions, text / media sending,
 //!   and teloxide-based message dispatch.
-//! - **No tool approvals** — `[telegram] tool_approvals` / `approve_only` load
-//!   but nothing waits for an approval (`Config::load` warns naming them).
+//! - **No tool approvals** — no tool call waits for an approval; the old
+//!   `[telegram] tool_approvals` / `approve_only` keys fail the load.
 //! - **Typing indicator** — runs as an independent `tokio::spawn` task.
 //! - **File attachments** — documents and photos downloaded and saved to
 //!   `{workspace}/.tengu-attachments/`.

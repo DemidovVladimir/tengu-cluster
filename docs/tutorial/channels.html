@@ -336,7 +336,7 @@
     <li><span class="chip hands">dir</span><span><b>/project &lt;name&gt;</b>A new project folder from <code>[scaffold.project]</code>; conversations reset.</span></li>
     <li><span class="chip data">lens</span><span><b>/help /eco /standard /precise /cost /context /engine</b>Built-in chat commands.</span></li>
   </ul>
-  <p class="note warn"><b>Not implemented:</b> <code>[telegram] tool_approvals</code> and <code>approve_only</code> gate nothing; no tool call waits for an approval. The config still loads and logs a warning naming them.</p>
+  <p class="note warn"><b>No approvals:</b> no tool call waits for an approval. The old <code>[telegram] tool_approvals</code> and <code>approve_only</code> keys gated nothing and were removed; <code>[telegram]</code> refuses unknown keys, so a config that still sets one fails the load.</p>
 </section>
 
 <section class="sec" aria-labelledby="s-rules">

@@ -116,7 +116,7 @@ A use case needs something outside? Add a trait in `src/ports/`, implement it in
 | `[claude_code]` | `ClaudeCodeConfig` | `outbound/engines/mod.rs` | ignored |
 | `[solana]` | `SolanaConfig` (`config/solana.rs`) | `Config::fold_default_scopes` → `AgentConfig::sandbox` (`privy_wallet_id`) → the Solana write tools (`tools/solana/mod.rs` `SignerSource::Privy` → `outbound/solana/privy.rs`); hardens the sandbox (`config/hardening.rs`) | **error** |
 | `[keys]` (+ `[keys.env]`) | `KeysConfig` (`config/keys.rs`) | `bootstrap/sandbox.rs::load_sandbox_or` → `outbound/keys::install` (also in `run-agent`, `mcp-bridge`, `eval` processes); `tengu keys` (`cli/keys.rs`); RPC / Privy clients via `keys::auth_header_for`, Telegram via `header_mode`; the builder's Cloudflare store | **error** |
-| `[telegram]` / `[webhooks]` | `TelegramConfig` / `WebhookConfig` | `inbound/telegram.rs` / `inbound/webhooks.rs` (`tool_approvals` / `approve_only`: read by nobody — not implemented, `Config::load` warns) | ignored |
+| `[telegram]` / `[webhooks]` | `TelegramConfig` / `WebhookConfig` | `inbound/telegram.rs` / `inbound/webhooks.rs` (`[telegram]` refuses unknown keys: the removed `tool_approvals` / `approve_only` fail the load) | **error** (unknown `[telegram]` key) |
 | `[decision_loops.<n>]` | `DecisionLoopConfig` (`config/decision_loop.rs`) | `bootstrap/decision.rs`, `inbound/webhooks.rs` (`loop = "<n>"`), `cli/decide.rs` | **error** |
 | `[scaffold]` | `ScaffoldConfig` | `outbound/scaffold.rs` | ignored |
 | `[xmarket]` | `XmarketConfig` (`config/xmarket.rs`) | `Config::fold_default_scopes` → `AgentConfig::sandbox` (`config/sections.rs`) | **error** |

@@ -436,7 +436,7 @@ Branch `feature/decision-loop` (not merged → merged 2026-09-29 as #18, `ff90d1
 | Open | Detail |
 |---|---|
 | First live send | not done: needs a DEDICATED wallet (never the bot's `F3YvPiLdniRPGpeKrbeGWR2zg2wPpzVuvqBA5BBJBQ5S` — the lease cannot see the TS bot) + the operator's go; order: close token accounts → ~$1 swap → tiny DLMM open + close → minimum perps order |
-| Human approval | `TelegramConfig.tool_approvals` / `approve_only` are parsed but never read — no approval gate exists |
+| Human approval | none: the never-read `TelegramConfig.tool_approvals` / `approve_only` were removed 2026-10-23 (audit S11; an old key fails the load); a later approval decorator waits for A6 |
 | Token-2022 pools | refused by the DLMM write tools (transfer-hook slices not built) |
 | Privy signer | second `SolanaSigner` impl possible later |
 | Loop write actions | `hedge_watch` has no write actions yet; `lp_watch.open_position` stays `dry_run` + `mode = "simulate"` |

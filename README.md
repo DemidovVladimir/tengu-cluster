@@ -292,7 +292,7 @@ cargo run -- secret set TELEGRAM_BOT_TOKEN "123456:ABC-..."
 cargo run -- telegram --sandbox storage-test
 ```
 
-`allowed_users` (or `TENGU_TELEGRAM_ALLOWED_USERS`) is required: without it `tengu telegram` refuses to start. `@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`); private agents (no `description`, not `default`) are never reachable from Telegram. `[telegram] tool_approvals` / `approve_only` are not implemented (load warns).
+`allowed_users` (or `TENGU_TELEGRAM_ALLOWED_USERS`) is required: without it `tengu telegram` refuses to start. `@role: message` targets a specific agent (bypasses the planner unless `route_explicit_agents = true`); private agents (no `description`, not `default`) are never reachable from Telegram. No tool call waits for an approval (the old `[telegram] tool_approvals` / `approve_only` keys fail the load).
 
 ## Docker
 

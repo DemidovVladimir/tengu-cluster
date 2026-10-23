@@ -909,10 +909,10 @@ These are not preferences. They're load-bearing.
   an unlisted sender gets "Unauthorized.". A private agent (no `description`,
   not `default` — the exec-tool / signing owners) is never `@<id>:` /
   `@<role>:`-routable, never the default and not listed in `/agents` or the
-  team block (`telegram.rs::telegram_reachable`). `[telegram] tool_approvals`
-  / `approve_only` are NOT implemented — no tool call waits for an approval,
-  on any engine or surface; they still load and
-  `Config::load` warns naming them (`TelegramConfig::approvals_warning`).
+  team block (`telegram.rs::telegram_reachable`). No tool call waits for an
+  approval, on any engine or surface: `[telegram] tool_approvals` /
+  `approve_only` gated nothing and were removed (2026-10-23) — `[telegram]` is
+  `deny_unknown_fields`, so an old key fails the load.
 - **Sandbox sections reach tools via `AgentConfig::sandbox` (2026-09-30)** —
   `config/sections.rs::SandboxSections` (one `Arc` per config, set by
   `fold_default_scopes`): the sandbox name (`<name>` of the file
