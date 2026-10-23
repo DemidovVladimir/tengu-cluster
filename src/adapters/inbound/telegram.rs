@@ -1012,9 +1012,10 @@ impl TelegramSession {
             None => return,
         };
         let skill_cmds = self.skill_command_router.list();
-        let state = self.user_states.entry(state_key).or_insert_with(|| {
-            crate::application::chat::service::create_chat_loop_state(&agent.agent_config)
-        });
+        let state = self
+            .user_states
+            .entry(state_key)
+            .or_insert_with(crate::application::chat::service::create_chat_loop_state);
         let cmd_result = handle_chat_command(
             &msg.content,
             state,
@@ -1259,9 +1260,10 @@ impl TelegramSession {
         let state_key = format!("{}:{}", sender_id, target_agent_id);
         self.user_state_last_active
             .insert(state_key.clone(), std::time::Instant::now());
-        let state = self.user_states.entry(state_key).or_insert_with(|| {
-            crate::application::chat::service::create_chat_loop_state(&agent.agent_config)
-        });
+        let state = self
+            .user_states
+            .entry(state_key)
+            .or_insert_with(crate::application::chat::service::create_chat_loop_state);
 
         if self.is_multi_agent {
             let agent_label = agent
@@ -1833,9 +1835,10 @@ impl TelegramSession {
         let state_key = format!("{}:{}", sender_id, active_aid);
         self.user_state_last_active
             .insert(state_key.clone(), std::time::Instant::now());
-        let state = self.user_states.entry(state_key).or_insert_with(|| {
-            crate::application::chat::service::create_chat_loop_state(&agent.agent_config)
-        });
+        let state = self
+            .user_states
+            .entry(state_key)
+            .or_insert_with(crate::application::chat::service::create_chat_loop_state);
 
         let _ = self.pipe.send_chat_action(sender).await;
         let t_pipe = Arc::clone(&self.pipe);

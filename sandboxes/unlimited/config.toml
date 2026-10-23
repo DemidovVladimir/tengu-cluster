@@ -29,7 +29,6 @@ engine = "openrouter"
 model = "qwen/qwen3.8-27b"
 role = "opsec"
 workspace = "~/unlimited-workspace"
-default_lens = "standard"
 # Explicit allow-list = no `run_command`, so no shelling out to python3/curl/etc.
 # Web research goes through the Rust-native `http_request` tool. Omitting this
 # line would grant ALL base tools (including run_command with a permissive

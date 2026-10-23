@@ -1,7 +1,6 @@
 //! Chat/flow session state — per-session prompt assembly and loop state.
 //! Pure data, no IO.
 
-use crate::domain::message::Lens;
 use crate::domain::message::Message;
 
 #[derive(Debug, Clone, Default)]
@@ -40,7 +39,6 @@ pub(crate) struct ChatLoopState {
     pub active_flow_key: Option<String>,
     pub manual_session_id: Option<String>,
     pub flow_token_usage: u64,
-    pub active_lens: Lens,
     pub total_input_tokens: u32,
     pub total_output_tokens: u32,
     pub last_prompt_report: Option<PromptAssemblyReport>,

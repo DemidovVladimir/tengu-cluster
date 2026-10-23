@@ -1,8 +1,7 @@
-//! Messages, tool calls/definitions, stream events, and the precision `Lens`
-//! — the vocabulary every layer speaks. Pure data, no IO.
+//! Messages, tool calls/definitions and stream events — the vocabulary
+//! every layer speaks. Pure data, no IO.
 
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 // ---------------------------------------------------------------------------
 // Messages
@@ -182,40 +181,6 @@ pub enum StreamEvent {
 
     /// Terminal event indicating generation failure.
     Error { message: String },
-}
-
-// ---------------------------------------------------------------------------
-// Lens — user-controlled precision mode
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Lens {
-    Eco,
-    Standard,
-    Precise,
-}
-
-impl Lens {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Lens::Eco => "eco",
-            Lens::Standard => "standard",
-            Lens::Precise => "precise",
-        }
-    }
-}
-
-impl FromStr for Lens {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "standard" => Lens::Standard,
-            "precise" => Lens::Precise,
-            "eco" => Lens::Eco,
-            _ => return Err(()),
-        })
-    }
 }
 
 // ---------------------------------------------------------------------------

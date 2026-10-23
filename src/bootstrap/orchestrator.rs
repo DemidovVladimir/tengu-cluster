@@ -109,7 +109,7 @@ impl ChatServiceFactory for RuntimeChatServiceFactory {
             bridge_tools: inputs.bridge_tools.as_deref(),
             mcp_servers: &inputs.mcp_servers,
         };
-        let mut state = create_chat_loop_state(inputs.agent_config.as_ref());
+        let mut state = create_chat_loop_state();
         let result = service.process_user_text(&mut state, text).await?;
         // An empty assistant response (tool-only turn, budget notice) is an
         // empty string: the caller always wants *some* string.

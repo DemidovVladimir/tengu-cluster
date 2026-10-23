@@ -1328,7 +1328,7 @@ mod golden_tests {
             bridge_tools: Some(&bridge),
             mcp_servers: &servers,
         };
-        let mut state = create_chat_loop_state(&agent);
+        let mut state = create_chat_loop_state();
         service.process_user_text(&mut state, "hi").await.unwrap();
         let (seen_servers, seen_bridge) = engine.0.lock().unwrap().clone().unwrap();
         assert_eq!(seen_servers, ["fake"]);
@@ -1423,7 +1423,7 @@ mod golden_tests {
             bridge_tools: None,
             mcp_servers: &[],
         };
-        let mut state = create_chat_loop_state(&agent);
+        let mut state = create_chat_loop_state();
         service
             .process_user_text(&mut state, "hello there")
             .await

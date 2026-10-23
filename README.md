@@ -130,7 +130,7 @@ Hidden test command `tengu tool` (`src/adapters/inbound/cli/tool.rs`; bridge con
 | Command | Description |
 |---|---|
 | `/help` · `/cost` · `/context` · `/engine` | Info |
-| `/eco` / `/standard` / `/precise` | Lens mode |
+
 | `/reset` · `/purge` | Clear conversation (+ wipe persistent memory) |
 | `/reload` · `/skills` · `/enable <skill>` · `/disable <skill>` | Re-read env + re-scan skills · list · toggle a skill |
 | `/theme` · `/dark` · `/light` | TUI theme |

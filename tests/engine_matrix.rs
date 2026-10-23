@@ -1454,7 +1454,6 @@ fn run_leg(
     let input = json!({
         "goal": set.goal(ws, prep),
         "agent_name": target.agent,
-        "model": "",
         "max_turns": 14,
         "session_id": format!("engine-matrix-{}", uuid::Uuid::new_v4().simple()),
         "step_id": format!("matrix-{}", set.name()),

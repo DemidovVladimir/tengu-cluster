@@ -235,7 +235,7 @@
     <div class="grid" style="grid-template-columns:minmax(0,1fr)">
       <div class="card data"><h3><code>TENGU_TUI_METRICS=1</code></h3><p>A one-line token summary after every recorded call. Totals are kept even while the panel is off. The flag accepts <code>1</code>, <code>true</code>, <code>yes</code>, <code>on</code>.</p></div>
       <div class="card jev"><h3>Decision feed</h3><p>When the config has <code>[decision_loops]</code>, every new line of <code>decisions.jsonl</code> for those loops appears as a bubble, from any process. It polls every 300 ms.</p></div>
-      <div class="card hands"><h3>Slash commands</h3><p><code>/skills</code> <code>/enable</code> <code>/disable</code> <code>/reload</code> <code>/purge</code> <code>/reset</code> <code>/cost</code> <code>/context</code> <code>/engine</code> <code>/eco</code> <code>/standard</code> <code>/precise</code> <code>/theme</code> <code>/help</code>, plus skill commands.</p></div>
+      <div class="card hands"><h3>Slash commands</h3><p><code>/skills</code> <code>/enable</code> <code>/disable</code> <code>/reload</code> <code>/purge</code> <code>/reset</code> <code>/cost</code> <code>/context</code> <code>/engine</code> <code>/theme</code> <code>/help</code>, plus skill commands.</p></div>
     </div>
   </div>
 </section>
@@ -334,7 +334,7 @@
     <li><span class="chip data">reset</span><span><b>/reset · /purge</b>Clear your conversations; purge also wipes vector memory and saved attachments.</span></li>
     <li><span class="chip hands">skills</span><span><b>/reload</b>Re-scan the skill files and rebuild the tools.</span></li>
     <li><span class="chip hands">dir</span><span><b>/project &lt;name&gt;</b>A new project folder from <code>[scaffold.project]</code>; conversations reset.</span></li>
-    <li><span class="chip data">lens</span><span><b>/help /eco /standard /precise /cost /context /engine</b>Built-in chat commands.</span></li>
+    <li><span class="chip data">info</span><span><b>/help /cost /context /engine</b>Built-in chat commands.</span></li>
   </ul>
   <p class="note warn"><b>No approvals:</b> no tool call waits for an approval. The old <code>[telegram] tool_approvals</code> and <code>approve_only</code> keys gated nothing and were removed; <code>[telegram]</code> refuses unknown keys, so a config that still sets one fails the load.</p>
 </section>

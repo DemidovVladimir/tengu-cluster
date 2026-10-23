@@ -341,7 +341,7 @@
     <div class="tabpanel" id="tab-in"><pre>{
   <span class="k">"goal"</span>: <span class="s">"Compare the two answers.\n\nUpstream context:\n&lt;untrusted origin=\"step:s1\"&gt;\n…\n&lt;/untrusted&gt;\n\n"</span>,
   <span class="k">"agent_name"</span>: <span class="s">"crypto_researcher"</span>,   <span class="c"># or a label when compose is set; model, tools, skills: from its agent block</span>
-  <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (20 if the field is missing)</span>
+  <span class="k">"max_turns"</span>: <span class="n">40</span>,                   <span class="c"># limits.max_tool_rounds (required)</span>
   <span class="k">"session_id"</span>: <span class="s">"&lt;session-id&gt;"</span>,         <span class="c"># shared with the planner</span>
   <span class="k">"step_id"</span>: <span class="s">"s2"</span>,
   <span class="k">"sandbox_config"</span>: <span class="s">"lping"</span>,          <span class="c"># the child loads sandboxes/lping/config.toml</span>
@@ -436,7 +436,7 @@ When you have completed your task, your FINAL action MUST be to call the `compre
 <span class="ln cmd"><span class="p">$ </span>tengu run-agent &lt; step.json</span>
 <span class="ln er">Error: `tengu run-agent` is a subprocess mode not meant for direct invocation. Set TENGU_AGENT_IPC=1 …</span>
 <span class="ln cmd"><span class="p">$ </span>TENGU_AGENT_IPC=1 tengu run-agent &lt; step.json</span>
-<span class="ln o"># logs on stderr; max_turns is 20 here (field missing)</span>
+<span class="ln o"># logs on stderr; a step.json without max_turns is refused (exit 1)</span>
 <span class="ln">{"status":"ok","output":"…","summary":"…",<span class="hl">"tools":[{"name":"sol_price","ok":true},{"name":"compress_and_store","ok":true}]</span>,…}</span>
 <span class="ln cmd"><span class="p">$ </span>cargo test --test run_agent_ipc</span></pre>
   </div>

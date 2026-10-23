@@ -34,7 +34,7 @@ tengu chat                                     # or: tengu chat --sandbox lping
 |---|---|---|---|
 | `runtime_profile` | `Config` (`mod.rs`) | `"auto"` | — |
 | `[hub]` | `HubConfig` | defaults | ignored |
-| `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.lens`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
+| `[agents.<id>]` | `AgentConfig` | validation error (at least one agent) | **error** (direct keys, `.local`, `.codex`); ignored in `.limits`, `.flow`, `.identity`, `.prompt_budget`, `.claude_code`, `.scopes.<tool>` |
 | `[orchestrator]` | `OrchestratorConfig` | single-agent dispatch | ignored |
 | `[memory]` | `MemoryConfig` | `enabled = false` | ignored |
 | `[telegram]` · `[webhooks]` | `TelegramConfig` · `WebhookConfig` | off | ignored |
@@ -87,7 +87,7 @@ example_queries = ["what is the BTC price?"]
 | `workspace_tools` | `[]` | older opt-in list, merged with `tools`; only `src/domain/tools.rs::WORKSPACE_TOOLS` names |
 | `workspace` | none | `~` expanded. Without it a plan step / webhook turn runs in a temp dir removed after it (load warns when the agent's tools write files or skills) |
 | `skill_packages` (`skills`) | `[]` | skills loaded (`docs/skills.md`) |
-| `default_lens` | `"eco"` | `eco` \| `standard` \| `precise` |
+
 | `role` | none | free-form; non-empty when set |
 | `scopes.<tool>` | `{}` | `ToolScope` — § Scopes |
 | `claude_code.builtin_tools_profile` | `"none"` | `none` \| `read_only` \| `research` \| `editor` \| `editor_shell` (`config::CLAUDE_CODE_PROFILES`; read trimmed; unknown = error); `research` = WebSearch only (runs at Anthropic on the subscription; no Read / Glob / Grep, no WebFetch — files and pages via bridged tools); every profile runs without settings files, hooks, plugins, skills, CLAUDE.md and auto-memory; `none` required in a hardened sandbox |
@@ -98,8 +98,8 @@ example_queries = ["what is the BTC price?"]
 |---|---|---|
 | `.identity` | `name`, `instructions` (none) | `instructions` go into the system prompt |
 | `.flow` | `scope` (`per-sender`: `main` \| `per-group` \| `per-pipe-sender` \| `per-sender`), `reset_mode` (`idle`: `idle` \| `manual` \| `time`), `idle_timeout_minutes` (30), `max_history_turns`, `compaction_threshold_ratio`, `compaction_keep_turns`, `compaction_summary_max_tokens` (none) | ratio within (0, 1]; the others > 0 when set |
-| `.limits` | `max_tokens_per_flow` (100 000), `max_cost_per_flow`, `warn_at_cost` (none, USD), `context_window` (1 000 000), `max_output_tokens_per_turn` (none = model default), `max_tool_rounds` (70), `max_tool_result_chars` (300 000), `stream_event_timeout_secs` (120; a `codex` CLI is killed only after max(it, 900) s of silence — it keeps the caller alive every 30 s while it reasons), `request_timeout_secs` (600), `compact_result_limit` (200), `max_mcp_result_chars` (50 000), `step_timeout_secs` (600) | `max_tokens_per_flow`, `step_timeout_secs` > 0; costs > 0, `warn_at_cost` ≤ `max_cost_per_flow`; `max_output_tokens_per_turn` ≤ `context_window`; a `local` agent on the default window warns — set the server's real one |
-| `.lens` | `eco_max_tokens` (100), `standard_threshold` (0.7), `precise_budget` (0.5) | > 0; both within [0, 1] |
+| `.limits` | `max_tokens_per_flow` (100 000), `context_window` (1 000 000), `max_output_tokens_per_turn` (none = model default), `max_tool_rounds` (70), `max_tool_result_chars` (300 000), `stream_event_timeout_secs` (120; a `codex` CLI is killed only after max(it, 900) s of silence — it keeps the caller alive every 30 s while it reasons), `request_timeout_secs` (600), `compact_result_limit` (200), `max_mcp_result_chars` (50 000), `step_timeout_secs` (600) | `max_tokens_per_flow`, `step_timeout_secs` > 0; costs > 0, `warn_at_cost` ≤ `max_cost_per_flow`; `max_output_tokens_per_turn` ≤ `context_window`; a `local` agent on the default window warns — set the server's real one |
+
 | `.prompt_budget` | `max_file_tokens` (2 000), `max_skill_context_tokens` (16 000), `max_total_tokens` (32 000) | > 0; each ≤ `max_total_tokens` |
 
 | Limit | Meaning |
@@ -617,7 +617,7 @@ tengu sources --sandbox soe list                          # the source registry;
 | Errors (load fails) | Warnings (load continues) |
 |---|---|
 | unknown top-level key, unknown `[agents.<id>]` key, unknown key in a `deny_unknown_fields` section (§ Root sections) | a `local` agent on the default `context_window` |
-| no agent; more than one `default`; engine / lens / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
+| no agent; more than one `default`; engine / flow / profile values outside their lists | a routable agent without `workspace` whose tools write (`write_file`, `manage_skill`, `skill_distill`, `apply_improver_proposal`) |
 | `workspace_tools` outside `WORKSPACE_TOOLS`; an unknown `[telegram]` key (`tool_approvals` / `approve_only` were removed) | an agent that reads outside text and holds a side effect (`docs/tools.md` § Untrusted input) |
 | `[egress]`, `[keys]`, `[solana]`, hardening, `[xmarket]`, `[risk]` / `[paper]`, `[rate_limits]`, `[runtime]`, `[recorder]`, `[backtest]`, `[generation]`, `[strategy_ranking]`, `[sources]`, `[soe]`, `[studio]`, `[a2a]`, `[feeds]`, `[decision_loops]` rules (sections above) | an unset `${VAR}` (stays literal) · an agent holding `a2a` with no `[a2a.remotes.*]` |
 

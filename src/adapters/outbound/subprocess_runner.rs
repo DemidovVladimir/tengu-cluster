@@ -34,8 +34,9 @@ pub struct AgentIpcInput {
     /// Name of the agent — the child resolves `[agents.<name>]` from the
     /// same config the parent runs on (`sandbox_config` / default config).
     pub agent_name: String,
-    /// Hard cap on LLM mini-loop turns (the agent's `limits.max_tool_rounds`).
-    #[serde(default = "default_max_turns")]
+    /// Hard cap on LLM mini-loop turns: the parent sends the agent's
+    /// `limits.max_tool_rounds` (the engine matrix a smaller cap).
+    /// Required — a payload without it is refused, never run on a default.
     pub max_turns: u32,
     /// Parent-assigned session id for tagging memory writes.
     pub session_id: String,
@@ -76,10 +77,6 @@ pub struct AgentIpcInput {
 pub struct IpcTraceRef {
     pub run_id: String,
     pub parent_event_id: String,
-}
-
-fn default_max_turns() -> u32 {
-    20
 }
 
 /// JSON schema of the IPC output stream (stdout of `tengu run-agent`).
@@ -594,13 +591,18 @@ mod tests {
         assert_eq!(back.plan_state.as_deref(), Some("## Steps\n"));
     }
 
-    /// The optional fields default: no plan block, nothing recorded.
+    /// The optional fields default: no plan block, nothing recorded; the
+    /// turn cap has no default (it used to be 20 against the config's 70).
     #[test]
     fn ipc_input_parses_without_optional_fields() {
-        let json = r#"{"goal":"g","agent_name":"a","session_id":"s","step_id":"x"}"#;
+        let json = r#"{"goal":"g","agent_name":"a","max_turns":7,"session_id":"s","step_id":"x"}"#;
         let back: AgentIpcInput = serde_json::from_str(json).unwrap();
+        assert_eq!(back.max_turns, 7);
         assert!(back.plan_state.is_none());
         assert!(back.trace.is_none());
+        let no_cap = r#"{"goal":"g","agent_name":"a","session_id":"s","step_id":"x"}"#;
+        let err = serde_json::from_str::<AgentIpcInput>(no_cap).unwrap_err();
+        assert!(err.to_string().contains("max_turns"), "{err}");
     }
 
     /// The trace ref crosses only when set (an old child never sees the
@@ -608,7 +610,7 @@ mod tests {
     /// one's drafts round-trip.
     #[test]
     fn ipc_trace_is_compatible_both_ways() {
-        let json = r#"{"goal":"g","agent_name":"a","model":"m","session_id":"s","step_id":"x"}"#;
+        let json = r#"{"goal":"g","agent_name":"a","max_turns":3,"session_id":"s","step_id":"x"}"#;
         let mut input: AgentIpcInput = serde_json::from_str(json).unwrap();
         assert!(!serde_json::to_string(&input).unwrap().contains("\"trace\""));
         input.trace = Some(IpcTraceRef {

@@ -474,16 +474,12 @@ pub struct AgentConfig {
     pub tools: Vec<String>,
     #[serde(default)]
     pub workspace: Option<PathBuf>,
-    #[serde(default = "default_lens")]
-    pub default_lens: String,
     #[serde(default)]
     pub identity: IdentityConfig,
     #[serde(default)]
     pub flow: FlowConfig,
     #[serde(default)]
     pub limits: LimitsConfig,
-    #[serde(default)]
-    pub lens: LensConfig,
     /// Fleet orchestration role (qa|backend_engineer|integration_master).
     #[serde(default)]
     pub role: Option<String>,
@@ -527,10 +523,6 @@ pub struct AgentConfig {
     /// `Config::fold_default_scopes`.
     #[serde(skip)]
     pub sandbox: std::sync::Arc<sections::SandboxSections>,
-}
-
-fn default_lens() -> String {
-    "eco".to_string()
 }
 
 impl AgentConfig {
@@ -619,10 +611,6 @@ fn default_idle_timeout() -> u32 {
 pub struct LimitsConfig {
     #[serde(default = "default_max_tokens")]
     pub max_tokens_per_flow: u64,
-    #[serde(default)]
-    pub max_cost_per_flow: Option<f64>,
-    #[serde(default)]
-    pub warn_at_cost: Option<f64>,
     /// Model window in tokens (default 1_000_000). `engine = "local"`: set
     /// the server's real window (load warns on the default); one tool
     /// result is capped at 1/8 of it (`domain::token::tool_result_char_budget`).
@@ -668,8 +656,6 @@ impl Default for LimitsConfig {
     fn default() -> Self {
         Self {
             max_tokens_per_flow: default_max_tokens(),
-            max_cost_per_flow: None,
-            warn_at_cost: None,
             context_window: default_context_window(),
             max_output_tokens_per_turn: None,
             max_tool_rounds: default_max_tool_rounds(),
@@ -1234,37 +1220,6 @@ fn default_max_total_tokens() -> usize {
     32000
 }
 
-/// Lens-specific retrieval and budgeting parameters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LensConfig {
-    #[serde(default = "default_eco_max")]
-    pub eco_max_tokens: u32,
-    #[serde(default = "default_threshold")]
-    pub standard_threshold: f32,
-    #[serde(default = "default_budget")]
-    pub precise_budget: f32,
-}
-
-impl Default for LensConfig {
-    fn default() -> Self {
-        Self {
-            eco_max_tokens: default_eco_max(),
-            standard_threshold: default_threshold(),
-            precise_budget: default_budget(),
-        }
-    }
-}
-
-fn default_eco_max() -> u32 {
-    100
-}
-fn default_threshold() -> f32 {
-    0.7
-}
-fn default_budget() -> f32 {
-    0.5
-}
-
 /// Aggregates config validation issues.
 #[derive(Debug, Default)]
 struct ValidationErrors {
@@ -1301,14 +1256,6 @@ impl ValidationErrors {
     fn require_positive_opt_u32(&mut self, path: &str, value: Option<u32>) {
         if matches!(value, Some(0)) {
             self.push(format!("{path} must be greater than 0 when set"));
-        }
-    }
-
-    fn require_positive_opt_f64(&mut self, path: &str, value: Option<f64>) {
-        if let Some(v) = value {
-            if v <= 0.0 {
-                self.push(format!("{path} must be greater than 0 when set"));
-            }
         }
     }
 
@@ -1670,11 +1617,6 @@ impl Config {
                 CODEX_WEB_SEARCH,
             );
         }
-        errors.require_one_of(
-            &format!("agents.{agent_id}.default_lens"),
-            &agent.default_lens,
-            &["eco", "standard", "precise"],
-        );
 
         errors.require_one_of(
             &format!("agents.{agent_id}.flow.scope"),
@@ -1721,24 +1663,6 @@ impl Config {
                 format!("agents.{agent_id}.description must not be empty when set"),
             );
         }
-        errors.require_positive_opt_f64(
-            &format!("agents.{agent_id}.limits.max_cost_per_flow"),
-            agent.limits.max_cost_per_flow,
-        );
-        errors.require_positive_opt_f64(
-            &format!("agents.{agent_id}.limits.warn_at_cost"),
-            agent.limits.warn_at_cost,
-        );
-        if let (Some(max_cost), Some(warn_cost)) =
-            (agent.limits.max_cost_per_flow, agent.limits.warn_at_cost)
-        {
-            if warn_cost > max_cost {
-                errors.push(format!(
-                    "agents.{}.limits.warn_at_cost cannot exceed max_cost_per_flow",
-                    agent_id
-                ));
-            }
-        }
         if let Some(output) = agent.limits.max_output_tokens_per_turn {
             let context = agent.limits.context_window;
             if output > context {
@@ -1754,23 +1678,6 @@ impl Config {
                 !role.trim().is_empty(),
                 format!("agents.{agent_id}.role cannot be empty when set"),
             );
-        }
-
-        errors.require(
-            agent.lens.eco_max_tokens > 0,
-            format!("agents.{agent_id}.lens.eco_max_tokens must be greater than 0"),
-        );
-        if !(0.0..=1.0).contains(&agent.lens.standard_threshold) {
-            errors.push(format!(
-                "agents.{}.lens.standard_threshold must be within [0.0, 1.0]",
-                agent_id
-            ));
-        }
-        if !(0.0..=1.0).contains(&agent.lens.precise_budget) {
-            errors.push(format!(
-                "agents.{}.lens.precise_budget must be within [0.0, 1.0]",
-                agent_id
-            ));
         }
 
         let pb = &agent.prompt_budget;
@@ -1867,14 +1774,12 @@ impl Default for Config {
                 example_queries: vec![],
                 tools: vec![],
                 workspace: None,
-                default_lens: "eco".to_string(),
                 identity: IdentityConfig {
                     name: Some("Tengu".to_string()),
                     instructions: None,
                 },
                 flow: FlowConfig::default(),
                 limits: LimitsConfig::default(),
-                lens: LensConfig::default(),
                 role: None,
                 skill_packages: vec![],
                 prompt_budget: PromptBudgetConfig::default(),
@@ -2533,12 +2438,15 @@ ttl_days = 7
     fn agent_block_rejects_unknown_keys() {
         // The old agents/*.toml spec was strict (`max_turns`, `timeout_secs`,
         // `skills`, `sandbox`); the merged schema keeps a typo from being
-        // silently dropped.
+        // silently dropped — and a removed knob (`default_lens`, `lens`)
+        // from looking live.
         for bad in [
             "max_turns = 20",
             "timeout_secs = 180",
             "sandbox = \"x\"",
             "tool = []",
+            "default_lens = \"eco\"",
+            "lens = {}",
         ] {
             let toml = format!("[agents.x]\nengine = \"openrouter\"\nmodel = \"m\"\n{bad}\n");
             let err = toml::from_str::<Config>(&toml).unwrap_err().to_string();

@@ -165,8 +165,7 @@ pub fn run_tui(
     // Set header
     let identity = agent_config.identity.name.as_deref().unwrap_or("Tengu");
     let engine_label = format!("{}/{}", agent_config.engine, agent_config.model);
-    let default_lens = agent_config.default_lens.clone();
-    view::update_header(&mut siv, identity, &engine_label, &default_lens);
+    view::update_header(&mut siv, identity, &engine_label);
     view::push_welcome(&mut siv);
 
     let memory_config = config.memory.clone();
@@ -401,8 +400,7 @@ pub fn run_tui(
         let mut current_executor: Option<Arc<dyn ToolExecutor>> = None;
         let mut current_system_prompt = system_prompt;
 
-        let mut runtime_state =
-            crate::application::chat::service::create_chat_loop_state(&engine_agent_config);
+        let mut runtime_state = crate::application::chat::service::create_chat_loop_state();
 
         // Memory recall during chat turns goes through the
         // `MemoryManager` directly (ChatRuntimeService::memory_manager).

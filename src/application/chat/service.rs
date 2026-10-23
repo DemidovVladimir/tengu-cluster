@@ -20,7 +20,7 @@ use crate::application::chat::tool_loop::{collect_engine_response, LoopOpts, Too
 use crate::application::memory::fencing::build_memory_context_block;
 use crate::application::memory::manager::MemoryManager;
 use crate::config::AgentConfig;
-use crate::domain::message::{Lens, Message, Recipient, Role, ToolDef};
+use crate::domain::message::{Message, Recipient, Role, ToolDef};
 use crate::domain::session::{ChatLoopState, FlowCompactionPolicy};
 use crate::domain::token::estimate_tokens_approx_min1;
 use crate::ports::engine::EngineDiagnostics;
@@ -64,24 +64,6 @@ pub(crate) fn handle_chat_command(
     skill_commands: &[(String, String)],
 ) -> CommandResult {
     match command {
-        "/eco" => {
-            state.active_lens = Lens::Eco;
-            CommandResult::Handled(CommandOutput {
-                lines: vec!["Switched to eco lens (summaries only)".into()],
-            })
-        }
-        "/standard" => {
-            state.active_lens = Lens::Standard;
-            CommandResult::Handled(CommandOutput {
-                lines: vec!["Switched to standard lens (auto-expand)".into()],
-            })
-        }
-        "/precise" => {
-            state.active_lens = Lens::Precise;
-            CommandResult::Handled(CommandOutput {
-                lines: vec!["Switched to precise lens (full content)".into()],
-            })
-        }
         "/cost" => {
             let lines = vec![
                 "Session Stats".into(),
@@ -102,7 +84,6 @@ pub(crate) fn handle_chat_command(
                 .map(|m| estimate_tokens_approx_min1(&m.content))
                 .sum();
             let window = engine_info.context_window;
-            let lens_name = state.active_lens.as_str();
             let mut lines = vec![
                 format!(
                     "Context: ~{} / {} tokens ({}%)",
@@ -110,7 +91,6 @@ pub(crate) fn handle_chat_command(
                     window,
                     (used * 100) / window.max(1)
                 ),
-                format!("Lens: {}", lens_name),
                 format!("History turn limit: {}", history_turn_limit),
                 format!(
                     "Compaction: threshold={} keep_turns={} summary_max_tokens={}",
@@ -178,9 +158,6 @@ pub(crate) fn handle_chat_command(
         "/help" => {
             let mut lines = vec![
                 "Commands:".into(),
-                "  /eco       — Eco lens (summaries)".into(),
-                "  /standard  — Standard lens (auto-expand)".into(),
-                "  /precise   — Precise lens (full content)".into(),
                 "  /engine    — Show current engine".into(),
                 "  /cost      — Token usage stats".into(),
                 "  /context   — Context window usage".into(),
@@ -273,14 +250,13 @@ pub(crate) fn needs_fresh_history_grounding(text: &str) -> bool {
     })
 }
 
-/// Create a new `ChatLoopState` with defaults from agent config.
-pub(crate) fn create_chat_loop_state(agent_config: &AgentConfig) -> ChatLoopState {
+/// A fresh `ChatLoopState` (no messages, no flow, zero usage).
+pub(crate) fn create_chat_loop_state() -> ChatLoopState {
     ChatLoopState {
         messages: Vec::new(),
         active_flow_key: None,
         manual_session_id: None,
         flow_token_usage: 0,
-        active_lens: agent_config.default_lens.parse().unwrap_or(Lens::Eco),
         total_input_tokens: 0,
         total_output_tokens: 0,
         last_prompt_report: None,
