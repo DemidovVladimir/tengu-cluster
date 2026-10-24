@@ -12,7 +12,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 |---|---|
 | Worktree | `/Users/vladimirdemidov/development/tengu-wt-audit` (this file's tracked copy lives here) |
 | Branch | `fix/audit-bugs`, from `origin/main` `fdfdc2eb1961964b33f154a829550ded52acb279` |
-| Last code commit | `f334e4a30b0e429f4544d8e8bf31ed605b53368b` (B6) · PR #59 open, not merged |
+| Last code commit | `217c3ecdadc1f09de36d737b7a4bd2f889210328` (B8) · PR #59 open, not merged |
 | Never | touch the main checkout: it runs `tengu run --sandbox xpower` + 2 `a2a serve` on `feature/xpower-sandbox` |
 | Build env | `CARGO_TARGET_DIR=~/.cache/tengu-xm.noindex/audit-target`, `CARGO_BUILD_JOBS=6`, `nice`; scoped tests only |
 
@@ -49,6 +49,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | B4 | done: `MetricsRecord.ok` (absent = true) + `MetricsRecord::call`; kind `agent` per in-process agent turn (chat, Telegram, webhook / A2A agent, `tengu tool turn`: `tool_loop::AgentTurnMetrics`); a failed planner / engine turn / embedding / wiki compile / Jev call records `ok=false`; `AgentRollup.failed_count` | `d35ec897bde588062f410f152859d7057eb60849` |
 | B5 | done: run-agent's summary writes (compress_and_store, bridge, backstop) logged either way and journaled as one `agentic_memory` call `step:<session>:<step>:summary` (`tool.completed` `stored <entry id>` / `tool.failed`) via `trace_exec::CallTrace::run` | `e51eb0f82582663b808a50e545739a2b25628cce` |
 | B6 | done: `tengu tool call --sandbox <s> --from-trace <run_id>:<seq>` (`domain::trace::recorded_call`): the recorded call as its node's agent, no call id; scrubbed (`<url>`, `[REDACTED]`) or bound-dropped args refused unless `--args` | `f334e4a30b0e429f4544d8e8bf31ed605b53368b` |
+| B8 | done: `JsonlTraceReader` keeps the last 2 runs parsed (grown file = only new lines parsed), `TraceReader::run_events` shared to Studio pages; `runs` from each file's ends + line count; 62k-event run lists in 0.5 s CPU vs 45 s full parse (debug) | `217c3ecdadc1f09de36d737b7a4bd2f889210328` |
 | W2 | done | `d237e4afc970c14535bbd5062e0829148bdc9da6` |
 | W3 | done but `--older-than <days>` (deferred) | `3b246d771b0ce02803e613184691fded4a5a7cc3` |
 | R1, B7 | done (also A10's "default build" half: `webhooks` is a default feature) | `d206882fdc1e1b4c6f7bb1415158693c63780f8c` |
@@ -89,7 +90,7 @@ Updated 2026-10-24 (resumed from 2026-10-23). Work order (operator, 2026-10-22):
 | Next | Rows, in order |
 |---|---|
 | 1 · leaks | done |
-| 2 · everything else (current) | B8, B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
+| 2 · everything else (current) | B9, B10, W1, W4, O1, O2, O3, O4, O5, O7, O8, O9, O10, O11 |
 | Waits for the operator (§ 11) | D1, D2, T3, Y7, T6, D4, S4 narrow-only everywhere, S14 "empty = read-only set" |
 | Finish | `docs/SESSION_HANDOFF.md`; push + one PR; merge on green CI; `handoff_for_check.md` — note `sandboxes/xpower` (not on this branch) changes on merge: S3 (`research` loses page fetches) and S13 (`*` no longer reaches local hosts), S10 (its readers checked against the side-effect rule), S16 (its 2 "web pages are untrusted" sentences to delete) |
 
