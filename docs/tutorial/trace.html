@@ -278,11 +278,11 @@
   <div class="sec-head">
     <span class="kicker">One shape for every event</span>
     <h2 id="s-env">One event</h2>
-    <p>Example: seq 7 of the run above (ids as recorded; <code>ts_ms</code> and the home path are illustrative). One line in the file; wrapped here. Every field is always present, <code>null</code> when unknown.</p>
+    <p>Example: seq 7 of the run above (ids as recorded; <code>ts_ms</code> and the home path are illustrative). As <code>tengu trace show</code> serves it; wrapped here. Every field is present, <code>null</code> when unknown. On disk (schema 2) only line 1, <code>run.opened</code>, carries the run's constants: this line is stored without <code>schema_version</code>, <code>event_id</code>, <code>sandbox</code>, <code>config_hash</code>, <code>runtime_id</code>, <code>run_id</code> and its <code>null</code> fields, and the reader puts them back.</p>
   </div>
   <div class="grid two">
 <pre class="ex-json">{
-  <span class="gi">"schema_version"</span>: 1,
+  <span class="gi">"schema_version"</span>: 2,
   <span class="gi">"event_id"</span>: "71650e67-fb10-4aac-8a5a-a1c837c1cee8:7",
   <span class="gi">"seq"</span>: 7,
   <span class="gi">"ts_ms"</span>: 1791491777841,

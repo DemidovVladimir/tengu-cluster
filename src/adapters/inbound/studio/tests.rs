@@ -454,7 +454,7 @@ async fn get_routes_only_without_control() {
     assert_eq!(meta["control_enabled"], json!(false));
     assert_eq!(meta["sandbox"], json!(SANDBOX));
     assert_eq!(meta["config_hash"], json!(s.config_hash));
-    assert_eq!(meta["schema"], json!({"workflow": 1, "trace": 1}));
+    assert_eq!(meta["schema"], json!({"workflow": 1, "trace": 2}));
     // The colour legend comes from Rust (`Status::tone`), not the page.
     let tone_of = |status: &str| {
         meta["tones"]["statuses"]
@@ -1322,7 +1322,7 @@ async fn reload_returns_identical_order() {
     // Each event keeps its trace line's field order (`tengu trace show`).
     let raw = text(format!("/api/v1/runs/{id}/events?limit=2")).await;
     assert!(
-        raw.contains(r#""events":[{"schema_version":1,"event_id":""#),
+        raw.contains(r#""events":[{"schema_version":2,"event_id":""#),
         "{raw}"
     );
     let whole = replay(&s, &id, 1000).await;
