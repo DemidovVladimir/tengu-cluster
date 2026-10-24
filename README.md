@@ -338,7 +338,7 @@ Restart=on-failure
 
 ## Configuration
 
-`config.example.toml` is the commented reference; `docs/configuration.md` has every section's fields, defaults, load rules and the environment-variable table. `Config` is `deny_unknown_fields`: a misspelled top-level key fails the load.
+`config.example.toml` is the commented reference; each section's keys, defaults and load rules are its module doc in `src/config/` (index: `docs/configuration.md` § Root sections, with the load pipeline, cross-section rules and the environment-variable table). `Config` is `deny_unknown_fields`: a misspelled top-level key fails the load.
 
 | Section | Purpose |
 |---|---|

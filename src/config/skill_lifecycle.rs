@@ -1,5 +1,13 @@
 //! Config for the skill-lifecycle subsystem. Parses the `[skill_lifecycle]`
 //! TOML section of `sandboxes/<name>/config.toml` (or `~/.tengu/config.toml`).
+//!
+//! | Field | Default | Read by |
+//! |---|---|---|
+//! | `improver_agent` | required | `tengu skill evolve` |
+//! | `default_max_evolve_cycles` | 3 | `skill evolve` (`--max-cycles` overrides) |
+//! | `worktree_stale_hours` | 24 | `skill evolve` startup sweep of `.tengu/worktrees/` (0 = off) |
+//! | `fixture_runner_agent` | none | nothing — `tengu eval` runs rows on the eval config's default agent |
+//! | `default_rolling_window` · `max_per_run_reports` · `per_run_dir` | 10 · 10 · `"metrics"` | parsed, not read (`tengu eval` uses 10 and its `--max-runs` flag) |
 
 use serde::{Deserialize, Serialize};
 

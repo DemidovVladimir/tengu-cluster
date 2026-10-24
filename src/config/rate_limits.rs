@@ -9,6 +9,14 @@
 //! # burst = 1200        # bucket size, default = per_minute
 //! # exec_reserve = 200  # weight reads leave for order calls, default 0
 //! ```
+//!
+//! | Field | Default | Rule |
+//! |---|---|---|
+//! | `per_minute` | required | ≥ 1, weight units / min |
+//! | `burst` | `per_minute` | ≥ 1 |
+//! | `exec_reserve` | 0 | < `burst` |
+//!
+//! Names `[a-z0-9_-]+`; used: `hyperliquid`, `geckoterminal`, `sec` (SEC EDGAR: `tengu history events`, a `sec_edgar` source row), `ted` (a `ted_search` source row) — a `[sources]` row names its own in `rate_limit`. One bucket per name per process: two processes each get the full budget.
 
 use std::collections::HashMap;
 

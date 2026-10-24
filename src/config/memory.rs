@@ -1,5 +1,19 @@
 //! `[memory]` (vector memory, recall lanes, `persistent_store` chunking)
 //! and `[prompt_budget]`.
+//!
+//! | `[memory]` key | Default | Notes |
+//! |---|---|---|
+//! | `enabled` | `false` | disk vector store + `memory_ingest` / `memory_search`; embeddings need `OPENROUTER_API_KEY` |
+//! | `embedding_model` | `text-embedding-3-small` | must stay 1536-dim (Postgres `vector(1536)`) |
+//! | `max_recall_entries` · `max_recall_tokens` | 5 · 600 | |
+//! | `store_path` | `<TENGU_HOME>/memory/` | store dir (`vectors.bin`) of an agent without `workspace` — else `<workspace>/.tengu/memory/` (an old `<workspace>/memory/vectors.bin` moves in on first use); the disk bincode store is the only built-in backend (no `backend` key; one set is ignored) |
+//! | `persistent_store_chunk_size` · `_overlap` | 1000 · 200 | characters |
+//! | `session_recent_n` | 10 | last messages reloaded per orchestrator turn |
+//! | `cross_plan_top_k` | 5 | replan recall over `agentic_memory` step outputs |
+//! | `cross_session_msg_top_k` | 0 (off) | cross-session user-message recall |
+//! | `within_session_output_top_k` | 0 (off) | step outputs of this session in the planner prompt; needs `postgres_memory`; 3–5 recommended |
+//!
+//! Durable memory is the Postgres `agentic_memory` plugin (`--features postgres_memory` + `TENGU_MEMORY_DATABASE_URL`), not this section. Spec: `docs/memory-*.md`.
 
 use super::*;
 

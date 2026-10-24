@@ -176,6 +176,8 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # agent = "main"              # tools + scopes + workspace come from this agent
 # dry_run = true              # write actions logged, not run (default true)
 # act_at = 0.8                # min confidence to act; below → escalate to planner
+# world = { price = "price_oracle/1:So11111111111111111111111111111111111111112", pools = "dlmm_pools/1:SOL-USDC|fee_tvl_24h|10|100000" }  # typed tools (docs/observations.md): alias → observation key, read (never fetched) each step
+# world_max_age_secs = 30     # older world entries render as stale, no numbers (default 30)
 # [decision_loops.watch.actions.hold]
 # description = "Nothing to do"           # no `tool` = terminal
 # [decision_loops.watch.actions.fetch]
@@ -185,17 +187,13 @@ max_tokens_per_flow = 100_000       # Hard limit. Warning sent at 80%. Use /rese
 # args = { method = "GET", url = "https://example.com/pools?pair={pair}", return_body = true }
 # slots = { pair = ["SOL-USDC"] }
 # reduce = { pools = "/data/*/{address,tvl}" }
-#
-# Typed tools (results carry an Observation; docs/observations.md):
-# world = { price = "price_oracle/1:So11111111111111111111111111111111111111112", pools = "dlmm_pools/1:SOL-USDC|fee_tvl_24h|10|100000" }  # alias → observation key, read (never fetched) each step
-# world_max_age_secs = 30                 # older world entries render as stale, no numbers (default 30)
 # [decision_loops.watch.actions.price]
 # description = "Refresh the SOL/USD price"
 # tool = "sol_price"                      # opt-in tool: list it in the loop agent's `tools`
 # read_only = true
 # [decision_loops.watch.actions.open]
 # description = "Open a position"
-# tool = "dlmm_open_position"             # not built yet — allowed only while dry_run
+# tool = "dlmm_open_position"             # a write tool: logged, not run, while dry_run
 # requires = { price = 30 }               # offered only while `price` is usable and <= 30 s old
 # slots = { pool = { observation = "pools", items = "/data/pools/*", value = "address", top = 5 } }  # from a fresh world entry (written by a dlmm_pools call with the same args)
 

@@ -36,6 +36,8 @@
 //! | `max_running` | 4 | tasks run at once; the rest wait `SUBMITTED` |
 //! | `run_timeout_secs` | 900 | a run longer than this fails (`timed out`) |
 //! | `context_turns` | 8 | earlier turns of a context handed to the agent with a follow-up message |
+//!
+//! Bounds (a violation fails `Config::load`): `url`, `public_url` `http(s)://` with a host; `timeout_secs` 1–3600; `max_result_chars` ≥ 200; one credential (`bearer_env`, or `header` + `header_env` together); `bind` an IP address, `port` > 0; exactly one of `token_env` / `allow_unauthenticated` (loopback `bind` only, never hardened); `orchestrator` or `agents` (at least one; `orchestrator = true` needs `[orchestrator]`; each agent once, a block with a `description`); `max_tasks`, `max_running` > 0; `run_timeout_secs` 1–86 400. An agent holding `a2a` with no remotes warns (every call is refused).
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;
