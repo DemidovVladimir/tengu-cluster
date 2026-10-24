@@ -27,15 +27,13 @@ Resume here, then **Open gates** (the one place gate state lives), then the last
 
 ## 2026-10-23/24: audit fixes — branch `fix/audit-bugs`, PR #59 (open, not merged)
 
-The 2026-10-22 audit (`TENGU_IMPROVEMENTS.md`). Order (operator): bugs → leaks → everything else. Done: A1–A12, R1–R8 (R7 stages 1–3), Y1–Y6, Y8–Y10, B1–B10, W1–W4 (W3 but `--older-than`), S1–S16, T1, T2, T4, T5, T7, T9, D3, D5, D6, O1–O4 (O3 but the svg), O6, O8. Waiting: § 11 rows, T8 (on Y7).
+The 2026-10-22 audit (`TENGU_IMPROVEMENTS.md`). Order (operator): bugs → leaks → everything else. Done: A1–A12, R1–R8 (R7 stages 1–3), Y1–Y6, Y8–Y10, B1–B5, B7, W1–W3 (W1 without `tengu paths`, W3 but `--older-than`), S1–S16, T1, T2, T4, T5, T7, T9, D3, D5, D6, O1–O11. Cut on the operator's word (2026-10-24, simplest): B6, B8–B10, `tengu paths`, W4. Waiting: § 11 rows, T8 (on Y7).
 
 | On merge | What changes |
 |---|---|
 | `~/.tengu/config.toml` | delete line 1 `runtime_profile` (R2) and line 7 `default_lens` (A9) — the base config fails to load otherwise |
-| Workspaces (W4) | `memory/vectors.bin` → `.tengu/memory/`, `.tengu-attachments/` → `.tengu/attachments/`: moved once on first open (refused while a `.lock` exists); `tengu paths --sandbox <s>` lists every path with its size |
-| Commands | `tengu webhooks` = `tengu run` with no feeds (`kind = "run"` + heartbeat); `tengu status` gone; new `tengu paths`, `tengu trace stats`, `tengu tool call --from-trace` |
+| Commands | `tengu webhooks` = `tengu run` with no feeds (`kind = "run"` + heartbeat); `tengu status` gone |
 | Config | `[orchestrator]` rejects unknown keys (no `engine`); `[telegram] tool_approvals` / `approve_only` removed (S11); step retries by error class (fatal / decode: none) |
-| Trace (B10) | schema 2: constants only on `run.opened`; schema 1 files still read |
 | Docs (O1, O2, O3, O6) | living docs undated (`docs/runtime.md`, `docs/observations.md`, `docs/memory-*.md`, …); 42 shipped docs in `docs/archive/<yyyy-mm>/` (`docs/archive/README.md`); `TENGU_{HANDOFF,ROADMAP,STUDIO_PLAN}.md` → `docs/plans/`; the architecture explorer = walk views only |
 | xpower | see Open gates |
 | Not retaken | `docs/studio-evidence/` screenshots after B9 (the board header) |
