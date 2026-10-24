@@ -1743,9 +1743,7 @@ pub async fn run_row(ctx: RowCtx<'_>) -> anyhow::Result<RowResult> {
             tools: exec.map(|e| &e.registry),
             judge: Some(Arc::clone(&ctx.judge_client)),
             http: exec.map(|e| &e.http),
-            memory_manager: exec.and_then(|e| e.memory_manager.as_deref()),
             secret_registry: exec.map(|e| &*e.secret_registry),
-            activity: exec.map(|e| &*e.activity),
             tool_scopes: exec.map(|e| &e.scopes),
             // Pre-authored fixture path: no live conversation, no sibling lookup.
             conversation: None,

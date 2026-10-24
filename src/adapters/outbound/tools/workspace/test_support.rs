@@ -7,19 +7,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::adapters::outbound::shell::LocalShellExecutor;
-use crate::domain::message::ToolCall;
 use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::shell::ShellExecutionPort;
 use crate::ports::tool::ToolCtx;
-use crate::ports::tool_activity::ToolActivityPort;
-
-/// No-op activity port for tests.
-pub(crate) struct NoopActivity;
-
-impl ToolActivityPort for NoopActivity {
-    fn publish_tool_activity(&self, _call: &ToolCall) {}
-}
 
 /// Self-contained test fixtures that own every long-lived port used by a
 /// `ToolCtx`. Borrow the cx via `ctx()` inside a single test function.
@@ -29,7 +20,6 @@ pub(crate) struct TestHarness {
     pub shell: Arc<dyn ShellExecutionPort>,
     pub http: reqwest::Client,
     pub secrets: SecretRegistry,
-    pub activity: Arc<dyn ToolActivityPort>,
 }
 
 impl TestHarness {
@@ -47,7 +37,6 @@ impl TestHarness {
             shell: Arc::new(LocalShellExecutor::new()),
             http: reqwest::Client::new(),
             secrets: SecretRegistry::new(),
-            activity: Arc::new(NoopActivity),
         }
     }
 
@@ -59,7 +48,6 @@ impl TestHarness {
             shell: Arc::new(LocalShellExecutor::new()),
             http: reqwest::Client::new(),
             secrets: SecretRegistry::new(),
-            activity: Arc::new(NoopActivity),
         }
     }
 
@@ -69,9 +57,7 @@ impl TestHarness {
             scope: &self.scope,
             shell: self.shell.as_ref(),
             http: &self.http,
-            memory_manager: None,
             secret_registry: &self.secrets,
-            activity: self.activity.as_ref(),
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
             call_id: None,

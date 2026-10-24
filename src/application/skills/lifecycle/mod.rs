@@ -8,7 +8,6 @@ pub(crate) mod approval_gate;
 pub(crate) mod audit;
 pub(crate) mod evolve;
 pub(crate) mod fixtures;
-pub(crate) mod learner_state;
 pub(crate) mod metric_kinds;
 pub(crate) mod metrics;
 pub(crate) mod scanner;

@@ -18,9 +18,6 @@
 //! | Dir hash ([`tree_hash`]) | sha256 of the lines `"<sha256>  <relpath>\n"` of every regular file under the dir, sorted bytewise by relpath (`/`-separated) — what `shasum -a 256` prints, sorted |
 //! | Captured | `captured_at`, `manifest_sha256` and every item's `sha256` / `files` / `bytes` are all set, or none is (a plan) |
 
-// Consumers land with `tengu evidence` and `tengu lineage` (lineage P0–P5).
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

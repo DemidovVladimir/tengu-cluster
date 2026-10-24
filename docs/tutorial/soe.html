@@ -199,10 +199,9 @@
       <tbody>
         <tr><td><code>Minor</code></td><td><code>"41250.75"</code> · <code>2750</code></td><td>integer hundredths; at most 2 fraction digits; a whole number means whole units</td><td><code>invalid_amount</code></td></tr>
         <tr><td><code>Currency</code></td><td><code>"EUR"</code></td><td>EUR, USD, GBP, CHF, KZT, RUB, CNY</td><td><code>invalid_currency</code></td></tr>
-        <tr><td><code>Money</code></td><td><code>{ amount = "250.00", currency = "EUR" }</code></td><td>adds, subtracts and compares within one currency only</td><td><code>currency_mismatch</code></td></tr>
+        <tr><td><code>Money</code></td><td><code>{ amount = "250.00", currency = "EUR" }</code></td><td>compares within one currency only; converted from a rate's base currency only</td><td><code>currency_mismatch</code></td></tr>
         <tr><td><code>Bps</code></td><td><code>250</code></td><td>an integer from 0 to 10 000</td><td><code>invalid_bps</code></td></tr>
         <tr><td><code>FxRate</code></td><td><code>{ pair = "USD/EUR", rate = "0.92", source = "url:https://…", as_of = "2026-10-01" }</code></td><td>quote units per 1 base unit, &gt; 0; where and when it was read</td><td><code>invalid_rate</code></td></tr>
-        <tr><td><code>Converted</code></td><td><code>{ native, rate, converted }</code></td><td>native amount, rate and result kept apart; the result is the floor or ceil of the exact product</td><td><code>invalid_conversion</code></td></tr>
         <tr><td><code>Est</code></td><td><code>"UNKNOWN: no price list"</code> · <code>{ low, base, high }</code></td><td>low ≤ base ≤ high</td><td><code>invalid_estimate</code> · <code>invalid_range</code></td></tr>
         <tr><td><code>Assumption</code></td><td><code>{ value, evidence = [...], as_of, note }</code></td><td>an estimate with its evidence locators and time</td><td>unknown fields</td></tr>
         <tr><td><code>SchemaTag</code></td><td><code>"soe.opportunity/1"</code></td><td>version 1 only</td><td><code>schema_unsupported</code></td></tr>
@@ -644,7 +643,6 @@
     <li><span><b>Nothing is rounded on the way in.</b> A third fraction digit is refused, not rounded.</span></li>
     <li><span><b>Rounding never flatters.</b> Inflows (revenue, contribution) round down; outflows (cost, exposure, capital) round up, negatives included.</span></li>
     <li><span><b>No silent conversion.</b> A rate converts only its own base currency; money in two currencies never adds or compares.</span></li>
-    <li><span><b>An unknown currency stays unknown.</b> A source amount outside the closed set becomes <code>UNKNOWN</code> with the reason.</span></li>
     <li><span><b>Unknown is not zero.</b> No scenario reads a value from an unknown estimate.</span></li>
     <li><span><b>Versions are explicit.</b> A record tagged with a schema version other than 1 is refused.</span></li>
     <li><span><b>No built-in operator parameter.</b> No profile field has a default; a missing one fails the parse. There is no salary field.</span></li>
@@ -735,7 +733,7 @@
       <thead><tr><th>File</th><th>Owns</th></tr></thead>
       <tbody>
         <tr><td><code>src/domain/soe/mod.rs</code></td><td>the SOE domain's files and rules</td></tr>
-        <tr><td><code>src/domain/soe/value.rs</code></td><td><code>Minor</code>, <code>Money</code>, <code>Currency</code>, <code>Bps</code>, <code>FxRate</code>, <code>Converted</code>, <code>Flow</code>, <code>Est</code>, <code>Assumption</code>, <code>Scenario</code>, <code>SchemaTag</code></td></tr>
+        <tr><td><code>src/domain/soe/value.rs</code></td><td><code>Minor</code>, <code>Money</code>, <code>Currency</code>, <code>Bps</code>, <code>FxRate</code>, <code>Flow</code>, <code>Est</code>, <code>Assumption</code>, <code>Scenario</code>, <code>SchemaTag</code></td></tr>
         <tr><td><code>src/domain/soe/record.rs</code></td><td><code>SoeRecord</code> header, <code>from_toml</code>, <code>validate</code>, <code>Problems</code>, <code>Tier</code>, <code>Verdict</code></td></tr>
         <tr><td><code>src/domain/soe/profile.rs</code></td><td><code>OperatorProfile</code>, <code>OperatorCapability</code>, <code>RankKey</code></td></tr>
         <tr><td><code>src/domain/soe/opportunity.rs</code></td><td><code>Opportunity</code>, <code>Mechanism</code>, <code>RevenueModel</code>, <code>EconomicInputs</code>, <code>DealReview</code></td></tr>
@@ -745,7 +743,7 @@
         <tr><td><code>src/domain/soe/economics.rs</code></td><td><code>scenarios</code>, <code>ScenarioMetrics</code>, <code>Metric</code>, <code>Payback</code>, <code>expected_loss</code></td></tr>
         <tr><td><code>src/domain/soe/gates.rs</code></td><td><code>gates</code>, <code>GateVerdict</code>, <code>GateCode</code>, <code>CitedRecord</code>, <code>next_information</code></td></tr>
         <tr><td><code>src/domain/soe/matching.rs</code></td><td><code>fit</code>, <code>active_at</code>, <code>FitLevel</code></td></tr>
-        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>rank_moves</code>, <code>sensitivity</code>, <code>hold_week</code></td></tr>
+        <tr><td><code>src/domain/soe/rank.rs</code></td><td><code>assess</code>, <code>rank</code>, <code>explain_order</code>, <code>sensitivity</code>, <code>hold_week</code></td></tr>
         <tr><td><code>src/domain/soe/eval.rs</code></td><td><code>EvalCase</code>, <code>run_case</code></td></tr>
         <tr><td><code>src/domain/soe/observe.rs</code></td><td><code>EvidenceIndex</code>, <code>cited_views</code> (the O2 packet in)</td></tr>
         <tr><td><code>src/domain/soe/proposal.rs</code> · <code>challenge.rs</code></td><td><code>ProposalDraft</code>, <code>MechanismProposal</code>, <code>COMPUTED_KEYS</code> · <code>ChallengeDraft</code>, <code>Challenge</code>, <code>apply</code></td></tr>
@@ -777,7 +775,7 @@
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

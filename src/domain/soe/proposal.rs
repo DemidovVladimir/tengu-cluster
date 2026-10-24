@@ -36,9 +36,6 @@
 //! [`ProposalDraft::unsupported`] lists the known inputs with no basis at
 //! all — kept, never refused, and shown as unsupported claims in the memo.
 
-// Consumers land with the `soe_propose` tool and the cycle.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};

@@ -9,7 +9,7 @@
 //!
 //! | File | Holds |
 //! |---|---|
-//! | `value.rs` | exact money (`Minor`, `Money`, `Currency`), `Bps`, FX (`FxRate`, `Converted`), rounding (`Flow`), unknown-safe `Est` + `Assumption`, `Scenario`, `SchemaTag`, refusal codes |
+//! | `value.rs` | exact money (`Minor`, `Money`, `Currency`), `Bps`, FX (`FxRate`), rounding (`Flow`), unknown-safe `Est` + `Assumption`, `Scenario`, `SchemaTag`, refusal codes |
 //! | `record.rs` | `SoeRecord` (header: schema, id, version), `from_toml` / `from_json` / `validate`, `Problems`, `Tier`, `Verdict` |
 //! | `profile.rs` | `OperatorProfile` (`soe.operator_profile/1`, private, signed) + `OperatorCapability`, `RankKey` |
 //! | `opportunity.rs` | `Opportunity` (`soe.opportunity/1`): `Mechanism`, `RevenueModel`, `EconomicInputs`, `Jurisdictions`, `DealReview` |
@@ -19,7 +19,7 @@
 //! | `economics.rs` | `scenarios`: downside / base / upside `ScenarioMetrics` (`Metric` known or the fields it lacks, `Payback`), `expected_loss`, `inputs_sha256`, `ECONOMICS_VERSION` |
 //! | `gates.rs` | `gates`: PRD § 7.2 hard gates → `GateVerdict` (`PASS` / `HOLD` / `REJECT`, `GateFailure` codes), `CitedRecord` (what a cited source record shows at `as_of`), `next_information` |
 //! | `matching.rs` | `fit`: how the profile's capabilities cover `requires_skills` at the decision (`active_at`, `FitLevel` `PROVEN` `CLAIMED` `STALE` `MISSING` · `UNSTATED`) |
-//! | `rank.rs` | `assess` (verdict, figures, fit, the eight `RankKey` values), `rank` by the profile's `rank_order`, `explain_order`, `rank_moves`, `perturb` / `sensitivity`; week blocks: `current_versions`, `ranked_row`, `gated_rows`, `week_next_information`, `hold_week` (the allocated week is `allocate.rs`'s, C4) |
+//! | `rank.rs` | `assess` (verdict, figures, fit, the eight `RankKey` values), `rank` by the profile's `rank_order`, `explain_order`, `perturb` / `sensitivity`; week blocks: `current_versions`, `ranked_row`, `gated_rows`, `week_next_information`, `hold_week` (the allocated week is `allocate.rs`'s, C4) |
 //! | `eval.rs` | `EvalCase` (`soe.eval_case/1`: dated, synthetic, profile-bound) + `run_case` (expected vs answered, no look-ahead, a valid `HOLD` week) |
 //! | `observe.rs` | O3 Observe: an O2 `EvidencePacket` → `EvidenceIndex` (per record: event, class, url, times, independent confirmations) + `cited_views` (`CitedRecord`s; a single non-primary origin is a trigger) |
 //! | `proposal.rs` | O3 Architect: `ProposalDraft` (model-written: opportunity, per-input `Basis` `FACT` / `INFERENCE`, novelty, forecast) → `MechanismProposal` (`soe.mechanism_proposal/1`, `Provenance` stamped by the tool); `COMPUTED_KEYS` refused; `check` against the packet; `unsupported` |

@@ -191,7 +191,7 @@
         <li><code>register_catalog</code> builds each needed plugin once and registers only allowed tools, none outside a bound <code>[generation]</code>. The in-process executor and the MCP bridge call this same function.</li>
         <li>Each registered tool gets a scope: the agent's entry (defaults already folded in), else a fallback rooted in the workspace with no env var. A hardened sandbox makes it deny-all.</li>
         <li>The model asks for a call. The executor publishes an activity line first; an unknown name fails with the sorted list of this agent's tools.</li>
-        <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, memory, secrets, conversation, agent config, call id.</li>
+        <li>A fresh <code>ToolCtx</code> per call: workspace, that tool's scope, shell, egress HTTP client, secrets, conversation, agent config, call id (the executor, not the tool, publishes the activity line).</li>
         <li><code>Tool::execute</code> calls <code>ctx.scope.check_*</code> before it touches a file, host, env var, shell or wallet. A denial is an error, never a silent skip.</li>
         <li>The tool returns <code>ToolOutput</code>: text for the model and, for typed tools, an <code>Observation</code> with status, age and features.</li>
         <li><code>SanitizedToolExecutor</code> redacts secret values from the text, the observation and errors. Only then does the model see it.</li>
@@ -294,9 +294,7 @@ ToolEntry {
         <div><b>scope</b>this tool's <code>ToolScope</code>: fs_roots, net_hosts, env_reads, shell_bins, wallets</div>
         <div><b>shell</b>runs commands in the workspace</div>
         <div><b>http</b>the egress client: proxied per <code>[egress]</code>, redirects off</div>
-        <div><b>memory_manager</b>vector memory, when the agent has one</div>
         <div><b>secret_registry</b>vault values for <code>$VAR</code> expansion and redaction</div>
-        <div><b>activity</b>where activity lines go (TUI bubble, log)</div>
         <div><b>conversation</b>read-only view of the messages so far</div>
         <div><b>agent_config</b>the calling agent's block (engine, model, sections)</div>
         <div><b>call_id</b><code>chat:&lt;nonce&gt;:&lt;round&gt;:&lt;i&gt;:&lt;provider id&gt;</code>, <code>mcp:&lt;nonce&gt;:&lt;id&gt;</code>, <code>feed:&lt;name&gt;:&lt;slot ms&gt;:&lt;i&gt;</code> or <code>{loop}:{session}:{t}</code>; exec tools dedupe on it</div>
@@ -392,7 +390,7 @@ error pyth: <span class="h">auth_required</span> HTTP 401         <span class="c
 </section>
 
 <nav class="pager" id="pager" aria-label="Previous and next page"></nav>
-<p class="stamp-foot">Checked against the code on 2026-10-23.</p>
+<p class="stamp-foot">Checked against the code on 2026-10-24.</p>
 </article>
 </main>
 </div>

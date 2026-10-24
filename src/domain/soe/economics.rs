@@ -20,9 +20,6 @@
 //! | scenarios | downside = each input's adverse end, upside its favorable end ([`Est::pick`]); a ONE_OFF figure takes the delivery length that is worse (downside) · better (upside) for that figure |
 //! | `inputs_sha256` | canonical sha256 of [`ECONOMICS_VERSION`] + `economics` + `risk` + the profile knobs read (`currency`, `shadow_hourly_rate`, `max_payback_months`) |
 
-// `Scenarios::get` and `Metric::fields` are read by tests only until O3.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::iter;
 
@@ -93,6 +90,7 @@ impl<T> Metric<T> {
     }
 
     /// The lacking fields (empty when known).
+    #[cfg(test)]
     pub fn fields(&self) -> &[String] {
         match self {
             Metric::Known(_) => &[],
@@ -191,16 +189,6 @@ pub struct Scenarios {
     pub upside: ScenarioMetrics,
     /// In the profile currency (low floored, high ceiled).
     pub expected_loss: Metric<LossRange>,
-}
-
-impl Scenarios {
-    pub fn get(&self, s: Scenario) -> &ScenarioMetrics {
-        match s {
-            Scenario::Downside => &self.downside,
-            Scenario::Base => &self.base,
-            Scenario::Upside => &self.upside,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1382,8 +1370,8 @@ working_capital = { value = { low = "0.00", base = "0.00", high = "250.00" }, ev
     fn missing_price_makes_contribution_unknown_not_zero() {
         // The recurring example's price is UNKNOWN.
         let sc = scenarios(&recurring(), &synthetic()).unwrap();
-        for s in Scenario::ALL {
-            let x = sc.get(s);
+        for x in [&sc.downside, &sc.base, &sc.upside] {
+            let s = x.scenario;
             for f in [
                 &x.monthly_revenue_collected,
                 &x.monthly_cash_contribution,

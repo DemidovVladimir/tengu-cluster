@@ -14,11 +14,6 @@
 //! | [`TokenBucket`] | one `[rate_limits.<name>]` budget: refill `per_minute`, capacity `burst`, request weights, an execution reserve reads may not use, post-hoc charges (debt) |
 //! | [`CircuitBreaker`] | `threshold` consecutive failures open it for `cooldown_ms` (calls fail fast); then calls pass again — the next failure re-opens at once, a success closes |
 
-// Users: Jev (`outbound/decisions.rs`), the limiters
-// (`outbound/rate_limit.rs`) and the feed scheduler
-// (`application/runtime/feeds.rs`); not every item has a caller yet.
-#![allow(dead_code)]
-
 use crate::domain::observation::ErrorClass;
 
 /// Knobs of [`next_delay`].
@@ -158,6 +153,7 @@ impl TokenBucket {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn per_minute(&self) -> u32 {
         self.per_minute
     }
@@ -176,6 +172,7 @@ impl TokenBucket {
     }
 
     /// Tokens after refilling to `now_ms` (negative = debt).
+    #[cfg(test)]
     pub(crate) fn available(&mut self, now_ms: i64) -> f64 {
         self.refill(now_ms);
         self.tokens

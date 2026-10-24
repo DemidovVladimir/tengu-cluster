@@ -86,7 +86,7 @@ metrics:                    # optional: accuracy metrics (below)
 | `commands` | registry | slash commands the skill declares |
 | `metrics` | lifecycle | `tengu eval` / `skill evolve` / `skill doctor` |
 | `editable_by_learner` | `manage_skill`, `apply_improver_proposal`, `skill evolve` | `false` refuses their writes (`manage_skill`: `edit_body`, `patch`, `add_resource`, `remove_resource` — not `create` or `delete`); absent or unparseable = editable |
-| `learner_facing` | written by `skill seed` / `manage_skill create` | marker; the per-learner state module (`skills/<name>/state/<learner_id>.json`, `lifecycle/learner_state.rs`) is landed but not wired |
+| `learner_facing` | written by `skill seed` / `manage_skill create` | marker only: no per-learner state exists (G12, `docs/skill-research-2026-04-28.md`) |
 
 `requires_bins` (each on `PATH`), `requires_env` (each set) and `os` (`macos` · `linux` · `windows`; `darwin` = macos) gate loading of frontmatter skills (2026-10-08, `registry.rs::SkillGate`, checked on every `reload`): a skill missing one is not loaded, an info log line names why. Inline `[a, b]` or a block list.
 

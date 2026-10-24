@@ -19,8 +19,6 @@
 //! handler — the runner's out-of-band intercept + backstop capture the
 //! summary, Open Brain Postgres is the durable backend.
 
-#![allow(dead_code)]
-
 use crate::domain::message::ToolDef;
 
 /// The tool's name: the runner, the bridge and the Claude Code engine match

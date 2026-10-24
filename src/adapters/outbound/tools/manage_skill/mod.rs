@@ -19,8 +19,6 @@
 //!   `loaded_in_current_conversation: false` so the agent tells the user to
 //!   restart.
 
-#![allow(dead_code)]
-
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 

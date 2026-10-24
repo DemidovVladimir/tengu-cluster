@@ -16,9 +16,6 @@
 //! The first stage with cash lacking a stop rule is a gate (`NO_STAGED_STOP_RULE`,
 //! O1 W4), not a parse error: [`ExperimentSpec::first_spend`] finds it.
 
-// `Threshold::met` waits for O3 (grading an experiment's result).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use super::record::Problems;
@@ -54,16 +51,6 @@ pub struct Threshold {
     pub op: ThresholdOp,
     pub value: i64,
     pub unit: String,
-}
-
-impl Threshold {
-    /// Whether `observed` meets the threshold.
-    pub fn met(&self, observed: i64) -> bool {
-        match self.op {
-            ThresholdOp::Ge => observed >= self.value,
-            ThresholdOp::Le => observed <= self.value,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,13 +174,6 @@ stop_rule = "fewer than 2 pilots signed"
             s.first_spend().map(|(i, st)| (i, st.name.as_str())),
             Some((1, "prototype"))
         );
-        assert!(s.threshold.met(2) && !s.threshold.met(1));
-        let le = Threshold {
-            op: ThresholdOp::Le,
-            value: 5,
-            unit: "days".into(),
-        };
-        assert!(le.met(5) && !le.met(6));
         let mut p = Problems::default();
         s.problems("experiment", &mut p);
         assert!(p.is_empty(), "{p:?}");

@@ -127,7 +127,7 @@ Specific test groups worth knowing:
 | `skills::lifecycle::metric_kinds::script::tests` | shell-script metric JSON parse |
 | `skills::lifecycle::metric_kinds::dialog_replay::tests` | current-dialog slice → delegate metric |
 | `skills::lifecycle::metric_kinds::description_trigger::tests` | should/shouldn't-trigger judge, holdout split |
-| `skills::lifecycle::scanner::tests` · `audit::tests` · `learner_state::tests` | threat patterns, `skills/.audit.jsonl`, `state/<learner>.json` |
+| `skills::lifecycle::scanner::tests` · `audit::tests` | threat patterns, `skills/.audit.jsonl` |
 | `skills::lifecycle::storage::tests` | `metrics.json` round-trip, rolling window, retention pruning |
 | `skills::lifecycle::fixtures::tests` | YAML round-trip + transcript→fixture extraction |
 | `skills::lifecycle::scratch_worktree::tests` | git worktree + non-git fallback |

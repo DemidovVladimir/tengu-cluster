@@ -248,12 +248,6 @@ pub(crate) struct MemSourceStore {
 }
 
 impl MemSourceStore {
-    pub(crate) fn with(records: Vec<SourceRecord>) -> Self {
-        Self {
-            records: Mutex::new(records),
-        }
-    }
-
     pub(crate) fn add(&self, more: &[SourceRecord]) {
         self.records.lock().unwrap().extend_from_slice(more);
     }

@@ -35,10 +35,6 @@
 //! `MarketOrderNoLiquidity`; a reduce-only close under $10 is accepted; the
 //! oracle band width is an input (HL documents no single number).
 
-// Consumers land next wave (`risk-gate-enforcement`, `risk-paper-tools`,
-// `x-weekend-fade-strategy`).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use crate::domain::book::{L2Book, LevelFill, Side, WalkEnd, WalkTarget};
@@ -260,6 +256,7 @@ pub(crate) enum FillReason {
 }
 
 impl FillReason {
+    #[cfg(test)]
     pub(crate) const ALL: [FillReason; 20] = [
         FillReason::Tick,
         FillReason::MinTradeNtl,

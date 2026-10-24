@@ -393,7 +393,6 @@ mod tests {
     use crate::domain::secrets::SecretRegistry;
     use crate::ports::shell::ShellExecutionPort;
     use crate::ports::tool::ConversationView;
-    use crate::ports::tool_activity::ToolActivityPort;
     use tempfile::TempDir;
 
     struct NoShell;
@@ -403,18 +402,12 @@ mod tests {
         }
     }
 
-    struct NoActivity;
-    impl ToolActivityPort for NoActivity {
-        fn publish_tool_activity(&self, _: &ToolCall) {}
-    }
-
     fn make_ctx<'a>(
         ws: &'a Path,
         scope: &'a ToolScope,
         shell: &'a dyn ShellExecutionPort,
         http: &'a reqwest::Client,
         secrets: &'a SecretRegistry,
-        activity: &'a dyn ToolActivityPort,
         messages: &'a [Message],
     ) -> ToolCtx<'a> {
         ToolCtx {
@@ -422,9 +415,7 @@ mod tests {
             scope,
             shell,
             http,
-            memory_manager: None,
             secret_registry: secrets,
-            activity,
             conversation: ConversationView::new(messages),
             agent_config: None,
             call_id: None,
@@ -437,7 +428,6 @@ mod tests {
         shell: &'a dyn ShellExecutionPort,
         http: &'a reqwest::Client,
         secrets: &'a SecretRegistry,
-        activity: &'a dyn ToolActivityPort,
         messages: &'a [Message],
         agent_config: &'a crate::config::AgentConfig,
     ) -> ToolCtx<'a> {
@@ -446,9 +436,7 @@ mod tests {
             scope,
             shell,
             http,
-            memory_manager: None,
             secret_registry: secrets,
-            activity,
             conversation: ConversationView::new(messages),
             agent_config: Some(agent_config),
             call_id: None,
@@ -469,7 +457,6 @@ mod tests {
         let shell = NoShell;
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity = NoActivity;
 
         let messages = vec![
             Message {
@@ -499,15 +486,7 @@ mod tests {
         let out = tool
             .execute(
                 &args,
-                &make_ctx(
-                    ws.path(),
-                    &scope,
-                    &shell,
-                    &http,
-                    &secrets,
-                    &activity,
-                    &messages,
-                ),
+                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &messages),
             )
             .await
             .unwrap();
@@ -546,7 +525,6 @@ mod tests {
         let shell = NoShell;
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity = NoActivity;
 
         let messages = vec![
             Message {
@@ -584,15 +562,7 @@ mod tests {
         });
         tool.execute(
             &args,
-            &make_ctx(
-                ws.path(),
-                &scope,
-                &shell,
-                &http,
-                &secrets,
-                &activity,
-                &messages,
-            ),
+            &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &messages),
         )
         .await
         .unwrap();
@@ -623,7 +593,6 @@ mod tests {
         let shell = NoShell;
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity = NoActivity;
 
         let tool = SkillDistillTool::new();
         let args = json!({
@@ -636,7 +605,7 @@ mod tests {
         let err = tool
             .execute(
                 &args,
-                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &activity, &[]),
+                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &[]),
             )
             .await;
         assert!(err.is_err(), "expected invalid-name error");
@@ -651,7 +620,6 @@ mod tests {
         let shell = NoShell;
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity = NoActivity;
 
         let tool = SkillDistillTool::new();
         let args = json!({
@@ -664,7 +632,7 @@ mod tests {
         let err = tool
             .execute(
                 &args,
-                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &activity, &[]),
+                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &[]),
             )
             .await
             .err()
@@ -687,7 +655,6 @@ mod tests {
         let shell = NoShell;
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity = NoActivity;
 
         let tool = SkillDistillTool::new();
         let args = json!({
@@ -700,7 +667,7 @@ mod tests {
         let out = tool
             .execute(
                 &args,
-                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &activity, &[]),
+                &make_ctx(ws.path(), &scope, &shell, &http, &secrets, &[]),
             )
             .await
             .unwrap();
@@ -720,7 +687,6 @@ mod tests {
         let shell = NoShell;
         let http = reqwest::Client::new();
         let secrets = SecretRegistry::new();
-        let activity = NoActivity;
 
         // Fake calling-agent config: claude_code engine + opus model.
         let mut fake_agent = crate::config::Config::default()
@@ -753,7 +719,6 @@ mod tests {
                 &shell,
                 &http,
                 &secrets,
-                &activity,
                 &messages,
                 &fake_agent,
             ),

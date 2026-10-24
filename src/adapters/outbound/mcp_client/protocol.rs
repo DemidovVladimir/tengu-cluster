@@ -7,8 +7,6 @@
 //! because servers must echo any id the client sends; clients always allocate
 //! a `u64`).
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

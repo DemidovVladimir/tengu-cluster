@@ -191,11 +191,9 @@ fn plugin_executor(
         workspace,
         config: agent_config,
         http: http_client.clone(),
-        shell: Arc::clone(&shell),
         memory_manager: memory_manager
             .clone()
             .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
-        secret_registry: Arc::clone(secret_registry),
     };
 
     // Register the tool catalog (`outbound/tools/mod.rs`) — the same call
@@ -256,9 +254,6 @@ fn plugin_executor(
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory_manager: memory_manager
-            .clone()
-            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
         secret_registry: Arc::clone(secret_registry),
         activity,
         scopes,

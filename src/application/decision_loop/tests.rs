@@ -204,7 +204,6 @@ async fn loop_call_id_reaches_the_tool_ctx() {
         workspace: PathBuf::from("."),
         shell: Arc::new(crate::adapters::outbound::shell::LocalShellExecutor::new()),
         http: reqwest::Client::new(),
-        memory_manager: None,
         secret_registry: Arc::new(crate::domain::secrets::SecretRegistry::new()),
         activity: Arc::new(Quiet),
         scopes: Default::default(),

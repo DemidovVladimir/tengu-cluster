@@ -29,9 +29,6 @@
 //! | timeout | `Timeout` |
 //! | 200, not JSON | `Decode` |
 
-// Consumers: `hl-ctx-tool`, `hl-book-tool` (next wave).
-#![allow(dead_code)]
-
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};

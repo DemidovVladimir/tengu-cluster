@@ -31,9 +31,6 @@
 //! | Rank stability ([`rank_stability`]) | every decided candidate re-assessed under each `rank::tornado(scale)` perturbation (the Critic's holds kept): stable when the ranked ids and their order are unchanged |
 //! | Ratios | integer bps, floored; none without a denominator |
 
-// Consumers: `application/soe/replay.rs`, `tengu soe replay`.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -44,9 +41,6 @@ use super::rank::{assess, perturb, rank, tornado, Assessment};
 use super::record::{Problems, SoeRecord};
 use super::value::{codes, Bps, SchemaTag, ValueError, BPS_FULL};
 use crate::domain::lineage::value::Time;
-
-/// Holdout cases the roadmap asks for ("at least 8 older dated cases").
-pub const MIN_HOLDOUT_CASES: usize = 8;
 
 const DAY_MS: i64 = 86_400_000;
 

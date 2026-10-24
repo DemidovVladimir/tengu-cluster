@@ -20,10 +20,6 @@
 //! volume tiers are not tabled: pass a negative [`HlUserRates::maker`] read
 //! from `userFees`.
 
-// Consumers land in wave W1 (`hl-ctx-tool` taker_fee_bps,
-// `risk-calc-tools`, `risk-paper-fill-engine`).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use crate::domain::book::{BookError, L2Book, Side, Walk, WalkTarget};
@@ -76,6 +72,7 @@ pub const HL_PRICE_SIG_FIGS: u32 = 5;
 /// Rounding direction for [`hl_round_px`] / [`hl_round_sz`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Round {
+    #[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
     Nearest,
     /// Toward zero (a buy limit that must not pay more; an order size that
     /// must not exceed a budget).
@@ -129,6 +126,7 @@ pub fn hl_px_ok(px: &str, sz_decimals: u32, kind: HlKind) -> bool {
 }
 
 /// Exact check of a wire size string (plain decimal, > 0).
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub fn hl_sz_ok(sz: &str, sz_decimals: u32) -> bool {
     split_decimal(sz)
         .is_some_and(|(_, frac)| frac.trim_end_matches('0').len() as u32 <= sz_decimals)
@@ -391,6 +389,7 @@ pub fn hl_fee_schedule(
 /// `funding`, per hour), bps of oracle notional; positive = the position
 /// pays. HL: payment = size × oracle × rate, positive ⇒ longs pay. Realized
 /// funding accrues per hour boundary in the paper ledger.
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub fn funding_carry_bps(rate_1h: f64, hours: f64, side: Side) -> Result<f64, CostError> {
     finite("rate_1h", rate_1h)?;
     if !(finite("hours", hours)? >= 0.0) {
@@ -402,6 +401,7 @@ pub fn funding_carry_bps(rate_1h: f64, hours: f64, side: Side) -> Result<f64, Co
 /// EVM transaction cost in USD: `gas_units × gas_price_wei / 1e18 ×
 /// eth_usd`. Robinhood Chain (Arbitrum Orbit) folds the L1 data fee into
 /// `gasUsed`, so this is the whole fee.
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub fn gas_usd(gas_units: u64, gas_price_wei: u128, eth_usd: f64) -> Result<f64, CostError> {
     if !(finite("eth_usd", eth_usd)? > 0.0) {
         return fail(format!("eth_usd {eth_usd} is not > 0"));
@@ -413,6 +413,7 @@ pub fn gas_usd(gas_units: u64, gas_price_wei: u128, eth_usd: f64) -> Result<f64,
 
 /// Cost of taking `target` from a book: the walk plus the taker fee.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub struct TakerCost {
     pub walk: Walk,
     pub fee_bps: f64,
@@ -422,6 +423,7 @@ pub struct TakerCost {
     pub total_cost_bps: Option<f64>,
 }
 
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub fn taker_cost(
     book: &L2Book,
     side: Side,
@@ -442,6 +444,7 @@ pub fn taker_cost(
 /// One round trip (enter + exit); every bps field is relative to
 /// `notional_usd`, positive = cost.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub struct RoundTripCost {
     pub notional_usd: f64,
     pub entry_fee_bps: f64,
@@ -457,6 +460,7 @@ pub struct RoundTripCost {
 
 impl RoundTripCost {
     /// Σ fees + slippage + carry + gas as bps of the notional.
+    #[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
     pub fn total_bps(&self) -> Result<f64, CostError> {
         if !(finite("notional_usd", self.notional_usd)? > 0.0) {
             return fail(format!("notional_usd {} is not > 0", self.notional_usd));
@@ -480,6 +484,7 @@ impl RoundTripCost {
 
 /// `gross_edge_bps − cost.total_bps()`. The gross edge is measured mid to
 /// mid (or vs the reference), so slippage vs mid covers the half spreads.
+#[allow(dead_code)] // consumer: `risk-calc-tools` (open, xmarket tracker)
 pub fn edge_after_costs_bps(gross_edge_bps: f64, cost: &RoundTripCost) -> Result<f64, CostError> {
     Ok(finite("gross_edge_bps", gross_edge_bps)? - cost.total_bps()?)
 }

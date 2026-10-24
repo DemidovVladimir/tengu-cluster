@@ -1,8 +1,8 @@
 //! Ranking primitives (PRD § 7.2 "remaining candidates are ranked by …",
 //! § 11 rank stability; `docs/soe-2026-10-08.md` § 5): each candidate's
 //! eight rank-key values, the order the signed profile's `rank_order` gives
-//! them, why one ranks above another, what moved between two rankings and
-//! how sensitive a verdict is to one input — plus the pieces of a
+//! them, why one ranks above another and how sensitive a verdict is to one
+//! input — plus the pieces of a
 //! `WeeklyPortfolio`. Pure and deterministic. The allocation (who gets a
 //! test within the weekly hours and the tranche) is `allocate.rs` (O3), the
 //! one portfolio builder (`tengu soe portfolio` and the weekly cycle use
@@ -24,7 +24,6 @@
 //! | Unknown | ranks after every known value of its key, never as a value |
 //! | Copies | supporting records count per `event_key` — the O2 as-of view gives copies one key (C6: syndication is detected there, not here) |
 //! | [`explain_order`] | the first key in the profile's order on which two candidates differ (`None`: equal on all, the id decides) |
-//! | [`rank_moves`] | per id whose rank changed: `ENTERED` / `LEFT` (with its verdict and gates), `CROSSED` (the candidate it swapped with nearest it, the key deciding them, both values before → after), `SHIFTED` (a candidate entered or left above it) |
 //! | [`perturb`] / [`sensitivity`] | scale one input's low / base / high by `(10 000 + scale_bps) / 10 000` — rounded against the candidate, shares held to 0..=10 000 bps — and re-run economics + gates; `scale_bps` ≥ −10 000 |
 //!
 //! | [`PerturbInput`] | `RECURRING` | `ONE_OFF` | `ACQUISITION` | `REVENUE_SHARE` |
@@ -41,9 +40,6 @@
 //! | [`week_next_information`] | the fields behind the held candidates' `HOLD` failures, by how many candidates each blocks, then by name |
 //! | [`portfolio_inputs_sha256`] | canonical sha256 of every candidate's (id, version, `inputs_sha256`), by id |
 //! | [`hold_week`] | the `HOLD` week: nothing ranked, every failed gate, the next information, a rationale; refused when a candidate passes (that week is the allocation's) |
-
-// `rank_moves` (week-over-week moves) and `KeyValue::is_known` wait for O3.
-#![allow(dead_code)]
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -100,10 +96,6 @@ impl KeyValue {
             KeyValue::Fit(f) => f.level().map(i128::from),
             KeyValue::Unknown(_) => None,
         }
-    }
-
-    pub fn is_known(&self) -> bool {
-        self.magnitude().is_some()
     }
 }
 
@@ -382,169 +374,6 @@ pub fn explain_order(a: &Assessment, b: &Assessment, order: &[RankKey]) -> RankR
             second_value: second.id.clone(),
         },
     }
-}
-
-// ---------------------------------------------------------------------------
-// Rank moves
-// ---------------------------------------------------------------------------
-
-/// A value before → after.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Change {
-    pub before: String,
-    pub after: String,
-}
-
-impl Change {
-    pub fn changed(&self) -> bool {
-        self.before != self.after
-    }
-}
-
-/// Why a candidate's rank changed (module table).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum MoveReason {
-    /// Ranked now, not before: `before` is its verdict then (none: not
-    /// assessed), `gates` what held it.
-    Entered {
-        before: Option<Verdict>,
-        gates: Vec<String>,
-    },
-    /// Ranked before, not now.
-    Left {
-        after: Option<Verdict>,
-        gates: Vec<String>,
-    },
-    /// It and `other` swapped; `key` decides between them now (before, when
-    /// they tie now).
-    Crossed {
-        other: String,
-        key: Option<RankKey>,
-        value: Change,
-        other_value: Change,
-    },
-    /// No swap: `other` entered (or left) above it.
-    Shifted { other: String, entered: bool },
-}
-
-/// One candidate whose rank changed; ranks count from 1, none = not ranked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RankMove {
-    pub id: String,
-    pub from: Option<u32>,
-    pub to: Option<u32>,
-    pub reason: MoveReason,
-}
-
-/// `id → (rank, assessment)` of a ranking (the first per id).
-fn positions<'a>(ranked: &[&'a Assessment]) -> BTreeMap<&'a str, (u32, &'a Assessment)> {
-    let mut out = BTreeMap::new();
-    for (i, a) in ranked.iter().enumerate() {
-        out.entry(a.id.as_str()).or_insert((i as u32 + 1, *a));
-    }
-    out
-}
-
-fn by_id(all: &[Assessment]) -> BTreeMap<&str, &Assessment> {
-    let mut out = BTreeMap::new();
-    for a in all {
-        out.entry(a.id.as_str()).or_insert(a);
-    }
-    out
-}
-
-/// Module table: every candidate (one assessment per id on each side)
-/// whose rank differs between `before` and `after`, ranked ones first.
-pub fn rank_moves(before: &[Assessment], after: &[Assessment], order: &[RankKey]) -> Vec<RankMove> {
-    let (rb, ra) = (rank(before, order), rank(after, order));
-    let (pb, pa) = (positions(&rb), positions(&ra));
-    let (all_b, all_a) = (by_id(before), by_id(after));
-    let ids: BTreeSet<&str> = pb.keys().chain(pa.keys()).copied().collect();
-    let change = |b: &Assessment, a: &Assessment, k: Option<RankKey>| match k {
-        Some(k) => Change {
-            before: b.value(k).to_string(),
-            after: a.value(k).to_string(),
-        },
-        None => Change {
-            before: b.id.clone(),
-            after: a.id.clone(),
-        },
-    };
-    let mut moves = Vec::new();
-    for id in ids {
-        let (from, to) = (pb.get(id), pa.get(id));
-        if from.map(|f| f.0) == to.map(|t| t.0) {
-            continue;
-        }
-        let reason = match (from, to) {
-            (None, _) => MoveReason::Entered {
-                before: all_b.get(id).map(|a| a.verdict.verdict),
-                gates: all_b
-                    .get(id)
-                    .map(|a| a.verdict.labels())
-                    .unwrap_or_default(),
-            },
-            (_, None) => MoveReason::Left {
-                after: all_a.get(id).map(|a| a.verdict.verdict),
-                gates: all_a
-                    .get(id)
-                    .map(|a| a.verdict.labels())
-                    .unwrap_or_default(),
-            },
-            (Some(&(f, xb)), Some(&(t, xa))) => {
-                // The swapped partner nearest it now.
-                let crossed = pa
-                    .iter()
-                    .filter_map(|(&y, &(ty, ya))| {
-                        let &(fy, yb) = pb.get(y)?;
-                        (y != id && (f < fy) != (t < ty)).then_some((fy, yb, ty, ya))
-                    })
-                    .min_by_key(|&(_, _, ty, _)| (ty.abs_diff(t), ty));
-                match crossed {
-                    Some((fy, yb, ty, ya)) => {
-                        let (first_a, second_a) = if t < ty { (xa, ya) } else { (ya, xa) };
-                        let (first_b, second_b) = if f < fy { (xb, yb) } else { (yb, xb) };
-                        let key = deciding_key(first_a, second_a, order)
-                            .or_else(|| deciding_key(first_b, second_b, order));
-                        MoveReason::Crossed {
-                            other: ya.id.clone(),
-                            key,
-                            value: change(xb, xa, key),
-                            other_value: change(yb, ya, key),
-                        }
-                    }
-                    None => {
-                        let entered = pa
-                            .iter()
-                            .filter(|&(y, &(ty, _))| ty < t && !pb.contains_key(y))
-                            .min_by_key(|&(_, &(ty, _))| ty)
-                            .map(|(y, _)| (y.to_string(), true));
-                        let left = || {
-                            pb.iter()
-                                .filter(|&(y, &(fy, _))| fy < f && !pa.contains_key(y))
-                                .min_by_key(|&(_, &(fy, _))| fy)
-                                .map(|(y, _)| (y.to_string(), false))
-                        };
-                        let (other, entered) = entered
-                            .or_else(left)
-                            .unwrap_or_else(|| (id.to_string(), false));
-                        MoveReason::Shifted { other, entered }
-                    }
-                }
-            }
-        };
-        moves.push(RankMove {
-            id: id.to_string(),
-            from: from.map(|f| f.0),
-            to: to.map(|t| t.0),
-            reason,
-        });
-    }
-    moves.sort_by(|a, b| {
-        (a.to.is_none(), a.to, a.from, &a.id).cmp(&(b.to.is_none(), b.to, b.from, &b.id))
-    });
-    moves
 }
 
 // ---------------------------------------------------------------------------
@@ -1096,13 +925,19 @@ mod tests {
             days_to_decisive_evidence(&a, &t("2026-11-15")),
             KeyValue::Days(1)
         );
-        assert!(!days_to_decisive_evidence(&a, &t("2026-11-16T00:00:00Z")).is_known());
+        assert!(matches!(
+            days_to_decisive_evidence(&a, &t("2026-11-16T00:00:00Z")),
+            KeyValue::Unknown(_)
+        ));
         // A decision day that runs past an instant deadline may be after it.
         let mut noon = a.clone();
         if let Some(x) = &mut noon.experiment {
             x.deadline = t("2026-11-15T12:00:00Z");
         }
-        assert!(!days_to_decisive_evidence(&noon, &t("2026-11-15")).is_known());
+        assert!(matches!(
+            days_to_decisive_evidence(&noon, &t("2026-11-15")),
+            KeyValue::Unknown(_)
+        ));
         assert_eq!(
             days_to_decisive_evidence(&noon, &t("2026-11-14")),
             KeyValue::Days(2)
@@ -1202,121 +1037,43 @@ mod tests {
     }
 
     #[test]
-    fn price_cut_rank_move_explained_by_time_adjusted_key() {
-        let (a, b) = (automation("a", "\"600.00\""), automation("b", "\"500.00\""));
-        let before = [assessed(&a), assessed(&b)];
-        let (cut, fields) = perturb(
-            &a,
+    fn price_cut_rank_change_explained_by_time_adjusted_key() {
+        // 450.00 a month: 5429.25 − ⌈488.6325⌉ − 40.00 − 630.00 = 4270.61.
+        a_drops_below_b(
             Perturbation {
                 input: PerturbInput::Price,
                 scale_bps: -2500,
             },
-        )
-        .unwrap();
-        assert_eq!(fields, ["economics.revenue.price_per_month"]);
-        let after = [assessed(&cut), assessed(&b)];
-        let order = synthetic().rank_order;
-        assert_eq!(ids(&rank(&after, &order)), ["b", "a"]);
-        let moves = rank_moves(&before, &after, &order);
-        // 450.00 a month: 5429.25 − ⌈488.6325⌉ − 40.00 − 630.00 = 4270.61.
-        assert_eq!(
-            moves,
-            [
-                RankMove {
-                    id: "b".into(),
-                    from: Some(2),
-                    to: Some(1),
-                    reason: MoveReason::Crossed {
-                        other: "a".into(),
-                        key: Some(RankKey::TimeAdjustedBase),
-                        value: Change {
-                            before: "4819.57 EUR".into(),
-                            after: "4819.57 EUR".into()
-                        },
-                        other_value: Change {
-                            before: "5917.49 EUR".into(),
-                            after: "4270.61 EUR".into()
-                        },
-                    },
-                },
-                RankMove {
-                    id: "a".into(),
-                    from: Some(1),
-                    to: Some(2),
-                    reason: MoveReason::Crossed {
-                        other: "b".into(),
-                        key: Some(RankKey::TimeAdjustedBase),
-                        value: Change {
-                            before: "5917.49 EUR".into(),
-                            after: "4270.61 EUR".into()
-                        },
-                        other_value: Change {
-                            before: "4819.57 EUR".into(),
-                            after: "4819.57 EUR".into()
-                        },
-                    },
-                },
-            ]
+            "economics.revenue.price_per_month",
+            "4270.61 EUR",
         );
-        assert!(rank_moves(&before, &before, &order).is_empty());
-        let j = serde_json::to_value(&moves[1]).unwrap();
-        assert_eq!(j["reason"]["kind"], "CROSSED");
-        assert_eq!(j["reason"]["key"], "TIME_ADJUSTED_BASE");
     }
 
-    /// `a` (600.00) ranks above `b` (500.00); `p` applied to `a` drops it.
+    /// `a` (600.00) ranks above `b` (500.00); `p` applied to `a` drops it
+    /// below `b`, decided by the time-adjusted base.
     fn a_drops_below_b(p: Perturbation, field: &str, after_value: &str) {
         let (a, b) = (automation("a", "\"600.00\""), automation("b", "\"500.00\""));
+        let order = synthetic().rank_order;
+        let before = [assessed(&a), assessed(&b)];
+        assert_eq!(ids(&rank(&before, &order)), ["a", "b"]);
+        assert_eq!(
+            before[0].value(RankKey::TimeAdjustedBase).to_string(),
+            "5917.49 EUR"
+        );
         let (moved, fields) = perturb(&a, p).unwrap();
         assert_eq!(fields, [field]);
-        let before = [assessed(&a), assessed(&b)];
         let after = [assessed(&moved), assessed(&b)];
         assert!(after[0].passes(), "{:?}", after[0].verdict.failures);
-        let moves = rank_moves(&before, &after, &synthetic().rank_order);
-        let mv = moves.iter().find(|m| m.id == "a").unwrap();
-        assert_eq!((mv.from, mv.to), (Some(1), Some(2)));
-        let MoveReason::Crossed {
-            other, key, value, ..
-        } = &mv.reason
-        else {
-            panic!("{mv:?}")
-        };
+        assert_eq!(ids(&rank(&after, &order)), ["b", "a"]);
         assert_eq!(
-            (other.as_str(), *key),
-            ("b", Some(RankKey::TimeAdjustedBase))
-        );
-        assert_eq!(
-            (value.before.as_str(), value.after.as_str()),
-            ("5917.49 EUR", after_value)
-        );
-    }
-
-    #[test]
-    fn a_new_candidate_enters_and_shifts_the_rest() {
-        let (a, b) = (automation("a", "\"600.00\""), automation("b", "\"500.00\""));
-        let c = automation("c", "\"700.00\"");
-        let before = [assessed(&a), assessed(&b)];
-        let after = [assessed(&a), assessed(&b), assessed(&c)];
-        let moves = rank_moves(&before, &after, &synthetic().rank_order);
-        let got: Vec<(&str, Option<u32>, Option<u32>, &MoveReason)> = moves
-            .iter()
-            .map(|m| (m.id.as_str(), m.from, m.to, &m.reason))
-            .collect();
-        let shifted = MoveReason::Shifted {
-            other: "c".into(),
-            entered: true,
-        };
-        let entered = MoveReason::Entered {
-            before: None,
-            gates: vec![],
-        };
-        assert_eq!(
-            got,
-            [
-                ("c", None, Some(1), &entered),
-                ("a", Some(1), Some(2), &shifted),
-                ("b", Some(2), Some(3), &shifted),
-            ]
+            explain_order(&after[0], &after[1], &order),
+            RankReason {
+                key: Some(RankKey::TimeAdjustedBase),
+                first: "b".into(),
+                first_value: "4819.57 EUR".into(),
+                second: "a".into(),
+                second_value: after_value.into(),
+            }
         );
     }
 
@@ -1388,7 +1145,7 @@ mod tests {
         assert!(c.fields.is_empty());
         assert_eq!(c.perturbed_time_adjusted, c.base_time_adjusted);
         assert_eq!(c.verdict_after, Verdict::Pass);
-        // Ranking sees the gate flip as a LEFT move.
+        // The gate flip drops it from the ranking.
         let (more, _) = perturb(
             &passing(),
             Perturbation {
@@ -1397,18 +1154,17 @@ mod tests {
             },
         )
         .unwrap();
-        let moves = rank_moves(
-            &[assessed(&passing())],
-            &[assessed(&more)],
-            &synthetic().rank_order,
-        );
+        let order = synthetic().rank_order;
+        assert_eq!(rank(&[assessed(&passing())], &order).len(), 1);
+        let dropped = assessed(&more);
         assert_eq!(
-            moves[0].reason,
-            MoveReason::Left {
-                after: Some(Verdict::Reject),
-                gates: vec!["CONTRIBUTION_BELOW_TARGET".into()]
-            }
+            (dropped.verdict.verdict, dropped.verdict.labels()),
+            (
+                Verdict::Reject,
+                vec!["CONTRIBUTION_BELOW_TARGET".to_string()]
+            )
         );
+        assert!(rank(&[dropped], &order).is_empty());
         // The tornado: each input down, then up; below −100 % is refused.
         let t = tornado(2000);
         assert_eq!(t.len(), 2 * PerturbInput::ALL.len());

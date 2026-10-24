@@ -14,8 +14,6 @@
 //! `run-agent` subcommand and the `TENGU_AGENT_IPC=1` environment guard. The
 //! guard prevents accidental fork-bomb-style re-entry.
 
-#![allow(dead_code)] // SubprocessRunner is wired by the DagExecutor in Phase 4.
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::process::Stdio;
@@ -125,10 +123,6 @@ pub enum AgentIpcOutput {
 pub struct SubprocessRunner {
     /// Explicit path to the tengu binary. None → `current_exe()`.
     pub tengu_path: Option<std::path::PathBuf>,
-    /// Hard timeout for the child when the step's agent is unknown
-    /// (`run` direct callers); `run_step` uses the agent's
-    /// `limits.step_timeout_secs`.
-    pub timeout_secs: u64,
     /// `[agents.*]` of the parent config — fail-fast on unknown agents and
     /// per-step `max_tool_rounds` / `step_timeout_secs`.
     pub agents: std::collections::HashMap<String, AgentConfig>,
@@ -152,7 +146,6 @@ impl Default for SubprocessRunner {
     fn default() -> Self {
         Self {
             tengu_path: None,
-            timeout_secs: crate::config::default_step_timeout_secs(),
             agents: std::collections::HashMap::new(),
             session_id: uuid::Uuid::new_v4().to_string(),
             sandbox_name: None,
@@ -219,11 +212,6 @@ impl SubprocessRunner {
             .collect();
         known.sort();
         known
-    }
-
-    /// Run the subagent to completion and return its output.
-    pub async fn run(&self, input: AgentIpcInput) -> Result<AgentIpcOutput> {
-        self.run_with_timeout(input, self.timeout_secs).await
     }
 
     /// `run` with an explicit wall-clock cap for the child.

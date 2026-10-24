@@ -2,8 +2,6 @@
 //! passed to them. Implementations live in `adapters/outbound/tools/` (listed
 //! in its `catalog()`); dispatch lives in `application/tools/registry.rs`.
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -16,7 +14,6 @@ use crate::domain::scope::ToolScope;
 use crate::domain::secrets::SecretRegistry;
 use crate::ports::memory::MemoryService;
 use crate::ports::shell::ShellExecutionPort;
-use crate::ports::tool_activity::ToolActivityPort;
 
 // ---------------------------------------------------------------------------
 // Core trait
@@ -110,9 +107,7 @@ pub(crate) struct ToolCtx<'a> {
     pub scope: &'a ToolScope,
     pub shell: &'a dyn ShellExecutionPort,
     pub http: &'a reqwest::Client,
-    pub memory_manager: Option<&'a dyn MemoryService>,
     pub secret_registry: &'a SecretRegistry,
-    pub activity: &'a dyn ToolActivityPort,
     pub conversation: ConversationView<'a>,
     /// Calling agent's resolved config. `Some(_)` for tool calls dispatched
     /// from inside an agent loop (populated by `PluginToolExecutor` from the
@@ -142,9 +137,7 @@ pub(crate) struct PluginCtx<'a> {
     pub workspace: &'a Path,
     pub config: &'a crate::config::AgentConfig,
     pub http: reqwest::Client,
-    pub shell: Arc<dyn ShellExecutionPort>,
     pub memory_manager: Option<Arc<dyn MemoryService>>,
-    pub secret_registry: Arc<SecretRegistry>,
 }
 
 /// Every tool definition the planner's registry lists: the built-in catalog

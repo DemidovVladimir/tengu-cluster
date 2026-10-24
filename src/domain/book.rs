@@ -14,10 +14,6 @@
 //! | Missing | no fill ⇒ `vwap`, `worst_px` and slippage are `None` — never 0 |
 //! | Wire | [`L2Level`] reads HL's `{px, sz, n}` with decimal strings (numbers too) |
 
-// Consumers land in wave W1 (`hl-book-tool`, `risk-paper-fill-engine`,
-// `risk-calc-tools`).
-#![allow(dead_code)]
-
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Relative tolerance under which a remaining target counts as filled

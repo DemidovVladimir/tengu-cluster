@@ -19,9 +19,6 @@
 //! (`domain::source::fence_untrusted`) after one [`FENCE_NOTE`]; a `|` in a
 //! table cell is escaped. Ids and hashes print in full.
 
-// Consumers land with the cycle (`memo.md` per cycle) and `tengu soe show`.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::fmt::Write;
 

@@ -17,9 +17,8 @@
 //!
 //! Pure: no IO, no clocks — `now_ms` is an input.
 
-// Consumed by the hedge_decide tool (WP-COMPOSE). `!(x > 0.0)` is the TS
-// NaN-rejecting guard, kept verbatim.
-#![allow(dead_code, clippy::neg_cmp_op_on_partial_ord)]
+// `!(x > 0.0)` is the TS NaN-rejecting guard, kept verbatim.
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +99,7 @@ pub(crate) enum Decision {
 }
 
 impl Decision {
+    #[cfg(test)]
     pub(crate) fn action(&self) -> &'static str {
         match self {
             Decision::None { .. } => "none",
@@ -431,31 +431,6 @@ pub(crate) fn lp_hedge_delta(
     LpHedgeDelta {
         delta_sol: lp_delta_for_regime(regime, lp_sol, lp_usdc, price),
         regime,
-    }
-}
-
-/// Clamp-dampening CANDIDATE (simulator only, not in production TS): the
-/// hedge input ramps continuously from the midpoint (share < `ramp_lo`) to the
-/// full bag at share 1.0; mirror side ramps to 0 (`simulator/src/hedge.rs:261-290`).
-pub(crate) fn lp_ramp_delta(lp_sol: f64, lp_usdc: f64, price: f64, ramp_lo: f64) -> f64 {
-    if !(price > 0.0) {
-        return lp_sol;
-    }
-    let sol_value = lp_sol * price;
-    let total = sol_value + lp_usdc;
-    if total <= 0.0 {
-        return 0.0;
-    }
-    let share = sol_value / total;
-    let mid = lp_midpoint_sol(lp_sol, lp_usdc, price);
-    if share >= ramp_lo {
-        let w = (share - ramp_lo) / (1.0 - ramp_lo);
-        mid + w * (lp_sol - mid)
-    } else if share <= 1.0 - ramp_lo {
-        let w = ((1.0 - ramp_lo) - share) / (1.0 - ramp_lo);
-        mid * (1.0 - w)
-    } else {
-        mid
     }
 }
 

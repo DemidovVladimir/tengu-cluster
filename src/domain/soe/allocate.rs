@@ -30,9 +30,6 @@
 //! (`observe`), every proposal and challenge checked, challenges merged,
 //! each candidate assessed and blocked, then [`allocate`].
 
-// Consumers land with the cycle (application `run_cycle`) and `tengu soe`.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use serde::Serialize;

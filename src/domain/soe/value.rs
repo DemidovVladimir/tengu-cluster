@@ -8,10 +8,9 @@
 //! |---|---|---|
 //! | [`Minor`] | `"41250.75"` · `"7.5"` · `2750` (whole units) | ≤ 2 fraction digits, exact; a float, `"1e3"`, `"2,500"`, `"+5"`, `".5"` refused (`invalid_amount`); prints `"41250.75"` |
 //! | [`Currency`] | `"EUR"` | closed set EUR USD GBP CHF KZT RUB CNY, each 2 minor digits (`invalid_currency`) |
-//! | [`Money`] | `{ amount = "250.00", currency = "EUR" }` | arithmetic and order within one currency only (`currency_mismatch`) |
+//! | [`Money`] | `{ amount = "250.00", currency = "EUR" }` | ordered within one currency only; an [`FxRate`] converts from its base currency only (`currency_mismatch`) |
 //! | [`Bps`] | `250` | an integer 0..=10 000 (`invalid_bps`) |
 //! | [`FxRate`] | `{ pair = "USD/EUR", rate = "0.92", source = "url:https://…", as_of = "2026-10-01" }` | quote units per 1 base unit, ≤ 8 fraction digits, > 0 (`invalid_rate`); `source` a lineage `Locator`, `as_of` a lineage `Time` |
-//! | [`Converted`] | `{ native = {…}, rate = {…}, converted = {…} }` | native amount, the rate (with its source and time) and the result stored apart; the result is the floor or the ceil of the exact product (`invalid_conversion`) |
 //! | [`Est`] | `"UNKNOWN"` · `"UNKNOWN: <reason>"` · `{ low = …, base = …, high = … }` | `low ≤ base ≤ high` (`invalid_range`); any other string `invalid_estimate`; an unknown never reads as 0 |
 //! | [`Assumption`] | `{ value = <Est>, evidence = [<locator>, …], as_of = <time>, note = "…" }` | `note` optional; `evidence = []` must be written out |
 //! | [`SchemaTag`] | `"soe.<record>/1"` | record `[a-z][a-z0-9_]{0,63}` (`invalid_schema`); a version other than [`SCHEMA_V1`] `schema_unsupported`; another record `schema_mismatch` |
@@ -22,10 +21,6 @@
 //! | [`Flow::Outflow`] (cost, exposure, capital) | ceil ([`div_ceil`]) |
 //! | Why | a rounded figure never flatters a candidate |
 //! | Scenario pick ([`Est::pick`]) | downside = each input's adverse end, upside = its favorable end, base = base; [`Better`] says which end is favorable |
-
-// `Converted`, `Money` arithmetic, `Est::unknown` / `point` and a few codes
-// wait for O2 (source amounts) and O3.
-#![allow(dead_code)]
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -45,7 +40,6 @@ pub mod codes {
     pub const CURRENCY_MISMATCH: &str = "currency_mismatch";
     pub const INVALID_BPS: &str = "invalid_bps";
     pub const INVALID_RATE: &str = "invalid_rate";
-    pub const INVALID_CONVERSION: &str = "invalid_conversion";
     pub const INVALID_ESTIMATE: &str = "invalid_estimate";
     pub const INVALID_RANGE: &str = "invalid_range";
     pub const INVALID_SCHEMA: &str = "invalid_schema";
@@ -268,6 +262,7 @@ impl Minor {
             .ok_or_else(|| ValueError::new(codes::OVERFLOW, format!("{self} + {other} overflows")))
     }
 
+    #[cfg(test)]
     pub fn checked_sub(self, other: Minor) -> Result<Minor, ValueError> {
         self.0
             .checked_sub(other.0)
@@ -293,12 +288,6 @@ impl Minor {
         }
         let q = flow.div(self.0 as i128 * num as i128, den as i128);
         Minor::from_i128(q, &format!("{self} × {num} / {den}"))
-    }
-
-    /// `self × bps / 10 000`, rounded for `flow` (never overflows: the result
-    /// is at most `|self|`).
-    pub fn mul_bps(self, bps: Bps, flow: Flow) -> Minor {
-        Minor(flow.div(self.0 as i128 * bps.0 as i128, BPS_FULL as i128) as i64)
     }
 }
 
@@ -394,12 +383,6 @@ impl Currency {
         }
     }
 
-    /// Minor digits: 2 for every member — [`Minor`] and [`FxRate::convert`]
-    /// rely on it.
-    pub fn exponent(self) -> u32 {
-        MINOR_DIGITS
-    }
-
     pub fn parse(code: &str) -> Option<Currency> {
         Currency::ALL.into_iter().find(|c| c.code() == code)
     }
@@ -451,52 +434,6 @@ impl Money {
     pub fn new(minor: Minor, currency: Currency) -> Money {
         Money { minor, currency }
     }
-
-    pub fn zero(currency: Currency) -> Money {
-        Money::new(Minor::ZERO, currency)
-    }
-
-    fn same_currency(self, other: Money, op: &str) -> Result<(), ValueError> {
-        if self.currency == other.currency {
-            Ok(())
-        } else {
-            Err(ValueError::new(
-                codes::CURRENCY_MISMATCH,
-                format!("{self} {op} {other}: convert first"),
-            ))
-        }
-    }
-
-    pub fn checked_add(self, other: Money) -> Result<Money, ValueError> {
-        self.same_currency(other, "+")?;
-        Ok(Money::new(
-            self.minor.checked_add(other.minor)?,
-            self.currency,
-        ))
-    }
-
-    pub fn checked_sub(self, other: Money) -> Result<Money, ValueError> {
-        self.same_currency(other, "−")?;
-        Ok(Money::new(
-            self.minor.checked_sub(other.minor)?,
-            self.currency,
-        ))
-    }
-
-    /// An amount + currency as a source record keeps them (any ISO code,
-    /// `domain/source/`): a currency outside the closed set is
-    /// [`Est::Unknown`] with the reason, never a guess; a malformed amount
-    /// is an error.
-    pub fn from_native(amount: &str, currency: &str) -> Result<Est<Money>, ValueError> {
-        let minor: Minor = amount.parse()?;
-        Ok(match Currency::parse(currency) {
-            Some(c) => Est::point(Money::new(minor, c)),
-            None => Est::unknown(format!(
-                "currency `{currency}` is outside the closed set ({})",
-                Currency::ALL.map(|c| c.code()).join(", ")
-            )),
-        })
-    }
 }
 
 /// Ordered within one currency only: `None` across currencies.
@@ -524,7 +461,7 @@ pub const BPS_FULL: u16 = 10_000;
 pub struct Bps(u16);
 
 impl Bps {
-    pub const ZERO: Bps = Bps(0);
+    #[cfg(test)]
     pub const FULL: Bps = Bps(BPS_FULL);
 
     pub fn new(v: i64) -> Result<Bps, ValueError> {
@@ -542,11 +479,6 @@ impl Bps {
 
     pub fn get(self) -> u16 {
         self.0
-    }
-
-    /// `10 000 − self` (churn → retention, loss → collected).
-    pub fn complement(self) -> Bps {
-        Bps(BPS_FULL - self.0)
     }
 }
 
@@ -654,7 +586,8 @@ mod rate_text {
 }
 
 impl FxRate {
-    /// `rate` as decimal text (`"0.92"`).
+    /// `rate` as decimal text (`"0.92"`); records carry rates as TOML.
+    #[cfg(test)]
     pub fn new(
         pair: CurrencyPair,
         rate: &str,
@@ -697,99 +630,6 @@ impl FxRate {
     }
 }
 
-/// A native amount, the rate that converted it and the result, kept apart
-/// (module table; PRD § 5.2 data rule). No rate when the currencies match.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "ConvertedRepr")]
-pub struct Converted {
-    native: Money,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rate: Option<FxRate>,
-    converted: Money,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ConvertedRepr {
-    native: Money,
-    #[serde(default)]
-    rate: Option<FxRate>,
-    converted: Money,
-}
-
-impl Converted {
-    /// `native` in `target`, rounded for `flow`; `rate` required exactly
-    /// when the currencies differ, and must be `native`/`target`.
-    pub fn new(
-        native: Money,
-        target: Currency,
-        rate: Option<FxRate>,
-        flow: Flow,
-    ) -> Result<Converted, ValueError> {
-        let converted = match &rate {
-            None if native.currency == target => native,
-            None => {
-                return Err(ValueError::new(
-                    codes::INVALID_CONVERSION,
-                    format!("{native} → {target}: no rate"),
-                ))
-            }
-            Some(_) if native.currency == target => {
-                return Err(ValueError::new(
-                    codes::INVALID_CONVERSION,
-                    format!("{native} → {target}: one currency takes no rate"),
-                ))
-            }
-            Some(r) if r.pair.quote != target => {
-                return Err(ValueError::new(
-                    codes::CURRENCY_MISMATCH,
-                    format!("{native} → {target} through a {} rate", r.pair),
-                ))
-            }
-            Some(r) => r.convert(native, flow)?,
-        };
-        Ok(Converted {
-            native,
-            rate,
-            converted,
-        })
-    }
-
-    pub fn native(&self) -> Money {
-        self.native
-    }
-
-    pub fn rate(&self) -> Option<&FxRate> {
-        self.rate.as_ref()
-    }
-
-    pub fn converted(&self) -> Money {
-        self.converted
-    }
-}
-
-impl TryFrom<ConvertedRepr> for Converted {
-    type Error = ValueError;
-    fn try_from(r: ConvertedRepr) -> Result<Self, ValueError> {
-        let target = r.converted.currency;
-        let floor = Converted::new(r.native, target, r.rate.clone(), Flow::Inflow)?;
-        let ceil = Converted::new(r.native, target, r.rate, Flow::Outflow)?;
-        if r.converted != floor.converted && r.converted != ceil.converted {
-            return Err(ValueError::new(
-                codes::INVALID_CONVERSION,
-                format!(
-                    "{} converts to {} or {}, not {}",
-                    r.native, floor.converted, ceil.converted, r.converted
-                ),
-            ));
-        }
-        Ok(Converted {
-            converted: r.converted,
-            ..floor
-        })
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Estimates, scenarios, assumptions
 // ---------------------------------------------------------------------------
@@ -804,6 +644,7 @@ pub enum Scenario {
 }
 
 impl Scenario {
+    #[cfg(test)]
     pub const ALL: [Scenario; 3] = [Scenario::Downside, Scenario::Base, Scenario::Upside];
 
     /// The range end this scenario takes; `None` for base (takes `base`).
@@ -1026,14 +867,6 @@ impl SchemaTag {
     /// `soe.<record>/1`.
     pub fn v1(record: &str) -> Result<SchemaTag, ValueError> {
         format!("{SCHEMA_PREFIX}{record}/{SCHEMA_V1}").parse()
-    }
-
-    pub fn record(&self) -> &str {
-        &self.record
-    }
-
-    pub fn version(&self) -> u32 {
-        self.version
     }
 
     /// `Ok` when this tags `record` (`schema_mismatch` otherwise).
@@ -1322,66 +1155,10 @@ mod tests {
             code_of(rate.convert(eur("1.00"), Flow::Inflow)),
             codes::CURRENCY_MISMATCH
         );
-
-        // Converted keeps native, rate and result apart.
-        let c = Converted::new(
-            usd("10.01"),
-            Currency::Eur,
-            Some(rate.clone()),
-            Flow::Outflow,
-        )
-        .unwrap();
-        assert_eq!(
-            (c.native(), c.converted(), c.rate()),
-            (usd("10.01"), eur("9.25"), Some(&rate))
-        );
-        let j = serde_json::to_value(&c).unwrap();
-        assert_eq!(j["rate"]["rate"], "0.92345678");
-        assert_eq!(j["rate"]["source"], "url:https://example.org/fx/2026-10-01");
-        assert_eq!(j["rate"]["as_of"], "2026-10-01");
-        assert_eq!(j["converted"]["amount"], "9.25");
-        assert_eq!(serde_json::from_value::<Converted>(j.clone()).unwrap(), c);
-        let t = toml::to_string(&c).unwrap();
-        assert_eq!(toml::from_str::<Converted>(&t).unwrap(), c);
-        // A stored result off by more than the rounding is refused.
-        let mut off = j.clone();
-        off["converted"]["amount"] = "9.26".into();
-        let e = serde_json::from_value::<Converted>(off).unwrap_err();
-        assert!(e.to_string().contains("invalid_conversion"), "{e}");
-        // One currency takes no rate; two need one.
-        assert_eq!(
-            Converted::new(eur("3.00"), Currency::Eur, None, Flow::Inflow)
-                .unwrap()
-                .converted(),
-            eur("3.00")
-        );
-        assert_eq!(
-            code_of(Converted::new(
-                usd("3.00"),
-                Currency::Eur,
-                None,
-                Flow::Inflow
-            )),
-            codes::INVALID_CONVERSION
-        );
-        assert_eq!(
-            code_of(Converted::new(
-                eur("3.00"),
-                Currency::Eur,
-                Some(rate.clone()),
-                Flow::Inflow
-            )),
-            codes::INVALID_CONVERSION
-        );
-        assert_eq!(
-            code_of(Converted::new(
-                usd("3.00"),
-                Currency::Gbp,
-                Some(rate),
-                Flow::Inflow
-            )),
-            codes::CURRENCY_MISMATCH
-        );
+        let j = serde_json::to_value(&rate).unwrap();
+        assert_eq!(j["rate"], "0.92345678");
+        assert_eq!(j["source"], "url:https://example.org/fx/2026-10-01");
+        assert_eq!(j["as_of"], "2026-10-01");
         // Rates: > 0, ≤ 8 fraction digits, two different currencies.
         for bad in ["0", "0.000000001", "-1", "1e2", ""] {
             assert_eq!(
@@ -1403,7 +1180,10 @@ mod tests {
     #[test]
     fn schema_tag_other_version_refused() {
         let t: SchemaTag = "soe.operator_profile/1".parse().unwrap();
-        assert_eq!((t.record(), t.version()), ("operator_profile", SCHEMA_V1));
+        assert_eq!(
+            (t.record.as_str(), t.version),
+            ("operator_profile", SCHEMA_V1)
+        );
         assert_eq!(t.to_string(), "soe.operator_profile/1");
         assert_eq!(SchemaTag::v1("operator_profile").unwrap(), t);
         assert!(t.require("operator_profile").is_ok());
@@ -1451,19 +1231,6 @@ mod tests {
         assert!(toml_v::<Bps>("10001").unwrap_err().contains("invalid_bps"));
         assert!(toml_v::<Bps>("2.5").is_err());
         assert!(toml_v::<Bps>("\"250\"").is_err());
-        assert_eq!(
-            Bps::new(1_250).unwrap().complement(),
-            Bps::new(8_750).unwrap()
-        );
-        // 3 % of 0.50 = 0.015: an inflow floors, an outflow ceils.
-        let b = Bps::new(300).unwrap();
-        assert_eq!(m("0.50").mul_bps(b, Flow::Inflow), m("0.01"));
-        assert_eq!(m("0.50").mul_bps(b, Flow::Outflow), m("0.02"));
-        assert_eq!(m("-0.50").mul_bps(b, Flow::Inflow), m("-0.02"));
-        assert_eq!(
-            Minor(i64::MAX).mul_bps(Bps::FULL, Flow::Outflow),
-            Minor(i64::MAX)
-        );
     }
 
     #[test]
@@ -1510,8 +1277,8 @@ mod tests {
 
     #[test]
     fn currencies_are_a_closed_set_with_two_minor_digits() {
+        assert_eq!(MINOR_DIGITS, 2);
         for c in Currency::ALL {
-            assert_eq!(c.exponent(), MINOR_DIGITS);
             assert_eq!(c.code().parse::<Currency>().unwrap(), c);
             assert_eq!(
                 serde_json::to_string(&c).unwrap(),
@@ -1520,31 +1287,11 @@ mod tests {
         }
         assert_eq!(code_of("JPY".parse::<Currency>()), codes::INVALID_CURRENCY);
         assert_eq!(code_of("eur".parse::<Currency>()), codes::INVALID_CURRENCY);
-        // A source amount: a known currency is a point, another one unknown
-        // with the reason, a malformed amount an error.
-        assert_eq!(
-            Money::from_native("41250.75", "EUR").unwrap(),
-            Est::point(eur("41250.75"))
-        );
-        match Money::from_native("41250.75", "JPY").unwrap() {
-            Est::Unknown { reason: Some(r) } => assert!(r.contains("`JPY`"), "{r}"),
-            other => panic!("{other:?}"),
-        }
-        assert_eq!(
-            code_of(Money::from_native("1e3", "EUR")),
-            codes::INVALID_AMOUNT
-        );
     }
 
     #[test]
     fn money_stays_in_one_currency() {
         let usd = Money::new(m("1.00"), Currency::Usd);
-        assert_eq!(eur("1.25").checked_add(eur("2.50")).unwrap(), eur("3.75"));
-        assert_eq!(eur("1.25").checked_sub(eur("2.50")).unwrap(), eur("-1.25"));
-        assert_eq!(
-            code_of(eur("1.00").checked_add(usd)),
-            codes::CURRENCY_MISMATCH
-        );
         assert_eq!(eur("1.00").partial_cmp(&usd), None);
         assert!(eur("1.00") < eur("1.01"));
         let t = toml::to_string(&eur("250.00")).unwrap();

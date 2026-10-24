@@ -629,20 +629,13 @@ fn mime_from_filename(filename: &str) -> String {
 mod tests {
     use super::*;
     use crate::adapters::outbound::shell::LocalShellExecutor;
-    use crate::domain::message::ToolCall;
     use crate::domain::scope::ToolScope;
     use crate::domain::secrets::SecretRegistry;
     use crate::ports::shell::ShellExecutionPort;
-    use crate::ports::tool_activity::ToolActivityPort;
     use serde_json::json;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tempfile::TempDir;
-
-    struct NoopActivity;
-    impl ToolActivityPort for NoopActivity {
-        fn publish_tool_activity(&self, _call: &ToolCall) {}
-    }
 
     struct HttpHarness {
         workspace: PathBuf,
@@ -650,7 +643,6 @@ mod tests {
         shell: Arc<dyn ShellExecutionPort>,
         http: reqwest::Client,
         secrets: SecretRegistry,
-        activity: Arc<dyn ToolActivityPort>,
     }
 
     impl HttpHarness {
@@ -665,7 +657,6 @@ mod tests {
                     .tool_client(std::time::Duration::from_secs(5))
                     .unwrap(),
                 secrets: SecretRegistry::new(),
-                activity: Arc::new(NoopActivity),
             }
         }
 
@@ -675,9 +666,7 @@ mod tests {
                 scope: &self.scope,
                 shell: self.shell.as_ref(),
                 http: &self.http,
-                memory_manager: None,
                 secret_registry: &self.secrets,
-                activity: self.activity.as_ref(),
                 conversation: crate::ports::tool::ConversationView::empty(),
                 agent_config: None,
                 call_id: None,

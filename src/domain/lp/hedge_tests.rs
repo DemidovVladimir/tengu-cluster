@@ -633,18 +633,6 @@ fn delta_for_regime() {
 }
 
 #[test]
-fn ramp_delta_endpoints() {
-    // share 1.0 → full bag (= the ADR-021 clamp); healthy middle → midpoint.
-    assert_eq!(lp_ramp_delta(1.22, 0.0, 82.0, 0.9), 1.22);
-    assert!(close_to(
-        lp_ramp_delta(0.61, 50.02, 82.0, 0.9),
-        lp_midpoint_sol(0.61, 50.02, 82.0),
-        12
-    ));
-    assert_eq!(lp_ramp_delta(0.0, 100.0, 82.0, 0.9), 0.0);
-}
-
-#[test]
 fn auto_notional_cap() {
     assert!(close_to(
         auto_notional_cap_usd(2.63, 80.5, 1.25, 0.0),

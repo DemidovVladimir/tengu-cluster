@@ -15,9 +15,6 @@
 //! | [`Tier`] | `LOW` `MEDIUM` `HIGH` `UNKNOWN` (defensibility, reversibility, evidence strength) |
 //! | [`Verdict`] | `PASS` `HOLD` `REJECT` |
 
-// `from_json` and `Problems::is_empty` are read by tests only until O3.
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::fmt;
 
@@ -177,6 +174,7 @@ impl Problems {
         );
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

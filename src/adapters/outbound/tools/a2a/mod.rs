@@ -381,16 +381,13 @@ mod tests {
         let secrets = SecretRegistry::new();
         let shell = NoShell;
         let http = reqwest::Client::new();
-        let activity = crate::adapters::outbound::noop::NoopActivity;
         let ws = std::env::temp_dir();
         let ctx = ToolCtx {
             workspace: &ws,
             scope,
             shell: &shell,
             http: &http,
-            memory_manager: None,
             secret_registry: &secrets,
-            activity: &activity,
             conversation: crate::ports::tool::ConversationView::empty(),
             agent_config: None,
             call_id: None,

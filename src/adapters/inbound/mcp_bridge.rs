@@ -867,11 +867,9 @@ async fn build_bridge_executor(
         workspace,
         config: &agent_config,
         http: http_client.clone(),
-        shell: Arc::clone(&shell),
         memory_manager: memory_manager_handle
             .clone()
             .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
-        secret_registry: Arc::clone(secret_registry),
     };
 
     let mut registry = ToolRegistry::new();
@@ -945,8 +943,6 @@ async fn build_bridge_executor(
         workspace: workspace.to_path_buf(),
         shell: Arc::clone(&shell),
         http: http_client,
-        memory_manager: memory_manager_handle
-            .map(|m| m as Arc<dyn crate::ports::memory::MemoryService>),
         secret_registry: Arc::clone(secret_registry),
         activity: Arc::new(BridgeActivity),
         scopes,
