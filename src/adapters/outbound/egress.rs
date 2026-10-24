@@ -31,8 +31,8 @@
 //!
 //! Every `http_request` hop and every network-looking shell command is
 //! appended to the JSONL audit log (`audit_log`, default
-//! `<TENGU_HOME>/logs/egress.jsonl`) and mirrored as a `tengu::egress`
-//! tracing line.
+//! `<TENGU_HOME>/logs/egress.jsonl`); a `denied` / `error` record is
+//! also a `tengu::egress` WARN line (tool, host, call id, status, reason).
 //!
 //! | Audit field | Source |
 //! |---|---|
@@ -579,16 +579,17 @@ impl EgressPolicy {
         })
     }
 
-    /// Append one audit record (JSONL) and mirror it to tracing. Adds
-    /// `ts`, `pid`, `session`, `agent`, `call_id` (module table), `via`,
-    /// `proxy`. Fail-soft on I/O.
+    /// Append one audit record (JSONL); a `denied` / `error` one is also a
+    /// WARN line in `tengu.log` ([`warn_failure`]). Adds `ts`, `pid`,
+    /// `session`, `agent`, `call_id` (module table), `via`, `proxy`.
+    /// Fail-soft on I/O.
     pub(crate) fn audit(&self, mut event: Value) {
         let Some(path) = &self.audit_path else {
             return;
         };
         self.stamp(&mut event, call_scope());
+        warn_failure(&event);
         let line = event.to_string();
-        tracing::info!(target: "tengu::egress", "{line}");
         let written = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -620,6 +621,54 @@ impl EgressPolicy {
         map.insert("call_id".into(), call_id.into());
         map.insert("via".into(), self.via().into());
         map.insert("proxy".into(), self.cfg.proxy.clone().into());
+    }
+}
+
+/// The `tengu.log` line of a failed audit record (`verdict` `denied` /
+/// `error`), naming tool, host (a shell command: its URLs), call id, status
+/// and reason; an allowed one is only in `egress.jsonl` (it was mirrored
+/// at INFO: 89% of `tengu.log`). `None` = not a failure.
+fn failure_fields(event: &Value) -> Option<[String; 6]> {
+    let verdict = event["verdict"].as_str()?;
+    if !matches!(verdict, "denied" | "error") {
+        return None;
+    }
+    let text = |k: &str| event[k].as_str().unwrap_or_default().to_string();
+    let host = event["host"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            event["urls"]
+                .as_array()
+                .map(|u| {
+                    u.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default()
+        });
+    let status = event["status"]
+        .as_u64()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    Some([
+        verdict.to_string(),
+        text("tool"),
+        host,
+        text("call_id"),
+        status,
+        text("reason"),
+    ])
+}
+
+fn warn_failure(event: &Value) {
+    if let Some([verdict, tool, host, call_id, status, reason]) = failure_fields(event) {
+        tracing::warn!(
+            target: "tengu::egress",
+            %verdict, %tool, %host, %call_id, %status, %reason,
+            "egress {verdict}"
+        );
     }
 }
 
@@ -900,6 +949,38 @@ mod tests {
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(stdout.contains("alive"), "{stdout}");
         assert!(stdout.contains("BLOCKED"), "{stdout}");
+    }
+
+    /// B1: only a denied / failed record reaches `tengu.log`, with its host
+    /// (a shell command's URLs), tool, call id, status and reason.
+    #[test]
+    fn only_failures_are_mirrored_to_the_log() {
+        let allowed = serde_json::json!({"tool": "hl_info", "verdict": "allowed", "host": "a"});
+        assert_eq!(failure_fields(&allowed), None);
+        assert_eq!(failure_fields(&serde_json::json!({"tool": "x"})), None);
+        let denied = serde_json::json!({
+            "tool": "http_request", "verdict": "denied", "host": "evil.example",
+            "call_id": "chat:n:1:0:p", "reason": "host not allowed",
+        });
+        assert_eq!(
+            failure_fields(&denied).unwrap(),
+            [
+                "denied",
+                "http_request",
+                "evil.example",
+                "chat:n:1:0:p",
+                "",
+                "host not allowed"
+            ]
+            .map(String::from)
+        );
+        let shell = serde_json::json!({
+            "tool": "run_command", "verdict": "error", "status": 503,
+            "urls": ["https://a.example/x", "https://b.example"],
+        });
+        let f = failure_fields(&shell).unwrap();
+        assert_eq!(f[2], "https://a.example/x https://b.example");
+        assert_eq!(f[4], "503");
     }
 
     /// `tengu run`'s feed and loop calls share one process: an egress line

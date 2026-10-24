@@ -234,7 +234,7 @@
         <li>Shell commands: each <code>http(s)://</code> literal passes the same URL gate. Built or encoded URLs slip by; on macOS <code>shell_network = "isolated"</code> is the hard stop.</li>
         <li>LLM calls (OpenRouter, embeddings, Jev) use the proxy only with <code>route_llm_api</code>. The Claude and Codex CLIs get <code>HTTPS_PROXY</code>; MCP and Telegram follow the proxy. No host check here.</li>
         <li>With a proxy, traffic goes to Arti on <code>:9050</code>, then lyrebird-rs, an obfs4 or snowflake bridge, and Tor. No direct fallback: proxy down, request fails.</li>
-        <li><code>network = "open"</code> goes direct. Either way, every tool hop and every network shell command appends one JSONL line to <code>egress.jsonl</code>.</li>
+        <li><code>network = "open"</code> goes direct. Either way, every tool hop and every network shell command appends one JSONL line to <code>egress.jsonl</code>; a denied or failed one is also a WARN line in <code>tengu.log</code>.</li>
       </ol>
     </div>
   </figure>
