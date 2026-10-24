@@ -786,8 +786,10 @@ These are not preferences. They're load-bearing.
 - **No write-landed diagnostic CLI yet** — `tengu memory inspect` was removed
   with the Qdrant path. To check whether a write landed, query Postgres
   directly against `TENGU_MEMORY_DATABASE_URL` or run the ignored
-  `postgres_*_smoke` tests. A Postgres-native inspect CLI is a tracked
-  follow-up.
+  `postgres_*_smoke` tests. A recorded plan step's trace shows its summary
+  write as an `agentic_memory` call (`step:<session>:<step>:summary`:
+  `tool.completed` `stored <entry id>` or `tool.failed` with the reason). A
+  Postgres-native inspect CLI is a tracked follow-up.
 - **All network traffic goes through `egress.rs`, and the default is Tor
   (2026-09-18)** — no `[egress]` section means `network = "tor"`:
   `socks5h://127.0.0.1:9050` (`TENGU_TOR_PROXY` overrides), `route_llm_api =

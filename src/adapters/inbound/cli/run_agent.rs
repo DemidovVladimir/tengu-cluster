@@ -49,6 +49,77 @@ async fn try_persist_agentic_step_summary(
     .await
 }
 
+/// The step summary's Open Brain write: fail-soft (logged, the step goes
+/// on), and in a recorded step one `agentic_memory` call in its journal
+/// ([`journaled_write`]). `from` = where the summary came from
+/// (`compress_and_store`, `bridge`, `final_text`).
+#[cfg(feature = "postgres_memory")]
+async fn persist_step_summary(
+    trace: Option<&crate::application::trace_exec::CallTrace>,
+    sandbox: &str,
+    input: &crate::adapters::outbound::subprocess_runner::AgentIpcInput,
+    summary: &str,
+    from: &str,
+) {
+    let (session_id, step_id) = (input.session_id.as_str(), input.step_id.as_str());
+    let write = try_persist_agentic_step_summary(sandbox, session_id, step_id, summary);
+    journaled_write(trace, session_id, step_id, summary, from, write).await;
+}
+
+/// `write` (an Open Brain write answering its entry id) as the call
+/// `agentic_memory` `step_summary`, call id `step:<session>:<step>:summary`:
+/// `tool.completed` (`stored <entry id>`) or `tool.failed` (the reason), so a
+/// recorded step's trace says whether its summary landed; logged either way.
+/// `true` = stored.
+#[cfg(feature = "postgres_memory")]
+async fn journaled_write(
+    trace: Option<&crate::application::trace_exec::CallTrace>,
+    session_id: &str,
+    step_id: &str,
+    summary: &str,
+    from: &str,
+    write: impl std::future::Future<Output = anyhow::Result<String>>,
+) -> bool {
+    let summary_chars = summary.chars().count();
+    let call = crate::domain::message::ToolCall {
+        id: format!("step:{session_id}:{step_id}:summary"),
+        name: "agentic_memory".to_string(),
+        arguments: serde_json::json!({
+            "operation": "step_summary",
+            "step_id": step_id,
+            "from": from,
+            "summary_chars": summary_chars,
+        }),
+    };
+    let work = async {
+        write
+            .await
+            .map(|id| crate::ports::tool::ToolOutput::from(format!("stored {id}")))
+    };
+    let result = match trace {
+        Some(trace) => trace.run(&call, work).await,
+        None => work.await,
+    };
+    match &result {
+        Ok(out) => tracing::info!(
+            session_id,
+            step_id,
+            from,
+            summary_chars,
+            "agentic_memory: step summary {}",
+            out.text
+        ),
+        Err(e) => tracing::warn!(
+            error = %e,
+            session_id,
+            step_id,
+            from,
+            "agentic_memory: step summary write FAILED"
+        ),
+    }
+    result.is_ok()
+}
+
 /// `tengu run-agent` handler: one plan step, an LLM with a multi-turn tool loop.
 ///
 /// 1. Verifies `TENGU_AGENT_IPC=1` is set (prevents accidental re-entry).
@@ -465,9 +536,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         hooks: Some(&hooks),
         ..crate::application::chat::tool_loop::LoopOpts::from_limits(&spec.limits)
     };
-    // Open Brain rows are stamped with (and recalled by) the owning sandbox.
+    // Open Brain rows are stamped with (and recalled by) the owning sandbox;
+    // a recorded step journals each write (`persist_step_summary`).
     #[cfg(feature = "postgres_memory")]
     let memory_sandbox = parent_config.sandbox_owner();
+    #[cfg(feature = "postgres_memory")]
+    let summary_trace = step_trace
+        .clone()
+        .map(|sink| crate::application::trace_exec::CallTrace::new(sink, &input.agent_name, None));
     let resp = crate::application::chat::tool_loop::collect_engine_response(
         engine.as_ref(),
         &messages,
@@ -487,11 +563,12 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
         tracing::info!("compress_and_store invoked; exiting subagent loop cleanly");
         #[cfg(feature = "postgres_memory")]
         if let Some(text) = &summary {
-            let _ = try_persist_agentic_step_summary(
+            persist_step_summary(
+                summary_trace.as_ref(),
                 &memory_sandbox,
-                &input.session_id,
-                &input.step_id,
+                &input,
                 text,
+                "compress_and_store",
             )
             .await;
         }
@@ -509,15 +586,14 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
             );
             compress_called = true;
             #[cfg(feature = "postgres_memory")]
-            {
-                let _ = try_persist_agentic_step_summary(
-                    &memory_sandbox,
-                    &input.session_id,
-                    &input.step_id,
-                    &text,
-                )
-                .await;
-            }
+            persist_step_summary(
+                summary_trace.as_ref(),
+                &memory_sandbox,
+                &input,
+                &text,
+                "bridge",
+            )
+            .await;
             summary = Some(text);
         }
     }
@@ -527,33 +603,19 @@ pub(super) async fn run_agent_subprocess() -> Result<()> {
 
     // Backstop the durable write when the subagent finished WITHOUT calling
     // compress_and_store — the path Claude Code subagents most often take
-    // (they "just stop" after their last tool call). Fail-soft: errors are
-    // logged and swallowed; the IPC payload still goes back to the parent
-    // unchanged — recall is best-effort, not a barrier to step completion.
+    // (they "just stop" after their last tool call). Fail-soft: the IPC
+    // payload still goes back to the parent unchanged — recall is
+    // best-effort, not a barrier to step completion.
     #[cfg(feature = "postgres_memory")]
     if !compress_called && !summary.trim().is_empty() {
-        match try_persist_agentic_step_summary(
+        persist_step_summary(
+            summary_trace.as_ref(),
             &memory_sandbox,
-            &input.session_id,
-            &input.step_id,
+            &input,
             &summary,
+            "final_text",
         )
-        .await
-        {
-            Ok(id) => tracing::info!(
-                entry_id = %id,
-                session_id = %input.session_id,
-                step_id = %input.step_id,
-                summary_chars = summary.chars().count(),
-                "agentic_memory: backstop wrote final_text summary to Postgres"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                session_id = %input.session_id,
-                step_id = %input.step_id,
-                "agentic_memory: backstop write FAILED"
-            ),
-        }
+        .await;
     }
 
     // The step's `output` — what the DAG hands to later steps and the
@@ -893,5 +955,47 @@ mod tests {
             bridged_summary(std::path::Path::new("/nonexistent/x")),
             None
         );
+    }
+
+    /// A step summary write is one `agentic_memory` call in the step's
+    /// trace: `tool.completed` with the entry id, or `tool.failed` with the
+    /// reason (it used to be dropped with `let _ =`).
+    #[cfg(feature = "postgres_memory")]
+    #[tokio::test]
+    async fn a_summary_write_lands_in_the_step_trace() {
+        use crate::application::trace_exec::{tests::MemTrace, CallTrace};
+        let sink = std::sync::Arc::new(MemTrace::default());
+        let trace = CallTrace::new(sink.clone(), "researcher", None);
+        let stored = async { Ok("6f1c2a9e-4b7d-4e0a-9c3f-2d8e5b1a7c40".to_string()) };
+        assert!(journaled_write(Some(&trace), "s-1", "s1", "the result", "bridge", stored).await);
+        let refused = async { Err(anyhow::anyhow!("TENGU_MEMORY_DATABASE_URL must be set")) };
+        assert!(!journaled_write(Some(&trace), "s-1", "s2", "x", "final_text", refused).await);
+        assert!(
+            !journaled_write(None, "s-1", "s3", "x", "final_text", async {
+                Err(anyhow::anyhow!("down"))
+            })
+            .await
+        );
+        assert_eq!(
+            sink.kinds(),
+            [
+                "tool.started",
+                "tool.completed",
+                "tool.started",
+                "tool.failed"
+            ]
+        );
+        let d = sink.all();
+        assert_eq!(d[1].call_id.as_deref(), Some("step:s-1:s1:summary"));
+        assert_eq!(d[0].payload["args"]["from"], "bridge");
+        assert_eq!(d[0].payload["args"]["summary_chars"], 10);
+        assert_eq!(
+            d[1].payload["line1"],
+            "stored 6f1c2a9e-4b7d-4e0a-9c3f-2d8e5b1a7c40"
+        );
+        assert!(d[3].payload["error"]
+            .as_str()
+            .unwrap()
+            .contains("TENGU_MEMORY_DATABASE_URL"));
     }
 }

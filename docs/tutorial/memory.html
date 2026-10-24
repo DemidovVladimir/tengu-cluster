@@ -209,7 +209,7 @@
         <li>Lanes read first: earlier user messages and this session's step outputs. Both are off by default (top_k 0). Replan adds a cross-plan lane (5).</li>
         <li>Then the message is stored: kind <code>message</code>, agent <code>planner</code>, with its vector. Reading first keeps it out of its own recall.</li>
         <li>A plan step runs as <code>tengu run-agent</code>. The child exports <code>TENGU_SESSION_ID</code> and <code>TENGU_AGENT_NAME</code>, so its writes carry the planner's session.</li>
-        <li>The step summary is stored as kind <code>step_output</code> with its <code>step_id</code>: the <code>compress_and_store</code> text, or the final reply as a backstop.</li>
+        <li>The step summary is stored as kind <code>step_output</code> with its <code>step_id</code>: the <code>compress_and_store</code> text, or the final reply as a backstop. A recorded step's trace shows the write as an <code>agentic_memory</code> call: <code>tool.completed</code> <code>stored &lt;entry id&gt;</code>, or <code>tool.failed</code> with the reason.</li>
         <li>Agents with the opt-in tool capture notes and ingest sources. <code>ingest_source</code> keeps the raw file, one source row and its chunks, each embedded.</li>
         <li><code>promote</code> marks a stable event, chunk or source: one <code>memory_promotions</code> row with a reason and optional evidence.</li>
         <li><code>promote</code> files a <code>pending</code> row; the operator approves it in Postgres. <code>compile_wiki</code> reads the 30 newest <code>approved</code> promotions of this sandbox. With <code>TENGU_WIKI_COMPILER_MODEL</code> set an LLM writes one page citing <code>[mem:kind/id]</code>; unset (the default) or failed, a plain bullet list is written.</li>
@@ -398,7 +398,7 @@ workspace_tools = [<span class="s">"agentic_memory"</span>]  <span class="c"># o
         <tr><td><code>src/ports/memory.rs</code></td><td>the <code>RecallStore</code> port the planner reads through</td></tr>
         <tr><td><code>src/application/orchestrator/planner.rs</code></td><td>recall blocks, user-message write</td></tr>
         <tr><td><code>src/bootstrap/orchestrator.rs</code></td><td>recall store + embedder wiring, one <code>session_id</code></td></tr>
-        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>step summary write, backstop, env export</td></tr>
+        <tr><td><code>src/adapters/inbound/cli/run_agent.rs</code></td><td>step summary write (journaled as a tool call), backstop, env export</td></tr>
         <tr><td><code>src/bootstrap/one_shot.rs</code></td><td>webhook / escalation output write</td></tr>
         <tr><td><code>src/adapters/inbound/mcp_bridge.rs</code></td><td><code>tengu agentic-memory-server</code></td></tr>
         <tr><td><code>src/config/memory.rs</code></td><td><code>MemoryConfig</code> knobs and defaults</td></tr>

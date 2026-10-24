@@ -42,13 +42,16 @@ persists across plan/replan cycles.
 |---|---|---|
 | **A — Out-of-band** | OpenRouter / local subagents | `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` (`:497`) intercepts the tool call BEFORE the executor. Sets `compress_called = true`, captures `summary`, persists it via `try_persist_agentic_step_summary` (`postgres_memory`), answers `stored`, breaks the loop after that round. |
 | **B — Bridge** | Claude Code subagents | The step's bridge (`mcp_bridge.rs::StepSummary`) writes `summary` to `TENGU_BRIDGE_SUMMARY_FILE` and answers `stored — stop now`; the engine ends the CLI run once the round's other calls are answered; `run-agent` reads the file as the step summary (+ the same `postgres_memory` write). |
-| **C — Backstop** | a subagent that never calls it | `compress_called` stays false; `run-agent` writes the final assistant text via `try_persist_agentic_step_summary`. |
+| **C — Backstop** | a subagent that never calls it | `compress_called` stays false; `run-agent` writes the final assistant text (`persist_step_summary`). |
 
 With `postgres_memory`, `adapters/inbound/cli/run_agent.rs::run_agent_subprocess` writes the final
 summary into Open Brain-style Postgres `agentic_memory`, with embeddings when
 available and text-only fallback otherwise
-(`agentic_memory::write_step_summary_with_embedding`). Without the feature the
-summary only travels back to the parent over IPC.
+(`agentic_memory::write_step_summary_with_embedding`). Fail-soft: a failed
+write is logged and the step goes on; a recorded step journals each write as an
+`agentic_memory` call (`step:<session>:<step>:summary`, `tool.completed`
+`stored <entry id>` / `tool.failed`). Without the feature the summary only
+travels back to the parent over IPC.
 
 ### Phase 5c — middle-ground protocol *(graceful degradation)*
 

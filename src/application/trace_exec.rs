@@ -6,7 +6,7 @@
 //! | Piece | Rule |
 //! |---|---|
 //! | [`Cause`] · [`caused_by`] · [`cause`] | the event that caused what this task does now (its `parent_event_id`) + the session / correlation it belongs to; set around a loop event (`LoopDispatch`: `loop.started`), a decide run (`trigger.*`), a loop's tool call (`action.selected`), a feed's calls and tick (`feed.fired`). Read where the next event is written: `LoopDispatch::enqueue`, `DecisionLoop::run_event`, [`TracedExecutor`]. A task it spawns does not inherit it |
-//! | [`TracedExecutor`] | wraps one agent's executor (inside `egress::AttributedExecutor`, outside `SanitizedToolExecutor`: it sees redacted results): `tool.started` (`Running`, `{tool, args}`) → `tool.completed` (`Ok`) or `tool.failed` (`Failed`: the executor's error, a typed result whose status is not usable, or an `http_request` text whose status line is not 2xx — `reduce::http_ok`, the rule a loop's `ok` uses) with `duration_ms`; `node_id` `tool:<agent>/<tool>`, `call_id` = `ToolCall.id`, parent / session / correlation = the [`cause`]; the result as a summary (`line1` of the text, a typed result's `key` / `status` / `headline`), never the whole text |
+//! | [`TracedExecutor`] · [`CallTrace`] | wraps one agent's executor (inside `egress::AttributedExecutor`, outside `SanitizedToolExecutor`: it sees redacted results): `tool.started` (`Running`, `{tool, args}`) → `tool.completed` (`Ok`) or `tool.failed` (`Failed`: the executor's error, a typed result whose status is not usable, or an `http_request` text whose status line is not 2xx — `reduce::http_ok`, the rule a loop's `ok` uses) with `duration_ms`; `node_id` `tool:<agent>/<tool>`, `call_id` = `ToolCall.id`, parent / session / correlation = the [`cause`]; the result as a summary (`line1` of the text, a typed result's `key` / `status` / `headline`), never the whole text. [`CallTrace::run`] writes the same pair for a call that runs outside an executor (a `run-agent` step's summary write to Open Brain) |
 //! | [`GatedTrace`] · [`close_after`] | one piece of work's view of a recording, closed when the work ends — finished, or dropped unfinished (aborted at the shutdown deadline: the work is dropped first, so its own drop record lands): a write in flight finishes first, a later one is dropped, so nothing the work left behind (a step task being aborted, a metrics forwarder mid-send) lands after it or after the run's closing event. A webhook / escalation turn (`inbound/webhooks.rs`), an eval row |
 //! | [`child_draft`] · [`replay_child`] | a `run-agent` step's tool events (`AgentIpcInput.trace` set) go to its journal (`trace_store::JournalSink`: the child's in-process calls and its Claude Code / Codex bridge's, child clock, redacted + bounded, ids `ipc:<pid>:<n>`, ≤ [`MAX_CHILD_EVENTS`] per process), which the parent reads on any exit — clean, failed, killed at the timeout (`trace_store::read_journal`) · the parent writes them into its own recording in order, a root (no parent) under the step's `step.started`, each `ipc:` parent mapped to the id its sink gave, the session = the step's, anything but `tool.*` dropped — one writer per run file |
 //!
@@ -104,11 +104,7 @@ pub(crate) fn cause() -> Option<Cause> {
 /// A tool executor whose every call writes `tool.*` events (module table).
 pub(crate) struct TracedExecutor {
     inner: Arc<dyn ToolExecutor>,
-    sink: Arc<dyn TraceSink>,
-    agent: String,
-    /// Where each call's full record lives (a loop: its `decisions.jsonl`,
-    /// key = the call id); `None` = nowhere but the tool's own store.
-    artifact: Option<String>,
+    calls: CallTrace,
 }
 
 impl TracedExecutor {
@@ -120,10 +116,42 @@ impl TracedExecutor {
     ) -> Self {
         Self {
             inner,
+            calls: CallTrace::new(sink, agent, artifact),
+        }
+    }
+}
+
+/// One agent's `tool.*` writer: [`TracedExecutor`]'s, and a call that runs
+/// outside an executor ([`CallTrace::run`]: a `run-agent` step's summary
+/// write to Open Brain).
+pub(crate) struct CallTrace {
+    sink: Arc<dyn TraceSink>,
+    agent: String,
+    /// Where each call's full record lives (a loop: its `decisions.jsonl`,
+    /// key = the call id); `None` = nowhere but the tool's own store.
+    artifact: Option<String>,
+}
+
+impl CallTrace {
+    pub(crate) fn new(sink: Arc<dyn TraceSink>, agent: &str, artifact: Option<String>) -> Self {
+        Self {
             sink,
             agent: agent.to_string(),
             artifact,
         }
+    }
+
+    /// `work` as the call `call`: `tool.started`, then `tool.completed` /
+    /// `tool.failed` by the decorator's rules (module table).
+    pub(crate) async fn run<F>(&self, call: &ToolCall, work: F) -> anyhow::Result<ToolOutput>
+    where
+        F: Future<Output = anyhow::Result<ToolOutput>>,
+    {
+        let started = self.started(call);
+        let t0 = Instant::now();
+        let result = work.await;
+        self.finished(call, started, &result, t0.elapsed().as_millis() as u64);
+        result
     }
 
     fn draft(&self, call: &ToolCall, kind: &str, status: Status) -> EventDraft {
@@ -200,15 +228,13 @@ impl TracedExecutor {
 #[async_trait]
 impl ToolExecutor for TracedExecutor {
     async fn execute(&self, call: &ToolCall, messages: &[Message]) -> anyhow::Result<String> {
-        let started = self.started(call);
-        let t0 = Instant::now();
-        let result = self
-            .inner
-            .execute(call, messages)
-            .await
-            .map(ToolOutput::from);
-        self.finished(call, started, &result, t0.elapsed().as_millis() as u64);
-        result.map(|o| o.text)
+        let work = async {
+            self.inner
+                .execute(call, messages)
+                .await
+                .map(ToolOutput::from)
+        };
+        self.calls.run(call, work).await.map(|o| o.text)
     }
 
     async fn execute_typed(
@@ -216,11 +242,9 @@ impl ToolExecutor for TracedExecutor {
         call: &ToolCall,
         messages: &[Message],
     ) -> anyhow::Result<ToolOutput> {
-        let started = self.started(call);
-        let t0 = Instant::now();
-        let result = self.inner.execute_typed(call, messages).await;
-        self.finished(call, started, &result, t0.elapsed().as_millis() as u64);
-        result
+        self.calls
+            .run(call, self.inner.execute_typed(call, messages))
+            .await
     }
 }
 
