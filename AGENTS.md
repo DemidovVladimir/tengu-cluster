@@ -1122,19 +1122,7 @@ These are not preferences. They're load-bearing.
 
 ## Open items still on the list
 
-See `docs/SESSION_HANDOFF.md` for the running list. **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later.
-
-State 2026-10-13 (`main` = #39–#54: xlab-w2 retention, strategy ranking, SOE O0–O4, Tengu Studio, weekend #2 graded, Studio builder + `codex`, A2A, seal proxy, Privy Solana signer; 0 open PRs, no branch but `main` — tips kept as `archive/<branch>` tags):
-
-| Open | Whose | Next |
-|---|---|---|
-| ~~G-WKND~~ | done 2026-10-12 | weekend #2 graded: capped +204.0 bps (n 4), shadow +108.3 (n 75); M3 tally 2 / 12 (`docs/SESSION_HANDOFF.md` 2026-10-12) |
-| G-SR1 | operator | seal `rank.xlab-w2.daily.v1` and `rank.xlab-w2.weekend.v1` (`tengu lineage seal ranking:<id>`) or change them first; every ranking is refused until then |
-| G-O0 → SOE Review #2 | operator | sign the SOE profile, approve each source row's terms + enable it, append SOE-G0's `[[frozen]]` row → 4 frozen weekly cycles → G-R2 (`docs/soe-2026-10-08.md` § 15) |
-| Seal proxy (#50) + Privy signer (#51) | operator | deploy the `tengu-seal` Worker (`npx wrangler deploy`), `CLIENTS` + provider secrets + `SESSION_KEY`, `[keys] strip` (`docs/cloudflare-secrets-setup.html`); then a Privy Solana wallet → `[solana] privy_wallet_id` + the write tools' scopes; the first live send = a separate go (real money) |
-| Studio | — | ST-90 passed 2026-10-09; Review #3 answered (builder built, #52); builder gaps: decision-loop / feed / `[[mcp_servers]]` cards, import a hand-written sandbox (`docs/SESSION_HANDOFF.md` 2026-10-10) |
-| Engine parity | — | live legs `xlab_rank` · `sources` · `soe` not run; the 11 live `codex_*` legs not run; live `local` legs (the operator's PC); `agentic_memory` live; Privy / Solana `send` |
-| Trading | — | `docs/plans/TENGU_ROADMAP.md` P0–P11 done (`docs/p{6,7,8,9,10}-*-2026-10-08.md`): no W2 change beats rule W, W1 kept; forward rule W evidence every weekend (M3 tally 2 / 12); P12 / P13 + trading Operator Review #2 not reached; W2 research in `xlab-w2`, history first (`docs/xlab-2026-10-01.md` § 12) |
+Gate state lives in one place: `docs/SESSION_HANDOFF.md` § Open gates (whose, state, next). **Local data to clean up** (not in git; delete a group only on the operator's word): `docs/SESSION_HANDOFF.md` § Local data to clean up later.
 
 As of 2026-05-14, the
 agentic-memory migration (Open Brain Postgres + pgvector behind

@@ -448,5 +448,5 @@ endpoints, verbatim error texts, SOE lease, no trace; before that 2026-09-18:
 single sandbox config, Postgres-only recall, `[egress]` Tor default). Built 2026-05-11 after Fix H landed and the smoke
 test produced a `webhook output persisted to agentic_memory` log line.
 Companion: `README.md` "Webhooks" section, `docs/configuration.md`
-`[webhooks]` row. Pair with `SESSION_HANDOFF.md` 2026-05-09 entry (initial
-build) and the Fix H follow-up dated 2026-05-11.*
+`[webhooks]` row. The 2026-05-09 build and the 2026-05-11 Fix H follow-up
+predate the restored `SESSION_HANDOFF.md` (2026-05-14); git history has them.*
